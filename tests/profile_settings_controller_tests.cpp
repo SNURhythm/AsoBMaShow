@@ -874,12 +874,105 @@ void testImportRetainsSkinBarrierUntilMainThreadCompletionOrAbandon() {
     REQUIRE(!std::get<1>(fake.skinMutationFinishes[0]));
   }
 }
+// A status created in English must follow subsequent language changes without
+// rerunning the mutation, while dependency diagnostics remain literal.
+void testProfileStatusRetainsLocalizationAndLiteralDiagnostics() {
+  i18n::setLanguage(i18n::Language::English);
+  FakeServices fake;
+  ProfileSettingsController controller(fake.dependencies());
+  REQUIRE(controller.create("Profile created.").ok());
+  REQUIRE(controller.status().message == "Profile created.");
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(controller.status().message == "프로필을 만들었습니다.");
+  i18n::setLanguage(i18n::Language::Japanese);
+  REQUIRE(controller.status().message == "プロファイルを作成しました。");
+  REQUIRE(fake.find("charlie")->displayName == "Profile created.");
+  controller.recordError("Profile created.");
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(controller.status().message == "Profile created.");
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testProfileActionStatusesRetainAllSupportedLanguages() {
+  struct Case {
+    const char *action;
+    const char *english;
+    const char *korean;
+    const char *japanese;
+  };
+  const Case cases[] = {
+      {"rename", "Profile renamed.", "프로필 이름을 변경했습니다.", "プロファイルの名前を変更しました。"},
+      {"duplicate", "Profile duplicated.", "프로필을 복제했습니다.", "プロファイルを複製しました。"},
+      {"delete", "Profile deleted.", "프로필을 삭제했습니다.", "プロファイルを削除しました。"},
+      {"activate", "Profile activated.", "프로필을 활성화했습니다.", "プロファイルを有効にしました。"},
+      {"export", "Profile exported.", "프로필을 내보냈습니다.", "プロファイルをエクスポートしました。"},
+      {"import", "Profile imported.", "프로필을 가져왔습니다.", "プロファイルをインポートしました。"}};
+  for (const auto &item : cases) {
+    i18n::setLanguage(i18n::Language::English);
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    const std::string action = item.action;
+    if (action == "rename") REQUIRE(controller.rename("bravo", "Name").ok());
+    if (action == "duplicate") REQUIRE(controller.duplicate("bravo", "Name").ok());
+    if (action == "delete") REQUIRE(controller.remove("bravo").ok());
+    if (action == "activate") REQUIRE(controller.activate("bravo").ok());
+    if (action == "export") REQUIRE(controller.exportProfile("bravo", "/tmp/test.asobprofile").ok());
+    if (action == "import") REQUIRE(controller.importProfile("/tmp/test.asobprofile").ok());
+    REQUIRE(controller.status().message == item.english);
+    const auto retained = controller.status().text;
+    i18n::setLanguage(i18n::Language::Korean);
+    REQUIRE(controller.status().message == item.korean);
+    REQUIRE(retained.resolve() == item.korean);
+    i18n::setLanguage(i18n::Language::Japanese);
+    REQUIRE(controller.status().message == item.japanese);
+    REQUIRE(retained.resolve() == item.japanese);
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testProfileFallbackAndAsyncExceptionRemainLocalized() {
+  i18n::setLanguage(i18n::Language::English);
+  FakeServices fake;
+  auto dependencies = fake.dependencies();
+  dependencies.create = [](std::string) {
+    return ProfileResult{.error = ProfileError::IoFailure};
+  };
+  dependencies.exportProfile = [](std::string_view, const std::filesystem::path &) -> ProfileArchiveResult {
+    throw std::runtime_error("Profile created.");
+  };
+  ProfileSettingsController controller(std::move(dependencies));
+  REQUIRE(!controller.create("Name").ok());
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(controller.status().message == "프로필 작업에 실패했습니다.");
+  i18n::setLanguage(i18n::Language::Japanese);
+  REQUIRE(controller.status().message == "プロファイルの操作に失敗しました。");
+  i18n::setLanguage(i18n::Language::English);
+  auto task = controller.beginExport("bravo", "/tmp/test.asobprofile");
+  REQUIRE(task.has_value());
+  const auto progress = controller.status().text;
+  const auto result = task->execute();
+  REQUIRE(controller.completeArchive(task->kind(), task->generation(), result));
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(progress.resolve() == "프로필 아카이브 준비 중...");
+  REQUIRE(controller.status().message == "프로필을 내보낼 수 없습니다: Profile created.");
+  i18n::setLanguage(i18n::Language::Japanese);
+  REQUIRE(controller.status().message == "プロファイルをエクスポートできません: Profile created.");
+  const auto eligibility = controller.deleteEligibility("alpha").text;
+  REQUIRE(eligibility.resolve() == "先に別のプロファイルを有効にしてください。");
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(eligibility.resolve() == "먼저 다른 프로필을 활성화하세요.");
+  i18n::setLanguage(i18n::Language::English);
+}
+
 #include "profile_archive_worker_tests.h"
 #include "profile_archive_scene_fixture.h"
 
 } // namespace
 
 int main() {
+  testProfileStatusRetainsLocalizationAndLiteralDiagnostics();
+  testProfileActionStatusesRetainAllSupportedLanguages();
+  testProfileFallbackAndAsyncExceptionRemainLocalized();
   profile_archive_scene_fixture::run();
   testProfileArchiveWorkerCompletionAndAdmission();
   testProfileArchiveWorkerStopWaitsForCleanup(false);

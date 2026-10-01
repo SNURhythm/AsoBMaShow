@@ -73,7 +73,8 @@ public:
   LibraryText *chartFolderStatusText = &folderStatus;
   LibraryText *tableUrlInput = &input;
   i18n::Text difficultyTableStatusMessage;
-  std::string chartFolderStatusMessage, tableUrlText;
+  i18n::Text chartFolderStatusMessage;
+  std::string tableUrlText;
   SDL_Color difficultyTableStatusColor{}, chartFolderStatusColor{};
   int pendingDeleteDifficultyTableId = 0;
   std::string pendingDeleteChartEntryPath;
@@ -89,6 +90,7 @@ public:
   void loadChartEntries() { ++folderReloads; }
   void refreshDifficultyTableImportModal() { ++modalRefreshes; }
   void applyPendingDifficultyTableUpdates();
+  void toggleChartEntryICloudBackup(const std::string &entryPathText);
   void addDifficultyTableFromUrl();
   void updateDifficultyTableFromSource(int tableId);
   void deleteDifficultyTable(int tableId);
@@ -96,6 +98,39 @@ public:
 };
 
 #include "settings_library_scene_methods.inc"
+
+void testSceneFolderStatusSurvivesLanguageChanges() {
+  i18n::setLanguage(i18n::Language::English);
+  LibraryOperations operations;
+  SettingsScene scene(operations);
+  scene.toggleChartEntryICloudBackup("literal-folder");
+  assert(scene.folderStatus.text == i18n::tr("settings.difficulty_tables.icloud_backup.ios_only_notice"));
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.folderStatus.refreshLanguage();
+  assert(scene.folderStatus.text == i18n::tr("settings.difficulty_tables.icloud_backup.ios_only_notice"));
+  assert(scene.libraryTask.start([](const auto &, const Task::Publisher &updates) {
+    updates.folderStatus(i18n::message("settings.library.folder.remove_summary",
+                         {{"count", "7"}}), true);
+  }));
+  waitIdle(scene.libraryTask);
+  i18n::setLanguage(i18n::Language::Japanese);
+  scene.applyPendingDifficultyTableUpdates();
+  assert(scene.folderStatus.text == i18n::format("settings.library.folder.remove_summary",
+                                               {{"count", "7"}}));
+  i18n::setLanguage(i18n::Language::English);
+  scene.folderStatus.refreshLanguage();
+  assert(scene.folderStatus.text == i18n::format("settings.library.folder.remove_summary",
+                                               {{"count", "7"}}));
+  assert(scene.libraryTask.start([](const auto &, const Task::Publisher &updates) {
+    updates.folderStatus("Remove failed.", false);
+  }));
+  waitIdle(scene.libraryTask);
+  scene.applyPendingDifficultyTableUpdates();
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.folderStatus.refreshLanguage();
+  assert(scene.folderStatus.text == "Remove failed.");
+  i18n::setLanguage(i18n::Language::English);
+}
 
 void testSceneTableStatusesSurviveLanguageChanges() {
   i18n::setLanguage(i18n::Language::English);

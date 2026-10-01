@@ -175,7 +175,7 @@ bool SettingsScene::startProfileArchiveTask(
     }
     if (profileController != nullptr) {
       profileController->abandonArchive(task.generation());
-      profileController->recordError(i18n::tr("settings.profiles.profile_task_already_running.message"));
+      profileController->recordError(i18n::message("settings.profiles.profile_task_already_running.message"));
     }
     invalidateProfileLayout();
     return false;
@@ -219,7 +219,7 @@ bool SettingsScene::startProfileArchiveTask(
     profileArchiveGeneration = 0;
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                 "Unable to start profile archive worker: %s", error.what());
-    profileController->recordError(i18n::tr("settings.profiles.could_not_start_profile_task.message"));
+    profileController->recordError(i18n::message("settings.profiles.could_not_start_profile_task.message"));
     invalidateProfileLayout();
     return false;
   } catch (...) {
@@ -234,7 +234,7 @@ bool SettingsScene::startProfileArchiveTask(
     }
     profileController->abandonArchive(profileArchiveGeneration);
     profileArchiveGeneration = 0;
-    profileController->recordError(i18n::tr("settings.profiles.could_not_start_profile_task.message"));
+    profileController->recordError(i18n::message("settings.profiles.could_not_start_profile_task.message"));
     invalidateProfileLayout();
     return false;
   }
@@ -267,13 +267,14 @@ void SettingsScene::startProfileImportDocumentPicker(
     }
     profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::Import;
   } catch (const std::exception &error) {
-    profileController->failPicker(i18n::tr("settings.profiles.unable_open_profile_import_picker.prefix") +
-                                  std::string(error.what()));
+    profileController->failPicker(i18n::message("settings.profiles.controller.joined_detail",
+        {{"prefix", i18n::message("settings.profiles.unable_open_profile_import_picker.prefix")},
+         {"detail", error.what()}}));
     pendingProfileImportOptions = {};
     profileDocumentHandoff.close();
     profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
   } catch (...) {
-    profileController->failPicker(i18n::tr("settings.profiles.unable_open_profile_import_picker.message"));
+    profileController->failPicker(i18n::message("settings.profiles.unable_open_profile_import_picker.message"));
     pendingProfileImportOptions = {};
     profileDocumentHandoff.close();
     profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
@@ -333,7 +334,7 @@ void SettingsScene::applyPendingProfileArchiveCompletion() {
       completion->result.ok()) {
     if (!profileController->beginPreparedExportPicker(completion->generation)) {
       profileController->abandonArchive(completion->generation);
-      profileController->recordError(i18n::tr("settings.profiles.could_not_open_save_picker.message"));
+      profileController->recordError(i18n::message("settings.profiles.could_not_open_save_picker.message"));
       profileArchiveGeneration = 0;
       profileExportSourceLifetime.reset();
       profileExportStagingFile.clear();
@@ -364,9 +365,9 @@ void SettingsScene::applyPendingProfileArchiveCompletion() {
     } catch (const std::exception &error) {
       SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                   "Unable to open profile export picker: %s", error.what());
-      profileController->failPicker(i18n::tr("settings.profiles.could_not_open_save_picker.message"));
+      profileController->failPicker(i18n::message("settings.profiles.could_not_open_save_picker.message"));
     } catch (...) {
-      profileController->failPicker(i18n::tr("settings.profiles.could_not_open_save_picker.message"));
+      profileController->failPicker(i18n::message("settings.profiles.could_not_open_save_picker.message"));
     }
     profileDocumentHandoff.close();
     profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
@@ -404,14 +405,17 @@ void SettingsScene::applyPendingProfileDocumentHandoff() {
   }
 
   if (!result) {
-    profileController->failPicker(i18n::tr("settings.profiles.file_picker_did_not_return_file.message"));
+    profileController->failPicker(i18n::message("settings.profiles.file_picker_did_not_return_file.message"));
   } else if (result->cancelled()) {
     profileController->cancelPicker();
   } else if (!result->ok()) {
-    std::string message = result->message;
+    i18n::Text message = result->message;
     if (kind == SettingsProfileDocumentHandoffKind::Export) {
-      message = i18n::tr("settings.profiles.could_not_save_profile.message") +
-                (message.empty() ? std::string{} : " " + message);
+      message = message.empty()
+                    ? i18n::message("settings.profiles.could_not_save_profile.message")
+                    : i18n::message("settings.profiles.controller.combined_warnings",
+                        {{"prior", i18n::message("settings.profiles.could_not_save_profile.message")},
+                         {"warning", message}});
     }
     profileController->failPicker(std::move(message));
   } else if (kind == SettingsProfileDocumentHandoffKind::Import) {
@@ -437,7 +441,7 @@ void SettingsScene::applyPendingProfileDocumentHandoff() {
       profileController->abandonArchive(generation);
     }
   } else {
-    profileController->failPicker(i18n::tr("settings.profiles.unexpected_file_picker_result.message"));
+    profileController->failPicker(i18n::message("settings.profiles.unexpected_file_picker_result.message"));
   }
 
   pendingProfileImportOptions = {};
@@ -572,7 +576,9 @@ void SettingsScene::activateProfile(std::string_view profileId) {
   const std::string warningText = joinWarnings(runtime.warnings);
   if (runtime.profileCommitted && !warningText.empty()) {
     profileController->recordWarning(
-        i18n::tr("settings.profiles.profile_switched_warnings.prefix") + warningText);
+        i18n::message("settings.profiles.controller.joined_detail",
+          {{"prefix", i18n::message("settings.profiles.profile_switched_warnings.prefix")},
+           {"detail", warningText}}));
   }
   invalidateProfileLayout();
 }
@@ -602,7 +608,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   const auto &status = profileController->status();
   if (!status.message.empty()) {
     profileStatusText = makeWrappedText(
-        status.message, metrics.bodyTextSize, ui_theme::textSecondary());
+        status.text, metrics.bodyTextSize, ui_theme::textSecondary());
     profileStatusText->setColor(statusColor(status.kind));
     cardsColumn->addView(profileStatusText);
   }
@@ -780,11 +786,11 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       body->addView(editorActions);
     }
 
-    std::string disabledReason;
+    i18n::Text disabledReason;
     if (!deleteEligibility.enabled && !confirmingDelete) {
-      disabledReason = deleteEligibility.reason;
+      disabledReason = deleteEligibility.text;
     } else if (!overwriteEligibility.enabled && !confirmingOverwrite) {
-      disabledReason = overwriteEligibility.reason;
+      disabledReason = overwriteEligibility.text;
     }
     if (!disabledReason.empty()) {
       auto *reason = makeWrappedText(disabledReason, metrics.smallTextSize,

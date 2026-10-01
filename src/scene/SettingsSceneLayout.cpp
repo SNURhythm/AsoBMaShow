@@ -1666,7 +1666,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   gaugeControls->setGap(metrics.compact ? 12.0f : 16.0f);
   gaugeControls->setAlignItems(YGAlignFlexStart);
   gaugeControls->addView(makeWrappedText(
-      "World: below lanes. Left/Right: side HUD.",
+      i18n::message("settings.visual.gauge_position.help"),
       metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *gaugePositionControls = new View();
   gaugePositionControls->setFlexDirection(FlexDirection::Row);
@@ -2447,16 +2447,16 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       if (context.requestAddChartFolderFromFiles) {
         context.requestAddChartFolderFromFiles();
         chartFolderStatusMessage = importFolderByCopy
-                                       ? i18n::tr("settings.bms_library.choose_folder_import.message")
-                                       : i18n::tr("settings.bms_library.choose_folder_add.message");
+                                       ? i18n::message("settings.bms_library.choose_folder_import.message")
+                                       : i18n::message("settings.bms_library.choose_folder_add.message");
         chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
       } else {
-        chartFolderStatusMessage = addFolderButtonLabel.resolve() + " is unavailable.";
+        chartFolderStatusMessage = i18n::message("settings.library.action.unavailable", {{"action", addFolderButtonLabel}});
         chartFolderStatusColor = {255, 177, 170, 255};
       }
 
       if (chartFolderStatusText != nullptr) {
-        chartFolderStatusText->setText(chartFolderStatusMessage);
+        chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
         chartFolderStatusText->setColor(chartFolderStatusColor);
       }
     });
@@ -2489,10 +2489,10 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
     repoButton->setOnClickListener([this]() {
       std::string errorMessage;
       if (!OpenURLInAndroidBrowser(kRepositoryUrl, errorMessage)) {
-        chartFolderStatusMessage = i18n::tr("settings.bms_library.could_not_open_git_hub_link.message");
+        chartFolderStatusMessage = i18n::message("settings.bms_library.could_not_open_git_hub_link.message");
         chartFolderStatusColor = {255, 177, 170, 255};
         if (chartFolderStatusText != nullptr) {
-          chartFolderStatusText->setText(chartFolderStatusMessage);
+          chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
           chartFolderStatusText->setColor(chartFolderStatusColor);
         }
         if (!errorMessage.empty()) {
@@ -2516,8 +2516,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
                                         metrics.bodyTextSize,
                                         ui_theme::textSecondary()));
     folderList->addView(makeWrappedText(
-        "Find BMS downloads use Documents/BMS until a writable library "
-        "folder is added.",
+        i18n::message("settings.bms_library.default_download_folder.help"),
         metrics.smallTextSize, ui_theme::textMuted()));
   } else {
     for (const auto &entry : chartEntries) {

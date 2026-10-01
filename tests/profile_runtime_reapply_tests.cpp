@@ -1,4 +1,7 @@
 #include "../src/scene/ProfileRuntimeReapply.h"
+#include "../src/i18n/Localization.h"
+
+#include <stdexcept>
 
 #include <cstdlib>
 #include <iostream>
@@ -88,9 +91,25 @@ void testPreviewPendingIsAccepted() {
   REQUIRE(result.warnings.empty());
   REQUIRE(events.back() == "display");
 }
+void testOwnedRuntimeFailuresLocalizeAndKeepBackendDetailsLiteral() {
+  std::vector<std::string> events;
+  i18n::setLanguage(i18n::Language::Korean);
+  auto result = ReapplyProfileRuntimeAfterSwitch(
+      {}, callbacks(events, {}, {.outcome = ProfileDisplayRuntimeOutcome::Failed}));
+  REQUIRE(result.warnings.size() == 1);
+  REQUIRE(result.warnings[0] == "디스플레이 재적용에 실패했습니다.");
+  auto throwing = callbacks(events);
+  throwing.sanitize = [] { throw std::runtime_error("Theme reapplication"); };
+  i18n::setLanguage(i18n::Language::Japanese);
+  result = ReapplyProfileRuntimeAfterSwitch({}, throwing);
+  REQUIRE(result.warnings.size() == 1);
+  REQUIRE(result.warnings[0] == "設定の検証に失敗しました: Theme reapplication");
+  i18n::setLanguage(i18n::Language::English);
+}
 } // namespace
 
 int main() {
+  testOwnedRuntimeFailuresLocalizeAndKeepBackendDetailsLiteral();
   testFailedSwitchDoesNoRuntimeWork();
   testSuccessfulSwitchAppliesExactlyOnceInOrder();
   testRuntimeFailuresWarnWithoutUndoingCommittedProfile();

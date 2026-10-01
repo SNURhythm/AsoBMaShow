@@ -344,10 +344,10 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     return group;
   };
   volumeControls->addView(
-      makeVolumeRow("Master (%)", 0, &masterVolumeInput));
-  volumeControls->addView(makeVolumeRow("BGM (%)", 1, &bgmVolumeInput));
+      makeVolumeRow(i18n::message("settings.audio.volume.master.label"), 0, &masterVolumeInput));
+  volumeControls->addView(makeVolumeRow(i18n::message("settings.audio.volume.bgm.label"), 1, &bgmVolumeInput));
   volumeControls->addView(
-      makeVolumeRow("Keysound (%)", 2, &keysoundVolumeInput));
+      makeVolumeRow(i18n::message("settings.audio.volume.keysound.label"), 2, &keysoundVolumeInput));
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.audio.volume.label"), "",
       volumeControls, metrics.modeCardHeight, metrics.cardsWidth));

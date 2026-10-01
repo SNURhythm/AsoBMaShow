@@ -53,7 +53,7 @@ SafeAreaInsets getSafeAreaInsetsUi() {
   return insets;
 }
 
-Button *makeButton(const std::string &label, int fontSize,
+Button *makeButton(const i18n::Text &label, int fontSize,
                    TextView **textOut = nullptr) {
   auto *button = new Button();
   button->setHeight(52);
@@ -66,7 +66,7 @@ Button *makeButton(const std::string &label, int fontSize,
   button->setStyledBorderWidth(1);
 
   auto *text = new TextView(kFontPath, fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
@@ -78,10 +78,10 @@ Button *makeButton(const std::string &label, int fontSize,
   return button;
 }
 
-TextView *makeText(const std::string &text, int fontSize,
+TextView *makeText(const i18n::Text &text, int fontSize,
                    View::ThemeColorProvider color) {
   auto *view = new TextView(kFontPath, fontSize);
-  view->setText(text);
+  view->setLocalizedText(text);
   view->setThemedColor(std::move(color));
   view->setOverflow(TextView::TextOverflow::Hidden);
   return view;
@@ -154,8 +154,8 @@ void IrUploadsScene::cleanupScene() {
   candidateList = nullptr;
   preparationTask.reset();
   controller = {};
-  loadError.clear();
-  loadDiagnostic.clear();
+  loadError = {};
+  loadDiagnostic = {};
   providerCanSubmit = false;
   reloadRequested = false;
 }
@@ -183,24 +183,24 @@ void IrUploadsScene::buildView() {
       ->setThemedBorderColor(ui_theme::hairline)
       ->setBorderWidth(1);
 
-  auto *backButton = makeButton(i18n::tr("ir.upload.back.label"), 20);
+  auto *backButton = makeButton(i18n::message("ir.upload.back.label"), 20);
   backButton->setWidth(118);
   backButton->setOnClickListener([this]() { goBack(); });
   header->addView(backButton);
 
-  auto *title = makeText(i18n::tr("ir.upload.ir_uploads.label"), 34, ui_theme::textPrimary);
+  auto *title = makeText(i18n::message("ir.upload.ir_uploads.label"), 34, ui_theme::textPrimary);
   title->setHeight(42);
   title->setFlex(1);
   header->addView(title);
 
-  candidateCountText = makeText(i18n::tr("ir.upload.score_count.empty"), 18, ui_theme::textSecondary);
+  candidateCountText = makeText(i18n::message("ir.upload.score_count.empty"), 18, ui_theme::textSecondary);
   candidateCountText->setWidth(150);
   candidateCountText->setHeight(32);
   candidateCountText->setAlign(TextView::RIGHT);
   candidateCountText->setVAlign(TextView::MIDDLE);
   header->addView(candidateCountText);
 
-  refreshButton = makeButton(i18n::tr("ir.upload.refresh.label"), 20);
+  refreshButton = makeButton(i18n::message("ir.upload.refresh.label"), 20);
   refreshButton->setWidth(132);
   refreshButton->setOnClickListener([this]() {
     if (!controller.selectionLocked()) {
@@ -240,11 +240,11 @@ void IrUploadsScene::buildView() {
   providerTitle->setHeight(32);
   providerColumn->addView(providerTitle);
   providerStatusText =
-      makeText(i18n::tr("ir.upload.checking_configuration.progress"), 17, ui_theme::textSecondary);
+      makeText(i18n::message("ir.upload.checking_configuration.progress"), 17, ui_theme::textSecondary);
   providerStatusText->setHeight(26);
   providerColumn->addView(providerStatusText);
   providerCard->addView(providerColumn);
-  openIrSettingsButton = makeButton(i18n::tr("ir.upload.open_ir_settings.label"), 18);
+  openIrSettingsButton = makeButton(i18n::message("ir.upload.open_ir_settings.label"), 18);
   openIrSettingsButton->setWidth(204);
   openIrSettingsButton->setOnClickListener([this]() { openIrSettings(); });
   providerCard->addView(openIrSettingsButton);
@@ -256,21 +256,21 @@ void IrUploadsScene::buildView() {
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(10);
-  selectAllButton = makeButton(i18n::tr("ir.upload.select_all.label"), 18);
+  selectAllButton = makeButton(i18n::message("ir.upload.select_all.label"), 18);
   selectAllButton->setWidth(146);
   selectAllButton->setOnClickListener([this]() {
     controller.selectAll();
     refreshUi();
   });
   selectionToolbar->addView(selectAllButton);
-  clearButton = makeButton(i18n::tr("ir.upload.clear.label"), 18);
+  clearButton = makeButton(i18n::message("ir.upload.clear.label"), 18);
   clearButton->setWidth(112);
   clearButton->setOnClickListener([this]() {
     controller.clearSelection();
     refreshUi();
   });
   selectionToolbar->addView(clearButton);
-  selectionCountText = makeText(i18n::tr("ir.upload.selection_count.empty"), 18, ui_theme::textSecondary);
+  selectionCountText = makeText(i18n::message("ir.upload.selection_count.empty"), 18, ui_theme::textSecondary);
   selectionCountText->setHeight(32);
   selectionCountText->setVAlign(TextView::MIDDLE);
   selectionToolbar->addView(selectionCountText);
@@ -301,7 +301,7 @@ void IrUploadsScene::buildView() {
   };
   listPanel->addView(candidateList);
   stateText =
-      makeText(i18n::tr("ir.upload.no_scores_waiting_ir_upload.message"), 21, ui_theme::textSecondary);
+      makeText(i18n::message("ir.upload.no_scores_waiting_ir_upload.message"), 21, ui_theme::textSecondary);
   stateText->setHeight(58);
   stateText->setWrap(true);
   stateText->setAlign(TextView::CENTER);
@@ -323,7 +323,7 @@ void IrUploadsScene::buildView() {
   progressText->setWrap(true);
   progressText->setVAlign(TextView::MIDDLE);
   footer->addView(progressText);
-  uploadButton = makeButton(i18n::tr("ir.upload.upload_0_scores.label"), 20, &uploadButtonText);
+  uploadButton = makeButton(i18n::message("ir.upload.upload_0_scores.label"), 20, &uploadButtonText);
   uploadButton->setWidth(238);
   uploadButton->setOnClickListener([this]() { startUpload(); });
   footer->addView(uploadButton);
@@ -347,8 +347,8 @@ std::string IrUploadsScene::serverOrigin() const {
 void IrUploadsScene::reloadCandidates() {
   const float scrollOffset =
       candidateList != nullptr ? candidateList->scrollOffset : 0.0F;
-  loadError.clear();
-  loadDiagnostic.clear();
+  loadError = {};
+  loadDiagnostic = {};
   refreshProviderState();
 
   const std::string origin = serverOrigin();
@@ -359,8 +359,8 @@ void IrUploadsScene::reloadCandidates() {
         ir::kTachiProviderId, origin, beforeResultId);
     if (page.status != ir::IrUploadCandidateReadStatus::Loaded) {
       loadError = page.diagnostic.empty()
-                      ? i18n::tr("ir.upload.saved_results_failed_loaded.message")
-                      : ir::sanitizeDiagnostic(page.diagnostic);
+                      ? i18n::message("ir.upload.saved_results_failed_loaded.message")
+                      : i18n::Text(ir::sanitizeDiagnostic(page.diagnostic));
       controller.applyCandidateRefresh(std::nullopt);
       refreshUi();
       return;
@@ -380,13 +380,13 @@ void IrUploadsScene::reloadCandidates() {
         (candidates.size() == ir::kMaximumIrUploadCandidateRows &&
          page.nextBeforeModernChartResultId)) {
       if (loadDiagnostic.empty()) {
-        loadDiagnostic = i18n::tr("ir.upload.only_newest_saved_ir_candidates_shown.message");
+        loadDiagnostic = i18n::message("ir.upload.only_newest_saved_ir_candidates_shown.message");
       }
       break;
     }
     if (page.nextBeforeModernChartResultId && beforeResultId &&
         *page.nextBeforeModernChartResultId >= *beforeResultId) {
-      loadError = "Saved result pagination did not advance.";
+      loadError = i18n::message("ir.upload.pagination_failed.message");
       controller.applyCandidateRefresh(std::nullopt);
       refreshUi();
       return;
@@ -430,7 +430,7 @@ void IrUploadsScene::refreshProviderState() {
   providerCanSubmit = availability.canSubmit;
 
   if (providerStatusText != nullptr) {
-    providerStatusText->setText(availability.statusText);
+    providerStatusText->setLocalizedText(availability.statusText);
   }
 }
 
@@ -440,22 +440,22 @@ void IrUploadsScene::refreshUi() {
   const bool locked = controller.selectionLocked();
 
   if (candidateCountText != nullptr) {
-    candidateCountText->setText(i18n::format(
+    candidateCountText->setLocalizedText(i18n::message(
         candidateCount == 1 ? "ir.upload.score_count.one" : "ir.upload.score_count.other",
         {{"count", std::to_string(candidateCount)}}));
   }
   if (selectionCountText != nullptr) {
-    selectionCountText->setText(i18n::format(
+    selectionCountText->setLocalizedText(i18n::message(
         "ir.upload.selection.count", {{"count", std::to_string(selectedCount)}}));
   }
   if (uploadButtonText != nullptr) {
-    uploadButtonText->setText(i18n::format(
+    uploadButtonText->setLocalizedText(i18n::message(
         selectedCount == 1 ? "ir.upload.selection.action.one" : "ir.upload.selection.action.other",
         {{"count", std::to_string(selectedCount)}}));
   }
   if (progressText != nullptr) {
-    const std::string &status = controller.statusText();
-    progressText->setText(status.empty() ? loadDiagnostic : status);
+    const auto &status = controller.statusMessage();
+    progressText->setLocalizedText(status.empty() ? loadDiagnostic : status);
   }
   if (refreshButton != nullptr) {
     refreshButton->setEnabled(!locked);
@@ -477,8 +477,8 @@ void IrUploadsScene::refreshUi() {
   if (stateText != nullptr) {
     const bool visible = !loadError.empty() || candidateCount == 0;
     stateText->setVisible(visible);
-    stateText->setText(!loadError.empty() ? loadError
-                                          : i18n::tr("ir.upload.no_scores_waiting_ir_upload.message"));
+    stateText->setLocalizedText(!loadError.empty() ? loadError
+                                          : i18n::message("ir.upload.no_scores_waiting_ir_upload.message"));
     stateText->setThemedColor(!loadError.empty() ? ui_theme::coral
                                                  : ui_theme::textSecondary);
   }

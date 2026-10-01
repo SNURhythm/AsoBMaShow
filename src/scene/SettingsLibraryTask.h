@@ -40,7 +40,7 @@ public:
     Publisher(const Publisher &) = delete;
     Publisher &operator=(const Publisher &) = delete;
     void tableStatus(i18n::Text text, bool succeeded, bool reload = false) const;
-    void folderStatus(std::string text, bool succeeded, bool reload = false) const;
+    void folderStatus(i18n::Text text, bool succeeded, bool reload = false) const;
     void importProgress(ImportProgress progress) const;
 
   private:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ThreadCompat.h"
+#include "../i18n/Localization.h"
 #include "../ir/IrSavedResultBatchUpload.h"
 #include "../ir/IrUploadCandidates.h"
 
@@ -27,7 +28,7 @@ struct ProviderAvailabilityInput {
 
 struct ProviderAvailability {
   bool canSubmit = false;
-  std::string statusText;
+  i18n::Text statusText;
 };
 
 [[nodiscard]] ProviderAvailability
@@ -117,7 +118,10 @@ public:
     return selectedAttemptIds_.contains(attemptId);
   }
   [[nodiscard]] bool selectionLocked() const noexcept { return preparing_; }
-  [[nodiscard]] const std::string &statusText() const noexcept {
+  [[nodiscard]] std::string statusText() const {
+    return statusText_.resolve();
+  }
+  [[nodiscard]] const i18n::Text &statusMessage() const noexcept {
     return statusText_;
   }
 
@@ -128,7 +132,7 @@ private:
   std::unordered_set<std::string> selectedAttemptIds_;
   std::unordered_map<std::string, std::string> sessionFailureReasons_;
   bool preparing_ = false;
-  std::string statusText_;
+  i18n::Text statusText_;
 };
 
 } // namespace ir_uploads

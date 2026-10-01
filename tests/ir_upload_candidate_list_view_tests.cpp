@@ -225,6 +225,24 @@ int main() {
             !dynamic_cast<IrUploadCandidateListItemView *>(row)->hasClearLamp(),
         "rebind clears checkbox, optional metadata, score rank, and lamp");
 
+    i18n::setLanguage(i18n::Language::Korean);
+    list.propagateLanguageChange();
+    expect(text(row, "irUploadAttempt")->getText().find("시도 123e4567  콤보 0") !=
+               std::string::npos &&
+               text(row, "irUploadAttempt")->getText().find(
+                   "실패: provider rejected this score") != std::string::npos &&
+               text(row, "irUploadTitle")->getText() == "Second Song",
+           "language changes translate retained attempt labels and preserve diagnostics and titles");
+    i18n::setLanguage(i18n::Language::Japanese);
+    list.propagateLanguageChange();
+    expect(text(row, "irUploadAttempt")->getText().find("プレイ 123e4567  コンボ 0") !=
+               std::string::npos &&
+               text(row, "irUploadAttempt")->getText().find(
+                   "失敗: provider rejected this score") != std::string::npos,
+           "retained attempt details follow another language change without rebinding");
+    i18n::setLanguage(i18n::Language::English);
+    list.propagateLanguageChange();
+
     second.result.score.maxScore = 2'000;
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);

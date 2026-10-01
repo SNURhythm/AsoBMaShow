@@ -73,7 +73,7 @@ void SettingsScene::loadChartEntries() {
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
     chartEntries.clear();
-    chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message");
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
     chartFolderStatusColor = {255, 177, 170, 255};
     return;
   }
@@ -119,12 +119,12 @@ void SettingsScene::refreshChartEntryBackupStatuses() {
 
 void SettingsScene::toggleChartEntryICloudBackup(
     const std::string &entryPathText) {
-  auto setFolderStatus = [this](const std::string &message,
+  auto setFolderStatus = [this](const i18n::Text &message,
                                 const SDL_Color &color) {
     chartFolderStatusMessage = message;
     chartFolderStatusColor = color;
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
   };
@@ -136,7 +136,7 @@ void SettingsScene::toggleChartEntryICloudBackup(
                      return formatChartEntryPath(entry) == entryPathText;
                    });
   if (entryIt == chartEntries.end()) {
-    setFolderStatus(i18n::tr("settings.difficulty_tables.folder_entry_not_found.message"), {255, 177, 170, 255});
+    setFolderStatus(i18n::message("settings.difficulty_tables.folder_entry_not_found.message"), {255, 177, 170, 255});
     return;
   }
 
@@ -150,7 +150,9 @@ void SettingsScene::toggleChartEntryICloudBackup(
   std::string errorMessage;
   if (!GetIOSFileExcludedFromBackup(access.resolvedPath, excluded,
                                     errorMessage)) {
-    setFolderStatus(i18n::tr("settings.difficulty_tables.could_not_check_i_cloud_backup.prefix") + errorMessage,
+    setFolderStatus(i18n::message("settings.library.status.detail",
+                  {{"prefix", i18n::message("settings.difficulty_tables.could_not_check_i_cloud_backup.prefix")},
+                   {"detail", errorMessage}}),
                     {255, 177, 170, 255});
     return;
   }
@@ -158,19 +160,21 @@ void SettingsScene::toggleChartEntryICloudBackup(
   const bool shouldExclude = !excluded;
   if (!SetIOSFileExcludedFromBackup(access.resolvedPath, shouldExclude,
                                     errorMessage)) {
-    setFolderStatus(i18n::tr("settings.difficulty_tables.could_not_update_i_cloud_backup.prefix") + errorMessage,
+    setFolderStatus(i18n::message("settings.library.status.detail",
+                  {{"prefix", i18n::message("settings.difficulty_tables.could_not_update_i_cloud_backup.prefix")},
+                   {"detail", errorMessage}}),
                     {255, 177, 170, 255});
     return;
   }
 
   chartEntryICloudBackupExcluded[entryPathText] = shouldExclude;
-  setFolderStatus(shouldExclude ? i18n::tr("settings.difficulty_tables.i_cloud_backup_disabled_folder.message")
-                                : i18n::tr("settings.difficulty_tables.i_cloud_backup_enabled_folder.message"),
+  setFolderStatus(shouldExclude ? i18n::message("settings.difficulty_tables.i_cloud_backup_disabled_folder.message")
+                                : i18n::message("settings.difficulty_tables.i_cloud_backup_enabled_folder.message"),
                   {181, 228, 165, 255});
   lastLayoutWidth = -1;
 #else
   (void)entryPathText;
-  setFolderStatus(i18n::tr("settings.difficulty_tables.icloud_backup.ios_only_notice"),
+  setFolderStatus(i18n::message("settings.difficulty_tables.icloud_backup.ios_only_notice"),
                   {255, 177, 170, 255});
 #endif
 }
@@ -188,12 +192,12 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
     }
   }
   if (pending.folderStatus) {
-    chartFolderStatusMessage = pending.folderStatus->text.resolve();
+    chartFolderStatusMessage = pending.folderStatus->text;
     chartFolderStatusColor = pending.folderStatus->succeeded
                                 ? SDL_Color{181, 228, 165, 255}
                                 : SDL_Color{255, 177, 170, 255};
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
   }
@@ -492,19 +496,19 @@ void SettingsScene::refreshChartLibrary() {
   pendingDeleteChartEntryPath.clear();
   if (context.requestRebuildChartLibrary) {
     context.requestRebuildChartLibrary();
-    chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.chart_list_rebuild_started_in_background.message");
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.chart_list_rebuild_started_in_background.message");
     chartFolderStatusColor = {181, 228, 165, 255};
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
     return;
   }
 
-  chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.rebuilding_chart_list.progress");
+  chartFolderStatusMessage = i18n::message("settings.difficulty_tables.rebuilding_chart_list.progress");
   chartFolderStatusColor = {239, 244, 251, 255};
   if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
@@ -515,7 +519,7 @@ void SettingsScene::refreshChartLibrary() {
         auto session = repository.OpenSession();
         if (!session.has_value()) {
           if (!token.stop_requested()) {
-            updates.folderStatus(i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message"), false);
+            updates.folderStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
           }
           return;
         }
@@ -526,8 +530,9 @@ void SettingsScene::refreshChartLibrary() {
           std::error_code errorCode;
           if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
             if (!token.stop_requested()) {
-              updates.folderStatus(i18n::tr("settings.difficulty_tables.could_not_create_default_bms_folder.prefix") +
-                                           errorCode.message(),
+              updates.folderStatus(i18n::message("settings.library.status.detail",
+                  {{"prefix", i18n::message("settings.difficulty_tables.could_not_create_default_bms_folder.prefix")},
+                   {"detail", errorCode.message()}}),
                                        false);
             }
             return;
@@ -572,15 +577,15 @@ void SettingsScene::refreshChartLibrary() {
         }
 
         const bool succeeded = changedCount >= 0;
-        std::string statusText;
+        i18n::Text statusText;
         if (!succeeded) {
-          statusText = i18n::tr("settings.difficulty_tables.refresh_failed.message");
+          statusText = i18n::message("settings.difficulty_tables.refresh_failed.message");
         } else if (changedCount == 0) {
-          statusText = i18n::tr("settings.difficulty_tables.chart_list_refreshed_no_changes_found.message");
+          statusText = i18n::message("settings.difficulty_tables.chart_list_refreshed_no_changes_found.message");
         } else if (changedCount == 1) {
-          statusText = i18n::tr("settings.difficulty_tables.chart_list_refreshed_updated_1_chart_entry.message");
+          statusText = i18n::message("settings.difficulty_tables.chart_list_refreshed_updated_1_chart_entry.message");
         } else {
-          statusText = i18n::format(
+          statusText = i18n::message(
               "settings.difficulty_tables.library_refresh.updated_count",
               {{"count", std::to_string(changedCount)}});
         }
@@ -592,22 +597,22 @@ void SettingsScene::setFindBmsDownloadEntry(
     const std::string &entryPathText) {
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
-    chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message");
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
     chartFolderStatusColor = {255, 177, 170, 255};
   } else if (!session->SetPrimaryStorageEntry(
                  std::filesystem::path(utf8_to_path_t(entryPathText)))) {
     chartFolderStatusMessage =
-        i18n::tr("settings.difficulty_tables.could_not_use_folder_find_bms_downloads.message");
+        i18n::message("settings.difficulty_tables.could_not_use_folder_find_bms_downloads.message");
     chartFolderStatusColor = {255, 177, 170, 255};
   } else {
-    chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.find_bms_download_folder_updated.message");
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.find_bms_download_folder_updated.message");
     chartFolderStatusColor = {181, 228, 165, 255};
     loadChartEntries();
     refreshChartEntryBackupStatuses();
   }
 
   if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
   lastLayoutWidth = -1;
@@ -621,10 +626,10 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 #if TARGET_OS_ANDROID
   if (ChartRepository::IsDefaultBmsFolderPath(
           std::filesystem::path(utf8_to_path_t(entryPathText)))) {
-    chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.default_bms_folder_built_in.message");
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.default_bms_folder_built_in.message");
     chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
     pendingDeleteChartEntryPath.clear();
@@ -640,10 +645,10 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   }
 
   pendingDeleteChartEntryPath.clear();
-  chartFolderStatusMessage = i18n::tr("settings.difficulty_tables.removing_folder.progress");
+  chartFolderStatusMessage = i18n::message("settings.difficulty_tables.removing_folder.progress");
   chartFolderStatusColor = {239, 244, 251, 255};
   if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
@@ -654,7 +659,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         auto session = repository.OpenSession();
         if (!session.has_value()) {
           if (!token.stop_requested()) {
-            updates.folderStatus(i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message"), false);
+            updates.folderStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
           }
           return;
         }
@@ -670,8 +675,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
           if (!token.stop_requested()) {
             updates.folderStatus(
                 entryIt == entries.end()
-                    ? i18n::tr("settings.difficulty_tables.folder_entry_not_found.message")
-                    : i18n::tr("settings.difficulty_tables.default_bms_folder_built_in.message"),
+                    ? i18n::message("settings.difficulty_tables.folder_entry_not_found.message")
+                    : i18n::message("settings.difficulty_tables.default_bms_folder_built_in.message"),
                                      false, true);
           }
           return;
@@ -686,14 +691,14 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
           return;
         }
 
-        std::string statusText;
+        i18n::Text statusText;
         if (removed) {
           statusText = removedChartCount == 1
-                           ? i18n::tr("settings.difficulty_tables.folder_removed_removed_1_cached_chart.message")
-                           : i18n::format("settings.library.folder.remove_summary",
+                           ? i18n::message("settings.difficulty_tables.folder_removed_removed_1_cached_chart.message")
+                           : i18n::message("settings.library.folder.remove_summary",
                                           {{"count", std::to_string(removedChartCount)}});
         } else {
-          statusText = i18n::tr("settings.difficulty_tables.remove_failed.message");
+          statusText = i18n::message("settings.difficulty_tables.remove_failed.message");
         }
         updates.folderStatus(statusText,
                              removed, true);

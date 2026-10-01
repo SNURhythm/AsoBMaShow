@@ -50,8 +50,7 @@ applicationDependencies(ApplicationContext &context) {
           return ProfileResult{
               .error = ProfileError::IoFailure,
               .message = coordinated.diagnostic.empty()
-                             ? "Secure credential cleanup could not be queued; "
-                               "the profile was not deleted."
+                             ? i18n::tr("settings.profiles.context.cleanup_queue_failed")
                              : coordinated.diagnostic};
         }
         if (coordinated.status ==
@@ -64,10 +63,9 @@ applicationDependencies(ApplicationContext &context) {
         if (coordinated.status ==
             ir::ProfileCredentialDeletionStatus::CredentialCleanupPending) {
           deleted.message = coordinated.diagnostic.empty()
-                                ? "The profile was deleted; secure IR "
-                                  "credential cleanup will retry."
-                                : coordinated.diagnostic +
-                                      " Cleanup will retry automatically.";
+                                ? i18n::tr("settings.profiles.context.deleted_cleanup_pending")
+                                : i18n::format("settings.profiles.context.cleanup_retry_detail",
+                                               {{"detail", coordinated.diagnostic}});
         }
         return deleted;
       },
@@ -81,7 +79,7 @@ applicationDependencies(ApplicationContext &context) {
                     std::memory_order_acquire)) {
               return ProfileArchiveResult{
                   .error = ProfileError::SwitchBlocked,
-                  .message = "The profile archive pipeline is not active."};
+                  .message = i18n::tr("settings.profiles.context.pipeline_inactive")};
             }
             ProfileArchiveService service(context.profileManager);
             return service.Export(profileId, destination);
@@ -93,7 +91,7 @@ applicationDependencies(ApplicationContext &context) {
                     std::memory_order_acquire)) {
               return ProfileArchiveResult{
                   .error = ProfileError::SwitchBlocked,
-                  .message = "The profile archive pipeline is not active."};
+                  .message = i18n::tr("settings.profiles.context.pipeline_inactive")};
             }
             ProfileArchiveService service(context.profileManager);
             auto imported = service.Import(archive, options);
@@ -116,11 +114,9 @@ applicationDependencies(ApplicationContext &context) {
                 imported.message += "; ";
               }
               imported.message += cleanup.diagnostic.empty()
-                                      ? "secure IR credential cleanup will "
-                                        "retry automatically"
-                                      : cleanup.diagnostic +
-                                            " Cleanup will retry "
-                                            "automatically.";
+                                      ? i18n::tr("settings.profiles.context.cleanup_retry")
+                                      : i18n::format("settings.profiles.context.cleanup_retry_detail",
+                                                     {{"detail", cleanup.diagnostic}});
             }
             return imported;
           },
@@ -144,7 +140,7 @@ applicationDependencies(ApplicationContext &context) {
                 std::memory_order_acquire)) {
           return true;
         }
-        errorMessage = "Another profile archive operation is active.";
+        errorMessage = i18n::tr("settings.profiles.context.pipeline_busy");
         return false;
       },
       .endArchivePipeline = [&context]() {

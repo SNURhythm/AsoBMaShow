@@ -28,22 +28,22 @@ ProviderAvailability
 evaluateProviderAvailability(const ProviderAvailabilityInput &input) {
   if (!input.enabled) {
     return {.statusText =
-                i18n::tr("ir.upload.bokutachi_disabled_enable_before_uploading.message")};
+                i18n::message("ir.upload.bokutachi_disabled_enable_before_uploading.message")};
   }
   if (!input.hasCredential) {
     return {.statusText =
-                i18n::tr("ir.upload.bokutachi_api_key_required_before_uploading.message")};
+                i18n::message("ir.upload.bokutachi_api_key_required_before_uploading.message")};
   }
   if (!input.httpsOrigin) {
     return {.statusText =
-                i18n::tr("ir.upload.use_https_server_origin_before_uploading.message")};
+                i18n::message("ir.upload.use_https_server_origin_before_uploading.message")};
   }
   if (!input.driverCanSubmit || !input.submissionServiceAvailable) {
-    return {.statusText = i18n::tr("ir.upload.bokutachi_score_submission_unavailable.message")};
+    return {.statusText = i18n::message("ir.upload.bokutachi_score_submission_unavailable.message")};
   }
   return {
       .canSubmit = true,
-      .statusText = i18n::tr("ir.upload.ready_queue_verified_scores_batch_delivery.message"),
+      .statusText = i18n::message("ir.upload.ready_queue_verified_scores_batch_delivery.message"),
   };
 }
 
@@ -194,7 +194,7 @@ PreparationOutcome prepareSelectedCandidates(
         uniqueSubmissionAttemptIds.push_back(submissionAttemptIds[index]);
       } else {
         recordFailure(submissionAttemptIds[index], {},
-                      "Saved results have duplicate IR attempt identity.");
+                      i18n::tr("ir.upload.duplicate_attempt.message"));
       }
     }
     if (uniqueSubmissions.empty()) {
@@ -207,12 +207,12 @@ PreparationOutcome prepareSelectedCandidates(
                                                   dependencies.enqueueBatch);
     } catch (const std::exception &) {
       for (const std::string &attemptId : uniqueSubmissionAttemptIds) {
-        recordFailure(attemptId, {}, "IR batch enqueue failed.");
+        recordFailure(attemptId, {}, i18n::tr("ir.upload.enqueue_failed.message"));
       }
       return outcome;
     } catch (...) {
       for (const std::string &attemptId : uniqueSubmissionAttemptIds) {
-        recordFailure(attemptId, {}, "IR batch enqueue failed.");
+        recordFailure(attemptId, {}, i18n::tr("ir.upload.enqueue_failed.message"));
       }
       return outcome;
     }
@@ -240,7 +240,7 @@ PreparationOutcome prepareSelectedCandidates(
             uniqueSubmissionAttemptIds[index]);
       } else if (count != resultCounts.end() && count->second > 1) {
         recordFailure(uniqueSubmissionAttemptIds[index], {},
-                      "IR batch enqueue returned ambiguous outcomes.");
+                      i18n::tr("ir.upload.ambiguous_outcomes.message"));
       } else if (item != resultItems.end()) {
         std::string diagnostic =
             ir::sanitizeDiagnostic(item->second->diagnostic);
@@ -248,10 +248,10 @@ PreparationOutcome prepareSelectedCandidates(
           diagnostic = ir::sanitizeDiagnostic(batch->diagnostic);
         }
         recordFailure(uniqueSubmissionAttemptIds[index], diagnostic,
-                      "IR batch enqueue rejected this score.");
+                      i18n::tr("ir.upload.enqueue_rejected.message"));
       } else {
         recordFailure(uniqueSubmissionAttemptIds[index], batch->diagnostic,
-                      "IR batch enqueue returned no outcome.");
+                      i18n::tr("ir.upload.no_outcome.message"));
       }
     }
     (void)detail::eraseQueuedAttemptIds(outcome.failedAttemptIds,
@@ -346,7 +346,8 @@ std::vector<ir::IrUploadCandidate> Controller::beginPreparation() {
   }
   if (!snapshot.empty()) {
     preparing_ = true;
-    statusText_ = "Preparing 0 of " + std::to_string(snapshot.size()) + "...";
+    statusText_ = i18n::message("ir.upload.preparing.count",
+        {{"completed", "0"}, {"total", std::to_string(snapshot.size())}});
   }
   return snapshot;
 }
@@ -357,13 +358,13 @@ void Controller::setPreparationProgress(std::size_t completed,
     return;
   }
   completed = std::min(completed, total);
-  statusText_ = "Preparing " + std::to_string(completed) + " of " +
-                std::to_string(total) + "...";
+  statusText_ = i18n::message("ir.upload.preparing.count",
+      {{"completed", std::to_string(completed)}, {"total", std::to_string(total)}});
 }
 
 void Controller::markCancellationRequested() {
   if (preparing_) {
-    statusText_ = i18n::tr("ir.upload.cancelling.progress");
+    statusText_ = i18n::message("ir.upload.cancelling.progress");
   }
 }
 
@@ -376,7 +377,7 @@ void Controller::completePreparation(const PreparationOutcome &outcome) {
                              outcome.failedAttemptIds.end());
   preparing_ = false;
   if (outcome.cancelled) {
-    statusText_ = i18n::tr("ir.upload.upload_cancelled.message");
+    statusText_ = i18n::message("ir.upload.upload_cancelled.message");
     return;
   }
   std::unordered_set<std::string> queuedAttemptIds;
@@ -408,8 +409,9 @@ void Controller::completePreparation(const PreparationOutcome &outcome) {
       candidate.failureReason = found->second;
     }
   }
-  statusText_ = std::to_string(outcome.queuedAttemptIds.size()) + " queued, " +
-                std::to_string(outcome.failedAttemptIds.size()) + " failed";
+  statusText_ = i18n::message("ir.upload.completed.count",
+      {{"queued", std::to_string(outcome.queuedAttemptIds.size())},
+       {"failed", std::to_string(outcome.failedAttemptIds.size())}});
 }
 
 } // namespace ir_uploads

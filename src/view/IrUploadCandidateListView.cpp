@@ -36,21 +36,23 @@ std::string keyModeDescription(int keyMode) {
   }
 }
 
-std::string attemptDetail(
+i18n::Text attemptDetail(
     const result_persistence::ModernChartResult &result) {
-  std::string detail = "Attempt " + result.attemptId.substr(0, 8);
-  detail += "  Combo " + std::to_string(result.score.maxCombo);
-  detail += "  ";
-  detail += gaugeTypeToShortLabel(result.adoptedGaugeType);
-  detail += "  Gauge " + formatGauge(result.score.finalGauge);
+  auto detail = i18n::message("ir.upload.candidate.detail",
+      {{"attempt", result.attemptId.substr(0, 8)},
+       {"combo", std::to_string(result.score.maxCombo)},
+       {"gaugeType", gaugeTypeToShortLabel(result.adoptedGaugeType)},
+       {"gauge", formatGauge(result.score.finalGauge)}});
   const auto &provenance = result.score.provenance;
   if (!provenance.player1.option.empty() &&
       provenance.player1.option != "NORMAL") {
-    detail += "  " + provenance.player1.option;
+    detail = i18n::message("ir.upload.candidate.option",
+        {{"detail", detail}, {"option", provenance.player1.option}});
   }
   if (assist_options::isEnabled(provenance.assistOption)) {
-    detail += "  Assist " +
-              assist_options::normalize(provenance.assistOption);
+    detail = i18n::message("ir.upload.candidate.assist",
+        {{"detail", detail},
+         {"assist", assist_options::normalize(provenance.assistOption)}});
   }
   return detail;
 }
@@ -205,11 +207,12 @@ void IrUploadCandidateListItemView::setCandidate(
 
   titleText_->setText(score.chartTitle);
   artistText_->setText(score.chartArtist);
-  std::string attempt = attemptDetail(result);
+  auto attempt = attemptDetail(result);
   if (!candidate.failureReason.empty()) {
-    attempt += "  Failed: " + candidate.failureReason;
+    attempt = i18n::message("ir.upload.candidate.failure",
+        {{"detail", attempt}, {"reason", candidate.failureReason}});
   }
-  attemptText_->setText(attempt);
+  attemptText_->setLocalizedText(attempt);
   difficultyText_->setText("");
   keyModeText_->setText(keyModeDescription(result.keyMode));
 
@@ -235,7 +238,8 @@ void IrUploadCandidateListItemView::setCandidate(
   jacketImage_->freeImage();
 
   const bool failed = candidate.state == ir::IrRecordState::Failed;
-  statusText_->setText(failed ? i18n::tr("ir.upload.candidate.retry.label") : i18n::tr("ir.upload.candidate.eligible.label"));
+  statusText_->setLocalizedText(i18n::message(
+      failed ? "ir.upload.candidate.retry.label" : "ir.upload.candidate.eligible.label"));
   if (failed) {
     statusText_->setThemedBackgroundColor(ui_theme::coral);
     statusText_->setThemedColor(

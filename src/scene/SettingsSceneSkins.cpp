@@ -601,7 +601,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                  persistSettings();
                });
   appendNumeric(
-      "Indicator Y (%)",
+      i18n::message("settings.skins.indicator_y.percent_label"),
       std::to_string(
           judgementIndicatorYToPercent(context.settings.judgementIndicatorY)),
       [this](const std::string &text) {
@@ -612,7 +612,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                        0, 100));
         persistSettings();
       });
-  appendNumeric("Indicator Width (%)",
+  appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
                 std::to_string(judgementIndicatorWidthScaleToPercent(
                     context.settings.judgementIndicatorWidthScale)),
                 [this](const std::string &text) {
@@ -699,7 +699,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
 
   appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
   appendNumeric(
-      "Judge Text Y (%)",
+      i18n::message("settings.skins.judge_text_y.percent_label"),
       std::to_string(judgementTextYToPercent(context.settings.judgementTextY)),
       [this](const std::string &text) {
         context.settings.judgementTextY = judgementTextPercentToY(std::clamp(
@@ -821,7 +821,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                       AppSettings::kMinLaneLength, AppSettings::kMaxLaneLength);
                   persistSettings();
                 });
-  appendNumeric("Beam Length (%)",
+  appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
                 std::to_string(context.settings.laneBeamLengthPercent),
                 [this](const std::string &text) {
                   context.settings.laneBeamLengthPercent =
@@ -829,7 +829,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                           text, context.settings.laneBeamLengthPercent));
                   persistSettings();
                 });
-  appendNumeric("Play Area Width (" + std::to_string(keyMode) + "K)",
+  appendNumeric(i18n::message("settings.skins.play_area_width.key_mode", {{"keys", std::to_string(keyMode)}}),
                 formatPlayAreaWidthLabel(
                     context.settings.playAreaWidthForKeyMode(keyMode)),
                 [this, keyMode](const std::string &text) {
@@ -1837,17 +1837,19 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     history->setFlexDirection(FlexDirection::Column);
     history->setGap(static_cast<float>(metrics.cardGap));
     for (const auto &record : snapshot.history) {
-      std::string recordText =
-          "History #" + std::to_string(record.recordSerial) + " • " +
-          record.entry.packageRelativePath +
-          " • Revision: " + record.revisionDigest +
-          " • Configuration: " + record.configurationDigest + " • " +
-          diagnosticPresentation(record.diagnostic);
+      auto recordText = i18n::message("settings.skins.history.record",
+          {{"serial", std::to_string(record.recordSerial)},
+           {"path", record.entry.packageRelativePath},
+           {"revision", record.revisionDigest},
+           {"configuration", record.configurationDigest},
+           {"diagnostic", diagnosticPresentation(record.diagnostic)}});
       if (record.luaLine) {
-        recordText += " • Lua line " + std::to_string(*record.luaLine);
+        recordText = i18n::message("settings.skins.history.lua_line",
+            {{"record", recordText}, {"line", std::to_string(*record.luaLine)}});
       }
       if (record.frameSerial) {
-        recordText += " • Frame " + std::to_string(*record.frameSerial);
+        recordText = i18n::message("settings.skins.history.frame",
+            {{"record", recordText}, {"frame", std::to_string(*record.frameSerial)}});
       }
       history->addView(makeWrappedText(recordText, metrics.smallTextSize,
                                        ui_theme::textSecondary()));

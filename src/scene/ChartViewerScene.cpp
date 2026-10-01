@@ -3161,26 +3161,29 @@ void ChartViewerScene::updateSelectionText() {
     return;
   }
   if (canvasView == nullptr || !canvasView->hasSelectedTime()) {
-    selectionText->setText(i18n::tr("chart_viewer.tap_chart_set_cursor.message"));
+    selectionText->setLocalizedText(i18n::message("chart_viewer.tap_chart_set_cursor.message"));
     return;
   }
 
   const auto range = canvasView->getPracticeRange();
-  std::string text = "Practice " + formatMicrosTime(range.startMicros) +
-                     " - " + formatMicrosTime(range.endMicros) +
-                     (range.active == practice::Marker::Start ? " / Start"
-                                                              : " / End");
+  auto text = i18n::message("chart_viewer.selection.range",
+      {{"start", formatMicrosTime(range.startMicros)},
+       {"end", formatMicrosTime(range.endMicros)},
+       {"marker", range.active == practice::Marker::Start
+                      ? i18n::message("chart_viewer.selection.start")
+                      : i18n::message("chart_viewer.selection.end")}});
   if (listenActive) {
-    text += " / Listening";
+    text = i18n::message("chart_viewer.selection.listening", {{"selection", text}});
   }
   if (loadedGhostReplayId == kPracticeGhostReplayId) {
-    text += " / Practice Ghost";
+    text = i18n::message("chart_viewer.selection.practice_ghost", {{"selection", text}});
   } else if (loadedGhostReplayId == kModernGhostReplayId) {
-    text += " / Saved Ghost";
+    text = i18n::message("chart_viewer.selection.saved_ghost", {{"selection", text}});
   } else if (loadedGhostReplayId >= 0) {
-    text += " / Ghost #" + std::to_string(loadedGhostReplayId);
+    text = i18n::message("chart_viewer.selection.ghost_number",
+        {{"selection", text}, {"id", std::to_string(loadedGhostReplayId)}});
   }
-  selectionText->setText(text);
+  selectionText->setLocalizedText(text);
 }
 
 void ChartViewerScene::updateListenControls() {
@@ -4817,17 +4820,15 @@ ChartViewerScene::scanActiveRandomOptions(
 
 std::string ChartViewerScene::randomSummary() const {
   if (selectedRandomValues.empty()) {
-    return "RANDOM: none";
+    return i18n::tr("chart_viewer.random.none");
   }
   if (selectedRandomValues.size() > kRandomSummaryLimit) {
-    return "RANDOM: " +
-           joinRandomValueRange(selectedRandomValues, 0, kRandomSummaryHead) +
-           " ... " +
-           joinRandomValueRange(selectedRandomValues,
-                                selectedRandomValues.size() -
-                                    kRandomSummaryTail,
-                                selectedRandomValues.size()) +
-           " (" + std::to_string(selectedRandomValues.size()) + " values)";
+    return i18n::format("chart_viewer.random.summary",
+        {{"values", joinRandomValueRange(selectedRandomValues, 0, kRandomSummaryHead) +
+                        " ... " + joinRandomValueRange(selectedRandomValues,
+                            selectedRandomValues.size() - kRandomSummaryTail,
+                            selectedRandomValues.size())},
+         {"count", std::to_string(selectedRandomValues.size())}});
   }
   return "RANDOM: " + joinRandomValues(selectedRandomValues);
 }
@@ -4838,7 +4839,8 @@ std::string ChartViewerScene::viewerPlayOptionLabel() const {
       viewerPlayOption2Seed);
   std::string result = label.empty() ? "NORMAL" : label;
   if (viewerLaneOrderSummary.has_value()) {
-    result += " / Lane " + *viewerLaneOrderSummary;
+    result = i18n::format("chart_viewer.option.lane_order",
+        {{"option", result}, {"order", *viewerLaneOrderSummary}});
   }
   return result;
 }

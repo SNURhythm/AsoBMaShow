@@ -1440,13 +1440,15 @@ void ResultScene::addResultPersistenceStatus() {
           persistenceDetailsReasonText->setText(i18n::tr("result.reason.label") + details->reason);
         }
         if (persistenceDetailsReferenceText != nullptr) {
-          std::string references = details->attemptId.empty()
-                  ? "Attempt ID: unavailable"
-                  : "Attempt ID: " + details->attemptId;
+          auto references = i18n::message("result.save_conflict.attempt_id",
+              {{"id", details->attemptId.empty()
+                          ? i18n::message("result.save_conflict.unavailable")
+                          : i18n::Text(details->attemptId)}});
           if (details->replayId.has_value()) {
-            references += "\nReplay ID: " + std::to_string(*details->replayId);
+            references = i18n::message("result.save_conflict.replay_id",
+                {{"attempt", references}, {"id", std::to_string(*details->replayId)}});
           }
-          persistenceDetailsReferenceText->setText(references);
+          persistenceDetailsReferenceText->setLocalizedText(references);
         }
         persistenceDetailsModalRoot->setSize(rendering::window_width,
                                              rendering::window_height);
@@ -1515,9 +1517,8 @@ void ResultScene::addResultPersistenceStatus() {
   modalPanel->addView(modalTitle);
 
   auto *modalIntroduction = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  modalIntroduction->setText(
-      "This diagnostic identifies the integrity check that raised the "
-      "warning.");
+  modalIntroduction->setLocalizedText(
+      i18n::message("result.save_conflict.explanation"));
   modalIntroduction->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   modalIntroduction->setWrap(true);
   modalIntroduction->setHeight(50);
@@ -2073,7 +2074,7 @@ void ResultScene::addRetryButtons() {
       ui_theme::withAlpha(ui_theme::violetActionHover(), 220));
   exportPhotoButton->setStyledBorderWidth(1);
   if (local->autoPlayResult) {
-    exportPhotoButtonText->setText("AUTO PLAY");
+    exportPhotoButtonText->setLocalizedText(i18n::message("records.auto_play.label"));
     exportPhotoButton->setOnClickListener([]() {});
     exportPhotoButton->setBackgroundColors(
         ui_theme::control(), ui_theme::control(), ui_theme::control());
