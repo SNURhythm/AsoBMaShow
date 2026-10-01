@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -78,24 +77,6 @@ std::string judgementId(std::string_view label) {
     }
   }
   return result;
-}
-
-Color comparisonDeltaAccent(const ResultComparisonCard &card) {
-  if (!card.delta.has_value() || card.delta->find("--") != std::string::npos) {
-    return ui_theme::textMuted();
-  }
-  if (card.title.find("COMBO") != std::string::npos) {
-    int comboDelta = 0;
-    int breakDelta = 0;
-    if (std::sscanf(card.delta->c_str(), "COMBO %d / BREAK %d", &comboDelta,
-                    &breakDelta) == 2) {
-      return comboDelta >= 0 && breakDelta <= 0 ? ui_theme::lime()
-                                                : ui_theme::amber();
-    }
-    return ui_theme::amber();
-  }
-  return card.delta->find('-') == std::string::npos ? ui_theme::lime()
-                                                    : ui_theme::coral();
 }
 
 std::optional<ResultGradeCard>
@@ -401,7 +382,7 @@ void DefaultSkin::buildPresentationResultLayout(
     if (card.delta.has_value()) {
       auto *deltaView =
           makeLabel(*card.delta, semanticName == "combo" ? 20 : 22,
-                    comparisonDeltaAccent(card));
+                    card.deltaAccent.value_or(ui_theme::textMuted()));
       deltaView->setHeight(semanticName == "combo" ? 28 : 30);
       deltaView->setAlign(TextView::CENTER);
       deltaView->setOverflow(TextView::TextOverflow::Hidden);
@@ -512,7 +493,8 @@ void DefaultSkin::buildPresentationResultLayout(
       if (!authoritativePresentation && !infoGrid->getChildren().empty()) {
         infoGrid->addView(makeDivider());
       }
-      const std::string id = semanticId(info.label);
+      const auto semanticName = resultInfoTileSemanticName(info.kind);
+      const std::string id = semanticId(semanticName);
       auto *tile = new View();
       tile->setFlexGrow(1);
       tile->setFlexShrink(1);
@@ -536,7 +518,7 @@ void DefaultSkin::buildPresentationResultLayout(
       labelView->setName("resultInfoLabel:" + id);
       tile->addView(labelView);
 
-      if (!authoritativePresentation && info.label == "BPM") {
+      if (!authoritativePresentation && info.kind == ResultInfoTileKind::Bpm) {
         const BpmTextParts bpm = splitBpmText(info.value);
         auto *valueRow = new View();
         valueRow->setFlexDirection(FlexDirection::Row);
@@ -588,13 +570,13 @@ void DefaultSkin::buildPresentationResultLayout(
       }
 
       const bool laneOrder =
-          info.label == "PLAY MODE" && info.detail.has_value();
+          info.kind == ResultInfoTileKind::PlayMode && info.detail.has_value();
       int valueSize = laneOrder ? 24 : 31;
-      if (info.label == "BPM" && info.value.size() > 9) {
+      if (info.kind == ResultInfoTileKind::Bpm && info.value.size() > 9) {
         valueSize = 23;
       }
       const Color valueColor =
-          info.label == "PLAY MODE" && !info.detail.has_value()
+          info.kind == ResultInfoTileKind::PlayMode && !info.detail.has_value()
               ? info.accent
               : (presentation.readOnlyIrUploaded && !info.detail.has_value()
                      ? info.accent
@@ -603,7 +585,7 @@ void DefaultSkin::buildPresentationResultLayout(
       valueView->setHeight(laneOrder ? 30 : 38);
       valueView->setAlign(TextView::CENTER);
       valueView->setOverflow(TextView::TextOverflow::Hidden);
-      valueView->setName(info.label);
+      valueView->setName(std::string(semanticName));
       tile->addView(valueView);
 
       if (laneOrder) {

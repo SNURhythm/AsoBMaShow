@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "i18n/Localization.h"
 #include "scene/ResultPhotoExportPresentation.h"
 #include "scene/ResultSkinFailurePresentation.h"
 #include "scene/ResultSkinApplicationOverlays.h"
@@ -809,6 +810,55 @@ void testRemoteGaugeLabelAndLampFallbackSemantics() {
          "known remote lamp supplies lamp semantics without inventing gauge");
 }
 
+void testLocalizedResultsKeepSemanticLayoutAndColors() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean,
+                              i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    for (const bool moreBreaks : {false, true}) {
+      auto state = localState();
+      state.comboBreak = moreBreaks ? 40 : 30;
+      const auto model = makeLocalResultPresentation(localMeta(), state, localOptions());
+      for (const bool legacy : {false, true}) {
+        const auto root = legacy ? buildLegacyLayout(localMeta(), state)
+                                 : buildPresentationLayout(model);
+        for (const char *id : {"next-grade", "total-notes", "bpm", "judge-rank",
+                              "duration", "play-mode"}) {
+          expect(root->findViewByName(std::string("resultInfoTile:") + id) != nullptr,
+                 "local result tile identities are independent of the display language");
+        }
+        const auto *label = textView(root.get(), "resultInfoLabel:play-mode");
+        expect(label && label->getText() == i18n::tr("result.summary.play_mode.badge"),
+               "stable play-mode identity still displays the selected translation");
+        auto *laneRow = root->findViewByName("resultInfoDetail:play-mode");
+        expect(laneRow && laneRow->getChildren().size() == 8,
+               "translated play mode retains the per-symbol lane-order row");
+        if (laneRow && laneRow->getChildren().size() == 8) {
+          const auto *scratch = dynamic_cast<TextView *>(laneRow->getChildren()[3]);
+          const auto expected = ui_theme::sdl(ui_theme::coral());
+          expect(scratch && scratch->getText() == "S" &&
+                     scratch->currentColor().r == expected.r &&
+                     scratch->currentColor().g == expected.g &&
+                     scratch->currentColor().b == expected.b,
+                 "localized lane-order row preserves the distinct scratch color");
+        }
+        const auto *delta = textView(root.get(), "resultSummaryDelta:combo");
+        const auto expected = ui_theme::sdl(moreBreaks ? ui_theme::amber() : ui_theme::lime());
+        expect(delta && delta->currentColor().r == expected.r &&
+                   delta->currentColor().g == expected.g && delta->currentColor().b == expected.b,
+               "combo/break improvement colors use result facts in every language");
+      }
+    }
+    const auto remote = makeRemoteResultPresentation(remoteScore());
+    const auto root = buildPresentationLayout(remote);
+    for (const char *id : {"total-notes", "bp", "service", "client", "input-device",
+                          "random", "gauge-type", "level"}) {
+      expect(root->findViewByName(std::string("resultInfoTile:") + id) != nullptr,
+             "remote metadata keeps distinct stable tile identities in every language");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testDefaultSkinLocalPresentationContract() {
   auto options = localOptions();
   bms_parser::Chart chart;
@@ -1178,6 +1228,7 @@ int main() {
   testRemoteMissingVersusExplicitZero();
   testRemoteUnknownLampDoesNotInventPresentation();
   testRemoteGaugeLabelAndLampFallbackSemantics();
+  testLocalizedResultsKeepSemanticLayoutAndColors();
   testDefaultSkinLocalPresentationContract();
   testDefaultSkinLegacyNullPresentationParity();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();

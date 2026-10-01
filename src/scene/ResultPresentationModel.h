@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct ResultJudgementRow {
@@ -32,9 +33,19 @@ struct ResultComparisonCard {
   std::optional<ResultComparisonValue> target;
   ResultComparisonValue current;
   std::optional<std::string> delta;
+  std::optional<Color> deltaAccent;
 };
 
+enum class ResultInfoTileKind {
+  Unknown, NextGrade, TotalNotes, Bpm, JudgeRank, Duration, PlayMode,
+  BadPoints, Service, Client, InputDevice, Random, GaugeType, Level,
+};
+
+// Stable view identities and rendering roles are separate from translated labels.
+std::string_view resultInfoTileSemanticName(ResultInfoTileKind kind) noexcept;
+
 struct ResultInfoTile {
+  ResultInfoTileKind kind = ResultInfoTileKind::Unknown;
   std::string label;
   std::string value;
   std::optional<std::string> detail;

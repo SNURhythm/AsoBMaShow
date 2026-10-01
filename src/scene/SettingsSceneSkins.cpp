@@ -897,11 +897,12 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->addView(makeWrappedText(
       i18n::message("settings.skins.catalog.compatibility_description"),
       metrics.bodyTextSize, ui_theme::textSecondary()));
+  // Storage components identify the canonical directory, not its UI label.
   const std::filesystem::path visibleSkinRoot =
       context.skinStorageRoots ? context.skinStorageRoots->visiblePackages
-                               : Utils::GetDocumentsPath(i18n::tr("settings.skins.skins.label"));
+                               : Utils::GetDocumentsPath("Skins");
   std::string visibleSkinFolder = Utils::GetStoragePathUtf8RelativeToDocuments(
-      visibleSkinRoot, i18n::tr("settings.skins.skins.label"));
+      visibleSkinRoot, "Skins");
   if (visibleSkinFolder.empty()) {
     visibleSkinFolder = "Documents/Skins";
   }
