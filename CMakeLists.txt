@@ -364,6 +364,13 @@ function(asobmashow_enable_lua_skin_java_pattern target_name)
     endif()
 endfunction()
 
+# Shared by skin file validation and cached text decoding on all platforms.
+# Xcode discovers Utf8.cpp through its synchronized src group.
+add_library(asobmashow_utf8 STATIC src/text/Utf8.cpp)
+target_compile_features(asobmashow_utf8 PRIVATE cxx_std_17)
+set_target_properties(asobmashow_utf8 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+list(APPEND COMMON_LIBS asobmashow_utf8)
+
 add_library(asobmashow_localization STATIC src/i18n/Localization.cpp)
 target_compile_features(asobmashow_localization PRIVATE cxx_std_17)
 set_target_properties(asobmashow_localization PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -764,6 +771,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(file_checksum_tests PRIVATE cxx_std_23)
 
+    add_executable(utf8_tests tests/utf8_tests.cpp)
+    target_include_directories(utf8_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(utf8_tests PRIVATE cxx_std_20)
+    target_link_libraries(utf8_tests PRIVATE asobmashow_utf8 utf8proc::utf8proc)
+
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         add_executable(play_skin_viewport_tests
             tests/play_skin_viewport_tests.cpp
@@ -788,7 +800,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(skin_text_decode_cache_tests PRIVATE cxx_std_20)
-        target_link_libraries(skin_text_decode_cache_tests PRIVATE utf8proc::utf8proc)
+        target_link_libraries(skin_text_decode_cache_tests PRIVATE asobmashow_utf8)
 
         add_executable(skin_draw_command_tests
             tests/skin_draw_command_tests.cpp
@@ -8408,6 +8420,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if (TARGET skin_destination_evaluator_tests)
         asobmashow_register_test(skin_destination_evaluator_tests)
     endif()
+    asobmashow_register_test(utf8_tests)
     if (TARGET skin_text_decode_cache_tests)
         asobmashow_register_test(skin_text_decode_cache_tests)
     endif()
@@ -8712,6 +8725,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 asobmashow_lua_skin_file_system_source_index)
             if(NOT asobmashow_lua_skin_file_system_source_index EQUAL -1)
                 asobmashow_enable_lua_skin_java_pattern(${asobmashow_target})
+            endif()
+
+            # Standalone skin tests may omit COMMON_LIBS. Match the consumers
+            # of the shared UTF-8 implementation before extracting test objects.
+            if(asobmashow_target_sources MATCHES
+               "(LuaSkinHostModules|SkinTextGraphNormalization|Skin2DRenderer)\\.cpp")
+                target_link_libraries(${asobmashow_target} PRIVATE asobmashow_utf8)
             endif()
 
             # Utils.cpp uses CoreFoundation for exact MS932 decoding on Apple.

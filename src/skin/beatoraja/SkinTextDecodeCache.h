@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-#include <utf8proc.h>
+#include "../../text/Utf8.h"
 
 namespace skin {
 
@@ -40,17 +40,7 @@ public:
     auto decoded = entry.codepoints.use_count() == 1
                        ? std::move(entry.codepoints)
                        : std::make_shared<std::vector<char32_t>>();
-    decoded->clear();
-    decoded->reserve(value.size());
-    for (std::size_t offset = 0; offset < value.size();) {
-      utf8proc_int32_t codepoint = 0;
-      const auto consumed = utf8proc_iterate(
-          reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
-          static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
-      if (consumed <= 0) return {};
-      decoded->push_back(static_cast<char32_t>(codepoint));
-      offset += static_cast<std::size_t>(consumed);
-    }
+    if (!asobmashow::text::decodeUtf8(value, *decoded)) return {};
 
     entry.text.assign(value);
     entry.codepoints = decoded;

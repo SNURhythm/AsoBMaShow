@@ -23,6 +23,7 @@ extern "C" {
 #include <atomic>
 #include <algorithm>
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -1834,9 +1835,70 @@ void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
          "Lua host I/O preserves UTF-8 virtual path bytes when constructing a physical path");
 }
 
+// Opt-in timing of the real Lua -> virtual filesystem -> UTF-8 -> line path.
+// Fixture construction and Lua chunk compilation are outside the measurement.
+void benchmarkFileHelpers() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin", true);
+  if (!fileSystem) { expect(false, "file benchmark creates a filesystem"); return; }
+  lua_State *state = luaL_newstate();
+  if (!state) { expect(false, "file benchmark creates a Lua state"); return; }
+  luaL_openlibs(state);
+  {
+    auto modules = LuaSkinHostModules::create(state, {.fileSystem = fileSystem.get()});
+    if (!modules.modules || modules.modules->installConfiguration({}) ||
+        modules.modules->enableStateAccessors()) {
+      expect(false, "file benchmark installs the configured host");
+    } else {
+      int status = luaL_dostring(state, R"lua(
+local state = require("main_state")
+local line = "제목: 青空の向こう側 - piano mix 😀\n"
+assert(state.file_write("benchmark.txt", string.rep(line, 1400)))
+function benchmark_count(iterations)
+  local total = 0
+  for i = 1, iterations do total = total + state.file_count_lines("benchmark.txt") end
+  assert(total == 1400 * iterations)
+end
+function benchmark_read(iterations)
+  local total = 0
+  for i = 1, iterations do
+    local lines = state.file_read_lines("benchmark.txt")
+    assert(lines[1] == line:sub(1, -2))
+    total = total + #lines
+  end
+  assert(total == 1400 * iterations)
+end
+)lua");
+      expect(status == 0, "file benchmark writes its multilingual corpus");
+      if (status == 0) {
+        for (const char *name : {"benchmark_count", "benchmark_read"}) {
+          for (const int iterations : {20, 400}) {
+            lua_getglobal(state, name);
+            lua_pushinteger(state, iterations);
+            const auto start = std::chrono::steady_clock::now();
+            status = lua_pcall(state, 1, 0, 0);
+            const double micros = std::chrono::duration<double, std::micro>(
+                std::chrono::steady_clock::now() - start).count() / iterations;
+            expect(status == 0, "file benchmark preserves every line");
+            if (status != 0) { lua_pop(state, 1); break; }
+            if (iterations == 400) std::cout << name << " us/file=" << micros << '\n';
+          }
+        }
+      } else {
+        std::cerr << lua_tostring(state, -1) << '\n';
+        lua_pop(state, 1);
+      }
+    }
+  }
+  lua_close(state);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--benchmark-files") {
+    benchmarkFileHelpers();
+    return failures == 0 ? 0 : 1;
+  }
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
   testGetPathUsesBeatorajaEntryParentPaths();
   testGetPathUsesBeatorajaSourceSemantics();

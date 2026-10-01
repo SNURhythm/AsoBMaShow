@@ -1,6 +1,7 @@
 #include "SkinTextGraphNormalization.h"
 
 #include "../LuaGameplaySkinFeature.h"
+#include "../../text/Utf8.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
@@ -14,53 +15,10 @@
 namespace skin {
 namespace {
 
-bool validUtf8(std::string_view value) {
-  std::size_t index = 0;
-  while (index < value.size()) {
-    const auto first = static_cast<unsigned char>(value[index]);
-    if (first <= 0x7f) {
-      ++index;
-      continue;
-    }
-
-    std::size_t continuationCount = 0;
-    std::uint32_t codePoint = 0;
-    if (first >= 0xc2 && first <= 0xdf) {
-      continuationCount = 1;
-      codePoint = first & 0x1f;
-    } else if (first >= 0xe0 && first <= 0xef) {
-      continuationCount = 2;
-      codePoint = first & 0x0f;
-    } else if (first >= 0xf0 && first <= 0xf4) {
-      continuationCount = 3;
-      codePoint = first & 0x07;
-    } else {
-      return false;
-    }
-    if (continuationCount >= value.size() - index) {
-      return false;
-    }
-    for (std::size_t continuation = 1; continuation <= continuationCount;
-         ++continuation) {
-      const auto byte = static_cast<unsigned char>(value[index + continuation]);
-      if ((byte & 0xc0) != 0x80) {
-        return false;
-      }
-      codePoint = (codePoint << 6) | (byte & 0x3f);
-    }
-    if ((continuationCount == 2 && codePoint < 0x800) ||
-        (continuationCount == 3 && codePoint < 0x10000) ||
-        (codePoint >= 0xd800 && codePoint <= 0xdfff) || codePoint > 0x10ffff) {
-      return false;
-    }
-    index += continuationCount + 1;
-  }
-  return true;
-}
 
 bool boundedUtf8(std::string_view value) {
   return value.size() <= LuaSkinTableDecoderPolicy::maxGameplayTextBytes &&
-         validUtf8(value);
+         asobmashow::text::validUtf8(value);
 }
 
 bool finiteAndBounded(double value) {
@@ -103,7 +61,7 @@ normalizeSkinText(const SkinTextNormalizationInput &input,
       input.literal.size() > LuaSkinTableDecoderPolicy::maxGameplayTextBytes) {
     return textFailure(SkinTextGraphNormalizationError::TextLimitExceeded);
   }
-  if (!validUtf8(input.fontName) || !validUtf8(input.literal)) {
+  if (!asobmashow::text::validUtf8(input.fontName) || !asobmashow::text::validUtf8(input.literal)) {
     return textFailure(SkinTextGraphNormalizationError::InvalidUtf8);
   }
   if (input.pointSize <= 0 ||

@@ -1,7 +1,7 @@
 #pragma once
 
 // Experiment only: this header is injected into a temporary source snapshot.
-// No candidate library is added to the application's dependency graph.
+// Includes the production wrapper for comparison with the library adapters.
 #include <cstddef>
 #include <iterator>
 #include <string_view>
@@ -12,6 +12,8 @@
 #include <simdutf.h>
 #elif TEXT_LIBRARY_BACKEND == 3
 #include <utf8.h>
+#elif TEXT_LIBRARY_BACKEND == 4
+#include "text/Utf8.h"
 #endif
 
 namespace text_library_experiment {
@@ -22,11 +24,16 @@ inline constexpr std::string_view name = "utf8proc";
 inline constexpr std::string_view name = "simdutf";
 #elif TEXT_LIBRARY_BACKEND == 3
 inline constexpr std::string_view name = "utfcpp";
+#elif TEXT_LIBRARY_BACKEND == 4
+inline constexpr std::string_view name = "production";
 #else
-#error Select TEXT_LIBRARY_BACKEND=1 (utf8proc), 2 (simdutf), or 3 (utfcpp)
+#error Select TEXT_LIBRARY_BACKEND=1 (utf8proc), 2 (simdutf), 3 (utfcpp), or 4 (production)
 #endif
 
 inline bool decode(std::string_view value, std::vector<char32_t> &output) {
+#if TEXT_LIBRARY_BACKEND == 4
+  return asobmashow::text::decodeUtf8(value, output);
+#endif
   output.clear();
   if (value.empty()) return true;
 #if TEXT_LIBRARY_BACKEND == 2
@@ -67,6 +74,9 @@ inline bool decode(std::string_view value, std::vector<char32_t> &output) {
 }
 
 inline bool validate(std::string_view value) {
+#if TEXT_LIBRARY_BACKEND == 4
+  return asobmashow::text::validUtf8(value);
+#endif
   if (value.empty()) return true;
 #if TEXT_LIBRARY_BACKEND == 2
   return simdutf::validate_utf8(value.data(), value.size());
@@ -85,4 +95,4 @@ inline bool validate(std::string_view value) {
 #endif
 }
 
-} // namespace text_library_experiment
+} // namespace asobmashow::text_library_experiment

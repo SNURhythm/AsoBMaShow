@@ -121,3 +121,11 @@ Release checklist:
   the exact package used for the binary.
 - Preserve the GPL source-availability obligations described above for
   binaries that include x264.
+
+## simdutf
+
+AsoBMaShow uses simdutf 9.2.1 for strict UTF-8 validation and text decoding.
+The UTF-8/UTF-32 amalgamation is bundled under `src/text/simdutf`; provenance
+and regeneration instructions are in that directory's README. This build
+uses its MIT license, reproduced in `assets/legal/simdutf.txt`. Keep that
+notice in app bundles and release archives.

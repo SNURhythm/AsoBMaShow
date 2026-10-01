@@ -1,6 +1,7 @@
 #include "LuaSkinHostModules.h"
 
 #include "../LuaGameplaySkinFeature.h"
+#include "../../text/Utf8.h"
 #include "../package/SkinPathPolicy.h"
 #include "LuaSkinFileIo.h"
 #include "LuaSkinAudioHost.h"
@@ -908,49 +909,6 @@ std::string luaToJStringImpl(lua_State *state, int index) {
   }
 }
 
-bool validUtf8FileContents(std::string_view value) {
-  std::size_t index = 0;
-  while (index < value.size()) {
-    const auto first = static_cast<unsigned char>(value[index]);
-    if (first <= 0x7f) {
-      ++index;
-      continue;
-    }
-    std::size_t continuationCount = 0;
-    std::uint32_t codePoint = 0;
-    if (first >= 0xc2 && first <= 0xdf) {
-      continuationCount = 1;
-      codePoint = first & 0x1f;
-    } else if (first >= 0xe0 && first <= 0xef) {
-      continuationCount = 2;
-      codePoint = first & 0x0f;
-    } else if (first >= 0xf0 && first <= 0xf4) {
-      continuationCount = 3;
-      codePoint = first & 0x07;
-    } else {
-      return false;
-    }
-    if (continuationCount >= value.size() - index) {
-      return false;
-    }
-    for (std::size_t continuation = 1; continuation <= continuationCount;
-         ++continuation) {
-      const auto byte = static_cast<unsigned char>(value[index + continuation]);
-      if ((byte & 0xc0) != 0x80) {
-        return false;
-      }
-      codePoint = (codePoint << 6) | (byte & 0x3f);
-    }
-    if ((continuationCount == 2 && codePoint < 0x800) ||
-        (continuationCount == 3 && codePoint < 0x10000) ||
-        (codePoint >= 0xd800 && codePoint <= 0xdfff) ||
-        codePoint > 0x10ffff) {
-      return false;
-    }
-    index += continuationCount + 1;
-  }
-  return true;
-}
 
 std::vector<std::string_view> utf8FileLines(std::string_view contents) {
   std::vector<std::string_view> lines;
@@ -1034,7 +992,7 @@ int mainStateFileReadLines(lua_State *state) {
   }
   const std::string_view contents(
       reinterpret_cast<const char *>(read.bytes.data()), read.bytes.size());
-  if (!validUtf8FileContents(contents)) {
+  if (!asobmashow::text::validUtf8(contents)) {
     return 1;
   }
   const auto lines = utf8FileLines(contents);
@@ -1082,7 +1040,7 @@ int mainStateFileCountLines(lua_State *state) {
   }
   const std::string_view contents(
       reinterpret_cast<const char *>(read.bytes.data()), read.bytes.size());
-  if (!validUtf8FileContents(contents)) {
+  if (!asobmashow::text::validUtf8(contents)) {
     lua_pushinteger(state, 0);
     return 1;
   }

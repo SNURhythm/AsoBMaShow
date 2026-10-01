@@ -28,7 +28,7 @@ SOURCES = {
     "simdutf": ("simdutf/simdutf", "v9.2.1", "582f9d0dcf578f6d4766fa29ea12a7f2f02bd3c6ad9e0cf35a8e0ec8478eba4b"),
     "utfcpp": ("nemtrif/utfcpp", "v4.2.1", "6d6a5493a111884cc085ee31babfe6d9960c8fb08fc80a64852eaeea8323dbc1"),
 }
-BACKENDS = {"utf8proc": 1, "simdutf": 2, "utfcpp": 3}
+BACKENDS = {"utf8proc": 1, "simdutf": 2, "utfcpp": 3, "production": 4}
 COMMAND_LOG = []
 SIMD_FLAGS = [f"-DSIMDUTF_FEATURE_{feature}=0" for feature in
               ("UTF16", "ASCII", "LATIN1", "BASE64", "DETECT_ENCODING")]
@@ -60,11 +60,11 @@ def download(name, output):
 
 
 def build_experiment(options, output, build):
-    deps = {name: download(name, output) for name in BACKENDS}
+    deps = {name: download(name, output) for name in SOURCES}
     cxx = os.environ.get("CXX", "c++")
     cc = os.environ.get("CC", "cc")
     includes = [f"-I{deps['utf8proc']}", f"-I{deps['simdutf'] / 'include'}",
-                f"-I{deps['utfcpp'] / 'source'}"]
+                f"-I{deps['utfcpp'] / 'source'}", f"-I{output / 'snapshot/src'}"]
     utf8_object = output / "utf8proc.o"
     simd_object = output / "simdutf.o"
     run([cc, "-O3", "-g0", "-DNDEBUG", "-DUTF8PROC_STATIC", "-c",
@@ -81,12 +81,13 @@ def build_experiment(options, output, build):
     shutil.copy2(adapter, snapshot / "src/skin/beatoraja/TextLibraryAdapters.h")
     cache = snapshot / "src/skin/beatoraja/SkinTextDecodeCache.h"
     text = cache.read_text()
-    start = text.index("    decoded->clear();")
+    start = text.index("    if (!asobmashow::text::decodeUtf8(value, *decoded)) return {};")
     end = text.index("    entry.text.assign(value);", start)
-    if "utf8proc_iterate(" not in text[start:end]:
-        raise RuntimeError("Cache decoder changed; review the experiment injection")
     text = text[:start] + "    if (!text_library_experiment::decode(value, *decoded)) return {};\n\n" + text[end:]
-    cache.write_text(text.replace("#include <utf8proc.h>", '#include "TextLibraryAdapters.h"'))
+    cache.write_text(text.replace('#include "../../text/Utf8.h"', '#include "TextLibraryAdapters.h"'))
+    runtime_object = output / "Utf8.o"
+    run([cxx, "-std=c++20", "-O3", "-g0", "-DNDEBUG", "-c",
+         snapshot / "src/text/Utf8.cpp", "-o", runtime_object])
 
     database = json.loads((build / "compile_commands.json").read_text())
     commands = {}
@@ -126,19 +127,26 @@ def build_experiment(options, output, build):
         for backend, obj, target in pool.map(compile_one, tasks):
             replacements[backend][obj] = target
     for backend, number in BACKENDS.items():
-        extra_objects = [simd_object] if backend == "simdutf" else []
+        extra_objects = ([simd_object] if backend == "simdutf" else
+                         [runtime_object] if backend == "production" else [])
         args = [replacements[backend].get(arg, arg) for arg in link]
         utf8_links = [i for i, arg in enumerate(args) if arg.endswith("/libutf8proc.a")]
         if len(utf8_links) != 1:
             raise RuntimeError("Expected one utf8proc static library in renderer link")
         args[utf8_links[0]] = str(utf8_object)
         args[args.index("-o") + 1] = str(output / backend / "renderer")
-        run(args + list(map(str, extra_objects)), build)
+        runtime_links = [i for i, arg in enumerate(args)
+                         if arg.endswith("libasobmashow_utf8.a")]
+        if len(runtime_links) != 1:
+            raise RuntimeError("Expected one shared UTF-8 library in renderer link")
+        args[runtime_links[0]] = str(runtime_object)
+        # The runtime object supplies simdutf symbols for every renderer variant.
+        run(args, build)
         flags = ["-std=c++20", "-O3", "-g0", "-DNDEBUG", "-DUTF8PROC_STATIC",
                  f"-DTEXT_LIBRARY_BACKEND={number}", *SIMD_FLAGS, *includes]
         run([cxx, *flags, ROOT / "tests/benchmarks/text_library_benchmark.cpp",
              utf8_object, *extra_objects, "-o", output / backend / "operations"])
-        run([cxx, *flags, f"-I{snapshot / 'src'}",
+        run([cxx, f"-I{snapshot / 'src'}", *flags,
              ROOT / "tests/skin_text_decode_cache_tests.cpp", utf8_object,
              *extra_objects, "-o", output / backend / "cache_tests"])
     compiler_names = {cc, cxx, *(commands[obj][0][0] for obj in objects)}
@@ -151,7 +159,10 @@ def build_experiment(options, output, build):
         source_sha256={str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                        for path in (ROOT / "src/skin/beatoraja/SkinTextDecodeCache.h",
                                     ROOT / "src/skin/beatoraja/Skin2DRenderer.cpp",
-                                    ROOT / "tests/skin_draw_command_tests.cpp", adapter,
+                                    ROOT / "tests/skin_draw_command_tests.cpp",
+                                    ROOT / "src/text/Utf8.cpp", ROOT / "src/text/Utf8.h",
+                                    ROOT / "src/text/simdutf/simdutf.h",
+                                    ROOT / "src/text/simdutf/simdutf.cpp.inc", adapter,
                                     ROOT / "tests/benchmarks/text_library_benchmark.cpp",
                                     Path(__file__).resolve())})
     (output / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

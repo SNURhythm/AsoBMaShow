@@ -1,5 +1,8 @@
 # Text library experiment
 
+This records the pre-adoption experiment at `3c97f686`. For the subsequent
+production integration, see [UTF-8 adoption](2026-10-01-utf8-adoption.md).
+
 ## Result
 
 simdutf is the strongest candidate for bulk UTF-8 validation. It also improves
