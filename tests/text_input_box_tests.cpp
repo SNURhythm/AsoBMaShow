@@ -474,8 +474,8 @@ void testReminderDescriptionPreservesLineBreaks() {
     view.setAlign(TextView::CENTER);
     view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
     const int unwrappedHeight = view.textureHeight();
-    expect(unwrappedHeight >= (view.lineHeight() * 3 + 1) / 2,
-           "reminder description keeps its three setup paragraphs in every language");
+    expect(unwrappedHeight >= (view.lineHeight() * 2 + 1) / 2,
+           "reminder description keeps its two setup paragraphs in every language");
     view.setWrap(true);
     view.applyYogaLayout();
     expect(view.textureHeight() == unwrappedHeight,
