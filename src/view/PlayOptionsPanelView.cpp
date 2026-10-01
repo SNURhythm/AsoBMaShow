@@ -404,7 +404,7 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   if (gaugeSectionLabel != nullptr) {
     gaugeSectionLabel->setLocalizedText(
         state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder
-            ? "Gauge / Auto Shift Upper Bound"
+            ? i18n::message("play_options.gauge_auto_shift_upper_bound.label")
             : i18n::message("play_options.gauge.label"));
   }
   if (gaugeAutoShiftBoundsSection != nullptr) {

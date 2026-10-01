@@ -496,7 +496,7 @@ findBmsProgressEventDisplayText(const BmsSearchDownloadProgress &progress,
 
 bool shouldReplaceFindBmsLogLine(const std::string &previous,
                                  const std::string &next) {
-  for (const char *prefix : {i18n::tr("library.find_bms.downloading_archive.label"), "Extracting "}) {
+  for (const char *prefix : {"Downloading archive", "Extracting "}) {
     if (messageStartsWith(previous, prefix) &&
         messageStartsWith(next, prefix)) {
       return true;
@@ -6242,12 +6242,11 @@ void MainMenuScene::applyFindBmsUpdates() {
   auto &progressEvents = updates.progress;
   auto &result = updates.result;
 
-  auto appendLogLine = [this](const std::string &logLine) {
+  auto appendLogLine = [this](const std::string &logLine, bool replace = false) {
     if (logLine.empty()) {
       return;
     }
-    if (!findBmsProgressLog.empty() &&
-        shouldReplaceFindBmsLogLine(findBmsProgressLog.back(), logLine)) {
+    if (!findBmsProgressLog.empty() && replace) {
       findBmsProgressLog.back() = logLine;
     } else if (findBmsProgressLog.empty() ||
                findBmsProgressLog.back() != logLine) {
@@ -6260,12 +6259,14 @@ void MainMenuScene::applyFindBmsUpdates() {
 
   bool shouldRefresh = false;
   for (const auto &progress : progressEvents) {
+    const bool replace =
+        shouldReplaceFindBmsLogLine(findBmsProgressMessage, progress.message);
     findBmsProgressMessage = progress.message;
     findBmsProgressCurrent = progress.downloadedBytes;
     findBmsProgressTotal = progress.totalBytes;
     findBmsProgressFraction =
         findBmsProgressFractionFor(progress, findBmsProgressFraction);
-    appendLogLine(findBmsProgressEventDisplayText(progress, true));
+    appendLogLine(findBmsProgressEventDisplayText(progress, true), replace);
     shouldRefresh = true;
   }
   if (result) {

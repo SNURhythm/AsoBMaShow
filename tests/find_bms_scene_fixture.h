@@ -181,6 +181,50 @@ void testSceneLookupProgressAndIndexHandoff() {
   assert(!scene.modal.visible);
 }
 
+void testSceneExtractionProgressPreservesHistoryAcrossLanguages() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean,
+                              i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    MainMenuScene scene;
+    Gate firstBatch, secondBatch;
+    assert(scene.findBmsTask.start([&](auto &, auto progress) {
+      progress({"Source diagnostic: mirror selected", 0, 0});
+      progress({"Downloading archive", 20, 100});
+      progress({"Downloading archive", 40, 100});
+      for (std::uint64_t i = 1; i <= 70; ++i) {
+        progress({"Extracting 音楽/file-" + std::to_string(i) + ".wav", i, 140});
+      }
+      firstBatch.block();
+      for (std::uint64_t i = 71; i <= 140; ++i) {
+        progress({"Extracting 音楽/file-" + std::to_string(i) + ".wav", i, 140});
+      }
+      secondBatch.block();
+      return BmsSearchResult{.message = "Finished with source diagnostic"};
+    }));
+    firstBatch.wait();
+    scene.applyFindBmsUpdates();
+    assert(scene.findBmsProgressLog.size() == 3);
+    assert(scene.findBmsProgressLog.front() == "Source diagnostic: mirror selected");
+    assert(scene.findBmsProgressLog[1].find("40%") != std::string::npos);
+    assert(scene.findBmsProgressLog.back().find("音楽/file-70.wav") != std::string::npos);
+    firstBatch.release.set_value();
+    secondBatch.wait();
+    scene.applyFindBmsUpdates();
+    assert(scene.findBmsProgressLog.size() == 3);
+    assert(scene.findBmsProgressLog.front() == "Source diagnostic: mirror selected");
+    assert(scene.findBmsProgressLog.back().find("音楽/file-140.wav") != std::string::npos);
+    if (language != i18n::Language::English) {
+      assert(scene.findBmsProgressLog.back().find("Extracting ") == std::string::npos);
+    }
+    secondBatch.release.set_value();
+    applyUntilIdle(scene);
+    assert(scene.findBmsProgressLog.size() == 4);
+    assert(scene.findBmsProgressLog.front() == "Source diagnostic: mirror selected");
+    assert(scene.findBmsProgressLog.back() == "Finished with source diagnostic");
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testSceneCancellationKeepsPendingArtifactVisible() {
   ServiceCalls calls;
   serviceCalls = &calls;

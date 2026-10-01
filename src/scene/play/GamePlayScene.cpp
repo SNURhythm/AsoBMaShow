@@ -3767,7 +3767,8 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
     if (!isCoursePlayback() && !isReplayPlayback() && state != nullptr &&
         state->isPlaying && !state->isEnding && chart != nullptr &&
         (handledNotes < chart->Meta.TotalNotes || remainingEffect) &&
-        hasReachedFirstPlayableNote(*chart, gameplayTimeMicros)) {
+        (handledNotes > 0 ||
+         hasReachedFirstPlayableNote(*chart, gameplayTimeMicros))) {
       if (!assist_options::isEnabled(attemptProvenance.assistOption)) {
         attemptProvenance.assistOption = assist_options::kAssisted;
       }

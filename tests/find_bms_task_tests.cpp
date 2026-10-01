@@ -169,6 +169,7 @@ int main() {
   testDestructionCancelsAndJoinsBeforeReleasingWorkCaptures();
   testImmediateArtifactCompletionKeepsActionsGatedUntilHandoff();
   testSceneLookupProgressAndIndexHandoff();
+  testSceneExtractionProgressPreservesHistoryAcrossLanguages();
   testSceneCancellationKeepsPendingArtifactVisible();
   testSceneCandidateAndPendingArtifactDecisions();
 }

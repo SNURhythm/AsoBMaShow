@@ -1,4 +1,5 @@
 #include "i18n/Localization.h"
+#include "ir/tachi/TachiEligibility.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GamePlayTiming.h"
 #include "scene/play/PracticeNoteFinalizer.h"
@@ -545,6 +546,59 @@ void testPausePenaltyAndFreshAttemptBoundary() {
             "course menus and pausing Watch never penalize a recorded attempt");
     require(scene.context.jukebox.paused == replay,
             "course menu leaves the song running while Watch remains pausable");
+  }
+}
+
+void testPauseAfterEarlyJudgmentDisqualifiesIr() {
+  for (const bool realtime : {false, true}) {
+    for (const int handled : {0, 1, 2}) {
+      GamePlayScene scene;
+      scene.options.ruleset = GameplayRuleset::LR2;
+      scene.options.autoKeySound = true;
+      scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+          scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+      require(scene.rulesetPolicyBuild.built(), "early-pause fixture has a canonical policy");
+      scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
+          scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+      const auto irEligible = [&] {
+        return ir::tachi::isReplayEligibleForBokutachi(
+            "11111111-1111-4111-8111-111111111111", true,
+            scene.chart->Meta, scene.attemptProvenance);
+      };
+      require(irEligible(), "ordinary manual attempt starts IR eligible");
+      auto &timelines = scene.chart->Measures.front()->TimeLines;
+      timelines.back()->Timing = 2'000'000;
+      scene.context.jukebox.time = 1'990'000;
+      for (int i = 0; i < handled; ++i) {
+        const auto result = scene.pressNote(timelines[i]->Notes[0],
+                                           1'990'000, nullptr, 1'990'000, false);
+        require(result.isNotePlayed(), "first chord can be judged before nominal note time");
+      }
+      require(scene.state->stagePassedNotes == handled,
+              "early judgments advance the actual handled-note count");
+      if (realtime) {
+        scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+        auto &session = *scene.realtimeGameplaySession;
+        session.worker = std::make_unique<FixtureWorker>();
+        session.worker->snapshot.attempt.stagePassedNotes = handled;
+        session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+        session.worker->snapshot.noteStates.resize(session.notes.size());
+        // Deliberately disagree with the authoritative count in both directions.
+        scene.state->stagePassedNotes = handled == 0 ? 1 : 0;
+      }
+      scene.showPauseMenu(true);
+      const bool penalized = handled == 1;
+      require(scene.state->lightAssistClearMark == penalized,
+              "early judgment ends lead-in exemption while completed play stays exempt");
+      require(irEligible() == !penalized,
+              "pausing after an early judgment disqualifies the attempt from IR");
+      if (penalized) {
+        require(scene.attemptProvenance.eligibility == ScoreEligibility::Modified &&
+                    scene.recordedReplay.provenance == scene.attemptProvenance &&
+                    scene.analyticsReplay.provenance == scene.attemptProvenance,
+                "early pause propagates modified provenance to both replay captures");
+      }
+    }
   }
 }
 
@@ -1322,6 +1376,7 @@ FLIP_IMPLEMENTATIONS
 int main(int argc, char **argv) {
   if (argc > 1 && std::string_view(argv[1]) == "pause-penalty") {
     testPausePenaltyAndFreshAttemptBoundary();
+    testPauseAfterEarlyJudgmentDisqualifiesIr();
     testPauseOnlyPenalizesUnfinishedNotePlay();
     testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects();
     return 0;
@@ -1408,6 +1463,7 @@ int main(int argc, char **argv) {
   testEffectiveCourseFactsPersistThroughResultScene();
   testPartialCourseRetrySameRestoresSavedOptions();
   testPausePenaltyAndFreshAttemptBoundary();
+  testPauseAfterEarlyJudgmentDisqualifiesIr();
   testPauseOnlyPenalizesUnfinishedNotePlay();
   testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects();
   for (const auto path : {"constructors", "retry", "practice", "skin-practice", "viewer", "in-game-retry"}) {
