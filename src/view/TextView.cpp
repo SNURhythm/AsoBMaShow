@@ -105,15 +105,33 @@ std::vector<std::string> systemFontFallbackPaths() {
   return paths;
 }
 
-std::vector<std::string> fontFallbackPaths(const std::string &primaryPath) {
+std::string fontPathForWeight(const std::string &path, TextView::FontWeight weight) {
+  static constexpr std::string_view notoPaths[] = {
+      "assets/fonts/notosanscjkjp.ttf", "assets/fonts/notosansjp.ttf",
+      "assets/fonts/notosanskr.otf"};
+  for (const auto regular : notoPaths) {
+    if (std::string_view(path).ends_with(regular)) {
+      return path.substr(0, path.size() - regular.size()) +
+          (weight == TextView::FontWeight::Bold
+              ? "assets/fonts/notosanscjkjp-bold.otf"
+              : "assets/fonts/notosanscjkjp.ttf");
+    }
+  }
+  return path;
+}
+
+std::vector<std::string> fontFallbackPaths(const std::string &primaryPath,
+                                         TextView::FontWeight weight) {
   std::vector<std::string> paths;
-  addUniquePath(paths, primaryPath);
-  addUniquePath(paths, "assets/fonts/notosansjp.ttf");
-  addUniquePath(paths, "assets/fonts/notosanskr.otf");
-  addUniquePath(paths, "assets/fonts/notosanssymbols2.ttf");
-  addUniquePath(paths, "assets/fonts/arial.ttf");
-  for (auto &path : systemFontFallbackPaths()) {
-    addUniquePath(paths, std::move(path));
+  const auto addFont = [&](const std::string &path) {
+    addUniquePath(paths, fontPathForWeight(path, weight));
+  };
+  addFont(primaryPath);
+  addFont("assets/fonts/notosanscjkjp.ttf");
+  addFont("assets/fonts/notosanssymbols2.ttf");
+  addFont("assets/fonts/arial.ttf");
+  for (const auto &path : systemFontFallbackPaths()) {
+    addFont(path);
   }
   return paths;
 }
@@ -297,8 +315,8 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   fontWeight_ = fontWeight;
   fontStyle_ = fontStyleForWeight(fontWeight);
   this->fontRasterSize = rasterFontSizeFor(fontSize);
-  primaryFontPath_ = fontPath;
-  fallbackFontPaths = fontFallbackPaths(fontPath);
+  primaryFontPath_ = fontPathForWeight(fontPath, fontWeight);
+  fallbackFontPaths = fontFallbackPaths(fontPath, fontWeight);
   ttfInitialized = text_runtime::acquire();
   auto rollback = makeScopeExit([this] { releaseFontResources(); });
   if (ttfInitialized) {

@@ -42,15 +42,13 @@ word order can change. Replacement values are inserted verbatim, even when they
 contain braces. Keep BMS standard grade, gauge, and judgement abbreviations when
 players use them as technical terms.
 
-The Korean font is Noto Sans KR Regular, unmodified, from Noto CJK Sans 2.004:
-https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/SubsetOTF/KR/NotoSansKR-Regular.otf
-It is bundled as `assets/fonts/notosanskr.otf`; the upstream SIL Open Font License
-is in `assets/legal/noto-sans-kr.txt`. TextView's fallback chain uses this font
-when the primary font lacks Korean glyphs. All asset packaging uses the existing
-assets directory, including Android and iOS.
-
-Japanese uses the existing bundled Noto Sans JP fonts through TextView's primary
-font and fallback chain. No additional font asset is needed.
+English, Japanese, and Korean use the full static Noto Sans CJK JP Regular and
+Bold faces. Each weight covers the complete CJK repertoire in one file; `JP`
+selects Japanese default forms for shared Han characters, not a Japanese-only
+character subset. Separate JP/KR fallback assets are no longer required.
+See [UI font sources and coverage](../ui-fonts.md) for provenance, licensing,
+compatibility mappings, and regeneration instructions. Android and iOS package
+the same files through the existing assets directory.
 
 Validation includes locale negotiation, preference persistence and migration,
 English fallback, Korean and Japanese lookup, named substitution, catalog
