@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -2194,6 +2195,136 @@ SkinObjectDefinition textObject(SkinObjectId id, bool critical,
           .critical = critical};
 }
 
+// Opt-in CPU frame-evaluation benchmark; no GPU, file I/O, or Lua callbacks.
+// Run the same binary/build flags before and after a text optimization.
+int benchmarkTextFrames() {
+  FakeResources resources;
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  auto atlas = avAtlas();
+  atlas.glyphs.emplace(U'한', atlas.glyphs.at(U'A'));
+  atlas.glyphs.emplace(U'😀', atlas.glyphs.at(U'V'));
+  for (SkinObjectId id = 1; id <= 32; ++id) {
+    resources.addTextAtlas(id, atlas);
+    auto object = textObject(id, true);
+    auto &text = std::get<SkinTextObject>(object.payload);
+    text.literal = std::string(id + 12, 'A');
+    for (int repeat = 0; repeat < 12; ++repeat) text.literal += "AV한😀";
+    model.model.objects.push_back(std::move(object));
+    model.model.destinations.push_back(destination(id, id, 10.0));
+  }
+  const auto playViewport = viewport();
+  for (const bool changing : {false, true}) {
+    Skin2DRenderer renderer;
+    std::size_t glyphs = 0;
+    constexpr std::uint64_t warmup = 100;
+    constexpr std::uint64_t frames = 2000;
+    std::chrono::steady_clock::time_point start;
+    for (std::uint64_t frame = 1; frame <= warmup + frames; ++frame) {
+      if (frame == warmup + 1) start = std::chrono::steady_clock::now();
+      if (changing) {
+        for (auto &object : model.model.objects) {
+          auto &value = std::get<SkinTextObject>(object.payload).literal;
+          // Unique values exercise sustained misses and bounded-cache eviction.
+          for (int bit = 0; bit < 12; ++bit) {
+            value[bit] = (frame & (1U << bit)) ? 'A' : 'V';
+          }
+        }
+      }
+      state.capturedSerial = frame;
+      const auto result = renderer.evaluateFrame(
+          {.frameSerial = frame, .sessionSerial = 1, .model = model,
+           .configuration = configuration, .resources = resources,
+           .viewport = playViewport, .state = state});
+      if (!result.submitReady || result.submitReady->commands.size() != 32) {
+        std::cerr << "text benchmark frame failed\n";
+        return 1;
+      }
+      if (frame > warmup) {
+        for (const auto &command : result.submitReady->commands) {
+          glyphs += std::get<SkinGlyphRunCommand>(command.payload).glyphs.size();
+        }
+      }
+    }
+    const auto micros = std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - start).count() / frames;
+    std::cout << "text_frames " << (changing ? "changing" : "stable")
+              << " us/frame=" << micros << " glyphs=" << glyphs << '\n';
+  }
+  return 0;
+}
+
+void testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeState state;
+  FakeResources resources;
+  auto atlas = avAtlas();
+  atlas.glyphs.emplace(U'한', atlas.glyphs.at(U'A'));
+  atlas.glyphs.emplace(U'😀', atlas.glyphs.at(U'V'));
+  resources.addTextAtlas(1, atlas);
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(textObject(1, true));
+  model.model.destinations.push_back(destination(1, 10, 10.0));
+  auto &value = std::get<SkinTextObject>(model.model.objects[0].payload).literal;
+  value = "A한\r\n😀V";
+  for (std::uint64_t frame = 1; frame <= 2; ++frame) {
+    const auto result = evaluate(renderer, runtime, model, resources, state, frame);
+    expect(result.submitReady && result.submitReady->commands.size() == 1,
+           "multilingual text renders on both initial and repeated frames");
+    if (result.submitReady && result.submitReady->commands.size() == 1) {
+      const auto &glyphs = std::get<SkinGlyphRunCommand>(
+          result.submitReady->commands[0].payload).glyphs;
+      expect(glyphs.size() == 4 && glyphs[0].codepoint == U'A' &&
+                 glyphs[1].codepoint == U'한' && glyphs[2].codepoint == U'😀' &&
+                 glyphs[3].codepoint == U'V' &&
+                 glyphs[2].vertices[0].y > glyphs[0].vertices[0].y,
+             "cached text preserves Unicode scalars and CRLF line layout");
+    }
+  }
+  value = "V";
+  const auto changed = evaluate(renderer, runtime, model, resources, state, 3);
+  expect(changed.submitReady && changed.submitReady->commands.size() == 1 &&
+             glyphRunText(changed.submitReady->commands[0]) == "V",
+         "changing a text value replaces the previous frame's decoded value");
+
+  // Same atlas ID with new contents: cached scalars must not retain glyphs.
+  FakeResources missingResources;
+  auto missingAtlas = atlas;
+  missingAtlas.glyphs.erase(U'V');
+  missingResources.addTextAtlas(1, missingAtlas);
+  const auto missing = evaluate(renderer, runtime, model, missingResources, state, 4);
+  expect(!missing.submitReady && hasDiagnostic(missing, "skin.renderer.text.glyph"),
+         "a warmed text value still checks the current atlas for missing glyphs");
+  const auto restored = evaluate(renderer, runtime, model, resources, state, 5);
+  expect(restored.submitReady && restored.submitReady->commands.size() == 1,
+         "restoring a missing atlas glyph makes warmed text visible again");
+
+  value = "AV";
+  auto bitmap = bitmapAtlas(0);
+  bitmap.glyphs.erase(U'V');
+  FakeResources bitmapResources;
+  bitmapResources.addTextAtlas(1, bitmap);
+  const auto filtered = evaluate(renderer, runtime, model, bitmapResources, state, 6);
+  expect(filtered.submitReady && filtered.submitReady->commands.size() == 1 &&
+             glyphRunText(filtered.submitReady->commands[0]) == "A",
+         "bitmap text still omits unavailable glyphs");
+  const auto unfiltered = evaluate(renderer, runtime, model, resources, state, 7);
+  expect(unfiltered.submitReady && unfiltered.submitReady->commands.size() == 1 &&
+             glyphRunText(unfiltered.submitReady->commands[0]) == "AV",
+         "filtering one atlas does not poison cached text for another atlas");
+
+  value = "A\xed\xa0\x80";
+  const auto malformed = evaluate(renderer, runtime, model, resources, state, 8);
+  expect(!malformed.submitReady && hasDiagnostic(malformed, "skin.renderer.text.utf8"),
+         "a malformed dynamic value never reuses a previous valid text run");
+  value = "Z\xed\xa0\x80";
+  const auto ordered = evaluate(renderer, runtime, model, resources, state, 9);
+  expect(!ordered.submitReady && hasDiagnostic(ordered, "skin.renderer.text.glyph"),
+         "missing glyph before malformed bytes retains scalar diagnostic precedence");
+}
+
 void testTextUsesPreparedMetricsKerningAndAtlasUvs() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -2538,6 +2669,31 @@ void testFalseDestinationSkipsTextValueCallback() {
   expect(result.submitReady && result.submitReady->commands.empty() &&
              result.diagnostics.empty(),
          "false text destination does not invoke its value callback");
+}
+
+void testWarmedTextStillHonorsRemainingFrameGlyphBudget() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(1, avAtlas());
+  resources.addTextAtlas(2, avAtlas());
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {textObject(2, true)};
+  model.model.destinations = {destination(2, 20, 60.0)};
+  const auto warm = evaluate(renderer, runtime, model, resources, state);
+  expect(warm.submitReady.has_value(), "short text warms the decoding cache");
+
+  auto prefix = textObject(1, true);
+  std::get<SkinTextObject>(prefix.payload).literal.assign(
+      SkinCommandPolicy::maximumGlyphInstances - 1, 'A');
+  model.model.objects.insert(model.model.objects.begin(), std::move(prefix));
+  model.model.destinations.insert(model.model.destinations.begin(),
+                                  destination(1, 10, 10.0));
+  const auto exhausted = evaluate(renderer, runtime, model, resources, state, 2);
+  expect(!exhausted.submitReady &&
+             hasDiagnostic(exhausted, "skin.renderer.command.limit"),
+         "cached two-glyph text rejects when earlier commands leave only one glyph");
 }
 
 void testTextGlyphLimitFailsBeforePublishingACommand() {
@@ -6692,6 +6848,9 @@ void testDesktopAndIpadFitCommandFixtures() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--benchmark-text") {
+    return benchmarkTextFrames();
+  }
   testMusicSelectSongListLowersSelectedBarStateAndPublishesHit();
   testMusicSelectDistributionGraphLowersDescendingSourceSegments();
   testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers();
@@ -6717,6 +6876,7 @@ int main(int argc, char **argv) {
   testZeroCycleNumericSpriteDoesNotConsultItsTimer();
   testFalseDestinationSkipsNumericSourceTimerAfterValueLookup();
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
+  testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
   testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
   testDistanceFieldTextAddsStandardFallbackColorOverlay();
@@ -6728,6 +6888,7 @@ int main(int argc, char **argv) {
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
   testSelectorCompatibilitySkipsTransientlyMissingGlyphs();
   testFalseDestinationSkipsTextValueCallback();
+  testWarmedTextStillHonorsRemainingFrameGlyphBudget();
   testTextGlyphLimitFailsBeforePublishingACommand();
   testTextAlignmentWrappingAndShrinkUsePreparedAdvances();
   testTextWordWrapAndMultilineTruncateMatchGlyphLayoutBoundaries();

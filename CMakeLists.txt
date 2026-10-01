@@ -781,6 +781,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
         endforeach()
 
+        add_executable(skin_text_decode_cache_tests
+            tests/skin_text_decode_cache_tests.cpp
+        )
+        target_include_directories(skin_text_decode_cache_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_text_decode_cache_tests PRIVATE cxx_std_20)
+        target_link_libraries(skin_text_decode_cache_tests PRIVATE utf8proc::utf8proc)
+
         add_executable(skin_draw_command_tests
             tests/skin_draw_command_tests.cpp
             src/Utils.cpp
@@ -8398,6 +8407,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_destination_evaluator_tests)
         asobmashow_register_test(skin_destination_evaluator_tests)
+    endif()
+    if (TARGET skin_text_decode_cache_tests)
+        asobmashow_register_test(skin_text_decode_cache_tests)
     endif()
     if (TARGET skin_draw_command_tests)
         asobmashow_register_test(skin_draw_command_tests)

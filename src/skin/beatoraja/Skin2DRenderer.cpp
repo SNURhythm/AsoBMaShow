@@ -366,6 +366,7 @@ struct FrameLookupIndex {
   std::vector<const SkinTimerPropertyBinding *> timers;
   std::vector<SkinObjectId> disabledOptionalObjects;
   bool uniqueBindingIds = true;
+  SkinTextDecodeCache &textDecodeCache;
 };
 
 template <typename Binding>
@@ -390,8 +391,9 @@ sortedBindingPointers(const std::vector<Binding> &bindings,
 }
 
 FrameLookupIndex
-buildFrameLookupIndex(const ValidatedBeatorajaSkinModel &model) {
-  FrameLookupIndex index;
+buildFrameLookupIndex(const ValidatedBeatorajaSkinModel &model,
+                      SkinTextDecodeCache &textDecodeCache) {
+  FrameLookupIndex index{.textDecodeCache = textDecodeCache};
   index.booleans = sortedBindingPointers(model.model.booleanProperties,
                                          index.uniqueBindingIds);
   index.integers = sortedBindingPointers(model.model.integerProperties,
@@ -1229,12 +1231,18 @@ NumericLoweringResult lowerNumeric(const SkinFrameInputs &inputs,
 struct TextLayoutInput {
   const PreparedSkinTextAtlas *atlas = nullptr;
   std::string value;
-  std::vector<char32_t> codepoints;
+  std::vector<char32_t> filteredCodepoints;
+  SkinTextDecodeCache::Codepoints decodedCodepoints;
+  std::span<const char32_t> codepoints() const {
+    return decodedCodepoints ? std::span<const char32_t>(*decodedCodepoints)
+                             : std::span<const char32_t>(filteredCodepoints);
+  }
   bool suppressed = false;
   std::optional<SkinDiagnostic> failure;
 };
 
 TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
+                                          SkinTextDecodeCache &decodeCache,
                                           const SkinObjectDefinition &object,
                                           const SkinTextObject &text,
                                           std::string value,
@@ -1272,54 +1280,76 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
     return result;
   }
 
-  result.codepoints.reserve(std::min(result.value.size(), maximumCodepoints));
+  result.decodedCodepoints = decodeCache.decode(result.value);
+  bool filtered = !result.decodedCodepoints;
+  if (filtered) {
+    result.filteredCodepoints.reserve(
+        std::min(result.value.size(), maximumCodepoints));
+  }
   std::size_t offset = 0;
-  while (offset < result.value.size()) {
-    utf8proc_int32_t codepoint = 0;
-    const auto consumed = utf8proc_iterate(
-        reinterpret_cast<const utf8proc_uint8_t *>(result.value.data() +
-                                                   offset),
-        static_cast<utf8proc_ssize_t>(result.value.size() - offset),
-        &codepoint);
-    if (consumed <= 0) {
-      result.failure = diagnostic("skin.renderer.text.utf8",
-                                  "Text property contains invalid UTF-8.");
-      result.codepoints.clear();
-      return result;
+  std::size_t decodedOffset = 0;
+  std::size_t keptCodepoints = 0;
+  const auto discardScalar = [&] {
+    if (!filtered) {
+      // Copy only when a CR or unavailable glyph actually needs filtering.
+      result.filteredCodepoints.assign(
+          result.decodedCodepoints->begin(),
+          result.decodedCodepoints->begin() + decodedOffset - 1);
+      filtered = true;
     }
-    offset += static_cast<std::size_t>(consumed);
-    const auto scalar = static_cast<char32_t>(codepoint);
+  };
+  while (result.decodedCodepoints
+             ? decodedOffset < result.decodedCodepoints->size()
+             : offset < result.value.size()) {
+    char32_t scalar;
+    if (result.decodedCodepoints) {
+      scalar = (*result.decodedCodepoints)[decodedOffset++];
+    } else {
+      utf8proc_int32_t codepoint = 0;
+      const auto consumed = utf8proc_iterate(
+          reinterpret_cast<const utf8proc_uint8_t *>(result.value.data() + offset),
+          static_cast<utf8proc_ssize_t>(result.value.size() - offset), &codepoint);
+      if (consumed <= 0) {
+        result.failure = diagnostic("skin.renderer.text.utf8",
+                                    "Text property contains invalid UTF-8.");
+        result.filteredCodepoints.clear();
+        return result;
+      }
+      offset += static_cast<std::size_t>(consumed);
+      scalar = static_cast<char32_t>(codepoint);
+    }
     if (scalar != U'\n' && scalar != U'\r' &&
         !result.atlas->glyphs.contains(scalar)) {
-      if (result.atlas->bitmapFont) {
-        continue;
-      }
-      if (!inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
-        // SkinTextFont regenerates a scalable font after SkinText observes a
-        // new current value. Our owner-thread atlas replacement completes on
-        // a later selector frame, so the glyph is transiently absent. Omit
-        // only that glyph rather than the whole run: suppressing the run
-        // makes bar titles blink out for the frame(s) while the atlas patch
-        // builds, which reads as flicker during folder transitions.
+      if (result.atlas->bitmapFont ||
+          !inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+        // Atlas patches may arrive on a later selector frame. Omit missing
+        // glyphs for this frame without changing the cached Unicode scalars.
+        discardScalar();
         continue;
       }
       result.failure = diagnostic(
           "skin.renderer.text.glyph",
           "Text property contains a glyph absent from the prepared atlas.");
-      result.codepoints.clear();
+      result.filteredCodepoints.clear();
+      result.decodedCodepoints.reset();
       return result;
     }
-    if (scalar != U'\r') {
-      if (result.codepoints.size() >= maximumCodepoints) {
-        result.failure = diagnostic(
-            "skin.renderer.command.limit",
-            "Text codepoints exceed the remaining fixed glyph limit.");
-        result.codepoints.clear();
-        return result;
-      }
-      result.codepoints.push_back(scalar);
+    if (scalar == U'\r') {
+      discardScalar();
+      continue;
     }
+    if (keptCodepoints >= maximumCodepoints) {
+      result.failure = diagnostic(
+          "skin.renderer.command.limit",
+          "Text codepoints exceed the remaining fixed glyph limit.");
+      result.filteredCodepoints.clear();
+      result.decodedCodepoints.reset();
+      return result;
+    }
+    ++keptCodepoints;
+    if (filtered) result.filteredCodepoints.push_back(scalar);
   }
+  if (filtered) result.decodedCodepoints.reset();
   return result;
 }
 
@@ -1336,8 +1366,8 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
     }
     value = std::move(*resolved.value);
   }
-  return prepareTextLayoutForValue(inputs, object, text, std::move(value),
-                                   maximumCodepoints);
+  return prepareTextLayoutForValue(inputs, index.textDecodeCache, object, text,
+                                   std::move(value), maximumCodepoints);
 }
 
 int pairKerning(const PreparedSkinTextAtlas &atlas, char32_t left,
@@ -1512,9 +1542,10 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                              const TextLayoutInput &prepared) {
   TextLoweringResult result;
   const auto &atlas = *prepared.atlas;
+  const auto codepoints = prepared.codepoints();
   if (atlas.layoutKind == SkinTextLayoutKind::Lr2Image) {
     std::vector<char32_t> glyphs;
-    glyphs.reserve(prepared.codepoints.size());
+    glyphs.reserve(codepoints.size());
     double measuredWidth = 0.0;
     const double heightScale = base.rect.height / atlas.originalSize;
     if (!std::isfinite(heightScale) || heightScale <= 0.0) {
@@ -1522,7 +1553,7 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                                   "LR2 text destination scale is invalid.");
       return result;
     }
-    for (const char32_t codepoint : prepared.codepoints) {
+    for (const char32_t codepoint : codepoints) {
       const auto metric = atlas.glyphs.find(codepoint);
       if (metric == atlas.glyphs.end() ||
           !preparedGlyphPage(atlas, metric->second)) {
@@ -1610,7 +1641,7 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
                                 "Text destination scale is invalid.");
     return result;
   }
-  auto lines = breakTextLines(atlas, prepared.codepoints, text.wrapping,
+  auto lines = breakTextLines(atlas, codepoints, text.wrapping,
                               base.rect.width / scaleY);
   double scaleX = scaleY;
   if (!text.wrapping && text.overflow == 1) {
@@ -1653,9 +1684,9 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   SkinGlyphRunCommand run;
   run.atlas = atlas.id;
   const std::size_t requested =
-      prepared.codepoints.size() -
-      static_cast<std::size_t>(std::count(prepared.codepoints.begin(),
-                                          prepared.codepoints.end(), U'\n'));
+      codepoints.size() -
+      static_cast<std::size_t>(std::count(codepoints.begin(),
+                                          codepoints.end(), U'\n'));
   run.glyphs.reserve(requested);
   for (std::size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     const auto &line = lines[lineIndex];
@@ -3587,7 +3618,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
     }
     if (text) {
       auto layout = prepareTextLayoutForValue(
-          inputs, *initial.object, *text, command.text,
+          inputs, index.textDecodeCache, *initial.object, *text, command.text,
           maximumGlyphs - std::min(maximumGlyphs, result.glyphCount));
       if (layout.failure) {
         continue;
@@ -4170,7 +4201,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     std::vector<ProjectionElement> mergedProjectionElements;
     validateAndMergeProjection(inputs.state, mergedProjectionElements);
 
-    const auto lookupIndex = buildFrameLookupIndex(inputs.model);
+    if (textDecodeCacheSessionSerial_ != inputs.sessionSerial) {
+      textDecodeCache_.clear();
+      textDecodeCacheSessionSerial_ = inputs.sessionSerial;
+    }
+    const auto lookupIndex = buildFrameLookupIndex(inputs.model, textDecodeCache_);
     if (!lookupIndex.uniqueBindingIds) {
       result.diagnostics.push_back(diagnostic(
           "skin.renderer.model.binding_id",
