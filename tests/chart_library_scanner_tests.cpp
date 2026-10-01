@@ -5,6 +5,7 @@
 #include "../src/repositories/ChartRepository.h"
 #include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/sqlite3.h"
+#include "fixtures/archive/mixed_encryption_zip.h"
 
 #include <archive_entry.h>
 
@@ -218,13 +219,19 @@ std::filesystem::path writeChart(const std::filesystem::path &root,
 
 std::filesystem::path
 writeZip(const std::filesystem::path &path,
-         const std::vector<std::pair<std::string, std::string>> &files) {
+         const std::vector<std::pair<std::string, std::string>> &files,
+         bool encrypted = false) {
   std::filesystem::create_directories(path.parent_path());
   auto writer = makeArchiveWriteHandle();
   assert(writer);
   assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
   assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
          ARCHIVE_OK);
+  if (encrypted) {
+    assert(archive_write_set_options(writer.get(), "zip:encryption=zipcrypt") ==
+           ARCHIVE_OK);
+    assert(archive_write_set_passphrase(writer.get(), "scanner-test") == ARCHIVE_OK);
+  }
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
          ARCHIVE_OK);
 
@@ -1461,6 +1468,8 @@ void testMissingFullScanRootPreservesMetadataRebuildState() {
   assert(!result.committed);
   assert(flushCompleted == 0);
   assert(metadataRebuildRequired(databasePath));
+  assert(hasArchiveLog(archive_file::debugLogLines(), root,
+                       "Configured chart folder is unavailable"));
 }
 
 void testPartialLibraryFullScanPreservesMetadataRebuildState() {
@@ -2236,6 +2245,69 @@ void testUnmodifiedRescanAcknowledgesPendingFlushRequest() {
   assert(flushCompleted >= 7);
 }
 
+void testEncryptedZipDoesNotBlockLibraryRefresh() {
+  // A ZIP's readable central directory must not admit locked charts into the
+  // parse queue or leave the archive pending for every subsequent refresh.
+  for (const auto *extension : {".zip", ".tar"}) {
+    TempDirectory temporary;
+    const auto root = temporary.path() / "library";
+    writeChart(root, "ordinary", "Readable ordinary");
+    // A .tar suffix exercises libarchive's format detection fallback.
+    const auto locked = writeZip(root / (std::string("locked") + extension),
+                                {{"a.bms", chartText("Locked A")},
+                                 {"b.bms", chartText("Locked B")},
+                                 {"c.bms", chartText("Locked C")}}, true);
+    const auto mixed = root / (std::string("mixed") + extension);
+    {
+      std::ofstream file(mixed, std::ios::binary);
+      file.write(reinterpret_cast<const char *>(archive_zip_fixtures::mixedEncryption),
+                 sizeof(archive_zip_fixtures::mixedEncryption));
+    }
+    TestChartRepository repository(temporary.path() / "chart.db");
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session);
+    const auto cacheDirectory = temporary.path() / "index";
+    archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+    ChartLibraryScanner scanner;
+    for (int pass = 0; pass < 3; ++pass) {
+      if (pass == 2) {
+        archive_file::clearArchiveIndexCacheForTesting();
+        archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+      }
+      // Force rediscovery against the cold, in-memory, then persisted index.
+      if (pass > 0) assert(session->ClearChartMeta());
+      const auto result = scanner.ScanWithResult(*session, {root});
+      assert(result.completed && result.committed);
+      if (pass == 2) {
+        assert(hasArchiveLog(archive_file::debugLogLines(), locked,
+                             "Loaded archive index from disk cache"));
+        assert(hasArchiveLog(archive_file::debugLogLines(), mixed,
+                             "Loaded archive index from disk cache"));
+      }
+      assert(session->CountAllChartMeta() == 2);
+      const auto snapshot = session->LoadScanSnapshot();
+      assert(!snapshot.checkpoint.has_value());
+      assert(snapshot.archiveCache.size() == 2);
+      for (const auto &cache : snapshot.archiveCache) {
+        assert(cache.chartCount == (cache.path == locked ? 0 : 1));
+      }
+      const std::array paths{archive_file::makeVirtualPath(mixed, "readable.bms")};
+      const auto records = session->SelectChartMetaByPaths(paths);
+      assert(records.records.size() == 1);
+      assert(records.records.front().meta.Title == "Readable mixed ZIP");
+      for (const auto &archive : {locked, mixed}) {
+        std::string error;
+        assert(!archive_file::unzipArchiveFully(
+            archive, temporary.path() / "output", &error));
+        assert(error.find("encrypted") != std::string::npos);
+        assert(std::filesystem::exists(archive));
+        assert(!std::filesystem::exists(temporary.path() / "output"));
+      }
+    }
+  }
+}
+
 void testUnreadableArchivePreservesMetadataRebuildState() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2978,6 +3050,7 @@ int main() {
   testArchiveStreamFailurePreservesCheckpointPrefix();
   testUnmodifiedRescanAcknowledgesPendingFlushRequest();
   testInterruptedScanDoesNotAcknowledgeFlush();
+  testEncryptedZipDoesNotBlockLibraryRefresh();
   testUnreadableArchivePreservesMetadataRebuildState();
   testStopAtPreparingUpdatesCancelsArchivePrefetch();
   testLargeSingleArchivePreservesAllChartResults();

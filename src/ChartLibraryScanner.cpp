@@ -1418,6 +1418,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                                    bool hasDocument) {
     if (requireReadableStorage && !std::ifstream(path, std::ios::binary)) {
       discoveryHealthy.store(false, std::memory_order_relaxed);
+      archive_file::appendDebugLogLine("Chart source is unreadable: " +
+                                       fspath_to_utf8(path));
       return;
     }
     const path_t key = fspath_to_path_t(path);
@@ -1471,6 +1473,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   auto scheduleArchivePath = [&](const std::filesystem::path &archivePath) {
     if (requireReadableStorage && !std::ifstream(archivePath, std::ios::binary)) {
       discoveryHealthy.store(false, std::memory_order_relaxed);
+      archive_file::appendDebugLogLine("Archive source is unreadable: " +
+                                       fspath_to_utf8(archivePath));
       return;
     }
     if (shouldStop()) {
@@ -1486,6 +1490,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::int64_t mtimeNs = 0;
     if (!archiveFileState(archivePath, archiveSize, mtimeNs)) {
       discoveryHealthy.store(false, std::memory_order_relaxed);
+      archive_file::appendDebugLogLine("Failed to stat archive source: " +
+                                       fspath_to_utf8(archivePath));
       return;
     }
     liveArchivePaths.push_back(archivePath);
@@ -1593,6 +1599,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (!ListAndroidTreeChartFiles(root, androidChartFiles, androidError,
                                      stopToken)) {
         traversalHealthy = false;
+        archive_file::appendDebugLogLine("Failed while scanning Android chart folder " +
+                                         fspath_to_utf8(root) + ": " + androidError);
         if (!androidError.empty()) {
           SDL_Log("Failed while scanning Android chart folder %s: %s",
                   fspath_to_utf8(root).c_str(), androidError.c_str());
@@ -1624,6 +1632,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const bool rootExists = std::filesystem::exists(root, error);
     if (error) {
       traversalHealthy = false;
+      archive_file::appendDebugLogLine("Failed to check chart folder " +
+                                       fspath_to_utf8(root) + ": " + error.message());
       SDL_Log("Failed to check chart folder %s: %s",
               fspath_to_utf8(root).c_str(), error.message().c_str());
       ++scannedRootCount;
@@ -1632,6 +1642,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (!rootExists) {
       if (reconcileExisting || requireReadableStorage) {
         traversalHealthy = false;
+        archive_file::appendDebugLogLine("Configured chart folder is unavailable: " +
+                                         fspath_to_utf8(root));
         SDL_Log("Configured chart folder is unavailable: %s",
                 fspath_to_utf8(root).c_str());
       }
@@ -1642,7 +1654,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::error_code rootTypeError;
     const auto incompleteRoot = hasIncompleteUnzipParent(root, session);
     if (!incompleteRoot || *incompleteRoot) {
-      if (!incompleteRoot || requireReadableStorage) traversalHealthy = false;
+      if (!incompleteRoot || requireReadableStorage) {
+        traversalHealthy = false;
+        archive_file::appendDebugLogLine("Chart folder has an incomplete or unreadable unzip marker: " +
+                                         fspath_to_utf8(root));
+      }
       ++scannedRootCount;
       continue;
     }
@@ -1679,7 +1695,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
         const auto incomplete = isIncompleteUnzipFolder(iterator->path(), session);
         if (!incomplete || *incomplete) {
-          if (!incomplete || requireReadableStorage) traversalHealthy = false;
+          if (!incomplete || requireReadableStorage) {
+            traversalHealthy = false;
+            archive_file::appendDebugLogLine("Chart folder has an incomplete or unreadable unzip marker: " +
+                                             fspath_to_utf8(iterator->path()));
+          }
           iterator.disable_recursion_pending();
           continue;
         }
@@ -1689,10 +1709,20 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         }
         continue;
       }
-      if (requireReadableStorage && directoryTypeError) traversalHealthy = false;
+      if (requireReadableStorage && directoryTypeError) {
+        traversalHealthy = false;
+        archive_file::appendDebugLogLine("Failed to inspect chart directory " +
+                                         fspath_to_utf8(iterator->path()) + ": " +
+                                         directoryTypeError.message());
+      }
       std::error_code typeError;
       if (!iterator->is_regular_file(typeError) || typeError) {
-        if (requireReadableStorage && typeError) traversalHealthy = false;
+        if (requireReadableStorage && typeError) {
+          traversalHealthy = false;
+          archive_file::appendDebugLogLine("Failed to inspect chart file " +
+                                           fspath_to_utf8(iterator->path()) + ": " +
+                                           typeError.message());
+        }
         continue;
       }
       const std::filesystem::path path = iterator->path();
@@ -1716,6 +1746,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     if (error) {
       traversalHealthy = false;
+      archive_file::appendDebugLogLine("Failed while scanning chart folder " +
+                                       fspath_to_utf8(root) + ": " + error.message());
       SDL_Log("Failed while scanning chart folder %s: %s",
               fspath_to_utf8(root).c_str(), error.message().c_str());
     }

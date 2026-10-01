@@ -527,7 +527,8 @@ std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
 #endif
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
-constexpr std::uint8_t kArchiveIndexCacheVersion = 5;
+// Version 6 excludes encrypted ZIP/libarchive entries from browsing indexes.
+constexpr std::uint8_t kArchiveIndexCacheVersion = 6;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
@@ -2993,8 +2994,10 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          std::string *errorMessage,
                          const PauseCallback &pauseCallback,
-                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max()) {
+                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
+                         bool *hasEncryptedEntries = nullptr) {
   entries.clear();
+  if (hasEncryptedEntries) *hasEncryptedEntries = false;
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -3006,6 +3009,7 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
 
   archive_entry *entry = nullptr;
   std::uint64_t inspectedEntries = 0;
+  std::size_t entryOrder = 0;
   for (;;) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       entries.clear();
@@ -3036,8 +3040,17 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
       continue;
     }
 
+    const bool encrypted = archive_entry_is_encrypted(entry) > 0;
+    if (encrypted && hasEncryptedEntries) *hasEncryptedEntries = true;
     ArchiveEntryInfo info;
     if (!archiveEntryInfo(entry, entryPathnameUtf8(entry), info)) {
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+
+    // Cached-order readers count valid headers, including locked entries.
+    const std::size_t currentOrder = entryOrder++;
+    if (encrypted) {
       archive_read_data_skip(archiveHandle);
       continue;
     }
@@ -3046,7 +3059,7 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
         .path = info.relativePath,
         .directory = info.directory,
         .size = info.size,
-        .order = entries.size(),
+        .order = currentOrder,
     });
     archive_read_data_skip(archiveHandle);
   }
@@ -3543,7 +3556,8 @@ constexpr mz_uint kZipIndexPauseCheckInterval = 256;
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
                     const PauseCallback &pauseCallback,
-                    std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max());
+                    std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
+                    bool *hasEncryptedEntries = nullptr);
 #endif
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
@@ -4036,7 +4050,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   std::string zipError;
   if (hasZipArchiveExtension(archivePath) &&
       listZipEntries(archivePath, loaded->entries, &zipError,
-                     pauseCallback, maximumEntries)) {
+                     pauseCallback, maximumEntries, &loaded->hasEncryptedEntries)) {
     loaded->backend = ArchiveIndexBackend::MinizZip;
     loadedEntries = true;
   } else if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
@@ -4112,7 +4126,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   std::string libarchiveError;
   if (!loadedEntries &&
       listEntriesUncached(archivePath, loaded->entries, &libarchiveError,
-                          pauseCallback, maximumEntries)) {
+                          pauseCallback, maximumEntries, &loaded->hasEncryptedEntries)) {
     loaded->backend = ArchiveIndexBackend::LibArchive;
     loadedEntries = true;
   } else if (!loadedEntries && !libarchiveError.empty()) {
@@ -4140,6 +4154,10 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     appendDebugLogLineImpl("Skipped system archive entries: " +
                            pathForLog(archivePath) + " count=" +
                            std::to_string(skippedSystemEntries));
+  }
+  if (loaded->hasEncryptedEntries) {
+    appendDebugLogLineImpl("Skipped encrypted archive entries while indexing: " +
+                           pathForLog(archivePath));
   }
   buildIndexLookups(*loaded);
   loaded->liveSourceManifest = true;
@@ -4892,8 +4910,10 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
                     const PauseCallback &pauseCallback,
-                    std::uint64_t maximumEntries) {
+                    std::uint64_t maximumEntries,
+                    bool *hasEncryptedEntries) {
   entries.clear();
+  if (hasEncryptedEntries) *hasEncryptedEntries = false;
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -4932,6 +4952,11 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     mz_zip_archive_file_stat stat{};
     if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
       return fail("Could not read ZIP central directory entry.");
+    }
+
+    if (stat.m_is_encrypted) {
+      if (hasEncryptedEntries) *hasEncryptedEntries = true;
+      continue;
     }
 
     const auto filename = minizFilename(&archive, fileIndex);
