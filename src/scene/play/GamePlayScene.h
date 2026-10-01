@@ -109,7 +109,9 @@ private:
   View *guidedAccessReminderLayout = nullptr;
   TextView *guidedAccessReminderIcon = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;
+  TextView *guidedAccessReminderWhy = nullptr;
   TextView *guidedAccessReminderHelp = nullptr;
+  TextView *guidedAccessReminderDisableHelp = nullptr;
   View *guidedAccessButtonMarker = nullptr;
   TextView *guidedAccessButtonHint = nullptr;
   TextView *guidedAccessButtonCheck = nullptr;

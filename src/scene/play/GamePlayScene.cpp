@@ -3775,15 +3775,35 @@ void GamePlayScene::showGuidedAccessReminder() {
     lock->setSize(180, 160);
     lock->setPosition(60, 32, YGPositionTypeAbsolute);
     guide->addView(lock);
+    auto *why = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+    guidedAccessReminderWhy = why;
+    why->setWidthPercent(100);
+    why->setHeight(60);
+    why->setWrap(true);
+    why->setAlign(TextView::CENTER);
+    why->setVAlign(TextView::MIDDLE);
+    why->setThemedColor(ui_theme::cyan);
+    why->setMargin(Edge::Bottom, 6);
+    overlay->addView(why);
     auto *help = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     guidedAccessReminderHelp = help;
     help->setWidthPercent(100);
-    help->setHeight(220);
+    help->setHeight(140);
     help->setWrap(true);
     help->setAlign(TextView::CENTER);
     help->setVAlign(TextView::MIDDLE);
     help->setThemedColor(ui_theme::textSecondary);
     overlay->addView(help);
+    auto *disableHelp = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    guidedAccessReminderDisableHelp = disableHelp;
+    disableHelp->setWidthPercent(100);
+    disableHelp->setHeight(60);
+    disableHelp->setWrap(true);
+    disableHelp->setAlign(TextView::CENTER);
+    disableHelp->setVAlign(TextView::MIDDLE);
+    disableHelp->setThemedColor(ui_theme::textSecondary);
+    disableHelp->setMargin(Edge::Top, 6);
+    overlay->addView(disableHelp);
     auto *controls = new View();
     controls->setFlexDirection(FlexDirection::Row);
     controls->setGap(20);
@@ -3904,6 +3924,11 @@ void GamePlayScene::showGuidedAccessReminder() {
   guidedAccessReminderTitle->setLocalizedText(i18n::message(confirming
       ? "gameplay.ipad_gesture_reminder.ready_title"
       : "gameplay.ipad_gesture_reminder.title"));
+  guidedAccessReminderWhy->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.why"));
+  guidedAccessReminderWhy->setVisible(!confirming);
+  guidedAccessReminderDisableHelp->setLocalizedText(
+      i18n::message("gameplay.ipad_gesture_reminder.disable_help"));
+  guidedAccessReminderDisableHelp->setVisible(!confirming);
   guidedAccessReminderHelp->setLocalizedText(i18n::message(confirming
       ? "gameplay.ipad_gesture_reminder.ready_help"
       : "gameplay.ipad_gesture_reminder.help"));
@@ -6882,7 +6907,9 @@ void GamePlayScene::cleanupScene() {
   guidedAccessReminderLayout = nullptr;
   guidedAccessReminderIcon = nullptr;
   guidedAccessReminderTitle = nullptr;
+  guidedAccessReminderWhy = nullptr;
   guidedAccessReminderHelp = nullptr;
+  guidedAccessReminderDisableHelp = nullptr;
   guidedAccessButtonMarker = nullptr;
   guidedAccessButtonHint = nullptr;
   guidedAccessButtonCheck = nullptr;

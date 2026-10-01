@@ -51,7 +51,9 @@ struct ReminderUIFixture {
   bool guidedAccessReminderDismissed = false;
   View *guidedAccessReminderLayout = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;
+  TextView *guidedAccessReminderWhy = nullptr;
   TextView *guidedAccessReminderHelp = nullptr;
+  TextView *guidedAccessReminderDisableHelp = nullptr;
   TextView *guidedAccessReminderIcon = nullptr;
   View *guidedAccessButtonMarker = nullptr;
   TextView *guidedAccessButtonHint = nullptr;
@@ -468,18 +470,39 @@ void testReminderDescriptionPreservesLineBreaks() {
     i18n::setLanguage(language);
     MultilineTextProbe view("assets/fonts/notosanscjkjp.ttf", 22);
     view.setDeferredTextureMaterialization(true);
-    view.setSize(1800, 220);
+    view.setSize(1800, 140);
     view.setAlign(TextView::CENTER);
     view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
     const int unwrappedHeight = view.textureHeight();
-    expect(unwrappedHeight >= (view.lineHeight() * 5 + 1) / 2,
-           "reminder description keeps its explanation and setup paragraphs in every language");
+    expect(unwrappedHeight >= (view.lineHeight() * 3 + 1) / 2,
+           "reminder description keeps its three setup paragraphs in every language");
     view.setWrap(true);
     view.applyYogaLayout();
     expect(view.textureHeight() == unwrappedHeight,
            "centered wrapping preserves the reminder's explicit paragraph breaks");
     expect(view.textureHeight() <= view.getContentHeight(),
-           "the explanation and setup instructions fit without clipping");
+           "the setup instructions fit without clipping");
+    ReminderUIFixture fixture;
+    fixture.root.setSize(rendering::window_width, rendering::window_height);
+    fixture.showGuidedAccessReminder();
+    fixture.root.applyYogaLayout();
+    const auto *why = fixture.guidedAccessReminderWhy;
+    const auto *help = fixture.guidedAccessReminderHelp;
+    const auto *disableHelp = fixture.guidedAccessReminderDisableHelp;
+    expect(why->pointSize() > help->pointSize(), "explanation is larger than setup instructions");
+    expect(why->textureWidth() <= why->getContentWidth() &&
+           why->textureHeight() <= why->getContentHeight() &&
+           help->textureHeight() <= help->getContentHeight() &&
+           disableHelp->textureHeight() <= disableHelp->getContentHeight(),
+           "separate explanation and instructions fit in the production layout");
+    expect(help->getY() - (why->getY() + why->getHeight()) >= 24,
+           "explanation has a clear paragraph gap before the setup steps");
+    expect(disableHelp->getY() - (help->getY() + help->getHeight()) >= 24,
+           "disable reminder note is spaced separately from setup steps");
+    expect(why->currentColor().r == ui_theme::cyan().r &&
+           why->currentColor().g == ui_theme::cyan().g &&
+           why->currentColor().b == ui_theme::cyan().b,
+           "explanation uses the theme accent color");
   }
   i18n::setLanguage(i18n::Language::English);
 }
@@ -523,6 +546,9 @@ void testHardwareCueUsesRealViewHierarchy() {
   fixture.showGuidedAccessReminder();
   fixture.root.applyYogaLayout();
   expect(fixture.guidedAccessButtonCheck->getVisible(), "confirmation displays its check");
+  expect(!fixture.guidedAccessReminderWhy->getVisible() &&
+         !fixture.guidedAccessReminderDisableHelp->getVisible(),
+         "confirmation hides the setup explanation and disable note");
   expect(fixture.guidedAccessButtonCheck->primaryFontPath() == ui_icons::kFontAwesomeSolidPath,
          "confirmation uses the Font Awesome face");
   expect(fixture.guidedAccessButtonCheck->getText() == ui_icons::textForCodepoint(0xf00c),
