@@ -3929,9 +3929,15 @@ void GamePlayScene::showGuidedAccessReminder() {
   guidedAccessReminderDisableHelp->setLocalizedText(
       i18n::message("gameplay.ipad_gesture_reminder.disable_help"));
   guidedAccessReminderDisableHelp->setVisible(!confirming);
-  guidedAccessReminderHelp->setLocalizedText(i18n::message(confirming
-      ? "gameplay.ipad_gesture_reminder.ready_help"
-      : "gameplay.ipad_gesture_reminder.help"));
+  const char *buttonNameKey = buttonLocation.button == ipad_hardware::Button::Home
+      ? "gameplay.ipad_gesture_reminder.button.home"
+      : buttonLocation.button == ipad_hardware::Button::Top
+          ? "gameplay.ipad_gesture_reminder.button.top"
+          : "gameplay.ipad_gesture_reminder.button.unknown";
+  guidedAccessReminderHelp->setLocalizedText(confirming
+      ? i18n::message("gameplay.ipad_gesture_reminder.ready_help")
+      : i18n::message("gameplay.ipad_gesture_reminder.help",
+                     {{"button", i18n::message(buttonNameKey)}}));
   if (pauseButton != nullptr) pauseButton->setVisible(false);
   if (practiceRestartButton != nullptr) practiceRestartButton->setVisible(false);
   if (practiceHudText != nullptr) practiceHudText->setVisible(false);

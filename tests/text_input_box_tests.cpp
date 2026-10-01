@@ -472,7 +472,8 @@ void testReminderDescriptionPreservesLineBreaks() {
     view.setDeferredTextureMaterialization(true);
     view.setSize(1800, 140);
     view.setAlign(TextView::CENTER);
-    view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
+    view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help",
+        {{"button", i18n::message("gameplay.ipad_gesture_reminder.button.unknown")}}));
     const int unwrappedHeight = view.textureHeight();
     expect(unwrappedHeight >= (view.lineHeight() * 2 + 1) / 2,
            "reminder description keeps its two setup paragraphs in every language");
@@ -503,6 +504,26 @@ void testReminderDescriptionPreservesLineBreaks() {
            why->currentColor().g == ui_theme::cyan().g &&
            why->currentColor().b == ui_theme::cyan().b,
            "explanation uses the theme accent color");
+    // Button identity remains known even when a partial window suppresses the edge cue.
+    for (const auto &entry : {
+             std::pair{"iPad7,5", "gameplay.ipad_gesture_reminder.button.home"},
+             std::pair{"iPad16,3", "gameplay.ipad_gesture_reminder.button.top"},
+             std::pair{"unknown", "gameplay.ipad_gesture_reminder.button.unknown"}}) {
+      testButtonLocation = ipad_hardware::locateButton(
+          ipad_hardware::modelForIdentifier(entry.first),
+          ipad_hardware::Orientation::Unknown, false);
+      fixture.showGuidedAccessReminder();
+      fixture.root.applyYogaLayout();
+      const std::string expectedHelp = i18n::message(
+          "gameplay.ipad_gesture_reminder.help",
+          {{"button", i18n::message(entry.second)}}).resolve();
+      expect(help->getText() == expectedHelp &&
+             help->getText().find("{button}") == std::string::npos,
+             "instruction names the model's button or uses the unknown-model fallback");
+      expect(help->textureHeight() <= help->getContentHeight(),
+             "localized device-specific instructions fit the help area");
+    }
+    testButtonLocation = {};
   }
   i18n::setLanguage(i18n::Language::English);
 }
