@@ -33,6 +33,11 @@ public:
   DifficultyTableImporter();
   explicit DifficultyTableImporter(DifficultyTableTextFetcher fetchText);
 
+  // Offline first-launch fallback. Existing sources always take precedence.
+  int SeedBundledDefaults(
+      ChartRepository::Session &session,
+      const std::string &assetPath = "assets/difficulty-tables/defaults.json");
+
   bool ImportFromUrl(
       ChartRepository::Session &session, const std::string &pageUrl,
       std::string *errorMessage = nullptr,

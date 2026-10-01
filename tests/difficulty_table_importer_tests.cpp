@@ -2,6 +2,7 @@
 #include "../src/DifficultyTableModel.h"
 #include "../src/repositories/ChartRepository.h"
 #include "../src/sqlite3.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -492,7 +494,72 @@ void testListImportKeepsBoundedConcurrencyAndSkipsExistingSources() {
 
 } // namespace
 
+void testBundledDefaultsSurviveOfflineAndYieldToUpdates() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  Fixture fixture;
+  const auto assetPath = temporary.path() / "defaults.json";
+  const nlohmann::json snapshot = {
+      {"tables", {{{"source_url", fixture.sourceUrl},
+                    {"header", nlohmann::json::parse(fixture.headerJson)},
+                    {"data", nlohmann::json::parse(fixture.dataJson)}}}}};
+  std::ofstream(assetPath) << snapshot.dump();
+  bool online = false;
+  DifficultyTableImporter importer(
+      [&](const std::string &url, std::string *) -> std::optional<std::string> {
+        if (!online) return std::nullopt;
+        if (url == fixture.sourceUrl) return fixture.headerJson;
+        return fixture.dataJson;
+      });
+  assert(importer.SeedBundledDefaults(*session, assetPath.string()) == 1);
+  const auto originalId = session->SelectDifficultyTables().front().id;
+  const auto before = snapshotTable(repository.DatabasePath(), "difficulty_tables");
+  assert(!importer.ImportFromUrl(*session, fixture.sourceUrl));
+  assert(snapshotTable(repository.DatabasePath(), "difficulty_tables") == before);
+  assert(importer.SeedBundledDefaults(*session, assetPath.string()) == 0);
+  online = true;
+  auto header = nlohmann::json::parse(fixture.headerJson);
+  header["name"] = "Updated Table";
+  fixture.headerJson = header.dump();
+  assert(importer.ImportFromUrl(*session, fixture.sourceUrl));
+  assert(importer.SeedBundledDefaults(*session, assetPath.string()) == 0);
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  assert(tables.front().name == "Updated Table");
+  assert(tables.front().id == originalId);
+  assert(tables.front().chartCount == 1);
+  assert(importer.SeedBundledDefaults(*session, "missing-snapshot.json") == 0);
+  std::ofstream(assetPath) << "invalid json";
+  assert(importer.SeedBundledDefaults(*session, assetPath.string()) == 0);
+}
+
+void testPackagedDefaultsImportWithoutNetwork() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  DifficultyTableImporter importer([](const std::string &, std::string *)
+      -> std::optional<std::string> {
+    assert(false && "Bundled defaults must never access the network");
+    return std::nullopt;
+  });
+  assert(importer.SeedBundledDefaults(*session) == 4);
+  const auto tables = session->SelectDifficultyTables();
+  for (const auto &table : tables) {
+    assert(!table.name.empty());
+    assert(table.sourceUrl.starts_with("https://"));
+    assert(table.chartCount > 0);
+  }
+  assert(importer.SeedBundledDefaults(*session) == 0);
+}
+
 int main() {
+  testBundledDefaultsSurviveOfflineAndYieldToUpdates();
+  testPackagedDefaultsImportWithoutNetwork();
 #if !defined(_WIN32)
   testDesktopDownloadsEnforceIncrementalResponseBudget();
 #endif

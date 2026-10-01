@@ -8269,7 +8269,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
-    set_tests_properties(text_input_box_tests PROPERTIES
+    set_tests_properties(text_input_box_tests difficulty_table_importer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)

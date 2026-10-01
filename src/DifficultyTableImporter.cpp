@@ -12,6 +12,7 @@
 #include <chrono>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -976,6 +977,52 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
     document.courses.push_back(std::move(course));
   }
   return document;
+}
+
+int DifficultyTableImporter::SeedBundledDefaults(
+    ChartRepository::Session &session, const std::string &assetPath) {
+  // SDL resolves packaged assets on Android and Apple platforms as well as
+  // ordinary files on desktop. Never use the network for this fallback.
+  std::size_t size = 0;
+  std::unique_ptr<void, decltype(&SDL_free)> bytes(
+      SDL_LoadFile(assetPath.c_str(), &size), SDL_free);
+  if (!bytes) {
+    SDL_Log("Could not read bundled difficulty tables: %s", SDL_GetError());
+    return 0;
+  }
+  const auto *text = static_cast<const char *>(bytes.get());
+  const auto snapshot = json::parse(text, text + size, nullptr, false);
+  if (!snapshot.is_object() || !snapshot.contains("tables") ||
+      !snapshot["tables"].is_array()) {
+    SDL_Log("Invalid bundled difficulty table snapshot: %s", assetPath.c_str());
+    return 0;
+  }
+  std::unordered_set<std::string> existingSources;
+  for (const auto &table : session.SelectDifficultyTables()) {
+    existingSources.insert(table.sourceUrl);
+  }
+  int imported = 0;
+  for (const auto &table : snapshot["tables"]) {
+    if (!table.is_object()) continue;
+    const auto sourceUrl = jsonStringAt(table, "source_url");
+    if (sourceUrl.empty() || existingSources.contains(sourceUrl) ||
+        !table.contains("header") || !table["header"].is_object() ||
+        !table.contains("data") || !table["data"].is_array()) {
+      continue;
+    }
+    std::string error;
+    const auto document = difficulty_table::Parse(
+        table["header"].dump(), table["data"].dump(), sourceUrl, error);
+    if (document && !document->charts.empty() &&
+        session.ReplaceDifficultyTable(*document)) {
+      existingSources.insert(sourceUrl);
+      ++imported;
+    } else {
+      SDL_Log("Could not seed bundled difficulty table %s: %s",
+              sourceUrl.c_str(), error.c_str());
+    }
+  }
+  return imported;
 }
 
 DifficultyTableImporter::DifficultyTableImporter() : fetchText_(fetchUrlText) {}
