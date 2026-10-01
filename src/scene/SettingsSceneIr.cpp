@@ -271,13 +271,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
        .now = reconciliationNow});
 
   auto publishResult = [this](const ir::IrSettingsActionResult &result,
-                              std::string successMessage) {
+                              i18n::Text successMessage) {
     irStatusIsError = !result.succeeded();
     irStatusMessage = result.succeeded()
                           ? std::move(successMessage)
                           : (result.diagnostic.empty()
-                                 ? i18n::tr("settings.ir.ir_setting_failed_changed.message")
-                                 : result.diagnostic);
+                                 ? i18n::message("settings.ir.ir_setting_failed_changed.message")
+                                 : i18n::Text(result.diagnostic));
     lastLayoutWidth = -1;
   };
 
@@ -297,7 +297,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     }
     publishResult(
         irSettingsModel->setEnabled(!irSettingsModel->settings().enabled),
-        i18n::tr("settings.ir.bokutachi_enablement_saved.message"));
+        i18n::message("settings.ir.bokutachi_enablement_saved.message"));
   });
   enableRow->addView(enabledButton);
   settingsBody->addView(enableRow);
@@ -317,7 +317,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       }
       publishResult(irSettingsModel->setAutoSubmit(
                         !irSettingsModel->settings().autoSubmit),
-                    i18n::tr("settings.ir.automatic_submission_preference_saved.message"));
+                    i18n::message("settings.ir.automatic_submission_preference_saved.message"));
     });
     autoRow->addView(autoButton);
     settingsBody->addView(autoRow);
@@ -338,7 +338,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     }
     publishResult(
         irSettingsModel->setServerOrigin(irServerOriginInput->getText()),
-        i18n::tr("settings.ir.server_origin_saved.message"));
+        i18n::message("settings.ir.server_origin_saved.message"));
   });
   originRow->addView(saveOrigin);
   settingsBody->addView(originRow);
@@ -372,7 +372,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       if (result.succeeded()) {
         irKeyEditorActive = false;
       }
-      publishResult(result, i18n::tr("settings.ir.api_key_saved_device.message"));
+      publishResult(result, i18n::message("settings.ir.api_key_saved_device.message"));
     });
     keyRow->addView(saveKey);
     auto *cancelKey = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), ui_theme::amber());
@@ -383,7 +383,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
         irApiKeyInput->setEditingText("");
       }
       irKeyEditorActive = false;
-      irStatusMessage = i18n::tr("settings.ir.api_key_edit_cancelled.message");
+      irStatusMessage = i18n::message("settings.ir.api_key_edit_cancelled.message");
       irStatusIsError = false;
       lastLayoutWidth = -1;
     });
@@ -396,7 +396,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     replaceKey->setEnabled(presentation.authenticatedActionsAvailable);
     replaceKey->setOnClickListener([this]() {
       irKeyEditorActive = true;
-      irStatusMessage.clear();
+      irStatusMessage = {};
       lastLayoutWidth = -1;
     });
     keyActions->addView(replaceKey);
@@ -407,7 +407,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           return;
         }
         publishResult(irSettingsModel->removeCredential(),
-                      i18n::tr("settings.ir.api_key_removed_from_device.message"));
+                      i18n::message("settings.ir.api_key_removed_from_device.message"));
       });
       keyActions->addView(removeKey);
     }
@@ -448,7 +448,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
         return;
       }
       publishResult(irSettingsModel->retryAll(),
-                    i18n::tr("settings.ir.queued_submissions_scheduled_retry.message"));
+                    i18n::message("settings.ir.queued_submissions_scheduled_retry.message"));
     });
     queueBody->addView(retryAll);
 
@@ -483,7 +483,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               if (result.succeeded()) {
                 irPendingDiscardRowId.reset();
               }
-              publishResult(result, i18n::tr("settings.ir.queued_submission_discarded.message"));
+              publishResult(result, i18n::message("settings.ir.queued_submission_discarded.message"));
             });
         row->addView(confirm);
         auto *cancel = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), ui_theme::amber());
@@ -496,7 +496,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
         auto *discard = makeIrButton(metrics, i18n::message("settings.ir.discard.label"), ui_theme::coral());
         discard->setOnClickListener([this, rowId = snapshot.rowId]() {
           irPendingDiscardRowId = rowId;
-          irStatusMessage = i18n::tr("settings.ir.confirm_permanent_removal_queued_score.message");
+          irStatusMessage = i18n::message("settings.ir.confirm_permanent_removal_queued_score.message");
           irStatusIsError = true;
           lastLayoutWidth = -1;
         });

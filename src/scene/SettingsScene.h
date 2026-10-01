@@ -378,7 +378,7 @@ private:
   std::optional<std::int64_t> irPendingDiscardRowId;
   bool irKeyEditorActive = false;
   bool irStatusIsError = false;
-  std::string irStatusMessage;
+  i18n::Text irStatusMessage;
 
   void initView();
   void resetViewState();

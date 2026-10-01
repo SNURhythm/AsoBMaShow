@@ -3,8 +3,21 @@
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+
+
+@lru_cache(maxsize=None)
+def _generated_launcher_json(path, cmake):
+    # Generator expressions have already been evaluated in this per-config
+    # file. Use CMake's list parser, then serialize argv without shell quoting.
+    result = subprocess.run(
+        [cmake, f"-DLAUNCHER_FILE={path}", f"-DPYTHON_EXECUTABLE={sys.executable}",
+         "-P", str(Path(__file__).with_name("fixture_compiler_launcher.cmake"))],
+        check=True, capture_output=True, text=True)
+    return result.stdout
 
 
 @dataclass(frozen=True)
@@ -16,7 +29,12 @@ class FixtureCompiler:
 
     @classmethod
     def from_environment(cls):
-        launcher = json.loads(os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER") or "[]")
+        encoded = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER")
+        launcher_file = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE")
+        if not encoded and launcher_file:
+            encoded = _generated_launcher_json(
+                launcher_file, os.environ.get("ASOBMASHOW_TEST_CMAKE_COMMAND", "cmake"))
+        launcher = json.loads(encoded or "[]")
         if not isinstance(launcher, list) or any(not isinstance(arg, str) for arg in launcher):
             raise ValueError("ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER must be a JSON array of strings")
         # A conditional CMake launcher can evaluate to one empty list element.

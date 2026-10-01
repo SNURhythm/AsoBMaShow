@@ -2229,18 +2229,35 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     # Runtime C++ fixtures should share the compiler cache selected for this
-    # build. Encode the launcher argv without shell quoting or splitting paths.
-    execute_process(
-        COMMAND ${Python3_EXECUTABLE} -c
-                "import json, sys; print(json.dumps(sys.argv[1:]))"
-                ${CMAKE_CXX_COMPILER_LAUNCHER}
-        OUTPUT_VARIABLE ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        COMMAND_ERROR_IS_FATAL ANY)
+    # build. Evaluate expressions before splitting/encoding launcher argv:
+    # inserting JSON punctuation inside an expression can change its meaning.
+    set(ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE "")
+    if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "\\$<")
+        set(ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/test-cxx-launcher-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE}"
+            CONTENT "${CMAKE_CXX_COMPILER_LAUNCHER}")
+        set(ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER "")
+    else()
+        # Nonempty transport tokens preserve empty argv entries during CMake
+        # command expansion; hex also keeps quotes and backslashes untouched.
+        set(asobmashow_launcher_encoded_args "")
+        foreach(asobmashow_launcher_arg IN LISTS CMAKE_CXX_COMPILER_LAUNCHER)
+            string(HEX "${asobmashow_launcher_arg}" asobmashow_launcher_hex)
+            list(APPEND asobmashow_launcher_encoded_args "x${asobmashow_launcher_hex}")
+        endforeach()
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c
+                    "import json, os, sys; print(json.dumps([os.fsdecode(bytes.fromhex(arg[1:])) for arg in sys.argv[1:]]))"
+                    ${asobmashow_launcher_encoded_args}
+            OUTPUT_VARIABLE ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+    endif()
     string(REPLACE ";" "\\;" ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
         "${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER}")
     set(ASOBMASHOW_TEST_CXX_ENVIRONMENT
-        "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID};ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER=${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER}")
+        "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID};ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER=${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER};ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE=${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE};ASOBMASHOW_TEST_CMAKE_COMMAND=${CMAKE_COMMAND}")
 
     add_test(NAME music_select_error_flow_contract
         COMMAND ${Python3_EXECUTABLE}
@@ -8701,6 +8718,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME android_dependency_cache_tests
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/tests/android_dependency_cache_tests.py -v)
+        add_test(NAME fixture_compiler_environment_tests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/fixture_compiler_environment_tests.py -v)
+        set_tests_properties(fixture_compiler_environment_tests PROPERTIES TIMEOUT 60)
     endif()
 
 endif()

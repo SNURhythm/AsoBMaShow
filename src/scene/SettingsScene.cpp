@@ -436,7 +436,7 @@ void SettingsScene::cleanupScene() {
   irPendingDiscardRowId.reset();
   irKeyEditorActive = false;
   irStatusIsError = false;
-  irStatusMessage.clear();
+  irStatusMessage = {};
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
