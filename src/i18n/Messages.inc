@@ -83,7 +83,7 @@
 {"gameplay.exit_without_summary.label", "Exit Without Summary", "결과 없이 나가기", "結果を表示せずに終了"},
 {"gameplay.finish_practice.label", "Finish Practice", "연습 마치기", "練習を終了"},
 {"gameplay.input.integrity_failure_notice", "Realtime input integrity failed. This attempt was invalidated; return and retry.", "실시간 입력 검증에 실패하여 이번 플레이가 무효 처리되었습니다. 돌아가서 다시 시도하세요.", "リアルタイム入力の整合性検証に失敗したため、今回のプレイは無効になりました。戻って再試行してください。"},
-{"gameplay.ipad_gesture_reminder.help", "Disable multitasking gestures or enable Guided Access to avoid interruptions.\nSwipe upward together, then lift all fingers.", "멀티태스킹 제스처를 끄거나 사용법 유도를 켜서 플레이 중 방해를 방지하세요.\n손가락을 함께 위로 쓸어올린 뒤 모두 떼세요.", "マルチタスクジェスチャーをオフにするか、アクセスガイドをオンにしてください。\n指をそろえて上にスワイプし、すべての指を離してください。"},
+{"gameplay.ipad_gesture_reminder.help", "Disable multitasking gestures or enable Guided Access to avoid interruptions.\nSwipe upward together, then lift all fingers.\nTurn this reminder off in Settings > Visual > iPad Gesture Reminder.", "멀티태스킹 제스처를 끄거나 사용법 유도를 켜서 플레이 중 방해를 방지하세요.\n손가락을 함께 위로 쓸어올린 뒤 모두 떼세요.\n이 알림은 설정 > 화면 효과 > iPad 제스처 알림에서 끌 수 있습니다.", "マルチタスクジェスチャーをオフにするか、アクセスガイドをオンにしてください。\n指をそろえて上にスワイプし、すべての指を離してください。\nこの確認は「設定」>「表示」>「iPadジェスチャー確認」でオフにできます。"},
 {"gameplay.ipad_gesture_reminder.title", "Swipe up with four or more fingers to start", "네 손가락 이상으로 위로 쓸어올려 시작하세요", "4本以上の指で上にスワイプして開始"},
 {"gameplay.loading.loading.progress", "Loading...", "불러오는 중...", "読み込み中..."},
 {"gameplay.paused.badge", "PAUSED", "일시 정지", "一時停止中"},

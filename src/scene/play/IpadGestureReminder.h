@@ -39,7 +39,7 @@ public:
       valid_ = fingers_.size() >= 4;
       for (const auto &[fingerId, finger] : fingers_) {
         const float upward = finger.startY - finger.y;
-        valid_ = valid_ && upward >= 0.12F &&
+        valid_ = valid_ && upward >= 0.03F &&
                  std::abs(finger.x - finger.startX) < upward;
       }
     }

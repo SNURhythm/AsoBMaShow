@@ -673,6 +673,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
             diagnostics);
+  // Existing profiles predate the reminder; enable it by default only for newcomers.
+  settings.ipadGestureReminderEnabled = false;
   readValue(document, "ipadGestureReminderEnabled",
             settings.ipadGestureReminderEnabled, diagnostics);
   readValue(document, "startLaneIndicatorsEnabled",
@@ -1096,6 +1098,7 @@ AppSettingsStore::LoadLegacyCfg(const std::filesystem::path &settingsCfg) {
     return result;
   }
   AppSettings parsed;
+  parsed.ipadGestureReminderEnabled = false;
   parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::loadLegacyCfg(settingsCfg, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;
@@ -1121,6 +1124,7 @@ AppSettingsLoadResult
 AppSettingsStore::LoadLegacyCfgStreamForTesting(std::istream &input) {
   AppSettingsLoadResult result;
   AppSettings parsed;
+  parsed.ipadGestureReminderEnabled = false;
   parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::parseLegacyCfg(input, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;

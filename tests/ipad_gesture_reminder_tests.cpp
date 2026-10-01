@@ -30,12 +30,21 @@ int main() {
   assert(gesture.completed());
 
   gesture.reset();
+  fingersDown(gesture);
+  swipe(gesture, 0.3F, 0.665F); // A short 3.5% upward swipe should count.
+  assert(!gesture.completed());
+  for (int i = 0; i < 3; ++i) gesture.up(i);
+  assert(!gesture.completed()); // Sensitivity does not weaken all-fingers-up gating.
+  gesture.up(3);
+  assert(gesture.completed());
+
+  gesture.reset();
   fingersDown(gesture, 3);
   swipe(gesture, 0.3F, 0.45F, 3);
   lift(gesture, 3);
   assert(!gesture.completed());
   fingersDown(gesture);
-  swipe(gesture, 0.3F, 0.65F); // Too short.
+  swipe(gesture, 0.3F, 0.69F); // Tiny touch jitter is still too short.
   lift(gesture);
   assert(!gesture.completed());
   fingersDown(gesture);

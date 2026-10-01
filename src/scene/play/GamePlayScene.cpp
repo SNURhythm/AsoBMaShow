@@ -90,6 +90,7 @@
 #endif
 
 namespace {
+constexpr uint32_t kIconBack = 0xf060;
 constexpr uint32_t kIconPause = 0xf04c;
 constexpr uint32_t kIconRestart = 0xf2f9;
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
@@ -3485,7 +3486,9 @@ void GamePlayScene::init() {
 }
 
 bool GamePlayScene::reset() {
+  ipadGestureReminderExiting = false;
   ipadGestureReminder.reset();
+  ipadGestureReminderReady = false;
   ipadGestureReminderPending = false;
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   ipadGestureReminderPending = gameplay::IpadGestureReminder::required(
@@ -3701,11 +3704,16 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
   ipadGestureReminderBackground = background;
   if (ipadGestureReminderPending) {
     ipadGestureReminder.reset();
+    ipadGestureReminderReady = false;
     if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
   }
 }
 
 void GamePlayScene::returnFromIpadGestureReminder() {
+  if (ipadGestureReminderExiting) return;
+  ipadGestureReminderExiting = true;
+  ipadGestureReminderReady = false;
+  ipadGestureReminder.reset();
   defer([this]() {
     if (options.returnScene != nullptr &&
         context.sceneManager->backgroundScenes.contains(options.returnScene)) {
@@ -3728,10 +3736,12 @@ void GamePlayScene::pumpIpadGestureReminderTouches() {
       if (ipadGestureReminderBackground ||
           event.phase == IOSRawTouchPhaseCancelled) {
         ipadGestureReminder.reset();
+        ipadGestureReminderReady = false;
         continue;
       }
       switch (event.phase) {
       case IOSRawTouchPhaseBegan:
+        ipadGestureReminderReady = false;
         ipadGestureReminder.down(event.fingerId, event.normalizedX,
                                  event.normalizedY);
         break;
@@ -3793,35 +3803,52 @@ void GamePlayScene::showIpadGestureReminder() {
     auto *help = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     help->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
     help->setWidthPercent(100);
-    help->setHeight(130);
+    help->setHeight(160);
     help->setAlign(TextView::CENTER);
     help->setVAlign(TextView::MIDDLE);
     help->setThemedColor(ui_theme::textSecondary);
     overlay->addView(help);
     auto *back = new Button();
-    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-    label->setLocalizedText(i18n::message("chart_viewer.back.label"));
+    auto *label = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+    label->setText(ui_icons::textForCodepoint(kIconBack));
     label->setAlign(TextView::CENTER);
     label->setVAlign(TextView::MIDDLE);
-    label->setThemedColor([]() {
-      return ui_theme::textOn(ui_theme::primaryAction());
-    });
+    label->setThemedColor(ui_theme::textPrimary);
     back->setContentView(label);
-    back->setSize(280, 64);
+    back->setSize(52, 52);
+    back->setPosition(32, 32, YGPositionTypeAbsolute);
     back->setCornerRadius(ui_theme::controlRadius());
-    back->setBackgroundColors(ui_theme::primaryAction(),
-                              ui_theme::primaryActionHover(),
-                              ui_theme::primaryActionPressed());
+    back->setThemedBackgroundColors(
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
     back->setOnClickListener([this]() { returnFromIpadGestureReminder(); });
     overlay->addView(back);
   }
   ipadGestureReminderLayout->setSize(rendering::window_width,
                                      rendering::window_height);
   ipadGestureReminderLayout->setVisible(true);
-  const float progress = static_cast<float>(SDL_GetTicks64() % 1600) / 1600.0F;
-  const int y = 125 - static_cast<int>(std::min(progress / 0.75F, 1.0F) * 75);
+  const float cycle = static_cast<float>(SDL_GetTicks64() % 1000) / 1000.0F;
+  const auto easeOut = [](float progress) {
+    const float remaining = 1.0F - std::clamp(progress, 0.0F, 1.0F);
+    return 1.0F - remaining * remaining * remaining;
+  };
+  const float landing = easeOut(cycle / 0.24F);
+  const float swipe = easeOut((cycle - 0.08F) / 0.68F);
+  const float lift = easeOut((cycle - 0.42F) / 0.34F);
+  const float scale = 1.0F + 0.4F * (1.0F - landing + lift);
+  const float alpha = easeOut(cycle / 0.10F) *
+                      (1.0F - easeOut((cycle - 0.80F) / 0.18F));
+  const int width = static_cast<int>(std::lround(28.0F * scale));
+  const int height = static_cast<int>(std::lround(44.0F * scale));
+  const int centerY = 147 - static_cast<int>(std::lround(swipe * 75.0F));
   for (int i = 0; i < 4; ++i) {
-    ipadGestureFingerMarkers[i]->setPositionNoLayout(40 + i * 64, y);
+    auto *finger = ipadGestureFingerMarkers[i];
+    finger->setSize(width, height);
+    finger->setCornerRadius(width / 2.0F);
+    finger->setBackgroundColor(ui_theme::withAlpha(
+        ui_theme::textPrimary(), static_cast<int>(std::lround(alpha * 255.0F))));
+    finger->setPositionNoLayout(54 + i * 64 - width / 2, centerY - height / 2);
   }
   if (pauseButton != nullptr) pauseButton->setVisible(false);
   if (practiceRestartButton != nullptr) practiceRestartButton->setVisible(false);
@@ -6148,23 +6175,23 @@ bool GamePlayScene::finishIfGaugeFailed() {
 
 void GamePlayScene::update(float dt) {
   if (ipadGestureReminderPending) {
+    if (ipadGestureReminderExiting) return;
     pumpIpadGestureReminderTouches();
     showIpadGestureReminder();
-    if (!ipadGestureReminderBackground && ipadGestureReminder.completed()) {
-      // Recheck next frame, after queued lifecycle events have been delivered.
-      defer([this]() {
-        if (!ipadGestureReminderPending) return true;
-        pumpIpadGestureReminderTouches();
-        if (!ipadGestureReminderPending || ipadGestureReminderBackground ||
-            !ipadGestureReminder.completed()) return true;
-        ipadGestureReminderPending = false;
-        ipadGestureReminderLayout->setVisible(false);
-        if (startPreparedAttempt()) {
-          refreshRealtimeTouchLayout();
-          setRealtimeGameplayIngressEnabled(true);
-        }
-        return true;
-      }, 0, true);
+    if (ipadGestureReminderBackground || !ipadGestureReminder.completed()) {
+      ipadGestureReminderReady = false;
+    } else if (ipadGestureReminderReady) {
+      // Start only during update, after this frame's lifecycle event dispatch.
+      // UIKit can enqueue background events before frame-end deferred callbacks.
+      ipadGestureReminderReady = false;
+      ipadGestureReminderPending = false;
+      ipadGestureReminderLayout->setVisible(false);
+      if (startPreparedAttempt()) {
+        refreshRealtimeTouchLayout();
+        setRealtimeGameplayIngressEnabled(true);
+      }
+    } else {
+      ipadGestureReminderReady = true;
     }
     return;
   }
@@ -7945,12 +7972,14 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
         event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
       ipadGestureReminderBackground = true;
       ipadGestureReminder.reset();
+      ipadGestureReminderReady = false;
       if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
     }
     if (event.type == SDL_WINDOWEVENT &&
         event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
       ipadGestureReminderBackground = false;
       ipadGestureReminder.reset();
+      ipadGestureReminderReady = false;
       if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
     }
     if (!ipadGestureReminderBackground) {

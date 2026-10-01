@@ -23,6 +23,8 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
+        "void GamePlayScene::onApplicationBackgroundChanged(",
+        "void GamePlayScene::returnFromIpadGestureReminder()",
         "void GamePlayScene::showPauseMenu(",
         "void GamePlayScene::closePauseMenu()",
         "bool GamePlayScene::drainRealtimeInputInterruption()",
@@ -64,6 +66,10 @@ def main():
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
     methods += "\n\n".join(extract(source, signature) for signature in signatures)
+    native_reminder_pump = extract(source, "void GamePlayScene::pumpIpadGestureReminderTouches()")
+    # Exercise the native iPad queue on the host without enabling iOS-only reset setup.
+    methods += "\n" + native_reminder_pump.replace(
+        "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR", "#if 1", 1)
     interruption = extract(source, "  void interruptInput(const input::InputInterruption &interruption)")
     methods += "\n" + interruption.replace("  void interruptInput(", "void FixtureRealtimeSession::interruptInput(", 1)
     reset_boundary = extract(source, "bool GamePlayScene::reset()")

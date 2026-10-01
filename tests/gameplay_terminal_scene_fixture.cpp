@@ -2,6 +2,7 @@
 #include "ir/tachi/TachiEligibility.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GamePlayTiming.h"
+#include "scene/play/IpadGestureReminder.h"
 #include "scene/play/PracticeNoteFinalizer.h"
 #include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/RealtimeGameplayWorker.h"
@@ -21,6 +22,9 @@
 #include "replay/CourseReplayConsumer.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
 #include <SDL2/SDL_log.h>
+#include "../SDL/include/SDL_uikit_rawtouch.h"
+#include <array>
+#include <deque>
 #include <yoga/Yoga.h>
 
 #include <atomic>
@@ -56,7 +60,18 @@ struct FixtureJukebox {
   void playKeySound(int) { require(false, "Watch must not request live keysounds"); }
 };
 
+std::deque<IOSRawTouchEvent> reminderTouches;
+extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity) {
+  size_t count = 0;
+  while (count < capacity && !reminderTouches.empty()) {
+    buffer[count++] = reminderTouches.front();
+    reminderTouches.pop_front();
+  }
+  return count;
+}
+
 struct FixtureInput {
+  void stopListen() {}
   void pumpPendingTouchEvents() {}
   void discardPendingTouchEvents() {}
 };
@@ -138,6 +153,12 @@ struct FixturePauseView {
   bool getVisible() const { return visible; }
 };
 
+struct ReminderSceneManager {
+  std::unordered_set<Scene *> backgroundScenes;
+  int returns = 0;
+  template <typename Destination> void changeScene(Destination, bool) { ++returns; }
+};
+
 class GamePlayScene {
 public:
   bms_parser::Chart ownedChart;
@@ -146,6 +167,8 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
+    ReminderSceneManager reminderSceneManager;
+    ReminderSceneManager *sceneManager = &reminderSceneManager;
     struct {
       int fallbackCompletions = 0;
       void resetGyroscopeTurntableSession() {}
@@ -184,6 +207,38 @@ public:
   FixturePauseView *practiceRestartButton = nullptr;
   bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   bool playbackInitializationFailed = false;
+  gameplay::IpadGestureReminder ipadGestureReminder;
+  bool ipadGestureReminderPending = false;
+  bool ipadGestureReminderReady = false;
+  bool ipadGestureReminderExiting = false;
+  bool ipadGestureReminderBackground = false;
+  FixturePauseView reminderLayout;
+  FixturePauseView *ipadGestureReminderLayout = &reminderLayout;
+  void pumpIpadGestureReminderTouches();
+  void showIpadGestureReminder() { reminderLayout.setVisible(true); }
+  void onApplicationBackgroundChanged(bool background);
+  void returnFromIpadGestureReminder();
+  int attemptStarts = 0;
+  bool nativeBackground = false;
+  bool startedWhileNativeBackground = false;
+  bool startPreparedAttempt() {
+    ++attemptStarts;
+    startedWhileNativeBackground |= nativeBackground;
+    state->isPlaying = true;
+    return true;
+  }
+  bool queueDeferred = false;
+  unsigned frame = 0;
+  std::vector<std::pair<unsigned, std::function<bool()>>> deferred;
+  void finishFrame() {
+    auto callbacks = std::move(deferred);
+    deferred.clear();
+    for (auto &entry : callbacks) {
+      if (entry.first <= frame) entry.second();
+      else deferred.push_back(std::move(entry));
+    }
+    ++frame;
+  }
   bool useProductionResetBoundary = false;
   int transitions = 0;
   int resets = 0;
@@ -232,7 +287,10 @@ public:
   void resetAttemptBoundaryForTest();
   void resetCoursePauseHold() {}
   void updateSkinResetLayoutVisibility() {}
-  template <typename Callback> void defer(Callback callback, int, bool) { callback(); }
+  template <typename Callback> void defer(Callback callback, int, bool waitFrame) {
+    if (queueDeferred) deferred.emplace_back(frame + (waitFrame ? 1 : 0), callback);
+    else callback();
+  }
   void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void completePracticeAttempt();
@@ -1529,7 +1587,80 @@ PREPARATION_IMPLEMENTATIONS
 
 FLIP_IMPLEMENTATIONS
 
+void queueReminderSwipe() {
+  for (auto phase : {IOSRawTouchPhaseBegan, IOSRawTouchPhaseMoved, IOSRawTouchPhaseEnded}) {
+    for (int i = 0; i < 4; ++i) {
+      reminderTouches.push_back({.fingerId = i, .normalizedX = .2F + .1F * i,
+          .normalizedY = phase == IOSRawTouchPhaseBegan ? .8F : .765F, .phase = phase});
+    }
+  }
+}
+
+void testReminderSceneStartup(std::string_view scenario) {
+  GamePlayScene scene;
+  scene.queueDeferred = true;
+  scene.ipadGestureReminderPending = true;
+  scene.state->isPlaying = false;
+  reminderTouches.clear();
+  queueReminderSwipe();
+  scene.update(0);
+  require(scene.attemptStarts == 0 && !scene.state->isPlaying &&
+              scene.recordedReplay.events.empty() && !scene.modernReplayInputRecorder,
+          "reminder swipe must leave gameplay and replay capture stopped");
+  scene.finishFrame();
+  if (scenario == "back") {
+    scene.returnFromIpadGestureReminder();
+    scene.update(0);
+    scene.finishFrame();
+    require(scene.attemptStarts == 0 && !scene.state->isPlaying,
+            "Back after a completed swipe must cancel startup immediately");
+    scene.finishFrame();
+    require(scene.context.sceneManager->returns == 1, "Back must return once");
+  } else if (scenario == "native-background") {
+    scene.update(0);
+    // UIKit runs after update, before deferred callbacks; SDL dispatch is next frame.
+    scene.nativeBackground = true;
+    scene.finishFrame();
+    require(!scene.startedWhileNativeBackground,
+            "startup must not run from deferred callbacks after native background arrival");
+    scene.onApplicationBackgroundChanged(true);
+  } else if (scenario == "native-cancel" || scenario == "cancel-then-swipe") {
+    reminderTouches.push_back({.phase = IOSRawTouchPhaseCancelled});
+    if (scenario == "cancel-then-swipe") queueReminderSwipe();
+    scene.update(0);
+    scene.finishFrame();
+    require(scene.attemptStarts == 0 && scene.ipadGestureReminderPending,
+            "native cancellation must invalidate readiness even before a fresh swipe in the same batch");
+    if (scenario == "cancel-then-swipe") {
+      scene.update(0);
+      require(scene.attemptStarts == 1, "fresh swipe starts after its own event-dispatch boundary");
+    }
+  } else if (scenario == "cancel") {
+    scene.onApplicationBackgroundChanged(true);
+    scene.finishFrame();
+    scene.onApplicationBackgroundChanged(false);
+    scene.update(0);
+    scene.finishFrame();
+    require(scene.attemptStarts == 0 && scene.ipadGestureReminderPending,
+            "background interruption must require a fresh swipe after foreground");
+  } else {
+    scene.update(0);
+    require(scene.attemptStarts == 1 && scene.state->isPlaying &&
+                !scene.ipadGestureReminderPending && !scene.reminderLayout.visible,
+            "a successful swipe must start at the next update after event dispatch");
+    scene.finishFrame();
+    require(scene.attemptStarts == 1, "deferred callbacks must not repeat startup");
+  }
+}
+
 int main(int argc, char **argv) {
+  if (argc > 2 && std::string_view(argv[1]) == "ipad-reminder") {
+    testReminderSceneStartup(argv[2]);
+    return 0;
+  }
+  for (const auto scenario : {"back", "native-background", "cancel", "native-cancel", "cancel-then-swipe", "success"}) {
+    testReminderSceneStartup(scenario);
+  }
   testNativeFailureRacingOrdinaryPauseResumeIsNotCleared();
   testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume();
   {

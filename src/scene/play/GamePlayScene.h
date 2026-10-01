@@ -102,6 +102,8 @@ private:
   void returnFromIpadGestureReminder();
   gameplay::IpadGestureReminder ipadGestureReminder;
   bool ipadGestureReminderPending = false;
+  bool ipadGestureReminderReady = false;
+  bool ipadGestureReminderExiting = false;
   bool ipadGestureReminderBackground = false;
   View *ipadGestureReminderLayout = nullptr;
   std::array<View *, 4> ipadGestureFingerMarkers{};
