@@ -20,6 +20,8 @@ int main() {
   assert(!IpadGestureReminder::required(true, true, true, false, 0));
   assert(!IpadGestureReminder::required(true, true, false, true, 0));
   assert(!IpadGestureReminder::required(true, true, false, false, 1));
+  assert(!IpadGestureReminder::required(true, true, false, false, 0, true));
+  assert(IpadGestureReminder::required(true, true, false, false, 0, false));
   IpadGestureReminder gesture;
   fingersDown(gesture);
   swipe(gesture, 0.3F, 0.45F);

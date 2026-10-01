@@ -212,6 +212,8 @@ public:
   bool ipadGestureReminderReady = false;
   bool ipadGestureReminderExiting = false;
   bool ipadGestureReminderBackground = false;
+  bool guidedAccessEnabled = false;
+  bool isGuidedAccessEnabled() const { return guidedAccessEnabled; }
   FixturePauseView reminderLayout;
   FixturePauseView *ipadGestureReminderLayout = &reminderLayout;
   void pumpIpadGestureReminderTouches();
@@ -1675,13 +1677,60 @@ void testReminderSceneStartup(std::string_view scenario) {
   }
 }
 
+void testGuidedAccessReminderStartup(std::string_view scenario) {
+  GamePlayScene scene;
+  scene.ipadGestureReminderPending = true;
+  scene.state->isPlaying = false;
+  reminderTouches.clear();
+  scene.update(0);
+  require(scene.attemptStarts == 0 && scene.ipadGestureReminderPending,
+          "inactive Guided Access must leave the reminder waiting");
+
+  scene.guidedAccessEnabled = true; // Native status-change notification starts a session.
+  if (scenario == "back") {
+    scene.returnFromIpadGestureReminder();
+    scene.update(0);
+    require(scene.attemptStarts == 0, "Guided Access must not override Back");
+    return;
+  }
+  if (scenario == "background" || scenario == "ended") {
+    scene.onApplicationBackgroundChanged(true);
+    scene.update(0);
+    require(scene.attemptStarts == 0 && scene.recordedReplay.events.empty() &&
+                !scene.modernReplayInputRecorder,
+            "Guided Access must not start gameplay or replay capture while backgrounded");
+    if (scenario == "ended") scene.guidedAccessEnabled = false;
+    scene.onApplicationBackgroundChanged(false);
+  }
+  scene.update(0);
+  if (scenario == "ended") {
+    require(scene.attemptStarts == 0 && scene.ipadGestureReminderPending,
+            "a session that ended before foreground must not bypass the reminder");
+    return;
+  }
+  require(scene.attemptStarts == 1 && scene.state->isPlaying &&
+              !scene.ipadGestureReminderPending && !scene.reminderLayout.visible,
+          "active Guided Access must dismiss the reminder on the first foreground update");
+  scene.guidedAccessEnabled = false;
+  scene.update(0);
+  require(scene.attemptStarts == 1 && !scene.ipadGestureReminderPending,
+          "ending Guided Access during gameplay must not restart the reminder");
+}
+
 int main(int argc, char **argv) {
+  if (argc > 2 && std::string_view(argv[1]) == "guided-access") {
+    testGuidedAccessReminderStartup(argv[2]);
+    return 0;
+  }
   if (argc > 2 && std::string_view(argv[1]) == "ipad-reminder") {
     testReminderSceneStartup(argv[2]);
     return 0;
   }
   for (const auto scenario : {"back", "native-background", "cancel", "native-cancel", "cancel-then-swipe", "late-finger", "success"}) {
     testReminderSceneStartup(scenario);
+  }
+  for (const auto scenario : {"started", "background", "ended", "back"}) {
+    testGuidedAccessReminderStartup(scenario);
   }
   testNativeFailureRacingOrdinaryPauseResumeIsNotCleared();
   testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume();

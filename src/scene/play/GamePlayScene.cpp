@@ -3494,7 +3494,8 @@ bool GamePlayScene::reset() {
   ipadGestureReminderPending = gameplay::IpadGestureReminder::required(
       context.settings.ipadGestureReminderEnabled, IsIOSPad(),
       isReplayPlayback(), options.autoPlay,
-      options.courseSession != nullptr ? options.courseSession->currentIndex : 0);
+      options.courseSession != nullptr ? options.courseSession->currentIndex : 0,
+      isGuidedAccessEnabled());
 #endif
   if (ipadGestureReminderLayout != nullptr) {
     ipadGestureReminderLayout->setVisible(false);
@@ -3698,6 +3699,14 @@ bool GamePlayScene::reset() {
     return true;
   }
   return startPreparedAttempt();
+}
+
+bool GamePlayScene::isGuidedAccessEnabled() const {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  return IsIOSGuidedAccessEnabled();
+#else
+  return false;
+#endif
 }
 
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
@@ -6180,9 +6189,11 @@ void GamePlayScene::update(float dt) {
     if (ipadGestureReminderExiting) return;
     pumpIpadGestureReminderTouches();
     showIpadGestureReminder();
-    if (ipadGestureReminderBackground || !ipadGestureReminder.completed()) {
+    const bool guidedAccessEnabled = isGuidedAccessEnabled();
+    if (ipadGestureReminderBackground ||
+        (!guidedAccessEnabled && !ipadGestureReminder.completed())) {
       ipadGestureReminderReady = false;
-    } else if (ipadGestureReminderReady) {
+    } else if (guidedAccessEnabled || ipadGestureReminderReady) {
       // Start only during update, after this frame's lifecycle event dispatch.
       // UIKit can enqueue background events before frame-end deferred callbacks.
       ipadGestureReminderReady = false;

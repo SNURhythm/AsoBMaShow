@@ -5496,6 +5496,28 @@ bool IsIOSPad() {
   return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
 }
 
+bool IsIOSGuidedAccessEnabled() {
+  static std::atomic_bool enabled{false};
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    enabled.store(UIAccessibilityIsGuidedAccessEnabled(), std::memory_order_relaxed);
+    SDL_Log("iOS Guided Access: %s (initial)", enabled.load() ? "enabled" : "disabled");
+    // Process-wide observer captures no scene; scene updates consume its latest state.
+    static id observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIAccessibilityGuidedAccessStatusDidChangeNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *) {
+                  enabled.store(UIAccessibilityIsGuidedAccessEnabled(),
+                                std::memory_order_relaxed);
+                  SDL_Log("iOS Guided Access: %s (status changed)",
+                          enabled.load() ? "enabled" : "disabled");
+                }];
+    (void)observer;
+  });
+  return enabled.load(std::memory_order_relaxed);
+}
+
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
   IOSNormalizedSafeAreaInsets insets;
   UIWindow *window = FindActiveWindow();

@@ -97,6 +97,7 @@ private:
   };
   bool reset();
   bool startPreparedAttempt();
+  bool isGuidedAccessEnabled() const;
   void showIpadGestureReminder();
   void pumpIpadGestureReminderTouches();
   void returnFromIpadGestureReminder();

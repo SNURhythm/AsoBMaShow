@@ -11,8 +11,9 @@ namespace gameplay {
 class IpadGestureReminder {
 public:
   static bool required(bool enabled, bool ipad, bool replay, bool autoPlay,
-                       std::size_t courseTrackIndex) {
-    return enabled && ipad && !replay && !autoPlay && courseTrackIndex == 0;
+                       std::size_t courseTrackIndex, bool guidedAccessEnabled = false) {
+    return enabled && ipad && !replay && !autoPlay && courseTrackIndex == 0 &&
+           !guidedAccessEnabled;
   }
 
   void reset() {

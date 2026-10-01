@@ -137,6 +137,8 @@ void *StartIOSSecurityScopedResource(const std::string &path,
                                       std::string &errorMessage);
 void StopIOSSecurityScopedResource(void *resource);
 bool IsIOSPad();
+// Call on the main thread. Observes Guided Access session changes for app lifetime.
+bool IsIOSGuidedAccessEnabled();
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int logicalWidth, int logicalHeight,
