@@ -1,0 +1,19 @@
+frames=64 voices=16 mix_p50=6.8us mix_p99=7.1us period=1333.3us
+frames=64 voices=64 mix_p50=27.2us mix_p99=48.5us period=1333.3us
+frames=64 voices=128 mix_p50=54.0us mix_p99=203.6us period=1333.3us
+frames=64 voices=256 mix_p50=108.3us mix_p99=455.3us period=1333.3us
+frames=64 voices=512 mix_p50=264.4us mix_p99=737.2us period=1333.3us
+frames=128 voices=16 mix_p50=16.5us mix_p99=94.5us period=2666.7us
+frames=128 voices=64 mix_p50=64.9us mix_p99=128.6us period=2666.7us
+frames=128 voices=128 mix_p50=130.2us mix_p99=178.4us period=2666.7us
+frames=128 voices=256 mix_p50=261.0us mix_p99=521.5us period=2666.7us
+frames=128 voices=512 mix_p50=422.8us mix_p99=533.4us period=2666.7us
+frames=512 voices=16 mix_p50=52.0us mix_p99=54.7us period=10666.7us
+frames=512 voices=64 mix_p50=207.7us mix_p99=217.9us period=10666.7us
+frames=512 voices=128 mix_p50=415.3us mix_p99=454.1us period=10666.7us
+frames=512 voices=256 mix_p50=712.3us mix_p99=1019.6us period=10666.7us
+frames=512 voices=512 mix_p50=2044.4us mix_p99=3897.5us period=10666.7us
+scheduled=1000 activate_one_p50=2.5us p99=4.3us
+scheduled=10000 activate_one_p50=34.6us p99=36.2us
+scheduled=65536 activate_one_p50=225.5us p99=266.3us
+scheduled=200000 activate_one_p50=688.4us p99=1395.2us
