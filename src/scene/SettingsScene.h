@@ -166,6 +166,7 @@ private:
   Button *startLaneIndicatorsModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
   Button *markProcessedNotesModeButton = nullptr;
+  Button *ipadGestureReminderModeButton = nullptr;
   Button *touchVisualizationModeButton = nullptr;
   Button *hispeedAutoAdjustModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;

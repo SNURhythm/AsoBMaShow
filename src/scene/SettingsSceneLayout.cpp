@@ -120,6 +120,7 @@ void SettingsScene::resetViewState() {
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   markProcessedNotesModeButton = nullptr;
+  ipadGestureReminderModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
   hispeedAutoAdjustModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
@@ -1591,15 +1592,15 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
     ipadGestureReminderModeText =
         makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
-    auto *button = makeControlButton(metrics.actionButtonWidth,
-                                     metrics.actionButtonHeight,
-                                     ipadGestureReminderModeText);
-    button->setOnClickListener([this]() {
+    ipadGestureReminderModeButton = makeControlButton(metrics.actionButtonWidth,
+                                                     metrics.actionButtonHeight,
+                                                     ipadGestureReminderModeText);
+    ipadGestureReminderModeButton->setOnClickListener([this]() {
       context.settings.ipadGestureReminderEnabled =
           !context.settings.ipadGestureReminderEnabled;
       persistSettings();
     });
-    controls->addView(button);
+    controls->addView(ipadGestureReminderModeButton);
     cardsColumn->addView(makeCard(
         metrics, i18n::message("settings.visual.ipad_gesture_reminder.label"),
         i18n::message("settings.visual.ipad_gesture_reminder.description"),

@@ -442,6 +442,10 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
       context.settings.markProcessedNotes ? SettingsButtonTone::Success
                                            : SettingsButtonTone::Info);
   applySemanticButtonStyle(
+      ipadGestureReminderModeButton, ipadGestureReminderModeText,
+      context.settings.ipadGestureReminderEnabled ? SettingsButtonTone::Success
+                                                  : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
       startLaneIndicatorsModeButton, startLaneIndicatorsModeText,
       context.settings.startLaneIndicatorsEnabled ? SettingsButtonTone::Success
                                                   : SettingsButtonTone::Info);
