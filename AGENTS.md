@@ -92,6 +92,27 @@
   `cmake --build cmake-build-debug --target main -j 6`
 - For full CTest runs, execute tests in parallel:
   `ctest --test-dir cmake-build-debug --output-on-failure -j 6`
+- Run only one Ninja/CMake build at a time per build directory. Combine targets
+  in one invocation; concurrent builds can corrupt `.ninja_deps` and cause
+  repeated recompilation of unchanged files.
+- Ninja's dependency database sometimes gets corrupted. If a small edit or an
+  unchanged checkout triggers suspiciously broad recompilation, investigate
+  `.ninja_deps` before accepting another full rebuild. A repeated
+  `premature end of file; recovering` warning is a known symptom: recovery can
+  retain a bad record and discard newer dependency records on every invocation.
+- Repair corrupted build metadata with Ninja's own recompaction tool. First
+  ensure no build or other Ninja invocation is using that build directory, then:
+  ```sh
+  ninja_repair_backup=$(mktemp -d /tmp/asobmashow-ninja-repair.XXXXXX)
+  cp cmake-build-debug/.ninja_deps cmake-build-debug/.ninja_log "$ninja_repair_backup/"
+  ninja -C cmake-build-debug -t recompact
+  cmake --build cmake-build-debug --target main -j 6
+  cmake --build cmake-build-debug --target main -j 6
+  ```
+  The first build may refresh stale dependency records. The second must do no
+  compilation or linking; routine shader-copy and build-identity checks are
+  normal. If broad recompilation persists, inspect Ninja's rebuild reasons
+  instead of repeatedly cleaning or rebuilding the entire tree.
 
 ## Git Worktrees
 
