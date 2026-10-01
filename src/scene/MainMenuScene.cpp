@@ -6143,7 +6143,7 @@ void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
     detail = findBmsDownloadFailureMessage(findBmsResult);
   } else {
-    detail = i18n::message("library.find_bms.searching_available_sources.progress");
+    detail = findBmsRunningDetailMessage(findBmsProgressMessage);
   }
   if (!findBmsModalChart.meta.Title.empty()) {
     detail = i18n::message("library.find_bms.chart_detail",
