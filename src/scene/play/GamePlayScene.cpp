@@ -3858,14 +3858,11 @@ void GamePlayScene::showGuidedAccessReminder() {
   const float progress = guidedAccessReminder.progress();
   auto cue = gameplay::layoutButtonCue(buttonLocation, rendering::window_width,
                                        rendering::window_height, cueInsets);
-  float cueOpacity = 1.0F;
   if (confirming) {
-    const auto animation = gameplay::confirmButtonCue(cue, buttonLocation.edge,
+    cue = gameplay::confirmButtonCue(cue, buttonLocation.edge,
         rendering::window_width, rendering::window_height, progress);
-    cue = animation.layout;
-    cueOpacity = animation.opacity;
   }
-  guidedAccessButtonMarker->setVisible(cueOpacity > 0 && cue.marker.width > 0);
+  guidedAccessButtonMarker->setVisible(cue.marker.width > 0);
   guidedAccessButtonMarker->setSize(cue.marker.width, cue.marker.height);
   guidedAccessButtonMarker->setPositionNoLayout(cue.marker.x, cue.marker.y);
   // Three gentle pulses suggest triple-clicking, followed by a pause.
@@ -3873,7 +3870,7 @@ void GamePlayScene::showGuidedAccessReminder() {
   const float pulse = pulseTime < 900 ? std::sin(3.14159265F * pulseTime / 300) : 0;
   guidedAccessButtonMarker->setBackgroundColor(
       ui_theme::withAlpha(ui_theme::lime(), confirming
-          ? static_cast<int>(255 * cueOpacity) : 150 + static_cast<int>(105 * pulse * pulse)));
+          ? 255 : 150 + static_cast<int>(105 * pulse * pulse)));
   guidedAccessButtonHint->setSize(cue.label.width, cue.label.height);
   guidedAccessButtonHint->setPositionNoLayout(cue.label.x, cue.label.y);
   guidedAccessButtonHint->setPadding(Edge::Left, confirming ? 48 : 8);
@@ -3882,18 +3879,11 @@ void GamePlayScene::showGuidedAccessReminder() {
       : buttonLocation.button == ipad_hardware::Button::Home
           ? "gameplay.ipad_gesture_reminder.home_button"
           : "gameplay.ipad_gesture_reminder.top_button"));
-  const auto fadedCueColor = [cueOpacity](Color color) {
-    color.a = static_cast<uint8_t>(std::lround(color.a * cueOpacity));
-    return color;
-  };
-  guidedAccessButtonHint->setColor(ui_theme::sdl(fadedCueColor(ui_theme::textPrimary())));
-  guidedAccessButtonHint->setBackgroundColor(fadedCueColor(ui_theme::panelStrong()));
-  guidedAccessButtonCheck->setColor(ui_theme::sdl(fadedCueColor(ui_theme::lime())));
-  // SDL_ttf treats zero input alpha as opaque; hide text once rounding reaches zero.
-  guidedAccessButtonHint->setVisible(cue.label.width > 0 &&
-                                     guidedAccessButtonHint->currentColor().a > 0);
-  guidedAccessButtonCheck->setVisible(confirming && guidedAccessButtonHint->getVisible() &&
-                                      guidedAccessButtonCheck->currentColor().a > 0);
+  guidedAccessButtonHint->setThemedColor(ui_theme::textPrimary);
+  guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
+  guidedAccessButtonCheck->setThemedColor(ui_theme::lime);
+  guidedAccessButtonHint->setVisible(cue.label.width > 0);
+  guidedAccessButtonCheck->setVisible(confirming && guidedAccessButtonHint->getVisible());
   if (confirming && cue.label.width > 0) {
     const int textWidth = guidedAccessButtonHint->measureTextWidth(guidedAccessButtonHint->getText());
     guidedAccessButtonCheck->setPositionNoLayout(

@@ -61,6 +61,7 @@ large text buttons in the central controls, leaving all screen edges free.
 The cue is recalculated while the reminder is visible, and confirms alongside
 the central lock when Guided Access activates: a green
 marker stretch and rebound, a separate Font Awesome check beside localized
-Enabled text, then an inward drift and fade over 0.8 seconds. This adds no time
-to the existing two-second startup delay. Interruption resets the cue to idle.
+Enabled text. The spring settles in place and the success cue remains fully
+visible until gameplay starts. This adds no time to the existing two-second
+startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.

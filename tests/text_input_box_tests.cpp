@@ -540,22 +540,17 @@ void testHardwareCueUsesRealViewHierarchy() {
            check->getX() + check->getWidth() <= textLeft - 4,
            "Font Awesome check stays inside the capsule and clear of its text after rotation");
   }
-  fixture.guidedAccessReminder.update(true, true, 1600);
-  fixture.showGuidedAccessReminder();
-  expect(fixture.guidedAccessButtonCheck->currentColor().a > 0 &&
-         fixture.guidedAccessButtonCheck->currentColor().a < 255, "check fades with its cue");
-  fixture.guidedAccessReminder.update(true, true, 1795);
-  fixture.showGuidedAccessReminder();
-  // SDL_ttf interprets an input alpha of zero as opaque, so rounded-zero text
-  // must be hidden before the fade's exact endpoint to prevent a final flash.
-  expect(!fixture.guidedAccessButtonHint->getVisible() &&
-         !fixture.guidedAccessButtonCheck->getVisible(), "rounded-zero text is hidden before the fade ends");
-  fixture.guidedAccessReminder.update(true, true, 1800);
-  fixture.showGuidedAccessReminder();
-  expect(!fixture.guidedAccessButtonHint->getVisible() &&
-         !fixture.guidedAccessButtonMarker->getVisible() &&
-         !fixture.guidedAccessButtonCheck->getVisible(), "all cue parts disappear together");
-  expect(!fixture.guidedAccessReminder.completed(), "cue does not shorten the startup delay");
+  for (const auto tick : {1600, 1795, 1800, 2000, 2999}) {
+    fixture.guidedAccessReminder.update(true, true, tick);
+    fixture.showGuidedAccessReminder();
+    expect(fixture.guidedAccessButtonHint->getVisible() &&
+           fixture.guidedAccessButtonMarker->getVisible() &&
+           fixture.guidedAccessButtonCheck->getVisible(), "success cue remains visible until playback");
+    expect(fixture.guidedAccessButtonCheck->currentColor().a == ui_theme::lime().a &&
+           fixture.guidedAccessButtonHint->currentColor().a == ui_theme::textPrimary().a,
+           "success text and Font Awesome check stay fully opaque");
+    expect(!fixture.guidedAccessReminder.completed(), "cue does not shorten the startup delay");
+  }
   fixture.guidedAccessReminder.reset();
   fixture.showGuidedAccessReminder();
   expect(fixture.guidedAccessButtonHint->getVisible() &&
