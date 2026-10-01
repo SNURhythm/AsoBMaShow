@@ -80,8 +80,13 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
   body_ = label(22);
   body_->setWrap(true);
   body_->setVAlign(TextView::TOP);
-  body_->setFlex(1);
-  panel_->addView(body_);
+  // Keep the text intrinsically measured: a flex-sized text node can have
+  // both dimensions resolved without Yoga calling its wrapping measure hook.
+  auto *bodySpace = new View();
+  bodySpace->setFlex(1)->setFlexDirection(FlexDirection::Column);
+  body_->setFlexShrink(0);
+  bodySpace->addView(body_);
+  panel_->addView(bodySpace);
 
   languages_ = new View();
   languages_->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
@@ -230,7 +235,8 @@ void NewcomerTutorialView::updateLayout(int width, int height) {
     const float sideWidth = std::max(left - 40, width - right - 40);
     if (sideWidth >= 340) panelWidth = std::min(panelWidth, sideWidth);
   }
-  const float desiredHeight = panelWidth < 440 ? 500.0F : 400.0F;
+  const float desiredHeight = panelWidth < 440 ? 500.0F
+      : step_ == NewcomerTutorialStep::Language ? 440.0F : 400.0F;
   const float panelHeight = std::min(desiredHeight + (saveFailed_ ? 46 : 0), std::max(0.0F, height - 40.0F));
   float x = (width - panelWidth) / 2;
   float y = (height - panelHeight) / 2;

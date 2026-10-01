@@ -102,28 +102,36 @@ void testTranslatedTipsFitAndLeaveTargetsVisible() {
           .saveLanguage = [](const std::string &) { return true; },
           .complete = [] { return true; },
           .target = [&](NewcomerTutorialStep) { return &target; }});
-      tour.advance();
-      for (int step = 1; step <= 4; ++step) {
+      for (int step = 0; step <= 4; ++step) {
         tour.updateLayout(width, 720);
         const auto *panel = tour.getChildren().back();
         require(panel->getX() >= 0 && panel->getY() >= 0 &&
                     panel->getX() + panel->getWidth() <= width &&
                     panel->getY() + panel->getHeight() <= 720,
                 "tutorial card must remain inside the viewport");
-        require(panel->getX() >= target.getX() + target.getWidth() ||
+        require(step == 0 || panel->getX() >= target.getX() + target.getWidth() ||
                     panel->getX() + panel->getWidth() <= target.getX(),
                 "tutorial card must not cover the highlighted control");
-        for (auto *child : tour.getChildren().back()->getChildren()) {
-          const auto *text = dynamic_cast<TextView *>(child);
-          if (text && text->getVisible()) {
-            if (text->textureHeight() > text->getHeight()) {
-              std::cerr << "Clipped tip at width " << width << ": " << text->getText()
-                        << " (" << text->textureHeight() << " > " << text->getHeight() << ")\n";
+        const auto checkText = [&](auto &&self, View *parent) -> void {
+          for (auto *child : parent->getChildren()) {
+            if (!child->getVisible()) continue;
+            if (const auto *text = dynamic_cast<TextView *>(child)) {
+              if (text->textureWidth() > text->getWidth() ||
+                  text->textureHeight() > text->getHeight()) {
+                std::cerr << "Overflow at width " << width << ": " << text->getText()
+                          << " texture " << text->textureWidth() << "x" << text->textureHeight()
+                          << " view " << text->getWidth() << "x" << text->getHeight() << "\n";
+              }
+              require(text->textureWidth() <= text->getWidth() &&
+                          text->textureHeight() <= text->getHeight(),
+                      "translated tutorial text must wrap within its view");
+              require(text->getY() + text->getHeight() <= parent->getY() + parent->getHeight(),
+                      "wrapped text must fit its allocated space without covering controls");
             }
-            require(text->textureHeight() <= text->getHeight(),
-                    "translated tutorial text must fit without vertical clipping");
+            self(self, child);
           }
-        }
+        };
+        checkText(checkText, tour.getChildren().back());
         tour.advance();
       }
     }
