@@ -5661,6 +5661,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
     set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
     if(APPLE AND NOT IOS)
+        add_test(NAME ios_guided_access_status_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/ios_guided_access_status_tests.py)
         add_test(NAME unzip_marker_io_tests
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
         set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)

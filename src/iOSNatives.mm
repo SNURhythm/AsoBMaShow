@@ -5502,7 +5502,7 @@ bool IsIOSGuidedAccessEnabled() {
   dispatch_once(&once, ^{
     enabled.store(UIAccessibilityIsGuidedAccessEnabled(), std::memory_order_relaxed);
     SDL_Log("iOS Guided Access: %s (initial)", enabled.load() ? "enabled" : "disabled");
-    // Process-wide observer captures no scene; scene updates consume its latest state.
+    // Process-wide observer captures no scene; polling also refreshes this state.
     static id observer = [[NSNotificationCenter defaultCenter]
         addObserverForName:UIAccessibilityGuidedAccessStatusDidChangeNotification
                     object:nil
@@ -5515,7 +5515,13 @@ bool IsIOSGuidedAccessEnabled() {
                 }];
     (void)observer;
   });
-  return enabled.load(std::memory_order_relaxed);
+  // Refresh even if UIKit has not delivered a status-change notification.
+  // Read UIKit directly so a visible reminder never relies on notification delivery.
+  const bool current = UIAccessibilityIsGuidedAccessEnabled();
+  if (enabled.exchange(current, std::memory_order_relaxed) != current) {
+    SDL_Log("iOS Guided Access: %s (polled change)", current ? "enabled" : "disabled");
+  }
+  return current;
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
