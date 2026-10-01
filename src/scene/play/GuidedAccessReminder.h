@@ -6,7 +6,7 @@
 #include <optional>
 
 namespace gameplay {
-// Keep playback stopped for a full foreground second after detecting Guided Access.
+// Animate for one foreground second, then allow another second for system UI to settle.
 class GuidedAccessReminder {
 public:
   static bool required(bool enabled, bool ipad, bool replay, bool autoPlay,
@@ -28,7 +28,7 @@ public:
     elapsed_ = now >= *startedAt_ ? now - *startedAt_ : 0;
   }
   [[nodiscard]] bool confirming() const { return startedAt_.has_value(); }
-  [[nodiscard]] bool completed() const { return confirming() && elapsed_ >= 1000; }
+  [[nodiscard]] bool completed() const { return confirming() && elapsed_ >= 2000; }
   [[nodiscard]] float progress() const {
     return static_cast<float>(std::min<std::uint64_t>(elapsed_, 1000)) / 1000.0F;
   }

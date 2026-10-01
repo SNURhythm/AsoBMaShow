@@ -22,6 +22,10 @@ int main() {
   reminder.update(true, true, 10999);
   assert(!reminder.completed());
   reminder.update(true, true, 11000);
+  assert(!reminder.completed() && reminder.progress() == 1);
+  reminder.update(true, true, 11999);
+  assert(!reminder.completed() && reminder.progress() == 1);
+  reminder.update(true, true, 12000);
   assert(reminder.completed() && reminder.progress() == 1);
 
   reminder.reset();
@@ -33,16 +37,18 @@ int main() {
   reminder.update(true, true, 10000);
   reminder.update(true, true, 10999);
   assert(!reminder.completed());
-  reminder.update(true, true, 11000);
+  reminder.update(true, true, 11999);
+  assert(!reminder.completed());
+  reminder.update(true, true, 12000);
   assert(reminder.completed());
 
   reminder.update(true, false, 12000);
   assert(!reminder.confirming() && !reminder.completed());
   reminder.update(true, false, 50000);
   reminder.update(true, true, 50000);
-  reminder.update(true, true, 50999);
+  reminder.update(true, true, 51999);
   assert(!reminder.completed()); // Background time cannot satisfy the delay.
-  reminder.update(true, true, 51000);
+  reminder.update(true, true, 52000);
   assert(reminder.completed());
   reminder.reset();
   assert(!reminder.confirming() && !reminder.completed());

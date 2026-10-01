@@ -1654,7 +1654,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
   scene.update(0);
   if (scenario == "back") {
     scene.returnFromGuidedAccessReminder();
-    reminderTicks += 1000;
+    reminderTicks += 2000;
     scene.update(0);
     scene.finishFrame();
     scene.finishFrame();
@@ -1670,7 +1670,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
     require(scene.attemptStarts == 0 && !scene.guidedAccessReminder.confirming(),
             "ending Guided Access during confirmation must cancel startup");
     scene.guidedAccessEnabled = true;
-    scene.update(0); // A new session needs its own full second.
+    scene.update(0); // A new session needs its own animation and settling second.
   } else if (scenario == "background" || scenario == "native-background") {
     // UIKit can change lifecycle state after update, before deferred callbacks.
     scene.nativeBackground = true;
@@ -1685,7 +1685,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
             "background time must not start gameplay or replay capture");
     scene.nativeBackground = false;
     scene.onApplicationBackgroundChanged(false);
-    scene.update(0); // Require a full visible second after foregrounding.
+    scene.update(0); // Restart the animation and settling delay after foregrounding.
   } else {
     reminderTicks -= 500; // Remaining checks are relative to the original start.
   }
@@ -1696,9 +1696,18 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
           "audio and replay capture must remain stopped throughout confirmation");
   reminderTicks += 1;
   scene.update(0);
+  require(scene.attemptStarts == 0 && scene.guidedAccessReminder.progress() == 1,
+          "finishing the lock animation must leave a full extra second before playback");
+  reminderTicks += 999;
+  scene.update(0);
+  require(scene.attemptStarts == 0 && !scene.state->isPlaying &&
+              scene.recordedReplay.events.empty() && !scene.modernReplayInputRecorder,
+          "audio and replay capture must remain stopped during the settling second");
+  reminderTicks += 1;
+  scene.update(0);
   require(scene.attemptStarts == 1 && scene.state->isPlaying &&
               !scene.guidedAccessReminderPending && !scene.reminderLayout.visible,
-          "confirmation completes after exactly one foreground second");
+          "confirmation completes after animation plus one extra foreground second");
   scene.finishFrame();
   scene.guidedAccessEnabled = false;
   scene.update(0);
