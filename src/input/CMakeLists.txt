@@ -70,13 +70,26 @@ function(asobmashow_add_gyroscope_backend target_name)
     endif()
 endfunction()
 
-function(asobmashow_add_windows_realtime_input_backend target_name)
+function(asobmashow_add_native_realtime_input_backend target_name)
     if(WIN32)
         target_sources(${target_name} PRIVATE
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/WindowsRealtimeInputBackend.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/WindowsRealtimeInputMapping.cpp
         )
         target_link_libraries(${target_name} PRIVATE rtworkq user32)
+    elseif(APPLE AND NOT IOS)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MacRealtimeKeyboardBackend.mm)
+        target_link_libraries(${target_name} PRIVATE
+            "-framework ApplicationServices" "-framework Carbon")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/LinuxRealtimeKeyboardBackend.cpp)
+        find_package(X11 QUIET)
+        if(X11_FOUND)
+            target_compile_definitions(${target_name} PRIVATE ASOBMASHOW_HAVE_X11=1)
+            target_link_libraries(${target_name} PRIVATE X11::X11)
+        endif()
     endif()
 endfunction()
 
@@ -90,4 +103,4 @@ endif()
 
 asobmashow_add_midi_backend(main)
 asobmashow_add_gyroscope_backend(main)
-asobmashow_add_windows_realtime_input_backend(main)
+asobmashow_add_native_realtime_input_backend(main)

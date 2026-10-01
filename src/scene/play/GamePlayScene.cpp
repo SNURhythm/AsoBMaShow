@@ -1094,6 +1094,9 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::atomic<std::uint64_t> requestedHitCaptureReset{0};
   std::uint64_t appliedRawHitCaptureReset = 0;
   std::uint64_t appliedSnapshotGeneration = 0;
+  std::uint64_t appliedNoteRevision = 0;
+  std::uint64_t appliedGraphJudgementRevision = 0;
+  std::uint64_t appliedGraphGaugeRevision = 0;
   std::uint64_t appliedTransactionSequence = 0;
   std::size_t visualMeasureIndex = 0;
   std::size_t visualTimelineIndex = 0;
@@ -1270,19 +1273,22 @@ struct GamePlayScene::RealtimeGameplaySession {
 
   bool prepareLegacyInput(gameplay::RealtimeGameplayInputType type, int lane,
                           int compensateLane, bool backSpin,
-                          std::int64_t inputDelayMicros) {
+                          std::int64_t inputDelayMicros,
+                          std::int64_t timestampMicros = 0) {
     return legacyInputBridge != nullptr &&
            legacyInputBridge->prepare(type, lane, compensateLane, backSpin,
-                                      nowMicros(), inputDelayMicros);
+                                      timestampMicros != 0 ? timestampMicros : nowMicros(),
+                                      inputDelayMicros);
   }
 
   bool emitLegacyApplied(int physicalLane, replay::LogicalControl control,
                          bool hasReplayControl, bool pressed,
-                         bool replayOnly) {
+                         bool replayOnly, std::int64_t timestampMicros) {
     return legacyInputBridge != nullptr &&
            legacyInputBridge->emitApplied(physicalLane, control,
                                           hasReplayControl, pressed,
-                                          replayOnly, nowMicros());
+                                          replayOnly, timestampMicros != 0
+                                              ? timestampMicros : nowMicros());
   }
 
   static bool scratchLongNoteHeld(void *context, int lane) {
@@ -2138,6 +2144,14 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     activeSession
         .registryRealtimeClasses[static_cast<std::size_t>(deviceClass)] = true;
   }
+#elif TARGET_OS_OSX || TARGET_OS_LINUX
+  for (const auto deviceClass :
+       {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
+        input::DeviceClass::Joystick, input::DeviceClass::Midi}) {
+    claimedClasses[static_cast<std::size_t>(deviceClass)] = true;
+    activeSession
+        .registryRealtimeClasses[static_cast<std::size_t>(deviceClass)] = true;
+  }
 #endif
   activeSession.inputRegistration =
       std::make_unique<gameplay::RealtimeGameplayInputRegistration>(
@@ -2582,27 +2596,58 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
   if (!snapshot || snapshot->generation == session.appliedSnapshotGeneration) {
     return;
   }
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  const auto selectedMicros = perf::latency::nowMicros();
+  if (snapshot->publishedSteadyMicros > 0 &&
+      selectedMicros >= snapshot->publishedSteadyMicros) {
+    perf::latency::record(perf::latency::Stage::SnapshotAge,
+                         selectedMicros - snapshot->publishedSteadyMicros);
+  }
+#endif
+  // The preceding prepared frame has rendered before this update. Drop only
+  // our lease; retained diagnostic/presentation consumers still trigger COW.
+  capturedPlayfieldVisualState.noteSnapshot.reset();
   session.appliedSnapshotGeneration = snapshot->generation;
-  playfieldVisualStateStore->applyGameplayGraphState(
-      snapshot->skinGameplayGraph);
+  const auto &graph = snapshot->skinGameplayGraph;
+  if (session.appliedNoteRevision == 0 ||
+      session.appliedGraphJudgementRevision != graph.judgementRevision ||
+      session.appliedGraphGaugeRevision != graph.gaugeRevision) {
+    playfieldVisualStateStore->applyGameplayGraphState(graph);
+    session.appliedGraphJudgementRevision = graph.judgementRevision;
+    session.appliedGraphGaugeRevision = graph.gaugeRevision;
+  }
 
-  const std::size_t noteCount =
-      std::min(session.notes.size(), snapshot->noteStates.size());
-  for (std::size_t index = 0; index < noteCount; ++index) {
+  snapshot->noteChanges.forEachSince(
+      session.appliedNoteRevision, snapshot->noteStates.size(),
+      [&](gameplay::NoteId index) {
+    if (index >= session.notes.size()) {
+      return;
+    }
     auto *note = session.notes[index];
     if (note == nullptr) {
-      continue;
+      return;
     }
     const auto &runtime = snapshot->noteStates[index];
     note->IsPlayed = runtime.played;
     note->IsDead = runtime.dead;
     note->PlayedTime = runtime.playedTimeMicros;
+    if (const auto visual = skinGameplayGraphSourceIds.find(note);
+        visual != skinGameplayGraphSourceIds.end()) {
+      playfieldVisualStateStore->setNoteState(
+          {.id = visual->second,
+           .judged = runtime.played,
+           .dead = runtime.dead,
+           .playedTimeMicros = runtime.played ? runtime.playedTimeMicros
+                                             : kPlayfieldTimestampOff,
+           .longActive = runtime.holding});
+    }
     if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
         longNote != nullptr) {
       longNote->IsHolding = runtime.holding;
       longNote->ReleaseTime = runtime.releaseTimeMicros;
     }
-  }
+  });
+  session.appliedNoteRevision = snapshot->noteChanges.revision;
 
   auto gaugeHistory = std::move(state->gaugeHistory);
   auto gaugeHistories = std::move(state->gaugeHistories);
@@ -3089,7 +3134,7 @@ void GamePlayScene::init() {
           captureModernReplayInput(
               transition.physicalLane, transition.control,
               transition.hasReplayControl, transition.pressed,
-              transition.replayOnly);
+              transition.replayOnly, transition.source.timestampMicros);
           if (transition.hasReplayControl &&
               (!transition.replayOnly ||
                transition.control.kind == replay::LogicalControlKind::Start ||
@@ -3097,7 +3142,8 @@ void GamePlayScene::init() {
             consumeStartSelectInput(
                 {.control = transition.control,
                  .pressed = transition.pressed,
-                 .timestampMicros = nowMicros()});
+                 .timestampMicros = static_cast<std::int64_t>(
+                     transition.source.timestampMicros)});
           }
         });
     inputHandler = ownedInputHandler.get();
@@ -4633,18 +4679,22 @@ void GamePlayScene::beginReplayRecording() {
 
 void GamePlayScene::captureModernReplayInput(
     int physicalLane, replay::LogicalControl control, bool hasReplayControl,
-    bool pressed, bool replayOnly) {
+    bool pressed, bool replayOnly, std::int64_t timestampMicros) {
   if (realtimeGameplayAuthorityActive()) {
     (void)realtimeGameplaySession->emitLegacyApplied(
-        physicalLane, control, hasReplayControl, pressed, replayOnly);
+        physicalLane, control, hasReplayControl, pressed, replayOnly, timestampMicros);
     return;
   }
   if (modernReplayInputRecorder == nullptr || !hasReplayControl) {
     return;
   }
+  const auto rawSongTime = timestampMicros != 0
+      ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
+            timestampMicros).value_or(context.jukebox.getTimeMicros())
+      : context.jukebox.getTimeMicros();
   std::string diagnostic;
   if (!modernReplayInputRecorder->recordSongTime(
-          getGameplayTimeMicros(context.jukebox.getTimeMicros()), control,
+          getGameplayTimeMicros(rawSongTime), control,
           pressed, diagnostic, replayOnly)) {
     modernReplayCaptureDiagnostic = diagnostic.empty()
                                         ? "Raw replay input capture failed."
@@ -5408,7 +5458,8 @@ void GamePlayScene::capturePlayfieldVisualState(
   };
   playfieldVisualStateStore->applyAuthorityUpdate(authority);
 
-  if (selectedSkinActive) {
+  if (selectedSkinActive && !realtimeGameplayAuthorityActive()) {
+    capturedPlayfieldVisualState.noteSnapshot.reset();
     const std::size_t noteCount =
         std::min(playfieldVisualNoteSources.size(),
                  playfieldChartVisualModel.notes.size());
@@ -5469,7 +5520,10 @@ void GamePlayScene::capturePlayfieldVisualState(
       };
   capturedPlayfieldVisualState =
       selectedSkinActive
-          ? playfieldVisualStateStore->captureForPresentation(frameClock)
+          ? playfieldVisualStateStore->captureForPresentation(
+                frameClock, realtimeGameplayAuthorityActive()
+                    ? std::optional<long long>{getNoteDisplayTimeMicros(visualTimeMicros)}
+                    : std::nullopt)
           : playfieldVisualStateStore->capture(frameClock, false);
   if (selectedSkinActive) {
     auto traversal = builtInPresentation->projectionTraversal();
@@ -6471,6 +6525,23 @@ void GamePlayScene::cleanupScene() {
   skinResetLayoutButton = nullptr;
   SDL_Log("Cleaned up GamePlayScene");
 }
+bms_parser::Note *GamePlayScene::pressLaneAt(int lane, std::int64_t timestampMicros) {
+  const auto previous = legacyInputTimestampMicros;
+  legacyInputTimestampMicros = timestampMicros;
+  auto *note = pressLane(lane, 0.0);
+  legacyInputTimestampMicros = previous;
+  return note;
+}
+
+bms_parser::Note *GamePlayScene::releaseLaneAt(int lane, std::int64_t timestampMicros,
+                                              bool backSpin) {
+  const auto previous = legacyInputTimestampMicros;
+  legacyInputTimestampMicros = timestampMicros;
+  auto *note = releaseLane(lane, 0.0, backSpin);
+  legacyInputTimestampMicros = previous;
+  return note;
+}
+
 bms_parser::Note *GamePlayScene::pressLane(int lane, double inputDelay) {
   if (laneInputController == nullptr && !realtimeGameplayAuthorityActive()) {
     return nullptr;
@@ -6489,13 +6560,17 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (realtimeGameplayAuthorityActive()) {
     (void)realtimeGameplaySession->prepareLegacyInput(
         gameplay::RealtimeGameplayInputType::Press, mainLane, compensateLane,
-        false, static_cast<long long>(inputDelay * 1000000.0));
+        false, static_cast<long long>(inputDelay * 1000000.0),
+        legacyInputTimestampMicros);
     return nullptr;
   }
   if (laneInputController == nullptr) {
     return nullptr;
   }
-  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long rawSongTimeMicros = legacyInputTimestampMicros != 0
+      ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
+            legacyInputTimestampMicros).value_or(context.jukebox.getTimeMicros())
+      : context.jukebox.getTimeMicros();
   const long long gameplayTimeMicros =
       getGameplayTimeMicros(rawSongTimeMicros);
   const RhythmLaneInputController::InputContext inputContext{
@@ -6558,13 +6633,16 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
   if (realtimeGameplayAuthorityActive()) {
     (void)realtimeGameplaySession->prepareLegacyInput(
         gameplay::RealtimeGameplayInputType::Release, lane, lane, isBackSpin,
-        static_cast<long long>(inputDelay * 1000000.0));
+        static_cast<long long>(inputDelay * 1000000.0), legacyInputTimestampMicros);
     return nullptr;
   }
   if (laneInputController == nullptr) {
     return nullptr;
   }
-  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long rawSongTimeMicros = legacyInputTimestampMicros != 0
+      ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
+            legacyInputTimestampMicros).value_or(context.jukebox.getTimeMicros())
+      : context.jukebox.getTimeMicros();
   const long long gameplayTimeMicros =
       getGameplayTimeMicros(rawSongTimeMicros);
   const RhythmLaneInputController::InputContext inputContext{

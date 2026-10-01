@@ -6835,6 +6835,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(realtime_gameplay_worker_tests PRIVATE cxx_std_23)
     target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
         BX_CONFIG_DEBUG=1
+        ASOBMASHOW_ENABLE_PERF_TELEMETRY=1
     )
     if(TARGET SDL2::SDL2)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2)

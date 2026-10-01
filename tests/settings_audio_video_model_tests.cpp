@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -321,12 +322,51 @@ void testAudioModelPreservesUnavailableStableIdAndFriendlyLabels() {
           "available stable IDs use friendly labels");
   require(model.devices.selectedValue == "missing:device",
           "selection preserves imported unavailable intent");
-  require(nearlyEqual(model.effectiveLatencyMs, 1000.0 * 256.0 / 48000.0),
-          "latency uses effective frames and rate rather than requested or "
-          "backend placeholder values");
+  require(nearlyEqual(model.effectiveLatencyMs, 999.0),
+          "reported output latency remains independent of callback size");
   require(model.effectiveSampleRate == 48000 &&
               model.effectiveBufferFrames == 256,
           "effective format is exposed independently from intent");
+}
+
+void testAudioModelKeepsUnknownLatencySeparateFromCallbackSize() {
+  audio::RuntimeState effective{
+      .effectiveSampleRate = 48000,
+      .effectiveBufferFrames = 64,
+      .effectiveLatencyMs = 19.0,
+  };
+  auto model = BuildAudioControlModel({}, desktopAudioCapabilities(), effective);
+  require(nearlyEqual(model.effectiveLatencyMs, 19.0),
+          "a short callback does not replace the backend output latency estimate");
+  require(nearlyEqual(model.effectiveCallbackPeriodMs, 1.333333),
+          "observed callback frames expose their own duration");
+  for (const double unknown : {0.0, -1.0,
+                               std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+    effective.effectiveLatencyMs = unknown;
+    model = BuildAudioControlModel({}, desktopAudioCapabilities(), effective);
+    require(model.effectiveLatencyMs == 0.0,
+            "missing backend latency stays unknown instead of using callback duration");
+  }
+  effective.effectiveBufferFrames = 0;
+  effective.effectiveLatencyMs = 19.0;
+  model = BuildAudioControlModel({}, desktopAudioCapabilities(), effective);
+  require(model.effectiveBufferFrames == 0 &&
+              model.effectiveCallbackPeriodMs == 0.0 &&
+              nearlyEqual(model.effectiveLatencyMs, 19.0),
+          "unknown callback size does not hide a reported output latency");
+  // A later native callback or route change can report a different native rate
+  // from the app PCM rate. Its observed period must follow the native rate.
+  effective.effectiveBufferFrames = 64;
+  effective.effectiveCallbackSampleRate = 44100;
+  model = BuildAudioControlModel({}, desktopAudioCapabilities(), effective);
+  require(nearlyEqual(model.effectiveCallbackPeriodMs, 1000.0 * 64 / 44100),
+          "a later observed callback uses its native route sample rate");
+  effective.effectiveCallbackSampleRate = 0;
+  effective.effectiveSampleRate = 0;
+  model = BuildAudioControlModel({}, desktopAudioCapabilities(), effective);
+  require(model.effectiveCallbackPeriodMs == 0.0,
+          "callback duration remains unknown without a sample rate");
 }
 
 void testAudioModelShowsFixedControlsDisabledWithExplanations() {
@@ -781,6 +821,7 @@ void testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes() {
 int main() {
   testKoreanDeviceChoicesPreserveDeviceNamesAndIds();
   testAudioModelPreservesUnavailableStableIdAndFriendlyLabels();
+  testAudioModelKeepsUnknownLatencySeparateFromCallbackSize();
   testAudioModelShowsFixedControlsDisabledWithExplanations();
   testDisplayModelUsesFriendlyLabelsAndShowsFixedFields();
   testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent();

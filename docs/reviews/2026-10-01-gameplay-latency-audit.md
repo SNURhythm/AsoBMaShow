@@ -1,7 +1,8 @@
 # Gameplay audio, display, and input latency audit — 2026-10-01
 
-Scope: iOS, macOS, Windows, and Linux. Android is excluded. This is an
-investigation, with no application or dependency changes.
+Scope: iOS, macOS, Windows, and Linux. Android is excluded. Findings 1–6
+describe the original baseline investigation. The implementation follow-up below
+records the fixes, verification, and remaining physical measurement limits.
 
 Baseline: `5750d646bda5d1c1d9814793712caed530809371`.
 Branch: `investigate/gameplay-audio-display-input-latency`.
@@ -287,3 +288,87 @@ controllers, and Linux with its actual audio/display stack. Use representative
 dense charts, BGA and selected skins, with real release builds. Audio loopback
 and high-speed-camera/photodiode measurements are needed before claiming an
 end-to-end latency number or improvement.
+
+## Implementation follow-up — 2026-10-01
+
+The fixes preserve the generated sample cursor for scheduled audio and use
+native output timestamps for presentation/input mapping. No reported latency,
+callback-period guess, configurable compensation offset, debounce, or artificial
+input/audio/display alignment wait is added.
+
+- **Output timing:** PortAudio DAC timestamps use a stream-clock/steady-clock
+  epoch calibration taken outside callbacks. iOS carries AudioUnit host time
+  through miniaudio's native render boundary and exact conversion-chunk offsets.
+  Unknown native timing retains receipt-time fallback and is reported as unknown.
+  A fixed history of actual output intervals preserves older input mapping and
+  holds the preceding interval's end during a real output gap. Seek, rate, and
+  stream changes invalidate previous intervals. Overwritten history is unknown.
+- **Presentation:** iOS flips after rendering while keeping main-thread ownership.
+  Desktop requests two queued frames where the renderer supports that setting;
+  it services events during the existing frame-cap wait at intervals no longer
+  than 1 ms. This does not add a new frame cap or delay input to match audio.
+- **Input:** macOS MIDI routes directly to gameplay. macOS uses a per-process
+  native keyboard tap only with existing permission; Linux uses timestamped
+  evdev input when devices are readable and X11 focus is reliable. Wayland,
+  missing permission, device/stream changes, and unsupported configurations use
+  SDL fallback. No elevated input access or permission prompt is requested.
+  Known source timestamps survive legacy logical transitions. Ownership tracks
+  focus, stale claim epochs, disconnects, and native-to-SDL backlog handover.
+- **Audio work and reporting:** the pending schedule uses circular storage;
+  activation no longer moves every future event. Mixer scratch is preallocated,
+  and oversized callbacks render completely in chunks with one consistent sample
+  origin. iOS requests 128 frames by default and offers alternate preferences;
+  accepted native callback frames/rate remain observations, not guarantees.
+  Desktop explicit frame preferences also set the requested output latency.
+  Settings separate observed callback period from reported output latency and
+  refresh when the backend supplies its first callback or a changed format.
+- **Snapshots:** a bounded mutation journal updates rotating snapshots and scene
+  state by changed note IDs; graph copies are skipped when unchanged. New readers
+  and journal overruns fully resynchronize. A pending publication retries when
+  leased buffers become available, without blocking authoritative input work.
+  Realtime selected-skin frames also apply dirty note IDs directly, reuse note
+  storage after releasing the previous frame, and derive HCN activity from lane
+  indexes/per-projected-note state. Legacy replay, initial synchronization,
+  journal overrun, and explicitly retained immutable snapshots can still require
+  full conversion/copy work.
+- **Telemetry:** the optional performance build records fixed-storage histograms
+  for known-source delivery, ingress/worker/sound-command stages, callback drain,
+  callback duration/interval, native output lead/lateness, snapshot age, and CPU
+  frame submission. Percentiles are bucket upper bounds, with an overflow bucket
+  reporting the observed maximum. The former `Audio` scheduler label is corrected.
+  PortAudio reports underruns; iOS underrun reporting and physical display
+  presentation remain explicitly unknown. Stage histograms are not an end-to-end
+  trace or a physical latency measurement.
+
+The production macOS backend probe observed **64 frames at 48 kHz** for the
+automatic setting, rather than the old inferred 898 frames. It retained the
+separate 18.708 ms backend estimate, approximately 4.34 ms native output lead,
+and zero reported underruns across two one-second silent start/stop cycles.
+This validates the clock mapping/reporting on this route, not an acoustic gain.
+
+The repeatable worker comparison reduced 100,000-note preparation-publication
+p50/p99 from **293/424 µs to 2/3 µs**. The retained measurements and limitations
+are in [worker snapshot evidence](evidence/2026-10-01-gameplay-latency/worker_snapshot_fix.txt)
+and [backend timing evidence](evidence/2026-10-01-gameplay-latency/backend_timing_fix.txt).
+Physical iOS, Windows, and Linux latency, iOS 60/120 Hz behavior, and dense-chart
+playback under real output routes still require device measurement; no acoustic
+or input-to-photon improvement number is claimed here.
+
+Final verification on this checkout:
+
+- `cmake --build cmake-build-debug -j 6`: passed, including the desktop app
+  and all test targets.
+- `ctest --test-dir cmake-build-debug --output-on-failure -j 6`: **404/404
+  passed**, 261.19 seconds, against the rebuilt binaries.
+- `IOS_RELEASE_BUILD_JOBS=6 scripts/ios_release_verify.sh`: passed **66/66
+  native checks**, **85 Python contract checks**, the unsigned arm64 iOS Release
+  build, and the resulting app's artifact audit. No distribution was performed.
+- Optional telemetry paths compiled on macOS; the iOS CoreAudio backend also
+  passed an arm64 syntax check. Native keyboard startup/teardown passed on macOS.
+  The Linux keyboard backend
+  compiled against Linux headers both with and without X11, and its ownership
+  tests passed. A complete Windows/Linux app build was not performed here.
+- Regression coverage includes native timestamp history, output gaps, immediate
+  restart callbacks, zero/oversized callbacks, fractional sample boundaries,
+  native/SDL handover, stale input ownership, journal overrun, leased snapshot
+  recovery, selected-skin note storage reuse, and HCN activity transitions.

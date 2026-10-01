@@ -3,6 +3,10 @@
 #include "MidiInputBackendFactory.h"
 #include "GyroscopeInputBackendFactory.h"
 #include "SDLInputBackend.h"
+#include "../targets.h"
+#if TARGET_OS_OSX || TARGET_OS_LINUX
+#include "DesktopRealtimeKeyboardBackend.h"
+#endif
 #if defined(_WIN32)
 #include "RealtimeControllerDeviceMap.h"
 #include "WindowsRealtimeInputBackend.h"
@@ -27,7 +31,7 @@ input::InputDeviceSnapshot keyboardSnapshot() {
 
 std::vector<InputDeviceRegistry::BackendFactory> defaultBackendFactories() {
   std::vector<InputDeviceRegistry::BackendFactory> factories;
-#if defined(_WIN32)
+#if defined(_WIN32) || TARGET_OS_OSX || TARGET_OS_LINUX
   auto controllerMap = std::make_shared<RealtimeControllerDeviceMap>();
   factories.emplace_back(
       [controllerMap](input::InputBackendSink sink) {
@@ -49,6 +53,12 @@ std::vector<InputDeviceRegistry::BackendFactory> defaultBackendFactories() {
   factories.emplace_back(
       [controllerMap](input::InputBackendSink sink) {
         return makeWindowsRealtimeInputBackend(std::move(sink), controllerMap);
+      });
+#endif
+#if TARGET_OS_OSX || TARGET_OS_LINUX
+  factories.emplace_back(
+      [controllerMap](input::InputBackendSink sink) {
+        return makeDesktopRealtimeKeyboardBackend(std::move(sink), controllerMap);
       });
 #endif
   return factories;

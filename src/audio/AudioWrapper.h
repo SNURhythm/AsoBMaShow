@@ -12,6 +12,7 @@
 #include "../utils/Stopwatch.h"
 #include <mutex>
 #include <atomic>
+#include <array>
 #include <cmath>
 #include <compare>
 #include <cstddef>
@@ -92,7 +93,24 @@ struct SoftKneeCompressor {
   void setParams(float threshold, float ratio, float attack, float release);
 };
 
+struct AudioPresentationSegment {
+  std::atomic<long long> micros{0};
+  std::atomic<long long> wallMicros{0};
+  std::atomic<long long> endMicros{0};
+  std::atomic<long long> wallEndMicros{0};
+  std::atomic<int> ratePercent{100};
+};
+
+constexpr size_t kAudioPresentationHistoryCapacity = 1024;
+
 struct UserData {
+  audio::RenderTiming pendingRenderTiming{};
+  // Atomic tuples share the anchor's seqlock. Readers can inspect old native
+  // presentation intervals while the callback replaces the oldest ring slot.
+  std::array<AudioPresentationSegment, kAudioPresentationHistoryCapacity>
+      audioPresentationHistory;
+  std::atomic<std::uint64_t> audioPresentationSegmentCount{0};
+  std::atomic<std::uint64_t> audioClockTimelineGeneration{0};
   Stopwatch *stopwatch;
   AudioCallbackState *callbackState;
   std::atomic<int> *sampleRate;
@@ -281,6 +299,7 @@ private:
   void cleanupRetiredSkinSoundsLocked() noexcept;
   bool retireSkinSound(audio::SkinSoundHandle handle) noexcept;
   void initializeUserData();
+  void invalidateNativePresentationHistory();
   void startBackendAfterConstruction();
   audio::playback::BackendOperationResult
   startDeviceWithLifecycleAndSoundLocked();

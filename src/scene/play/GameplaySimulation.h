@@ -29,6 +29,48 @@ struct NoteRuntimeState {
   JudgeResult acceptedHeadJudge = JudgeResult(None, 0);
 };
 
+// A bounded journal shared by the authority and its independent snapshot/read
+// cursors. Overrun falls back to the complete state, never drops a mutation.
+// Visitors may receive the same id more than once. Reset reader cursors to zero
+// when replacing the attempt (including a seek that creates a new worker).
+struct NoteStateChanges {
+  static constexpr std::size_t capacity = 4096;
+  std::array<NoteId, capacity> ids{};
+  // Zero is reserved for a reader that has never synchronized this attempt.
+  std::uint64_t revision = 1;
+
+  void record(NoteId id) noexcept {
+    ids[++revision % capacity] = id;
+  }
+
+  template <typename Visitor>
+  void forEachSince(std::uint64_t previous, std::size_t noteCount,
+                    Visitor visitor) const {
+    if (previous == 0 || previous > revision || revision - previous > capacity) {
+      for (NoteId id = 0; id < noteCount; ++id) {
+        visitor(id);
+      }
+      return;
+    }
+    for (auto sequence = previous; sequence < revision;) {
+      visitor(ids[++sequence % capacity]);
+    }
+  }
+
+  void catchUpTo(const NoteStateChanges &source) noexcept {
+    if (revision == 0 || revision > source.revision ||
+        source.revision - revision > capacity) {
+      ids = source.ids;
+    } else {
+      for (auto sequence = revision; sequence < source.revision;) {
+        ++sequence;
+        ids[sequence % capacity] = source.ids[sequence % capacity];
+      }
+    }
+    revision = source.revision;
+  }
+};
+
 struct GameplayTimeRange {
   std::int64_t startMicros = 0;
   std::int64_t endMicros = 0;
@@ -191,6 +233,9 @@ public:
                         const GameplayInputContext &context);
 
   [[nodiscard]] const NoteRuntimeState &noteState(NoteId id) const;
+  [[nodiscard]] const NoteStateChanges &noteChanges() const noexcept {
+    return noteChanges_;
+  }
   [[nodiscard]] bool lanePressed(int lane) const noexcept;
   [[nodiscard]] GameplaySearchStats lastSearchStats() const noexcept;
   [[nodiscard]] GameplaySearchStats lastAdvanceStats() const noexcept;
@@ -279,6 +324,7 @@ private:
   GameplayScoreState scoreState_;
   SkinGameplayGraphAccumulator skinGameplayGraph_;
   std::vector<NoteRuntimeState> noteStates_;
+  NoteStateChanges noteChanges_;
   std::vector<std::int64_t> hellChargeBalanceMicros_;
   std::vector<LaneRuntimeState> laneStates_;
   std::vector<GameplayReplayEvent> replayEvents_;

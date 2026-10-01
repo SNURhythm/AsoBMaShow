@@ -75,3 +75,31 @@ ctest --test-dir cmake-build-debug --output-on-failure -j 6 \
 
 Result: 11/11 passed. No production-code edits, full application rebuild,
 physical non-macOS run, or distribution action was part of this audit.
+
+## Fix verification probes
+
+`worker_snapshot_fix.txt` compares the unchanged preparation-publication probe
+against the before/after worker implementations in alternating serialized runs.
+The full raw results, including scheduling outliers, are retained there.
+
+`backend_timing_probe.cpp` uses the production backend factory, renders silence,
+and performs two start/stop cycles for each of three callback preferences.
+`backend_timing_fix.txt` retains its output. To reproduce on this checkout:
+
+```sh
+printf '#define MINIAUDIO_IMPLEMENTATION\n#include <miniaudio.h>\n' \
+  > /tmp/asobmashow-miniaudio-probe.cpp
+c++ -std=c++23 -O2 -Isrc -Iinclude \
+  -Icmake-build-debug/vcpkg_installed/arm64-osx/include \
+  docs/reviews/evidence/2026-10-01-gameplay-latency/backend_timing_probe.cpp \
+  /tmp/asobmashow-miniaudio-probe.cpp src/audio/AudioBackend.cpp \
+  src/audio/AudioMix.cpp src/settings/AudioVideoSettings.cpp \
+  cmake-build-debug/vcpkg_installed/arm64-osx/debug/lib/libportaudio.a \
+  -framework CoreAudio -framework AudioToolbox -framework AudioUnit \
+  -framework CoreFoundation -framework CoreServices \
+  -o /tmp/asobmashow-backend-timing-probe
+/tmp/asobmashow-backend-timing-probe
+```
+
+Its native timestamp lead is relative to callback receipt in the steady clock
+epoch. It does not measure acoustic output or exercise the application mixer.

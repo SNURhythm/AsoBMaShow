@@ -8,7 +8,7 @@ target_include_directories(input_registry_test_support PUBLIC ${CMAKE_SOURCE_DIR
 target_compile_features(input_registry_test_support PUBLIC cxx_std_23)
 asobmashow_add_midi_backend(input_registry_test_support)
 asobmashow_add_gyroscope_backend(input_registry_test_support)
-asobmashow_add_windows_realtime_input_backend(input_registry_test_support)
+asobmashow_add_native_realtime_input_backend(input_registry_test_support)
 if(TARGET SDL2::SDL2)
     target_link_libraries(input_registry_test_support PUBLIC SDL2::SDL2)
 elseif(TARGET SDL2::SDL2-static)
@@ -27,3 +27,12 @@ add_executable(realtime_gameplay_input_registration_tests
 target_link_libraries(realtime_gameplay_input_registration_tests PRIVATE
     input_registry_test_support Threads::Threads
 )
+
+add_executable(native_keyboard_input_tests tests/native_keyboard_input_tests.cpp)
+target_link_libraries(native_keyboard_input_tests PRIVATE input_registry_test_support)
+add_test(NAME native_keyboard_input_tests COMMAND native_keyboard_input_tests)
+
+add_executable(latency_telemetry_tests tests/latency_telemetry_tests.cpp)
+target_include_directories(latency_telemetry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(latency_telemetry_tests PRIVATE Threads::Threads)
+add_test(NAME latency_telemetry_tests COMMAND latency_telemetry_tests)

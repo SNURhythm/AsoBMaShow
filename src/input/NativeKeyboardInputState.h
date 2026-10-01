@@ -1,0 +1,77 @@
+#pragma once
+
+#include "InputTypes.h"
+#include <SDL2/SDL_scancode.h>
+#include <array>
+#include <bitset>
+#include <functional>
+#include <mutex>
+#include <utility>
+
+// Shared by native producers and the main-thread ownership/focus lifecycle.
+// Only effective edges reach the registry; no debounce or event buffering.
+class NativeKeyboardInputState {
+public:
+  static constexpr std::size_t kMaxDevices = 32;
+  explicit NativeKeyboardInputState(
+      std::function<void(input::PhysicalInputEvent)> emit)
+      : emit_(std::move(emit)) {}
+
+  void setEnabled(bool enabled, std::uint64_t timestampMicros) {
+    const std::lock_guard lock(mutex_);
+    if (enabled_ == enabled) return;
+    if (!enabled) {
+      for (int key = 1; key < SDL_NUM_SCANCODES; ++key) {
+        if (held(key)) emit(key, false, timestampMicros);
+      }
+      for (auto &device : devices_) device.reset();
+    }
+    enabled_ = enabled;
+    enabledSinceMicros_ = timestampMicros;
+  }
+
+  void consume(std::size_t device, int key, bool pressed,
+               std::uint64_t timestampMicros) {
+    const std::lock_guard lock(mutex_);
+    if (!enabled_ || timestampMicros < enabledSinceMicros_ ||
+        device >= devices_.size() ||
+        key <= SDL_SCANCODE_UNKNOWN || key >= SDL_NUM_SCANCODES) return;
+    const bool previous = held(key);
+    devices_[device].set(key, pressed);
+    if (held(key) != previous) emit(key, !previous, timestampMicros);
+  }
+
+  void disconnect(std::size_t device, std::uint64_t timestampMicros) {
+    const std::lock_guard lock(mutex_);
+    if (device >= devices_.size()) return;
+    const auto previous = devices_[device];
+    devices_[device].reset();
+    for (int key = 1; key < SDL_NUM_SCANCODES; ++key) {
+      if (previous[key] && !held(key)) emit(key, false, timestampMicros);
+    }
+  }
+
+private:
+  bool held(int key) const {
+    for (const auto &device : devices_) {
+      if (device[key]) return true;
+    }
+    return false;
+  }
+
+  void emit(int key, bool pressed, std::uint64_t timestampMicros) {
+    emit_({.control = {.deviceId = "keyboard",
+                       .deviceClass = input::DeviceClass::Keyboard,
+                       .kind = input::ControlKind::Key,
+                       .index = key},
+           .rawValue = pressed ? 1.0 : 0.0,
+           .normalizedValue = pressed ? 1.0F : 0.0F,
+           .timestampMicros = timestampMicros});
+  }
+
+  std::mutex mutex_;
+  bool enabled_ = false;
+  std::uint64_t enabledSinceMicros_ = 0;
+  std::array<std::bitset<SDL_NUM_SCANCODES>, kMaxDevices> devices_{};
+  std::function<void(input::PhysicalInputEvent)> emit_;
+};

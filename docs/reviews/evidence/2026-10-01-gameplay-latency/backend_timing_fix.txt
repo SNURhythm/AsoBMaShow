@@ -1,0 +1,10 @@
+Production AudioBackend.cpp, default Mac output, silent buffers, 2026-10-01.
+Two one-second start/stop cycles per stream. callbackMax is silence/probe work,
+not the application mixer. DAC-minus-receipt is native output timestamp minus
+steady callback receipt, not physical acoustic latency. Underflows from PortAudio.
+request=0 run=0 actual=64 rate=48000 count=746 known=1 reported=18.708ms DAC-minus-receipt-p50=4337us p99=4343us underflows=0 callbackMax=1us
+request=0 run=1 actual=64 rate=48000 count=1501 known=1 reported=18.708ms DAC-minus-receipt-p50=4336us p99=4340us underflows=0 callbackMax=1us
+request=128 run=0 actual=128 rate=48000 count=378 known=1 reported=20.042ms DAC-minus-receipt-p50=5668us p99=5674us underflows=0 callbackMax=1us
+request=128 run=1 actual=128 rate=48000 count=754 known=1 reported=20.042ms DAC-minus-receipt-p50=5661us p99=5671us underflows=0 callbackMax=2us
+request=256 run=0 actual=256 rate=48000 count=189 known=1 reported=22.708ms DAC-minus-receipt-p50=8327us p99=8336us underflows=0 callbackMax=1us
+request=256 run=1 actual=256 rate=48000 count=378 known=1 reported=22.708ms DAC-minus-receipt-p50=8322us p99=8338us underflows=0 callbackMax=2us

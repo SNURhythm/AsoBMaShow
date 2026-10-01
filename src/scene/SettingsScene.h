@@ -239,6 +239,7 @@ private:
   TextInputBox *bgmVolumeInput = nullptr;
   TextInputBox *keysoundVolumeInput = nullptr;
   TextView *audioEffectiveText = nullptr;
+  std::optional<audio::RuntimeState> displayedAudioState;
   TextView *audioStatusText = nullptr;
   TextView *displayStatusText = nullptr;
   View *displayPreviewOverlayRoot = nullptr;
@@ -486,6 +487,7 @@ private:
   void persistSettings();
   void ensureAudioVideoSession();
   void refreshAudioVideoControls(bool syncInputs = true);
+  void refreshAudioDiagnostics(bool force = false);
   void updateDisplayPreviewUi();
   void applyAudioStreamDraft();
   void applyDisplayDraft();

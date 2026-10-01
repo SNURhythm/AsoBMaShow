@@ -64,7 +64,19 @@ public:
   }
 
   void setKeyboardRealtimeAvailable(bool available) noexcept {
+    keyboardFallbackPending_.store(false, std::memory_order_release);
     keyboardRealtimeAvailable_.store(available, std::memory_order_release);
+  }
+
+  void requestKeyboardRealtimeFallback() noexcept {
+    keyboardFallbackPending_.store(true, std::memory_order_release);
+  }
+
+  template <typename Drain>
+  void completeKeyboardRealtimeFallback(Drain &&drain) {
+    if (!keyboardFallbackPending_.exchange(false, std::memory_order_acq_rel)) return;
+    drain();
+    keyboardRealtimeAvailable_.store(false, std::memory_order_release);
   }
 
   void setControllerRealtimeAvailable(bool available) noexcept {
@@ -88,5 +100,6 @@ private:
   std::array<std::shared_ptr<const std::string>, kMaxPlayers> stableIds_{};
   std::array<std::atomic<std::uint64_t>, kMaxPlayers> generations_{};
   std::atomic_bool keyboardRealtimeAvailable_ = false;
+  std::atomic_bool keyboardFallbackPending_ = false;
   std::atomic_bool controllerRealtimeAvailable_ = false;
 };

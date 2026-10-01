@@ -7,6 +7,7 @@
 #include "scene/play/RealtimeGameplayWorker.h"
 #include "scene/play/RealtimeGameplayInputRegistration.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
+#include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/StartSelectControl.h"
 #include "replay/ReplayInputRecorder.h"
@@ -97,12 +98,19 @@ struct FixtureRealtimeSession {
   std::atomic_bool startSelectInputOverflow{false};
   std::vector<bms_parser::Note *> notes;
   std::uint64_t appliedSnapshotGeneration = 0;
+  std::uint64_t appliedNoteRevision = 0;
+  std::uint64_t appliedGraphJudgementRevision = 0;
+  std::uint64_t appliedGraphGaugeRevision = 0;
   std::uint64_t appliedTransactionSequence = 0;
   std::atomic_bool acceptingNativeInput{false};
   std::unique_ptr<gameplay::RealtimeGameplayInputRegistration> inputRegistration;
 };
 
 struct FixturePresentation {
+  std::unordered_map<ChartVisualId, NotePresentationState> noteStates;
+  void setNoteState(NotePresentationState state) {
+    noteStates.insert_or_assign(state.id, state);
+  }
   void onLanePressed(int, JudgeResult, long long) {}
   void onLaneReleased(int, long long) {}
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) {}
@@ -171,6 +179,8 @@ public:
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   std::unordered_map<int, bool> lanePressed;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
+  PlayfieldVisualState capturedPlayfieldVisualState;
+  std::unordered_map<const bms_parser::Note *, ChartVisualId> skinGameplayGraphSourceIds;
   std::unique_ptr<FixturePresentation> presentationEventFanout = std::make_unique<FixturePresentation>();
   std::unique_ptr<FixturePresentation> playfieldVisualStateStore = std::make_unique<FixturePresentation>();
 
@@ -1245,6 +1255,9 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
   scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
   auto &session = *scene.realtimeGameplaySession;
   session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+  for (std::size_t index = 0; index < session.notes.size(); ++index) {
+    scene.skinGameplayGraphSourceIds.emplace(session.notes[index], index + 1);
+  }
   session.worker = std::make_unique<FixtureWorker>();
   session.worker->native = std::make_unique<gameplay::RealtimeGameplayWorker>(
       gameplay::buildGameplayDefinition(*scene.chart, 1),
@@ -1321,6 +1334,10 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
   require(!scene.realtimeGameplaySession && scene.transitions == 1 &&
               scene.state->judgeCount[Poor] == 2,
           "actual stopped-worker sync plus abort judges only the remaining note");
+  require(scene.playfieldVisualStateStore->noteStates.size() == 2 &&
+              scene.playfieldVisualStateStore->noteStates.at(1).judged &&
+              scene.playfieldVisualStateStore->noteStates.at(1).playedTimeMicros < abortTimeMicros,
+          "actual worker snapshot synchronizes the visual note DTO and source timestamp");
   const std::vector<replay::InputTransition> accepted{
       {.songTimeMicros = 500'000, .control = control, .pressed = true},
       {.songTimeMicros = 510'000, .control = control, .pressed = false}};

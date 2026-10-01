@@ -7912,6 +7912,11 @@ struct ma_device
             ma_bool32 isSwitchingPlaybackDevice;   /* <-- Set to true when the default device has changed and miniaudio is in the process of switching. */
             ma_bool32 isSwitchingCaptureDevice;    /* <-- Set to true when the default device has changed and miniaudio is in the process of switching. */
             void* pNotificationHandler;             /* Only used on mobile platforms. Obj-C object for handling route changes. */
+            /* AsoBMaShow: native first-output-frame timing, callback thread only. */
+            ma_uint64 outputHostTime;
+            ma_uint64 outputAppFramesRendered;
+            ma_bool32 outputHostTimeValid;
+            void (*outputBoundaryCallback)(ma_device*, ma_bool32, ma_uint32);
         } coreaudio;
 #endif
 #ifdef MA_SUPPORT_SNDIO
@@ -33393,6 +33398,13 @@ static OSStatus ma_on_output__coreaudio(void* pUserData, AudioUnitRenderActionFl
     ma_stream_layout layout;
 
     MA_ASSERT(pDevice != NULL);
+    pDevice->coreaudio.outputHostTimeValid = pTimeStamp != NULL &&
+        (pTimeStamp->mFlags & kAudioTimeStampHostTimeValid) != 0;
+    pDevice->coreaudio.outputHostTime = pTimeStamp != NULL ? pTimeStamp->mHostTime : 0;
+    pDevice->coreaudio.outputAppFramesRendered = 0;
+    if (pDevice->coreaudio.outputBoundaryCallback != NULL) {
+        pDevice->coreaudio.outputBoundaryCallback(pDevice, MA_TRUE, frameCount);
+    }
 
     /*ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_DEBUG, "INFO: Output Callback: busNumber=%d, frameCount=%d, mNumberBuffers=%d\n", (int)busNumber, (int)frameCount, (int)pBufferList->mNumberBuffers);*/
 
@@ -33408,6 +33420,7 @@ static OSStatus ma_on_output__coreaudio(void* pUserData, AudioUnitRenderActionFl
         for (iBuffer = 0; iBuffer < pBufferList->mNumberBuffers; ++iBuffer) {
             if (pBufferList->mBuffers[iBuffer].mNumberChannels == pDevice->playback.internalChannels) {
                 ma_uint32 frameCountForThisBuffer = pBufferList->mBuffers[iBuffer].mDataByteSize / ma_get_bytes_per_frame(pDevice->playback.internalFormat, pDevice->playback.internalChannels);
+                pDevice->coreaudio.outputAppFramesRendered = 0;
                 if (frameCountForThisBuffer > 0) {
                     ma_device_handle_backend_data_callback(pDevice, pBufferList->mBuffers[iBuffer].mData, NULL, frameCountForThisBuffer);
                 }
@@ -33438,6 +33451,7 @@ static OSStatus ma_on_output__coreaudio(void* pUserData, AudioUnitRenderActionFl
             for (iBuffer = 0; iBuffer < pBufferList->mNumberBuffers; iBuffer += pDevice->playback.internalChannels) {
                 ma_uint32 frameCountPerBuffer = pBufferList->mBuffers[iBuffer].mDataByteSize / ma_get_bytes_per_sample(pDevice->playback.internalFormat);
                 ma_uint32 framesRemaining = frameCountPerBuffer;
+                pDevice->coreaudio.outputAppFramesRendered = 0;
 
                 while (framesRemaining > 0) {
                     void* ppDeinterleavedBuffers[MA_MAX_CHANNELS];
@@ -33466,6 +33480,9 @@ static OSStatus ma_on_output__coreaudio(void* pUserData, AudioUnitRenderActionFl
     (void)busNumber;
     (void)frameCount;
 
+    if (pDevice->coreaudio.outputBoundaryCallback != NULL) {
+        pDevice->coreaudio.outputBoundaryCallback(pDevice, MA_FALSE, frameCount);
+    }
     return noErr;
 }
 

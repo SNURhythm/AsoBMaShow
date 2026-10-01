@@ -602,6 +602,49 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   updateDisplayPreviewUi();
 }
 
+void SettingsScene::refreshAudioDiagnostics(bool force) {
+  if (audioEffectiveText == nullptr) return;
+  const auto state = context.jukebox.audioRuntime().runtimeState();
+  if (!force && displayedAudioState &&
+      displayedAudioState->request == state.request &&
+      displayedAudioState->effectiveSampleRate == state.effectiveSampleRate &&
+      displayedAudioState->effectiveBufferFrames == state.effectiveBufferFrames &&
+      displayedAudioState->effectiveCallbackSampleRate == state.effectiveCallbackSampleRate &&
+      displayedAudioState->effectiveLatencyMs == state.effectiveLatencyMs) return;
+  displayedAudioState = state;
+  const auto audioModel = BuildAudioControlModel(
+      audioDraft, context.audioDeviceManager.capabilities(), state);
+  if (audioEffectiveText != nullptr) {
+    std::ostringstream text;
+    text << i18n::tr("settings.audio.output.prefix") << audioModel.effectiveDeviceLabel << "\n";
+    if (audioModel.effectiveSampleRate > 0) {
+      text << i18n::format("settings.audio.format.message",
+                           {{"rate", std::to_string(audioModel.effectiveSampleRate)}});
+    } else {
+      text << i18n::tr("settings.audio.format_unavailable.message");
+    }
+    text << "\n" << i18n::tr("settings.audio.callback.prefix");
+    if (audioModel.effectiveCallbackPeriodMs > 0.0) {
+      text << i18n::format("settings.audio_video.buffer_frames.value",
+                           {{"value", std::to_string(audioModel.effectiveBufferFrames)}})
+           << " · " << std::fixed << std::setprecision(2)
+           << audioModel.effectiveCallbackPeriodMs << " ms";
+    } else {
+      text << i18n::tr("settings.audio.unknown.label");
+    }
+    text << "\n" << i18n::tr("settings.audio.latency.prefix");
+    if (audioModel.effectiveLatencyMs > 0.0) {
+      text << std::fixed << std::setprecision(2)
+           << audioModel.effectiveLatencyMs << " ms";
+    } else {
+      text << i18n::tr("settings.audio.unknown.label");
+    }
+    audioEffectiveText->setText(text.str());
+  }
+  if (rootLayout != nullptr) rootLayout->applyYogaLayout();
+  if (scrollView != nullptr) scrollView->refreshContentLayout();
+}
+
 void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
   if (audioVideoSession == nullptr) {
     return;
@@ -628,21 +671,7 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
                     audioBufferDropdownOpen, i18n::message("settings.audio.buffer.label"), dropdownWidth);
   }
 
-  if (audioEffectiveText != nullptr) {
-    std::ostringstream text;
-    text << i18n::tr("settings.audio.output.prefix") << audioModel.effectiveDeviceLabel << "\n";
-    if (audioModel.effectiveSampleRate > 0) {
-      text << i18n::format("settings.audio.format.message",
-                           {{"rate", std::to_string(audioModel.effectiveSampleRate)},
-                            {"frames", std::to_string(audioModel.effectiveBufferFrames)}})
-           << "\n";
-      text << std::fixed << std::setprecision(2)
-           << i18n::tr("settings.audio.latency.prefix") << audioModel.effectiveLatencyMs << " ms";
-    } else {
-      text << i18n::tr("settings.audio.format_unavailable.message");
-    }
-    audioEffectiveText->setText(text.str());
-  }
+  refreshAudioDiagnostics(true);
   if (syncInputs) {
     syncVolumeInputText(false);
   }

@@ -61,6 +61,8 @@ struct BackendControl {
   unsigned int startCalls = 0;
   audio::RenderCallback renderCallback = nullptr;
   void *renderUserData = nullptr;
+  audio::RenderTimingCallback timingCallback = nullptr;
+  void *timingUserData = nullptr;
 };
 
 class TestStream final : public audio::IBackend {
@@ -91,6 +93,12 @@ public:
       control_->failAfterStart->emplace();
     }
     return true;
+  }
+
+  void setRenderTimingCallback(audio::RenderTimingCallback callback,
+                               void *userData) override {
+    control_->timingCallback = callback;
+    control_->timingUserData = userData;
   }
 
   bool stop(std::string &) override {
@@ -734,13 +742,17 @@ void testRateScaledSnapshotRestoresBgaTimeline() {
   require(!jukebox.hasActiveVisuals(),
           "the future BGA is inactive at chart time zero");
   require(control->renderCallback != nullptr &&
-              control->renderUserData != nullptr,
+              control->renderUserData != nullptr && control->timingCallback != nullptr,
           "Jukebox backend exposes the production render callback");
 
+  // Model a completed native output interval. No zero-frame callback is needed
+  // to move the presentation anchor to the end of the rendered half-second.
+  const auto wallNow = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  control->timingCallback({.outputSteadyMicros = wallNow - 1'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
   std::vector<std::int16_t> output(22'050 * 2);
   control->renderCallback(output.data(), 22'050, 2, control->renderUserData);
-  std::array<std::int16_t, 1> emptyOutput{};
-  control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
   jukebox.pause();
   require(jukebox.getTimeMicros() == 1'000'000,
           "half a real second publishes one chart second at 200 percent");

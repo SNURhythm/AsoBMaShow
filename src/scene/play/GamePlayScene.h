@@ -74,6 +74,9 @@ public:
   [[nodiscard]] GameplaySkinSessionStopHandle
   gameplaySkinPreparationCancellationHandle() const noexcept;
   void cancelGameplaySkinPreparation() noexcept;
+  bms_parser::Note *pressLaneAt(int lane, std::int64_t timestampMicros) override;
+  bms_parser::Note *releaseLaneAt(int lane, std::int64_t timestampMicros,
+                                  bool backSpin = false) override;
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay) override;
@@ -181,10 +184,11 @@ private:
   void finishReplayRecording();
   [[nodiscard]] CompletedModernReplayCapture completeModernReplayCapture();
   void recordModernCourseStage(const CompletedModernReplayCapture &capture);
+  std::int64_t legacyInputTimestampMicros = 0;
   void captureModernReplayInput(int physicalLane,
                                 replay::LogicalControl control,
                                 bool hasReplayControl, bool pressed,
-                                bool replayOnly);
+                                bool replayOnly, std::int64_t timestampMicros);
   void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayEvents(long long gameplayTimeMicros);

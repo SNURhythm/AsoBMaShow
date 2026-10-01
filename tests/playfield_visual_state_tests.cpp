@@ -885,9 +885,92 @@ void testPresentationCaptureKeepsAnImmutableSharedNoteSnapshot() {
           "prepared presentation frame");
 }
 
+void testUnchangedNoteUpdateRetainsSharedStorage() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+  const auto before = store.captureForPresentation({});
+  store.setNoteState(*before.noteState(model.notes.front().id));
+  const auto after = store.captureForPresentation({});
+  require(before.noteSnapshot == after.noteSnapshot,
+          "unchanged note updates must not copy chart-sized shared storage");
+}
+
+void testRealtimeLongNoteActivityTracksClockAndLaneWithoutNoteCopies() {
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {1};
+  model.timelines = {{.id = 1, .timeMicros = 100},
+                    {.id = 2, .timeMicros = 200}};
+  model.notes = {
+      {.id = 10, .timelineId = 1, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::HCN},
+      {.id = 11, .timelineId = 2, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::HCN}};
+  PlayfieldVisualStateStore store(model);
+  auto before = store.captureForPresentation({}, 99);
+  require(!before.realtimeLongNoteLanes->front().active &&
+              !before.realtimeLongNoteLanes->front().damaged,
+          "future HCN heads have no lane activity");
+  auto reached = store.captureForPresentation({}, 100);
+  require(reached.realtimeLongNoteLanes->front().damaged &&
+              reached.noteSnapshot == before.noteSnapshot,
+          "clock crossing alone marks HCN damage without copying notes");
+  store.onLanePressed(1, JudgeResult(None, 0), 100);
+  auto pressed = store.captureForPresentation({}, 100);
+  require(pressed.realtimeLongNoteLanes->front().active &&
+              pressed.realtimeLongNoteLanes->front().reactive &&
+              !pressed.realtimeLongNoteLanes->front().damaged &&
+              pressed.noteSnapshot == before.noteSnapshot,
+          "lane changes alone reactivate HCN without note conversion");
+  store.setNoteState({.id = 11, .judged = true, .longActive = true});
+  store.onLaneReleased(1, 101);
+  auto overlapping = store.captureForPresentation({}, 100);
+  require(overlapping.realtimeLongNoteLanes->front().active &&
+              overlapping.realtimeLongNoteLanes->front().damaged &&
+              !overlapping.realtimeLongNoteLanes->front().reactive,
+          "held early head and reached unheld head retain independent lane flags");
+  require(!before.noteState(11)->judged && overlapping.noteState(11)->judged,
+          "sparse updates preserve a retained old snapshot");
+  auto rewind = store.captureForPresentation({}, 99);
+  require(rewind.realtimeLongNoteLanes->front().active &&
+              !rewind.realtimeLongNoteLanes->front().damaged,
+          "display-clock rewind removes only clock-derived HCN damage");
+  store.setNoteState({.id = 11, .judged = true});
+  auto earlyReleased = store.captureForPresentation({}, 99);
+  require(!earlyReleased.realtimeLongNoteLanes->front().active &&
+              earlyReleased.realtimeLongNoteLanes->front().damaged,
+          "early resolved head stays reached after release even before its timing");
+  store.resetModel(model);
+  require(!store.captureForPresentation({}, 99).realtimeLongNoteLanes->front().damaged,
+          "attempt reset discards cached HCN reach and holding state");
+}
+
+void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {1};
+  for (ChartVisualId id = 1; id <= 100'000; ++id) {
+    model.notes.push_back({.id = id, .lane = 1});
+  }
+  PlayfieldVisualStateStore store(model);
+  auto previous = store.captureForPresentation({}, 0);
+  const auto *storage = previous.noteSnapshot.get();
+  previous.noteSnapshot.reset();
+  store.setNoteState({.id = 50'000, .judged = true});
+  for (int frame = 1; frame <= 8; ++frame) {
+    const auto current = store.captureForPresentation({.serial = static_cast<std::uint64_t>(frame)}, frame);
+    require(current.noteSnapshot.get() == storage && current.notes.empty() &&
+                current.noteState(50'000)->judged && !current.noteState(100'000)->judged &&
+                current.realtimeLongNoteLanes->size() == 1,
+            "100k-note realtime frames reuse sparse state and only capture lane activity");
+  }
+}
+
 } // namespace
 
 int main() {
+  testLargeRealtimePresentationReusesStorageAfterFrameRelease();
+  testRealtimeLongNoteActivityTracksClockAndLaneWithoutNoteCopies();
+  testUnchangedNoteUpdateRetainsSharedStorage();
   testGameplaySkinIrProviderNameUsesFirstConfiguredProvider();
   testChartModelOwnsStablePointerFreeValues();
   testLongNoteModeUsesChartThenOverridePrecedence();

@@ -86,10 +86,16 @@ RealtimeGameplayWorker::RealtimeGameplayWorker(
   ownedInputLanes_.resize(laneStorageSize);
   for (auto &buffer : snapshots_) {
     buffer.snapshot.noteStates.resize(definition_.noteCount());
+    buffer.snapshot.noteChanges.revision = 0;
+    buffer.holdingNoteCountsByLane.resize(laneStorageSize);
     buffer.snapshot.lanePressed.resize(laneStorageSize);
     buffer.snapshot.longNoteHoldingByLane.resize(laneStorageSize);
   }
-  publishSnapshot();
+  // Prime every buffer before input admission; the first rotation must not
+  // pay a chart-sized initialization cost on the gameplay thread.
+  for (std::size_t index = 0; index < snapshots_.size(); ++index) {
+    publishSnapshot();
+  }
 }
 
 RealtimeGameplayWorker::~RealtimeGameplayWorker() { stop(); }
@@ -166,7 +172,14 @@ bool RealtimeGameplayWorker::enqueueInput(
       fault() != RealtimeGameplayFault::None) {
     return false;
   }
-  if (!ingress_.tryPush(input)) {
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  auto capturedInput = input;
+  capturedInput.ingressTimestampMicros = perf::latency::nowMicros();
+  const auto &queuedInput = capturedInput;
+#else
+  const auto &queuedInput = input;
+#endif
+  if (!ingress_.tryPush(queuedInput)) {
     latchFault(RealtimeGameplayFault::IngressOverflow);
     return false;
   }
@@ -269,7 +282,7 @@ void RealtimeGameplayWorker::run() {
     if (fault() == RealtimeGameplayFault::None) {
       changed = advanceAutomatic() || changed;
     }
-    if (changed || fault() != RealtimeGameplayFault::None) {
+    if (changed || snapshotPending_ || fault() != RealtimeGameplayFault::None) {
       publishSnapshot();
     }
 
@@ -297,6 +310,14 @@ void RealtimeGameplayWorker::signal() noexcept {
 
 void RealtimeGameplayWorker::processInput(
     const RealtimeGameplayInput &input) {
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  processingStartedMicros_ = perf::latency::nowMicros();
+  if (input.ingressTimestampMicros > 0 &&
+      processingStartedMicros_ >= input.ingressTimestampMicros) {
+    perf::latency::record(perf::latency::Stage::IngressToWorker,
+                         processingStartedMicros_ - input.ingressTimestampMicros);
+  }
+#endif
   if (input.epoch != config_.epoch || config_.clock.mapSteadyToSong == nullptr) {
     return;
   }
@@ -570,6 +591,15 @@ bool RealtimeGameplayWorker::processGameplayInput(
   if (!config_.audio.commit(config_.audio.context, reservation, preview)) {
     latchFault(RealtimeGameplayFault::AudioCommitFailed);
   }
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  else {
+    const auto committedMicros = perf::latency::nowMicros();
+    if (committedMicros >= processingStartedMicros_) {
+      perf::latency::record(perf::latency::Stage::WorkerToSoundCommit,
+                           committedMicros - processingStartedMicros_);
+    }
+  }
+#endif
   return true;
 }
 
@@ -697,6 +727,7 @@ void RealtimeGameplayWorker::recordTransaction(
 }
 
 void RealtimeGameplayWorker::publishSnapshot() {
+  snapshotPending_ = true;
   const std::size_t latest =
       latestSnapshot_.load(std::memory_order_acquire);
   for (std::size_t offset = 1; offset < snapshots_.size(); ++offset) {
@@ -705,30 +736,40 @@ void RealtimeGameplayWorker::publishSnapshot() {
       continue;
     }
     auto &snapshot = snapshots_[index].snapshot;
+    const bool firstPublication = snapshot.generation == 0;
     snapshot.generation = ++snapshotGeneration_;
     snapshot.transactionSequence = transactionSequence_;
-    std::fill(snapshot.longNoteHoldingByLane.begin(),
-              snapshot.longNoteHoldingByLane.end(), false);
-    for (NoteId id = 0; id < definition_.noteCount(); ++id) {
+    auto &holdingCounts = snapshots_[index].holdingNoteCountsByLane;
+    simulation_.noteChanges().forEachSince(
+        snapshot.noteChanges.revision, definition_.noteCount(), [&](NoteId id) {
       const auto &state = simulation_.noteState(id);
-      snapshot.noteStates[id] = state;
       const auto &note = definition_.note(id);
-      if (state.holding &&
-          (note.kind == NoteKind::LongHead ||
-           note.kind == NoteKind::LongTail) &&
+      if ((note.kind == NoteKind::LongHead || note.kind == NoteKind::LongTail) &&
           note.lane >= 0 &&
-          static_cast<std::size_t>(note.lane) <
-              snapshot.longNoteHoldingByLane.size()) {
-        snapshot.longNoteHoldingByLane[static_cast<std::size_t>(note.lane)] =
-            true;
+          static_cast<std::size_t>(note.lane) < holdingCounts.size()) {
+        auto &count = holdingCounts[static_cast<std::size_t>(note.lane)];
+        if (snapshot.noteStates[id].holding) {
+          --count;
+        }
+        if (state.holding) {
+          ++count;
+        }
       }
-    }
+      snapshot.noteStates[id] = state;
+    });
+    snapshot.noteChanges.catchUpTo(simulation_.noteChanges());
     for (int lane = 0; lane < static_cast<int>(snapshot.lanePressed.size());
          ++lane) {
       snapshot.lanePressed[lane] = simulation_.lanePressed(lane);
+      snapshot.longNoteHoldingByLane[lane] = holdingCounts[lane] != 0;
     }
     snapshot.attempt = simulation_.snapshot();
-    snapshot.skinGameplayGraph = simulation_.skinGameplayGraphState();
+    const auto &graph = simulation_.skinGameplayGraphState();
+    if (firstPublication ||
+        snapshot.skinGameplayGraph.judgementRevision != graph.judgementRevision ||
+        snapshot.skinGameplayGraph.gaugeRevision != graph.gaugeRevision) {
+      snapshot.skinGameplayGraph = graph;
+    }
     const auto &scoreState = simulation_.scoreState();
     snapshot.gaugeState = scoreState.gaugeSnapshot();
     snapshot.fastCount = scoreState.fastCount;
@@ -755,7 +796,11 @@ void RealtimeGameplayWorker::publishSnapshot() {
     }
     snapshot.replayEventCount = simulation_.replayEvents().size();
     snapshot.terminalReason = simulation_.terminalReason();
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+    snapshot.publishedSteadyMicros = perf::latency::nowMicros();
+#endif
     latestSnapshot_.store(index, std::memory_order_release);
+    snapshotPending_ = false;
     return;
   }
 }

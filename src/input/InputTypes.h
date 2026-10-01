@@ -129,6 +129,8 @@ struct LogicalInputTransition {
   LogicalAction action;
   bool pressed = false;
   float value = 0.0f;
+  std::uint64_t timestampMicros = 0;
+  InputTimestampDomain timestampDomain = InputTimestampDomain::SteadyClock;
 };
 
 struct InputDeviceSnapshot {

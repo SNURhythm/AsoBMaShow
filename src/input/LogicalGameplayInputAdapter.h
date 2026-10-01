@@ -67,8 +67,8 @@ private:
   };
 
   [[nodiscard]] bool isLaneHeld(int lane) const;
-  bms_parser::Note *pressPhysicalLane(int lane);
-  void releasePhysicalLane(int lane, bool backSpin);
+  bms_parser::Note *pressPhysicalLane(int lane, std::uint64_t timestampMicros);
+  void releasePhysicalLane(int lane, bool backSpin, std::uint64_t timestampMicros);
   void applyOwned(std::span<const input::LogicalInputTransition> transitions,
                   OwnerKind ownerKind);
   void applyLane(const input::LogicalInputTransition &transition,

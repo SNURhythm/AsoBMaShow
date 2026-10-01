@@ -49,7 +49,10 @@ private:
   };
 
   bool scopeIsActive(input::InputScope scope) const;
-  void applyEvaluations(std::span<const BindingEvaluation> evaluations);
+  void applyEvaluations(std::span<const BindingEvaluation> evaluations,
+                        std::uint64_t timestampMicros = 0,
+                        input::InputTimestampDomain timestampDomain =
+                            input::InputTimestampDomain::SteadyClock);
 
   InputProfile profile_;
   std::vector<input::InputScope> activeScopes_;

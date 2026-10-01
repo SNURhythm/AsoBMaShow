@@ -447,7 +447,19 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   }
 }
 
-void SDLInputBackend::pump() {}
+void SDLInputBackend::pump() {
+  if (realtimeControllerMap_) {
+    realtimeControllerMap_->completeKeyboardRealtimeFallback([this] {
+      if (!realtimeInputClaimed_[static_cast<std::size_t>(input::DeviceClass::Keyboard)]
+               .load(std::memory_order_acquire)) return;
+      // Native ingress may already have judged keys still in the OS/SDL queue.
+      // Main-thread-only handover drains that backlog while native ownership
+      // still suppresses it; subsequent SDL events are fresh fallback input.
+      SDL_PumpEvents();
+      SDL_FlushEvents(SDL_KEYDOWN, SDL_KEYUP);
+    });
+  }
+}
 
 void SDLInputBackend::setRealtimeInputClaimed(
     input::DeviceClass deviceClass, bool claimed) {

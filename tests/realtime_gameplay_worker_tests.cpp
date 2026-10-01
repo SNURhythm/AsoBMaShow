@@ -6,7 +6,9 @@
 #include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/Judge.h"
 #include "support/AllocationFailure.h"
+#include "perf/LatencyTelemetry.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -189,6 +191,228 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
   }
   return predicate();
 }
+
+void testPreparationSnapshotsDoNotVisitUnchangedLargeChart() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 100'000;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  for (int index = 0; index < chart.Meta.TotalNotes; ++index) {
+    addTimeline(*measure, 1'000'000LL + index * 10'000LL)
+        ->SetNote(1, new bms_parser::Note(1));
+  }
+  chart.Measures.push_back(measure);
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.activationSongTimeMicros = 1'000'000;
+  gameplay::RealtimeGameplayWorker worker(
+      gameplay::buildGameplayDefinition(chart, 0), config);
+  // Pin an old buffer while the other two repeatedly rotate.
+  auto initial = worker.acquireLatestSnapshot();
+  const auto revision = initial->noteChanges.revision;
+  require(worker.start(), "large sparse worker starts");
+  for (int index = 0; index < 8; ++index) {
+    require(worker.enqueueInput({.epoch = 7,
+        .type = index % 2 == 0 ? gameplay::RealtimeGameplayInputType::Press
+                              : gameplay::RealtimeGameplayInputType::Release,
+        .lane = 1, .steadyTimestampMicros = 0}), "preparation input queued");
+    require(waitUntil([&] {
+      auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot->transactionSequence >= static_cast<unsigned>(index + 1);
+    }), "preparation snapshot published");
+  }
+  auto latest = worker.acquireLatestSnapshot();
+  std::size_t visited = 0;
+  latest->noteChanges.forEachSince(revision, latest->noteStates.size(),
+      [&](gameplay::NoteId) { ++visited; });
+  require(visited == 0, "unchanged 100k-note snapshots require zero note visits");
+  require(!latest->noteStates.back().played && !initial->noteStates.front().played,
+          "complete compatibility snapshots and pinned lease remain intact");
+  worker.stop();
+}
+
+void testSparseSnapshotsCatchUpLongNotePairsAcrossSkippedGenerations() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                           makeConfig(clock, audio));
+  auto initial = worker.acquireLatestSnapshot();
+  const auto revision = initial->noteChanges.revision;
+  require(worker.start(), "long-note sparse worker starts");
+  const auto send = [&](gameplay::RealtimeGameplayInputType type,
+                        std::int64_t time, std::uint64_t sequence) {
+    require(worker.enqueueInput({.epoch = 7, .type = type, .lane = 7,
+        .backSpin = true, .steadyTimestampMicros = time}), "long-note input queued");
+    require(waitUntil([&] {
+      auto current = worker.acquireLatestSnapshot();
+      return current->transactionSequence >= sequence;
+    }), "long-note sparse snapshot published");
+  };
+  send(gameplay::RealtimeGameplayInputType::Press, 1'000'000, 1);
+  {
+    auto held = worker.acquireLatestSnapshot();
+    require(held->noteStates[0].holding && held->noteStates[1].holding &&
+                held->longNoteHoldingByLane[7], "both pair identities hold");
+  }
+  // Keep the initial lease, skip consumer application, and rotate both writable
+  // buffers through unrelated lane events before releasing the long note.
+  for (std::uint64_t sequence = 2; sequence <= 7; ++sequence) {
+    require(worker.enqueueInput({.epoch = 7,
+        .type = sequence % 2 == 0 ? gameplay::RealtimeGameplayInputType::Press
+                                 : gameplay::RealtimeGameplayInputType::Release,
+        .lane = 1, .steadyTimestampMicros = 1'100'000}), "unrelated input queued");
+    require(waitUntil([&] {
+      auto current = worker.acquireLatestSnapshot();
+      return current->transactionSequence >= sequence;
+    }), "rotating snapshot published");
+  }
+  send(gameplay::RealtimeGameplayInputType::Release, 2'000'000, 8);
+  auto final = worker.acquireLatestSnapshot();
+  std::array<bool, 2> changed{};
+  final->noteChanges.forEachSince(revision, final->noteStates.size(),
+      [&](gameplay::NoteId id) { changed.at(id) = true; });
+  require(changed[0] && changed[1] && final->noteStates[0].played &&
+              final->noteStates[1].played && !final->noteStates[0].holding &&
+              !final->noteStates[1].holding && !final->longNoteHoldingByLane[7] &&
+              final->noteStates[1].releaseTimeMicros == 2'000'000,
+          "skipped generations retain both pair updates and the release timestamp");
+  require(!initial->noteStates[0].played && !initial->noteStates[1].holding,
+          "pinned old snapshot is immutable across rotating publications");
+  worker.stop();
+}
+
+void testSnapshotJournalOverrunResynchronizesCompleteState() {
+  constexpr int count = 4200;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = count;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  for (int index = 0; index < count; ++index) {
+    addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  }
+  chart.Measures.push_back(measure);
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.attempt.autoPlay = true;
+  config.simulation.attempt.replayCapacity = count + 10;
+  config.simulation.attempt.gaugeHistoryCapacity = count + 10;
+  config.simulation.attempt.automaticResultCapacity = count * 2 + 10;
+  gameplay::RealtimeGameplayWorker worker(
+      gameplay::buildGameplayDefinition(chart, 0), config);
+  auto initial = worker.acquireLatestSnapshot();
+  require(worker.start(), "journal-overrun worker starts");
+  require(worker.enqueueInput({.epoch = 7,
+      .type = gameplay::RealtimeGameplayInputType::Press,
+      .lane = 1, .steadyTimestampMicros = 0}), "initialize before autoplay notes");
+  require(waitUntil([&] {
+    return worker.acquireLatestSnapshot()->transactionSequence != 0;
+  }), "initial advance completes before autoplay batch");
+  clock.nowMicros.store(1'000'001);
+  require(waitUntil([&] {
+    auto current = worker.acquireLatestSnapshot();
+    return current->attempt.judgeCounts[PGreat] == count;
+  }), "entire autoplay batch publishes despite journal overrun");
+  auto final = worker.acquireLatestSnapshot();
+  std::size_t visited = 0;
+  final->noteChanges.forEachSince(initial->noteChanges.revision,
+      final->noteStates.size(), [&](gameplay::NoteId id) {
+    ++visited;
+    require(final->noteStates[id].played, "overrun compatibility snapshot is complete");
+  });
+  require(visited == count && final->attempt.score == count * 2 &&
+              worker.fault() == gameplay::RealtimeGameplayFault::None,
+          "slow consumer resynchronizes every note after bounded journal overrun");
+  worker.stop();
+}
+
+void testPinnedBuffersPublishPendingStateAfterReaderReleases() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.activationSongTimeMicros = 1'000'000;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(), config);
+  auto first = worker.acquireLatestSnapshot();
+  require(worker.start(), "pinned-buffer worker starts");
+  const auto enqueue = [&](gameplay::RealtimeGameplayInputType type) {
+    require(worker.enqueueInput({.epoch = 7, .type = type,
+        .lane = 1, .steadyTimestampMicros = 0}), "pinned-buffer input queued");
+  };
+  enqueue(gameplay::RealtimeGameplayInputType::Press);
+  require(waitUntil([&] {
+    return worker.acquireLatestSnapshot()->transactionSequence == 1;
+  }), "second buffer published");
+  auto second = worker.acquireLatestSnapshot();
+  enqueue(gameplay::RealtimeGameplayInputType::Release);
+  require(waitUntil([&] {
+    return worker.acquireLatestSnapshot()->transactionSequence == 2;
+  }), "third buffer published");
+  enqueue(gameplay::RealtimeGameplayInputType::Press);
+  require(waitUntil([&] { return audio.commitCount.load() == 2; }),
+          "input sound commits even while both writable buffers are pinned");
+  require(worker.suspend(), "suspend acknowledges completed input processing");
+  require(worker.acquireLatestSnapshot()->transactionSequence == 2,
+          "leased snapshots are never overwritten");
+  first = {};
+  require(worker.resume(), "resume retries pending publication without new input");
+  require(waitUntil([&] {
+    return worker.acquireLatestSnapshot()->transactionSequence == 3;
+  }), "releasing a reader eventually publishes already accepted state");
+  worker.stop();
+}
+
+void testNoteJournalBoundaryAndNewReader() {
+  gameplay::NoteStateChanges changes;
+  const auto before = changes.revision;
+  for (std::size_t index = 0; index < gameplay::NoteStateChanges::capacity; ++index) {
+    changes.record(2);
+  }
+  std::size_t visited = 0;
+  changes.forEachSince(before, 9, [&](gameplay::NoteId id) {
+    require(id == 2, "exact-capacity history still contains all sparse changes");
+    ++visited;
+  });
+  require(visited == gameplay::NoteStateChanges::capacity,
+          "exact-capacity history does not fall back early");
+  changes.record(4);
+  for (const auto revision : {before, std::uint64_t{0}, changes.revision + 1}) {
+    std::array<bool, 9> visitedIds{};
+    changes.forEachSince(revision, 9, [&](gameplay::NoteId id) {
+      visitedIds.at(id) = true;
+    });
+    require(std::all_of(visitedIds.begin(), visitedIds.end(), [](bool value) { return value; }),
+            "overrun, new attempt and reset reader revisions resynchronize all notes");
+  }
+}
+
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+void testWorkerRecordsMeasuredIngressAndSoundStages() {
+  using namespace perf::latency;
+  const auto queueBefore = snapshot(Stage::IngressToWorker).count;
+  const auto soundBefore = snapshot(Stage::WorkerToSoundCommit).count;
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.activationSongTimeMicros = 1'000'000;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(), config);
+  require(worker.start(), "measured-stage worker starts");
+  for (std::uint64_t sequence = 1; sequence <= 3; ++sequence) {
+    require(worker.enqueueInput({.epoch = 7,
+        .type = sequence % 2 ? gameplay::RealtimeGameplayInputType::Press
+                            : gameplay::RealtimeGameplayInputType::Release,
+        .lane = 1, .steadyTimestampMicros = 0}), "measured input queued");
+    require(waitUntil([&] {
+      return worker.acquireLatestSnapshot()->transactionSequence == sequence;
+    }), "measured input publishes");
+  }
+  worker.stop();
+  require(snapshot(Stage::IngressToWorker).count == queueBefore + 3,
+          "every accepted input records measured queue residence");
+  require(snapshot(Stage::WorkerToSoundCommit).count == soundBefore + 2,
+          "successful sound commits record processing duration only for presses");
+}
+#endif
 
 void testWorkerLaunchFailureReleasesAdmission() {
   FakeClock clock;
@@ -1364,8 +1588,11 @@ void testPracticeCountInPressJudgesFirstInRangeNote() {
                                .compensateLane = 1,
                                .steadyTimestampMicros = 999'999}),
           "count-in press reaches the practice authority");
-  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
-          "valid early count-in hit commits its keysound");
+  require(waitUntil([&] {
+    const auto published = worker.acquireLatestSnapshot();
+    return audio.commitCount.load() == 1 && published &&
+           published->transactionSequence != 0;
+  }), "valid early count-in hit commits and publishes its keysound transaction");
   auto snapshot = worker.acquireLatestSnapshot();
   require(snapshot && snapshot->noteStates[0].played &&
               snapshot->attempt.judgeCounts[PGreat] == 1,
@@ -1618,6 +1845,14 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  testWorkerRecordsMeasuredIngressAndSoundStages();
+#endif
+  testPreparationSnapshotsDoNotVisitUnchangedLargeChart();
+  testSparseSnapshotsCatchUpLongNotePairsAcrossSkippedGenerations();
+  testSnapshotJournalOverrunResynchronizesCompleteState();
+  testNoteJournalBoundaryAndNewReader();
+  testPinnedBuffersPublishPendingStateAfterReaderReleases();
   testHeldLongNoteRecoveryDoesNotReserveAnotherKeysound();
   testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance();
   testWorkerLaunchFailureReleasesAdmission();

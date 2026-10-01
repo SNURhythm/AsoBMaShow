@@ -723,6 +723,8 @@
 				bms_search/CMakeLists.txt,
 				game/CMakeLists.txt,
 				input/CMakeLists.txt,
+				input/LinuxRealtimeKeyboardBackend.cpp,
+				input/MacRealtimeKeyboardBackend.mm,
 				ir/CMakeLists.txt,
 				math/CMakeLists.txt,
 				music_select/CMakeLists.txt,
