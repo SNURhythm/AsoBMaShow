@@ -191,6 +191,13 @@ void testBpmGuideUsesLightAssistOnlyForVariableTempoCharts() {
               kClearTypeAssistedEasyClearRank, true, audio::PlaybackRate{}) ==
               kClearTypeFullComboRank,
           "an Assisted Easy gauge alone still permits a full-combo lamp");
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      "ASSISTED", 120.0, 120.0, {}));
+  require(state.getClearType() == ClearType::LightAssistedEasyClear &&
+              clear_policy::fullComboRankForPlayback(
+                  state.getClearTypeRank(), true, {}) ==
+                  kClearTypeLightAssistedEasyClearRank,
+          "generic assisted attempts keep the light-assist cap even at full combo");
 }
 
 void testAlteredPlaybackUsesLightAssistEasy() {

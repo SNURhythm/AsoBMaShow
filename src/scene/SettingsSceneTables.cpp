@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "DifficultyTableUrlCompletion.h"
 #include "../ChartLibraryScanner.h"
@@ -49,7 +50,7 @@ void SettingsScene::loadDifficultyTables() {
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
     difficultyTables.clear();
-    difficultyTableStatusMessage = "Could not open chart database.";
+    difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
     difficultyTableStatusColor = {255, 177, 170, 255};
     return;
   }
@@ -72,7 +73,7 @@ void SettingsScene::loadChartEntries() {
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
     chartEntries.clear();
-    chartFolderStatusMessage = "Could not open chart database.";
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
     chartFolderStatusColor = {255, 177, 170, 255};
     return;
   }
@@ -118,12 +119,12 @@ void SettingsScene::refreshChartEntryBackupStatuses() {
 
 void SettingsScene::toggleChartEntryICloudBackup(
     const std::string &entryPathText) {
-  auto setFolderStatus = [this](const std::string &message,
+  auto setFolderStatus = [this](const i18n::Text &message,
                                 const SDL_Color &color) {
     chartFolderStatusMessage = message;
     chartFolderStatusColor = color;
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
   };
@@ -135,7 +136,7 @@ void SettingsScene::toggleChartEntryICloudBackup(
                      return formatChartEntryPath(entry) == entryPathText;
                    });
   if (entryIt == chartEntries.end()) {
-    setFolderStatus("Folder entry was not found.", {255, 177, 170, 255});
+    setFolderStatus(i18n::message("settings.difficulty_tables.folder_entry_not_found.message"), {255, 177, 170, 255});
     return;
   }
 
@@ -149,7 +150,9 @@ void SettingsScene::toggleChartEntryICloudBackup(
   std::string errorMessage;
   if (!GetIOSFileExcludedFromBackup(access.resolvedPath, excluded,
                                     errorMessage)) {
-    setFolderStatus("Could not check iCloud Backup: " + errorMessage,
+    setFolderStatus(i18n::message("settings.library.status.detail",
+                  {{"prefix", i18n::message("settings.difficulty_tables.could_not_check_i_cloud_backup.prefix")},
+                   {"detail", errorMessage}}),
                     {255, 177, 170, 255});
     return;
   }
@@ -157,19 +160,21 @@ void SettingsScene::toggleChartEntryICloudBackup(
   const bool shouldExclude = !excluded;
   if (!SetIOSFileExcludedFromBackup(access.resolvedPath, shouldExclude,
                                     errorMessage)) {
-    setFolderStatus("Could not update iCloud Backup: " + errorMessage,
+    setFolderStatus(i18n::message("settings.library.status.detail",
+                  {{"prefix", i18n::message("settings.difficulty_tables.could_not_update_i_cloud_backup.prefix")},
+                   {"detail", errorMessage}}),
                     {255, 177, 170, 255});
     return;
   }
 
   chartEntryICloudBackupExcluded[entryPathText] = shouldExclude;
-  setFolderStatus(shouldExclude ? "iCloud Backup disabled for folder."
-                                : "iCloud Backup enabled for folder.",
+  setFolderStatus(shouldExclude ? i18n::message("settings.difficulty_tables.i_cloud_backup_disabled_folder.message")
+                                : i18n::message("settings.difficulty_tables.i_cloud_backup_enabled_folder.message"),
                   {181, 228, 165, 255});
   lastLayoutWidth = -1;
 #else
   (void)entryPathText;
-  setFolderStatus("iCloud Backup settings are only available on iOS.",
+  setFolderStatus(i18n::message("settings.difficulty_tables.icloud_backup.ios_only_notice"),
                   {255, 177, 170, 255});
 #endif
 }
@@ -182,17 +187,17 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
                                      ? SDL_Color{181, 228, 165, 255}
                                      : SDL_Color{255, 177, 170, 255};
     if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
       difficultyTableStatusText->setColor(difficultyTableStatusColor);
     }
   }
   if (pending.folderStatus) {
-    chartFolderStatusMessage = std::move(pending.folderStatus->text);
+    chartFolderStatusMessage = pending.folderStatus->text;
     chartFolderStatusColor = pending.folderStatus->succeeded
                                 ? SDL_Color{181, 228, 165, 255}
                                 : SDL_Color{255, 177, 170, 255};
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
   }
@@ -268,28 +273,30 @@ void SettingsScene::refreshDifficultyTableImportModal() {
           : 0.0f;
 
   if (difficultyTableImportTitleText != nullptr) {
-    difficultyTableImportTitleText->setText(
-        !finished ? "Importing Difficulty Tables"
-                  : (succeeded ? "Import Complete" : "Import Failed"));
+    difficultyTableImportTitleText->setLocalizedText(
+        !finished ? i18n::message("settings.difficulty_tables.importing_difficulty_tables.label")
+                  : (succeeded ? i18n::message("settings.difficulty_tables.import_complete.label") : i18n::message("settings.difficulty_tables.import_failed.label")));
   }
   if (difficultyTableImportStatusText != nullptr) {
     if (!difficultyTableImportStatusMessage.empty()) {
-      difficultyTableImportStatusText->setText(
+      difficultyTableImportStatusText->setLocalizedText(
           difficultyTableImportStatusMessage);
     } else {
-      difficultyTableImportStatusText->setText(
-          !finished ? "Downloading and importing tables..."
-                    : (succeeded ? "Import finished." : "Import failed."));
+      difficultyTableImportStatusText->setLocalizedText(
+          !finished ? i18n::message("settings.difficulty_tables.downloading_importing_tables.progress")
+                    : (succeeded ? i18n::message("settings.difficulty_tables.import_finished.message") : i18n::message("settings.difficulty_tables.import_failed.message")));
     }
   }
   if (difficultyTableImportTableText != nullptr) {
-    difficultyTableImportTableText->setText(
+    difficultyTableImportTableText->setLocalizedText(
         difficultyTableImportName.empty()
-            ? "Current table: Resolving table URL"
-            : "Current table: " + difficultyTableImportName);
+            ? i18n::message("settings.difficulty_tables.current_table_resolving_table_url.label")
+            : i18n::message("settings.difficulty_tables.current_table",
+                            {{"prefix", i18n::message("settings.difficulty_tables.current_table.prefix")},
+                             {"name", difficultyTableImportName}}));
   }
   if (difficultyTableImportProgressText != nullptr) {
-    difficultyTableImportProgressText->setText(
+    difficultyTableImportProgressText->setLocalizedText(
         formatImportProgressText(current, total));
   }
   if (difficultyTableImportProgressFill != nullptr) {
@@ -326,10 +333,10 @@ void SettingsScene::addDifficultyTableFromUrl() {
   const std::string url =
       tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
   if (url.empty()) {
-    difficultyTableStatusMessage = "Enter a table webpage URL first.";
+    difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.enter_table_webpage_url_first.message");
     difficultyTableStatusColor = {255, 177, 170, 255};
     if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
       difficultyTableStatusText->setColor(difficultyTableStatusColor);
     }
     return;
@@ -337,7 +344,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
 
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
-  difficultyTableStatusMessage = "Adding table...";
+  difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.adding_table.progress");
   difficultyTableStatusColor = {239, 244, 251, 255};
   difficultyTableImportModalVisible = true;
   difficultyTableImportFinished = false;
@@ -345,9 +352,9 @@ void SettingsScene::addDifficultyTableFromUrl() {
   difficultyTableImportCurrent = 0;
   difficultyTableImportTotal = 1;
   difficultyTableImportName = url;
-  difficultyTableImportStatusMessage = "Preparing import...";
+  difficultyTableImportStatusMessage = i18n::message("settings.difficulty_tables.preparing_import.progress");
   if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
   refreshDifficultyTableImportModal();
@@ -359,8 +366,8 @@ void SettingsScene::addDifficultyTableFromUrl() {
     if (!session.has_value()) {
       if (!token.stop_requested()) {
         updates.importProgress({
-            0, 1, url, "Could not open chart database.", true, false, url});
-        updates.tableStatus("Could not open chart database.", false);
+            0, 1, url, i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), true, false, url});
+        updates.tableStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
       }
       return;
     }
@@ -375,7 +382,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
       lastProgress = progress;
       updates.importProgress({
           progress.current, progress.total, progress.tableName,
-          "Downloading and importing tables...", false, false, {}});
+          i18n::message("settings.difficulty_tables.downloading_importing_tables.progress"), false, false, {}});
     };
     DifficultyTableImporter importer;
     const bool imported = importer.ImportFromUrl(
@@ -385,9 +392,9 @@ void SettingsScene::addDifficultyTableFromUrl() {
       return;
     }
 
-    const std::string finalMessage =
-        imported ? (errorMessage.empty() ? "Table added." : errorMessage)
-                 : (errorMessage.empty() ? "Add failed." : errorMessage);
+    const i18n::Text finalMessage =
+        imported ? (errorMessage.empty() ? i18n::message("settings.difficulty_tables.table_added.message") : i18n::Text(errorMessage))
+                 : (errorMessage.empty() ? i18n::message("settings.difficulty_tables.add_failed.message") : i18n::Text(errorMessage));
     updates.importProgress({
         lastProgress.current, lastProgress.total, lastProgress.tableName,
         finalMessage, true, imported, url});
@@ -402,10 +409,10 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
 
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
-  difficultyTableStatusMessage = "Updating table...";
+  difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.updating_table.progress");
   difficultyTableStatusColor = {239, 244, 251, 255};
   if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
 
@@ -415,7 +422,7 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        updates.tableStatus("Could not open chart database.", false);
+        updates.tableStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
       }
       return;
     }
@@ -430,8 +437,8 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     }
 
     updates.tableStatus(
-        updated ? "Table updated."
-                : (errorMessage.empty() ? "Update failed." : errorMessage),
+        updated ? i18n::message("settings.difficulty_tables.table_updated.message")
+                : (errorMessage.empty() ? i18n::message("settings.difficulty_tables.update_failed.message") : i18n::Text(errorMessage)),
         updated, updated);
   });
 }
@@ -444,17 +451,17 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
   if (pendingDeleteDifficultyTableId != tableId) {
     pendingDeleteDifficultyTableId = tableId;
     pendingDeleteChartEntryPath.clear();
-    difficultyTableStatusMessage = "Tap Confirm on that table to delete it.";
+    difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.tap_confirm_on_table_delete.message");
     difficultyTableStatusColor = {255, 213, 151, 255};
     lastLayoutWidth = -1;
     return;
   }
 
   pendingDeleteDifficultyTableId = 0;
-  difficultyTableStatusMessage = "Deleting table...";
+  difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.deleting_table.progress");
   difficultyTableStatusColor = {239, 244, 251, 255};
   if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
 
@@ -464,7 +471,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        updates.tableStatus("Could not open chart database.", false);
+        updates.tableStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
       }
       return;
     }
@@ -475,7 +482,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
       return;
     }
 
-    updates.tableStatus(deleted ? "Table deleted." : "Delete failed.",
+    updates.tableStatus(deleted ? i18n::message("settings.difficulty_tables.table_deleted.message") : i18n::message("settings.difficulty_tables.delete_failed.message"),
                         deleted, deleted);
   });
 }
@@ -489,19 +496,19 @@ void SettingsScene::refreshChartLibrary() {
   pendingDeleteChartEntryPath.clear();
   if (context.requestRebuildChartLibrary) {
     context.requestRebuildChartLibrary();
-    chartFolderStatusMessage = "Chart list rebuild started in the background.";
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.chart_list_rebuild_started_in_background.message");
     chartFolderStatusColor = {181, 228, 165, 255};
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
     return;
   }
 
-  chartFolderStatusMessage = "Rebuilding chart list...";
+  chartFolderStatusMessage = i18n::message("settings.difficulty_tables.rebuilding_chart_list.progress");
   chartFolderStatusColor = {239, 244, 251, 255};
   if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
@@ -512,7 +519,7 @@ void SettingsScene::refreshChartLibrary() {
         auto session = repository.OpenSession();
         if (!session.has_value()) {
           if (!token.stop_requested()) {
-            updates.folderStatus("Could not open chart database.", false);
+            updates.folderStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
           }
           return;
         }
@@ -523,8 +530,9 @@ void SettingsScene::refreshChartLibrary() {
           std::error_code errorCode;
           if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
             if (!token.stop_requested()) {
-              updates.folderStatus("Could not create default BMS folder: " +
-                                           errorCode.message(),
+              updates.folderStatus(i18n::message("settings.library.status.detail",
+                  {{"prefix", i18n::message("settings.difficulty_tables.could_not_create_default_bms_folder.prefix")},
+                   {"detail", errorCode.message()}}),
                                        false);
             }
             return;
@@ -569,16 +577,17 @@ void SettingsScene::refreshChartLibrary() {
         }
 
         const bool succeeded = changedCount >= 0;
-        std::string statusText;
+        i18n::Text statusText;
         if (!succeeded) {
-          statusText = "Refresh failed.";
+          statusText = i18n::message("settings.difficulty_tables.refresh_failed.message");
         } else if (changedCount == 0) {
-          statusText = "Chart list refreshed. No changes found.";
+          statusText = i18n::message("settings.difficulty_tables.chart_list_refreshed_no_changes_found.message");
         } else if (changedCount == 1) {
-          statusText = "Chart list refreshed. Updated 1 chart entry.";
+          statusText = i18n::message("settings.difficulty_tables.chart_list_refreshed_updated_1_chart_entry.message");
         } else {
-          statusText = "Chart list refreshed. Updated " +
-                       std::to_string(changedCount) + " chart entries.";
+          statusText = i18n::message(
+              "settings.difficulty_tables.library_refresh.updated_count",
+              {{"count", std::to_string(changedCount)}});
         }
         updates.folderStatus(statusText, succeeded, true);
       });
@@ -588,22 +597,22 @@ void SettingsScene::setFindBmsDownloadEntry(
     const std::string &entryPathText) {
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
-    chartFolderStatusMessage = "Could not open chart database.";
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
     chartFolderStatusColor = {255, 177, 170, 255};
   } else if (!session->SetPrimaryStorageEntry(
                  std::filesystem::path(utf8_to_path_t(entryPathText)))) {
     chartFolderStatusMessage =
-        "Could not use this folder for Find BMS downloads.";
+        i18n::message("settings.difficulty_tables.could_not_use_folder_find_bms_downloads.message");
     chartFolderStatusColor = {255, 177, 170, 255};
   } else {
-    chartFolderStatusMessage = "Find BMS download folder updated.";
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.find_bms_download_folder_updated.message");
     chartFolderStatusColor = {181, 228, 165, 255};
     loadChartEntries();
     refreshChartEntryBackupStatuses();
   }
 
   if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
   lastLayoutWidth = -1;
@@ -617,10 +626,10 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 #if TARGET_OS_ANDROID
   if (ChartRepository::IsDefaultBmsFolderPath(
           std::filesystem::path(utf8_to_path_t(entryPathText)))) {
-    chartFolderStatusMessage = "The default BMS folder is built in.";
+    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.default_bms_folder_built_in.message");
     chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
     if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
     }
     pendingDeleteChartEntryPath.clear();
@@ -636,10 +645,10 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   }
 
   pendingDeleteChartEntryPath.clear();
-  chartFolderStatusMessage = "Removing folder...";
+  chartFolderStatusMessage = i18n::message("settings.difficulty_tables.removing_folder.progress");
   chartFolderStatusColor = {239, 244, 251, 255};
   if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
@@ -650,7 +659,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         auto session = repository.OpenSession();
         if (!session.has_value()) {
           if (!token.stop_requested()) {
-            updates.folderStatus("Could not open chart database.", false);
+            updates.folderStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
           }
           return;
         }
@@ -666,8 +675,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
           if (!token.stop_requested()) {
             updates.folderStatus(
                 entryIt == entries.end()
-                    ? "Folder entry was not found."
-                    : "The default BMS folder is built in.",
+                    ? i18n::message("settings.difficulty_tables.folder_entry_not_found.message")
+                    : i18n::message("settings.difficulty_tables.default_bms_folder_built_in.message"),
                                      false, true);
           }
           return;
@@ -682,15 +691,14 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
           return;
         }
 
-        std::string statusText;
+        i18n::Text statusText;
         if (removed) {
           statusText = removedChartCount == 1
-                           ? "Folder removed. Removed 1 cached chart."
-                           : "Folder removed. Removed " +
-                                 std::to_string(removedChartCount) +
-                                 " cached charts.";
+                           ? i18n::message("settings.difficulty_tables.folder_removed_removed_1_cached_chart.message")
+                           : i18n::message("settings.library.folder.remove_summary",
+                                          {{"count", std::to_string(removedChartCount)}});
         } else {
-          statusText = "Remove failed.";
+          statusText = i18n::message("settings.difficulty_tables.remove_failed.message");
         }
         updates.folderStatus(statusText,
                              removed, true);

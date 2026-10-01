@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../i18n/Localization.h"
+
 #include "FrameCapRuntime.h"
 #include "../settings/AudioVideoSettings.h"
 
@@ -74,7 +76,7 @@ enum class ApplyStatus {
 struct ApplyResult {
   ApplyStatus status = ApplyStatus::Unsupported;
   player_settings::VideoSettings effective;
-  std::string message;
+  i18n::Text message;
 };
 
 class DisplaySettingsManager {
@@ -106,7 +108,7 @@ private:
     std::optional<RollbackReason> rollbackReason;
   };
 
-  std::optional<std::string>
+  std::optional<i18n::Text>
   unsupportedReason(const player_settings::VideoSettings &,
                     const player_settings::VideoSettings &effective) const;
   static bool displayFieldsEqual(const player_settings::VideoSettings &,

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Regression tests for runner-owned music-select ledger evidence."""
 
-import json
 import os
-import subprocess
 import unittest
 from pathlib import Path
 
 from tests import beatoraja_music_select_skin_ledger_tests as ledger
+from tests.support.ledger_test_evidence import executed_coverage
 
 
 TEST_RUNNERS = {
@@ -67,30 +66,6 @@ def validate_executed_coverage(expected, emitted_by_runner):
     assert all(observed[key] == expected[key] for key in expected), (
         "ledger IDs were emitted by the wrong runner"
     )
-
-
-def executed_coverage(build_dir: Path, runners: set[str]):
-    emitted = {}
-    for runner in sorted(runners):
-        executable = build_dir / runner
-        assert executable.is_file(), f"ledger evidence is unbuilt: {runner}"
-        completed = subprocess.run(
-            [str(executable), "--list-ledger-assertions"],
-            cwd=ledger.ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        assert completed.returncode == 0, completed.stdout
-        payload = json.loads(completed.stdout.splitlines()[-1])
-        assert payload.get("runner") == runner
-        identifiers = payload.get("assertionIds")
-        assert isinstance(identifiers, list)
-        assert all(isinstance(identifier, str) and identifier
-                   for identifier in identifiers)
-        emitted[runner] = identifiers
-    return emitted
 
 
 class MusicSelectSkinLedgerEvidenceTests(unittest.TestCase):

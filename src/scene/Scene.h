@@ -1,5 +1,6 @@
 #pragma once
 #include "../view/View.h"
+#include "../i18n/Localization.h"
 #include "../context.h"
 #include <SDL2/SDL.h>
 #include <vector>
@@ -24,6 +25,18 @@ public:
   virtual void init() = 0; // Initialize the scene
   virtual void onPause() {}
   virtual void onResume() {}
+  virtual void onLanguageChanged() {
+    for (auto *view : views) {
+      view->propagateLanguageChange();
+    }
+  }
+  void refreshLanguageIfNeeded() {
+    const auto currentRevision = i18n::revision();
+    if (languageRevision_ != currentRevision) {
+      languageRevision_ = currentRevision;
+      onLanguageChanged();
+    }
+  }
   virtual void onApplicationBackgroundChanged(bool) {}
   virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {
@@ -115,6 +128,7 @@ public:
   }
 
   inline void prepareForUse() {
+    languageRevision_ = i18n::revision();
     isDead = false;
     isCleaned = false;
     deferred.clear();
@@ -165,4 +179,5 @@ private:
   std::vector<std::function<bool()>> postedDeferred_;
   bool isDead = false;
   bool isCleaned = false;
+  std::uint64_t languageRevision_ = i18n::revision();
 };

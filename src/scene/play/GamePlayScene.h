@@ -211,6 +211,7 @@ private:
   [[nodiscard]] double
   noteDisplayBpmAtGameplayTime(long long gameplayTimeMicros) const;
   View *pauseLayout = nullptr;
+  View *pausePenaltyText = nullptr;
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
   Button *practiceRestartButton = nullptr;

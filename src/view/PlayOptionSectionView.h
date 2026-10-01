@@ -1,6 +1,7 @@
 #pragma once
 
 #include "View.h"
+#include "../i18n/Localization.h"
 
 #include <functional>
 #include <string>
@@ -31,7 +32,8 @@ public:
 
   void refresh(const std::string &selectedOption,
                const std::string &defaultLaneOrder, bool laneOrderEnabled);
-  void setLaneOrderMessage(std::string message, bool error = false);
+  void setLaneOrderMessage(i18n::Text message, bool error = false);
+  void resetLaneOrderDraft() { laneOrderSnapshotInitialized = false; }
 
 private:
   struct OptionButton {
@@ -43,6 +45,10 @@ private:
   PlayOptionSectionCallbacks callbacks;
   std::vector<OptionButton> optionButtons;
   TextInputBox *laneOrderInput = nullptr;
+  bool laneOrderSnapshotInitialized = false;
+  std::string lastLaneOrderOption;
+  std::string lastDefaultLaneOrder;
+  bool lastLaneOrderEnabled = false;
   Button *applyLaneOrderButton = nullptr;
   Button *resetLaneOrderButton = nullptr;
   TextView *laneOrderMessage = nullptr;

@@ -61,8 +61,8 @@ private:
 
   ir_uploads::Controller controller;
   ir_uploads::PreparationTask preparationTask;
-  std::string loadError;
-  std::string loadDiagnostic;
+  i18n::Text loadError;
+  i18n::Text loadDiagnostic;
   bool providerCanSubmit = false;
   bool reloadRequested = false;
   std::uint64_t observedAccountEvidenceRevision = 0;

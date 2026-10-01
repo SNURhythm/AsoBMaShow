@@ -1,3 +1,4 @@
+#include "../../i18n/Localization.h"
 //
 // Created by XF on 8/25/2024.
 //
@@ -276,7 +277,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
 }
 
 std::string gameplaySkinFailureMessage(const skin::SkinDiagnostic &diagnostic) {
-  std::string message = "The selected gameplay skin could not be used.";
+  std::string message = i18n::tr("gameplay.selected_gameplay_skin_failed_used.message");
   if (!diagnostic.message.empty()) {
     message.append("\n\n");
     message.append(diagnostic.message);
@@ -294,7 +295,7 @@ const char *
 resultPersistenceStateName(result_persistence::SaveState state) noexcept {
   switch (state) {
   case result_persistence::SaveState::Saved:
-    return "Saved";
+    return i18n::tr("gameplay.saved.label");
   case result_persistence::SaveState::InvalidAttempt:
     return "InvalidAttempt";
   case result_persistence::SaveState::Unstaged:
@@ -308,7 +309,7 @@ resultPersistenceStateName(result_persistence::SaveState state) noexcept {
   case result_persistence::SaveState::PendingConflict:
     return "PendingConflict";
   }
-  return "Unknown";
+  return i18n::tr("gameplay.unknown.label");
 }
 
 const char *chartReplayPersistenceStateName(
@@ -329,7 +330,7 @@ const char *chartReplayPersistenceStateName(
   case replay::ChartReplayPersistenceState::IntegrityConflict:
     return "IntegrityConflict";
   }
-  return "Unknown";
+  return i18n::tr("gameplay.unknown.label");
 }
 
 replay::ReplayTouchAction modernTouchAction(ReplayTouchAction action) noexcept {
@@ -953,6 +954,23 @@ constexpr bool kShowLaneStateOverlay = true;
 #else
 constexpr bool kShowLaneStateOverlay = false;
 #endif
+
+bool hasReachedFirstPlayableNote(const bms_parser::Chart &chart,
+                                 long long gameplayTimeMicros) {
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) continue;
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr || timeline->Timing > gameplayTimeMicros) continue;
+      for (auto *note : timeline->Notes) {
+        if (note != nullptr) return true;
+      }
+      for (auto *mine : timeline->LandmineNotes) {
+        if (mine != nullptr) return true;
+      }
+    }
+  }
+  return false;
+}
 
 std::vector<bms_parser::Note *>
 buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
@@ -2835,7 +2853,7 @@ void GamePlayScene::init() {
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(
         rulesetPolicyBuild.diagnostic.empty()
-            ? "The selected gameplay ruleset could not be started."
+            ? i18n::tr("gameplay.selected_gameplay_ruleset_failed_started.message")
             : rulesetPolicyBuild.diagnostic);
     return;
   }
@@ -2975,7 +2993,6 @@ void GamePlayScene::init() {
       .playAreaWidth =
           context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
       .laneBeamsEnabled = true,
-      .accelerationCompensation = context.settings.accelerationCompensation,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
       .laneBeamLengthPercent = context.settings.laneBeamLengthPercent,
@@ -3141,7 +3158,9 @@ void GamePlayScene::init() {
   {
     auto pauseScreen = new View();
     pauseScreen->setWidth(520);
-    pauseScreen->setHeight(options.practiceSession != nullptr ? 500 : 430);
+    const bool showsPausePenalty = !coursePlayback && !isReplayPlayback();
+    pauseScreen->setHeight((options.practiceSession != nullptr ? 500 : 430) +
+                            (showsPausePenalty ? 64 : 0));
     pauseScreen->setFlexDirection(FlexDirection::Column);
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
@@ -3176,26 +3195,45 @@ void GamePlayScene::init() {
 
       auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
       pauseText->setSize(420, 72);
-      pauseText->setText(coursePlayback ? "COURSE MENU" : "PAUSED");
+      pauseText->setText(coursePlayback ? i18n::tr("gameplay.course_menu.badge") : i18n::tr("gameplay.paused.badge"));
       pauseText->setAlign(TextView::CENTER);
       pauseText->setVAlign(TextView::MIDDLE);
       pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
+      if (showsPausePenalty) {
+        auto penaltyText = new View();
+        pausePenaltyText = penaltyText;
+        penaltyText->setVisible(false);
+        penaltyText->setDisplay(YGDisplayNone);
+        penaltyText->setSize(420, 56);
+        penaltyText->setFlexDirection(FlexDirection::Column);
+        std::istringstream lines(i18n::tr("gameplay.paused.penalty"));
+        for (std::string line; std::getline(lines, line);) {
+          auto label = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+          label->setSize(420, 28);
+          label->setText(line);
+          label->setAlign(TextView::CENTER);
+          label->setVAlign(TextView::MIDDLE);
+          label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+          penaltyText->addView(label);
+        }
+        pauseScreen->addView(penaltyText);
+      }
       pauseScreen->addView(makePauseButton(
-          coursePlayback ? "Close" : "Resume", Color(22, 132, 126, 238),
+          coursePlayback ? i18n::tr("gameplay.close.label") : i18n::tr("gameplay.resume.label"), Color(22, 132, 126, 238),
           Color(28, 151, 144, 248), Color(40, 173, 164, 255),
           ui_theme::accentBorderStrong(), [this]() { closePauseMenu(); }));
       if (options.practiceSession != nullptr) {
         pauseScreen->addView(makePauseButton(
-            "Restart Section", Color(57, 105, 42, 238), Color(72, 127, 51, 248),
+            i18n::tr("gameplay.restart_section.label"), Color(57, 105, 42, 238), Color(72, 127, 51, 248),
             Color(91, 153, 61, 255), ui_theme::lime(),
             [this]() { restartCurrentPattern(); }));
         pauseScreen->addView(makePauseButton(
-            "Finish Practice", ui_theme::primaryAction(),
+            i18n::tr("gameplay.finish_practice.label"), ui_theme::primaryAction(),
             ui_theme::primaryActionHover(), ui_theme::primaryActionPressed(),
             ui_theme::cyan(), [this]() { finishPractice(); }));
         pauseScreen->addView(makePauseButton(
-            "Exit Without Summary", Color(119, 45, 46, 238),
+            i18n::tr("gameplay.exit_without_summary.label"), Color(119, 45, 46, 238),
             Color(145, 53, 51, 248), Color(174, 64, 57, 255), ui_theme::coral(),
             [this]() { exitPracticeWithoutSummary(); }));
       } else {
@@ -3204,8 +3242,8 @@ void GamePlayScene::init() {
             chart != nullptr &&
             gameplayHasSamePatternRandomization(*chart, options);
         pauseScreen->addView(makePauseButton(
-            coursePlayback ? "Restart Course"
-                           : (isReplayPlayback() ? "Replay" : "Retry"),
+            coursePlayback ? i18n::tr("gameplay.restart_course.label")
+                           : (isReplayPlayback() ? i18n::tr("gameplay.replay.label") : i18n::tr("gameplay.retry.label")),
             Color(57, 105, 42, 238), Color(72, 127, 51, 248),
             Color(91, 153, 61, 255), ui_theme::lime(), [this, canRetrySame]() {
               if (isCoursePlayback()) {
@@ -3219,12 +3257,12 @@ void GamePlayScene::init() {
             }));
         if (canRetrySame) {
           pauseScreen->addView(makePauseButton(
-              "Retry Same", ui_theme::control(), ui_theme::controlHover(),
+              i18n::tr("gameplay.retry_same.label"), ui_theme::control(), ui_theme::controlHover(),
               ui_theme::controlPressed(), ui_theme::hairline(),
               [this]() { restartCurrentPattern(); }));
         }
         pauseScreen->addView(makePauseButton(
-            "Exit", Color(119, 45, 46, 238), Color(145, 53, 51, 248),
+            i18n::tr("gameplay.exit.label"), Color(119, 45, 46, 238), Color(145, 53, 51, 248),
             Color(174, 64, 57, 255), ui_theme::coral(), [this]() {
               context.jukebox.stop();
               defer(
@@ -3277,7 +3315,7 @@ void GamePlayScene::init() {
   addView(skinResetLayoutButton);
   auto resetLayoutText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  resetLayoutText->setText("Reset Layout");
+  resetLayoutText->setText(i18n::tr("gameplay.reset_layout.label"));
   resetLayoutText->setAlign(TextView::CENTER);
   resetLayoutText->setVAlign(TextView::MIDDLE);
   resetLayoutText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -3343,6 +3381,12 @@ bool GamePlayScene::reset() {
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
+  // Retry and Retry Same both begin a new attempt. Rebuild all attempt facts
+  // so runtime modifiers (including pause use) never leak into the retry.
+  if (!isReplayPlayback() && rulesetPolicyBuild.policy.has_value()) {
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        options, chart->Meta, *rulesetPolicyBuild.policy);
+  }
   ownedState.reset();
   state = nullptr;
   presentation->reset();
@@ -3598,7 +3642,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
   playbackFailureLayout->setBackgroundColor(Color(2, 5, 9, 255));
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 38);
-  title->setText("PLAYBACK UNAVAILABLE");
+  title->setText(i18n::tr("gameplay.playback_unavailable.badge"));
   title->setAlign(TextView::CENTER);
   title->setVAlign(TextView::MIDDLE);
   title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -3615,7 +3659,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
 
   auto *returnButton = new Button();
   auto *returnText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  returnText->setText("Return");
+  returnText->setText(i18n::tr("gameplay.return.label"));
   returnText->setAlign(TextView::CENTER);
   returnText->setVAlign(TextView::MIDDLE);
   returnText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -3667,6 +3711,80 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   }
   if (pausePlayback) {
     context.jukebox.pause();
+    const long long gameplayTimeMicros =
+        getGameplayTimeMicros(context.jukebox.getTimeMicros());
+    int handledNotes = state != nullptr ? state->stagePassedNotes : 0;
+    // TotalNotes excludes mines, and an early HCN tail judgement can finish
+    // the score count before its gauge interval ends. Those effects still
+    // make pausing an advantage after the last counted judgement.
+    const auto hasRemainingEffect = [&](bms_parser::Note *note, bool played,
+                                         bool dead, long long playedTime) {
+      if (note == nullptr) return false;
+      if (note->IsLandmineNote()) return !dead;
+      const auto *tail = dynamic_cast<bms_parser::LongNote *>(note);
+      if (tail == nullptr || !tail->IsTail()) return false;
+      if (!played && !dead) return true;
+      return chart != nullptr && tail->Timeline != nullptr &&
+             tail->Head != nullptr && tail->Head->Timeline != nullptr &&
+             effectiveLongNoteIsHellCharge(tail, chart, options.longNoteMode) &&
+             tail->Timeline->Timing > tail->Head->Timeline->Timing &&
+             gameplayTimeMicros >= tail->Head->Timeline->Timing &&
+             gameplayTimeMicros < tail->Timeline->Timing && played &&
+             playedTime < tail->Timeline->Timing;
+    };
+    bool remainingEffect = false;
+    if (realtimeGameplayAuthorityActive()) {
+      const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
+      if (snapshot) {
+        handledNotes = snapshot->attempt.stagePassedNotes;
+        const auto &notes = realtimeGameplaySession->notes;
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+          if (index >= snapshot->noteStates.size()) {
+            remainingEffect = true;
+            break;
+          }
+          const auto &runtime = snapshot->noteStates[index];
+          if (hasRemainingEffect(notes[index], runtime.played, runtime.dead,
+                                 runtime.playedTimeMicros)) {
+            remainingEffect = true;
+            break;
+          }
+        }
+      } else {
+        // Do not declare completion from the stale UI copy when the worker
+        // is the score authority but cannot provide its suspended snapshot.
+        remainingEffect = true;
+      }
+    } else if (chart != nullptr) {
+      for (auto *note : buildRealtimeGameplayNoteLookup(*chart)) {
+        if (hasRemainingEffect(note, note->IsPlayed, note->IsDead,
+                               note->PlayedTime)) {
+          remainingEffect = true;
+          break;
+        }
+      }
+    }
+    if (!isCoursePlayback() && !isReplayPlayback() && state != nullptr &&
+        state->isPlaying && !state->isEnding && chart != nullptr &&
+        (handledNotes < chart->Meta.TotalNotes || remainingEffect) &&
+        (handledNotes > 0 ||
+         hasReachedFirstPlayableNote(*chart, gameplayTimeMicros))) {
+      if (!assist_options::isEnabled(attemptProvenance.assistOption)) {
+        attemptProvenance.assistOption = assist_options::kAssisted;
+      }
+      attemptProvenance.eligibility = ScoreEligibility::Modified;
+      recordedReplay.provenance = attemptProvenance;
+      recordedReplay.assistOption = attemptProvenance.assistOption;
+      analyticsReplay.provenance = attemptProvenance;
+      analyticsReplay.assistOption = attemptProvenance.assistOption;
+      state->lightAssistClearMark = true;
+    }
+  }
+  if (pausePenaltyText != nullptr) {
+    const bool showPenalty = state != nullptr &&
+                            (state->lightAssistClearMark || state->assistClearMark);
+    pausePenaltyText->setVisible(showPenalty);
+    pausePenaltyText->setDisplay(showPenalty ? YGDisplayFlex : YGDisplayNone);
   }
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->clearLiveTouchPoints();
@@ -5815,8 +5933,7 @@ void GamePlayScene::update(float dt) {
         state->isEnding = true;
       }
       showPlaybackInitializationFailure(
-          "Realtime input integrity failed. This attempt was invalidated; "
-          "return and retry.");
+          i18n::tr("gameplay.input.integrity_failure_notice"));
       return;
     }
     const auto terminalAction = gameplay::classifyRealtimeGameplayTerminal(
@@ -5852,8 +5969,7 @@ void GamePlayScene::update(float dt) {
         state->isEnding = true;
       }
       showPlaybackInitializationFailure(
-          "Realtime input integrity failed. This attempt was invalidated; "
-          "return and retry.");
+          i18n::tr("gameplay.input.integrity_failure_notice"));
       return;
     }
     stopRealtimeGameplayAuthority(true);

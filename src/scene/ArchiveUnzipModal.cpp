@@ -1,4 +1,6 @@
+#include "../i18n/Localization.h"
 #include "ArchiveUnzipModal.h"
+#include "ArchiveUnzipPresentation.h"
 
 #include "FindBmsProgressPresentation.h"
 #include "../rendering/common.h"
@@ -14,11 +16,11 @@
 
 namespace {
 
-Button *makeModalButton(const std::string &label, int fontSize,
+Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, 160, 58);
   auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
@@ -99,7 +101,7 @@ void ArchiveUnzipModal::build(View *parent) {
   root_->addView(panel);
 
   title_ = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title_->setText("Unzip");
+  title_->setLocalizedText(i18n::message("library.archive.unzip.label"));
   title_->setThemedColor(ui_theme::textPrimary);
   title_->setHeight(42);
   panel->addView(title_);
@@ -142,13 +144,13 @@ void ArchiveUnzipModal::build(View *parent) {
   footer->setGap(12);
   footer->setHeight(58);
 
-  keepButton_ = makeModalButton("Keep Archives", 18);
+  keepButton_ = makeModalButton(i18n::message("library.archive.keep_archives.label"), 18);
   keepButton_->setVisible(false);
   keepButton_->setWidth(0)->setHeight(0);
   keepButton_->setOnClickListener([this]() { beginAll(false); });
   footer->addView(keepButton_);
 
-  deleteButton_ = makeModalButton("Delete Archive", 18, &deleteText_);
+  deleteButton_ = makeModalButton(i18n::message("library.archive.delete_archive.label"), 18, &deleteText_);
   deleteButton_->setVisible(false);
   deleteButton_->setWidth(0)->setHeight(0);
   deleteButton_->setOnClickListener([this]() {
@@ -160,7 +162,7 @@ void ArchiveUnzipModal::build(View *parent) {
   });
   footer->addView(deleteButton_);
 
-  cancelButton_ = makeModalButton("Cancel", 20, &cancelText_);
+  cancelButton_ = makeModalButton(i18n::message("library.archive.cancel.label"), 20, &cancelText_);
   cancelButton_->setWidth(130);
   cancelButton_->setOnClickListener([this]() { cancelOrClose(); });
   footer->addView(cancelButton_);
@@ -180,10 +182,10 @@ bool ArchiveUnzipModal::start(const ChartMetaRecord &record) {
   message_->setMinHeight(32);
   resize(rendering::window_width, rendering::window_height);
   root_->setVisible(true);
-  title_->setText("Unzip");
-  cancelText_->setText("Cancel");
+  title_->setLocalizedText(i18n::message("library.archive.unzip.label"));
+  cancelText_->setLocalizedText(i18n::message("library.archive.cancel.label"));
   setDeleteVisible(false);
-  updateProgress(0.0, "Preparing unzip");
+  updateProgress(0.0, i18n::message("library.archive.preparing_unzip.label"));
   return true;
 }
 
@@ -200,11 +202,11 @@ bool ArchiveUnzipModal::startAll() {
   estimatedSize_ = 0;
   resize(rendering::window_width, rendering::window_height);
   root_->setVisible(true);
-  title_->setText("Unzip All");
-  message_->setText("Choose what happens to each original archive before starting.");
+  title_->setLocalizedText(i18n::message("library.archive.unzip_all.label"));
+  message_->setLocalizedText(i18n::message("library.archive.originals.disposition_help"));
   message_->setMinHeight(64);
-  detail_->setText("Delete originals after each successful extraction.\nIndex completed folders once at the end, even if cancelled.\nIndexing failures cannot restore deleted archives.");
-  cancelText_->setText("Cancel");
+  detail_->setLocalizedText(i18n::message("library.archive.delete_originals.warning"));
+  cancelText_->setLocalizedText(i18n::message("library.archive.cancel.label"));
   setAllChoiceVisible(true);
   root_->applyYogaLayout();
   return true;
@@ -215,12 +217,12 @@ void ArchiveUnzipModal::beginAll(bool deleteAfterUnzip) {
     return;
   }
   if (!operation_.startAll(deleteAfterUnzip)) {
-    message_->setText("Could not start Unzip All. Original archives kept.");
+    message_->setLocalizedText(i18n::message("library.archive.could_not_start_unzip_all_original_archives_kept.message"));
     return;
   }
   choosingAll_ = false;
   setAllChoiceVisible(false);
-  updateProgress(0.0, "Finding solid archives");
+  updateProgress(0.0, i18n::message("library.archive.finding_solid_archives.label"));
 }
 
 bool ArchiveUnzipModal::inProgress() const {
@@ -239,22 +241,11 @@ void ArchiveUnzipModal::update() {
     if (batchMode_ && progress->indexing) {
       indexing_ = true;
       cancelButton_->setEnabled(false);
-      cancelText_->setText("Indexing...");
+      cancelText_->setLocalizedText(i18n::message("library.archive.indexing.progress"));
     }
-    auto message = progress->message;
-    if (batchMode_ && !progress->indexing) {
-      message.clear();
-      const auto visibleArchives = std::min<std::size_t>(3, progress->activeArchives.size());
-      for (std::size_t index = 0; index < visibleArchives; ++index) {
-        if (!message.empty()) message += '\n';
-        message += progress->activeArchives[index];
-      }
-      if (progress->activeArchives.size() > visibleArchives) {
-        message += "\n+ " + std::to_string(progress->activeArchives.size() - visibleArchives) + " other active archives";
-      }
-      if (message.empty()) message = "Finishing archive extraction";
-    }
-    updateProgress(progress->fraction, message,
+    const auto progressMessage = archive_unzip_presentation::progressMessage(
+        *progress, batchMode_);
+    updateProgress(progress->fraction, progressMessage,
                    progress->current, progress->total);
   }
   const auto result = operation_.takeResult();
@@ -262,33 +253,33 @@ void ArchiveUnzipModal::update() {
     cancelling_ = false;
     indexing_ = false;
     cancelButton_->setEnabled(true);
-    title_->setText(result->success ? "Unzip Complete"
-                      : result->cancelled ? "Unzip Cancelled" : "Unzip Failed");
+    title_->setLocalizedText(result->success ? i18n::message("library.archive.unzip_complete.label")
+                      : result->cancelled ? i18n::message("library.archive.unzip_cancelled.label") : i18n::message("library.archive.unzip_failed.label"));
     if (result->batch) {
-      title_->setText(result->success ? "Unzip All Complete"
-                        : result->cancelled ? "Unzip All Cancelled"
-                                            : "Unzip All Finished with Errors");
+      title_->setLocalizedText(result->success ? i18n::message("library.archive.unzip_all_complete.label")
+                        : result->cancelled ? i18n::message("library.archive.unzip_all_cancelled.label")
+                                            : i18n::message("library.archive.unzip_all_finished_errors.label"));
       message_->setMinHeight(128);
     }
     updateProgress(result->success ? 1.0 : 0.0, result->message);
     const bool canDelete = operation_.canDeleteArchive();
     setDeleteVisible(canDelete);
-    cancelText_->setText(canDelete ? "Keep Archive" : "Close");
+    cancelText_->setLocalizedText(canDelete ? i18n::message("library.archive.keep_archive.label") : i18n::message("library.archive.close.label"));
     if (canDelete) {
-      detail_->setText("Choose whether to keep or delete the original archive.");
+      detail_->setLocalizedText(i18n::message("library.archive.choose_whether_keep_delete_original_archive.message"));
     } else if (result->batch) {
-      detail_->setText("Archives not completed: " +
-                      std::to_string(result->archiveCount - result->completedCount) +
-                      ". Unfinished or failed extractions keep their originals.");
+      detail_->setLocalizedText(i18n::message(
+          "library.archive.archives_not_completed.message",
+          {{"count", std::to_string(result->archiveCount - result->completedCount)}}));
     }
     root_->applyYogaLayout();
   }
   if (const auto deletion = operation_.takeDeleteResult()) {
     deleting_ = false;
     cancelButton_->setEnabled(true);
-    title_->setText(deletion->deleted ? "Archive Deleted" : "Delete Failed");
+    title_->setLocalizedText(deletion->deleted ? i18n::message("library.archive.archive_deleted.label") : i18n::message("library.archive.delete_failed.label"));
     setDeleteVisible(deletion->canRetry);
-    cancelText_->setText(deletion->canRetry ? "Keep Archive" : "Close");
+    cancelText_->setLocalizedText(deletion->canRetry ? i18n::message("library.archive.keep_archive.label") : i18n::message("library.archive.close.label"));
     updateProgress(1.0, deletion->message);
   }
   const bool operationChanged =
@@ -354,8 +345,8 @@ void ArchiveUnzipModal::cancelOrClose() {
   if (operation_.inProgress()) {
     cancelling_ = true;
     operation_.requestCancel();
-    updateProgress(0.0, batchMode_ ? "Stopping extraction, then indexing completed folders..."
-                                    : "Cancelling...");
+    updateProgress(0.0, batchMode_ ? i18n::message("library.archive.stopping_extraction_then_indexing_completed_folders.progress")
+                                    : i18n::message("library.archive.cancelling.progress"));
   } else {
     hide();
   }
@@ -368,9 +359,9 @@ void ArchiveUnzipModal::deleteArchive() {
   deleting_ = true;
   setDeleteVisible(false);
   cancelButton_->setEnabled(false);
-  cancelText_->setText("Deleting...");
-  title_->setText("Deleting Archive");
-  updateProgress(1.0, "Deleting original archive and refreshing library...");
+  cancelText_->setLocalizedText(i18n::message("library.archive.deleting.progress"));
+  title_->setLocalizedText(i18n::message("library.archive.deleting_archive.label"));
+  updateProgress(1.0, i18n::message("library.archive.deleting_original_archive_refreshing_library.progress"));
 }
 
 void ArchiveUnzipModal::setDeleteVisible(bool visible) {
@@ -384,7 +375,7 @@ void ArchiveUnzipModal::setAllChoiceVisible(bool visible) {
   keepButton_->setVisible(visible);
   keepButton_->setWidth(visible ? 180.0f : 0.0f);
   keepButton_->setHeight(visible ? 58.0f : 0.0f);
-  deleteText_->setText(visible ? "Delete After Unzip" : "Delete Archive");
+  deleteText_->setLocalizedText(visible ? i18n::message("library.archive.delete_after_unzip.label") : i18n::message("library.archive.delete_archive.label"));
   setDeleteVisible(visible);
   track_->setVisible(!visible);
   track_->setHeight(visible ? 0.0f : 24.0f);
@@ -393,30 +384,28 @@ void ArchiveUnzipModal::setAllChoiceVisible(bool visible) {
 }
 
 void ArchiveUnzipModal::updateProgress(double fraction,
-                                      const std::string &message,
+                                      const i18n::Text &message,
                                       std::uint64_t current,
                                       std::uint64_t total) {
   fraction = std::clamp(fraction, 0.0, 1.0);
-  message_->setText(message);
+  message_->setLocalizedText(message);
   fill_->setWidth(std::max(0.0f, (track_->getWidth() - 4.0f) *
                                    static_cast<float>(fraction)));
   std::ostringstream text;
   text << std::fixed << std::setprecision(0) << (fraction * 100.0) << "%";
-  if (total > 0) {
-    text << " (" << current << "/" << total;
-    if (batchMode_ && !indexing_) text << " archives completed";
-    text << ")";
-  }
-  percent_->setText(text.str());
-  std::string detail = batchMode_ ? "Processing archives concurrently within the device budget"
-                                 : total > 0 ? "Processing files" : "Working on archive";
+  percent_->setLocalizedText(archive_unzip_presentation::progressCount(
+      text.str(), current, total, batchMode_ && !indexing_));
+  i18n::Text detail = batchMode_ ? i18n::message("library.archive.processing_archives_concurrently_within_device_budget.message")
+                                 : total > 0 ? i18n::message("library.archive.processing_files.label") : i18n::message("library.archive.working_on_archive.label");
   if (indexing_) {
-    detail = "Finishing library indexing. This step continues after cancellation.";
+    detail = i18n::message("library.archive.indexing.cancellation_notice");
   }
   if (estimatedSize_ > 0) {
-    detail += "\nEstimated unzipped size: " + formatFindBmsBytes(estimatedSize_);
+    detail = i18n::message("library.archive.progress.detail_with_size",
+                           {{"detail", detail},
+                            {"size", formatFindBmsBytes(estimatedSize_)}});
   }
-  detail_->setText(detail);
+  detail_->setLocalizedText(detail);
   if (isVisible()) {
     root_->applyYogaLayout();
   }

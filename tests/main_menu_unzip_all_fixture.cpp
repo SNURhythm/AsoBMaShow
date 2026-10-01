@@ -14,6 +14,7 @@ bool isVirtualPath(const std::filesystem::path &) { return false; }
 struct Text {
   std::string text;
   void setText(const std::string &value) { text = value; }
+  void setLocalizedText(const i18n::Text &value) { text = value.resolve(); }
 };
 
 struct Modal {

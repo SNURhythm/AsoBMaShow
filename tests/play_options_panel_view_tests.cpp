@@ -13,6 +13,8 @@
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
 #include "view/TextView.h"
+#include "view/TextInputBox.h"
+#include "i18n/Localization.h"
 #include "rendering/UniformCache.h"
 
 #include <SDL2/SDL.h>
@@ -63,6 +65,88 @@ void click(Button &button) {
 
 const TextView *buttonText(const Button &button) {
   return dynamic_cast<const TextView *>(button.getContentView());
+}
+
+TextInputBox *findInput(View &view) {
+  if (auto *input = dynamic_cast<TextInputBox *>(&view)) return input;
+  for (auto *child : view.getChildren()) {
+    if (auto *input = findInput(*child)) return input;
+  }
+  return nullptr;
+}
+
+void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
+  i18n::setLanguage(i18n::Language::English);
+  ScrollView scroll(0, 0, 360, 240);
+  auto *panel = new PlayOptionsPanelView(
+      {}, {.width = 340.0f, .showLaneOrder = true}, nullptr);
+  scroll.setContentView(panel);
+  panel->refresh({.ruleset = GameplayRuleset::Beatoraja, .clubMode = true});
+  scroll.applyYogaLayout();
+  auto *input = findInput(*panel);
+  require(input != nullptr, "play options exposes a lane-order input");
+  input->setEditingText("7654321 unsaved");
+  auto *heading = dynamic_cast<TextView *>(
+      panel->findViewByName("ruleset-section-label"));
+  require(heading != nullptr, "ruleset heading is inspectable");
+  auto *club = dynamic_cast<Button *>(panel->findViewByName("club-mode"));
+  auto *clubContent = dynamic_cast<CheckboxButtonContent *>(
+      club == nullptr ? nullptr : club->getContentView());
+  scroll.setScrollOffset(75.0f);
+  const float offset = scroll.getScrollOffset();
+  const auto english = heading->getText();
+
+  i18n::setLanguage(i18n::Language::Korean);
+  scroll.propagateLanguageChange();
+  require(heading->getText() == i18n::tr("play_options.ruleset.label") &&
+              heading->getText() != english,
+          "retained panel resolves its original localized heading");
+  require(input->getText() == "7654321 unsaved",
+          "language refresh preserves unsaved lane-order edits");
+  require(std::abs(scroll.getScrollOffset() - offset) < 0.001f,
+          "language refresh preserves modal scroll");
+  require(clubContent != nullptr && clubContent->checked() &&
+              clubContent->labelView()->getText() ==
+                  i18n::tr("play_options.club_beat.label"),
+          "checkbox label translates without changing selection");
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testLaneOrderDraftTracksAuthoritativeSelectionAndProfile() {
+  PlayOptionsPanelView panel(
+      {}, {.width = 340.0f, .showLaneOrder = true}, nullptr);
+  PlayOptionsPanelState state{
+      .playOption = "NORMAL",
+      .defaultLaneOrder = "1234567",
+      .laneOrderEnabled = true,
+      .profileId = "first-profile"};
+  panel.refresh(state);
+  auto *input = findInput(panel);
+  require(input != nullptr && input->getText() == "1234567",
+          "initial authoritative lane order populates the input");
+  input->setEditingText("7654321 draft");
+  panel.refresh(state);
+  require(input->getText() == "7654321 draft",
+          "unchanged authoritative refresh preserves lane-order draft");
+  state.clubMode = true;
+  panel.refresh(state);
+  require(input->getText() == "7654321 draft",
+          "unrelated option refresh preserves lane-order draft");
+
+  state.defaultLaneOrder = "123456789";
+  panel.refresh(state);
+  require(input->getText() == "123456789",
+          "changed authoritative lane configuration replaces old draft");
+  input->setEditingText("another draft");
+  state.playOption = "MIRROR";
+  panel.refresh(state);
+  require(input->getText() == "123456789",
+          "changed selected mode replaces old draft");
+  input->setEditingText("previous profile draft");
+  state.profileId = "second-profile";
+  panel.refresh(state);
+  require(input->getText() == "123456789",
+          "new profile clears draft even when lane configuration matches");
 }
 
 void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
@@ -151,6 +235,8 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
+  testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
   testDropdownDefersOptionViewsUntilOpen();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();

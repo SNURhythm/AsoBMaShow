@@ -23,6 +23,10 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
+        "void GamePlayScene::showPauseMenu(",
+        "void GamePlayScene::closePauseMenu()",
+        "void GamePlayScene::togglePauseMenuFromInput()",
+        "void GamePlayScene::restartCurrentPattern()",
         "void GamePlayScene::update(float dt)",
         "void GamePlayScene::completePracticeSection(",
         "void GamePlayScene::finalizePracticeRangeMisses()",
@@ -48,6 +52,7 @@ def main():
     ]
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     helpers = [
+        "bool hasReachedFirstPlayableNote(",
         "replay::ReplayTouchAction modernTouchAction(",
         "bool longNoteTailJudgedBeforeTiming(",
         "void markReplayMissedNote(",
@@ -58,6 +63,10 @@ def main():
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
     methods += "\n\n".join(extract(source, signature) for signature in signatures)
+    reset_boundary = extract(source, "bool GamePlayScene::reset()")
+    reset_boundary = reset_boundary[reset_boundary.index("{") + 1:
+                                    reset_boundary.index("  ownedState.reset();")]
+    methods += "\nvoid GamePlayScene::resetAttemptBoundaryForTest() {\n" + reset_boundary + "\n}\n"
     sync_method = extract(source, "void GamePlayScene::syncRealtimeGameplaySnapshot()")
     methods += "\n" + sync_method.replace("syncRealtimeGameplaySnapshot()",
                                            "syncRealtimeGameplaySnapshotFromWorker()", 1)
@@ -118,7 +127,7 @@ def main():
         'bool ChartViewerScene::applyViewerPlayOptions(',
     ]).replace('ChartViewerScene::', 'PreparedViewerFixture::')
     viewer_start = viewer_source.index('        std::atomic_bool parseCancelled = false;',
-                                        viewer_source.index('Preparing auto play...'))
+                                        viewer_source.index('chart_viewer.preparing_auto_play.progress'))
     viewer_end = viewer_source.index('        context.jukebox.stop();', viewer_start)
     viewer_prefix = viewer_source[viewer_start:viewer_end].replace(
         '        std::unique_ptr<bms_parser::Chart> practiceChart;', '')

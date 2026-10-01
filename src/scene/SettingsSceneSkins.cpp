@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -33,7 +34,7 @@ View *makeGameplaySkinsColumn(const LayoutMetrics &metrics) {
 }
 
 Button *makeGameplaySkinAction(const LayoutMetrics &metrics,
-                               const std::string &label, bool enabled,
+                               const i18n::Text &label, bool enabled,
                                std::function<void()> action,
                                const Color &accent = ui_theme::cyan()) {
   auto *labelView =
@@ -53,7 +54,7 @@ Button *makeGameplaySkinAction(const LayoutMetrics &metrics,
 }
 
 struct GameplaySkinChoiceButton {
-  std::string label;
+  i18n::Text label;
   bool selected = false;
   std::function<void()> action;
   std::function<bool()> tryAction;
@@ -87,7 +88,7 @@ void styleGameplaySkinChoiceButton(Button *button, bool selected) {
 }
 
 View *makeGameplaySkinChoiceRow(
-    const LayoutMetrics &metrics, const std::string &label, bool enabled,
+    const LayoutMetrics &metrics, const i18n::Text &label, bool enabled,
     std::vector<GameplaySkinChoiceButton> choices) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row);
@@ -143,16 +144,16 @@ View *makeGameplaySkinChoiceRow(
   return row;
 }
 
-const char *validationLabel(skin::SkinValidationDisposition disposition) {
+i18n::Text validationLabel(skin::SkinValidationDisposition disposition) {
   switch (disposition) {
   case skin::SkinValidationDisposition::SelectableGameplay:
-    return "Gameplay selectable";
+    return i18n::message("settings.skins.gameplay_selectable.label");
   case skin::SkinValidationDisposition::UnavailableType:
-    return "Unsupported skin type";
+    return i18n::message("settings.skins.unsupported_skin_type.label");
   case skin::SkinValidationDisposition::Invalid:
-    return "Validation failed";
+    return i18n::message("settings.skins.validation_failed.label");
   }
-  return "Unavailable";
+  return i18n::message("settings.skins.unavailable.label");
 }
 
 std::string diagnosticPresentation(const skin::SkinDiagnostic &diagnostic) {
@@ -197,16 +198,16 @@ std::string formatViewportComponent(float value) {
   return std::move(stream).str();
 }
 
-const char *safetyLevelLabel(skin::SkinSafetyLevel level) {
+i18n::Text safetyLevelLabel(skin::SkinSafetyLevel level) {
   switch (level) {
   case skin::SkinSafetyLevel::Standard:
-    return "Standard";
+    return i18n::message("settings.skins.standard.label");
   case skin::SkinSafetyLevel::BeatorajaCompatibility:
-    return "Beatoraja compatibility";
+    return i18n::message("settings.skins.beatoraja_compatibility.label");
   case skin::SkinSafetyLevel::Unrestricted:
-    return "Unrestricted";
+    return i18n::message("settings.skins.unrestricted.label");
   }
-  return "Standard";
+  return i18n::message("settings.skins.standard.label");
 }
 
 } // namespace
@@ -217,7 +218,7 @@ bool SettingsScene::handleGameplaySkinActionResult(
       (!result.accepted || !result.asynchronous)) {
     gameplaySkinUiMessage = result.message;
   } else if (result.accepted && result.asynchronous) {
-    gameplaySkinUiMessage.clear();
+    gameplaySkinUiMessage = {};
   }
   if (result.accepted && !result.asynchronous) {
     lastLayoutWidth = -1;
@@ -317,7 +318,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   }
   gameplaySkinSettingsProfileId = profileId->opaque;
   gameplaySkinSettingsLayoutKey.clear();
-  gameplaySkinUiMessage.clear();
+  gameplaySkinUiMessage = {};
   gameplaySkinSafetyDropdownOpen = false;
   gameplaySkinConfigurationDropdownOpenKey.clear();
   gameplaySkinReplaceConfirmationArmed = false;
@@ -341,9 +342,9 @@ void SettingsScene::applyPendingSoundSetFolderPick() {
   if (skinSelectSoundSetInput != nullptr) {
     skinSelectSoundSetInput->setEditingText(pick->path);
   }
-  gameplaySkinUiMessage = "Sound set folder updated: " + pick->path;
+  gameplaySkinUiMessage = i18n::message("settings.skins.sound_set.folder_updated.message", {{"path", pick->path}});
   if (gameplaySkinUiMessageText != nullptr) {
-    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+    gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage);
   }
   persistSettings();
 }
@@ -421,9 +422,9 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
     gameplaySkinStatusText->setText(snapshot.statusMessage);
   }
   if (gameplaySkinUiMessageText != nullptr) {
-    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage ==
+    gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage.resolve() ==
                                                snapshot.statusMessage
-                                           ? std::string{}
+                                           ? i18n::Text{}
                                            : gameplaySkinUiMessage);
   }
   if (gameplaySkinConfigurationDigestText != nullptr) {
@@ -436,9 +437,11 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
                                  return entry.entry == selected->second;
                                });
     if (row != snapshot.entries.end()) {
-      gameplaySkinConfigurationDigestText->setText(
-          "Revision: " + row->revisionDigest +
-          " • Configuration: " + row->configurationDigest);
+      gameplaySkinConfigurationDigestText->setLocalizedText(
+          i18n::message("settings.skins.revision.summary",
+                        {{"prefix", i18n::message("settings.skins.revision.prefix")},
+                         {"revision", row->revisionDigest},
+                         {"configuration", row->configurationDigest}}));
     }
   }
 
@@ -482,14 +485,14 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
     panel->setThemedBorderColor(ui_theme::hairline);
     panel->setBorderWidth(1);
-    panel->addView(makeWrappedText("Updating skins", 26,
+    panel->addView(makeWrappedText(i18n::message("settings.skins.updating_skins.label"), 26,
                                    ui_theme::textPrimary()));
     gameplaySkinBusyOverlayStatusText =
         makeWrappedText({}, 20, ui_theme::textSecondary());
     panel->addView(gameplaySkinBusyOverlayStatusText);
     gameplaySkinBusyOverlayCancelButton = makeControlButton(
         180, 60,
-        makeText("Cancel", 20, ui_theme::textPrimary(), TextView::CENTER,
+        makeText(i18n::message("settings.skins.cancel.label"), 20, ui_theme::textPrimary(), TextView::CENTER,
                  TextView::MIDDLE));
     gameplaySkinBusyOverlayCancelButton->setOnClickListener([this]() {
       if (gameplaySkinSettingsController != nullptr) {
@@ -538,12 +541,12 @@ bool SettingsScene::gameplaySkinTraitsRuntimeAvailable() const noexcept {
 
 void SettingsScene::appendSelectedSkinHudSettings(
     View *body, const LayoutMetrics &metrics, bool includeBuiltInOnlySettings) {
-  const auto appendHeading = [body, &metrics](const std::string &label) {
+  const auto appendHeading = [body, &metrics](const i18n::Text &label) {
     body->addView(
         makeWrappedText(label, metrics.bodyTextSize, ui_theme::cyan()));
   };
   const auto appendNumeric =
-      [this, body, &metrics](const std::string &label, const std::string &value,
+      [this, body, &metrics](const i18n::Text &label, const std::string &value,
                              std::function<void(const std::string &)> apply) {
         auto *row = new View();
         row->setFlexDirection(FlexDirection::Row);
@@ -567,38 +570,38 @@ void SettingsScene::appendSelectedSkinHudSettings(
         body->addView(row);
       };
   const auto appendToggle = [this, body,
-                             &metrics](const std::string &label, bool value,
+                             &metrics](const i18n::Text &label, bool value,
                                        std::function<void(bool)> set) {
     body->addView(makeGameplaySkinChoiceRow(
         metrics, label, true,
-        {{.label = "Off",
+        {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
           .selected = !value,
           .action =
               [this, set]() mutable {
                 set(false);
                 lastLayoutWidth = -1;
               }},
-         {.label = "On", .selected = value, .action = [this, set]() mutable {
+         {.label = i18n::message("settings.skins.judgement_hud.on.label"), .selected = value, .action = [this, set]() mutable {
             set(true);
             lastLayoutWidth = -1;
           }}}));
   };
   const auto appendChoices =
-      [this, body, &metrics](const std::string &label,
+      [this, body, &metrics](const i18n::Text &label,
                              std::vector<GameplaySkinChoiceButton> choices) {
         body->addView(makeGameplaySkinChoiceRow(metrics, label, true,
                                                 std::move(choices)));
       };
 
-  appendHeading("Application Judgement HUD");
-  appendToggle("Judgement Indicator",
+  appendHeading(i18n::message("settings.skins.application_judgement_hud.label"));
+  appendToggle(i18n::message("settings.skins.judgement_indicator.label"),
                context.settings.judgementIndicatorEnabled,
                [this](bool enabled) {
                  context.settings.judgementIndicatorEnabled = enabled;
                  persistSettings();
                });
   appendNumeric(
-      "Indicator Y (%)",
+      i18n::message("settings.skins.indicator_y.percent_label"),
       std::to_string(
           judgementIndicatorYToPercent(context.settings.judgementIndicatorY)),
       [this](const std::string &text) {
@@ -609,7 +612,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                        0, 100));
         persistSettings();
       });
-  appendNumeric("Indicator Width (%)",
+  appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
                 std::to_string(judgementIndicatorWidthScaleToPercent(
                     context.settings.judgementIndicatorWidthScale)),
                 [this](const std::string &text) {
@@ -621,7 +624,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                   persistSettings();
                 });
   appendNumeric(
-      "Indicator Range (ms)",
+      i18n::message("settings.skins.indicator_range_ms.label"),
       std::to_string(context.settings.judgementIndicatorRangeMilliseconds),
       [this](const std::string &text) {
         context.settings.judgementIndicatorRangeMilliseconds =
@@ -632,8 +635,8 @@ void SettingsScene::appendSelectedSkinHudSettings(
 
   if (includeBuiltInOnlySettings) {
     appendChoices(
-        "Indicator Layout",
-        {{.label = "3D Space",
+        i18n::message("settings.skins.indicator_layout.label"),
+        {{.label = i18n::message("settings.skins.hud.position.world.label"),
           .selected = context.settings.judgementIndicatorRenderMode ==
                       AppSettings::JudgementIndicatorRenderMode::World3D,
           .action =
@@ -643,7 +646,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                 persistSettings();
                 lastLayoutWidth = -1;
               }},
-         {.label = "2D HUD",
+         {.label = i18n::message("settings.skins.hud.position.overlay.label"),
           .selected = context.settings.judgementIndicatorRenderMode ==
                       AppSettings::JudgementIndicatorRenderMode::Hud2D,
           .action = [this]() {
@@ -654,13 +657,13 @@ void SettingsScene::appendSelectedSkinHudSettings(
           }}});
   }
 
-  appendToggle("Judgement Counter", context.settings.judgementCounterEnabled,
+  appendToggle(i18n::message("settings.skins.judgement_counter.label"), context.settings.judgementCounterEnabled,
                [this](bool enabled) {
                  context.settings.judgementCounterEnabled = enabled;
                  persistSettings();
                });
-  appendChoices("Counter Position",
-                {{.label = "Top",
+  appendChoices(i18n::message("settings.skins.counter_position.label"),
+                {{.label = i18n::message("settings.skins.top.label"),
                   .selected = context.settings.judgementCounterPosition ==
                               AppSettings::JudgementCounterPosition::Top,
                   .action =
@@ -670,7 +673,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
-                 {.label = "Left",
+                 {.label = i18n::message("settings.skins.left.label"),
                   .selected = context.settings.judgementCounterPosition ==
                               AppSettings::JudgementCounterPosition::Left,
                   .action =
@@ -680,7 +683,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
-                 {.label = "Right",
+                 {.label = i18n::message("settings.skins.right.label"),
                   .selected = context.settings.judgementCounterPosition ==
                               AppSettings::JudgementCounterPosition::Right,
                   .action = [this]() {
@@ -694,9 +697,9 @@ void SettingsScene::appendSelectedSkinHudSettings(
     return;
   }
 
-  appendHeading("Judgement Feedback");
+  appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
   appendNumeric(
-      "Judge Text Y (%)",
+      i18n::message("settings.skins.judge_text_y.percent_label"),
       std::to_string(judgementTextYToPercent(context.settings.judgementTextY)),
       [this](const std::string &text) {
         context.settings.judgementTextY = judgementTextPercentToY(std::clamp(
@@ -740,9 +743,9 @@ void SettingsScene::appendSelectedSkinHudSettings(
             context.settings.judgementTimingMillisecondsCriteria = criteria;
           }));
 
-  appendHeading("Gauge");
-  appendChoices("Gauge Position",
-                {{.label = "World",
+  appendHeading(i18n::message("settings.skins.gauge.label"));
+  appendChoices(i18n::message("settings.skins.gauge_position.label"),
+                {{.label = i18n::message("settings.skins.world.label"),
                   .selected = context.settings.gaugeBarPosition ==
                               AppSettings::GaugeBarPosition::World,
                   .action =
@@ -752,7 +755,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
-                 {.label = "Left HUD",
+                 {.label = i18n::message("settings.skins.left_hud.label"),
                   .selected = context.settings.gaugeBarPosition ==
                               AppSettings::GaugeBarPosition::Left,
                   .action =
@@ -762,7 +765,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
-                 {.label = "Right HUD",
+                 {.label = i18n::message("settings.skins.right_hud.label"),
                   .selected = context.settings.gaugeBarPosition ==
                               AppSettings::GaugeBarPosition::Right,
                   .action = [this]() {
@@ -775,10 +778,10 @@ void SettingsScene::appendSelectedSkinHudSettings(
 
 void SettingsScene::appendBuiltInGameplayTraitSettings(
     View *body, const LayoutMetrics &metrics, int keyMode) {
-  body->addView(makeWrappedText("Built-in gameplay", metrics.bodyTextSize,
+  body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
                                 ui_theme::lime()));
   const auto appendNumeric =
-      [this, body, &metrics](const std::string &label, const std::string &value,
+      [this, body, &metrics](const i18n::Text &label, const std::string &value,
                              std::function<void(const std::string &)> apply) {
         auto *row = new View();
         row->setFlexDirection(FlexDirection::Row);
@@ -802,27 +805,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         body->addView(row);
       };
 
-  body->addView(makeGameplaySkinChoiceRow(
-      metrics, "Acceleration compensation", true,
-      {{.label = "Off",
-        .selected = !context.settings.accelerationCompensation,
-        .action = [this]() {
-          context.settings.accelerationCompensation = false;
-          persistSettings();
-          lastLayoutWidth = -1;
-        }},
-       {.label = "On",
-        .selected = context.settings.accelerationCompensation,
-        .action = [this]() {
-          context.settings.accelerationCompensation = true;
-          persistSettings();
-          lastLayoutWidth = -1;
-        }}}));
-  body->addView(makeWrappedText(
-      "Keep note travel steady on screen by compensating for 3D perspective.",
-      metrics.smallTextSize, ui_theme::textSecondary()));
-
-  appendNumeric("Lane Angle (deg)",
+  appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
                 formatFloatValue(context.settings.laneAngleDegrees, 1),
                 [this](const std::string &text) {
                   context.settings.laneAngleDegrees = sanitizeViewportComponent(
@@ -831,14 +814,14 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                       AppSettings::kMaxLaneAngleDegrees);
                   persistSettings();
                 });
-  appendNumeric("Lane Length", formatFloatValue(context.settings.laneLength, 1),
+  appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.laneLength, 1),
                 [this](const std::string &text) {
                   context.settings.laneLength = sanitizeViewportComponent(
                       text, context.settings.laneLength,
                       AppSettings::kMinLaneLength, AppSettings::kMaxLaneLength);
                   persistSettings();
                 });
-  appendNumeric("Beam Length (%)",
+  appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
                 std::to_string(context.settings.laneBeamLengthPercent),
                 [this](const std::string &text) {
                   context.settings.laneBeamLengthPercent =
@@ -846,7 +829,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                           text, context.settings.laneBeamLengthPercent));
                   persistSettings();
                 });
-  appendNumeric("Play Area Width (" + std::to_string(keyMode) + "K)",
+  appendNumeric(i18n::message("settings.skins.play_area_width.key_mode", {{"keys", std::to_string(keyMode)}}),
                 formatPlayAreaWidthLabel(
                     context.settings.playAreaWidthForKeyMode(keyMode)),
                 [this, keyMode](const std::string &text) {
@@ -869,17 +852,17 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     auto *body = new View();
     body->setFlexDirection(FlexDirection::Column);
     body->setGap(static_cast<float>(metrics.cardGap));
-    std::string availabilityMessage =
-        "Gameplay skin services are not ready. The built-in presentation is "
-        "still available.";
+    std::string availabilityDiagnostic;
     if (context.skinRecoveryResult &&
         !context.skinRecoveryResult->diagnostics.empty()) {
-      availabilityMessage += " " + diagnosticPresentation(
+      availabilityDiagnostic = " " + diagnosticPresentation(
           context.skinRecoveryResult->diagnostics.front());
     }
     body->addView(makeWrappedText(
-        availabilityMessage + " Built-in gameplay controls remain available "
-                              "in the Timing, Visual, and Lane tabs.",
+        i18n::message("settings.skins.unavailable.summary",
+                      {{"notice", i18n::message("settings.skins.service.unavailable_builtin_notice")},
+                       {"diagnostic", availabilityDiagnostic},
+                       {"controls", i18n::message("settings.skins.builtin_controls.availability_suffix")}}),
         metrics.bodyTextSize, ui_theme::textSecondary()));
     const bool canRetryStartup =
         skin::luaGameplaySkinsAvailable() && context.skinRecoveryResult &&
@@ -887,16 +870,16 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             skin::SkinRecoveryDisposition::Failed;
     if (canRetryStartup) {
       body->addView(makeGameplaySkinAction(
-          metrics, "Retry Startup", true, [this]() {
+          metrics, i18n::message("settings.skins.retry_startup.label"), true, [this]() {
             const bool recovered = context.retryGameplaySkinServices();
             gameplaySkinUiMessage = recovered
-                                      ? "Gameplay skin services restarted."
-                                      : "Gameplay skin services remain unavailable.";
+                                      ? i18n::message("settings.skins.gameplay_skin_services_restarted.message")
+                                      : i18n::message("settings.skins.gameplay_skin_services_remain_unavailable.message");
             ensureGameplaySkinSettingsController();
             lastLayoutWidth = -1;
           }));
     }
-    column->addView(makeCard(metrics, "Skins", "Availability", body,
+    column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability.label"), body,
                              metrics.modeCardHeight, metrics.cardsWidth));
     return column;
   }
@@ -912,9 +895,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->setFlexDirection(FlexDirection::Column);
   overview->setGap(static_cast<float>(metrics.cardGap));
   overview->addView(makeWrappedText(
-      "Install and configure Beatoraja skins. Installing, scanning, "
-      "and revalidation evaluate Lua declarations in the compatibility runtime.",
+      i18n::message("settings.skins.catalog.compatibility_description"),
       metrics.bodyTextSize, ui_theme::textSecondary()));
+  // Storage components identify the canonical directory, not its UI label.
   const std::filesystem::path visibleSkinRoot =
       context.skinStorageRoots ? context.skinStorageRoots->visiblePackages
                                : Utils::GetDocumentsPath("Skins");
@@ -923,15 +906,15 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   if (visibleSkinFolder.empty()) {
     visibleSkinFolder = "Documents/Skins";
   }
-  overview->addView(makeWrappedText("Files location: " + visibleSkinFolder,
+  overview->addView(makeWrappedText(i18n::message("settings.skins.files_location", {{"path", visibleSkinFolder}}),
                                     metrics.smallTextSize,
                                     ui_theme::textMuted()));
   gameplaySkinStatusText = makeWrappedText(
       snapshot.statusMessage, metrics.smallTextSize, ui_theme::textSecondary());
   overview->addView(gameplaySkinStatusText);
   gameplaySkinUiMessageText = makeWrappedText(
-      gameplaySkinUiMessage != snapshot.statusMessage ? gameplaySkinUiMessage
-                                                       : std::string{},
+      gameplaySkinUiMessage.resolve() != snapshot.statusMessage ? gameplaySkinUiMessage
+                                                       : i18n::Text{},
       metrics.smallTextSize, ui_theme::textSecondary());
   overview->addView(gameplaySkinUiMessageText);
   MusicSelectToolbarMode toolbarMode;
@@ -949,19 +932,19 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     std::string diagnostic;
     if (!context.saveApplicationUiState(&diagnostic)) {
       gameplaySkinUiMessage = diagnostic.empty()
-                                  ? "Toolbar visibility could not be saved."
-                                  : diagnostic;
+                                  ? i18n::message("settings.skins.toolbar_visibility_failed_saved.message")
+                                  : i18n::Text(diagnostic);
       if (gameplaySkinUiMessageText != nullptr) {
-        gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+        gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage);
       }
     }
   };
   overview->addView(makeGameplaySkinChoiceRow(
-      metrics, "Music Select toolbar", true,
-      {{.label = "Visible",
+      metrics, i18n::message("settings.skins.music_select_toolbar.label"), true,
+      {{.label = i18n::message("settings.skins.visible.label"),
         .selected = toolbarMode != MusicSelectToolbarMode::Hidden,
         .action = [setToolbarHidden] { setToolbarHidden(false); }},
-       {.label = "Hidden",
+       {.label = i18n::message("settings.skins.hidden.label"),
         .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
         .action = [setToolbarHidden] { setToolbarHidden(true); }}}));
   // Typed path (advanced fallback on every platform) because desktop has no
@@ -972,7 +955,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   soundSetRow->setFlexWrap(YGWrapWrap);
   soundSetRow->setAlignItems(YGAlignCenter);
   soundSetRow->setGap(metrics.compact ? 8.0f : 10.0f);
-  auto *soundSetLabel = makeText("Sound set folder", metrics.smallTextSize,
+  auto *soundSetLabel = makeText(i18n::message("settings.skins.sound_set_folder.label"), metrics.smallTextSize,
                                  ui_theme::textSecondary(), TextView::LEFT,
                                  TextView::MIDDLE);
   soundSetLabel->setMinWidth(0.0f);
@@ -1001,7 +984,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         std::make_unique<chart_library_platform::SoundSetFolderPicker>();
   }
   soundSetRow->addView(makeGameplaySkinAction(
-      metrics, "Pick...", ordinaryActionsEnabled,
+      metrics, i18n::message("settings.skins.pick.progress"), ordinaryActionsEnabled,
       [this]() {
         if (soundSetFolderPicker != nullptr) {
           soundSetFolderPicker->request();
@@ -1015,7 +998,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   safetyRow->setFlexWrap(YGWrapWrap);
   safetyRow->setAlignItems(YGAlignCenter);
   safetyRow->setGap(metrics.compact ? 8.0f : 10.0f);
-  auto *safetyLabel = makeText("Skin safety", metrics.smallTextSize,
+  auto *safetyLabel = makeText(i18n::message("settings.skins.skin_safety.label"), metrics.smallTextSize,
                                ui_theme::textSecondary(), TextView::LEFT,
                                TextView::MIDDLE);
   safetyLabel->setMinWidth(0.0f);
@@ -1054,7 +1037,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
        .menuWidth = 0.0f});
   safetyRow->addView(safetyDropdown);
   overview->addView(safetyRow);
-  column->addView(makeCard(metrics, "Skins", "Availability and mode",
+  column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability_mode.label"),
                            overview, metrics.modeCardHeight,
                            metrics.cardsWidth));
 
@@ -1066,25 +1049,25 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   importActions->setFlexWrap(YGWrapWrap);
   importActions->setGap(metrics.compact ? 8.0f : 10.0f);
   importActions->addView(makeGameplaySkinAction(
-      metrics, "Import Archive", ordinaryActionsEnabled, [this]() {
+      metrics, i18n::message("settings.skins.import_archive.label"), ordinaryActionsEnabled, [this]() {
         gameplaySkinReplaceConfirmationArmed = false;
         handleGameplaySkinActionResult(
             gameplaySkinSettingsController->beginArchiveImport());
       }));
   importActions->addView(makeGameplaySkinAction(
-      metrics, "Add Folder", ordinaryActionsEnabled, [this]() {
+      metrics, i18n::message("settings.skins.add_folder.label"), ordinaryActionsEnabled, [this]() {
         gameplaySkinReplaceConfirmationArmed = false;
         handleGameplaySkinActionResult(
             gameplaySkinSettingsController->beginFolderImport());
       }));
   importActions->addView(makeGameplaySkinAction(
-      metrics, "Rescan", ordinaryActionsEnabled, [this]() {
+      metrics, i18n::message("settings.skins.rescan.label"), ordinaryActionsEnabled, [this]() {
         handleGameplaySkinActionResult(
             gameplaySkinSettingsController->requestRescan());
       }));
   if (actionAvailability.canCancel) {
     importActions->addView(makeGameplaySkinAction(
-        metrics, "Cancel", true,
+        metrics, i18n::message("settings.skins.cancel.label"), true,
         [this, rerender]() {
           gameplaySkinSettingsController->cancelRescan();
           rerender();
@@ -1113,20 +1096,23 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     const bool collision = snapshot.collisionPackage.has_value();
     if (collision) {
       nameRow->addView(makeWrappedText(
-          "Existing package: " + snapshot.collisionPackage->directoryName,
+          i18n::message("settings.skins.package.summary",
+                        {{"prefix", i18n::message("settings.skins.existing_package.prefix")},
+                         {"name", snapshot.collisionPackage->directoryName},
+                         {"details", ""}}),
           metrics.bodyTextSize, ui_theme::textSecondary()));
     }
-    const std::string installLabel =
-        collision ? (gameplaySkinReplaceConfirmationArmed ? "Confirm Replace"
-                                                          : "Replace Existing")
-                  : "Install";
+    const i18n::Text installLabel =
+        collision ? (gameplaySkinReplaceConfirmationArmed ? i18n::message("settings.skins.confirm_replace.label")
+                                                          : i18n::message("settings.skins.replace_existing.label"))
+                  : i18n::message("settings.skins.install.label");
     nameRow->addView(makeGameplaySkinAction(
         metrics, installLabel, actionAvailability.canInstallPrepared,
         [this, collision]() {
           if (collision && !gameplaySkinReplaceConfirmationArmed) {
             gameplaySkinReplaceConfirmationArmed = true;
             gameplaySkinUiMessage =
-                "Tap Confirm Replace to replace the installed package.";
+                i18n::message("settings.skins.tap_confirm_replace_replace_installed_package.message");
             lastLayoutWidth = -1;
             return;
           }
@@ -1139,8 +1125,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::lime()));
     imports->addView(nameRow);
   }
-  column->addView(makeCard(metrics, "Install",
-                           "Import a .zip or an unpacked folder.", imports,
+  column->addView(makeCard(metrics, i18n::message("settings.skins.install.label"),
+                           i18n::message("settings.skins.import_zip_unpacked_folder.message"), imports,
                            metrics.modeCardHeight, metrics.cardsWidth));
 
   std::vector<skin::SkinTargetTrait> traits(
@@ -1226,7 +1212,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
 
   std::vector<skin::SkinEntryId> dropdownEntries;
   std::vector<DropdownView::Option> dropdownOptions = {
-      {.id = "", .label = "Built-in", .available = ordinaryActionsEnabled},
+      {.id = "", .label = i18n::message("settings.skins.built_in.label"), .available = ordinaryActionsEnabled},
   };
   dropdownEntries.reserve(selectableRows.size());
   for (const auto *candidate : selectableRows) {
@@ -1281,7 +1267,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   skinDropdownRow->setAlignItems(YGAlignCenter);
   skinDropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
   auto *skinDropdownLabel =
-      makeText("Skin", metrics.smallTextSize, ui_theme::textSecondary(),
+      makeText(i18n::message("settings.skins.skin.label"), metrics.smallTextSize, ui_theme::textSecondary(),
                TextView::LEFT, TextView::MIDDLE);
   skinDropdownLabel->setMinWidth(0.0f);
   skinDropdownLabel->setFlexShrink(1.0f);
@@ -1291,12 +1277,12 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   if (selected != snapshot.selectedSkinEntries.end() &&
       selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
-        "The selected skin is no longer available. Choose Built-in or another "
-        "validated skin.",
+        i18n::message("settings.skins.selection.missing_skin_notice"),
         metrics.smallTextSize, ui_theme::coral()));
   } else if (selectableRows.empty()) {
     traitPanel->addView(makeWrappedText(
-        "No validated " + traitLabel + " skin is installed.",
+        i18n::message("settings.skins.selection.no_validated_skin_notice",
+                     {{"type", traitLabel}}),
         metrics.smallTextSize, ui_theme::textSecondary()));
   }
 
@@ -1309,12 +1295,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                   ? row.entry.packageRelativePath
                                   : row.metadata.displayName;
     entryBody->addView(makeWrappedText(
-        title + " — " + validationLabel(row.validation),
+        i18n::message("settings.skins.validation.summary",
+                      {{"title", title}, {"validation", validationLabel(row.validation)}}),
         metrics.bodyTextSize,
         row.validation == skin::SkinValidationDisposition::SelectableGameplay
             ? ui_theme::lime()
             : ui_theme::textSecondary()));
-    std::string metadata = "Package: " + row.entry.package.directoryName;
+    std::string metadata;
     if (!row.metadata.author.empty()) {
       metadata += " • " + row.metadata.author;
     }
@@ -1322,11 +1309,17 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       metadata += " • " + std::to_string(row.metadata.authoredWidth) + "×" +
                   std::to_string(row.metadata.authoredHeight);
     }
-    entryBody->addView(makeWrappedText(metadata, metrics.smallTextSize,
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.package.summary",
+                      {{"prefix", i18n::message("settings.skins.package.prefix")},
+                       {"name", row.entry.package.directoryName},
+                       {"details", metadata}}), metrics.smallTextSize,
                                        ui_theme::textMuted()));
     gameplaySkinConfigurationDigestText = makeWrappedText(
-        "Revision: " + row.revisionDigest +
-            " • Configuration: " + row.configurationDigest,
+        i18n::message("settings.skins.revision.summary",
+                      {{"prefix", i18n::message("settings.skins.revision.prefix")},
+                       {"revision", row.revisionDigest},
+                       {"configuration", row.configurationDigest}}),
         metrics.smallTextSize, ui_theme::textMuted());
     entryBody->addView(gameplaySkinConfigurationDigestText);
     if (activeTrait->kind == skin::SkinTargetKind::Gameplay) {
@@ -1549,7 +1542,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       auto addOffsetComponent =
           [this, &metrics, &row, ordinaryActionsEnabled, offsetControls,
            &offset,
-           configured](const char *label, skin::OffsetPermissionMask permission,
+           configured](const i18n::Text &label, skin::OffsetPermissionMask permission,
                        int skin::ConfigOffset::*member) {
             if ((offset.permissions & permission) == 0) {
               return;
@@ -1625,7 +1618,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     customViewport->setFlexWrap(YGWrapWrap);
     customViewport->setGap(metrics.compact ? 8.0f : 10.0f);
     customViewport->addView(makeGameplaySkinAction(
-        metrics, "Custom Base: Fit", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.custom_base_fit.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           const auto viewport = skin::gameplaySkinViewportWithCustomBase(
               gameplaySkinViewportForEntry(entry),
@@ -1634,7 +1627,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     customViewport->addView(makeGameplaySkinAction(
-        metrics, "Custom Base: Stretch", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.custom_base_stretch.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           const auto viewport = skin::gameplaySkinViewportWithCustomBase(
               gameplaySkinViewportForEntry(entry),
@@ -1643,7 +1636,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     auto addViewportComponent = [this, &metrics, &row, ordinaryActionsEnabled,
-                                 customViewport](const char *label, float value,
+                                 customViewport](const i18n::Text &label, float value,
                                                  bool scale, bool horizontal) {
       auto *group = new View();
       group->setFlexDirection(FlexDirection::Column);
@@ -1678,13 +1671,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       group->addView(input);
       customViewport->addView(group);
     };
-    addViewportComponent("Custom X", row.settings.viewport.translateX, false,
+    addViewportComponent(i18n::message("settings.skins.custom_x.label"), row.settings.viewport.translateX, false,
                          true);
-    addViewportComponent("Custom Y", row.settings.viewport.translateY, false,
+    addViewportComponent(i18n::message("settings.skins.custom_y.label"), row.settings.viewport.translateY, false,
                          false);
-    addViewportComponent("Custom Width", row.settings.viewport.scaleX, true,
+    addViewportComponent(i18n::message("settings.skins.custom_width.label"), row.settings.viewport.scaleX, true,
                          true);
-    addViewportComponent("Custom Height", row.settings.viewport.scaleY, true,
+    addViewportComponent(i18n::message("settings.skins.custom_height.label"), row.settings.viewport.scaleY, true,
                          false);
     entryBody->addView(customViewport);
 
@@ -1693,7 +1686,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     actions->setFlexWrap(YGWrapWrap);
     actions->setGap(metrics.compact ? 8.0f : 10.0f);
     actions->addView(makeGameplaySkinAction(
-        metrics, "Revalidate", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.revalidate.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->requestRevalidation(entry));
@@ -1701,13 +1694,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     const bool confirmingRemoval =
         gameplaySkinRemovalConfirmationKey == row.entry.package.collisionKey;
     actions->addView(makeGameplaySkinAction(
-        metrics, confirmingRemoval ? "Confirm Remove" : "Remove",
+        metrics, confirmingRemoval ? i18n::message("settings.skins.confirm_remove.label") : i18n::message("settings.skins.remove.label"),
         ordinaryActionsEnabled,
         [this, package = row.entry.package, confirmingRemoval]() {
           if (!confirmingRemoval) {
             gameplaySkinRemovalConfirmationKey = package.collisionKey;
             gameplaySkinUiMessage =
-                "Tap Confirm Remove to uninstall this package.";
+                i18n::message("settings.skins.tap_confirm_remove_uninstall_package.message");
             lastLayoutWidth = -1;
             return;
           }
@@ -1717,7 +1710,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         },
         ui_theme::coral()));
     actions->addView(makeGameplaySkinAction(
-        metrics, "Fit", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.fit.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           const auto viewport = skin::gameplaySkinViewportWithMode(
               gameplaySkinViewportForEntry(entry), skin::ViewportMode::Fit);
@@ -1725,7 +1718,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     actions->addView(makeGameplaySkinAction(
-        metrics, "Stretch", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.stretch.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           const auto viewport = skin::gameplaySkinViewportWithMode(
               gameplaySkinViewportForEntry(entry),
@@ -1734,7 +1727,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     actions->addView(makeGameplaySkinAction(
-        metrics, "Custom", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.custom.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           const auto viewport = skin::gameplaySkinViewportWithMode(
               gameplaySkinViewportForEntry(entry), skin::ViewportMode::Custom);
@@ -1742,7 +1735,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
               gameplaySkinSettingsController->setViewport(entry, viewport));
         }));
     actions->addView(makeGameplaySkinAction(
-        metrics, "Reset Layout", ordinaryActionsEnabled,
+        metrics, i18n::message("settings.skins.reset_layout.label"), ordinaryActionsEnabled,
         [this, entry = row.entry]() {
           handleGameplaySkinActionResult(
               gameplaySkinSettingsController->resetLayout(entry));
@@ -1761,8 +1754,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   }
 
   traitWorkspace->addView(traitPanel);
-  column->addView(makeCard(metrics, "Skin Traits",
-                           "Choose a screen, then a skin and its settings.",
+  column->addView(makeCard(metrics, i18n::message("settings.skins.skin_traits.label"),
+                           i18n::message("settings.skins.choose_screen_then_skin_settings.message"),
                            traitWorkspace, metrics.modeCardHeight,
                            metrics.cardsWidth));
 
@@ -1779,11 +1772,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                     ? row->entry.packageRelativePath
                                     : row->metadata.displayName;
       entryBody->addView(makeWrappedText(
-          title + " — " + validationLabel(row->validation),
+          i18n::message("settings.skins.validation.summary",
+                        {{"title", title}, {"validation", validationLabel(row->validation)}}),
           metrics.bodyTextSize, ui_theme::coral()));
       entryBody->addView(makeWrappedText(
-          "Package: " + row->entry.package.directoryName + " • Entry: " +
-              row->entry.packageRelativePath,
+          i18n::message("settings.skins.package.entry",
+                        {{"prefix", i18n::message("settings.skins.package.prefix")},
+                         {"package", row->entry.package.directoryName},
+                         {"entry", row->entry.packageRelativePath}}),
           metrics.smallTextSize, ui_theme::textMuted()));
       for (const auto &diagnostic : row->diagnostics) {
         entryBody->addView(makeWrappedText(diagnosticPresentation(diagnostic),
@@ -1795,7 +1791,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       actions->setFlexWrap(YGWrapWrap);
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
       actions->addView(makeGameplaySkinAction(
-          metrics, "Revalidate", ordinaryActionsEnabled,
+          metrics, i18n::message("settings.skins.revalidate.label"), ordinaryActionsEnabled,
           [this, entry = row->entry]() {
             handleGameplaySkinActionResult(
                 gameplaySkinSettingsController->requestRevalidation(entry));
@@ -1803,13 +1799,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       const bool confirmingRemoval =
           gameplaySkinRemovalConfirmationKey == row->entry.package.collisionKey;
       actions->addView(makeGameplaySkinAction(
-          metrics, confirmingRemoval ? "Confirm Remove" : "Remove",
+          metrics, confirmingRemoval ? i18n::message("settings.skins.confirm_remove.label") : i18n::message("settings.skins.remove.label"),
           ordinaryActionsEnabled,
           [this, package = row->entry.package, confirmingRemoval]() {
             if (!confirmingRemoval) {
               gameplaySkinRemovalConfirmationKey = package.collisionKey;
               gameplaySkinUiMessage =
-                  "Tap Confirm Remove to uninstall this package.";
+                  i18n::message("settings.skins.tap_confirm_remove_uninstall_package.message");
               lastLayoutWidth = -1;
               return;
             }
@@ -1822,8 +1818,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       management->addView(entryBody);
     }
     column->addView(makeCard(
-        metrics, "Unavailable Installed Skins",
-        "Review validation details, then revalidate or remove an entry.",
+        metrics, i18n::message("settings.skins.unavailable_installed_skins.label"),
+        i18n::message("settings.skins.review_validation_details_then_revalidate_remove_entry.message"),
         management, metrics.modeCardHeight, metrics.cardsWidth));
   }
 
@@ -1831,10 +1827,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     auto *empty = new View();
     empty->setFlexDirection(FlexDirection::Column);
     empty->setGap(static_cast<float>(metrics.cardGap));
-    empty->addView(makeWrappedText("No installed skins were found.",
+    empty->addView(makeWrappedText(i18n::message("settings.skins.no_installed_skins_found.message"),
                                    metrics.bodyTextSize,
                                    ui_theme::textSecondary()));
-    column->addView(makeCard(metrics, "Installed Skins", "Catalog", empty,
+    column->addView(makeCard(metrics, i18n::message("settings.skins.installed_skins.label"), i18n::message("settings.skins.catalog.label"), empty,
                              metrics.modeCardHeight, metrics.cardsWidth));
   }
   if (!snapshot.history.empty()) {
@@ -1842,22 +1838,24 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     history->setFlexDirection(FlexDirection::Column);
     history->setGap(static_cast<float>(metrics.cardGap));
     for (const auto &record : snapshot.history) {
-      std::string recordText =
-          "History #" + std::to_string(record.recordSerial) + " • " +
-          record.entry.packageRelativePath +
-          " • Revision: " + record.revisionDigest +
-          " • Configuration: " + record.configurationDigest + " • " +
-          diagnosticPresentation(record.diagnostic);
+      auto recordText = i18n::message("settings.skins.history.record",
+          {{"serial", std::to_string(record.recordSerial)},
+           {"path", record.entry.packageRelativePath},
+           {"revision", record.revisionDigest},
+           {"configuration", record.configurationDigest},
+           {"diagnostic", diagnosticPresentation(record.diagnostic)}});
       if (record.luaLine) {
-        recordText += " • Lua line " + std::to_string(*record.luaLine);
+        recordText = i18n::message("settings.skins.history.lua_line",
+            {{"record", recordText}, {"line", std::to_string(*record.luaLine)}});
       }
       if (record.frameSerial) {
-        recordText += " • Frame " + std::to_string(*record.frameSerial);
+        recordText = i18n::message("settings.skins.history.frame",
+            {{"record", recordText}, {"frame", std::to_string(*record.frameSerial)}});
       }
       history->addView(makeWrappedText(recordText, metrics.smallTextSize,
                                        ui_theme::textSecondary()));
     }
-    column->addView(makeCard(metrics, "Diagnostic History", "Recent records",
+    column->addView(makeCard(metrics, i18n::message("settings.skins.diagnostic_history.label"), i18n::message("settings.skins.recent_records.label"),
                              history, metrics.modeCardHeight,
                              metrics.cardsWidth));
   }
@@ -1895,13 +1893,11 @@ void SettingsScene::buildGameplaySkinSafetyOverlay(
   panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
   panel->setThemedBorderColor(ui_theme::hairline);
   panel->setBorderWidth(1);
-  panel->addView(makeWrappedText("Enable unrestricted skins",
+  panel->addView(makeWrappedText(i18n::message("settings.skins.enable_unrestricted_skins.label"),
                                  metrics.sectionTitleSize,
                                  ui_theme::textPrimary()));
   panel->addView(makeWrappedText(
-      "This removes every gameplay-skin safeguard. A skin may read or write "
-      "outside its package, change process-wide state, or exhaust memory, "
-      "storage, CPU, and file descriptors. Enable it only for skins you trust.",
+      i18n::message("settings.skins.safeguards.disabled_warning"),
       metrics.bodyTextSize, ui_theme::amber()));
 
   auto *actions = new View();
@@ -1911,7 +1907,7 @@ void SettingsScene::buildGameplaySkinSafetyOverlay(
   actions->setJustifyContent(YGJustifyCenter);
   auto *cancel = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Cancel", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.skins.cancel.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE));
   cancel->setOnClickListener([this]() {
     gameplaySkinSettingsController->cancelSafetyLevelChange();
@@ -1920,7 +1916,7 @@ void SettingsScene::buildGameplaySkinSafetyOverlay(
   actions->addView(cancel);
   auto *enable = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Enable Unrestricted", metrics.bodyTextSize + 2,
+      makeText(i18n::message("settings.skins.enable_unrestricted.label"), metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::coral());
   enable->setOnClickListener([this]() {

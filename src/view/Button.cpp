@@ -164,6 +164,9 @@ void Button::setContentView(View *view) {
     return;
   }
   contentView.reset(view);
+  if (contentView) {
+    contentView->setAutoFitText(true);
+  }
   syncContentFrame(*this, contentView.get(), true);
 }
 
@@ -264,6 +267,13 @@ void Button::propagateThemeChange() {
 }
 
 Button::~Button() = default;
+void Button::propagateLanguageChange() {
+  View::propagateLanguageChange();
+  if (contentView) {
+    contentView->propagateLanguageChange();
+  }
+}
+
 void Button::onLayout() { syncContentFrame(*this, contentView.get(), true); }
 
 void Button::onMove(int newX, int newY) {
@@ -328,6 +338,9 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     return false;
   }
   case SDL_MOUSEMOTION: {
+    if (event.motion.which == SDL_TOUCH_MOUSEID) {
+      return true;
+    }
     int uiX = 0;
     int uiY = 0;
     mouseCoordsToUi(event.motion.x, event.motion.y, uiX, uiY);
@@ -355,6 +368,7 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     }
 
     activeTouchId = -1;
+    isHovered = false;
     float uiX = 0.0f;
     float uiY = 0.0f;
     fingerEventToUi(event.tfinger, uiX, uiY);

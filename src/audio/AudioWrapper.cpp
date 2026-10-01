@@ -914,6 +914,11 @@ void AudioWrapper::clearCallbackState() {
 
 bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
                              long long startOffsetMicros) {
+  return playSound(path, bus, startOffsetMicros, 1.0F);
+}
+
+bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
+                             long long startOffsetMicros, float gain) {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
 
@@ -947,7 +952,8 @@ bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
                                          {.type = AudioCommandType::PlayNow,
                                           .soundData = soundData.get(),
                                           .bus = bus,
-                                          .startFrame = startFrame})) {
+                                          .startFrame = startFrame,
+                                          .gain = gain})) {
       SDL_Log("Audio command queue full; dropping %s",
               path_t_to_utf8(path).c_str());
       return false;

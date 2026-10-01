@@ -290,6 +290,17 @@ void testProviderEligibilityHidesModifiedModernResults() {
   expect(candidates.candidates.empty(),
          "provider-ineligible modern snapshots are not manual upload "
          "candidates");
+
+  for (const auto eligibility : {ScoreEligibility::Modified,
+                                 ScoreEligibility::Verified}) {
+    auto assisted = source(34);
+    assisted.result.score.provenance.assistOption = "ASSISTED";
+    assisted.result.score.provenance.eligibility = eligibility;
+    refreshSnapshot(assisted);
+    expect(ir::projectIrUploadCandidates(std::vector{assisted}, kProvider,
+                                         kOrigin).candidates.empty(),
+           "generic assisted play cannot upload even with stale verified eligibility");
+  }
 }
 
 void testProviderNeutralEligibilitySupportsOtherDrivers() {

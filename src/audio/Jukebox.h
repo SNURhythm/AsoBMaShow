@@ -110,6 +110,10 @@ enum class JukeboxAudioSource : std::uint8_t {
 
 constexpr audio::Bus
 audioBusForJukeboxSource(JukeboxAudioSource source) noexcept {
+  // Settings runs with the gameplay clock stopped.
+  if (source == JukeboxAudioSource::SettingsTestTone) {
+    return audio::Bus::System;
+  }
   return source == JukeboxAudioSource::BackgroundNote ||
                  source == JukeboxAudioSource::ClubBeat
              ? audio::Bus::Bgm

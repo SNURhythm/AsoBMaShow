@@ -24,6 +24,7 @@ def main():
         "void MainMenuScene::hideFindBmsModal()",
         "void MainMenuScene::applyFindBmsUpdates()",
     ]
+    signatures.insert(0, ("i18n::Text" if "i18n::Text findBmsCandidateLabel(" in source else "std::string") + " findBmsCandidateLabel(")
     methods = "\n\n".join(extract(source, item) for item in signatures)
     cancel = extract(source, "findBmsCloseButton->setOnClickListener([this]()")
     methods += "\nvoid MainMenuScene::cancelFindBms() " + cancel[cancel.index("{"):]

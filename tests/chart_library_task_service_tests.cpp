@@ -1,6 +1,7 @@
 #include "library/ChartLibraryTaskTypes.h"
 #include "library/ChartLibraryTaskService.h"
 #include "support/AllocationFailure.h"
+#include "i18n/Localization.h"
 
 #include <atomic>
 #include <chrono>
@@ -47,6 +48,92 @@ bool waitUntil(Predicate predicate) {
     std::this_thread::yield();
   }
   return predicate();
+}
+
+void testTaskTitlesRetainMessagesAcrossLanguageChanges() {
+  using namespace chart_library_tasks;
+  ChartLibraryTaskService service([](const auto &, const auto &, auto, auto) {
+    return TaskRunResult{};
+  });
+  service.setGameplayPaused(true);
+  i18n::setLanguage(i18n::Language::English);
+  const auto first = service.enqueue({.title = i18n::message("music_select.update_folder.label")});
+  const auto reserved = service.reserve(i18n::message("menu.import_archive.label"), "copying");
+  expect(service.enqueueReserved(reserved, {.title = i18n::message("music_select.update_difficulty_table.label")}),
+         "reserved task retains the replacement message");
+  const auto literal = service.enqueue({.title = "User task 日本語"});
+  const auto folder = service.enqueue({.title = i18n::message("library.tasks.add_folder.message",
+      {{"name", std::string("My 日本語 folder")}})});
+  expect(service.beginAndroidImport("localized", true), "Android import reserves a title");
+  const auto snapshot = service.snapshot();
+  for (auto language : {i18n::Language::English, i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    expect(i18n::Text(taskFor(snapshot, first)->detail).resolve() == i18n::tr("library.tasks.paused.label"),
+           "paused task details follow the current language in retained snapshots");
+    expect(taskFor(snapshot, first)->title.resolve() == i18n::tr("music_select.update_folder.label"),
+           "queued snapshot resolves the current language");
+    expect(taskFor(snapshot, reserved)->title.resolve() == i18n::tr("music_select.update_difficulty_table.label"),
+           "reserved snapshot resolves the current language");
+    expect(taskFor(snapshot, literal)->title.resolve() == "User task 日本語",
+           "raw task titles remain literal");
+    expect(taskFor(snapshot, folder)->title.resolve() ==
+               i18n::format("library.tasks.add_folder.message", {{"name", "My 日本語 folder"}}),
+           "named task titles own raw path arguments while retaining the translated wrapper");
+    expect(snapshot.tasks.back().title.resolve() == i18n::tr("menu.import_folder.label"),
+           "Android reservation resolves the current language");
+  }
+  service.shutdown();
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testTaskDetailsRetainProducerMessages() {
+  using namespace chart_library_tasks;
+  i18n::setLanguage(i18n::Language::English);
+  std::atomic_bool release = false;
+  ChartLibraryTaskService service([&](const TaskRequest &request,
+      const auto &, TaskProgressCallback progress, auto) -> TaskRunResult {
+    if (request.tableId == 1) {
+      throw TaskError(i18n::message("library.tasks.database_open_failed"));
+    }
+    if (request.tableId == 2) throw std::runtime_error("Raw Settings {name} 日本語");
+    progress({.current = 1, .total = 2},
+        i18n::message("library.tasks.adding_default_table", {{"name", "Settings {name} 日本語"}}));
+    while (!release.load()) std::this_thread::yield();
+    return {};
+  });
+  const auto id = service.enqueue({.title = "test"});
+  expect(waitUntil([&] { return service.snapshot().tasks.front().current == 1; }),
+         "worker published its retained progress");
+  const auto running = service.snapshot();
+  release = true;
+  expect(waitUntil([&] { return service.snapshot().activeCount == 0; }), "worker completed");
+  const auto complete = service.snapshot();
+  const auto failedId = service.enqueue({.title = "failed", .tableId = 1});
+  const auto rawId = service.enqueue({.title = "raw", .tableId = 2});
+  expect(waitUntil([&] { return service.snapshot().activeCount == 0; }), "error tasks finished");
+  expect(service.beginAndroidImport("copy", true), "copy task reserved");
+  const auto copying = service.snapshot();
+  service.cancelAndroidImports();
+  const auto finished = service.snapshot();
+  for (auto language : {i18n::Language::English, i18n::Language::Korean,
+                        i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    expect(taskFor(running, id)->detail.resolve() == i18n::format(
+        "library.tasks.adding_default_table", {{"name", "Settings {name} 日本語"}}),
+        "worker progress retains its message and raw name");
+    expect(taskFor(complete, id)->detail.resolve() == i18n::tr("library.tasks.complete.label"),
+           "default completion remains localized in history");
+    expect(taskFor(finished, failedId)->detail.resolve() == i18n::tr("library.tasks.database_open_failed"),
+           "task errors retain message identity through the worker catch");
+    expect(taskFor(finished, rawId)->detail.resolve() == "Raw Settings {name} 日本語",
+           "external errors remain literal");
+    expect(copying.tasks.back().detail.resolve() == i18n::tr("library.tasks.copying"),
+           "copy status retains message identity");
+    expect(finished.tasks.back().detail.resolve() == i18n::tr("library.tasks.import_cancelled"),
+           "cancelled import history retains message identity");
+  }
+  service.shutdown();
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testSnapshotCarriesQueueAndProgressAsValues() {
@@ -245,7 +332,7 @@ void testAndroidErrorAllocationFailureKeepsCopyReservation() {
          "copy error publication retries");
   const auto after = service.snapshot();
   expect(after.tasks.size() == 1 && after.tasks.front().status == TaskStatus::Failed &&
-             after.tasks.front().detail == error && !service.active(),
+             after.tasks.front().detail.resolve() == error && !service.active(),
          "copy error completes without creating a worker");
 }
 
@@ -303,7 +390,7 @@ void testWorkerRunsQueuedTasksOnceInOrder() {
       [&](const auto &request, const auto &, auto, auto) {
         {
           std::lock_guard lock(mutex);
-          titles.push_back(request.title);
+          titles.push_back(request.title.resolve());
         }
         changed.notify_all();
         return chart_library_tasks::TaskRunResult{};
@@ -406,7 +493,7 @@ void testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume() {
         }
         {
           std::lock_guard lock(mutex);
-          completed.push_back(request.title);
+          completed.push_back(request.title.resolve());
         }
         changed.notify_all();
         return chart_library_tasks::TaskRunResult{};
@@ -465,7 +552,7 @@ void testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume() {
 
   auto completedSnapshot = service.snapshot();
   completedSnapshot.tasks.front().detail = "mutated copy";
-  expect(service.snapshot().tasks.front().detail == "Complete",
+  expect(service.snapshot().tasks.front().detail.resolve() == "Complete",
          "snapshot mutation cannot change service state");
   service.shutdown();
 }
@@ -498,7 +585,7 @@ void testProgressUpdatesTaskRowAndProgressSnapshotTogether() {
   const auto snapshot = service.snapshot();
   const auto *task = taskFor(snapshot, id);
   expect(task != nullptr && task->current == 2 && task->total == 8 &&
-             task->fraction == 0.25 && task->detail == "Parsing charts",
+             task->fraction == 0.25 && task->detail.resolve() == "Parsing charts",
          "task row advances with published progress");
   expect(snapshot.progress.valid && snapshot.progress.taskId == id &&
              snapshot.progress.current == 2 &&
@@ -721,6 +808,8 @@ void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
 } // namespace
 
 int main() {
+  testTaskTitlesRetainMessagesAcrossLanguageChanges();
+  testTaskDetailsRetainProducerMessages();
   testSnapshotCarriesQueueAndProgressAsValues();
   testQueueAdmissionFailuresPreserveWorkOwnership();
   testAndroidAdmissionFailuresPreserveImportOwnership();

@@ -38,14 +38,17 @@ private:
   bool hasStyledBorder = false;
 
 public:
-  Button() : View() {}
-  Button(int x, int y, int width, int height) : View(x, y, width, height) {}
+  Button() : View() { setAutoFitText(true); }
+  Button(int x, int y, int width, int height) : View(x, y, width, height) {
+    setAutoFitText(true);
+  }
   ~Button() override;
 
   void onLayout() override;
   void onMove(int newX, int newY) override;
   void onResize(int newWidth, int newHeight) override;
   void propagateThemeChange() override;
+  void propagateLanguageChange() override;
 
   void setOnClickListener(std::function<void()> listener);
   void setEnabled(bool enabled);

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "SettingsScenePreviewAuthority.h"
 #include "../library/ChartLibraryPlatform.h"
@@ -36,7 +37,6 @@ previewPresentationConfiguration(const AppSettings &settings,
       .hispeedFixMode = settings.hispeedFixMode,
       .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
       .laneBeamsEnabled = true,
-      .accelerationCompensation = settings.accelerationCompensation,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = settings.laneCoverEnabled,
       .laneBeamLengthPercent = settings.laneBeamLengthPercent,
@@ -178,7 +178,7 @@ void SettingsScene::syncPreviewAuthority() {
       .gaugeAutoShift = GaugeAutoShiftMode::None,
       .currentGauge = 74.0F,
       .gaugeRules = *previewGaugeRules,
-      .playOptionLabel = "PREVIEW",
+      .playOptionLabel = i18n::tr("settings.preview.preview.badge"),
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
   });

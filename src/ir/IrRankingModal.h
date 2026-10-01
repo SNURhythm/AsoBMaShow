@@ -138,6 +138,7 @@ public:
 private:
   std::optional<IrRankingRequest> expectedRequest_;
   IrRankingModalPresentation presentation_;
+  std::uint64_t languageRevision_ = 0;
 };
 
 class IrRankingModal {
@@ -158,6 +159,8 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
+[[nodiscard]] i18n::Text
+formatIrLocalComparison(const IrLocalComparison &comparison);
 [[nodiscard]] std::string formatIrRankingRate(int score, int maxScore);
 [[nodiscard]] std::string
 formatIrRankingTimestamp(std::optional<std::int64_t> unixMillis);

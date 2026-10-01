@@ -162,7 +162,7 @@ void testRefreshStopsAtTheExistingPauseCheckpoint() {
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
        .title = "Refresh Library",
        .folderToAdd = libraryRoot},
-      stop.get_token(), [](const ChartScanProgress &, std::string_view) {},
+      stop.get_token(), [](const ChartScanProgress &, const i18n::Text &) {},
       [&] {
         ++pauseCalls;
         return false;
@@ -217,7 +217,7 @@ void testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal() {
   chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary}, {},
-      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
   expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
          "startup recovery completes without a registered scan root");
   auto session = restarted.OpenSession();
@@ -246,7 +246,7 @@ void testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots() {
       dependencies(repository, temporary.path(), reloadRequested));
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary}, {},
-      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
   expect(session->CountAllChartMeta() == 1, "unavailable recovery does not block healthy indexing");
   expect(session->LoadUnzipRecovery()->size() == 1, "offline work remains pending");
   expect(reloadRequested, "healthy chart changes are published");
@@ -264,6 +264,7 @@ void testRefreshScansThroughTheRealRepository() {
   chart_library_tasks::ChartLibraryOperations operations(
       dependencies(repository, temporary.path(), reloadRequested));
   std::vector<ChartScanProgress> progress;
+  std::vector<i18n::Text> details;
   const auto before = repository.GetLibraryRevision();
 
   const auto result = operations.run(
@@ -271,14 +272,27 @@ void testRefreshScansThroughTheRealRepository() {
        .title = "Refresh Library",
        .folderToAdd = libraryRoot},
       std::stop_token{},
-      [&](const ChartScanProgress &value, std::string_view) {
+      [&](const ChartScanProgress &value, const i18n::Text &detail) {
         progress.push_back(value);
+        details.push_back(detail);
       },
       [] { return true; });
 
   expect(result.disposition ==
              chart_library_tasks::TaskRunDisposition::Complete,
          "refresh completes through the shared operation");
+  for (auto language : {i18n::Language::English, i18n::Language::Korean,
+                        i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    expect(result.detail.resolve() == i18n::tr("library.tasks.complete.label"),
+           "operation completion retains its message");
+    expect(!details.empty() && details.front().resolve() == i18n::tr("library.tasks.adding_folder"),
+           "actual folder registration progress retains its message");
+    for (const auto &detail : details) {
+      expect(detail.isLocalized(), "standard scan progress is application-owned text");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
   auto session = repository.OpenSession();
   expect(session.has_value() && session->CountAllChartMeta() == 1,
          "refresh indexes the real BMS fixture");
@@ -361,9 +375,9 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(
         const int currentAttempt = attempt.fetch_add(1) + 1;
         const auto result = operations.run(
             request, stop,
-            [&](const ChartScanProgress &progress, std::string_view detail) {
-              if (detail == "Clearing library caches") ++clearCount;
-              if (detail == "Adding folder") ++registrationCount;
+            [&](const ChartScanProgress &progress, const i18n::Text &detail) {
+              if (detail.resolve() == "Clearing library caches") ++clearCount;
+              if (detail.resolve() == "Adding folder") ++registrationCount;
               if (progress.stage == ChartScanProgressStage::ParsingCharts) {
                 parsingCurrent.store(progress.current);
                 if (currentAttempt == 4 && resumedParsingCurrent == -1) {
@@ -575,7 +589,7 @@ void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
     request.refreshPath = root;
     request.downloadedPath = root;
     const auto result = operations.run(
-        request, {}, [](const ChartScanProgress &, std::string_view) {},
+        request, {}, [](const ChartScanProgress &, const i18n::Text &) {},
         [] { return true; });
     expect(!timedOut && workers.size() >= 2,
            "scanner workers meet concurrently inside the operation checkpoint");
@@ -611,7 +625,7 @@ void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
        .title = "Add Folder",
        .folderToAdd = addedRoot,
        .iosBookmark = "new-bookmark"},
-      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
       [] { return true; });
 
   expect(result.disposition ==
@@ -651,7 +665,7 @@ void testPathRefreshReconcilesOnlyTheRequestedSubtree() {
        .title = "Refresh Library",
        .folderToAdd = libraryRoot},
       std::stop_token{},
-      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
   expect(initial.disposition ==
              chart_library_tasks::TaskRunDisposition::Complete,
          "initial full refresh completes");
@@ -665,7 +679,7 @@ void testPathRefreshReconcilesOnlyTheRequestedSubtree() {
        .title = "Update Folder",
        .refreshPath = targetRoot},
       std::stop_token{},
-      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
 
   expect(targeted.disposition ==
              chart_library_tasks::TaskRunDisposition::Complete,
@@ -714,7 +728,7 @@ void testPathRefreshReparsesSamePathAndFolderPreview() {
   for (const auto &root : {target, sibling}) {
     operations.run({.kind = chart_library_tasks::TaskKind::RefreshLibrary,
                     .folderToAdd = root}, {},
-                   [](const ChartScanProgress &, std::string_view) {},
+                   [](const ChartScanProgress &, const i18n::Text &) {},
                    [] { return true; });
   }
   const auto oldIdentity = readChartIdentity(chartPath);
@@ -727,7 +741,7 @@ void testPathRefreshReparsesSamePathAndFolderPreview() {
   expect(newIdentity.sha256 != oldIdentity.sha256, "fixture content identity changes");
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::RefreshPath, .refreshPath = target}, {},
-      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
   expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
          "same-path refresh completes");
   auto session = repository.OpenSession();
@@ -771,7 +785,7 @@ void testDownloadedPathIndexesAndReturnsTheSelectionHandoff() {
          .downloadedTargetIdentity = identity,
          .downloadedSelectionGeneration = 9},
         std::stop_token{},
-        [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+        [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
   } catch (const std::exception &error) {
     expect(false, std::string("download indexing threw: ") + error.what());
     return;
@@ -830,7 +844,7 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
        .title = "Refresh Library"},
-      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
       [] { return true; });
 
   const std::vector<std::string> expectedUrls = {
@@ -886,7 +900,7 @@ void testRefreshPausesInsideDefaultTableSeeding() {
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
        .title = "Refresh Library"},
-      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
       [] { return true; });
 
   expect(result.disposition ==
@@ -922,7 +936,7 @@ void testRefreshPausesInsideLocalTableImport() {
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
        .title = "Refresh Library"},
-      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
       [&] { return true; });
 
   expect(result.disposition ==
@@ -959,7 +973,7 @@ void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
       {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
        .title = "Update Difficulty Table",
        .tableId = 47},
-      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
       [] { return true; });
 
   expect(result.disposition ==
@@ -995,7 +1009,7 @@ void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
       {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
        .title = "Update Difficulty Table",
        .tableId = 47},
-      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
       [] { return true; });
 
   expect(result.disposition ==

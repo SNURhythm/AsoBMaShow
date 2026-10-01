@@ -248,6 +248,21 @@ void testLocalChartRoundTripAndStockProjection() {
       codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
   expect(encodedAgain == encoded,
          "deterministic encoding supports exact-attempt retry");
+
+  auto assisted = source;
+  assisted.playback.setup.assistOption = "ASSISTED";
+  const auto assistedBytes = codec.encodeChart(assisted, 1'725'000'000'123LL,
+                                              diagnostic);
+  expect(assistedBytes.has_value(), "generic assist uses the existing replay setup");
+  if (assistedBytes) {
+    const auto payload = outerJson(*assistedBytes);
+    expect(payload["asobmashow"]["schemaVersion"] == 3 &&
+               !payload["asobmashow"]["setup"].contains("pauseUsed"),
+           "assisted replay does not require a new schema or pause field");
+    expect(codec.decode(*assistedBytes, context(assisted)).chart ==
+               std::optional(assisted),
+           "generic assisted replay round-trips through the existing codec");
+  }
 }
 
 void testStockKeyEncodingMatchesIndependentJavaBytes() {

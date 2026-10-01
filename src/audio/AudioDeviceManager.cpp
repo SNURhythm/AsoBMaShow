@@ -23,14 +23,13 @@ bool contains(const std::vector<Value> &values, const Value &target) {
   return std::find(values.begin(), values.end(), target) != values.end();
 }
 
-void appendMessage(std::string &message, std::string_view addition) {
+void appendMessage(i18n::Text &message, i18n::Text addition) {
   if (addition.empty()) {
     return;
   }
-  if (!message.empty()) {
-    message += "; ";
-  }
-  message += addition;
+  message = message.empty() ? std::move(addition)
+                           : i18n::message("settings.audio_video.audio.failure_detail",
+                                           {{"first", message}, {"second", addition}});
 }
 
 bool sameVolumes(const Volumes &left, const Volumes &right) {
@@ -87,7 +86,7 @@ AudioDeviceManager::apply(const player_settings::AudioSettings &candidate) {
     appliedVolumes_ = candidateVolumes;
   }
   updateVolumeFields(lastWorkingSettings_, candidateVolumes);
-  std::string validationMessage;
+  i18n::Text validationMessage;
   if (!validateRequest(request, runtime_.capabilities(), validationMessage)) {
     return remember({.status = ApplyStatus::Unsupported,
                      .effective = previousRuntime,
@@ -106,25 +105,21 @@ AudioDeviceManager::apply(const player_settings::AudioSettings &candidate) {
     return remember({
         .status = ApplyStatus::FailedStopped,
         .effective = runtime_.runtimeState(),
-        .message = "Playback could not be suspended and drained",
+        .message = i18n::message("settings.audio_video.audio.drain_failed"),
     });
   }
   std::string restartError;
   if (!runtime_.restart(request, restartError)) {
-    if (restartError.empty()) {
-      restartError = "Audio stream restart failed";
-    }
-    return remember(
-        rollback(previousRuntime, snapshot, std::move(restartError)));
+    return remember(rollback(previousRuntime, snapshot,
+        restartError.empty() ? i18n::message("settings.audio_video.audio.restart_failed")
+                             : i18n::Text(std::move(restartError))));
   }
 
   std::string playbackError;
   if (!playback_.restorePlayback(snapshot, playbackError)) {
-    if (playbackError.empty()) {
-      playbackError = "Playback could not resume on the candidate stream";
-    }
-    return remember(
-        rollback(previousRuntime, snapshot, std::move(playbackError)));
+    return remember(rollback(previousRuntime, snapshot,
+        playbackError.empty() ? i18n::message("settings.audio_video.audio.candidate_resume_failed")
+                              : i18n::Text(std::move(playbackError))));
   }
 
   lastWorkingSettings_ = candidate;
@@ -135,11 +130,11 @@ AudioDeviceManager::apply(const player_settings::AudioSettings &candidate) {
 
 bool AudioDeviceManager::validateRequest(const StreamRequest &request,
                                          const Capabilities &capabilities,
-                                         std::string &message) const {
+                                         i18n::Text &message) const {
   const DeviceInfo *selectedDevice = nullptr;
   if (!request.deviceId.empty()) {
     if (!capabilities.canSelectOutputDevice) {
-      message = "Output-device selection is unsupported";
+      message = i18n::message("settings.audio_video.audio.device_selection_unsupported");
       return false;
     }
     const auto selected = std::find_if(capabilities.outputDevices.begin(),
@@ -148,7 +143,7 @@ bool AudioDeviceManager::validateRequest(const StreamRequest &request,
                                          return device.id == request.deviceId;
                                        });
     if (selected == capabilities.outputDevices.end()) {
-      message = "Requested output device is unavailable";
+      message = i18n::message("settings.audio_video.audio.device_unavailable");
       return false;
     }
     selectedDevice = &*selected;
@@ -161,30 +156,30 @@ bool AudioDeviceManager::validateRequest(const StreamRequest &request,
                          : &capabilities.outputDevices.front();
   }
   if (capabilities.canSelectOutputDevice && selectedDevice == nullptr) {
-    message = "No output device is available";
+    message = i18n::message("settings.audio_video.audio.no_device");
     return false;
   }
 
   if (request.sampleRate != 0) {
     if (!capabilities.canSelectSampleRate) {
-      message = "Sample-rate selection is unsupported";
+      message = i18n::message("settings.audio_video.audio.rate_selection_unsupported");
       return false;
     }
     if (selectedDevice != nullptr &&
         !contains(selectedDevice->sampleRates, request.sampleRate)) {
-      message = "Requested sample rate is unavailable for the output device";
+      message = i18n::message("settings.audio_video.audio.rate_unavailable");
       return false;
     }
   }
 
   if (request.bufferFrames != 0) {
     if (!capabilities.canSelectBufferFrames) {
-      message = "Buffer-size selection is unsupported";
+      message = i18n::message("settings.audio_video.audio.buffer_selection_unsupported");
       return false;
     }
     if (selectedDevice != nullptr &&
         !contains(selectedDevice->bufferFrames, request.bufferFrames)) {
-      message = "Requested buffer size is unavailable for the output device";
+      message = i18n::message("settings.audio_video.audio.buffer_unavailable");
       return false;
     }
   }
@@ -193,13 +188,13 @@ bool AudioDeviceManager::validateRequest(const StreamRequest &request,
 
 ApplyResult AudioDeviceManager::rollback(const RuntimeState &previousRuntime,
                                          const PlaybackSnapshot &snapshot,
-                                         std::string failureMessage) {
+                                         i18n::Text failureMessage) {
   std::string restoreRuntimeError;
   if (!runtime_.restore(previousRuntime, restoreRuntimeError)) {
     appendMessage(failureMessage,
                   restoreRuntimeError.empty()
-                      ? "Previous audio stream could not be restored"
-                      : restoreRuntimeError);
+                      ? i18n::message("settings.audio_video.audio.stream_restore_failed")
+                      : i18n::Text(restoreRuntimeError));
     playback_.leavePlaybackStopped();
     return {.status = ApplyStatus::FailedStopped,
             .effective = runtime_.runtimeState(),
@@ -210,8 +205,8 @@ ApplyResult AudioDeviceManager::rollback(const RuntimeState &previousRuntime,
   if (!playback_.restorePlayback(snapshot, restorePlaybackError)) {
     appendMessage(failureMessage,
                   restorePlaybackError.empty()
-                      ? "Playback could not resume after rollback"
-                      : restorePlaybackError);
+                      ? i18n::message("settings.audio_video.audio.rollback_resume_failed")
+                      : i18n::Text(restorePlaybackError));
     playback_.leavePlaybackStopped();
     return {.status = ApplyStatus::FailedStopped,
             .effective = runtime_.runtimeState(),

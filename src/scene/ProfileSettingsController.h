@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../PlayerProfileManager.h"
+#include "../i18n/Localization.h"
 #include "../ProfileArchive.h"
 #include "../ProfileSessionCoordinator.h"
 
@@ -28,14 +29,19 @@ enum class ProfileSettingsStatusKind { None, Info, Success, Warning, Error };
 
 struct ProfileSettingsStatus {
   ProfileSettingsStatusKind kind = ProfileSettingsStatusKind::None;
-  std::string message;
+  // Compatibility snapshot for non-view consumers; views retain text directly.
+  mutable std::string message;
+  i18n::Text text;
 
-  bool operator==(const ProfileSettingsStatus &) const = default;
+  bool operator==(const ProfileSettingsStatus &other) const {
+    return kind == other.kind && text == other.text;
+  }
 };
 
 struct ProfileActionEligibility {
   bool enabled = false;
   std::string reason;
+  i18n::Text text;
 
   bool operator==(const ProfileActionEligibility &) const = default;
 };
@@ -138,7 +144,7 @@ public:
   bool beginConfirmedOverwritePicker();
   bool beginPreparedExportPicker(std::uint64_t generation);
   void cancelPicker();
-  bool failPicker(std::string message);
+  bool failPicker(i18n::Text message);
 
   std::optional<ProfileArchiveTask>
   beginExport(std::string_view profileId,
@@ -155,32 +161,32 @@ public:
   ProfileArchiveResult importProfile(const std::filesystem::path &archive,
                                      const ProfileImportOptions &options = {});
 
-  void recordError(std::string message);
-  void recordWarning(std::string message);
+  void recordError(i18n::Text message);
+  void recordWarning(i18n::Text message);
 
 private:
   [[nodiscard]] bool contains(std::string_view profileId) const;
   [[nodiscard]] ProfileActionEligibility
   destructiveEligibility(std::string_view profileId) const;
-  [[nodiscard]] ProfileResult unavailableResult(std::string message) const;
   [[nodiscard]] ProfileArchiveResult
   unavailableArchiveResult(std::string message) const;
-  bool flushActiveState(std::string &errorMessage);
+  bool flushActiveState(i18n::Text &errorMessage);
   bool acquireArchivePipeline();
   void releaseArchivePipeline();
   std::optional<std::uint64_t> beginSkinProfileCatalogMutation(
       std::optional<std::string_view> existingTarget,
-      std::string &errorMessage);
+      i18n::Text &errorMessage);
   void finishSkinProfileCatalogMutation(std::uint64_t token, bool succeeded,
                                         bool profileStillExists) noexcept;
   void abandonArchiveSkinMutation() noexcept;
-  void setFailure(ProfileError error, std::string message,
-                  std::string fallback);
-  void setSuccess(std::string message, std::string fallback);
+  void setFailure(ProfileError error, i18n::Text message,
+                  i18n::Text fallback);
+  void setSuccess(i18n::Text message, i18n::Text fallback);
   bool refreshAfterMutation(std::optional<std::string> preferredProfileId,
-                            const std::string &operationError = {});
-  ProfileResult finishMutation(ProfileResult result, std::string successText,
-                               std::optional<std::string> preferredProfileId);
+                            const i18n::Text &operationError = {});
+  ProfileResult finishMutation(ProfileResult result, i18n::Text successText,
+                               std::optional<std::string> preferredProfileId,
+                               i18n::Text failureText = {});
   void clearTransientPhase();
 
   ProfileSettingsControllerDependencies dependencies_;
@@ -194,6 +200,9 @@ private:
   std::uint64_t nextArchiveGeneration_ = 1;
   std::uint64_t activeArchiveGeneration_ = 0;
   bool archivePipelineHeld_ = false;
+  // Worker-owned text is consumed only after the matching task completion.
+  // A cancelled task keeps its own shared ownership until it finishes.
+  std::shared_ptr<i18n::Text> activeArchiveFailureText_;
   std::optional<ProfileSettingsStatus> archivePipelinePriorStatus_;
   std::uint64_t nextFallbackSkinMutationToken_ = 0;
   std::uint64_t activeArchiveSkinMutationToken_ = 0;

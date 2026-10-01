@@ -9,7 +9,10 @@ struct LibraryText {
   std::string text;
   SDL_Color color{};
   std::string getText() const { assert(owner == std::this_thread::get_id()); return text; }
-  void setText(const std::string &value) { assert(owner == std::this_thread::get_id()); text = value; }
+  void setText(const std::string &value) { assert(owner == std::this_thread::get_id()); localized = {}; text = value; }
+  void setLocalizedText(const i18n::Text &value) { setText(value.resolve()); localized = value; }
+  i18n::Text localized;
+  void refreshLanguage() { if (localized.isLocalized()) text = localized.resolve(); }
   void setEditingText(const std::string &value) { setText(value); }
   void setColor(SDL_Color value) { assert(owner == std::this_thread::get_id()); color = value; }
 };
@@ -69,14 +72,17 @@ public:
   LibraryText *difficultyTableStatusText = &tableStatus;
   LibraryText *chartFolderStatusText = &folderStatus;
   LibraryText *tableUrlInput = &input;
-  std::string difficultyTableStatusMessage, chartFolderStatusMessage, tableUrlText;
+  i18n::Text difficultyTableStatusMessage;
+  i18n::Text chartFolderStatusMessage;
+  std::string tableUrlText;
   SDL_Color difficultyTableStatusColor{}, chartFolderStatusColor{};
   int pendingDeleteDifficultyTableId = 0;
   std::string pendingDeleteChartEntryPath;
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false, difficultyTableImportSucceeded = false;
   int difficultyTableImportCurrent = 0, difficultyTableImportTotal = 0;
-  std::string difficultyTableImportName, difficultyTableImportStatusMessage;
+  std::string difficultyTableImportName;
+  i18n::Text difficultyTableImportStatusMessage;
   std::uint64_t observedLibraryRevision = 0;
   int lastLayoutWidth = 100;
   int tableReloads = 0, folderReloads = 0, modalRefreshes = 0;
@@ -84,6 +90,7 @@ public:
   void loadChartEntries() { ++folderReloads; }
   void refreshDifficultyTableImportModal() { ++modalRefreshes; }
   void applyPendingDifficultyTableUpdates();
+  void toggleChartEntryICloudBackup(const std::string &entryPathText);
   void addDifficultyTableFromUrl();
   void updateDifficultyTableFromSource(int tableId);
   void deleteDifficultyTable(int tableId);
@@ -91,6 +98,91 @@ public:
 };
 
 #include "settings_library_scene_methods.inc"
+
+void testSceneFolderStatusSurvivesLanguageChanges() {
+  i18n::setLanguage(i18n::Language::English);
+  LibraryOperations operations;
+  SettingsScene scene(operations);
+  scene.toggleChartEntryICloudBackup("literal-folder");
+  assert(scene.folderStatus.text == i18n::tr("settings.difficulty_tables.icloud_backup.ios_only_notice"));
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.folderStatus.refreshLanguage();
+  assert(scene.folderStatus.text == i18n::tr("settings.difficulty_tables.icloud_backup.ios_only_notice"));
+  assert(scene.libraryTask.start([](const auto &, const Task::Publisher &updates) {
+    updates.folderStatus(i18n::message("settings.library.folder.remove_summary",
+                         {{"count", "7"}}), true);
+  }));
+  waitIdle(scene.libraryTask);
+  i18n::setLanguage(i18n::Language::Japanese);
+  scene.applyPendingDifficultyTableUpdates();
+  assert(scene.folderStatus.text == i18n::format("settings.library.folder.remove_summary",
+                                               {{"count", "7"}}));
+  i18n::setLanguage(i18n::Language::English);
+  scene.folderStatus.refreshLanguage();
+  assert(scene.folderStatus.text == i18n::format("settings.library.folder.remove_summary",
+                                               {{"count", "7"}}));
+  assert(scene.libraryTask.start([](const auto &, const Task::Publisher &updates) {
+    updates.folderStatus("Remove failed.", false);
+  }));
+  waitIdle(scene.libraryTask);
+  scene.applyPendingDifficultyTableUpdates();
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.folderStatus.refreshLanguage();
+  assert(scene.folderStatus.text == "Remove failed.");
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testSceneTableStatusesSurviveLanguageChanges() {
+  i18n::setLanguage(i18n::Language::English);
+  LibraryOperations operations;
+  SettingsScene scene(operations);
+  scene.addDifficultyTableFromUrl();
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.tableStatus.refreshLanguage();
+  assert(scene.tableStatus.text == i18n::tr("settings.difficulty_tables.enter_table_webpage_url_first.message"));
+
+  i18n::setLanguage(i18n::Language::English);
+  scene.input.text = scene.tableUrlText = "raw-table-url";
+  Gate gate;
+  operations.importGate = &gate;
+  scene.addDifficultyTableFromUrl();
+  gate.wait();
+  i18n::setLanguage(i18n::Language::Japanese);
+  scene.tableStatus.refreshLanguage();
+  assert(scene.tableStatus.text == i18n::tr("settings.difficulty_tables.adding_table.progress"));
+  scene.applyPendingDifficultyTableUpdates();
+  assert(i18n::Text(scene.difficultyTableImportStatusMessage).resolve() ==
+         i18n::tr("settings.difficulty_tables.downloading_importing_tables.progress"));
+  assert(scene.difficultyTableImportName == "Downloading table");
+  gate.release.set_value();
+  waitIdle(scene.libraryTask);
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.applyPendingDifficultyTableUpdates();
+  assert(scene.tableStatus.text == i18n::tr("settings.difficulty_tables.table_added.message"));
+  i18n::setLanguage(i18n::Language::Japanese);
+  scene.tableStatus.refreshLanguage();
+  assert(scene.tableStatus.text == i18n::tr("settings.difficulty_tables.table_added.message"));
+
+  scene.deleteDifficultyTable(9);
+  i18n::setLanguage(i18n::Language::Korean);
+  assert(i18n::Text(scene.difficultyTableStatusMessage).resolve() ==
+         i18n::tr("settings.difficulty_tables.tap_confirm_on_table_delete.message"));
+  scene.deleteDifficultyTable(9);
+  waitIdle(scene.libraryTask);
+  i18n::setLanguage(i18n::Language::Japanese);
+  scene.applyPendingDifficultyTableUpdates();
+  assert(scene.tableStatus.text == i18n::tr("settings.difficulty_tables.table_deleted.message"));
+
+  operations.importGate = nullptr;
+  operations.succeed = false;
+  operations.error = "settings.difficulty_tables.table_added.message";
+  scene.updateDifficultyTableFromSource(7);
+  waitIdle(scene.libraryTask);
+  i18n::setLanguage(i18n::Language::Korean);
+  scene.applyPendingDifficultyTableUpdates();
+  assert(scene.tableStatus.text == operations.error);
+  i18n::setLanguage(i18n::Language::English);
+}
 
 void testSceneImportProgressAndSuccessfulUrlCompletion() {
   LibraryOperations operations;

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "LibraryTasksScene.h"
 
 #include "SceneManager.h"
@@ -18,11 +19,11 @@ constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 std::string statusName(chart_library_tasks::TaskStatus status) {
   using chart_library_tasks::TaskStatus;
   switch (status) {
-  case TaskStatus::Queued: return "Queued";
-  case TaskStatus::Running: return "Running";
-  case TaskStatus::Complete: return "Complete";
-  case TaskStatus::Failed: return "Failed";
-  case TaskStatus::Paused: return "Paused";
+  case TaskStatus::Queued: return i18n::tr("library.tasks.queued.label");
+  case TaskStatus::Running: return i18n::tr("library.tasks.running.label");
+  case TaskStatus::Complete: return i18n::tr("library.tasks.complete.label");
+  case TaskStatus::Failed: return i18n::tr("library.tasks.failed.label");
+  case TaskStatus::Paused: return i18n::tr("library.tasks.paused.label");
   }
   return {};
 }
@@ -59,10 +60,10 @@ void LibraryTasksScene::buildView() {
   back->setWidth(116)->setHeight(52)->setCornerRadius(ui_theme::controlRadius());
   back->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
                                   ui_theme::controlPressed);
-  back->setContentView(makeText("Back", 20, ui_theme::textPrimary));
+  back->setContentView(makeText(i18n::tr("library.tasks.back.label"), 20, ui_theme::textPrimary));
   back->setOnClickListener([this] { goBack(); });
   header->addView(back);
-  auto *title = makeText("Library Tasks", 34, ui_theme::textPrimary);
+  auto *title = makeText(i18n::tr("library.tasks.library_tasks.label"), 34, ui_theme::textPrimary);
   title->setFlex(1)->setHeight(52);
   header->addView(title);
   rootLayout_->addView(header);
@@ -90,7 +91,7 @@ void LibraryTasksScene::refreshTasks() {
   taskList_->clearChildren();
 
   if (snapshot.tasks.empty()) {
-    auto *empty = makeText("No library tasks.", 20,
+    auto *empty = makeText(i18n::tr("library.tasks.no_library_tasks.message"), 20,
                            ui_theme::textSecondary);
     empty->setHeight(54);
     taskList_->addView(empty);
@@ -104,7 +105,7 @@ void LibraryTasksScene::refreshTasks() {
         detail << " · " << std::fixed << std::setprecision(0)
                << task.fraction * 100.0 << '%';
       }
-      if (!task.detail.empty()) detail << " · " << task.detail;
+      if (!task.detail.empty()) detail << " · " << task.detail.resolve();
       auto *row = new View();
       row->setMinHeight(74)
           ->setFlexDirection(FlexDirection::Column)
@@ -114,7 +115,7 @@ void LibraryTasksScene::refreshTasks() {
           ->setThemedBorderColor(ui_theme::hairline)
           ->setBorderWidth(1)
           ->setCornerRadius(ui_theme::panelRadius());
-      auto *taskTitle = makeText(task.title, 21, ui_theme::textPrimary);
+      auto *taskTitle = makeText(task.title.resolve(), 21, ui_theme::textPrimary);
       taskTitle->setHeight(30);
       row->addView(taskTitle);
       auto *taskDetail =

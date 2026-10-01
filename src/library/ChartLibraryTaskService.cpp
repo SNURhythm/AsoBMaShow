@@ -69,7 +69,7 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
           continue;
         }
         task.status = TaskStatus::Paused;
-        task.detail = "Paused";
+        task.detail = i18n::message("library.tasks.paused.label");
         changed = true;
         continue;
       }
@@ -78,7 +78,7 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
       }
       if (activeTaskId_ && *activeTaskId_ == task.id) {
         task.status = TaskStatus::Running;
-        task.detail = "Resuming";
+        task.detail = i18n::message("library.tasks.resuming");
       } else {
         const auto queued = std::find_if(
             queue_.begin(), queue_.end(), [&task](const TaskRequest &request) {
@@ -93,7 +93,7 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
         }
         task.status = queued == queue_.end() ? TaskStatus::Running
                                             : TaskStatus::Queued;
-        task.detail = queued == queue_.end() ? "Resuming" : "Waiting";
+        task.detail = queued == queue_.end() ? i18n::message("library.tasks.resuming") : i18n::message("library.tasks.waiting");
       }
       changed = true;
     }
@@ -116,7 +116,7 @@ std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
         .id = id,
         .title = request.title,
         .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued,
-        .detail = gameplayPaused_ ? "Paused" : "Waiting",
+        .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : i18n::message("library.tasks.waiting"),
     };
     startWorkerLocked();
     tasks_.push_back(std::move(task));
@@ -134,15 +134,15 @@ std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
   return id;
 }
 
-std::uint64_t ChartLibraryTaskService::reserve(std::string title,
-                                               std::string detail) {
+std::uint64_t ChartLibraryTaskService::reserve(i18n::Text title,
+                                               i18n::Text detail) {
   std::lock_guard lock(stateMutex_);
   const std::uint64_t id = nextTaskId_++;
   tasks_.push_back(TaskInfo{
       .id = id,
       .title = std::move(title),
       .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
-      .detail = gameplayPaused_ ? "Paused" : std::move(detail),
+      .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : std::move(detail),
   });
   trimHistoryLocked();
   bumpRevisionLocked();
@@ -177,7 +177,7 @@ bool ChartLibraryTaskService::enqueueReservedLocked(std::uint64_t id,
       .id = id,
       .title = request.title,
       .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued,
-      .detail = gameplayPaused_ ? "Paused" : "Waiting",
+      .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : i18n::message("library.tasks.waiting"),
   };
   startWorkerLocked();
   queue_.push_back(std::move(request));
@@ -195,9 +195,9 @@ bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
   const std::uint64_t id = nextTaskId_;
   tasks_.push_back(TaskInfo{
       .id = id,
-      .title = folder ? "Import Folder" : "Import Archive",
+      .title = i18n::message(folder ? "menu.import_folder.label" : "menu.import_archive.label"),
       .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
-      .detail = gameplayPaused_ ? "Paused" : "Copying selected charts",
+      .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : i18n::message("library.tasks.copying"),
   });
   try {
     androidImports_.emplace(token, std::pair{id, folder});
@@ -232,7 +232,7 @@ bool ChartLibraryTaskService::finishAndroidImport(
     id = found->second.first;
     if (!error.empty() || path.empty()) {
       setTaskStateLocked(id, TaskStatus::Failed, 0.0, 0, 0,
-                         error.empty() ? "Import failed: selected path is empty."
+                         error.empty() ? i18n::message("library.tasks.import_empty")
                                        : error);
       androidImports_.erase(found);
       trimHistoryLocked();
@@ -254,7 +254,7 @@ bool ChartLibraryTaskService::finishAndroidImport(
     }
     queued = enqueueReservedLocked(
         id, {.kind = TaskKind::AndroidImport,
-             .title = folder ? "Import Folder" : "Import Archive",
+             .title = i18n::message(folder ? "menu.import_folder.label" : "menu.import_archive.label"),
              .androidImportPath = path,
              .androidImportFolder = folder});
     androidImports_.erase(found);
@@ -270,14 +270,14 @@ void ChartLibraryTaskService::cancelAndroidImports() {
   acceptingAndroidImports_ = false;
   for (const auto &[token, reservation] : androidImports_) {
     setTaskStateLocked(reservation.first, TaskStatus::Failed, 0.0, 0, 0,
-                       "Chart import cancelled.");
+                       i18n::message("library.tasks.import_cancelled"));
   }
   androidImports_.clear();
   trimHistoryLocked();
 }
 
 bool ChartLibraryTaskService::failReserved(std::uint64_t id,
-                                           std::string detail) {
+                                           i18n::Text detail) {
   std::lock_guard lock(stateMutex_);
   TaskInfo *task = findTaskLocked(id);
   if (task == nullptr) {
@@ -339,7 +339,7 @@ void ChartLibraryTaskService::run(const std::stop_token &stopToken) {
       queue_.pop_front();
       activeTaskId_ = task.id;
       setTaskStateLocked(task.id, TaskStatus::Running, 0.0, 0, 0,
-                         "Starting");
+                         i18n::message("library.tasks.starting"));
     }
 
     TaskRunResult result;
@@ -347,18 +347,21 @@ void ChartLibraryTaskService::run(const std::stop_token &stopToken) {
       result = runner_(
           task, stopToken,
           [this, id = task.id](const ChartScanProgress &progress,
-                               std::string_view detail) {
+                               const i18n::Text &detail) {
             publishProgress(id, progress, detail);
           },
           [this, id = task.id, &stopToken] {
             return waitForResume(id, stopToken);
           });
+    } catch (const TaskError &error) {
+      result = {.disposition = TaskRunDisposition::Failed,
+                .detail = error.detail()};
     } catch (const std::exception &error) {
       result = {.disposition = TaskRunDisposition::Failed,
                 .detail = error.what()};
     } catch (...) {
       result = {.disposition = TaskRunDisposition::Failed,
-                .detail = "Unknown library task failure"};
+                .detail = i18n::message("library.tasks.unknown_failure")};
     }
 
     {
@@ -399,7 +402,7 @@ void ChartLibraryTaskService::run(const std::stop_token &stopToken) {
   for (auto &task : tasks_) {
     if (isPauseable(task.status)) {
       task.status = TaskStatus::Paused;
-      task.detail = "Paused";
+      task.detail = i18n::message("library.tasks.paused.label");
     }
   }
   bumpRevisionLocked();
@@ -413,7 +416,7 @@ bool ChartLibraryTaskService::waitForResume(
   }
   if (auto *task = findTaskLocked(id)) {
     task->status = TaskStatus::Paused;
-    task->detail = "Paused";
+    task->detail = i18n::message("library.tasks.paused.label");
     bumpRevisionLocked();
   }
   pauseChanged_.wait(lock, stopToken,
@@ -423,7 +426,7 @@ bool ChartLibraryTaskService::waitForResume(
   }
   if (auto *task = findTaskLocked(id)) {
     task->status = TaskStatus::Running;
-    task->detail = "Resuming";
+    task->detail = i18n::message("library.tasks.resuming");
     bumpRevisionLocked();
   }
   return true;
@@ -431,7 +434,7 @@ bool ChartLibraryTaskService::waitForResume(
 
 void ChartLibraryTaskService::publishProgress(
     std::uint64_t id, const ChartScanProgress &progress,
-    std::string_view detail) {
+    const i18n::Text &detail) {
   std::lock_guard lock(stateMutex_);
   if (!activeTaskId_ || *activeTaskId_ != id) {
     return;
@@ -456,7 +459,7 @@ void ChartLibraryTaskService::publishProgress(
     task->current = current;
     task->total = total;
     if (!detail.empty()) {
-      task->detail = std::string(detail);
+      task->detail = detail;
     }
     bumpRevisionLocked();
   }
@@ -464,7 +467,7 @@ void ChartLibraryTaskService::publishProgress(
 
 void ChartLibraryTaskService::setTaskStateLocked(
     std::uint64_t id, TaskStatus status, double fraction, int current,
-    int total, std::string detail) {
+    int total, i18n::Text detail) {
   auto *task = findTaskLocked(id);
   if (task == nullptr) {
     return;

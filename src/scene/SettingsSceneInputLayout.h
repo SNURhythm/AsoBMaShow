@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 
 #include "../input/GyroscopeTurntable.h"
 #include "../input/InputTypes.h"
@@ -11,9 +12,9 @@
 
 namespace settings_scene {
 
-inline constexpr std::string_view kGyroscopeStepAngleLabel = "Step angle (°)";
-inline constexpr std::string_view kGyroscopeReleaseDelayLabel =
-    "Release delay (ms)";
+inline constexpr std::string_view kGyroscopeStepAngleLabelKey = "settings.input.gyroscope.step_angle.label";
+inline constexpr std::string_view kGyroscopeReleaseDelayLabelKey =
+    "settings.input.gyroscope.release_delay.label";
 inline constexpr int kInputSettingsCardBorderWidth = 1;
 inline constexpr int kInputSettingsActionGroupBorderWidth = 1;
 inline constexpr int kInputSettingsBindingRowBorderWidth = 1;
@@ -23,7 +24,7 @@ constexpr bool shouldShowGyroscopeSettingsCard(std::string_view stableId) {
 }
 
 inline std::string gyroscopeSettingsErrorLabel(std::string_view error) {
-  return error.empty() ? std::string() : "Not saved: " + std::string(error);
+  return error.empty() ? std::string() : i18n::tr("settings.input.not_saved.prefix") + std::string(error);
 }
 
 struct InputSettingsLayout {
@@ -117,51 +118,55 @@ resolveGyroscopeSettingsLayout(int availableWidth, bool compact) {
               stackEditors ? width : std::max(0, (width - editorGap) / 2)};
 }
 
-constexpr std::string_view deviceClassLabel(input::DeviceClass deviceClass) {
+inline i18n::Text deviceClassLabel(input::DeviceClass deviceClass) {
   switch (deviceClass) {
   case input::DeviceClass::Keyboard:
-    return "Keyboard";
+    return i18n::message("settings.input.keyboard.label");
   case input::DeviceClass::GameController:
-    return "Controller";
+    return i18n::message("settings.input.controller.label");
   case input::DeviceClass::Joystick:
-    return "Joystick";
+    return i18n::message("settings.input.joystick.label");
   case input::DeviceClass::Touch:
-    return "Touch";
+    return i18n::message("settings.input.touch.label");
   case input::DeviceClass::Midi:
     return "MIDI";
   case input::DeviceClass::Gyroscope:
-    return "Gyroscope";
+    return i18n::message("settings.input.gyroscope.label");
   }
-  return "Input";
+  return i18n::message("settings.input.input.label");
 }
 
-inline std::string axisControlLabel(input::DeviceClass deviceClass, int index,
+inline i18n::Text axisControlLabel(input::DeviceClass deviceClass, int index,
                                     input::ControlDirection direction) {
-  std::string result =
+  i18n::Text result =
       deviceClass == input::DeviceClass::Gyroscope && index == 0
-          ? "Turntable"
-          : "Axis " + std::to_string(index);
+          ? i18n::message("settings.input.turntable.label")
+          : i18n::message("settings.input.control.number",
+                          {{"kind", i18n::message("settings.input.axis.prefix")},
+                           {"number", std::to_string(index)}});
   if (direction == input::ControlDirection::Positive) {
-    result += " +";
+    return i18n::message("settings.input.control.direction",
+                         {{"control", result}, {"direction", "+"}});
   } else if (direction == input::ControlDirection::Negative) {
-    result += " -";
+    return i18n::message("settings.input.control.direction",
+                         {{"control", result}, {"direction", "-"}});
   }
   return result;
 }
 
-constexpr std::string_view
+inline i18n::Text
 inputDeviceStatusLabel(input::InputDeviceStatus status) {
   switch (status) {
   case input::InputDeviceStatus::Ready:
-    return "Ready";
+    return i18n::message("settings.input.ready.label");
   case input::InputDeviceStatus::Calibrating:
-    return "Calibrating";
+    return i18n::message("settings.input.calibrating.label");
   case input::InputDeviceStatus::Disconnected:
-    return "Disconnected";
+    return i18n::message("settings.input.disconnected.label");
   case input::InputDeviceStatus::Retrying:
-    return "Retrying";
+    return i18n::message("settings.input.retrying.label");
   }
-  return "Disconnected";
+  return i18n::message("settings.input.disconnected.label");
 }
 
 inline std::optional<int> parseGyroscopeSettingInteger(std::string_view text) {

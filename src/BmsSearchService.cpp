@@ -145,6 +145,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
   if (cancelled.load()) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Lookup cancelled.";
+    result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
     return result;
   }
   if (!patternHtml) {
@@ -176,6 +177,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
     if (cancelled.load()) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = "Lookup cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
       return result;
     }
     if (progressCallback) {
@@ -186,6 +188,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
     if (cancelled.load()) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = "Lookup cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
       return result;
     }
     if (!bmsHtml) {

@@ -183,11 +183,11 @@ public:
   }
 
   void setSummary(const ReplaySummary &summary) {
-    titleText->setText(summary.autoPlay
-                           ? "AUTO PLAY"
+    titleText->setLocalizedText(summary.autoPlay
+                           ? i18n::message("records.auto_play.label")
                            : (summary.createdAt.empty()
-                                  ? "Replay #" + std::to_string(summary.id)
-                                  : summary.createdAt));
+                                  ? i18n::message("records.replay.number", {{"id", std::to_string(summary.id)}})
+                                  : i18n::Text(summary.createdAt)));
     detailText->setText(replay_summary_ui::detailLabel(summary));
     scoreText->setText(summary.autoPlay ? "AUTO"
                                         : std::to_string(summary.finalScore));

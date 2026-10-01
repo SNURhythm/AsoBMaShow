@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "MainMenuLibrary.h"
 
 #include "../BmsMetadataText.h"
@@ -114,7 +115,7 @@ std::optional<ChartMetaRecord> unzipAllRecord(int archiveCount) {
   record.unzipAll = true;
   record.solidArchive = true;
   record.meta.Title = "Unzip All (" + std::to_string(archiveCount) + ")";
-  record.meta.Artist = "Choose Keep or Delete before starting";
+  record.meta.Artist = i18n::tr("library.choose_keep_delete_before_starting.label");
   record.difficultyTableLabels = "ALL";
   return record;
 }

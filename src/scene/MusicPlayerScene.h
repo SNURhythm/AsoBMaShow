@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../i18n/Localization.h"
+
 #include "../audio/MusicPlaylist.h"
 #include "../bms_parser.hpp"
 #include "../view/RecyclerView.h"
@@ -167,7 +169,7 @@ private:
                          const std::string &statusMessage);
   void playNowPlaying(std::vector<MusicTrack> tracks, std::size_t startIndex,
                       const std::string &emptyMessage,
-                      const std::string &successMessage);
+                      const i18n::Text &successMessage);
   void playLibraryTrack();
   void playTrackBrowserTrack(TrackBrowserKind kind);
   void playPlaylist();

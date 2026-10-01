@@ -242,6 +242,7 @@ bool HorieYuukaDriver::tryDownload(
     if (cancelled.load()) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = "Lookup cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
       return true;
     }
     if (trimmedQuery.empty()) {
@@ -261,6 +262,7 @@ bool HorieYuukaDriver::tryDownload(
     if (cancelled.load()) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = "Lookup cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
       return true;
     }
     if (searchResult.candidates.empty()) {
@@ -313,10 +315,12 @@ bool HorieYuukaDriver::downloadCandidateById(
     BmsSearchDownloadProgressCallback progressCallback,
     const BmsSearchDownloadOptions &options,
     BmsSearchResult &result) {
+  result.presentationMessage = {};
   if (candidate.source != BmsSearchCandidate::Source::Horie ||
       candidate.id.empty()) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Selected download candidate is not valid.";
+    result.presentationMessage = i18n::message("library.find_bms.result.invalid_candidate");
     return true;
   }
 
@@ -329,6 +333,9 @@ bool HorieYuukaDriver::downloadCandidateById(
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         grantError.empty() ? "Horie archive grant failed." : grantError;
+    if (grantError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.horie_grant_failed");
+    }
     return true;
   }
 
@@ -339,6 +346,8 @@ bool HorieYuukaDriver::downloadCandidateById(
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         std::string("Horie archive grant returned invalid JSON: ") + e.what();
+    result.presentationMessage = i18n::message("library.find_bms.result.horie_invalid_grant",
+        {{"diagnostic", e.what()}});
     return true;
   }
 
@@ -346,6 +355,7 @@ bool HorieYuukaDriver::downloadCandidateById(
   if (grantDownloadUrl.empty()) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Horie archive did not return a download URL.";
+    result.presentationMessage = i18n::message("library.find_bms.result.horie_missing_url");
     return true;
   }
 

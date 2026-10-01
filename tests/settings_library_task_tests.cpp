@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "scene/SettingsLibraryTask.h"
 
 #include <cassert>
@@ -137,6 +138,8 @@ void testOwnerDestructionJoinsBeforeWorkCapturesAreReleased() {
 #include "settings_library_scene_fixture.h"
 
 int main() {
+  testSceneFolderStatusSurvivesLanguageChanges();
+  testSceneTableStatusesSurviveLanguageChanges();
   testExclusiveAdmissionAndProgressHandoff();
   testCompletedUpdatesSurviveAdmissionUntilConsumed();
   testStopJoinsUncancellableWorkAndDiscardsLateAndQueuedUpdates();

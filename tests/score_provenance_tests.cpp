@@ -74,6 +74,21 @@ void testBpmGuideOnlyModifiesVariableTempoAttempt() {
   const ScoreProvenance variableResult = makeScoreProvenance(variableTempo);
   assert(variableResult.assistOption == assist_options::kBpmGuide);
   assert(variableResult.eligibility == ScoreEligibility::Modified);
+
+  auto assisted = constantTempo;
+  assisted.assistOption = "ASSISTED";
+  const auto assistedResult = makeScoreProvenance(assisted);
+  assert(assistedResult.assistOption == "ASSISTED");
+  assert(assistedResult.eligibility == ScoreEligibility::Modified);
+  const auto encoded = serializeScoreProvenance(assistedResult);
+  const auto payload = nlohmann::json::parse(encoded);
+  assert(payload["schemaVersion"] == 6 && !payload.contains("pauseUsed"));
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(encoded, error);
+  assert(decoded && *decoded == assistedResult);
+  assert(resultRetryAssistOption(decoded->assistOption) == assist_options::kOff);
+  assert(resultRetryAssistOption(assist_options::kDrag) == assist_options::kDrag);
+  assert(resultRetryAssistOption(assist_options::kBpmGuide) == assist_options::kBpmGuide);
 }
 
 void testPreviousRulesetsCannotRemainVerified() {

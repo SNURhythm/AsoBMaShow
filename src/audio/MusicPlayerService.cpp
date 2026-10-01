@@ -1025,22 +1025,46 @@ bool MusicPlayerService::PlayPreviousLocked(std::string &errorMessage) {
   return PlayTrackLocked(*track, errorMessage);
 }
 
-bool MusicPlayerService::PlayCurrentAsync(std::string &statusMessage,
-                                          std::string successMessage) {
+bool MusicPlayerService::PlayCurrentAsync(i18n::Text &statusMessage,
+                                          i18n::Text successMessage) {
   return StartPlaybackAsync(PlaybackRequest::Current, statusMessage,
                             std::move(successMessage));
 }
 
-bool MusicPlayerService::PlayNextAsync(std::string &statusMessage,
-                                       std::string successMessage) {
+bool MusicPlayerService::PlayNextAsync(i18n::Text &statusMessage,
+                                       i18n::Text successMessage) {
   return StartPlaybackAsync(PlaybackRequest::Next, statusMessage,
                             std::move(successMessage));
 }
 
-bool MusicPlayerService::PlayPreviousAsync(std::string &statusMessage,
-                                           std::string successMessage) {
+bool MusicPlayerService::PlayPreviousAsync(i18n::Text &statusMessage,
+                                           i18n::Text successMessage) {
   return StartPlaybackAsync(PlaybackRequest::Previous, statusMessage,
                             std::move(successMessage));
+}
+
+bool MusicPlayerService::PlayCurrentAsync(std::string &statusMessage,
+                                         i18n::Text successMessage) {
+  i18n::Text status;
+  const bool started = PlayCurrentAsync(status, std::move(successMessage));
+  statusMessage = status.resolve();
+  return started;
+}
+
+bool MusicPlayerService::PlayNextAsync(std::string &statusMessage,
+                                         i18n::Text successMessage) {
+  i18n::Text status;
+  const bool started = PlayNextAsync(status, std::move(successMessage));
+  statusMessage = status.resolve();
+  return started;
+}
+
+bool MusicPlayerService::PlayPreviousAsync(std::string &statusMessage,
+                                         i18n::Text successMessage) {
+  i18n::Text status;
+  const bool started = PlayPreviousAsync(status, std::move(successMessage));
+  statusMessage = status.resolve();
+  return started;
 }
 
 bool MusicPlayerService::Resume(std::string &errorMessage) {
@@ -1181,20 +1205,21 @@ long long MusicPlayerService::SleepTimerRemainingMicros() const {
 }
 
 bool MusicPlayerService::ProcessNativeControlEvents(
-    std::string &statusMessage) {
-  statusMessage.clear();
+    i18n::Text &statusMessage) {
+  statusMessage = {};
   bool handled = false;
   for (const auto event : native_music_player::DrainControlEvents()) {
     handled = true;
     switch (event) {
     case native_music_player::ControlEvent::Previous:
-      PlayPreviousAsync(statusMessage, "Playing previous track.");
+      PlayPreviousAsync(statusMessage);
       break;
     case native_music_player::ControlEvent::Next:
-      PlayNextAsync(statusMessage, "Playing next track.");
+      PlayNextAsync(statusMessage);
       break;
     case native_music_player::ControlEvent::Finished:
-      PlayNextAsync(statusMessage, "Track finished. Playing next track.");
+      PlayNextAsync(statusMessage, i18n::message(
+          "music_player.service.finished_next.message"));
       break;
     }
   }
@@ -1202,13 +1227,31 @@ bool MusicPlayerService::ProcessNativeControlEvents(
 }
 
 bool MusicPlayerService::ConsumeNativeControlStatus(
-    std::string &statusMessage) {
+    i18n::Text &statusMessage) {
   std::lock_guard<std::mutex> lock(nativeControlStatusMutex);
   if (consumedNativeControlStatusRevision == nativeControlStatusRevision) {
     return false;
   }
   consumedNativeControlStatusRevision = nativeControlStatusRevision;
   statusMessage = nativeControlStatusMessage;
+  return true;
+}
+
+bool MusicPlayerService::ProcessNativeControlEvents(
+    std::string &statusMessage) {
+  i18n::Text status;
+  const bool handled = ProcessNativeControlEvents(status);
+  statusMessage = status.resolve();
+  return handled;
+}
+
+bool MusicPlayerService::ConsumeNativeControlStatus(
+    std::string &statusMessage) {
+  i18n::Text status;
+  if (!ConsumeNativeControlStatus(status)) {
+    return false;
+  }
+  statusMessage = status.resolve();
   return true;
 }
 
@@ -1355,11 +1398,11 @@ bool MusicPlayerService::PlayTrackLocked(
 }
 
 bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
-                                            std::string &statusMessage,
-                                            std::string successMessage) {
-  statusMessage.clear();
+                                            i18n::Text &statusMessage,
+                                            i18n::Text successMessage) {
+  statusMessage = {};
   if (!native_music_player::IsSupported()) {
-    statusMessage = "Native music playback is not supported on this platform.";
+    statusMessage = i18n::message("music_player.service.native_unavailable.message");
     return false;
   }
 
@@ -1382,13 +1425,13 @@ bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
     if (selectedTrack == nullptr) {
       switch (request) {
       case PlaybackRequest::Current:
-        statusMessage = "No music track is selected.";
+        statusMessage = i18n::message("music_player.service.no_track_selected.message");
         break;
       case PlaybackRequest::Next:
-        statusMessage = "No next music track is available.";
+        statusMessage = i18n::message("music_player.service.no_next_track.message");
         break;
       case PlaybackRequest::Previous:
-        statusMessage = "No previous music track is available.";
+        statusMessage = i18n::message("music_player.service.no_previous_track.message");
         break;
       }
       return false;
@@ -1419,13 +1462,13 @@ bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
         });
   }
 
-  statusMessage = "Preparing music...";
+  statusMessage = i18n::message("music_player.service.preparing.progress");
   return true;
 }
 
 void MusicPlayerService::PlaybackWorker(
     music_playlist::MusicTrack track, std::uint64_t requestRevision,
-    bool requestedClubMode, std::string successMessage,
+    bool requestedClubMode, i18n::Text successMessage,
     const std::stop_token &stopToken) {
   const auto isCurrentRequest = [this, requestRevision, &stopToken]() {
     return !stopToken.stop_requested() &&
@@ -1453,7 +1496,7 @@ void MusicPlayerService::PlaybackWorker(
     return;
   }
 
-  std::string statusMessage;
+  i18n::Text statusMessage;
   bool playing = false;
   std::vector<music_playlist::MusicTrack> adjacentTracks;
   std::vector<std::filesystem::path> keepCachePaths;
@@ -1465,7 +1508,7 @@ void MusicPlayerService::PlaybackWorker(
     lastCacheResult = cacheResult;
     if (!cacheResult.success) {
       statusMessage = cacheResult.message.empty()
-                          ? "Could not render music track."
+                          ? i18n::message("music_player.service.render_failed.message")
                           : cacheResult.message;
     } else {
       auto metadata = music_playlist::MakeNativeMetadata(track);
@@ -1493,7 +1536,7 @@ void MusicPlayerService::PlaybackWorker(
         adjacentTracks = AdjacentTracksLocked();
         playing = true;
         statusMessage =
-            successMessage.empty() ? "Playing music." : successMessage;
+            successMessage.empty() ? i18n::message("music_player.service.playing.message") : successMessage;
       }
     }
   }
@@ -1533,7 +1576,7 @@ void MusicPlayerService::ClubModeSwitchWorker(
     return;
   }
 
-  std::string statusMessage;
+  i18n::Text statusMessage;
   bool switched = false;
   std::vector<music_playlist::MusicTrack> adjacentTracks;
   std::vector<std::filesystem::path> keepCachePaths;
@@ -1545,7 +1588,7 @@ void MusicPlayerService::ClubModeSwitchWorker(
     }
     if (!cacheResult.success) {
       statusMessage = cacheResult.message.empty()
-                          ? "Could not switch Club Beat."
+                          ? i18n::message("music_player.service.club_switch_failed.message")
                           : cacheResult.message;
     } else {
       const auto previousState = native_music_player::GetState();
@@ -1570,8 +1613,8 @@ void MusicPlayerService::ClubModeSwitchWorker(
         keepCachePaths = PlaybackCacheKeepPathsLocked(cacheResult);
         adjacentTracks = AdjacentTracksLocked();
         switched = true;
-        statusMessage = requestedClubMode ? "Club Beat on."
-                                          : "Club Beat off.";
+        statusMessage = requestedClubMode ? i18n::message("music_player.service.club_on.message")
+                                          : i18n::message("music_player.service.club_off.message");
       }
     }
   }
@@ -1742,10 +1785,11 @@ void MusicPlayerService::SleepTimerWorker(const std::stop_token &stopToken) {
     lock.unlock();
     std::string stopMessage;
     if (StopPlaybackInternal(stopMessage)) {
-      PublishNativeControlStatus("Sleep timer stopped playback.");
+      PublishNativeControlStatus(i18n::message(
+          "music_player.service.sleep_stopped.message"));
     } else {
       PublishNativeControlStatus(stopMessage.empty()
-                                     ? "Sleep timer expired."
+                                     ? i18n::message("music_player.service.sleep_expired.message")
                                      : stopMessage);
     }
     lock.lock();
@@ -1794,7 +1838,7 @@ void MusicPlayerService::StopNativeControlEventPump() {
 void MusicPlayerService::NativeControlEventLoop(
     const std::stop_token &stopToken) {
   while (!stopToken.stop_requested()) {
-    std::string statusMessage;
+    i18n::Text statusMessage;
     if (ProcessNativeControlEvents(statusMessage) && !statusMessage.empty()) {
       PublishNativeControlStatus(statusMessage);
     }
@@ -1806,7 +1850,7 @@ void MusicPlayerService::NativeControlEventLoop(
 }
 
 void MusicPlayerService::PublishNativeControlStatus(
-    const std::string &statusMessage) {
+    const i18n::Text &statusMessage) {
   std::lock_guard<std::mutex> lock(nativeControlStatusMutex);
   nativeControlStatusMessage = statusMessage;
   ++nativeControlStatusRevision;

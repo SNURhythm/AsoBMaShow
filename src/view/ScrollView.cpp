@@ -108,6 +108,14 @@ void ScrollView::refreshContentLayout() {
   updateContentPosition();
 }
 
+void ScrollView::propagateLanguageChange() {
+  View::propagateLanguageChange();
+  if (contentView != nullptr) {
+    contentView->propagateLanguageChange();
+    refreshContentLayout();
+  }
+}
+
 void ScrollView::scrollToBottom() {
   if (contentView == nullptr) {
     return;

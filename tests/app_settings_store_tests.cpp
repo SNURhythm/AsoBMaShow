@@ -187,35 +187,11 @@ void testLegacyFixtureLoadsEverySetting() {
          "legacy fixture discriminates pacemaker persistence");
 }
 
-void testAccelerationCompensationDefaultsAndSavedChoice() {
-  TempDirectory temp;
-  const auto path = temp.path() / "settings.json";
-  expect(AppSettingsStore::Load(path).settings.accelerationCompensation,
-         "new profiles enable acceleration compensation");
-  writeFile(path, R"({"schemaVersion":7})");
-  expect(AppSettingsStore::Load(path).settings.accelerationCompensation,
-         "settings without a compensation preference use the enabled default");
-  expect(AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg"))
-             .settings.accelerationCompensation,
-         "legacy profiles without the preference enable compensation");
-  for (const bool enabled : {false, true}) {
-    AppSettings settings;
-    settings.accelerationCompensation = enabled;
-    std::string error;
-    expect(AppSettingsStore::Save(path, settings, error),
-           "compensation preference saves: " + error);
-    expect(AppSettingsStore::Load(path).settings.accelerationCompensation ==
-               enabled,
-           "an explicit saved compensation choice overrides the default");
-  }
-}
-
 void testJsonRoundTripIncludesAudioAndVideo() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
   AppSettings expected = makeDistinctSettings();
   expected.selectedPlaybackRatePercent = 75;
-  expected.accelerationCompensation = true;
   expected.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   expected.musicPlayerPlaybackRatePercent = 135;
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
@@ -1200,6 +1176,30 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
          "malformed range emits a setting diagnostic");
 }
 
+void testLaneAngleAcceptsZeroAndPreservesItAcrossRestart() {
+  TempDirectory temp;
+  for (const float angle : {0.0f, 0.5f, 3.5f}) {
+    AppSettings settings;
+    settings.laneAngleDegrees = angle;
+    settings.sanitize();
+    expect(settings.laneAngleDegrees == angle,
+           "lane angles below four degrees remain selectable");
+    const auto path = temp.path() / "lane-angle.json";
+    std::string error;
+    expect(AppSettingsStore::Save(path, settings, error),
+           "lane angle saves: " + error);
+    const auto loaded = AppSettingsStore::Load(path);
+    expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+               loaded.settings.laneAngleDegrees == angle,
+           "low lane angles survive an application restart");
+  }
+  AppSettings belowMinimum;
+  belowMinimum.laneAngleDegrees = -1.0f;
+  belowMinimum.sanitize();
+  expect(belowMinimum.laneAngleDegrees == 0.0f,
+         "negative lane angles clamp to zero");
+}
+
 void testBeatorajaStartSelectDurationRange() {
   AppSettings lower;
   lower.visibleTimeDurationMilliseconds = 0;
@@ -1752,7 +1752,6 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
-  testAccelerationCompensationDefaultsAndSavedChoice();
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
@@ -1773,6 +1772,7 @@ int main() {
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
+  testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();
   testBeatorajaStartSelectDurationRange();
   testVisibleTimeDurationKeepsBeatorajaMillisecondsCanonical();
   testGameplayRulesetDefaultsMigrationAndValidation();

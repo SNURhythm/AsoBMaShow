@@ -887,7 +887,12 @@ BMSRenderer::BMSRenderer(
     return uv;
   };
 
-  auto configureSheet = [&](NoteSheet &sheet, int textureW, int textureH) {
+  auto configureSheet = [&](NoteSheet &sheet, const SpriteLoader &loader) {
+    const int textureW = loader.getWidth();
+    const int textureH = loader.getHeight();
+    sheet.noteVisibleBounds = image_alpha::visibleBounds(
+        {loader.getData(), static_cast<std::size_t>(textureW) * textureH * 4},
+        textureW, textureH, 0, 0, 128, 40);
     sheet.note = makeUv(0, 0, 128, 40, textureW, textureH);
     sheet.longTail = makeUv(0, 40, 128, 40, textureW, textureH);
     sheet.longHead = makeUv(0, 80, 128, 40, textureW, textureH);
@@ -901,11 +906,9 @@ BMSRenderer::BMSRenderer(
     sheet.mine = makeUv(0, 296, 128, 40, textureW, textureH);
   };
 
-  configureSheet(graySheet, spriteLoader.getWidth(), spriteLoader.getHeight());
-  configureSheet(blueSheet, spriteLoader2.getWidth(),
-                 spriteLoader2.getHeight());
-  configureSheet(scratchSheet, spriteLoader3.getWidth(),
-                 spriteLoader3.getHeight());
+  configureSheet(graySheet, spriteLoader);
+  configureSheet(blueSheet, spriteLoader2);
+  configureSheet(scratchSheet, spriteLoader3);
 
   titleText = std::make_unique<TextView>(kHudFontPath, 26);
   titleText->setText(chart->Meta.Title);
@@ -1989,14 +1992,10 @@ void BMSRenderer::recordCharacterizationSubmission(
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
-    bool renderBudgetReserved, bool headAtLowerBound) {
+    bool renderBudgetReserved) {
   if (!renderBudgetReserved) {
     return;
   }
-  // A retained missed head is anchored to the world clipping boundary.
-  // It is not a scroll coordinate and must not be perspective-remapped.
-  headY = headAtLowerBound ? lowerBound : compensatedLaneY(headY);
-  tailY = compensatedLaneY(tailY);
   // assert head
   assert(!head->IsTail() && "head is tail");
   const bool tailMissedWithHead = wasLongNoteTailMissedWithHead(head);
@@ -2142,7 +2141,6 @@ void BMSRenderer::drawLongNote(
 
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
                                  uint32_t submitDepth) {
-  y = compensatedLaneY(y);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
                                    noteRenderHeight, judgeY);
   if (note->IsPlayed || !clip.visible ||
@@ -2178,7 +2176,6 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
                                     uint32_t submitDepth) {
-  y = compensatedLaneY(y);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
                                    noteRenderHeight, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
@@ -2246,7 +2243,6 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
 void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note,
                                    uint32_t submitDepth) {
-  y = compensatedLaneY(y);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
                                    noteRenderHeight, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
@@ -2534,8 +2530,8 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
   }
 
   const auto visible = gameplay_scroll_geometry::visibleScrollRange(
-      currentScrollPosition, rxhs,
-      linearLaneY(lowerBound - noteRenderHeight), upperBound, 0.0F, judgeY);
+      currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+      judgeY);
   const double firstVisibleScrollPosition = visible.minimum;
   const double lastVisibleScrollPosition = visible.maximum;
 
@@ -2558,8 +2554,8 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
   }
 
   const auto visible = gameplay_scroll_geometry::visibleScrollRange(
-      currentScrollPosition, rxhs,
-      linearLaneY(lowerBound - noteRenderHeight), upperBound, 0.0F, judgeY);
+      currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+      judgeY);
   const double firstVisibleScrollPosition = visible.minimum;
   const double lastVisibleScrollPosition = visible.maximum;
 
@@ -2584,8 +2580,15 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 }
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
-  y = compensatedLaneY(y);
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+  const auto visible = image_alpha::trimBottomUp(
+      {laneToX(event.lane), y, noteRenderWidth, noteRenderHeight},
+      sheetForLane(event.lane).noteVisibleBounds);
+  const float x = static_cast<float>(visible.x);
+  y = static_cast<float>(visible.y);
+  const float noteWidth = static_cast<float>(visible.width);
+  const float noteHeight = static_cast<float>(visible.height);
+  if (noteWidth <= 0.0f || noteHeight <= 0.0f ||
+      y + noteHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -2601,20 +2604,28 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
                 : Color(255, 40, 40, 220);
   }
 
-  const float x = laneToX(event.lane);
-  const float thickness = std::max(0.015f, noteRenderHeight * 0.12f);
+  const float thickness =
+      std::min(std::max(0.015f, noteHeight * 0.12f),
+               std::min(noteWidth, noteHeight) * 0.5f);
   const uint32_t abgr = color.toABGR();
-  ghostBatchRenderer.addRect(x, y, noteRenderWidth, thickness, abgr);
-  ghostBatchRenderer.addRect(x, y + noteRenderHeight - thickness,
-                             noteRenderWidth, thickness, abgr);
-  ghostBatchRenderer.addRect(x, y, thickness, noteRenderHeight, abgr);
-  ghostBatchRenderer.addRect(x + noteRenderWidth - thickness, y, thickness,
-                             noteRenderHeight, abgr);
+  ghostBatchRenderer.addRect(x, y, noteWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y + noteHeight - thickness,
+                             noteWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y, thickness, noteHeight, abgr);
+  ghostBatchRenderer.addRect(x + noteWidth - thickness, y, thickness,
+                             noteHeight, abgr);
 }
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
-  y = compensatedLaneY(y);
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+  const auto visible = image_alpha::trimBottomUp(
+      {laneToX(marker.lane), y, noteRenderWidth, noteRenderHeight},
+      sheetForLane(marker.lane).noteVisibleBounds);
+  const float x = static_cast<float>(visible.x);
+  y = static_cast<float>(visible.y);
+  const float noteWidth = static_cast<float>(visible.width);
+  const float noteHeight = static_cast<float>(visible.height);
+  if (noteWidth <= 0.0f || noteHeight <= 0.0f ||
+      y + noteHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -2625,11 +2636,11 @@ void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
           gameplay_chart_entity_render_budget::kReplayMissMarkerCost)) {
     return;
   }
-  const float x = laneToX(marker.lane);
+  const float minimumExtent = std::min(noteWidth, noteHeight);
   const float block =
-      std::max(0.018f, std::min(noteRenderWidth, noteRenderHeight) * 0.22f);
-  const float maxX = std::max(0.0f, noteRenderWidth - block);
-  const float maxY = std::max(0.0f, noteRenderHeight - block);
+      std::min(std::max(0.018f, minimumExtent * 0.22f), minimumExtent);
+  const float maxX = std::max(0.0f, noteWidth - block);
+  const float maxY = std::max(0.0f, noteHeight - block);
   const uint32_t color = Color(255, 42, 42, 236).toABGR();
 
   for (int i = 0; i < kSteps; ++i) {
@@ -3144,8 +3155,7 @@ void BMSRenderer::renderFrame(
   const BuiltInRendererTraversal builtInTraversal =
       builtInProjectionTraversal();
   const float hispeed = builtInTraversal.hispeed;
-  noteVisibleUpperBound =
-      compensatedLaneY(builtInTraversal.noteVisibleUpperBound);
+  noteVisibleUpperBound = builtInTraversal.noteVisibleUpperBound;
   float rxhs = builtInTraversal.rxhs;
   float y = judgeY;
   const double currentScrollPosition =
@@ -3154,8 +3164,8 @@ void BMSRenderer::renderFrame(
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   if (characterizationRecorder != nullptr) {
     const auto visibleScroll = gameplay_scroll_geometry::visibleScrollRange(
-        currentScrollPosition, rxhs,
-        linearLaneY(lowerBound - noteRenderHeight), upperBound, 0.0F, judgeY);
+        currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+        judgeY);
     const auto coverHandle = laneCoverHandleGeometry();
     characterizationRecorder->beginFrame({
         .renderTimeMicros = micro,
@@ -3269,7 +3279,6 @@ void BMSRenderer::renderFrame(
                   kSingleRectangleEntityCost)) {
         return;
       }
-      lineY = compensatedLaneY(lineY);
       drawRect(playAreaWidth, 0.05F, playAreaLeftX, lineY,
                Color(255, 255, 255, 128));
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
@@ -3297,7 +3306,6 @@ void BMSRenderer::renderFrame(
           if (!std::isfinite(noteY)) {
             return;
           }
-          noteY = compensatedLaneY(noteY);
           const auto clip = noteRenderClip(note.timeMicros, currentRenderMicros,
                                            noteY,
                                            noteRenderHeight, judgeY);
@@ -3340,7 +3348,6 @@ void BMSRenderer::renderFrame(
           if (!timelineWasTraversed(retainedOrdinal)) {
             return;
           }
-          noteY = compensatedLaneY(noteY);
           const auto clip = noteRenderClip(timeMicros, currentRenderMicros,
                                            noteY,
                                            noteRenderHeight, judgeY);
@@ -3408,7 +3415,7 @@ void BMSRenderer::renderFrame(
 
     const auto drawProjectedLong =
         [&](const ProjectedLongNoteDescriptor &longNote, float frozenHeadY,
-            float frozenTailY, bool headAtLowerBound) {
+            float frozenTailY) {
       if (longNote.headSource == ChartVisualNoteSource::Invisible ||
           longNote.tailSource == ChartVisualNoteSource::Invisible) {
         if (longNote.headSource == ChartVisualNoteSource::Invisible) {
@@ -3443,9 +3450,8 @@ void BMSRenderer::renderFrame(
               gameplay_chart_entity_render_budget::kLongNoteReservationCost)) {
         return;
       }
-      const float headY =
-          headAtLowerBound ? lowerBound : compensatedLaneY(frozenHeadY);
-      const float tailY = compensatedLaneY(frozenTailY);
+      const float headY = frozenHeadY;
+      const float tailY = frozenTailY;
       if (!std::isfinite(headY) || !std::isfinite(tailY)) {
         return;
       }
@@ -3612,8 +3618,7 @@ void BMSRenderer::renderFrame(
       }
       case BuiltInRendererPlanEntryKind::LongNote:
         drawProjectedLong(builtInPlan.longNotes[entry.descriptorIndex],
-                          entry.renderY, entry.tailRenderY,
-                          entry.headAtLowerBound);
+                          entry.renderY, entry.tailRenderY);
         break;
       }
     }
@@ -3633,10 +3638,9 @@ void BMSRenderer::renderFrame(
   longNoteLookahead.clear();
   const auto rememberLongNoteHead =
       [&](bms_parser::LongNote *longNote, float headY,
-          const auto &orderProvider, bool headAtLowerBound = false) {
+          const auto &orderProvider) {
         auto [it, inserted] = longNoteLookahead.try_emplace(longNote);
         it->second.headY = headY;
-        it->second.headAtLowerBound = headAtLowerBound;
         if (!inserted) {
           return;
         }
@@ -3650,7 +3654,7 @@ void BMSRenderer::renderFrame(
       };
   for (auto *orphanLongNote : state.orphanLongNotes) {
     rememberLongNoteHead(orphanLongNote, lowerBound,
-                         [&]() { return pastLongNoteOrder; }, true);
+                         [&]() { return pastLongNoteOrder; });
   }
   double futureY = static_cast<double>(judgeY);
   bool futureTraversalStarted = false;
@@ -3704,8 +3708,7 @@ void BMSRenderer::renderFrame(
         chartEntityRenderBudget.tryConsume(
             gameplay_chart_entity_render_budget::
                 kSingleRectangleEntityCost)) {
-      const float lineY = compensatedLaneY(y);
-      drawRect(playAreaWidth, 0.05f, playAreaLeftX, lineY,
+      drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
                Color(255, 255, 255, 128));
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
       recordCharacterizationSubmission(
@@ -3714,7 +3717,7 @@ void BMSRenderer::renderFrame(
           timeLine, nullptr, -1, 0,
           bms_renderer_characterization::LongBodyState::None,
           {.x = playAreaLeftX,
-           .y = lineY,
+           .y = y,
            .width = playAreaWidth,
            .height = 0.05F});
 #endif
@@ -3770,7 +3773,7 @@ void BMSRenderer::renderFrame(
           return false;
         }
         state.orphanLongNotes.insert(longNote);
-        rememberLongNoteHead(longNote, lowerBound, ensureLongOrder, true);
+        rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
         return true;
       };
       if (timeLine->Timing >= chartTimeMicros - latePoorTiming) {
@@ -3801,8 +3804,7 @@ void BMSRenderer::renderFrame(
                 it != longNoteLookahead.end()) {
               drawLongNote(it->second.headY, y, longNote->Head,
                            it->second.order,
-                           it->second.renderBudgetReserved,
-                           it->second.headAtLowerBound);
+                           it->second.renderBudgetReserved);
               // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
@@ -3811,7 +3813,7 @@ void BMSRenderer::renderFrame(
                       gameplay_chart_entity_render_budget::
                           kLongNoteReservationCost);
               drawLongNote(lowerBound, y, longNote->Head, pastLongNoteOrder,
-                           renderBudgetReserved, true);
+                           renderBudgetReserved);
             }
           } else {
             rememberLongNoteHead(longNote, y, ensureLongOrder);
@@ -3847,7 +3849,7 @@ void BMSRenderer::renderFrame(
 
             // setting to lowerBound in all cases is OK because the played
             // state will be correctly handled by drawLongNote
-            rememberLongNoteHead(longNote, lowerBound, ensureLongOrder, true);
+            rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
           }
         }
       }
@@ -3885,8 +3887,7 @@ void BMSRenderer::renderFrame(
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
     drawLongNote(pair.second.headY, upperBound, pair.first,
-                 pair.second.order, pair.second.renderBudgetReserved,
-                 pair.second.headAtLowerBound);
+                 pair.second.order, pair.second.renderBudgetReserved);
   }
   }
 
@@ -4342,10 +4343,6 @@ void BMSRenderer::configure(
   setHiSpeedFixMode(configuration.hispeedFixMode);
   setPlayAreaWidth(configuration.playAreaWidth);
   setLaneBeamsEnabled(configuration.laneBeamsEnabled);
-  if (accelerationCompensation != configuration.accelerationCompensation) {
-    accelerationCompensation = configuration.accelerationCompensation;
-    refreshGeometry();
-  }
   setLaneCoverHispeedFactor(configuration.laneCoverHispeedFactor);
   laneCoverEnabled = configuration.laneCoverEnabled;
   setLaneBeamLengthPercent(configuration.laneBeamLengthPercent);
@@ -4515,38 +4512,12 @@ std::optional<PresentationFailure> BMSRenderer::lastFailure() const {
   return presentationFailure;
 }
 
-gameplay_scroll_geometry::LanePerspectiveCompensation
-BMSRenderer::lanePerspectiveCompensation(float laneTop) const {
-  const auto eye = rendering::game_camera.getEye();
-  const auto forward = bx::sub(rendering::game_camera.getLookAt(), eye);
-  const float x = gameplay_geometry::kPlayAreaCenterX;
-  return {judgeY, laneTop,
-          bx::dot(bx::sub(bx::Vec3{x, judgeY, 0.0F}, eye), forward),
-          bx::dot(bx::sub(bx::Vec3{x, laneTop, 0.0F}, eye), forward)};
-}
-
-float BMSRenderer::compensatedLaneY(float linearY) const {
-  return accelerationCompensation
-             ? lanePerspectiveCompensation(upperBound).toWorld(linearY)
-             : linearY;
-}
-
-float BMSRenderer::linearLaneY(float worldY) const {
-  return accelerationCompensation
-             ? lanePerspectiveCompensation(upperBound).toLinear(worldY)
-             : worldY;
-}
-
 void BMSRenderer::refreshGeometry() {
   const float nextUpperBound = calculateLanePlaneScreenTopIntersection();
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
-  const float linearVisibleUpperBound =
+  const float nextVisibleUpperBound =
       judgeY + std::max(0.0F, nextUpperBound - judgeY) * (1.0F - hiddenRatio);
-  const float nextVisibleUpperBound = accelerationCompensation
-      ? lanePerspectiveCompensation(nextUpperBound).toWorld(
-            linearVisibleUpperBound)
-      : linearVisibleUpperBound;
   if (nextUpperBound != upperBound ||
       nextVisibleUpperBound != noteVisibleUpperBound) {
     advanceTouchRevision(touchLayoutRevision_);
@@ -4634,8 +4605,8 @@ void BMSRenderer::setNoteStartPositionPercent(int percent) {
   noteStartPositionPercent = next;
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
-  noteVisibleUpperBound = compensatedLaneY(
-      judgeY + std::max(0.0F, upperBound - judgeY) * (1.0F - hiddenRatio));
+  noteVisibleUpperBound =
+      judgeY + std::max(0.0F, upperBound - judgeY) * (1.0F - hiddenRatio);
   advanceTouchRevision(touchHitRegionsRevision_);
 }
 
@@ -4810,15 +4781,13 @@ int BMSRenderer::dragLaneCoverHandleTo(float renderX, float renderY,
   const float laneHeight = std::max(0.001f, upperBound - judgeY);
   const float maxHiddenRatio =
       static_cast<float>(AppSettings::kMaxNoteStartPositionPercent) / 100.0f;
-  const float minVisibleY =
-      compensatedLaneY(judgeY + laneHeight * (1.0f - maxHiddenRatio));
+  const float minVisibleY = judgeY + laneHeight * (1.0f - maxHiddenRatio);
   const float anchorOffset =
       std::isfinite(lanePointYOffset) ? std::max(0.0f, lanePointYOffset)
                                       : 0.0f;
   const float targetY =
       std::clamp(point->y - anchorOffset, minVisibleY, upperBound);
-  const float linearTargetY = linearLaneY(targetY);
-  const float hiddenRatio = 1.0f - ((linearTargetY - judgeY) / laneHeight);
+  const float hiddenRatio = 1.0f - ((targetY - judgeY) / laneHeight);
   setNoteStartPositionPercent(std::clamp(
       static_cast<int>(std::lround(hiddenRatio * 100.0f)),
       AppSettings::kMinNoteStartPositionPercent,

@@ -2322,6 +2322,67 @@ expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
         .textAtlasesByObject = planned.plan->textAtlasesByObject,
         .decodedBytes = planned.plan->decodedBytes};
   };
+  {
+    const skin::SkinSourceRect crop{.x = 3, .y = 2, .w = 10, .h = 8};
+    const skin::SkinSourceRect blank{.x = 13, .y = 2, .w = 3, .h = 8};
+    const skin::SkinSourceRect aliasCrop{.x = 5, .y = 5, .w = 5, .h = 4};
+    auto pixels = std::make_shared<std::vector<unsigned char>>(16 * 12 * 4, 0);
+    (*pixels)[3] = 255; // A different atlas cell must not affect the note.
+    (*pixels)[(5 * 16 + 5) * 4 + 3] = 1;
+    (*pixels)[(8 * 16 + 9) * 4 + 3] = 255;
+    skin::ValidatedBeatorajaSkinModel alphaModel;
+    for (skin::SkinResourceId id : {90001, 90002, 90003}) {
+      alphaModel.model.resources.emplace_back(skin::SkinImageResource{
+          .id = id, .virtualPath = "resources/fixture.png"});
+    }
+    skin::SkinNoteObject alphaNotes;
+    alphaNotes.lanes.resize(2);
+    alphaNotes.lanes[0].authoredLane = 0;
+    alphaNotes.lanes[0].visuals[skin::SkinNoteVisualKind::Normal] =
+        skin::SkinSpriteFrames{.resource = 90001, .frames = {crop, blank}};
+    alphaNotes.lanes[1].authoredLane = 1;
+    alphaNotes.lanes[1].visuals[skin::SkinNoteVisualKind::Normal] =
+        skin::SkinSpriteFrames{.resource = 90002, .frames = {aliasCrop}};
+    alphaModel.model.objects.push_back(
+        {.id = 90001, .payload = std::move(alphaNotes), .critical = true});
+    alphaModel.model.objects.push_back(
+        {.id = 90003, .payload = skin::SkinImageObject{
+             .orderedStates = {{.resource = 90003, .frames = {blank}}}},
+         .critical = true});
+    skin::SkinResourcePreparationService alphaService(
+        [pixels](std::span<const std::byte>, std::stop_token)
+            -> std::optional<image_decode::DecodedImageData> {
+          return image_decode::DecodedImageData{
+              .width = 16, .height = 12, .rgba = pixels};
+        });
+    // Repeat to cover both the cold decode and cached-image alias paths.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      auto alphaPlan = alphaService.decodeAndPlan(
+          {.revision = planned.plan->revision.clone(), .entry = entry,
+           .fileSystem = *leasedFs.fileSystem, .model = alphaModel,
+           .configuration = configuration});
+      expect(alphaPlan.plan.has_value(), "note alpha bounds are prepared from decoded pixels");
+      if (!alphaPlan.plan) continue;
+      auto alphaDevice = std::make_shared<FakeTextureDevice>();
+      const auto alphaUpload = skin::SkinResourceCatalog::upload(std::move(*alphaPlan.plan), alphaDevice);
+      expect(alphaUpload.catalog != nullptr, "alpha crop fixture uploads");
+      if (alphaUpload.catalog) {
+        const auto visible = alphaUpload.catalog->findResolvedRegion(90001, crop)->visibleBounds;
+        const auto empty = alphaUpload.catalog->findResolvedRegion(90001, blank)->visibleBounds;
+        const auto alias = alphaUpload.catalog->findResolvedRegion(90002, aliasCrop)->visibleBounds;
+        expect(visible.left == 0.2 && visible.top == 0.375 &&
+                   visible.right == 0.7 && visible.bottom == 0.875,
+               "uploaded atlas frame retains nonzero alpha bounds relative to its crop");
+        expect(empty.left == empty.right && empty.top == empty.bottom,
+               "fully transparent atlas frame retains empty visible bounds");
+        expect(alias.left == 0 && alias.top == 0 && alias.right == 1 && alias.bottom == 1,
+               "aliased image computes bounds for its own source region");
+        const auto ui = alphaUpload.catalog->findResolvedRegion(90003, blank)->visibleBounds;
+        expect(ui.left == 0 && ui.top == 0 && ui.right == 1 && ui.bottom == 1,
+               "unrelated UI crops do not request note alpha analysis");
+      }
+    }
+  }
   const auto rejectBeforeUpload = [&](std::string_view message,
                                       const auto &mutate) {
     auto rejectedPlan = copyUploadPlan();

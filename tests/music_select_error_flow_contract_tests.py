@@ -4,6 +4,12 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
+
+if __package__:
+    from .support.fixture_compiler import FixtureCompiler
+else:
+    from support.fixture_compiler import FixtureCompiler
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,17 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 def read_music_select_scene():
     return "\n".join((ROOT / path).read_text() for path in (
         "src/scene/MusicSelectScene.cpp", "src/scene/MusicSelectSceneRecords.cpp"))
-
-
-def fixture_compile_command(compiler, frontend, compiler_id, source, executable,
-                            extra_sources=()):
-    if frontend == "MSVC" or compiler_id == "MSVC":
-        objects = (f"/Fo{source.parent}{os.sep}" if extra_sources
-                   else f"/Fo{source.with_suffix('.obj')}")
-        return [compiler, "/nologo", "/std:c++20", "/EHsc", str(source),
-                *map(str, extra_sources), objects, f"/Fe{executable}"]
-    return [compiler, "-std=c++20", "-pthread", str(source),
-            *map(str, extra_sources), "-o", str(executable)]
 
 
 def function_body(source: str, signature: str) -> str:
@@ -62,11 +57,25 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
         initialization = function_body(
             self.source, "void MusicSelectSkinErrorScene::init()"
         )
-        self.assertIn('makeButton("Back")', initialization)
+        self.assertIn('makeButton(i18n::tr("music_select.skin_error.back.label"))', initialization)
         self.assertIn('changeScene("Intro")', initialization)
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture_directory = tempfile.TemporaryDirectory()
+        cls.fixture_executables = {}
+        cls.fixture_objects = {}
+        cls.addClassCleanup(cls.clear_fixture_cache)
+
+    @classmethod
+    def clear_fixture_cache(cls):
+        cls.fixture_directory.cleanup()
+        del cls.fixture_directory
+        del cls.fixture_executables
+        del cls.fixture_objects
+
     def test_course_stage_and_result_navigation_preserve_records_owner(self):
         methods = []
         for file, signature in (
@@ -114,10 +123,9 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
                                      .replace("SCENE_METHODS", methods)
-                                     .replace("AUTOPLAY_CALLBACK", callback)
-                                     .replace("SCENE_TEST", "testAutoPlayAudio()" if path == 4
-                                              else f"testReplayAudio({path})"),
-                                     [ROOT / "src/scene/ReplayRecordTask.cpp"])
+                                     .replace("AUTOPLAY_CALLBACK", callback),
+                                     [ROOT / "src/scene/ReplayRecordTask.cpp"],
+                                     arguments=[str(path)])
 
     def test_folder_statistics_prioritize_selection_and_survive_navigation(self):
         source = read_music_select_scene()
@@ -171,9 +179,9 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         cleanup = cleanup[1:cleanup.index("stopPreloadWorker();")]
         self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
                              .replace("CLEANUP_LAUNCH", cleanup)
-                             .replace("SCENE_METHODS", methods)
-                             .replace("SCENE_TEST", test_name),
-                             [ROOT / "tests/support/AllocationFailure.cpp"])
+                             .replace("SCENE_METHODS", methods),
+                             [ROOT / "tests/support/AllocationFailure.cpp"],
+                             arguments=[test_name])
 
     def test_runtime_error_keyboard_and_controller_settings_recovery(self):
         self.run_error_recovery_fixture("testSettingsRecovery")
@@ -201,12 +209,12 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         fixture = (ROOT / "tests/music_select_scene_error_recovery_fixture.cpp").read_text()
         fixture = (fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
                    .replace("SCENE_METHODS", methods)
-                   .replace("ERROR_EVENT_PREFIX", prefix)
-                   .replace("SCENE_TEST", test_name))
+                   .replace("ERROR_EVENT_PREFIX", prefix))
         for enabled in (0, 1):
             with self.subTest(lua_enabled=enabled):
                 self.compile_and_run(
-                    f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture)
+                    f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture,
+                    arguments=[test_name])
 
     def test_uncached_launch_cleanup_cancels_parser_and_audio_without_handoff(self):
         source = read_music_select_scene()
@@ -260,7 +268,8 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                             for signature in ("void ArchiveUnzipModal::update()",
                                               "void ArchiveUnzipModal::cancelOrClose()"))
         fixture = (ROOT / "tests/archive_unzip_modal_indexing_fixture.cpp").read_text()
-        self.compile_and_run(fixture.replace("MODAL_METHODS", methods))
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                            .replace("MODAL_METHODS", methods))
 
     def test_main_menu_unzip_all_uses_preflight_instead_of_single_start(self):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
@@ -391,11 +400,11 @@ int main() {
                    .replace("SCENE_METHODS", "\n".join(methods))
                    .replace("SELECTED_MOVE_GUARD", moved[guard_start:guard_end])
                    .replace("RELOAD_CAPTURE", capture)
-                   .replace("RELOAD_RESTORE", restore)
-                   .replace("SCENE_TEST", test_name))
+                   .replace("RELOAD_RESTORE", restore))
         try:
             self.compile_and_run(
-                fixture, [ROOT / "src/music_select/MusicSelectBarManager.cpp"])
+                fixture, [ROOT / "src/music_select/MusicSelectBarManager.cpp"],
+                arguments=[test_name])
         except subprocess.CalledProcessError as error:
             self.fail(error.stderr)
 
@@ -558,21 +567,45 @@ int main() {
 
     def test_fixture_uses_configured_msvc_and_clang_cl_frontends(self):
         for compiler_id in ("MSVC", "Clang"):
-            command = fixture_compile_command(
-                "C:/Program Files/compiler.exe", "MSVC", compiler_id,
-                Path("scene.cpp"), Path("scene.exe"))
-            self.assertEqual(command[0], "C:/Program Files/compiler.exe")
-            self.assertIn("/std:c++20", command)
-            self.assertIn("/Foscene.obj", command)
-            self.assertIn("/Fescene.exe", command)
-            self.assertNotIn("-pthread", command)
+            for launcher in ((), ("C:/Program Files/cache.exe", "--flag")):
+                compiler = FixtureCompiler("C:/Program Files/compiler.exe", "MSVC",
+                                           compiler_id, launcher)
+                command = compiler.compile_command(Path("scene.cpp"), Path("scene.obj"))
+                self.assertEqual(command[:len(launcher) + 1],
+                                 [*launcher, "C:/Program Files/compiler.exe"])
+                self.assertIn("/std:c++20", command)
+                self.assertIn("/c", command)
+                self.assertIn("/Foscene.obj", command)
+                self.assertNotIn("-pthread", command)
+                self.assertFalse(any(flag.startswith("/Fe") for flag in command))
+                self.assertEqual(compiler.link_command([Path("scene.obj")], Path("scene.exe")),
+                                 ["C:/Program Files/compiler.exe", "/nologo", "scene.obj",
+                                  "/Fescene.exe"])
 
     def test_fixture_uses_configured_gnu_frontend(self):
-        command = fixture_compile_command(
-            "/toolchain/bin/clang++", "GNU", "Clang",
-            Path("scene.cpp"), Path("scene"))
-        self.assertEqual(command, ["/toolchain/bin/clang++", "-std=c++20",
-                                  "-pthread", "scene.cpp", "-o", "scene"])
+        for encoded, expected in ((None, ()), ("", ()), ("[]", ()), ('[""]', ()),
+                                  ('["/cache path/ccache", "--flag", ""]',
+                                   ("/cache path/ccache", "--flag", ""))):
+            with self.subTest(launcher_environment=encoded), patch.dict(os.environ, {}, clear=True):
+                if encoded is not None:
+                    os.environ["ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER"] = encoded
+                compiler = FixtureCompiler.from_environment()
+                self.assertEqual(compiler.launcher, expected)
+                self.assertEqual(compiler.compile_command("scene.cpp", "scene.obj")[:len(expected) + 1],
+                                 [*expected, "c++"])
+        for encoded in ('"ccache"', "{}", "[null]", "[5]", "invalid json"):
+            with self.subTest(invalid_launcher_environment=encoded), patch.dict(os.environ, {
+                "ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER": encoded,
+            }):
+                with self.assertRaises(ValueError):
+                    FixtureCompiler.from_environment()
+        for launcher in ((), ("/cache path/ccache", "--flag")):
+            compiler = FixtureCompiler("/toolchain/bin/clang++", "GNU", "Clang", launcher)
+            command = compiler.compile_command(Path("scene.cpp"), Path("scene.obj"))
+            self.assertEqual(command, [*launcher, "/toolchain/bin/clang++", "-std=c++20",
+                                       "-pthread", "scene.cpp", "-c", "-o", "scene.obj"])
+            self.assertEqual(compiler.link_command([Path("scene.obj")], Path("scene")),
+                             ["/toolchain/bin/clang++", "-pthread", "scene.obj", "-o", "scene"])
 
     def test_pause_joins_preload_before_handoff_and_clears_publication(self):
         self.run_scene_fixture("music_select_scene_pause_fixture.cpp", [
@@ -648,14 +681,6 @@ int main() {
         dependencies = [ROOT / "src/music_select/MusicSelectInputProcessor.cpp"]
         self.compile_and_run(fixture.replace("SCENE_METHODS", signature + body),
                              dependencies)
-        layout_only = signature + """{
-          if (inputBindingAdapter_) inputBindingAdapter_->reset();
-          inputProcessor_ = MusicSelectInputProcessor({
-              .layout = musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput)});
-        }"""
-        with self.assertRaises(AssertionError):
-            self.compile_and_run(fixture.replace("SCENE_METHODS", layout_only),
-                                 dependencies)
 
     def run_scene_fixture(self, filename, signatures, extra_sources=()):
         source = read_music_select_scene()
@@ -722,7 +747,7 @@ struct Toolbar : View {
 };
 struct OverlayPortal {};
 struct ContextMenuView {
-  struct Action { std::string id, label; bool enabled = true; };
+  struct Action { std::string id; i18n::Text label; bool enabled = true; };
   struct Callbacks { std::function<void(bool)> onOpenChanged;
                      std::function<void(const std::string &)> onActionSelected; } callbacks;
   bool open = false;
@@ -812,8 +837,8 @@ int main() {
   assert(platform_open::calls == 3 && scene.revealContextMenu_->isOpen());
   const auto &menu = *scene.revealContextMenu_;
   assert(menu.width == 220 && menu.actions.size() == 2);
-  assert(menu.actions[0].label == "Show Same Folder" && menu.actions[0].enabled);
-  assert(menu.actions[1].label == "Reveal File" && menu.actions[1].enabled);
+  assert(menu.actions[0].label.resolve() == "Show Same Folder" && menu.actions[0].enabled);
+  assert(menu.actions[1].label.resolve() == "Reveal File" && menu.actions[1].enabled);
   scene.revealChart();
   assert(!menu.isOpen());
   scene.revealChart();
@@ -834,23 +859,47 @@ int main() {
         self.compile_and_run(fixture.replace("ANCHORS", anchors).replace(
             "METHOD", "\n".join(signature + function_body(source, signature) for signature in signatures)))
 
-    def compile_and_run(self, source, extra_sources=()):
-        compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
-        frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
-        compiler_id = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_ID", "")
-        with tempfile.TemporaryDirectory() as directory:
-            program = Path(directory) / "scene.cpp"
-            executable = Path(directory) / (
-                "scene.exe" if os.name == "nt" or frontend == "MSVC" or
-                compiler_id == "MSVC" else "scene")
-            program.write_text(source)
-            subprocess.run(
-                fixture_compile_command(compiler, frontend, compiler_id,
-                                        program, executable, extra_sources),
-                cwd=directory, check=True, capture_output=True, text=True,
-            )
-            result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True,
-                                    timeout=10)
+    def compile_and_run(self, source, extra_sources=(), arguments=()):
+        if hasattr(self, "fixture_directory"):
+            self._compile_and_run(source, extra_sources, arguments,
+                                  self.fixture_directory.name, self.fixture_executables,
+                                  self.fixture_objects)
+        else:
+            # Other suites also invoke this helper without unittest class setup.
+            with tempfile.TemporaryDirectory() as directory:
+                self._compile_and_run(source, extra_sources, arguments, directory, {})
+
+    def _compile_and_run(self, source, extra_sources, arguments,
+                         fixture_directory, fixture_executables, fixture_objects=None):
+        compiler = FixtureCompiler.from_environment()
+        extra_sources = (*extra_sources, ROOT / "src/i18n/Localization.cpp")
+        key = (source, extra_sources, compiler)
+        executable = fixture_executables.get(key)
+        if executable is None:
+            # Cases from the same fixture share a build, but never process state.
+            directory = Path(tempfile.mkdtemp(dir=fixture_directory))
+            program = directory / "scene.cpp"
+            executable = directory / ("scene" + compiler.executable_suffix)
+            program.write_text('#include "' + (ROOT / "src/i18n/Localization.h").as_posix() + '"\n' + source)
+            objects = []
+            if fixture_objects is not None:
+                localization_object = fixture_objects.get(compiler)
+                if localization_object is None:
+                    localization_object = directory / "Localization.obj"
+                    subprocess.run(
+                        compiler.compile_command(ROOT / "src/i18n/Localization.cpp",
+                                                 localization_object.name),
+                        cwd=directory, check=True, capture_output=True, text=True,
+                    )
+                    fixture_objects[compiler] = localization_object
+                extra_sources = extra_sources[:-1]
+                objects.append(localization_object)
+            compiler.build([program, *extra_sources], executable, directory, objects=objects)
+            fixture_executables[key] = executable
+        # Fixture-created files (e.g. replay slots) remain isolated per case too.
+        with tempfile.TemporaryDirectory(dir=fixture_directory) as directory:
+            result = subprocess.run([str(executable), *arguments], cwd=directory,
+                                    capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
 
 

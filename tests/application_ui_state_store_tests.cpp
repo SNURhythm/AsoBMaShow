@@ -3,6 +3,8 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
 
@@ -70,6 +72,35 @@ void testEveryModeAndAuthoredPositionRoundTrips() {
   }
 }
 
+void testLanguagePreferenceRoundTripsAndMigrates() {
+  TempDirectory temp;
+  const auto path = applicationUiStatePath(temp.path());
+  for (const std::string preference : {"system", "en", "ko", "ja"}) {
+    ApplicationUiState state;
+    state.language = preference;
+    state.musicSelectToolbar.x = 42.0F;
+    std::string diagnostic;
+    expect(ApplicationUiStateStore::SaveAtomic(path, state, diagnostic),
+           "language preference saves");
+    expect(ApplicationUiStateStore::Load(path).state == state,
+           "language and toolbar survive an application restart");
+  }
+  nlohmann::json document;
+  { std::ifstream input(path); input >> document; }
+  document.erase("language");
+  { std::ofstream output(path); output << document; }
+  expect(ApplicationUiStateStore::Load(path).state.language == "system",
+         "older installations follow device language");
+  for (const auto invalid : {nlohmann::json("invalid"), nlohmann::json(3)}) {
+    document["language"] = invalid;
+    { std::ofstream output(path); output << document; }
+    const auto loaded = ApplicationUiStateStore::Load(path);
+    expect(loaded.state.language == "system" &&
+               loaded.state.musicSelectToolbar.x == 42.0F,
+           "invalid language falls back without losing toolbar state");
+  }
+}
+
 void testPathIsDeviceScoped() {
   TempDirectory temp;
   const auto expected = temp.path() / "application-ui-state.json";
@@ -86,6 +117,7 @@ int main() {
   testMissingUsesDeclaredDefault();
   testEveryModeAndAuthoredPositionRoundTrips();
   testPathIsDeviceScoped();
+  testLanguagePreferenceRoundTripsAndMigrates();
   if (failures != 0) {
     std::cerr << failures << " application UI state test(s) failed\n";
     return 1;

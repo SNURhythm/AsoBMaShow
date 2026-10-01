@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "PlayOptionSectionView.h"
 
 #include "../PlayOptionUtils.h"
@@ -12,9 +13,9 @@
 namespace {
 constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
 
-TextView *makeText(std::string text, int size) {
+TextView *makeText(i18n::Text text, int size) {
   auto *view = new TextView(kFont, size);
-  view->setText(std::move(text));
+  view->setLocalizedText(std::move(text));
   view->setThemedColor(ui_theme::textPrimary);
   view->setAlign(TextView::CENTER);
   view->setVAlign(TextView::MIDDLE);
@@ -22,7 +23,7 @@ TextView *makeText(std::string text, int size) {
   return view;
 }
 
-Button *makeButton(const std::string &label, int fontSize, TextView **textOut) {
+Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
   auto *button = new Button(0, 0, 0, 48);
   button->setFlexGrow(1.0f);
   button->setFlexBasis(0.0f);
@@ -83,7 +84,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   setAlignItems(YGAlignStretch);
   setGap(10);
 
-  auto *heading = makeText("Play Option", 20);
+  auto *heading = makeText(i18n::message("play_options.section.play_option.label"), 20);
   heading->setThemedColor(ui_theme::textSecondary);
   heading->setAlign(TextView::LEFT);
   heading->setHeight(28);
@@ -122,7 +123,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneRow->setGap(10);
   laneRow->setHeight(52);
 
-  auto *laneLabel = makeText("Lane Order", 17);
+  auto *laneLabel = makeText(i18n::message("play_options.section.lane_order.label"), 17);
   laneLabel->setThemedColor(ui_theme::textSecondary);
   laneLabel->setAlign(TextView::LEFT);
   laneLabel->setWidth(90);
@@ -160,7 +161,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneActionRow->setHeight(46);
 
   TextView *applyText = nullptr;
-  applyLaneOrderButton = makeButton("Apply", 17, &applyText);
+  applyLaneOrderButton = makeButton(i18n::message("play_options.section.apply.label"), 17, &applyText);
   applyLaneOrderButton->setFlexGrow(0.0f);
   applyLaneOrderButton->setWidth(96.0f);
   applyLaneOrderButton->setFlexShrink(0.0f);
@@ -172,11 +173,12 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneActionRow->addView(applyLaneOrderButton);
 
   TextView *resetText = nullptr;
-  resetLaneOrderButton = makeButton("Reset", 17, &resetText);
+  resetLaneOrderButton = makeButton(i18n::message("play_options.section.reset.label"), 17, &resetText);
   resetLaneOrderButton->setFlexGrow(0.0f);
   resetLaneOrderButton->setWidth(96.0f);
   resetLaneOrderButton->setFlexShrink(0.0f);
   resetLaneOrderButton->setOnClickListener([this]() {
+    resetLaneOrderDraft();
     if (this->callbacks.onOptionSelected) {
       this->callbacks.onOptionSelected("NORMAL");
     }
@@ -202,10 +204,17 @@ void PlayOptionSectionView::refresh(const std::string &selectedOption,
     styleButton(item.button, item.text, normalized == item.option, allowed);
   }
 
-  if (laneOrderInput != nullptr) {
+  if (laneOrderInput != nullptr &&
+      (!laneOrderSnapshotInitialized || lastLaneOrderOption != normalized ||
+       lastDefaultLaneOrder != defaultLaneOrder ||
+       lastLaneOrderEnabled != laneOrderEnabled)) {
     const auto assigned =
         play_options::laneAssignNotationFromOption(selectedOption);
     laneOrderInput->setEditingText(assigned.value_or(defaultLaneOrder));
+    laneOrderSnapshotInitialized = true;
+    lastLaneOrderOption = normalized;
+    lastDefaultLaneOrder = defaultLaneOrder;
+    lastLaneOrderEnabled = laneOrderEnabled;
   }
   if (applyLaneOrderButton != nullptr) {
     applyLaneOrderButton->setEnabled(laneOrderEnabled);
@@ -214,18 +223,18 @@ void PlayOptionSectionView::refresh(const std::string &selectedOption,
     resetLaneOrderButton->setEnabled(true);
   }
   if (!laneOrderEnabled) {
-    setLaneOrderMessage("Lane order is unavailable for this selection.");
+    setLaneOrderMessage(i18n::message("play_options.section.lane_order_unavailable_selection.message"));
   } else if (laneOrderMessage != nullptr) {
     laneOrderMessage->setText("");
   }
 }
 
-void PlayOptionSectionView::setLaneOrderMessage(std::string message,
+void PlayOptionSectionView::setLaneOrderMessage(i18n::Text message,
                                                 bool error) {
   if (laneOrderMessage == nullptr) {
     return;
   }
-  laneOrderMessage->setText(std::move(message));
+  laneOrderMessage->setLocalizedText(std::move(message));
   laneOrderMessage->setColor(
       ui_theme::sdl(error ? ui_theme::coral() : ui_theme::textMuted()));
 }

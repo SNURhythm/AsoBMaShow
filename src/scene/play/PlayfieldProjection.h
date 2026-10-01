@@ -200,8 +200,6 @@ enum class BuiltInRendererPlanEntryKind : std::uint8_t {
 struct BuiltInRendererPlanEntry {
   BuiltInRendererPlanEntryKind kind = BuiltInRendererPlanEntryKind::Note;
   std::uint32_t descriptorIndex = 0;
-  // This is a world clipping boundary, not a note scroll coordinate.
-  bool headAtLowerBound = false;
   bool tailAtUpperBound = false;
   float renderY = std::numeric_limits<float>::quiet_NaN();
   float tailRenderY = std::numeric_limits<float>::quiet_NaN();

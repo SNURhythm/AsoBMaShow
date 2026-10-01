@@ -1,3 +1,5 @@
+#include "i18n/Localization.h"
+#include "ir/tachi/TachiEligibility.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GamePlayTiming.h"
 #include "scene/play/PracticeNoteFinalizer.h"
@@ -17,6 +19,7 @@
 #include "replay/CourseReplayConsumer.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
 #include <SDL2/SDL_log.h>
+#include <yoga/Yoga.h>
 
 #include <atomic>
 #include <chrono>
@@ -27,6 +30,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 
 void require(bool condition, std::string_view message) {
@@ -39,8 +43,12 @@ void require(bool condition, std::string_view message) {
 
 struct FixtureJukebox {
   long long time = 0;
+  bool paused = false;
   long long getTimeMicros() const { return time; }
   void stop() {}
+  void pause() { paused = true; }
+  void resume() { paused = false; }
+  bool isPaused() const { return paused; }
   void playKeySound(int) { require(false, "Watch must not request live keysounds"); }
 };
 
@@ -67,6 +75,8 @@ struct FixtureWorker {
     return std::make_shared<gameplay::RealtimeGameplaySnapshot>(snapshot);
   }
   std::function<void()> beforeStop;
+  bool suspend() { return native ? native->suspend() : true; }
+  bool resume() { return native ? native->resume() : true; }
   void stop() {
     if (beforeStop) beforeStop();
     native->stop();
@@ -97,6 +107,15 @@ struct FixturePresentation {
   void onLaneReleased(int, long long) {}
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) {}
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &) {}
+  void clearLiveTouchPoints() {}
+};
+
+struct FixturePauseView {
+  bool visible = false;
+  YGDisplay display = YGDisplayFlex;
+  void setDisplay(YGDisplay value) { display = value; }
+  void setVisible(bool value) { visible = value; }
+  bool getVisible() const { return visible; }
 };
 
 class GamePlayScene {
@@ -105,7 +124,10 @@ public:
   bms_parser::Chart *chart = &ownedChart;
   std::unique_ptr<RhythmState> state;
   StartOptions options;
-  struct { FixtureJukebox jukebox; } context;
+  struct {
+    FixtureJukebox jukebox;
+    struct { void resetGyroscopeTurntableSession() {} } inputDeviceRegistry;
+  } context;
   FixtureInput *inputHandler = nullptr;
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
   std::optional<gameplay::StartSelectControl> startSelectControl;
@@ -132,6 +154,13 @@ public:
   std::optional<GaugeStateSnapshot> courseStageInitialGauge;
   bool playfieldLaneCoverEnabled = false;
   ScoreProvenance attemptProvenance = ScoreProvenance::Legacy();
+  FixturePauseView *pauseLayout = nullptr;
+  FixturePauseView *pausePenaltyText = nullptr;
+  FixturePauseView *pauseButton = nullptr;
+  FixturePauseView *practiceRestartButton = nullptr;
+  bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
+  bool playbackInitializationFailed = false;
+  bool useProductionResetBoundary = false;
   int transitions = 0;
   int resets = 0;
   std::unique_ptr<RhythmState> stoppedSnapshot;
@@ -168,6 +197,14 @@ public:
   }
 
   void update(float dt);
+  void showPauseMenu(bool pausePlayback);
+  void closePauseMenu();
+  void togglePauseMenuFromInput();
+  void restartCurrentPattern();
+  void resetAttemptBoundaryForTest();
+  void resetCoursePauseHold() {}
+  void updateSkinResetLayoutVisibility() {}
+  template <typename Callback> void defer(Callback callback, int, bool) { callback(); }
   void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void completePracticeAttempt();
@@ -189,8 +226,7 @@ public:
   std::function<void()> onIngressClosed;
   std::function<void()> onTouchDrain;
   void setRealtimeGameplayIngressEnabled(bool enabled) {
-    require(!enabled, "terminal fixture only closes ingress");
-    if (onIngressClosed) onIngressClosed();
+    if (!enabled && onIngressClosed) onIngressClosed();
   }
   void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
@@ -299,6 +335,7 @@ public:
                          long long judgeTime, const JudgeResult &judge,
                          bool checkGaugeFailure = true);
   void reset() {
+    if (useProductionResetBoundary) resetAttemptBoundaryForTest();
     ++resets;
     state = std::make_unique<RhythmState>(chart, false);
     state->isPlaying = true;
@@ -313,7 +350,7 @@ public:
       }
     }
     recordedReplay = {};
-    options.practiceSession->beginAttempt();
+    if (options.practiceSession) options.practiceSession->beginAttempt();
   }
 };
 
@@ -411,6 +448,305 @@ void testAbortExportAdmission(const ReplayData &replay) {
 }
 
 #include "gameplay_terminal_persistence_fixture.h"
+
+void testPausePenaltyAndFreshAttemptBoundary() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    GamePlayScene scene;
+    FixturePauseView warning;
+    scene.pausePenaltyText = &warning;
+    scene.options.ruleset = ruleset;
+    scene.options.gaugeType = GaugeType::Hard;
+    const auto *selectedAssist = ruleset == GameplayRuleset::LR2
+                                    ? assist_options::kBpmGuide
+                                    : assist_options::kOff;
+    scene.options.assistOption = selectedAssist;
+    scene.chart->Meta.MinBpm = scene.chart->Meta.MaxBpm = 120;
+    scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+    require(scene.rulesetPolicyBuild.built(), "pause fixture has a canonical policy");
+    scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
+        scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+    scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+    require(scene.attemptProvenance.eligibility == ScoreEligibility::Verified,
+            "unpaused manual attempt starts verified");
+    scene.context.jukebox.time = 2'500'000;
+    scene.showPauseMenu(true);
+    require(scene.context.jukebox.paused &&
+                scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                scene.attemptProvenance.eligibility == ScoreEligibility::Modified &&
+                scene.recordedReplay.provenance == scene.attemptProvenance &&
+                scene.analyticsReplay.provenance == scene.attemptProvenance &&
+                scene.recordedReplay.assistOption == assist_options::kAssisted &&
+                scene.analyticsReplay.assistOption == assist_options::kAssisted &&
+                scene.options.assistOption == selectedAssist &&
+                scene.state->getClearType() == ClearType::LightAssistedEasyClear,
+            "actual pause marks the attempt and its replay assisted and unranked");
+    require(warning.getVisible(), "assisted pause shows the warning");
+    scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+    auto &session = *scene.realtimeGameplaySession;
+    session.worker = std::make_unique<FixtureWorker>();
+    session.worker->snapshot.generation = 1;
+    session.worker->snapshot.gaugeState = scene.state->gaugeSnapshot();
+    scene.syncRealtimeGameplaySnapshotFromWorker();
+    require(scene.state->getClearType() == ClearType::LightAssistedEasyClear,
+            "worker snapshot synchronization cannot erase the pause lamp cap");
+    scene.realtimeGameplaySession.reset();
+    scene.closePauseMenu();
+    require(!scene.context.jukebox.paused &&
+                scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                scene.state->lightAssistClearMark,
+            "resume retains the pause penalty");
+    scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes;
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                warning.getVisible(),
+            "a safe later pause retains the earlier penalty and warning");
+    scene.closePauseMenu();
+    scene.useProductionResetBoundary = true;
+    scene.restartCurrentPattern();
+    require(scene.resets == 1 &&
+                scene.attemptProvenance.assistOption == assist_options::kOff &&
+                scene.attemptProvenance.eligibility == ScoreEligibility::Verified &&
+                !scene.state->lightAssistClearMark,
+            "Retry Same and Retry without randomization reset the penalty at the real attempt boundary");
+    scene.context.jukebox.time = 0;
+    scene.showPauseMenu(true);
+    require(!warning.getVisible() && warning.display == YGDisplayNone,
+            "safe pause after retry hides the previous attempt's warning");
+    scene.closePauseMenu();
+    scene.context.jukebox.time = 2'500'000;
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                warning.getVisible() && warning.display == YGDisplayFlex,
+            "a fresh attempt can acquire its own pause penalty and warning");
+  }
+  for (const auto *assist : {assist_options::kDrag, assist_options::kBpmGuide}) {
+    GamePlayScene scene;
+    scene.options.assistOption = assist;
+    scene.chart->Meta.MinBpm = 120;
+    scene.chart->Meta.MaxBpm = 180;
+    scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+    scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
+        scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+    scene.context.jukebox.time = 2'500'000;
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.assistOption == assist &&
+                scene.recordedReplay.assistOption == assist &&
+                scene.options.assistOption == assist,
+            "pause retains the effective assist option already in use");
+  }
+  for (const bool replay : {false, true}) {
+    GamePlayScene scene;
+    if (replay) scene.options.replayData = std::make_shared<ReplayData>();
+    else scene.options.courseSession = std::make_shared<CoursePlaySession>();
+    const auto before = scene.attemptProvenance;
+    scene.togglePauseMenuFromInput();
+    require(scene.attemptProvenance == before && !scene.state->lightAssistClearMark,
+            "course menus and pausing Watch never penalize a recorded attempt");
+    require(scene.context.jukebox.paused == replay,
+            "course menu leaves the song running while Watch remains pausable");
+  }
+}
+
+void testPauseAfterEarlyJudgmentDisqualifiesIr() {
+  for (const bool realtime : {false, true}) {
+    for (const int handled : {0, 1, 2}) {
+      GamePlayScene scene;
+      scene.options.ruleset = GameplayRuleset::LR2;
+      scene.options.autoKeySound = true;
+      scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+          scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+      require(scene.rulesetPolicyBuild.built(), "early-pause fixture has a canonical policy");
+      scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
+          scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+      const auto irEligible = [&] {
+        return ir::tachi::isReplayEligibleForBokutachi(
+            "11111111-1111-4111-8111-111111111111", true,
+            scene.chart->Meta, scene.attemptProvenance);
+      };
+      require(irEligible(), "ordinary manual attempt starts IR eligible");
+      auto &timelines = scene.chart->Measures.front()->TimeLines;
+      timelines.back()->Timing = 2'000'000;
+      scene.context.jukebox.time = 1'990'000;
+      for (int i = 0; i < handled; ++i) {
+        const auto result = scene.pressNote(timelines[i]->Notes[0],
+                                           1'990'000, nullptr, 1'990'000, false);
+        require(result.isNotePlayed(), "first chord can be judged before nominal note time");
+      }
+      require(scene.state->stagePassedNotes == handled,
+              "early judgments advance the actual handled-note count");
+      if (realtime) {
+        scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+        auto &session = *scene.realtimeGameplaySession;
+        session.worker = std::make_unique<FixtureWorker>();
+        session.worker->snapshot.attempt.stagePassedNotes = handled;
+        session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+        session.worker->snapshot.noteStates.resize(session.notes.size());
+        // Deliberately disagree with the authoritative count in both directions.
+        scene.state->stagePassedNotes = handled == 0 ? 1 : 0;
+      }
+      scene.showPauseMenu(true);
+      const bool penalized = handled == 1;
+      require(scene.state->lightAssistClearMark == penalized,
+              "early judgment ends lead-in exemption while completed play stays exempt");
+      require(irEligible() == !penalized,
+              "pausing after an early judgment disqualifies the attempt from IR");
+      if (penalized) {
+        require(scene.attemptProvenance.eligibility == ScoreEligibility::Modified &&
+                    scene.recordedReplay.provenance == scene.attemptProvenance &&
+                    scene.analyticsReplay.provenance == scene.attemptProvenance,
+                "early pause propagates modified provenance to both replay captures");
+      }
+    }
+  }
+}
+
+void testPauseOnlyPenalizesUnfinishedNotePlay() {
+  for (const auto offset : {-100'000LL, 0LL, 100'000LL}) {
+    for (const auto &[time, handled, penalized] :
+         {std::tuple{1'999'999LL, 0, false},
+          std::tuple{2'000'000LL, 0, true},
+          std::tuple{2'500'000LL, 1, true},
+          std::tuple{3'050'000LL, 1, true},
+          std::tuple{2'950'000LL, 2, false},
+          std::tuple{3'500'000LL, 2, false}}) {
+      for (const bool realtime : {false, true}) {
+        GamePlayScene scene;
+        FixturePauseView warning;
+        scene.pausePenaltyText = &warning;
+        auto *leadIn = new bms_parser::TimeLine(8, false);
+        leadIn->Timing = 0;
+        leadIn->AddBackgroundNote(new bms_parser::Note(1));
+        leadIn->SetInvisibleNote(1, new bms_parser::Note(1));
+        auto &timelines = scene.chart->Measures.front()->TimeLines;
+        timelines.insert(timelines.begin(), leadIn);
+        scene.offset = offset;
+        scene.context.jukebox.time = time - offset;
+        if (!realtime) {
+          for (int i = 0; i < handled; ++i) {
+            scene.state->commitJudge(JudgeResult(i == 0 ? PGreat : Poor, 0));
+          }
+        }
+        if (realtime) {
+          scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+          auto &session = *scene.realtimeGameplaySession;
+          session.worker = std::make_unique<FixtureWorker>();
+          session.worker->snapshot.generation = 1;
+          session.worker->snapshot.attempt.stagePassedNotes = handled;
+        }
+        const auto before = scene.attemptProvenance;
+        scene.showPauseMenu(true);
+        require(scene.context.jukebox.paused, "pause remains available outside note play");
+        require(scene.state->lightAssistClearMark == penalized,
+                "pause penalty starts at the first note and ends only when all notes are handled");
+        require(warning.getVisible() == penalized &&
+                    warning.display == (penalized ? YGDisplayFlex : YGDisplayNone),
+                "safe unassisted pauses hide the penalty warning");
+        if (!penalized) {
+          require(scene.attemptProvenance == before,
+                  "safe pauses preserve eligibility and assist metadata");
+        }
+      }
+    }
+  }
+  GamePlayScene empty;
+  empty.chart->Meta.TotalNotes = 0;
+  empty.context.jukebox.time = 2'500'000;
+  empty.showPauseMenu(true);
+  require(!empty.state->lightAssistClearMark, "empty charts never incur pause penalties");
+}
+
+void testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects() {
+  // All scored notes can be resolved while a trailing mine can still damage
+  // the gauge. The worker's latest note flags override stale presentation.
+  for (const bool realtime : {false, true}) {
+    for (const bool resolved : {false, true}) {
+      GamePlayScene scene;
+      auto *timeline = new bms_parser::TimeLine(8, false);
+      timeline->Timing = 4'000'000;
+      auto *mine = new bms_parser::LandmineNote(20);
+      timeline->SetLandmineNote(1, mine);
+      scene.chart->Measures.front()->TimeLines.push_back(timeline);
+      scene.chart->Meta.TotalLandmineNotes = 1;
+      scene.context.jukebox.time = resolved ? 4'100'000 : 3'500'000;
+      for (int i = 0; i < 2; ++i) scene.state->commitJudge(JudgeResult(PGreat, 0));
+      mine->IsDead = resolved;
+      if (realtime) {
+        scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+        auto &session = *scene.realtimeGameplaySession;
+        session.worker = std::make_unique<FixtureWorker>();
+        session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+        session.worker->snapshot.noteStates.resize(session.notes.size());
+        session.worker->snapshot.attempt.stagePassedNotes = 2;
+        session.worker->snapshot.noteStates.back().dead = resolved;
+        mine->IsDead = !resolved;
+      }
+      scene.showPauseMenu(true);
+      require(scene.state->lightAssistClearMark == !resolved,
+              "trailing mine keeps pause assisted until authoritative mine resolution");
+    }
+  }
+  for (const long long time : {999'999LL, 1'000'000LL}) {
+    GamePlayScene scene;
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = 1'000'000;
+    timeline->SetLandmineNote(1, new bms_parser::LandmineNote(20));
+    scene.chart->Measures.front()->TimeLines.insert(
+        scene.chart->Measures.front()->TimeLines.begin(), timeline);
+    scene.context.jukebox.time = time;
+    scene.showPauseMenu(true);
+    require(scene.state->lightAssistClearMark == (time == 1'000'000),
+            "lead-in exemption ends at a leading mine's score-affecting timing");
+  }
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                         bms_parser::LongNoteType::ChargeNote,
+                         bms_parser::LongNoteType::HellChargeNote}) {
+    for (const bool realtime : {false, true}) {
+      for (const long long time : {2'800'000LL, 3'000'000LL}) {
+        GamePlayScene scene;
+        auto &timelines = scene.chart->Measures.front()->TimeLines;
+        for (auto *timeline : timelines) {
+          delete timeline->Notes[0];
+          timeline->Notes[0] = nullptr;
+        }
+        auto *head = new bms_parser::LongNote(1, type);
+        auto *tail = new bms_parser::LongNote(1, type);
+        head->Tail = tail;
+        tail->Head = head;
+        timelines[0]->SetNote(1, head);
+        timelines[1]->SetNote(1, tail);
+        scene.chart->Meta.TotalNotes = type == bms_parser::LongNoteType::LongNote ? 1 : 2;
+        scene.context.jukebox.time = time;
+        for (int i = 0; i < scene.chart->Meta.TotalNotes; ++i) {
+          scene.state->commitJudge(JudgeResult(PGreat, 0));
+        }
+        head->IsPlayed = true;
+        head->PlayedTime = 2'000'000;
+        tail->IsPlayed = true;
+        tail->IsDead = true;
+        tail->PlayedTime = 2'750'000;
+        if (realtime) {
+          scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+          auto &session = *scene.realtimeGameplaySession;
+          session.worker = std::make_unique<FixtureWorker>();
+          session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+          session.worker->snapshot.attempt.stagePassedNotes = scene.chart->Meta.TotalNotes;
+          session.worker->snapshot.noteStates = {
+              {.played = true, .playedTimeMicros = 2'000'000},
+              {.played = true, .dead = true, .playedTimeMicros = 2'750'000}};
+          // The UI copy has already lost the early-release timing.
+          tail->PlayedTime = 3'000'000;
+        }
+        scene.showPauseMenu(true);
+        const bool hasGaugeInterval =
+            type == bms_parser::LongNoteType::HellChargeNote && time < 3'000'000;
+        require(scene.state->lightAssistClearMark == hasGaugeInterval,
+                "early-resolved HCN tail keeps pause assisted only through its remaining gauge interval");
+      }
+    }
+  }
+}
 
 void testPractice(bool loop, bool chartTerminal, long long offset) {
   GamePlayScene scene;
@@ -1038,6 +1374,13 @@ PREPARATION_IMPLEMENTATIONS
 FLIP_IMPLEMENTATIONS
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "pause-penalty") {
+    testPausePenaltyAndFreshAttemptBoundary();
+    testPauseAfterEarlyJudgmentDisqualifiesIr();
+    testPauseOnlyPenalizesUnfinishedNotePlay();
+    testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects();
+    return 0;
+  }
   if (argc > 1 && std::string_view(argv[1]) == "partial-course-retry-same") {
     testPartialCourseRetrySameRestoresSavedOptions(argc > 2 ? argv[2] : "all");
     return 0;
@@ -1110,6 +1453,8 @@ int main(int argc, char **argv) {
   }
   std::cout << "COR01 actual scene practice tests passed\n";
   testQueuedAbortLifetime();
+  testPausePenaltyAndFreshAttemptBoundary();
+  testPauseOnlyPenalizesUnfinishedNotePlay();
   std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();
@@ -1117,6 +1462,10 @@ int main(int argc, char **argv) {
   testAbortCaptureRejectsLateEvidence();
   testEffectiveCourseFactsPersistThroughResultScene();
   testPartialCourseRetrySameRestoresSavedOptions();
+  testPausePenaltyAndFreshAttemptBoundary();
+  testPauseAfterEarlyJudgmentDisqualifiesIr();
+  testPauseOnlyPenalizesUnfinishedNotePlay();
+  testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects();
   for (const auto path : {"constructors", "retry", "practice", "skin-practice", "viewer", "in-game-retry"}) {
     testActualChartPreparationOrdering(path);
   }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ArchiveFile.h"
+#include "../i18n/Localization.h"
 #include "../ThreadCompat.h"
 #include "../repositories/ChartRepository.h"
 
@@ -23,13 +24,13 @@ struct ArchiveUnzipResult {
   std::size_t deletionFailedCount = 0;
   std::filesystem::path rootPath, archivePath, outputFolder, chartPath;
   std::string archiveKey;
-  std::string message;
+  i18n::Text message;
 };
 
 struct ArchiveDeleteResult {
   bool deleted = false;
   bool canRetry = false;
-  std::string message;
+  i18n::Text message;
 };
 
 class ArchiveUnzipOperation final {

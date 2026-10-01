@@ -409,6 +409,22 @@ public:
     }
   }
 
+  inline void propagateLanguageChange() override {
+    View::propagateLanguageChange();
+    std::unordered_set<View *> retainedViews;
+    for (auto &entry : viewEntries) {
+      retainedViews.insert(entry.first);
+    }
+    for (auto *view : recycledViewEntries) {
+      retainedViews.insert(view);
+    }
+    for (auto *view : retainedViews) {
+      if (view != nullptr) {
+        view->propagateLanguageChange();
+      }
+    }
+  }
+
 private:
   std::vector<T> items;
   int externalItemCount = 0;

@@ -12,6 +12,7 @@ struct CacheTextView {
   void setText(const std::string &value) {
     assert(owner == std::this_thread::get_id()); text = value;
   }
+  void setLocalizedText(const i18n::Text &value) { setText(value.resolve()); }
   void setColor(SDL_Color value) {
     assert(owner == std::this_thread::get_id()); color = value;
   }
@@ -33,7 +34,7 @@ public:
   CacheLayout layout;
   CacheLayout *rootLayout = &layout;
   CacheLayout *scrollView = &layout;
-  std::string archiveCacheCleanupStatusMessage;
+  i18n::Text archiveCacheCleanupStatusMessage;
   SDL_Color archiveCacheCleanupStatusColor{};
   void cleanupTemporaryArchiveCache();
   void measureTemporaryArchiveCache();
@@ -41,6 +42,82 @@ public:
 };
 
 #include "settings_cache_scene_methods.inc"
+
+void testCacheStatusRetainsLanguageIdentityAcrossWorkerCompletion() {
+  i18n::setLanguage(i18n::Language::English);
+  CacheFixture fixture;
+  fixture.write("active.mov", "keep");
+  fixture.write("unused.mov", "remove");
+  Gate measure, cleanup;
+  int measurements = 0;
+  int cleanups = 0;
+  SettingsScene scene([&](auto &result, auto &error) {
+    ++cleanups;
+    cleanup.block();
+    return fixture.cleanup()(result, error);
+  }, [&](auto &result, auto &error, const auto &token) {
+    ++measurements;
+    measure.block();
+    return fixture.measure()(result, error, token);
+  });
+  scene.measureTemporaryArchiveCache();
+  measure.wait();
+  const i18n::Text measuring = scene.archiveCacheCleanupStatusMessage;
+  i18n::setLanguage(i18n::Language::Korean);
+  const bool progressTranslated = measuring.resolve() ==
+      i18n::tr("settings.measuring_temporary_archive_cache.progress");
+  measure.release.set_value();
+  waitIdle(scene.archiveCacheMaintenance);
+  assert(progressTranslated && "current cache progress retains its message identity");
+  scene.applyPendingArchiveCacheCleanupStatus();
+
+  const i18n::Text usage = scene.archiveCacheCleanupStatusMessage;
+  i18n::setLanguage(i18n::Language::Japanese);
+  assert(usage.resolve() == i18n::format("settings.cache.usage.summary",
+                                        {{"size", "10 B"}, {"count", "2"}}));
+  scene.cleanupTemporaryArchiveCache();
+  cleanup.wait();
+  const i18n::Text cleaning = scene.archiveCacheCleanupStatusMessage;
+  i18n::setLanguage(i18n::Language::English);
+  const bool cleanupTranslated = cleaning.resolve() ==
+      i18n::tr("settings.cleaning_temporary_archive_cache.progress");
+  cleanup.release.set_value();
+  waitIdle(scene.archiveCacheMaintenance);
+  assert(cleanupTranslated);
+  scene.applyPendingArchiveCacheCleanupStatus();
+
+  const i18n::Text completed = scene.archiveCacheCleanupStatusMessage;
+  i18n::setLanguage(i18n::Language::Korean);
+  assert(completed.resolve() ==
+         i18n::format("settings.cache.cleanup.summary",
+                      {{"size", "6 B"}, {"count", "1"}}) +
+         i18n::format("settings.cache.cleanup.skipped.one", {{"count", "1"}}));
+  assert(measurements == 1 && cleanups == 1);
+  assert(std::filesystem::exists(fixture.root / "active.mov"));
+  assert(!std::filesystem::exists(fixture.root / "unused.mov"));
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testCacheFailureTranslatesItsCaptionButPreservesRawDiagnostic() {
+  i18n::setLanguage(i18n::Language::English);
+  CacheFixture fixture;
+  const std::string diagnostic = "Settings: /tmp/テスト/경로";
+  SettingsScene scene([&](auto &, auto &error) {
+    error = diagnostic;
+    return false;
+  }, fixture.measure());
+  scene.cleanupTemporaryArchiveCache();
+  waitIdle(scene.archiveCacheMaintenance);
+  scene.applyPendingArchiveCacheCleanupStatus();
+  const i18n::Text failure = scene.archiveCacheCleanupStatusMessage;
+  for (const auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    assert(failure.resolve() ==
+           std::string(i18n::tr("settings.archive_cache_cleanup_failed.label")) +
+               ": " + diagnostic);
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
 
 void testSceneAppliesTypedResultsOnTheApplicationThread() {
   CacheFixture fixture;
@@ -97,7 +174,7 @@ void testSceneShowsOperationErrorsAndHandlesAbsentViews() {
   scene.measureTemporaryArchiveCache();
   waitIdle(scene.archiveCacheMaintenance);
   scene.applyPendingArchiveCacheCleanupStatus();
-  assert(scene.archiveCacheCleanupStatusMessage.find("empty") != std::string::npos);
+  assert(scene.archiveCacheCleanupStatusMessage.resolve().find("empty") != std::string::npos);
 }
 
 void testSceneShowsThrownOperationErrorsAndAllowsRetry() {

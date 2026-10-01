@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "scene/SettingsCacheMaintenance.h"
 #include "archive/TemporaryCache.h"
 
@@ -273,6 +274,8 @@ void testDestructionJoinsCleanupBeforeItsDependenciesDie() {
 #include "settings_cache_scene_fixture.h"
 
 int main() {
+  testCacheStatusRetainsLanguageIdentityAcrossWorkerCompletion();
+  testCacheFailureTranslatesItsCaptionButPreservesRawDiagnostic();
   testSceneAppliesTypedResultsOnTheApplicationThread();
   testSceneShowsOperationErrorsAndHandlesAbsentViews();
   testSceneShowsThrownOperationErrorsAndAllowsRetry();

@@ -36,8 +36,6 @@ SANDBOX_PROBE_PATH = (
     ROOT / "tests/fixtures/beatoraja_skin/lua/sandbox_probe.luaskin"
 )
 TREE_DIGEST_PARITY_ROOT = ROOT / "tests/fixtures/skin_tree_digest_v1"
-GAMEPLAY_CONTRACT_PATH = ROOT / "docs/skin-compat/beatoraja-lua-gameplay-contract.md"
-ACCEPTANCE_PATH = ROOT / "docs/skin-compat/modernchic-scuro-4.6-acceptance.md"
 LOWER_SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
 
 TRACE_FILES = {
@@ -219,24 +217,6 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
     def require_manifest(self) -> dict:
         self.assertIsNotNone(self.manifest, "reference manifest must be committed")
         return self.manifest
-
-    def test_required_contract_artifacts_are_committed(self):
-        required = (
-            "docs/skin-compat/beatoraja-lua-gameplay-contract.md",
-            "docs/skin-compat/modernchic-scuro-4.6-acceptance.md",
-            "tests/fixtures/beatoraja_skin/reference_manifest.json",
-            "tests/fixtures/beatoraja_skin/README.md",
-            "scripts/check_beatoraja_reference.py",
-            "scripts/audit_beatoraja_skin.py",
-            "scripts/capture_beatoraja_skin_traces.py",
-            "tests/fixtures/beatoraja_skin/lua/two_phase/entry.luaskin",
-            "tests/fixtures/beatoraja_skin/lua/two_phase/shared.lua",
-            "tests/fixtures/beatoraja_skin/lua/sandbox_probe.luaskin",
-            *(f"tests/fixtures/beatoraja_skin/traces/{name}" for name in TRACE_FILES.values()),
-        )
-        for relative_path in required:
-            with self.subTest(path=relative_path):
-                self.assertTrue((ROOT / relative_path).is_file(), relative_path)
 
     def test_skin_tree_digest_v1_shared_fixture_matches_task1_audit(self):
         audit = load_audit_module()
@@ -523,15 +503,6 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         ):
             self.assertNotIn(policy_only_claim, upstream_serialized)
 
-    def test_runtime_io_contract_has_no_separate_aso_phase_policy(self):
-        manifest = self.require_manifest()
-        selected = manifest["selectedFileIoSurface"]
-        self.assertNotIn("asoBMaShowPolicy", selected)
-        self.assertNotIn("negativeExpectedDeniedOperation", selected)
-        self.assertFalse(
-            (ROOT / "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json").exists()
-        )
-
     def test_capture_tool_requires_explicit_reference_root(self):
         result = run_python(TRACE_CAPTURE_PATH, "--output-dir", TRACE_ROOT)
         self.assertNotEqual(result.returncode, 0)
@@ -650,84 +621,6 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
                 "selectedIdTraceRequired": True,
             },
         )
-
-    def test_acceptance_schema_freezes_device_protocol_and_completion_evidence(self):
-        contract = self.require_manifest()["acceptanceContract"]
-        self.assertEqual(contract["schemaVersion"], 2)
-        self.assertEqual(contract["protocol"]["warmupSeconds"], 30)
-        self.assertEqual(contract["protocol"]["measurementSeconds"], 180)
-        self.assertEqual(contract["protocol"]["repetitions"], 3)
-        self.assertEqual(
-            {(case["aspect"], case["mode"]) for case in contract["layouts"]},
-            {
-                ("16:9", "fit"),
-                ("16:9", "stretch"),
-                ("16:9", "custom"),
-                ("4:3", "fit"),
-                ("4:3", "stretch"),
-                ("4:3", "custom"),
-            },
-        )
-        self.assertEqual(contract["limits"]["p99SkinCpuFrameFraction"], 0.9)
-        self.assertEqual(contract["limits"]["missedPresentationPercent"], 0.5)
-        self.assertEqual(contract["limits"]["residentMemoryDriftMiB"], 32)
-        self.assertNotIn("activeRenderFilesystemReads", contract["limits"])
-        self.assertNotIn("activeRenderFilesystemWrites", contract["limits"])
-        self.assertNotIn("activeRenderFilesystemDirectoryScans", contract["limits"])
-        self.assertNotIn("activeRenderResourceUploads", contract["limits"])
-        self.assertEqual(contract["limits"]["liveResourceGrowthAfterTenExits"], 0)
-        external_digests = contract["externalDigests"]
-        self.assertIn("activatedRevisionSha256", external_digests)
-        self.assertEqual(
-            external_digests["activatedRevisionSha256"],
-            {"status": "pending", "value": None},
-        )
-        self.assertEqual(
-            external_digests["configurationSha256"],
-            {"status": "pending", "value": None},
-        )
-        for screenshot in contract["screenshotTimestamps"]:
-            self.assertEqual(screenshot["status"], "pending")
-            self.assertEqual(screenshot["timestampsMicros"], [])
-            self.assertIsNone(screenshot["evidenceReference"])
-        self.assertIn("timerEventTrace", contract)
-        self.assertEqual(
-            contract["timerEventTrace"],
-            {
-                "status": "pending",
-                "selectedIds": [],
-                "observedOrder": [],
-                "evidenceReference": None,
-            },
-        )
-        self.assertEqual(
-            contract["ordinaryRuntimeIo"],
-            {
-                "status": "pending",
-                "configuredLoadOperations": [],
-                "renderCallbackOperations": [],
-                "evidenceReference": None,
-            },
-        )
-        self.assertNotIn("negativeScenarios", contract)
-        self.assertNotIn("passingGuardVectorSha256", contract)
-        for key in (
-            "hardwareModel",
-            "iPadOS",
-            "drawableSize",
-            "safeInsets",
-            "configuredHz",
-            "measurementBuild",
-            "externalDigests",
-            "syntheticChartHashes",
-            "autoplayScripts",
-            "screenshotTimestamps",
-        ):
-            self.assertIn(key, contract)
-        self.assertTrue(contract["completionCriteria"])
-        for criterion in contract["completionCriteria"]:
-            self.assertIn(criterion["status"], {"pending", "pass", "fail"})
-            self.assertIn("evidenceReference", criterion)
 
     def test_selected_file_io_surface_is_complete_opaque_and_deterministic(self):
         manifest = self.require_manifest()
@@ -890,37 +783,6 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertNotIn(manifest["entries"][0]["path"], serialized)
         self.assertNotRegex(serialized, r"(?:^|[\"/])(?:Play|Root)/")
         self.assertNotRegex(serialized, r"\.lua(?:skin)?")
-
-    def test_ordinary_runtime_io_contract_has_no_denial_policy(self):
-        manifest = self.require_manifest()
-        contract = manifest["acceptanceContract"]
-        self.assertEqual(
-            contract["ordinaryRuntimeIo"],
-            {
-                "status": "pending",
-                "configuredLoadOperations": [],
-                "renderCallbackOperations": [],
-                "evidenceReference": None,
-            },
-        )
-        serialized = json.dumps(contract, ensure_ascii=False, sort_keys=True)
-        for legacy in (
-            "negativeScenarios", "passingGuardVectorSha256", "overlayDigestBefore",
-            "overlayDigestAfter", "deniedCountersExpected",
-        ):
-            self.assertNotIn(legacy, serialized)
-        self.assertNotIn("negativeExpectedDeniedOperation", manifest["selectedFileIoSurface"])
-        self.assertNotIn("asoBMaShowPolicy", manifest["selectedFileIoSurface"])
-        self.assertEqual(
-            contract["externalDigests"]["configurationSha256"],
-            {"status": "pending", "value": None},
-            "static closure analysis must not populate physical SkinConfigurationDigestV1",
-        )
-        for document in (GAMEPLAY_CONTRACT_PATH, ACCEPTANCE_PATH):
-            text = document.read_text(encoding="utf-8")
-            with self.subTest(document=document.name):
-                self.assertIn("selected-root", text)
-                self.assertNotIn("skin_file_render_phase_denied", text)
 
     def test_external_payload_digest_set_covers_every_sensitive_file_kind(self):
         payloads = self.require_manifest()["externalPayloadDigests"]

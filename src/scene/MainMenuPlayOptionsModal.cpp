@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "MainMenuPlayOptionsModal.h"
 
 #include "../rendering/common.h"
@@ -23,7 +24,7 @@ Color modalPanelBorder() {
 Button *makeCloseButton() {
   auto *button = new Button(0, 0, 160, 58);
   auto *text = new TextView(kFontPath, 20);
-  text->setText("Close");
+  text->setLocalizedText(i18n::message("menu.play_options.close.label"));
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setThemedColor(
@@ -86,7 +87,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
       ->setBorderWidth(1);
 
   auto *title = new TextView(kFontPath, 30);
-  title->setText("Play Options");
+  title->setLocalizedText(i18n::message("menu.play_options.play_options.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);

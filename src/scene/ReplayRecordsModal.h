@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ReplayRecordFilters.h"
+#include "../i18n/Localization.h"
 #include "../ResultRecordSummary.h"
 #include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ChartRepository.h"
@@ -103,7 +104,7 @@ public:
   bool handleEvents(SDL_Event &event);
   void update();
 
-  void setStatus(std::string text);
+  void setStatus(i18n::Text text);
   void setTouchVisualizationEnabled(bool enabled);
   void reloadRecords(bool preserveViewState = true);
   void refresh();
@@ -112,11 +113,11 @@ public:
   void setIrUploadInProgress(bool inProgress);
   void setLoadInProgress(bool inProgress);
   void setDocumentHandoffActive(bool active);
-  void showExportProgress(const std::string &title,
-                          const std::string &message);
-  void updateExportProgress(double fraction, const std::string &message);
-  void returnToList(const std::string &status = {});
-  void showIrFeedback(const std::string &message);
+  void showExportProgress(const i18n::Text &title,
+                          const i18n::Text &message);
+  void updateExportProgress(double fraction, const i18n::Text &message);
+  void returnToList(const i18n::Text &status = {});
+  void showIrFeedback(const i18n::Text &message);
   [[nodiscard]] bool renderTouchPoints() const noexcept {
     return selectedReplayRenderTouchPoints_;
   }

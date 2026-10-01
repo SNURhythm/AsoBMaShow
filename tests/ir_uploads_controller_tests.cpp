@@ -1,4 +1,5 @@
 #include "scene/IrUploadsController.h"
+#include "i18n/Localization.h"
 #include "scene/IrUploadPreparationTask.h"
 
 #include <algorithm>
@@ -65,6 +66,41 @@ std::string failureReason(const ir_uploads::PreparationOutcome &outcome,
       });
   return found == outcome.failureReasons.end() ? std::string{}
                                                : found->diagnostic;
+}
+
+void testPreparationStatusFollowsLanguageChanges() {
+  i18n::setLanguage(i18n::Language::English);
+  ir_uploads::Controller controller;
+  controller.replaceCandidates({candidate(1), candidate(2)});
+  controller.selectAll();
+  (void)controller.beginPreparation();
+  i18n::setLanguage(i18n::Language::Korean);
+  expect(controller.statusText() == "준비 중 0 / 2...",
+         "initial preparation retains its message across language changes");
+  controller.setPreparationProgress(9, 2);
+  expect(controller.statusText() == "준비 중 2 / 2...",
+         "localized preparation clamps completed count to total");
+  i18n::setLanguage(i18n::Language::Japanese);
+  expect(controller.statusText() == "準備中 2 / 2...",
+         "existing progress resolves in Japanese without another update");
+  controller.completePreparation({.queuedAttemptIds = attemptIds({1}),
+                                  .failedAttemptIds = attemptIds({2})});
+  expect(controller.statusText() == "1件をキューに追加、1件が失敗",
+         "completion localizes both outcome counts");
+  i18n::setLanguage(i18n::Language::Korean);
+  expect(controller.statusText() == "1개 대기열 추가, 1개 실패",
+         "completed summary follows a later language change");
+  (void)controller.beginPreparation();
+  controller.markCancellationRequested();
+  i18n::setLanguage(i18n::Language::Japanese);
+  expect(controller.statusText() == "キャンセル中...",
+         "cancellation progress retains its message");
+  controller.completePreparation({.cancelled = true,
+                                  .failedAttemptIds = attemptIds({2})});
+  i18n::setLanguage(i18n::Language::Korean);
+  expect(controller.statusText() == "업로드를 취소했습니다.",
+         "cancelled summary retains its message");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testSelectionSnapshotLockAndFinalSummary() {
@@ -485,7 +521,7 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
       .submissionServiceAvailable = true,
   });
   expect(!insecure.canSubmit &&
-             insecure.statusText ==
+             insecure.statusText.resolve() ==
                  "Use an HTTPS server origin before uploading.",
          "manual upload availability rejects a stored credential over HTTP");
 
@@ -497,9 +533,13 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
       .submissionServiceAvailable = true,
   });
   expect(secure.canSubmit &&
-             secure.statusText ==
+             secure.statusText.resolve() ==
                  "Ready to queue verified scores for batch delivery.",
          "manual upload availability accepts the complete HTTPS path");
+  i18n::setLanguage(i18n::Language::Korean);
+  expect(secure.statusText.resolve() == i18n::tr("ir.upload.ready_queue_verified_scores_batch_delivery.message"),
+         "provider availability retains its message across language changes");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 } // namespace
@@ -508,6 +548,7 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
 #include "ir_upload_scene_fixture.h"
 
 int main() {
+  testPreparationStatusFollowsLanguageChanges();
   testScenePreparationLaunchGatesAndApplicationThreadCompletion();
   testSceneStopRetainsCancelledSelectionUntilCompletion();
   testPreparationTaskProgressPartialFailureAndCompletionJoining();

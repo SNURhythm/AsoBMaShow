@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../i18n/Localization.h"
+
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayScoreState.h"
 
@@ -71,7 +73,7 @@ struct IrChartRanking {
 };
 
 struct IrLocalComparison {
-  std::string label;
+  i18n::Text label;
   int score = 0;
   int maxScore = 0;
   int clearType = kClearTypeFailedRank;

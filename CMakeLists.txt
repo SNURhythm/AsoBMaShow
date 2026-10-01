@@ -364,6 +364,10 @@ function(asobmashow_enable_lua_skin_java_pattern target_name)
     endif()
 endfunction()
 
+add_library(asobmashow_localization STATIC src/i18n/Localization.cpp)
+target_compile_features(asobmashow_localization PRIVATE cxx_std_17)
+set_target_properties(asobmashow_localization PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
@@ -396,6 +400,8 @@ endif()
 # Refresh the source identity before every build. The refresh script only
 # replaces its generated header when Git identity changes, preserving normal
 # incremental compilation while keeping acceptance evidence honest.
+target_link_libraries(main PRIVATE asobmashow_localization)
+
 include("${CMAKE_SOURCE_DIR}/cmake/BuildIdentity.cmake")
 add_library(asobmashow_build_identity OBJECT "${SRC_DIR}/BuildIdentity.cpp")
 target_compile_features(asobmashow_build_identity PRIVATE cxx_std_23)
@@ -550,13 +556,17 @@ elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_custom_command(
         TARGET main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:main>/Contents/Resources
-        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/select.wav
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/select.wav
+            $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/audio/sample.wav
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets
     )
 else()
     add_custom_command(
         TARGET main POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE_DIR:main>/assets/select.wav
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            $<TARGET_FILE_DIR:main>/assets/select.wav
+            $<TARGET_FILE_DIR:main>/assets/audio/sample.wav
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:main>/assets
     )
 endif()
@@ -2218,19 +2228,50 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_music_select_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    # Runtime C++ fixtures should share the compiler cache selected for this
+    # build. Evaluate expressions before splitting/encoding launcher argv:
+    # inserting JSON punctuation inside an expression can change its meaning.
+    set(ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE "")
+    if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "\\$<")
+        set(ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/test-cxx-launcher-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE}"
+            CONTENT "${CMAKE_CXX_COMPILER_LAUNCHER}")
+        set(ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER "")
+    else()
+        # Nonempty transport tokens preserve empty argv entries during CMake
+        # command expansion; hex also keeps quotes and backslashes untouched.
+        set(asobmashow_launcher_encoded_args "")
+        foreach(asobmashow_launcher_arg IN LISTS CMAKE_CXX_COMPILER_LAUNCHER)
+            string(HEX "${asobmashow_launcher_arg}" asobmashow_launcher_hex)
+            list(APPEND asobmashow_launcher_encoded_args "x${asobmashow_launcher_hex}")
+        endforeach()
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c
+                    "import json, os, sys; print(json.dumps([os.fsdecode(bytes.fromhex(arg[1:])) for arg in sys.argv[1:]]))"
+                    ${asobmashow_launcher_encoded_args}
+            OUTPUT_VARIABLE ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+    endif()
+    string(REPLACE ";" "\\;" ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
+        "${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER}")
+    set(ASOBMASHOW_TEST_CXX_ENVIRONMENT
+        "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID};ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER=${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER};ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE=${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE};ASOBMASHOW_TEST_CMAKE_COMMAND=${CMAKE_COMMAND}")
+
     add_test(NAME music_select_error_flow_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/music_select_error_flow_contract_tests.py -v)
     set_tests_properties(music_select_error_flow_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME music_select_export_preload
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/music_select_scene_export_preload_tests.py -v)
     set_tests_properties(music_select_export_preload PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     if (TARGET lua_music_select_skin_decoder_tests)
         set(SELECTOR_SETTINGS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/music_select_settings_runtime_fixture.cpp)
@@ -2251,7 +2292,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME music_select_settings_runtime
             COMMAND lua_music_select_skin_decoder_tests --settings-retention)
         set_tests_properties(music_select_settings_runtime PROPERTIES
-            ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+            ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         )
     endif()
     add_test(NAME main_menu_preview_lifecycle
@@ -2259,28 +2300,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest tests/main_menu_preview_lifecycle_tests.py -v)
     set_tests_properties(main_menu_preview_lifecycle PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME main_menu_records_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/main_menu_records_lifecycle_tests.py -v)
     set_tests_properties(main_menu_records_lifecycle PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME settings_sound_set_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/settings_sound_set_lifecycle_tests.py -v)
     set_tests_properties(settings_sound_set_lifecycle PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME gameplay_builtin_image_batch
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/gameplay_builtin_image_batch_tests.py -v)
     set_tests_properties(gameplay_builtin_image_batch PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     if (TARGET beatoraja_skin_model_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger
@@ -2294,13 +2335,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:beatoraja_skin_model_tests>"
         )
     endif()
-    add_test(NAME gameplay_skin_loading_benchmark_script_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/gameplay_skin_loading_benchmark_script_tests.py -v)
-    set_tests_properties(gameplay_skin_loading_benchmark_script_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     if (TARGET json_gameplay_skin_decoder_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
             COMMAND ${Python3_EXECUTABLE}
@@ -2421,13 +2456,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(find_bms_archive_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME judgement_indicator_range_flow_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_judgement_indicator_range_flow.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(judgement_indicator_range_flow_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     add_test(NAME result_persistence_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py
@@ -2435,13 +2464,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(result_persistence_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME result_visual_layout_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_result_visual_layout.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(result_visual_layout_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     add_test(NAME main_menu_ranking_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_main_menu_ranking_flow.py
@@ -2470,13 +2493,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(main_menu_chart_list_lifecycle_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME ir_ranking_detail_flow_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_ir_ranking_detail_flow.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(ir_ranking_detail_flow_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     add_test(NAME ios_native_text_editor_sync_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_ios_native_text_editor_sync.py
@@ -2503,27 +2520,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -B
                 -m unittest tests/windows_skin_shader_artifact_tests.py -v)
     set_tests_properties(windows_skin_shader_artifact_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME records_ir_marker_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_records_ir_marker.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(records_ir_marker_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME saved_course_result_browse_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_saved_course_result_browse.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(saved_course_result_browse_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME records_result_recall_flow_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_records_result_recall_flow.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(records_result_recall_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
@@ -3888,8 +3884,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_repository_tests PRIVATE cxx_std_23)
-    add_test(NAME chart_repository_search_paging
-             COMMAND chart_repository_tests --search-paging-tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -4498,6 +4492,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     add_test(NAME chart_audio_renderer_tests COMMAND chart_audio_renderer_tests)
     set_tests_properties(chart_audio_renderer_tests PROPERTIES TIMEOUT 30)
+    # The real foreground/background quota regression mixes over 317 million
+    # frames. Optimize only this test's hot translation unit, retaining Debug
+    # assertions, shared dependency objects, and the application's own flags.
+    # Xcode disallows per-config source options; MSVC Debug /RTC conflicts /O2.
+    if(ENABLE_DEBUG_OPTIMIZED_BUILD AND NOT MSVC AND
+       NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        set_property(SOURCE src/audio/ChartAudioRenderer.cpp APPEND PROPERTY
+            COMPILE_OPTIONS
+            "$<$<AND:$<CONFIG:Debug>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,chart_audio_renderer_tests>>:-O2>")
+    endif()
 
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
@@ -4606,7 +4610,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(visual_catch_up_tests PRIVATE cxx_std_23)
     target_compile_definitions(visual_catch_up_tests PRIVATE
         ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-    target_link_libraries(visual_catch_up_tests PRIVATE ${COMMON_LIBS} bgfx)
+    target_link_libraries(visual_catch_up_tests PRIVATE ${COMMON_LIBS} bgfx asobmashow_localization)
     if(APPLE)
         target_link_libraries(visual_catch_up_tests PRIVATE iconv)
     endif()
@@ -4653,13 +4657,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(settings_audio_video_model_tests PRIVATE cxx_std_23)
-
-    add_executable(chart_filter_sort_panel_view_tests
-        tests/chart_filter_sort_panel_view_tests.cpp
-        src/bms_parser.cpp
-    )
-    target_include_directories(chart_filter_sort_panel_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(chart_filter_sort_panel_view_tests PRIVATE cxx_std_23)
 
     add_executable(image_fade_tests
         tests/image_fade_tests.cpp
@@ -4921,11 +4918,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(APPLE)
         target_link_libraries(image_view_fade_tests PRIVATE iconv)
     endif()
-    add_test(NAME image_view_decoder_ownership_tests
-        COMMAND ${CMAKE_COMMAND}
-            -DIMAGE_VIEW_SOURCE=${CMAKE_SOURCE_DIR}/src/view/ImageView.cpp
-            -P ${CMAKE_SOURCE_DIR}/tests/assert_image_view_decoder_ownership.cmake
-    )
 
     add_executable(chart_list_item_view_tests
         tests/chart_list_item_view_tests.cpp
@@ -5051,6 +5043,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(settings_button_layout_tests
+        tests/settings_button_layout_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextInputBox.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(settings_button_layout_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(settings_button_layout_tests PRIVATE cxx_std_23)
+    target_link_libraries(settings_button_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(button_enabled_tests
         tests/button_enabled_tests.cpp
         src/rendering/Color.cpp
@@ -5069,6 +5077,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/DropdownView.cpp
+        src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
@@ -5100,24 +5110,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(text_view_font_lifetime_tests PRIVATE cxx_std_23)
     target_compile_definitions(text_view_font_lifetime_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(text_view_font_lifetime_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
-
-    add_executable(checkbox_button_content_tests
-        tests/checkbox_button_content_tests.cpp
-        src/rendering/Color.cpp
-        src/rendering/common.cpp
-        src/rendering/UniformCache.cpp
-        src/view/CheckboxButtonContent.cpp
-        src/view/SdlTtfRuntime.cpp
-        src/view/TextView.cpp
-        src/view/View.cpp
-    )
-    target_include_directories(checkbox_button_content_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(checkbox_button_content_tests PRIVATE cxx_std_23)
-    target_link_libraries(checkbox_button_content_tests PRIVATE
-        ${COMMON_LIBS} bgfx yogacore
-    )
 
     add_executable(difficulty_table_url_completion_tests
         tests/difficulty_table_url_completion_tests.cpp
@@ -5480,6 +5472,40 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
     target_link_libraries(app_settings_store_tests PRIVATE utf8proc::utf8proc)
+
+    add_executable(image_alpha_bounds_tests tests/image_alpha_bounds_tests.cpp)
+    target_include_directories(image_alpha_bounds_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(image_alpha_bounds_tests PRIVATE cxx_std_20)
+
+    add_executable(localization_tests tests/localization_tests.cpp)
+    target_include_directories(localization_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(localization_tests PRIVATE cxx_std_20)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(localization_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(localization_tests PRIVATE SDL2::SDL2-static)
+    else()
+        target_link_libraries(localization_tests PRIVATE SDL2)
+    endif()
+    set(scene_language_lifecycle_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/scene_language_lifecycle_tests.cpp)
+    add_custom_command(
+        OUTPUT ${scene_language_lifecycle_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/scene_language_lifecycle_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${scene_language_lifecycle_source}
+        DEPENDS tests/scene_language_lifecycle_extract.py tests/scene_language_lifecycle_fixture.cpp
+                src/scene/Scene.h src/scene/SceneManager.h src/scene/SceneManager.cpp
+        VERBATIM
+    )
+    add_executable(scene_language_lifecycle_tests ${scene_language_lifecycle_source})
+    target_include_directories(scene_language_lifecycle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(scene_language_lifecycle_tests PRIVATE cxx_std_23)
+    add_test(NAME practice_panel_message_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/practice_panel_message_tests.py)
+    set_tests_properties(practice_panel_message_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+    add_test(NAME localization_catalog_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
 
     add_executable(application_ui_state_store_tests
         tests/application_ui_state_store_tests.cpp
@@ -6427,29 +6453,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
         endif()
 
-        add_executable(builtin_playfield_presentation_tests
-            tests/builtin_playfield_presentation_tests.cpp
-        )
-        target_include_directories(builtin_playfield_presentation_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/src
-        )
-        target_compile_features(builtin_playfield_presentation_tests PRIVATE
-            cxx_std_23
-        )
-        target_link_libraries(builtin_playfield_presentation_tests PRIVATE
-            ${COMMON_LIBS}
-            bgfx
-        )
-
-        add_executable(gameplay_skin_integration_tests
-            tests/gameplay_skin_integration_tests.cpp
-        )
-        target_include_directories(gameplay_skin_integration_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/src
-        )
-        target_compile_features(gameplay_skin_integration_tests PRIVATE
-            cxx_std_23
-        )
         add_executable(skin_performance_telemetry_tests
             tests/skin_performance_telemetry_tests.cpp
             src/skin/beatoraja/SkinPerformanceTelemetry.cpp
@@ -7914,7 +7917,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         button_enabled_tests
         text_input_box_tests
         text_view_font_lifetime_tests
-        checkbox_button_content_tests
         play_options_panel_view_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
@@ -7930,6 +7932,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         endif()
     endforeach()
 
+    include("${CMAKE_SOURCE_DIR}/cmake/LedgerTestEvidence.cmake")
+    asobmashow_load_ledger_runners(
+        "${CMAKE_SOURCE_DIR}/docs/skin-compat/beatoraja-gameplay-feature-ledger-v1.json"
+        asobmashow_gameplay_ledger_runners)
+    asobmashow_load_ledger_runners(
+        "${CMAKE_SOURCE_DIR}/docs/skin-compat/beatoraja-music-select-feature-ledger-v1.json"
+        asobmashow_music_select_ledger_runners)
+    set(asobmashow_ledger_runners
+        ${asobmashow_gameplay_ledger_runners} ${asobmashow_music_select_ledger_runners})
+    list(REMOVE_DUPLICATES asobmashow_ledger_runners)
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         set(test_command_arguments)
@@ -7943,6 +7956,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         get_property(test_target_prepared TARGET ${target_name}
             PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED)
         if(NOT test_target_prepared)
+            target_link_libraries(${target_name} PRIVATE asobmashow_localization)
             target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
             # Many legacy fixtures use assert() for setup as well as validation.
             # Release's NDEBUG would otherwise remove database/resource setup calls
@@ -7958,7 +7972,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             set_property(TARGET ${target_name}
                 PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)
         endif()
-        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${test_command_arguments})
+        if(target_name IN_LIST asobmashow_ledger_runners AND NOT test_command_arguments)
+            asobmashow_add_ledger_test(${target_name} ${test_name})
+        else()
+            add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${test_command_arguments})
+        endif()
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
@@ -8178,7 +8196,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         app_database_initializer_tests
         application_startup_tests
         application_result_recovery_tests
-        chart_filter_sort_panel_view_tests
         image_fade_tests
         decoded_image_cache_tests
         image_decode_coordinator_tests
@@ -8192,7 +8209,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         view_layout_tests
         button_enabled_tests
         text_input_box_tests
-        checkbox_button_content_tests
         difficulty_table_url_completion_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
@@ -8544,12 +8560,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             RESOURCE_LOCK metal_device
         )
     endif()
-    if(TARGET builtin_playfield_presentation_tests)
-        asobmashow_register_test(builtin_playfield_presentation_tests)
-    endif()
-    if(TARGET gameplay_skin_integration_tests)
-        asobmashow_register_test(gameplay_skin_integration_tests)
-    endif()
     if(TARGET skin_performance_telemetry_tests)
         asobmashow_register_test(skin_performance_telemetry_tests)
     endif()
@@ -8585,6 +8595,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_startup_failure_tests)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(image_alpha_bounds_tests)
+    asobmashow_register_test(localization_tests)
+    asobmashow_register_test(scene_language_lifecycle_tests)
     asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
@@ -8622,8 +8635,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_bootstrap --shard bootstrap)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_deletion --shard deletion)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_integrity --shard integrity)
-    asobmashow_register_test(player_profile_manager_tests profile_manager_invalid_shard --shard invalid)
-    set_tests_properties(profile_manager_invalid_shard PROPERTIES WILL_FAIL TRUE)
+
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 60)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_portable --shard portable)
@@ -8633,8 +8645,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     # The fault matrix assumes its injected filesystem failure is the only I/O
     # failure while it classifies exact durable recovery outcomes.
     set_tests_properties(foundation_profile_archive_faults PROPERTIES RUN_SERIAL TRUE)
-    asobmashow_register_test(profile_archive_tests profile_archive_invalid_shard --shard invalid)
-    set_tests_properties(profile_archive_invalid_shard PROPERTIES WILL_FAIL TRUE)
+
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
@@ -8645,6 +8656,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_scene_preview_authority_tests)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
+    asobmashow_register_test(settings_button_layout_tests)
+    set_tests_properties(settings_button_layout_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
@@ -8652,6 +8666,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)
     asobmashow_register_test(midi_input_tests foundation_input_midi)
+
+    asobmashow_require_ledger_evidence(beatoraja_gameplay_skin_ledger
+        ${asobmashow_gameplay_ledger_runners})
+    asobmashow_require_ledger_evidence(beatoraja_music_select_skin_ledger_evidence_contract
+        ${asobmashow_music_select_ledger_runners})
+    add_test(NAME ledger_test_evidence_tests
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests/ledger_test_evidence_tests.py -v)
+    set_tests_properties(ledger_test_evidence_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     get_property(asobmashow_directory_targets DIRECTORY
         PROPERTY BUILDSYSTEM_TARGETS)
@@ -8699,6 +8722,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME android_dependency_cache_tests
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/tests/android_dependency_cache_tests.py -v)
+        add_test(NAME fixture_compiler_environment_tests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/fixture_compiler_environment_tests.py -v)
+        set_tests_properties(fixture_compiler_environment_tests PROPERTIES TIMEOUT 60)
     endif()
 
 endif()

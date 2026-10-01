@@ -115,9 +115,11 @@ struct FolderActionService::Impl {
     std::string name = folder.filename().empty()
                            ? fspath_to_utf8(folder)
                            : fspath_to_utf8(folder.filename());
-    if (name.empty()) name = "Folder";
+    const i18n::Text folderName = name.empty()
+        ? i18n::message("library.tasks.unnamed_folder.label") : i18n::Text(name);
     tasks->enqueue({.kind = chart_library_tasks::TaskKind::RefreshLibrary,
-                    .title = "Add Folder: " + name,
+                    .title = i18n::message("library.tasks.add_folder.message",
+                                           {{"name", folderName}}),
                     .folderToAdd = folder,
                     .iosBookmark = bookmark});
   }

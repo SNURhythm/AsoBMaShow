@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../i18n/Localization.h"
+
 #include "AudioBackend.h"
 #include "PlaybackRate.h"
 #include "../settings/AudioVideoSettings.h"
@@ -49,7 +51,7 @@ struct ApplyResult {
   ApplyStatus status = ApplyStatus::Unsupported;
   RuntimeState effective;
   bool playbackResumed = false;
-  std::string message;
+  i18n::Text message;
   bool operator==(const ApplyResult &) const = default;
 };
 
@@ -67,10 +69,10 @@ public:
 private:
   [[nodiscard]] bool validateRequest(const StreamRequest &request,
                                      const Capabilities &capabilities,
-                                     std::string &message) const;
+                                     i18n::Text &message) const;
   ApplyResult rollback(const RuntimeState &previousRuntime,
                        const PlaybackSnapshot &snapshot,
-                       std::string failureMessage);
+                       i18n::Text failureMessage);
   ApplyResult remember(ApplyResult result);
 
   IAudioRuntime &runtime_;

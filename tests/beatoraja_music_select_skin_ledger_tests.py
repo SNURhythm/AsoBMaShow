@@ -98,10 +98,7 @@ class MusicSelectSkinLedgerTests(unittest.TestCase):
                 self.assertTrue(row.get("implementation"), row["id"])
                 self.assertTrue(row.get("tests"), row["id"])
                 self.assertEqual(set(row.get("assertion", {})), {"runner"})
-            elif row["status"] == "missing":
-                self.assertTrue(row.get("plan", "").startswith("docs/superpowers/plans/"))
-                self.assertTrue(row.get("task", "").startswith("Task "))
-            else:
+            elif row["status"] == "source-defined-noop":
                 self.assertTrue(row.get("source", {}).get("path"), row["id"])
                 self.assertTrue(row.get("source", {}).get("symbol"), row["id"])
 

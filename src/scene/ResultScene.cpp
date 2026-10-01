@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ResultScene.h"
 #include "../BeatorajaScoreMetrics.h"
 #include "../CourseConstraintUtils.h"
@@ -1232,7 +1233,7 @@ void ResultScene::loadDifficultyLabel() {
     return;
   }
   if (isCourseFinalResult()) {
-    local->difficultyLabel = "Course";
+    local->difficultyLabel = i18n::tr("result.course.label");
     return;
   }
   local->difficultyLabel = result_presentation::difficultyLabelForChart(
@@ -1402,7 +1403,7 @@ void ResultScene::addResultPersistenceStatus() {
   };
 
   persistenceRetryButton = makeButton(
-      "Retry Save", ui_theme::primaryAction(), ui_theme::primaryActionHover(),
+      i18n::tr("result.retry_save.label"), ui_theme::primaryAction(), ui_theme::primaryActionHover(),
       ui_theme::primaryActionPressed(), ui_theme::cyan(),
       [this]() { retryResultPersistence(); });
   const bool courseRetryable =
@@ -1416,7 +1417,7 @@ void ResultScene::addResultPersistenceStatus() {
                                       persistenceOptions.outcome.retryable()));
   actions->addView(persistenceRetryButton);
   persistenceDetailsButton = makeButton(
-      "Show Details", ui_theme::infoAction(), ui_theme::infoActionHover(),
+      i18n::tr("result.show_details.label"), ui_theme::infoAction(), ui_theme::infoActionHover(),
       ui_theme::infoActionPressed(), ui_theme::accentBorder(), [this]() {
         const auto *current = localSource();
         if (current == nullptr || persistenceDetailsModalRoot == nullptr) {
@@ -1433,19 +1434,21 @@ void ResultScene::addResultPersistenceStatus() {
           return;
         }
         if (persistenceDetailsStateText != nullptr) {
-          persistenceDetailsStateText->setText("Save state: " + details->state);
+          persistenceDetailsStateText->setText(i18n::tr("result.save_state.prefix") + details->state);
         }
         if (persistenceDetailsReasonText != nullptr) {
-          persistenceDetailsReasonText->setText("Reason\n" + details->reason);
+          persistenceDetailsReasonText->setText(i18n::tr("result.reason.label") + details->reason);
         }
         if (persistenceDetailsReferenceText != nullptr) {
-          std::string references = details->attemptId.empty()
-                  ? "Attempt ID: unavailable"
-                  : "Attempt ID: " + details->attemptId;
+          auto references = i18n::message("result.save_conflict.attempt_id",
+              {{"id", details->attemptId.empty()
+                          ? i18n::message("result.save_conflict.unavailable")
+                          : i18n::Text(details->attemptId)}});
           if (details->replayId.has_value()) {
-            references += "\nReplay ID: " + std::to_string(*details->replayId);
+            references = i18n::message("result.save_conflict.replay_id",
+                {{"attempt", references}, {"id", std::to_string(*details->replayId)}});
           }
-          persistenceDetailsReferenceText->setText(references);
+          persistenceDetailsReferenceText->setLocalizedText(references);
         }
         persistenceDetailsModalRoot->setSize(rendering::window_width,
                                              rendering::window_height);
@@ -1464,7 +1467,7 @@ void ResultScene::addResultPersistenceStatus() {
                                                            : YGDisplayNone);
   actions->addView(persistenceDetailsButton);
   actions->addView(makeButton(
-      "Continue Without Saving", ui_theme::warningAction(),
+      i18n::tr("result.continue_without_saving.label"), ui_theme::warningAction(),
       ui_theme::warningActionHover(), ui_theme::warningActionPressed(),
       ui_theme::coral(), [this]() { continueWithoutSaving(); }));
   status->addView(actions);
@@ -1508,15 +1511,14 @@ void ResultScene::addResultPersistenceStatus() {
       ->setBorderWidth(1);
 
   auto *modalTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  modalTitle->setText("Save Conflict Details");
+  modalTitle->setText(i18n::tr("result.save_conflict_details.label"));
   modalTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   modalTitle->setHeight(42);
   modalPanel->addView(modalTitle);
 
   auto *modalIntroduction = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  modalIntroduction->setText(
-      "This diagnostic identifies the integrity check that raised the "
-      "warning.");
+  modalIntroduction->setLocalizedText(
+      i18n::message("result.save_conflict.explanation"));
   modalIntroduction->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   modalIntroduction->setWrap(true);
   modalIntroduction->setHeight(50);
@@ -1553,7 +1555,7 @@ void ResultScene::addResultPersistenceStatus() {
   modalFooter->setHeight(60);
   modalFooter->setFlexShrink(0);
   auto *closeButton = makeButton(
-      "Close", ui_theme::infoAction(), ui_theme::infoActionHover(),
+      i18n::tr("result.close.label"), ui_theme::infoAction(), ui_theme::infoActionHover(),
       ui_theme::infoActionPressed(), ui_theme::accentBorder(), [this]() {
         if (persistenceDetailsModalRoot != nullptr) {
           persistenceDetailsModalRoot->setVisible(false);
@@ -1667,10 +1669,10 @@ void ResultScene::addIrResultStatus() {
     return button;
   };
   irResultSubmitButton =
-      makeAction("Submit", ui_theme::cyan(), [this]() { submitIrResult(); });
+      makeAction(i18n::tr("result.submit.label"), ui_theme::cyan(), [this]() { submitIrResult(); });
   status->addView(irResultSubmitButton);
   irResultRetryButton =
-      makeAction("Retry", ui_theme::lime(), [this]() { retryIrResult(); });
+      makeAction(i18n::tr("result.ir.retry.label"), ui_theme::lime(), [this]() { retryIrResult(); });
   status->addView(irResultRetryButton);
 
   status->setDisplay(YGDisplayNone);
@@ -1750,7 +1752,7 @@ void ResultScene::submitIrResult() {
     return;
   }
   if (!context.irSubmissionService) {
-    local->irActionDiagnostic = "The IR submission service is unavailable.";
+    local->irActionDiagnostic = i18n::tr("result.ir_submission_service_unavailable.message");
     updateIrResultPresentation(true);
     return;
   }
@@ -1758,7 +1760,7 @@ void ResultScene::submitIrResult() {
       ir::kTachiProviderId, *local->persistenceOptions.irSubmission);
   if (draft.status != ir::BuildDraftStatus::Built || !draft.draft) {
     local->irActionDiagnostic =
-        draft.diagnostic.empty() ? "This result could not be prepared for IR."
+        draft.diagnostic.empty() ? i18n::tr("result.result_failed_prepared_ir.message")
                              : ir::sanitizeDiagnostic(draft.diagnostic);
     updateIrResultPresentation(true);
     return;
@@ -1772,7 +1774,7 @@ void ResultScene::submitIrResult() {
   } else {
     local->irActionDiagnostic =
         enqueued.diagnostic.empty()
-            ? "This result could not be added to the submission queue."
+            ? i18n::tr("result.result_failed_added_submission_queue.message")
             : ir::sanitizeDiagnostic(enqueued.diagnostic);
   }
   updateIrResultPresentation(true);
@@ -1788,7 +1790,7 @@ void ResultScene::retryIrResult() {
     return;
   }
   if (!context.irSubmissionService) {
-    local->irActionDiagnostic = "The IR submission service is unavailable.";
+    local->irActionDiagnostic = i18n::tr("result.ir_submission_service_unavailable.message");
     updateIrResultPresentation(true);
     return;
   }
@@ -1798,7 +1800,7 @@ void ResultScene::retryIrResult() {
   } else {
     local->irActionDiagnostic =
         retried.diagnostic.empty()
-            ? "This submission could not be scheduled for retry."
+            ? i18n::tr("result.submission_failed_scheduled_retry.message")
             : ir::sanitizeDiagnostic(retried.diagnostic);
   }
   updateIrResultPresentation(true);
@@ -2004,13 +2006,13 @@ void ResultScene::addRetryButtons() {
   };
 
   if (local->replayResult) {
-    retryRow->addView(makeButton("Replay", true, true, ui_theme::infoAction(),
+    retryRow->addView(makeButton(i18n::tr("result.replay.label"), true, true, ui_theme::infoAction(),
                                  ui_theme::infoActionHover(),
                                  ui_theme::infoActionPressed(),
                                  ui_theme::cyan()));
   } else if (local->practiceOptions.enabled) {
     retryRow->addView(
-        makeButton("Retry", true, false, ui_theme::primaryAction(),
+        makeButton(i18n::tr("result.gameplay.retry.label"), true, false, ui_theme::primaryAction(),
                                  ui_theme::primaryActionHover(),
                    ui_theme::primaryActionPressed(), ui_theme::cyan()));
   } else {
@@ -2020,12 +2022,12 @@ void ResultScene::addRetryButtons() {
             : (local->retrySameAllowed &&
                play_options::hasSamePatternRandomization(local->meta));
     retryRow->addView(
-        makeButton("Retry", !canRetrySame, false, ui_theme::primaryAction(),
+        makeButton(i18n::tr("result.gameplay.retry.label"), !canRetrySame, false, ui_theme::primaryAction(),
                                  ui_theme::primaryActionHover(),
                    ui_theme::primaryActionPressed(), ui_theme::cyan()));
     if (canRetrySame) {
       retryRow->addView(
-          makeButton("Retry Same", true, false, ui_theme::successAction(),
+          makeButton(i18n::tr("result.retry_same.label"), true, false, ui_theme::successAction(),
                                    ui_theme::successActionHover(),
                      ui_theme::successActionPressed(), ui_theme::lime()));
     }
@@ -2033,7 +2035,7 @@ void ResultScene::addRetryButtons() {
 
   rankingsButton = new Button();
   auto *rankingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  rankingsText->setText("Rankings");
+  rankingsText->setText(i18n::tr("result.rankings.label"));
   rankingsText->setAlign(TextView::CENTER);
   rankingsText->setVAlign(TextView::MIDDLE);
   rankingsText->setColor(
@@ -2054,7 +2056,7 @@ void ResultScene::addRetryButtons() {
 
   exportPhotoButton = new Button();
   exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  exportPhotoButtonText->setText("Export Photo");
+  exportPhotoButtonText->setText(i18n::tr("result.export_photo.label"));
   exportPhotoButtonText->setAlign(TextView::CENTER);
   exportPhotoButtonText->setVAlign(TextView::MIDDLE);
   exportPhotoButtonText->setColor(
@@ -2072,7 +2074,7 @@ void ResultScene::addRetryButtons() {
       ui_theme::withAlpha(ui_theme::violetActionHover(), 220));
   exportPhotoButton->setStyledBorderWidth(1);
   if (local->autoPlayResult) {
-    exportPhotoButtonText->setText("AUTO PLAY");
+    exportPhotoButtonText->setLocalizedText(i18n::message("records.auto_play.label"));
     exportPhotoButton->setOnClickListener([]() {});
     exportPhotoButton->setBackgroundColors(
         ui_theme::control(), ui_theme::control(), ui_theme::control());
@@ -2085,7 +2087,7 @@ void ResultScene::addRetryButtons() {
   practiceSectionButton = new Button();
   practiceSectionButtonText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  practiceSectionButtonText->setText("Select Section");
+  practiceSectionButtonText->setText(i18n::tr("result.select_section.label"));
   practiceSectionButtonText->setAlign(TextView::CENTER);
   practiceSectionButtonText->setVAlign(TextView::MIDDLE);
   practiceSectionButtonText->setColor(
@@ -2196,7 +2198,7 @@ void ResultScene::buildResultTouchControls() {
     bool enabled = true;
     switch (action) {
     case ResultTouchControlAction::Back:
-      label = "Back";
+      label = i18n::tr("result.back.label");
       callback = [this]() {
         const auto *current = localSource();
         if (current != nullptr && isCourseStageResult() &&
@@ -2208,7 +2210,7 @@ void ResultScene::buildResultTouchControls() {
       };
       break;
     case ResultTouchControlAction::Retry:
-      label = "Retry";
+      label = i18n::tr("result.gameplay.retry.label");
       accent = ui_theme::primaryAction();
       callback = [this, local]() {
         if (local == nullptr) return;
@@ -2222,7 +2224,7 @@ void ResultScene::buildResultTouchControls() {
       };
       break;
     case ResultTouchControlAction::RetrySame:
-      label = "Retry Same";
+      label = i18n::tr("result.retry_same.label");
       accent = ui_theme::successAction();
       callback = [this]() {
         if (isCourseFinalResult()) {
@@ -2233,7 +2235,7 @@ void ResultScene::buildResultTouchControls() {
       };
       break;
     case ResultTouchControlAction::Replay:
-      label = "Replay";
+      label = i18n::tr("result.replay.label");
       accent = ui_theme::infoAction();
       callback = [this]() {
         if (isCourseFinalResult()) {
@@ -2244,28 +2246,28 @@ void ResultScene::buildResultTouchControls() {
       };
       break;
     case ResultTouchControlAction::Rankings:
-      label = "Rankings";
+      label = i18n::tr("result.rankings.label");
       accent = ui_theme::infoAction();
       callback = [this]() { openRankings(); };
       enabled = rankingsAvailable();
       break;
     case ResultTouchControlAction::ExportPhoto:
-      label = "Export";
+      label = i18n::tr("result.export.label");
       accent = ui_theme::violetAction();
       callback = [this]() { exportPhoto(); };
       break;
     case ResultTouchControlAction::SelectSection:
-      label = "Section";
+      label = i18n::tr("result.section.label");
       accent = ui_theme::successAction();
       callback = [this]() { practiceThisSection(); };
       break;
     case ResultTouchControlAction::Next:
-      label = "Next";
+      label = i18n::tr("result.next.label");
       accent = ui_theme::successAction();
       callback = [this]() { continueCourse(); };
       break;
     case ResultTouchControlAction::Hide:
-      label = "Hide";
+      label = i18n::tr("result.hide.label");
       accent = ui_theme::textSecondary();
       callback = [this]() { setResultTouchControlsHidden(true); };
       break;
@@ -2375,8 +2377,8 @@ void ResultScene::handleResultSkinRenderFailure() {
 
   auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   message->setText(renderFailed
-                       ? "Result skin stopped rendering. Application controls are restored."
-                       : "Result skin could not start. Application controls are available.");
+                       ? i18n::tr("result.result_skin_stopped_rendering_application_controls_restored.message")
+                       : i18n::tr("result.result_skin_failed_start_application_controls_available.message"));
   message->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   message->setWrap(true);
   message->setFlexGrow(1.0F);
@@ -2384,7 +2386,7 @@ void ResultScene::handleResultSkinRenderFailure() {
 
   auto *back = new Button();
   auto *backText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  backText->setText("Back");
+  backText->setText(i18n::tr("result.back.label"));
   backText->setAlign(TextView::CENTER);
   backText->setVAlign(TextView::MIDDLE);
   backText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
@@ -2474,7 +2476,7 @@ void ResultScene::addRemoteButtons() {
 
   if (actions.rankings) {
     rankingsButton =
-        makeButton("Rankings", ui_theme::infoAction(),
+        makeButton(i18n::tr("result.rankings.label"), ui_theme::infoAction(),
                    ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
                    ui_theme::cyan(), [this]() { openRankings(); });
     rankingsButton->setEnabled(rankingsAvailable());
@@ -2483,13 +2485,13 @@ void ResultScene::addRemoteButtons() {
 
   if (actions.exportPhoto) {
     exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-    exportPhotoButtonText->setText("Export Photo");
+    exportPhotoButtonText->setText(i18n::tr("result.export_photo.label"));
     exportPhotoButtonText->setAlign(TextView::CENTER);
     exportPhotoButtonText->setVAlign(TextView::MIDDLE);
     exportPhotoButtonText->setColor(
         ui_theme::sdl(ui_theme::textOn(ui_theme::violetAction())));
     exportPhotoButton = makeButton(
-        "Export Photo", ui_theme::violetAction(), ui_theme::violetActionHover(),
+        i18n::tr("result.export_photo.label"), ui_theme::violetAction(), ui_theme::violetActionHover(),
         ui_theme::violetActionPressed(), ui_theme::violetActionHover(),
         [this]() { exportPhoto(); });
     exportPhotoButton->setContentView(exportPhotoButtonText);
@@ -2541,7 +2543,7 @@ void ResultScene::addRemoteIrStatus() {
   status->addView(check);
 
   irResultStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  irResultStatusText->setText("Bokutachi · Uploaded");
+  irResultStatusText->setText(i18n::tr("result.bokutachi_uploaded.label"));
   irResultStatusText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   irResultStatusText->setFlex(1.0F);
   irResultStatusText->setHeight(32.0F);
@@ -2549,7 +2551,7 @@ void ResultScene::addRemoteIrStatus() {
 
   irResultDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   irResultDetailText->setName("remoteIrReadOnlyStatus");
-  irResultDetailText->setText("Read-only synchronized result");
+  irResultDetailText->setText(i18n::tr("result.read_only_synchronized_result.label"));
   irResultDetailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   irResultDetailText->setWidth(240.0F);
   irResultDetailText->setHeight(28.0F);
@@ -2640,10 +2642,10 @@ void ResultScene::openRankings() {
   if (remote != nullptr) {
     chartQuery = remote->rankingQuery;
     serverOrigin = remote->serverOrigin;
-    title = remote->score.title.empty() ? "Synchronized chart"
+    title = remote->score.title.empty() ? i18n::tr("result.synchronized_chart.label")
                                         : remote->score.title;
     comparison = ir::IrLocalComparison{
-        .label = "This Play",
+        .label = i18n::tr("result.play.label"),
         .score = remote->score.score,
         .maxScore = result_contract::maximumScoreForNotes(
                         remote->score.noteCount)
@@ -2658,9 +2660,9 @@ void ResultScene::openRankings() {
     if (query.value && settings != context.settings.irProviders.end()) {
       chartQuery = *query.value;
       serverOrigin = settings->second.serverOrigin;
-      title = local->meta.Title.empty() ? "Completed chart" : local->meta.Title;
+      title = local->meta.Title.empty() ? i18n::tr("result.completed_chart.label") : local->meta.Title;
       comparison = ir::IrLocalComparison{
-          .label = "This Play",
+          .label = i18n::tr("result.play.label"),
           .score = local->resultState.getScore(),
           .maxScore = result_contract::maximumScoreForNotes(
                           local->meta.TotalNotes)
@@ -2722,7 +2724,7 @@ void ResultScene::addCourseButtons() {
 
   if (isCourseStageResult()) {
     auto [nextButton, ignoredText] = makeButton(
-        "Next", ui_theme::successAction(), ui_theme::successActionHover(),
+        i18n::tr("result.next.label"), ui_theme::successAction(), ui_theme::successActionHover(),
         ui_theme::successActionPressed(), ui_theme::lime(),
         [this]() { continueCourse(); });
     (void)ignoredText;
@@ -2733,7 +2735,7 @@ void ResultScene::addCourseButtons() {
       courseOptions.session->courseReplayData != nullptr &&
       !courseOptions.session->courseReplayData->stages.empty()) {
     auto [replayButton, ignoredText] =
-        makeButton("Replay", ui_theme::infoAction(),
+        makeButton(i18n::tr("result.replay.label"), ui_theme::infoAction(),
                    ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
                    ui_theme::cyan(), [this]() { startCourseReplay(); });
     (void)ignoredText;
@@ -2744,7 +2746,7 @@ void ResultScene::addCourseButtons() {
       courseOptions.session->modernCourseResultBrowsing &&
       courseOptions.session->modernCourseRetrySameAllowed) {
     auto [retrySameButton, ignoredText] =
-        makeButton("Retry Same", ui_theme::successAction(),
+        makeButton(i18n::tr("result.retry_same.label"), ui_theme::successAction(),
                    ui_theme::successActionHover(),
                    ui_theme::successActionPressed(), ui_theme::lime(),
                    [this]() { startModernCourseRetrySame(); });
@@ -2753,7 +2755,7 @@ void ResultScene::addCourseButtons() {
   }
 
   auto [photoButton, photoText] =
-      makeButton("Export Photo", ui_theme::violetAction(),
+      makeButton(i18n::tr("result.export_photo.label"), ui_theme::violetAction(),
       ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
       ui_theme::violetActionHover(), [this]() { exportPhoto(); });
   exportPhotoButton = photoButton;
@@ -2820,14 +2822,14 @@ void ResultScene::buildCourseExitConfirmation() {
   panel->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Leave Course?");
+  title->setText(i18n::tr("result.leave_course.label"));
   title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   title->setAlign(TextView::CENTER);
   title->setHeight(42);
   panel->addView(title);
 
   auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  message->setText("Course progress will be lost.");
+  message->setText(i18n::tr("result.course_progress_will_lost.message"));
   message->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   message->setAlign(TextView::CENTER);
   message->setHeight(32);
@@ -2861,10 +2863,10 @@ void ResultScene::buildCourseExitConfirmation() {
   };
 
   row->addView(
-      makeModalButton("Cancel", ui_theme::control(), ui_theme::controlHover(),
+      makeModalButton(i18n::tr("result.cancel.label"), ui_theme::control(), ui_theme::controlHover(),
       ui_theme::controlPressed(), ui_theme::hairlineSubtle(),
       [this]() { hideCourseExitConfirmation(); }));
-  row->addView(makeModalButton("Back to Menu", ui_theme::warningAction(),
+  row->addView(makeModalButton(i18n::tr("result.back_menu.label"), ui_theme::warningAction(),
                                ui_theme::warningActionHover(),
                                ui_theme::warningActionPressed(),
       ui_theme::coral(), [this]() { exitResult(); }));
@@ -3313,7 +3315,7 @@ void ResultScene::startRetry(bool samePattern) {
                 : retrySource.gaugeAutoShiftLowerBound;
         options.longNoteMode = resultRetryLongNoteMode(
             retrySource.chartMeta, local->attemptProvenance);
-        options.assistOption = retrySource.assistOption;
+        options.assistOption = resultRetryAssistOption(retrySource.assistOption);
         options.clubMode = local->attemptProvenance.clubMode;
         options.doublePlayFlip = local->attemptProvenance.doublePlayFlip;
         options.pacemakerTarget =
@@ -3594,7 +3596,7 @@ void ResultScene::updatePracticeSectionAction() {
   const auto selectedRequest = selectedPracticeLaunchRequest();
   if (!selectedRequest.has_value()) {
     practiceSectionButton->setEnabled(false);
-    practiceSectionButtonText->setText("Select Section");
+    practiceSectionButtonText->setText(i18n::tr("result.select_section.label"));
     return;
   }
   if (const auto issue = practice::validateLaunchRequest(*selectedRequest);
@@ -3605,7 +3607,7 @@ void ResultScene::updatePracticeSectionAction() {
   }
 
   practiceSectionButton->setEnabled(true);
-  practiceSectionButtonText->setText("Practice Section");
+  practiceSectionButtonText->setText(i18n::tr("result.practice_section.label"));
 }
 
 void ResultScene::practiceThisSection() {

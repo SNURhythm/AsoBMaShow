@@ -254,7 +254,7 @@ void DropdownView::rebuildOptions() {
     content->addView(indicator);
 
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
-    text->setText(option.label);
+    text->setLocalizedText(option.label);
     text->setAlign(TextView::LEFT);
     text->setVAlign(TextView::MIDDLE);
     text->setOverflow(TextView::TextOverflow::Hidden);
@@ -334,8 +334,8 @@ void DropdownView::refreshVisualState() {
   }
   if (triggerText != nullptr) {
     const std::string selected = selectedLabel();
-    triggerText->setText(
-        current.label.empty() ? selected : current.label + ": " + selected);
+    const std::string label = current.label.resolve();
+    triggerText->setText(label.empty() ? selected : label + ": " + selected);
   }
   refreshIndicator(triggerIndicator, selectedLeadingColor());
   if (triggerIcon != nullptr) {
@@ -409,10 +409,11 @@ float DropdownView::preferredWidth() const {
 
   int widestValue = 0;
   bool hasLeadingIndicator = false;
+  const std::string label = current.label.resolve();
   for (const auto &option : current.options) {
-    const std::string text = current.label.empty()
-                                 ? option.label
-                                 : current.label + ": " + option.label;
+    const std::string text = label.empty()
+                                 ? option.label.resolve()
+                                 : label + ": " + option.label.resolve();
     widestValue = std::max(widestValue, triggerText->measureTextWidth(text));
     hasLeadingIndicator = hasLeadingIndicator || option.leadingColor.has_value();
   }
@@ -466,11 +467,11 @@ void DropdownView::scheduleOptionViewClear() {
 std::string DropdownView::selectedLabel() const {
   for (const auto &option : current.options) {
     if (option.id == current.selectedId) {
-      return option.label;
+      return option.label.resolve();
     }
   }
   return current.options.empty() ? std::string()
-                                 : current.options.front().label;
+                                 : current.options.front().label.resolve();
 }
 
 std::optional<Color> DropdownView::selectedLeadingColor() const {
@@ -583,4 +584,16 @@ void DropdownView::onThemeChanged() {
   if (menuOwnedByPortal && menuScroll != nullptr) {
     menuScroll->propagateThemeChange();
   }
+}
+
+void DropdownView::onLanguageChanged() {
+  View::onLanguageChanged();
+  if (menuOwnedByPortal && menuScroll != nullptr) {
+    menuScroll->propagateLanguageChange();
+  }
+  refreshVisualState();
+  resolvedWidth = std::max(current.menuWidth, preferredWidth());
+  setWidth(resolvedWidth);
+  setMinWidth(resolvedWidth);
+  updateMenuPlacement();
 }

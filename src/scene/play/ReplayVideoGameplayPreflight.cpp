@@ -67,7 +67,6 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .hispeedFixMode = settings.hispeedFixMode,
       .playAreaWidth = playAreaWidth,
       .laneBeamsEnabled = true,
-      .accelerationCompensation = settings.accelerationCompensation,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = laneCoverEnabled,
       .laneBeamLengthPercent = settings.laneBeamLengthPercent,

@@ -103,7 +103,7 @@ end-to-end scanner batch containing a 17 MiB chart.
 ## Verification
 
 Start with `chart_library_scanner_tests`, `chart_scan_work_scheduler_tests`,
-`chart_repository_tests`, `chart_filter_sort_panel_view_tests`, and
+`chart_repository_tests`, `chart_record_filters_tests`, and
 `difficulty_table_*_tests`. Preview ownership is covered by
 `chart_preload_worker_tests`, `main_menu_preview_controller_tests`, and the
 Main Menu preview/Records lifecycle fixtures. For the scheduler's detailed operating model, see

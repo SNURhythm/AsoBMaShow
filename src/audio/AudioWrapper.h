@@ -165,6 +165,8 @@ public:
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path, audio::Bus bus,
                  long long startOffsetMicros = 0);
+  bool playSound(const path_t &path, audio::Bus bus,
+                 long long startOffsetMicros, float gain);
   [[nodiscard]] audio::SkinSoundLoadResult
   loadSkinSound(const path_t &path, std::atomic<bool> &isCancelled,
                 std::size_t maximumEncodedBytes,

@@ -206,7 +206,6 @@ asobmashow_share_test_sources(dependencies
         builtin_renderer_characterization_tests
         button_enabled_tests
         chart_audio_renderer_tests
-        chart_filter_sort_panel_view_tests
         chart_library_operations_tests
         chart_library_scanner_tests
         chart_list_item_view_tests
@@ -218,7 +217,6 @@ asobmashow_share_test_sources(dependencies
         chart_replay_persistence_tests
         chart_repository_tests
         chart_selector_query_tests
-        checkbox_button_content_tests
         club_beat_tests
         context_menu_view_tests
         course_continuation_tests

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "PracticeAnalyticsView.h"
 #include "PracticeAnalyticsPresentation.h"
 
@@ -56,13 +57,13 @@ std::string formatMetric(const std::optional<double> &value) {
 std::string modeName(PracticeAnalyticsMode mode) {
   switch (mode) {
   case PracticeAnalyticsMode::Histogram:
-    return "Histogram";
+    return i18n::tr("practice.analytics.histogram.label");
   case PracticeAnalyticsMode::Lanes:
-    return "Lanes";
+    return i18n::tr("practice.analytics.lanes.label");
   case PracticeAnalyticsMode::Sections:
-    return "Sections";
+    return i18n::tr("practice.analytics.sections.label");
   }
-  return "Histogram";
+  return i18n::tr("practice.analytics.histogram.label");
 }
 
 bool pointInside(const View &view, float x, float y) {
@@ -409,9 +410,9 @@ void PracticeAnalyticsView::build() {
   modeControlsRow->setAlignItems(YGAlignCenter);
   modeControlsRow->setGap(8);
   for (const auto &[label, value] :
-       {std::pair{"Histogram", PracticeAnalyticsMode::Histogram},
-        std::pair{"Lanes", PracticeAnalyticsMode::Lanes},
-        std::pair{"Sections", PracticeAnalyticsMode::Sections}}) {
+       {std::pair{i18n::tr("practice.analytics.histogram.label"), PracticeAnalyticsMode::Histogram},
+        std::pair{i18n::tr("practice.analytics.lanes.label"), PracticeAnalyticsMode::Lanes},
+        std::pair{i18n::tr("practice.analytics.sections.label"), PracticeAnalyticsMode::Sections}}) {
     auto *button = makeButton(label, 112);
     button->setOnClickListener([this, value]() { setMode(value); });
     modeButtons.push_back(button);
@@ -421,7 +422,7 @@ void PracticeAnalyticsView::build() {
   spacer->setFlexGrow(1.0f);
   modeControlsRow->addView(spacer);
   auto *abandoned =
-      makeText("Abandoned: " + std::to_string(model.abandonedAttempts()), 14,
+      makeText(i18n::tr("practice.analytics.abandoned.prefix") + std::to_string(model.abandonedAttempts()), 14,
                model.abandonedAttempts() == 0 ? ui_theme::textMuted()
                                               : ui_theme::amber());
   abandoned->setWidth(140);
@@ -580,13 +581,13 @@ void PracticeAnalyticsView::refreshText() {
         "Aggregate · " +
         model.compatibilityGroups()[model.selectedAggregateGroup()].label);
   } else {
-    selectionText->setText("No completed attempts");
+    selectionText->setText(i18n::tr("practice.analytics.no_completed_attempts.label"));
   }
 
   const auto &analysis = model.displayedAnalysis();
   const auto &timing = analysis.overall;
   std::ostringstream summary;
-  summary << (model.displayedIsAuto() ? "Auto timing" : "Timing")
+  summary << (model.displayedIsAuto() ? i18n::tr("practice.analytics.auto_timing.label") : i18n::tr("practice.analytics.timing.label"))
           << " · n " << timing.samples << " · Miss " << timing.misses
           << " · Mean " << formatMetric(timing.meanMillis) << " · SD "
           << formatMetric(timing.standardDeviationMillis) << " · Median "
@@ -595,9 +596,9 @@ void PracticeAnalyticsView::refreshText() {
 
   std::ostringstream detail;
   if (mode == PracticeAnalyticsMode::Histogram) {
-    detail << "Early ← 0 → Late · 5 ms bins";
+    detail << i18n::tr("practice.analytics.early_0_late_5_ms_bins.label");
   } else if (mode == PracticeAnalyticsMode::Lanes) {
-    detail << "Lane offsets";
+    detail << i18n::tr("practice.analytics.lane_offsets.label");
     const std::size_t shown = std::min<std::size_t>(analysis.lanes.size(), 8);
     for (std::size_t index = 0; index < shown; ++index) {
       detail << (index == 0 ? " · " : "   ") << "L"
@@ -611,7 +612,7 @@ void PracticeAnalyticsView::refreshText() {
            << static_cast<double>(selected->endMicros) / 1'000'000.0
            << " s";
   } else {
-    detail << "Tap or drag to select measures";
+    detail << i18n::tr("practice.analytics.tap_drag_select_measures.label");
   }
   if (model.displayedContainsAuto() && !model.displayedIsAuto()) {
     detail << " · aggregate includes Auto";

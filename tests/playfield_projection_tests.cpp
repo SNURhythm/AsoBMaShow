@@ -1843,7 +1843,6 @@ int main() {
       builtInPlanResult.builtInPlan.entries[3].descriptorIndex != 2U ||
       builtInPlanResult.builtInPlan.entries[4].kind !=
           BuiltInRendererPlanEntryKind::LongNote ||
-      !builtInPlanResult.builtInPlan.entries[4].headAtLowerBound ||
       !builtInPlanResult.builtInPlan.entries[4].tailAtUpperBound ||
       builtInPlanResult.builtInPlan.entries[4].renderY != -1.0F ||
       builtInPlanResult.builtInPlan.entries[4].tailRenderY != 1.5F ||
@@ -1853,6 +1852,56 @@ int main() {
                  "of skin DTO limits and retain its renderer hispeed\n";
     return EXIT_FAILURE;
   }
+  // A missed/dead head inside the late-POOR window must retain its live
+  // body's lower-bound anchor, just as the mutable renderer's orphan path
+  // does. A live or merely played head keeps the authored traversal position.
+  for (const auto mode : {ChartLongNoteMode::LN, ChartLongNoteMode::CN,
+                          ChartLongNoteMode::HCN}) {
+    auto deadHeadModel = builtInPlanModel;
+    deadHeadModel.notes.front().longNoteMode = mode;
+    deadHeadModel.notes.back().longNoteMode = mode;
+    // The projection index retains pointers into this immutable model.
+    PlayfieldProjection deadHeadProjection;
+    PlayfieldProjectionRequest request{
+        .latePoorTimingMicros = 150,
+        .builtInTraversal = BuiltInRendererTraversal{
+            .judgeY = 0.0F, .upperBound = 1.5F, .rxhs = 1.0F}};
+    auto liveState = builtInPlanState;
+    const auto live = deadHeadProjection.project(deadHeadModel, liveState, request);
+    if (live.builtInPlan.entries.empty()) {
+      std::cerr << "fixture must retain a live LN plan entry\n";
+      return EXIT_FAILURE;
+    }
+    const auto &liveEntry = live.builtInPlan.entries.back();
+    if (liveEntry.kind != BuiltInRendererPlanEntryKind::LongNote ||
+        liveEntry.renderY == request.builtInTraversal->lowerBound) {
+      std::cerr << "fixture must retain a live LN head inside the judgement window\n";
+      return EXIT_FAILURE;
+    }
+    liveState.notes = {{.id = 1110, .judged = true, .dead = true,
+                        .playedTimeMicros = 150}};
+    const auto missed = deadHeadProjection.project(deadHeadModel, liveState, request);
+    if (missed.builtInPlan.entries.empty() ||
+        missed.builtInPlan.longNotes.empty()) {
+      std::cerr << "dead LN heads must retain their body plan\n";
+      return EXIT_FAILURE;
+    }
+    const auto &missedEntry = missed.builtInPlan.entries.back();
+    if (missedEntry.renderY != request.builtInTraversal->lowerBound ||
+        missedEntry.tailRenderY != liveEntry.tailRenderY ||
+        !missed.builtInPlan.longNotes.back().headDead) {
+      std::cerr << "dead LN heads must anchor retained bodies at the lower bound\n";
+      return EXIT_FAILURE;
+    }
+    liveState.notes.front().dead = false;
+    const auto played = deadHeadProjection.project(deadHeadModel, liveState, request);
+    if (played.builtInPlan.entries.empty() ||
+        played.builtInPlan.entries.back().renderY != liveEntry.renderY) {
+      std::cerr << "played live LN heads must retain their traversal geometry\n";
+      return EXIT_FAILURE;
+    }
+  }
+
   const auto repeatedBuiltInPlanResult = projection.project(
       builtInPlanModel, builtInPlanState,
       {.builtInTraversal = BuiltInRendererTraversal{

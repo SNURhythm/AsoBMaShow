@@ -50,7 +50,7 @@ void SettingsLibraryTask::stopAndWait() {
 }
 
 void SettingsLibraryTask::Publisher::tableStatus(
-    std::string text, bool succeeded, bool reload) const {
+    i18n::Text text, bool succeeded, bool reload) const {
   std::lock_guard lock(owner_.mutex_);
   if (!token_.stop_requested()) {
     owner_.pending_.tableStatus = Status{std::move(text), succeeded};
@@ -59,7 +59,7 @@ void SettingsLibraryTask::Publisher::tableStatus(
 }
 
 void SettingsLibraryTask::Publisher::folderStatus(
-    std::string text, bool succeeded, bool reload) const {
+    i18n::Text text, bool succeeded, bool reload) const {
   std::lock_guard lock(owner_.mutex_);
   if (!token_.stop_requested()) {
     owner_.pending_.folderStatus = Status{std::move(text), succeeded};

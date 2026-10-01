@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ChartFilterSortPanelView.h"
 
 #include "../scene/play/RhythmState.h"
@@ -107,9 +108,9 @@ void setDisplayed(View *view, bool displayed) {
   view->setDisplay(displayed ? YGDisplayFlex : YGDisplayNone);
 }
 
-TextView *makePanelLabel(const std::string &text) {
+TextView *makePanelLabel(const i18n::Text &text) {
   auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  label->setText(text);
+  label->setLocalizedText(text);
   label->setThemedColor(ui_theme::textSecondary);
   label->setHeight(28);
   return label;
@@ -124,7 +125,7 @@ View *makePanelOptionRow(float height = 42.0f) {
   return row;
 }
 
-Button *makeCheckboxButton(const std::string &label, TextView **iconOut,
+Button *makeCheckboxButton(const i18n::Text &label, TextView **iconOut,
                            TextView **textOut) {
   auto *button = new Button(0, 0, 118, 42);
   auto *content = new View();
@@ -139,7 +140,7 @@ Button *makeCheckboxButton(const std::string &label, TextView **iconOut,
   icon->setVAlign(TextView::MIDDLE);
   icon->setWidth(16);
   auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::LEFT);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
@@ -186,7 +187,7 @@ std::optional<int> clearMarkRankFromId(const std::string &id) {
 
 std::vector<DropdownView::Option> clearMarkOptions() {
   std::vector<DropdownView::Option> options;
-  options.push_back({.id = "", .label = "All"});
+  options.push_back({.id = "", .label = i18n::message("library.filter.clear_mark.all.label")});
   for (const auto &filter : kClearMarkFilters) {
     options.push_back({
         .id = std::to_string(filter.rank),
@@ -199,7 +200,7 @@ std::vector<DropdownView::Option> clearMarkOptions() {
 
 std::vector<DropdownView::Option> scoreRankOptions() {
   std::vector<DropdownView::Option> options;
-  options.push_back({.id = "", .label = "All"});
+  options.push_back({.id = "", .label = i18n::message("library.filter.score_rank.all.label")});
   constexpr std::array<const char *, 10> kScoreRankLabels = {
       "MAX", "MAX -", "AAA", "AA", "A", "B", "C", "D", "E", "F"};
   for (const char *rank : kScoreRankLabels) {
@@ -211,7 +212,7 @@ std::vector<DropdownView::Option> scoreRankOptions() {
 std::vector<DropdownView::Option>
 difficultyOptions(const std::vector<DifficultyLevelInfo> &levels) {
   std::vector<DropdownView::Option> options;
-  options.push_back({.id = "", .label = "All"});
+  options.push_back({.id = "", .label = i18n::message("library.filter.difficulty.all.label")});
   for (const auto &level : levels) {
     options.push_back({.id = level.level, .label = level.level});
   }
@@ -246,7 +247,7 @@ void ChartFilterPanelView::buildStaticContent() {
     dropdown->setHeight(42);
   };
 
-  clearMarkLabel = makePanelLabel("Clear Mark");
+  clearMarkLabel = makePanelLabel(i18n::message("library.filter_sort.clear_mark.label"));
   addView(clearMarkLabel);
   clearMarkRow = makePanelOptionRow();
   clearMarkDropdown = new DropdownView({
@@ -265,7 +266,7 @@ void ChartFilterPanelView::buildStaticContent() {
   });
   configureDropdown(clearMarkDropdown);
   clearMarkRow->addView(clearMarkDropdown);
-  clearMarkOrAboveButton = makeCheckboxButton("or above", &clearMarkOrAboveIcon,
+  clearMarkOrAboveButton = makeCheckboxButton(i18n::message("library.filter_sort.above.label"), &clearMarkOrAboveIcon,
                                               &clearMarkOrAboveText);
   clearMarkOrAboveButton->setOnClickListener([this]() {
     if (!currentState.filters.clearMarkRank.has_value()) {
@@ -277,7 +278,7 @@ void ChartFilterPanelView::buildStaticContent() {
     }
   });
   clearMarkRow->addView(clearMarkOrAboveButton);
-  clearMarkOrBelowButton = makeCheckboxButton("or below", &clearMarkOrBelowIcon,
+  clearMarkOrBelowButton = makeCheckboxButton(i18n::message("library.filter_sort.below.label"), &clearMarkOrBelowIcon,
                                               &clearMarkOrBelowText);
   clearMarkOrBelowButton->setOnClickListener([this]() {
     if (!currentState.filters.clearMarkRank.has_value()) {
@@ -291,7 +292,7 @@ void ChartFilterPanelView::buildStaticContent() {
   clearMarkRow->addView(clearMarkOrBelowButton);
   addView(clearMarkRow);
 
-  addView(makePanelLabel("Score Rank"));
+  addView(makePanelLabel(i18n::message("library.filter_sort.score_rank.label")));
   scoreRankRow = makePanelOptionRow();
   scoreRankDropdown = new DropdownView({
       .onOpenChanged =
@@ -309,7 +310,7 @@ void ChartFilterPanelView::buildStaticContent() {
   });
   configureDropdown(scoreRankDropdown);
   scoreRankRow->addView(scoreRankDropdown);
-  scoreRankOrAboveButton = makeCheckboxButton("or above", &scoreRankOrAboveIcon,
+  scoreRankOrAboveButton = makeCheckboxButton(i18n::message("library.filter_sort.above.label"), &scoreRankOrAboveIcon,
                                               &scoreRankOrAboveText);
   scoreRankOrAboveButton->setOnClickListener([this]() {
     if (!currentState.filters.scoreRank.has_value()) {
@@ -321,7 +322,7 @@ void ChartFilterPanelView::buildStaticContent() {
     }
   });
   scoreRankRow->addView(scoreRankOrAboveButton);
-  scoreRankOrBelowButton = makeCheckboxButton("or below", &scoreRankOrBelowIcon,
+  scoreRankOrBelowButton = makeCheckboxButton(i18n::message("library.filter_sort.below.label"), &scoreRankOrBelowIcon,
                                               &scoreRankOrBelowText);
   scoreRankOrBelowButton->setOnClickListener([this]() {
     if (!currentState.filters.scoreRank.has_value()) {
@@ -335,11 +336,11 @@ void ChartFilterPanelView::buildStaticContent() {
   scoreRankRow->addView(scoreRankOrBelowButton);
   addView(scoreRankRow);
 
-  addView(makePanelLabel("BPM Range"));
+  addView(makePanelLabel(i18n::message("library.filter_sort.bpm_range.label")));
   auto *bpmRow = makePanelOptionRow(48);
-  auto makeBpmLabel = [](const std::string &label) {
+  auto makeBpmLabel = [](const i18n::Text &label) {
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-    text->setText(label);
+    text->setLocalizedText(label);
     text->setThemedColor(ui_theme::textSecondary);
     text->setWidth(44);
     text->setVAlign(TextView::MIDDLE);
@@ -385,9 +386,9 @@ void ChartFilterPanelView::buildStaticContent() {
     }
   });
 
-  bpmRow->addView(makeBpmLabel("Min"));
+  bpmRow->addView(makeBpmLabel(i18n::message("library.filter.bpm.min.label")));
   bpmRow->addView(bpmMinBox);
-  bpmRow->addView(makeBpmLabel("Max"));
+  bpmRow->addView(makeBpmLabel(i18n::message("library.filter.bpm.max.label")));
   bpmRow->addView(bpmMaxBox);
   addView(bpmRow);
 
@@ -397,7 +398,7 @@ void ChartFilterPanelView::buildStaticContent() {
   difficultyContent->setGap(8);
   difficultyContent->setVisible(false);
   difficultyContent->setHeight(0);
-  difficultyContent->addView(makePanelLabel("Difficulty Range"));
+  difficultyContent->addView(makePanelLabel(i18n::message("library.filter_sort.difficulty_range.label")));
   difficultyRow = makePanelOptionRow();
   difficultyMinDropdown = new DropdownView({
       .onOpenChanged =
@@ -500,7 +501,7 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
   const auto options = difficultyOptions(state.difficultyLevels);
   if (difficultyMinDropdown != nullptr) {
     difficultyMinDropdown->refresh({
-        .label = "Min",
+        .label = i18n::message("library.filter.difficulty.min.label"),
         .selectedId = optionalStringId(state.filters.difficultyMinLevel),
         .options = options,
         .open = showDifficulty && state.difficultyMinDropdownOpen,
@@ -509,7 +510,7 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
   }
   if (difficultyMaxDropdown != nullptr) {
     difficultyMaxDropdown->refresh({
-        .label = "Max",
+        .label = i18n::message("library.filter.difficulty.max.label"),
         .selectedId = optionalStringId(state.filters.difficultyMaxLevel),
         .options = options,
         .open = showDifficulty && state.difficultyMaxDropdownOpen,
@@ -585,7 +586,7 @@ ChartSortPanelView::ChartSortPanelView(Callbacks callbacks)
 }
 
 void ChartSortPanelView::buildContent() {
-  addView(makePanelLabel("Sort"));
+  addView(makePanelLabel(i18n::message("library.filter_sort.sort.label")));
   View *row = nullptr;
   size_t index = 0;
   auto addGridCell = [&](View *cell) {
@@ -608,7 +609,7 @@ void ChartSortPanelView::buildContent() {
     cell->addView(content);
     return cell;
   };
-  auto makeSortButton = [this, makeSortCell](const std::string &label,
+  auto makeSortButton = [this, makeSortCell](const i18n::Text &label,
                                              ChartRecordSortCriterion criterion) {
     auto *button = new Button(0, 0, 160, 42);
     auto *content = new View();
@@ -617,7 +618,7 @@ void ChartSortPanelView::buildContent() {
     content->setJustifyContent(YGJustifyCenter);
     content->setGap(6);
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
-    text->setText(label);
+    text->setLocalizedText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
     text->setMinWidth(0);
@@ -656,7 +657,7 @@ void ChartSortPanelView::buildContent() {
 
   for (const auto &option : kSortOptions) {
     const SortButton sortButton =
-        makeSortButton(option.label, option.criterion);
+        makeSortButton(i18n::message(option.labelKey), option.criterion);
     if (option.criterion == ChartRecordSortCriterion::Difficulty) {
       difficultySortCell = sortButton.cell;
       difficultySortButton = sortButton.button;
@@ -689,7 +690,7 @@ void ChartSortPanelView::refreshButtons(const State &state) {
     setDisplayed(item.cell, true);
     setDisplayed(item.button, true);
     if (item.text != nullptr) {
-      item.text->setText(item.label);
+      item.text->setLocalizedText(item.label);
     }
 
     const bool selected = item.criterion == state.sort.criterion;

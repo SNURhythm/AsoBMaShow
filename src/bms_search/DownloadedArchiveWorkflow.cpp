@@ -48,6 +48,7 @@ bool reportCancelled(std::atomic_bool &cancelled, BmsSearchResult &result) {
   }
   result.status = BmsSearchResult::Status::DownloadFailed;
   result.message = "Lookup cancelled.";
+  result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
   result.outputPath.clear();
   result.removedPaths.clear();
   result.pendingArtifact.reset();
@@ -187,9 +188,11 @@ bool processDownloadedArchive(
   result.outputPath.clear();
   result.removedPaths.clear();
   result.pendingArtifact.reset();
+  result.presentationMessage = {};
   if (!dependencies.decideArchive || !dependencies.commitArtifact) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Find BMS archive processing is unavailable.";
+    result.presentationMessage = i18n::message("library.find_bms.result.processing_unavailable");
     return false;
   }
   if (reportCancelled(cancelled, result)) {
@@ -224,6 +227,9 @@ bool processDownloadedArchive(
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = commitError.empty() ? "Could not keep downloaded archive."
                                            : commitError;
+      if (commitError.empty()) {
+        result.presentationMessage = i18n::message("library.find_bms.result.keep_archive_failed");
+      }
       return false;
     }
     result.status = BmsSearchResult::Status::Downloaded;
@@ -241,12 +247,14 @@ bool processDownloadedArchive(
     result.message =
         "The downloaded archive does not contain the selected BMS chart. "
         "Choose Keep Files or Delete Files.";
+    result.presentationMessage = i18n::message("library.find_bms.result.archive_mismatch");
     return true;
   }
 
   if (!dependencies.extractArchive || !dependencies.decideExtracted) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Find BMS archive extraction is unavailable.";
+    result.presentationMessage = i18n::message("library.find_bms.result.extraction_unavailable");
     return false;
   }
 
@@ -262,6 +270,9 @@ bool processDownloadedArchive(
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = extractError.empty() ? "Archive extraction failed."
                                           : extractError;
+    if (extractError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.extraction_failed");
+    }
     return false;
   }
   if (reportCancelled(cancelled, result)) {
@@ -272,6 +283,7 @@ bool processDownloadedArchive(
   if (directDecision.verificationBytes > verificationLimits.maxTotalBytes) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Archive exceeds the BMS verification byte limit.";
+    result.presentationMessage = i18n::message("library.find_bms.result.verification_limit");
     return false;
   }
   verificationLimits.maxTotalBytes -= directDecision.verificationBytes;
@@ -285,6 +297,9 @@ bool processDownloadedArchive(
     result.message = extractedDecision.message.empty()
                          ? "Could not validate extracted archive contents."
                          : extractedDecision.message;
+    if (extractedDecision.message.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.validation_failed");
+    }
     return false;
   }
   if (extractedDecision.disposition ==
@@ -296,6 +311,7 @@ bool processDownloadedArchive(
     result.message =
         "The unarchived files do not contain the selected BMS chart. "
         "Choose Keep Files or Delete Files.";
+    result.presentationMessage = i18n::message("library.find_bms.result.extracted_mismatch");
     return true;
   }
 
@@ -306,6 +322,9 @@ bool processDownloadedArchive(
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = commitError.empty() ? "Could not keep unarchived files."
                                          : commitError;
+    if (commitError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.keep_extracted_failed");
+    }
     return false;
   }
   result.status = BmsSearchResult::Status::Downloaded;

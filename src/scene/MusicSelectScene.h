@@ -65,6 +65,7 @@ public:
   void init() override;
   void onPause() override;
   void onResume() override;
+  void onLanguageChanged() override;
   void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &) override;
   void update(float) override;
@@ -168,7 +169,7 @@ private:
   void applyRecordsExportProgress();
   void applyRecordsExportResult();
   void showTasksModal();
-  void refreshTasksModal();
+  void refreshTasksModal(bool force = false);
   [[nodiscard]] std::string tasksModalTextSnapshot() const;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   [[nodiscard]] bool

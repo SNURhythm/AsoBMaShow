@@ -13,6 +13,7 @@ def main():
     source = (args.root / "src/scene/SettingsSceneTables.cpp").read_text()
     signatures = [
         "void SettingsScene::applyPendingDifficultyTableUpdates()",
+        "void SettingsScene::toggleChartEntryICloudBackup(",
         "void SettingsScene::addDifficultyTableFromUrl()",
         "void SettingsScene::updateDifficultyTableFromSource(",
         "void SettingsScene::deleteDifficultyTable(",

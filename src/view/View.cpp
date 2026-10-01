@@ -652,6 +652,40 @@ void View::propagateThemeChange() {
   }
 }
 
+void View::onLanguageChanged() {}
+
+std::optional<View::RenderBounds> View::textFitBounds() const {
+  const auto inherited = parent != nullptr ? parent->textFitBounds()
+                                           : std::nullopt;
+  if (!autoFitText && !inherited) {
+    return std::nullopt;
+  }
+  RenderBounds bounds{static_cast<float>(getContentX()),
+                      static_cast<float>(getContentY()),
+                      static_cast<float>(getContentWidth()),
+                      static_cast<float>(getContentHeight())};
+  if (inherited) {
+    const float right = std::min(bounds.x + bounds.width,
+                                  inherited->x + inherited->width);
+    const float bottom = std::min(bounds.y + bounds.height,
+                                   inherited->y + inherited->height);
+    bounds.x = std::max(bounds.x, inherited->x);
+    bounds.y = std::max(bounds.y, inherited->y);
+    bounds.width = std::max(0.0f, right - bounds.x);
+    bounds.height = std::max(0.0f, bottom - bounds.y);
+  }
+  return bounds;
+}
+
+void View::propagateLanguageChange() {
+  onLanguageChanged();
+  for (auto *child : children) {
+    if (child != nullptr) {
+      child->propagateLanguageChange();
+    }
+  }
+}
+
 void View::renderBoxDecoration(RenderContext &context) const {
   if ((!hasBackground && (!hasBorder || borderWidth <= 0) && !hasShadow) ||
       getWidth() <= 0 || getHeight() <= 0) {

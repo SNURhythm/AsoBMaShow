@@ -1907,6 +1907,43 @@ void testRunningMidBufferStopAndRateTransitionDoesNotJump() {
   }
 }
 
+void testSettingsToneIsAudibleWithoutStartingGameplayClock() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("settings-tone");
+  require(wrapper.loadGeneratedSound(sound, std::vector<short>(44100, 16000),
+                                     1, 44100),
+          "settings tone fixture loads PCM");
+  require(wrapper.playSound(
+              sound, audioBusForJukeboxSource(JukeboxAudioSource::SettingsTestTone)),
+          "settings tone submission succeeds");
+  std::array<std::int16_t, 16> output{};
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(std::ranges::any_of(output, [](auto sample) { return sample != 0; }),
+          "settings tone produces audio with the gameplay clock stopped");
+  require(!stopwatch.isRunning() && wrapper.getTimeMicros() == 0,
+          "settings tone does not start or advance the gameplay clock");
+  const auto fullVolume = output[0];
+  require(wrapper.stopSounds().success, "previous tone stops");
+  require(wrapper.playSound(
+              sound, audioBusForJukeboxSource(JukeboxAudioSource::SettingsTestTone),
+              0, audio::EffectiveGain(audio::Bus::Keysound,
+                                     {.master = 0.5F, .bgm = 0.0F,
+                                      .keysound = 0.5F})),
+          "settings tone accepts the master and keysound gain");
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(output[0] > 0 && std::abs(output[0] * 4 - fullVolume) <= 4,
+          "settings volume scales PCM independently of BGM volume");
+  require(wrapper.stopSounds().success &&
+              wrapper.playSound(sound, audio::Bus::System, 0, 0.0F),
+          "muted settings tone submits");
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(std::ranges::all_of(output, [](auto sample) { return sample == 0; }),
+          "muted settings volume produces silence");
+}
+
 void testStoppedClockStillMixesSystemSoundWhileBgmStaysSilent() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -2880,6 +2917,7 @@ int main() {
     testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock();
     testPausedMidBufferRateTransitionPreservesPublishedPosition();
     testRunningMidBufferStopAndRateTransitionDoesNotJump();
+    testSettingsToneIsAudibleWithoutStartingGameplayClock();
     testStoppedClockStillMixesSystemSoundWhileBgmStaysSilent();
     testWallInterpolationUsesTheRatePublishedWithItsAnchor();
     testClockAnchorReaderWaitsForACompleteGeneration();

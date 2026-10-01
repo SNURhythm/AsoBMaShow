@@ -77,3 +77,39 @@ add_executable(settings_preview_chart_tests
 target_include_directories(settings_preview_chart_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(settings_preview_chart_tests PRIVATE cxx_std_23)
 asobmashow_register_test(settings_preview_chart_tests)
+
+# Retained audio/display status presentation across language changes.
+set(settings_audio_video_scene_source
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_audio_video_scene_tests.cpp)
+add_custom_command(
+    OUTPUT ${settings_audio_video_scene_source}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/settings_audio_video_scene_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${settings_audio_video_scene_source}
+    DEPENDS tests/settings_audio_video_scene_extract.py
+            tests/settings_audio_video_scene_fixture.cpp
+            tests/gameplay_terminal_scene_extract.py
+            src/scene/SettingsScene.h src/scene/SettingsSceneAudioVideo.cpp
+    VERBATIM
+)
+add_executable(settings_audio_video_scene_tests ${settings_audio_video_scene_source})
+target_include_directories(settings_audio_video_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(settings_audio_video_scene_tests PRIVATE cxx_std_23)
+asobmashow_register_test(settings_audio_video_scene_tests)
+
+set(settings_ir_scene_source
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_ir_scene_tests.cpp)
+add_custom_command(
+    OUTPUT ${settings_ir_scene_source}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/settings_ir_scene_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${settings_ir_scene_source}
+    DEPENDS tests/settings_ir_scene_extract.py tests/settings_ir_scene_fixture.cpp
+            tests/gameplay_terminal_scene_extract.py
+            src/scene/SettingsScene.h src/scene/SettingsSceneIr.cpp
+    VERBATIM
+)
+add_executable(settings_ir_scene_tests ${settings_ir_scene_source})
+target_include_directories(settings_ir_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(settings_ir_scene_tests PRIVATE cxx_std_23)
+asobmashow_register_test(settings_ir_scene_tests)

@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 
 #include "../repositories/ChartRepository.h"
 #include "../ir/IrSettingsPresentation.h"
@@ -74,6 +75,7 @@ public:
 
   void init() override;
   void update(float dt) override;
+  void onLanguageChanged() override;
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
@@ -156,7 +158,6 @@ private:
   TextView *archiveCacheCleanupStatusText = nullptr;
   TextView *profileTabText = nullptr;
   TextView *profileStatusText = nullptr;
-  TextView *profileDeleteReasonText = nullptr;
   TextInputBox *profileCreateNameInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -301,7 +302,7 @@ private:
       gameplaySkinSettingsController;
   std::string gameplaySkinSettingsProfileId;
   std::string gameplaySkinSettingsLayoutKey;
-  std::string gameplaySkinUiMessage;
+  i18n::Text gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;
   bool gameplaySkinTraitDropdownOpen = false;
   bool gameplaySkinSafetyDropdownOpen = false;
@@ -332,12 +333,12 @@ private:
   bool profileExportStagingSwept = false;
   std::string profileCreateNameText;
   settings_scene::ProfileInlineEditorState profileInlineEditor;
-  std::string difficultyTableStatusMessage;
+  i18n::Text difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
-  std::string chartFolderStatusMessage;
+  i18n::Text chartFolderStatusMessage;
   SDL_Color chartFolderStatusColor{157, 177, 200, 255};
-  std::string archiveCacheCleanupStatusMessage =
-      "Temporary archive cache has not been cleaned yet.";
+  i18n::Text archiveCacheCleanupStatusMessage =
+      i18n::message("settings.temporary_archive_cache_has_not_cleaned_yet.message");
   SDL_Color archiveCacheCleanupStatusColor{157, 177, 200, 255};
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;
@@ -345,7 +346,7 @@ private:
   int difficultyTableImportCurrent = 0;
   int difficultyTableImportTotal = 0;
   std::string difficultyTableImportName;
-  std::string difficultyTableImportStatusMessage;
+  i18n::Text difficultyTableImportStatusMessage;
   std::string tableUrlText;
   std::unordered_map<std::string, bool> chartEntryICloudBackupExcluded;
   int pendingDeleteDifficultyTableId = 0;
@@ -361,8 +362,8 @@ private:
   std::unique_ptr<SettingsAudioVideoSession> audioVideoSession;
   player_settings::AudioSettings audioDraft;
   player_settings::VideoSettings displayDraft;
-  std::string audioStatusMessage;
-  std::string displayStatusMessage;
+  i18n::Text audioStatusMessage;
+  i18n::Text displayStatusMessage;
   SDL_Color audioStatusColor{157, 177, 200, 255};
   SDL_Color displayStatusColor{157, 177, 200, 255};
   bool audioDeviceDropdownOpen = false;
@@ -377,7 +378,7 @@ private:
   std::optional<std::int64_t> irPendingDiscardRowId;
   bool irKeyEditorActive = false;
   bool irStatusIsError = false;
-  std::string irStatusMessage;
+  i18n::Text irStatusMessage;
 
   void initView();
   void resetViewState();
@@ -385,8 +386,6 @@ private:
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
                                  bool includeDescription,
                                  bool compactAdjustments);
-  View *buildAccelerationCompensationControls(
-      const settings_scene::LayoutMetrics &metrics);
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
@@ -447,7 +446,7 @@ private:
   void toggleChartEntryICloudBackup(const std::string &entryPathText);
   void measureTemporaryArchiveCache();
   void cleanupTemporaryArchiveCache();
-  void refreshSettingsText();
+  void refreshSettingsText(bool syncInputs = true);
   void refreshIrSettingsPresentation();
   void ensureProfileController();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -486,15 +485,15 @@ private:
   void invalidateProfileLayout();
   void persistSettings();
   void ensureAudioVideoSession();
-  void refreshAudioVideoControls();
+  void refreshAudioVideoControls(bool syncInputs = true);
   void updateDisplayPreviewUi();
   void applyAudioStreamDraft();
   void applyDisplayDraft();
   void keepDisplayPreview();
   void revertDisplayPreview();
   void cancelDisplayPreviewForTabExit();
-  void setAudioStatus(const std::string &message, const SDL_Color &color);
-  void setDisplayStatus(const std::string &message, const SDL_Color &color);
+  void setAudioStatus(const i18n::Text &message, const SDL_Color &color);
+  void setDisplayStatus(const i18n::Text &message, const SDL_Color &color);
   void syncVolumeInputText(bool force = false);
   void commitVolumeInput(TextInputBox *input, int busIndex);
   void adjustVolume(int busIndex, int deltaPercent);

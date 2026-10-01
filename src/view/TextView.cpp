@@ -109,7 +109,7 @@ std::vector<std::string> fontFallbackPaths(const std::string &primaryPath) {
   std::vector<std::string> paths;
   addUniquePath(paths, primaryPath);
   addUniquePath(paths, "assets/fonts/notosansjp.ttf");
-  addUniquePath(paths, "assets/fonts/notosanskr.ttf");
+  addUniquePath(paths, "assets/fonts/notosanskr.otf");
   addUniquePath(paths, "assets/fonts/notosanssymbols2.ttf");
   addUniquePath(paths, "assets/fonts/arial.ttf");
   for (auto &path : systemFontFallbackPaths()) {
@@ -350,6 +350,23 @@ void TextView::releaseFontResources() {
 }
 
 void TextView::setText(const std::string &newText) {
+  localizedText_ = i18n::Text("");
+  setResolvedText(newText);
+}
+
+void TextView::setLocalizedText(const i18n::Text &newText) {
+  localizedText_ = newText;
+  setResolvedText(localizedText_.resolve());
+}
+
+void TextView::onLanguageChanged() {
+  View::onLanguageChanged();
+  if (localizedText_.isLocalized()) {
+    setResolvedText(localizedText_.resolve());
+  }
+}
+
+void TextView::setResolvedText(const std::string &newText) {
   if (newText == text) {
     return;
   }
@@ -382,12 +399,15 @@ void TextView::renderImpl(RenderContext &context) {
   }
 
   SDL_Rect drawRect = resolvedTextRect();
+  if (drawRect.w <= 0 || drawRect.h <= 0) {
+    return;
+  }
   const float rotationDegrees = getRotationDegrees();
   const bool clip =
       overflow != TextOverflow::Visible && getContentWidth() > 0 &&
       getContentHeight() > 0;
   if (rotationDegrees == 0.0f && overflow == TextOverflow::Marquee &&
-      !wrapEnabled &&
+      !wrapEnabled && !textFitBounds().has_value() &&
       rect.w > getContentWidth()) {
     drawRect.x = getContentX() - static_cast<int>(
                                    std::round(marqueeOffset(getContentWidth())));
@@ -427,17 +447,30 @@ void TextView::renderImpl(RenderContext &context) {
 SDL_Rect TextView::resolvedTextRect() const {
   const int contentHeight = rect.h > 0 ? rect.h : textLineHeight();
   SDL_Rect drawRect = {getContentX(), getContentY(), rect.w, contentHeight};
-  const int width = getContentWidth();
-  const int height = getContentHeight();
+  int width = getContentWidth();
+  int height = getContentHeight();
+  if (const auto bounds = textFitBounds()) {
+    drawRect.x = static_cast<int>(bounds->x);
+    drawRect.y = static_cast<int>(bounds->y);
+    width = static_cast<int>(bounds->width);
+    height = static_cast<int>(bounds->height);
+    if (drawRect.w > 0 && drawRect.h > 0) {
+      const float scale = std::min(
+          {1.0f, static_cast<float>(width) / drawRect.w,
+           static_cast<float>(height) / drawRect.h});
+      drawRect.w = static_cast<int>(std::floor(drawRect.w * scale));
+      drawRect.h = static_cast<int>(std::floor(drawRect.h * scale));
+    }
+  }
 
   switch (align) {
   case TextAlign::LEFT:
     break;
   case TextAlign::CENTER:
-    drawRect.x += (width - rect.w) / 2;
+    drawRect.x += (width - drawRect.w) / 2;
     break;
   case TextAlign::RIGHT:
-    drawRect.x += width - rect.w;
+    drawRect.x += width - drawRect.w;
     break;
   }
 
@@ -445,10 +478,10 @@ SDL_Rect TextView::resolvedTextRect() const {
   case TextVAlign::TOP:
     break;
   case TextVAlign::MIDDLE:
-    drawRect.y += (height - contentHeight) / 2;
+    drawRect.y += (height - drawRect.h) / 2;
     break;
   case TextVAlign::BOTTOM:
-    drawRect.y += height - contentHeight;
+    drawRect.y += height - drawRect.h;
     break;
   }
 
@@ -456,11 +489,17 @@ SDL_Rect TextView::resolvedTextRect() const {
 }
 
 View::RenderBounds TextView::renderingBounds() const {
+  const RenderBounds frame = View::renderingBounds();
   const SDL_Rect drawRect = resolvedTextRect();
-  return {.x = static_cast<float>(drawRect.x),
-          .y = static_cast<float>(drawRect.y),
-          .width = static_cast<float>(drawRect.w),
-          .height = static_cast<float>(drawRect.h)};
+  // Decorations and input carets still paint when there are no glyphs.
+  // Include overflowing text as well as the view's own frame when culling.
+  const float left = std::min(frame.x, static_cast<float>(drawRect.x));
+  const float top = std::min(frame.y, static_cast<float>(drawRect.y));
+  const float right = std::max(frame.x + frame.width,
+                               static_cast<float>(drawRect.x + drawRect.w));
+  const float bottom = std::max(frame.y + frame.height,
+                                static_cast<float>(drawRect.y + drawRect.h));
+  return {.x = left, .y = top, .width = right - left, .height = bottom - top};
 }
 
 int TextView::textLineHeight() const {

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
 #include "../library/ChartLibraryPlatform.h"
@@ -32,34 +33,37 @@ std::string formatCacheBytes(std::uint64_t bytes) {
   return stream.str();
 }
 
-std::string formatCacheCleanupResult(
+i18n::Text formatCacheCleanupResult(
     const archive_file::TemporaryCacheCleanupResult &result) {
   if (!result.cacheExisted || result.removedEntries == 0) {
     return result.skippedEntries == 0
-               ? "Temporary archive cache is already empty."
-               : "Temporary archive cache only contains active files.";
+               ? i18n::message("settings.temporary_archive_cache_already_empty.message")
+               : i18n::message("settings.temporary_archive_cache_only_contains_active_files.message");
   }
-  std::string message = "Removed " + formatCacheBytes(result.removedBytes) +
-                        " (" + std::to_string(result.removedEntries) +
-                        " entries).";
+  const auto summary = i18n::message(
+      "settings.cache.cleanup.summary",
+      {{"size", formatCacheBytes(result.removedBytes)},
+       {"count", std::to_string(result.removedEntries)}});
   if (result.skippedEntries > 0) {
-    message +=
-        " Skipped " + std::to_string(result.skippedEntries) + " active file";
-    if (result.skippedEntries != 1) {
-      message += "s";
-    }
-    message += ".";
+    return i18n::message(
+        "settings.cache.cleanup.result",
+        {{"summary", summary},
+         {"skipped", i18n::message(
+             result.skippedEntries == 1 ? "settings.cache.cleanup.skipped.one"
+                                        : "settings.cache.cleanup.skipped.other",
+             {{"count", std::to_string(result.skippedEntries)}})}});
   }
-  return message;
+  return summary;
 }
 
-std::string
+i18n::Text
 formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
   if (!result.cacheExisted || result.entries == 0) {
-    return "Temporary archive cache is empty.";
+    return i18n::message("settings.temporary_archive_cache_empty.message");
   }
-  return "Temporary archive cache uses " + formatCacheBytes(result.bytes) +
-         " (" + std::to_string(result.entries) + " entries).";
+  return i18n::message("settings.cache.usage.summary",
+                      {{"size", formatCacheBytes(result.bytes)},
+                       {"count", std::to_string(result.entries)}});
 }
 } // namespace
 
@@ -87,10 +91,12 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   const bool cleanup =
       completion->operation == SettingsCacheMaintenance::Operation::Cleanup;
   if (!completion->succeeded) {
-    archiveCacheCleanupStatusMessage = cleanup ? "Archive cache cleanup failed"
-                                               : "Archive cache measurement failed";
-    archiveCacheCleanupStatusMessage +=
-        completion->error.empty() ? "." : ": " + completion->error;
+    archiveCacheCleanupStatusMessage = i18n::message(
+        "settings.cache.operation.failure",
+        {{"operation", i18n::message(
+             cleanup ? "settings.archive_cache_cleanup_failed.label"
+                     : "settings.archive_cache_measurement_failed.label")},
+         {"details", completion->error.empty() ? "." : ": " + completion->error}});
     archiveCacheCleanupStatusColor = {255, 177, 170, 255};
   } else if (cleanup) {
     archiveCacheCleanupStatusMessage = formatCacheCleanupResult(completion->cleanup);
@@ -101,12 +107,12 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   }
 
   if (archiveCacheCleanupStatusText != nullptr) {
-    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
-    archiveCacheCleanupButtonText->setText(
-        archiveCacheMaintenance.cleanupRunning() ? "Cleaning..." : "Clean Up");
+    archiveCacheCleanupButtonText->setLocalizedText(
+        archiveCacheMaintenance.cleanupRunning() ? i18n::message("settings.cleaning.progress") : i18n::message("settings.clean_up.label"));
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -121,14 +127,14 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
     return;
   }
 
-  archiveCacheCleanupStatusMessage = "Cleaning temporary archive cache...";
+  archiveCacheCleanupStatusMessage = i18n::message("settings.cleaning_temporary_archive_cache.progress");
   archiveCacheCleanupStatusColor = {239, 244, 251, 255};
   if (archiveCacheCleanupStatusText != nullptr) {
-    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
-    archiveCacheCleanupButtonText->setText("Cleaning...");
+    archiveCacheCleanupButtonText->setLocalizedText(i18n::message("settings.cleaning.progress"));
   }
 }
 
@@ -137,10 +143,10 @@ void SettingsScene::measureTemporaryArchiveCache() {
     return;
   }
 
-  archiveCacheCleanupStatusMessage = "Measuring temporary archive cache...";
+  archiveCacheCleanupStatusMessage = i18n::message("settings.measuring_temporary_archive_cache.progress");
   archiveCacheCleanupStatusColor = {239, 244, 251, 255};
   if (archiveCacheCleanupStatusText != nullptr) {
-    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
 }
@@ -158,14 +164,13 @@ void SettingsScene::init() {
   context.profileSwitchBlockers.scene = [this]() -> std::optional<std::string> {
     if (audioVideoSession != nullptr &&
         audioVideoSession->hasDisplayPreview()) {
-      return "Confirm or revert the pending display preview before switching "
-             "profiles.";
+      return i18n::tr("settings.profile_switch.display_preview_blocker");
     }
     if (libraryTask.running()) {
-      return "A difficulty table library update is active.";
+      return i18n::tr("settings.difficulty_table_library_update_active.message");
     }
     if (archiveCacheMaintenance.running()) {
-      return "Archive cache maintenance is active.";
+      return i18n::tr("settings.archive_cache_maintenance_active.message");
     }
     return std::nullopt;
   };
@@ -184,6 +189,16 @@ void SettingsScene::init() {
   ensureLayoutUpToDate();
 }
 
+void SettingsScene::onLanguageChanged() {
+  View::LayoutBatchScope batch;
+  Scene::onLanguageChanged();
+  // Refresh presentation without committing input drafts or rebuilding views.
+  refreshSettingsText(false);
+  refreshAudioVideoControls(false);
+  refreshInputMonitorText();
+  updateDisplayPreviewUi();
+}
+
 void SettingsScene::update(float dt) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();
@@ -199,8 +214,7 @@ void SettingsScene::update(float dt) {
                            ? SDL_Color{157, 220, 176, 255}
                            : SDL_Color{255, 177, 170, 255});
     } else if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
-      setDisplayStatus("The display preview ended and the previous settings "
-                       "were restored.",
+      setDisplayStatus(i18n::tr("settings.display_preview_ended_previous_settings_restored.message"),
                        {255, 209, 128, 255});
     }
     if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
@@ -279,7 +293,7 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     displayDraft = context.settings.audioVideo.video;
     setDisplayStatus(result.has_value() && !result->message.empty()
                          ? result->message
-                         : "Display preview was restored after focus loss.",
+                         : i18n::tr("settings.display_preview_restored_after_focus_loss.message"),
                      {255, 209, 128, 255});
     updateDisplayPreviewUi();
   }
@@ -305,7 +319,7 @@ void SettingsScene::cleanupScene() {
   }
   gameplaySkinSettingsProfileId.clear();
   gameplaySkinSettingsLayoutKey.clear();
-  gameplaySkinUiMessage.clear();
+  gameplaySkinUiMessage = {};
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
 #endif
@@ -313,7 +327,7 @@ void SettingsScene::cleanupScene() {
   if (audioVideoSession != nullptr) {
     const auto result = audioVideoSession->cleanup();
     if (!result.message.empty()) {
-      SDL_Log("%s", result.message.c_str());
+      SDL_Log("%s", result.message.resolve().c_str());
     }
     audioVideoSession.reset();
   }
@@ -376,7 +390,6 @@ void SettingsScene::cleanupScene() {
   archiveCacheCleanupStatusText = nullptr;
   profileTabText = nullptr;
   profileStatusText = nullptr;
-  profileDeleteReasonText = nullptr;
   profileCreateNameInput = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
@@ -423,7 +436,7 @@ void SettingsScene::cleanupScene() {
   irPendingDiscardRowId.reset();
   irKeyEditorActive = false;
   irStatusIsError = false;
-  irStatusMessage.clear();
+  irStatusMessage = {};
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;

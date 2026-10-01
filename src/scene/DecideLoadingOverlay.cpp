@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "DecideLoadingOverlay.h"
 
 #include "../view/UiTheme.h"
@@ -104,7 +105,7 @@ void DecideLoadingOverlay::rebuild() {
   }
 
   auto *loading = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  loading->setText("Loading...");
+  loading->setText(i18n::tr("gameplay.loading.loading.progress"));
   loading->setThemedColor(ui_theme::textSecondary);
   row->addView(loading);
 

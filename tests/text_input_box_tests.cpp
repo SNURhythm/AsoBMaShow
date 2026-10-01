@@ -1,6 +1,11 @@
 #include "rendering/UniformCache.h"
 #include "view/TextInputBox.h"
 #include "view/TextView.h"
+#include "view/Button.h"
+#include "view/OverlayPortal.h"
+#include "view/DropdownView.h"
+#include "view/ScrollView.h"
+#include "i18n/Localization.h"
 
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
@@ -8,6 +13,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -115,6 +121,53 @@ void testEmptyInputHasNoClearHitTarget() {
   input.onUnselected();
 }
 
+void testEmptyInputKeepsItsVisibleFrame() {
+  struct RecordingBackend final : rendering::UiBatchBackend {
+    std::vector<rendering::PosColorVertex> vertices;
+
+    bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+      vertices.insert(vertices.end(), submission.colorVertices.begin(),
+                      submission.colorVertices.end());
+      return true;
+    }
+  } backend;
+  rendering::UiBatchRenderer renderer(backend);
+  RenderContext context(renderer);
+  context.pushScissor(0, 0, 300, 100);
+
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.setBackgroundColor(Color(20, 30, 40, 255));
+  input.setBorderColor(Color(80, 90, 100, 255));
+  input.setBorderWidth(1);
+  input.applyYogaLayout();
+
+  for (const char *value : {"", "query", ""}) {
+    input.setEditingText(value);
+    renderer.begin();
+    backend.vertices.clear();
+    input.render(context);
+    renderer.end();
+
+    bool paintedBackground = false;
+    bool paintedBorder = false;
+    for (const auto &vertex : backend.vertices) {
+      paintedBackground |= vertex.abgr == Color(20, 30, 40, 255).toABGR();
+      paintedBorder |= vertex.abgr == Color(80, 90, 100, 255).toABGR();
+    }
+    expect(paintedBackground && paintedBorder,
+           "input paints its background and border before typing and after "
+           "clearing");
+    expect(input.getWidth() == 240 && input.getHeight() == 52,
+           "clearing text preserves the input layout frame");
+  }
+
+  click(input, 120, 26);
+  expect(input.getSelected(), "cleared input remains clickable");
+  input.onUnselected();
+  context.popScissor();
+}
+
 void testFocusedInputConsumesItsInitiatingTouch() {
   TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
   input.setSize(240, 52);
@@ -155,6 +208,107 @@ void testBeginEditingUsesTheLatestDeclaredInputFrame() {
          "begin editing frames the platform editor at the declared touch "
          "target");
   input.endEditing();
+}
+
+void testLanguageRefreshPreservesRawTextAndFocusedInput() {
+  i18n::setLanguage(i18n::Language::English);
+  View root;
+  auto *button = new Button(0, 0, 200, 40);
+  auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  label->setDeferredTextureMaterialization(true);
+  label->setLocalizedText(i18n::message("settings.options.reset.label"));
+  button->setContentView(label);
+  root.addView(button);
+  auto *raw = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  raw->setDeferredTextureMaterialization(true);
+  raw->setText("Reset");
+  root.addView(raw);
+  auto *input = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 20);
+  input->setSize(200, 40);
+  input->setEditingText("Reset");
+  root.addView(input);
+  input->beginEditing();
+  int edits = 0;
+  input->onTextChanged([&](const std::string &) { ++edits; });
+
+  i18n::setLanguage(i18n::Language::Korean);
+  root.propagateLanguageChange();
+  expect(label->getText() == "초기화", "button content refreshes its bound message");
+  expect(label->textureWidth() > 0 && label->textureHeight() > 0,
+         "language refresh updates text geometry");
+  expect(raw->getText() == "Reset", "raw metadata equal to English copy stays raw");
+  expect(input->getText() == "Reset" && input->getSelected() && edits == 0,
+         "language refresh preserves focused input without an edit event");
+
+  label->setText("초기화");
+  i18n::setLanguage(i18n::Language::Japanese);
+  root.propagateLanguageChange();
+  expect(label->getText() == "초기화",
+         "even an equal raw replacement clears the old message binding");
+  input->endEditing();
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testLanguageRefreshKeepsOpenDropdownScrollAndSelection() {
+  i18n::setLanguage(i18n::Language::English);
+  DropdownView dropdown({});
+  DropdownView::State state;
+  state.selectedId = "chosen";
+  state.open = true;
+  state.maxVisibleItems = 2;
+  state.options.push_back({"chosen", i18n::message("settings.options.reset.label")});
+  for (int i = 0; i < 8; ++i) {
+    state.options.push_back({std::to_string(i), "Raw chart name"});
+  }
+  dropdown.refresh(state);
+  ScrollView *menu = nullptr;
+  TextView *trigger = nullptr;
+  for (auto *child : dropdown.getChildren()) {
+    if (auto *scroll = dynamic_cast<ScrollView *>(child)) menu = scroll;
+    if (auto *button = dynamic_cast<Button *>(child)) {
+      for (auto *content : button->getContentView()->getChildren()) {
+        if (auto *text = dynamic_cast<TextView *>(content); text && !trigger) {
+          trigger = text;
+        }
+      }
+    }
+  }
+  expect(menu != nullptr && trigger != nullptr, "dropdown exposes its open menu and trigger");
+  menu->setScrollOffset(44.0F);
+  expect(menu->getScrollOffset() > 0.0F, "open dropdown has scrollable overflow");
+  const float scrollBefore = menu->getScrollOffset();
+  i18n::setLanguage(i18n::Language::Korean);
+  dropdown.propagateLanguageChange();
+  expect(trigger->getText() == "초기화", "selected option refreshes in the trigger");
+  expect(menu->getVisible() && menu->getScrollOffset() == scrollBefore,
+         "language refresh retains the open dropdown and menu scroll");
+  dropdown.refresh(state);
+  expect(trigger->getText() == "초기화" && menu->getScrollOffset() == scrollBefore,
+         "refreshing the same semantic state does not rebuild translated options");
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testLanguageRefreshReachesPortalOverlay() {
+  i18n::setLanguage(i18n::Language::English);
+  OverlayPortal portal;
+  ScrollView overlay(0, 0, 200, 100);
+  auto *content = new View();
+  content->setHeight(600);
+  auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  label->setDeferredTextureMaterialization(true);
+  label->setLocalizedText(i18n::message("menu.refresh_list.label"));
+  content->addView(label);
+  overlay.setContentView(content);
+  overlay.setScrollOffset(64.0F);
+  portal.present(&overlay);
+  i18n::setLanguage(i18n::Language::Japanese);
+  portal.propagateLanguageChange();
+  expect(label->getText() == "一覧を更新" && portal.isPresented(&overlay),
+         "portal scroll content refreshes without being dismissed");
+  expect(overlay.getScrollOffset() == 64.0F,
+         "portal scroll position survives language refresh");
+  portal.dismiss(&overlay);
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testDeferredTextKeepsRasterizedLineHeight() {
@@ -221,15 +375,20 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testLanguageRefreshPreservesRawTextAndFocusedInput();
+  testLanguageRefreshReachesPortalOverlay();
+  testLanguageRefreshKeepsOpenDropdownScrollAndSelection();
   testDefaultHorizontalPadding();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
+  testEmptyInputKeepsItsVisibleFrame();
   testFocusedInputConsumesItsInitiatingTouch();
   testBeginEditingUsesTheLatestDeclaredInputFrame();
   testDeferredTextKeepsRasterizedLineHeight();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 
   TextInputBox::releaseCachedCursors();
+  rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   return 0;

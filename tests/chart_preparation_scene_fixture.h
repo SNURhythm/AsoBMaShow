@@ -146,13 +146,20 @@ void testActualChartPreparationOrdering(std::string_view pathToTest) {
       if (pathToTest == "in-game-retry") {
         auto initial = parsePreparationFixture(path);
         applyEffectiveLongNoteModeToChart(*initial, selectedMode);
+        PreparedGamePlayScene pausedAttempt(context, initial.get(), options);
+        pausedAttempt.attemptProvenance.assistOption = assist_options::kAssisted;
+        pausedAttempt.attemptProvenance.eligibility = ScoreEligibility::Modified;
         std::unique_ptr<bms_parser::Chart> retry;
         StartOptions retryOptions;
         std::atomic_bool cancelled = false;
-        require(prepareRetryChart(initial->Meta, options, retry, retryOptions, cancelled),
+        require(prepareRetryChart(initial->Meta, pausedAttempt.options, retry,
+                                  retryOptions, cancelled),
                 "COR05 actual in-game retry helper prepares a new pattern");
         PreparedGamePlayScene scene(context, std::move(retry), retryOptions);
         requirePreparedPolicy(scene, 3);
+        require(scene.attemptProvenance.assistOption == assist_options::kOff &&
+                    scene.attemptProvenance.eligibility == ScoreEligibility::Verified,
+                "Retry with a new pattern starts a verified attempt without the old pause penalty");
         scene.resetNotesForSameAttempt();
         requirePreparedPolicy(scene, 3);
       }

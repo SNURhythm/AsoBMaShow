@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "scene/FindBmsTask.h"
 
 #include <cassert>
@@ -162,12 +163,14 @@ void testDestructionCancelsAndJoinsBeforeReleasingWorkCaptures() {
 #include "find_bms_scene_fixture.h"
 
 int main() {
+  testCandidateDownloadLabelRetainsLanguageAndMetadata();
   testProgressRetainsLast160EventsInOrderAndResultIsTakenOnce();
   testCancellationReturnsImmediatelyAndStillDeliversServiceResult();
   testStopJoinsArtifactResolutionAndReplacementDiscardsOldData();
   testDestructionCancelsAndJoinsBeforeReleasingWorkCaptures();
   testImmediateArtifactCompletionKeepsActionsGatedUntilHandoff();
   testSceneLookupProgressAndIndexHandoff();
+  testSceneExtractionProgressPreservesHistoryAcrossLanguages();
   testSceneCancellationKeepsPendingArtifactVisible();
   testSceneCandidateAndPendingArtifactDecisions();
 }

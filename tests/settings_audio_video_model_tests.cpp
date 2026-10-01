@@ -1,4 +1,5 @@
 #include "scene/SettingsAudioVideoModel.h"
+#include "i18n/Localization.h"
 
 #include <array>
 #include <chrono>
@@ -255,6 +256,41 @@ player_settings::VideoSettings riskyDisplayCandidate() {
   return candidate;
 }
 
+void testKoreanDeviceChoicesPreserveDeviceNamesAndIds() {
+  auto capabilities = desktopAudioCapabilities();
+  capabilities.outputDevices[0].name = "Settings";
+  i18n::setLanguage(i18n::Language::Korean);
+  const auto model = BuildAudioControlModel({}, capabilities, {});
+  player_settings::AudioSettings unavailableIntent;
+  unavailableIntent.requestedBufferFrames = 999;
+  const auto unavailable = BuildAudioControlModel(unavailableIntent, capabilities, {});
+  require(findOption(unavailable.bufferFrames, "999")->label.resolve() ==
+              "999 프레임 (사용 불가)",
+          "unavailable buffer choices retain the translated unit and wrapper");
+  require(unavailable.bufferFrames.selectedValue == "999" &&
+              !findOption(unavailable.bufferFrames, "999")->available,
+          "translated labels preserve unavailable persisted buffer intent");
+  require(findOption(model.devices, "")->label.resolve() == "시스템 기본값",
+          "application labels use the Korean catalog");
+  require(findOption(model.devices, "builtin:output")->label.resolve() == "Settings",
+          "device-provided names remain verbatim");
+  require(findOption(model.bufferFrames, "128")->label.resolve() == "128 프레임",
+          "selectable buffer sizes use translated units");
+  i18n::setLanguage(i18n::Language::Japanese);
+  require(findOption(model.devices, "")->label.resolve() ==
+              i18n::tr("settings.audio_video.system_default.label"),
+          "retained device choices resolve the current language");
+  require(findOption(unavailable.bufferFrames, "999")->label.resolve() ==
+              "999 フレーム（利用不可）",
+          "unavailable nested values also follow a language change");
+  require(findOption(model.bufferFrames, "128")->label.resolve() == "128 フレーム",
+          "retained buffer-size units follow language changes");
+  require(findOption(model.devices, "builtin:output")->label.resolve() == "Settings" &&
+              model.devices.selectedValue.empty(),
+          "changing language preserves device names and selected stable IDs");
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testAudioModelPreservesUnavailableStableIdAndFriendlyLabels() {
   auto intent = player_settings::AudioSettings{
       .outputDeviceId = "missing:device",
@@ -276,12 +312,12 @@ void testAudioModelPreservesUnavailableStableIdAndFriendlyLabels() {
   require(!model.devices.options.empty(), "device choices remain visible");
   require(model.devices.options.front().persistedValue == "missing:device",
           "missing stable ID remains the persisted choice");
-  require(model.devices.options.front().label == "missing:device (Unavailable)",
+  require(model.devices.options.front().label.resolve() == "missing:device (Unavailable)",
           "missing stable ID has an explicit unavailable label");
   require(!model.devices.options.front().available,
           "missing stable ID is not presented as selectable");
   const auto *friendly = findOption(model.devices, "usb:studio-dac");
-  require(friendly != nullptr && friendly->label == "Studio DAC",
+  require(friendly != nullptr && friendly->label.resolve() == "Studio DAC",
           "available stable IDs use friendly labels");
   require(model.devices.selectedValue == "missing:device",
           "selection preserves imported unavailable intent");
@@ -330,11 +366,11 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
   const auto desktop =
       BuildDisplayControlModel(intent, desktopDisplayCapabilities());
   require(desktop.displays.options.front().persistedValue == "9" &&
-              desktop.displays.options.front().label ==
+              desktop.displays.options.front().label.resolve() ==
                   "Display 9 (Unavailable)",
           "missing display intent remains the first unavailable choice");
   require(findOption(desktop.displays, "0") != nullptr &&
-              findOption(desktop.displays, "0")->label == "Laptop Display",
+              findOption(desktop.displays, "0")->label.resolve() == "Laptop Display",
           "display indices use friendly runtime names");
   require(findOption(desktop.frameCaps, "75") != nullptr,
           "valid custom frame caps remain selectable");
@@ -417,43 +453,53 @@ void testSettingsTestSoundUsesInjectedKeysoundPath() {
           "settings session routes test sound through its keysound callback");
 }
 
-void testSettingsTestSoundLoadsPlatformAssetBytes() {
-  const path_t soundPath = PATH("assets/audio/sample.wav");
-  const std::vector<unsigned char> assetBytes = {0x52, 0x49, 0x46, 0x46};
-  int step = 0;
-
-  const bool played = PlaySettingsTestSoundAsset(
-      soundPath,
-      {.readAssetBytes =
-           [&](const path_t &requested) {
-             require(requested == soundPath,
-                     "platform reader receives asset path");
-             require(step == 0, "asset bytes are read before decoding");
-             step = 1;
-             return std::optional{assetBytes};
-           },
-       .loadSoundFromMemory =
-           [&](const path_t &requested,
-               const std::vector<unsigned char> &bytes) {
-             require(requested == soundPath,
-                     "memory decoder keeps the sound cache key");
-             require(bytes == assetBytes,
-                     "platform asset bytes are passed to memory decoding");
-             require(step == 1, "memory decoding follows platform asset read");
-             step = 2;
-             return true;
-           },
-       .playKeysound =
-           [&](const path_t &requested) {
-             require(requested == soundPath,
-                     "playback uses the decoded cache key");
-             require(step == 2, "playback starts only after memory decoding");
-             step = 3;
-             return true;
-           }});
-
-  require(played && step == 3,
-          "settings test sound uses platform bytes and memory decoding");
+void testSettingsTestSoundSynthesizesCMajorNotes() {
+  int loads = 0;
+  int plays = 0;
+  path_t soundKey;
+  const bool played = PlaySettingsTestSound({
+      .loadGeneratedSound = [&](const path_t &key, const std::vector<short> &pcm,
+                                int channels, int sampleRate) {
+        ++loads;
+        soundKey = key;
+        require(channels == 2 && sampleRate == 48000,
+                "test tone provides stereo PCM at a supported source rate");
+        require(pcm.size() == 86400, "three short notes last 0.9 seconds");
+        const std::array expectedCycles{65, 82, 98}; // C4, E4, G4 over 250 ms.
+        for (int note = 0; note < 3; ++note) {
+          const int start = note * 14400;
+          int positiveCrossings = 0;
+          int peak = 0;
+          for (int frame = 0; frame < 14400; ++frame) {
+            const int sample = pcm[(start + frame) * 2];
+            require(sample == pcm[(start + frame) * 2 + 1],
+                    "both output channels receive the tone");
+            peak = std::max(peak, std::abs(sample));
+            if (frame > 0 && sample > 0 && pcm[(start + frame - 1) * 2] <= 0) {
+              ++positiveCrossings;
+            }
+            if (frame >= 12000) require(sample == 0, "notes have a silent gap");
+          }
+          require(std::abs(positiveCrossings - expectedCycles[note]) <= 1,
+                  "test melody plays do, mi, sol at their expected pitches");
+          require(peak > 1000 && peak <= 8192, "test tone is audible without clipping");
+          require(pcm[start * 2] == 0 && pcm[(start + 11999) * 2] == 0,
+                  "each note fades in and out without a discontinuity");
+        }
+        return true;
+      },
+      .playSound = [&](const path_t &key) {
+        require(loads == 1 && key == soundKey, "generated sound is loaded before playback");
+        ++plays;
+        return true;
+      }});
+  require(played && plays == 1, "synthetic test sound starts successfully");
+  require(!PlaySettingsTestSound({
+              .loadGeneratedSound = [](const path_t &, std::vector<short>, int, int) {
+                return false;
+              },
+              .playSound = [&](const path_t &) { ++plays; return true; }}) && plays == 1,
+          "failed loading never starts playback");
 }
 
 void testDisplayPreviewPersistsOnlyWhenKept() {
@@ -733,13 +779,14 @@ void testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes() {
 } // namespace
 
 int main() {
+  testKoreanDeviceChoicesPreserveDeviceNamesAndIds();
   testAudioModelPreservesUnavailableStableIdAndFriendlyLabels();
   testAudioModelShowsFixedControlsDisabledWithExplanations();
   testDisplayModelUsesFriendlyLabelsAndShowsFixedFields();
   testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent();
   testStreamIntentPersistsOnlyAfterSuccessfulApply();
   testSettingsTestSoundUsesInjectedKeysoundPath();
-  testSettingsTestSoundLoadsPlatformAssetBytes();
+  testSettingsTestSoundSynthesizesCMajorNotes();
   testDisplayPreviewPersistsOnlyWhenKept();
   testSafeFrameCapOnlyChangePersistsWithoutOverlay();
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();

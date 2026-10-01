@@ -1,6 +1,7 @@
 #pragma once
 
 #include "OverlayPortal.h"
+#include "../i18n/Localization.h"
 #include "ScrollView.h"
 #include "View.h"
 
@@ -12,7 +13,7 @@ class ContextMenuView final : public View {
 public:
   struct Action {
     std::string id;
-    std::string label;
+    i18n::Text label;
     bool enabled = true;
   };
 

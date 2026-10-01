@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
@@ -147,268 +148,267 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 }
 } // namespace
 
-View *SettingsScene::buildAccelerationCompensationControls(
-    const LayoutMetrics &metrics) {
-  auto *compensationControls = new View();
-  compensationControls->setFlexDirection(FlexDirection::Row);
-  compensationControls->setAlignItems(YGAlignFlexStart);
-  auto *label = makeText(
-      context.settings.accelerationCompensation ? "On" : "Off",
-      metrics.bodyTextSize + 4, ui_theme::textPrimary(), TextView::CENTER,
-      TextView::MIDDLE);
-  auto *compensationButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, label);
-  applySemanticButtonStyle(compensationButton, label,
-                           context.settings.accelerationCompensation
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Info);
-  compensationButton->setOnClickListener([this]() {
-    context.settings.accelerationCompensation =
-        !context.settings.accelerationCompensation;
-    persistSettings();
-    lastLayoutWidth = -1;
-  });
-  compensationControls->addView(compensationButton);
-  return compensationControls;
-}
-
-void SettingsScene::refreshSettingsText() {
+void SettingsScene::refreshSettingsText(bool syncInputs) {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
   const int visibleTimeDurationMilliseconds =
       context.settings.visibleTimeDurationMilliseconds;
-  const std::string offsetLabel = formatOffsetLabel(offsetMs);
-  const std::string visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
-  const std::string visibleTimeLabel = formatVisibleTimeLabel(
+  const i18n::Text offsetLabel = formatOffsetLabel(offsetMs);
+  const i18n::Text visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
+  const i18n::Text visibleTimeLabel = formatVisibleTimeLabel(
       visibleTimeDurationMilliseconds,
       context.settings.visibleTimeUseMilliseconds);
-  const std::string keysoundLabel =
-      context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
-  const std::string prepMetronomeLabel =
-      context.settings.prepMetronomeEnabled ? "Prep On" : "Prep Off";
-  const std::string bgaLabel =
-      context.settings.bgaEnabled ? "Enabled" : "Disabled";
-  const std::string bgaDisplayLabel =
+  const i18n::Text keysoundLabel =
+      context.settings.inputKeysoundEnabled ? i18n::message("settings.controls.keysound.input_trigger.label") : i18n::message("settings.controls.keysound.auto_timed.label");
+  const i18n::Text prepMetronomeLabel =
+      context.settings.prepMetronomeEnabled ? i18n::message("settings.controls.prep_metronome.prep_on.label") : i18n::message("settings.controls.prep_metronome.prep_off.label");
+  const i18n::Text bgaLabel =
+      context.settings.bgaEnabled ? i18n::message("settings.controls.bga.enabled.label") : i18n::message("settings.controls.bga.disabled.label");
+  const i18n::Text bgaDisplayLabel =
       formatBgaDisplayModeLabel(context.settings.bgaDisplayMode);
-  const std::string bgaBrightnessLabel =
+  const i18n::Text bgaBrightnessLabel =
       formatBgaBrightnessLabel(context.settings.bgaBrightnessPercent);
-  const std::string bgaBlurLabel =
+  const i18n::Text bgaBlurLabel =
       formatBgaBlurLabel(context.settings.bgaBlurStrength);
-  const std::string laneAngleLabel =
+  const i18n::Text laneAngleLabel =
       formatLaneAngleLabel(context.settings.laneAngleDegrees);
-  const std::string laneLengthLabel =
+  const i18n::Text laneLengthLabel =
       formatLaneLengthLabel(context.settings.laneLength);
-  const std::string laneBeamLengthLabel =
+  const i18n::Text laneBeamLengthLabel =
       formatLaneBeamLengthLabel(context.settings.laneBeamLengthPercent);
-  const std::string noteStartPositionLabel =
+  const i18n::Text noteStartPositionLabel =
       formatNoteStartPositionLabel(context.settings.noteStartPositionPercent);
-  const std::string previewPlayAreaWidthLabel =
+  const i18n::Text previewPlayAreaWidthLabel =
       formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(7));
-  const std::string judgementTextYLabel = formatJudgementPercentLabel(
+  const i18n::Text judgementTextYLabel = formatJudgementPercentLabel(
       judgementTextYToPercent(context.settings.judgementTextY));
-  const std::string judgementIndicatorYLabel = formatJudgementPercentLabel(
+  const i18n::Text judgementIndicatorYLabel = formatJudgementPercentLabel(
       judgementIndicatorYToPercent(context.settings.judgementIndicatorY));
-  const std::string judgementIndicatorWidthLabel =
+  const i18n::Text judgementIndicatorWidthLabel =
       std::to_string(judgementIndicatorWidthScaleToPercent(
           context.settings.judgementIndicatorWidthScale)) +
       "%";
-  const std::string judgementIndicatorRangeLabel =
+  const i18n::Text judgementIndicatorRangeLabel =
       formatJudgementIndicatorRangeLabel(
           context.settings.judgementIndicatorRangeMilliseconds);
-  const std::string notePriorityLabel =
+  const i18n::Text notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
-  const std::string invisibleNotesLabel =
-      context.settings.showInvisibleNotes ? "Shown" : "Hidden";
-  const std::string markProcessedNotesLabel =
-      context.settings.markProcessedNotes ? "Enabled" : "Disabled";
-  const std::string startLaneIndicatorsLabel =
-      context.settings.startLaneIndicatorsEnabled ? "Shown" : "Hidden";
-  const std::string touchVisualizationLabel =
-      context.settings.touchVisualizationEnabled ? "Shown" : "Hidden";
-  const std::string hispeedAutoAdjustLabel =
-      context.settings.hispeedAutoAdjust ? "Hi-Speed Auto Adjust: On"
-                                         : "Hi-Speed Auto Adjust: Off";
-  const std::string archiveChartPreviewLabel =
-      context.settings.archiveChartPreviewEnabled ? "Enabled" : "Disabled";
-  const std::string findBmsSkipUnarchivingLabel =
-      context.settings.findBmsSkipUnarchivingForNonSolidArchives ? "On"
-                                                                 : "Off";
-  const std::string judgementIndicatorLabel =
-      context.settings.judgementIndicatorEnabled ? "Enabled" : "Disabled";
-  const std::string judgementIndicatorRenderModeLabel =
+  const i18n::Text invisibleNotesLabel =
+      context.settings.showInvisibleNotes ? i18n::message("settings.controls.invisible_notes.shown.label") : i18n::message("settings.controls.invisible_notes.hidden.label");
+  const i18n::Text markProcessedNotesLabel =
+      context.settings.markProcessedNotes ? i18n::message("settings.controls.mark_processed_notes.enabled.label") : i18n::message("settings.controls.mark_processed_notes.disabled.label");
+  const i18n::Text startLaneIndicatorsLabel =
+      context.settings.startLaneIndicatorsEnabled ? i18n::message("settings.controls.start_lane_indicators.shown.label") : i18n::message("settings.controls.start_lane_indicators.hidden.label");
+  const i18n::Text touchVisualizationLabel =
+      context.settings.touchVisualizationEnabled ? i18n::message("settings.controls.touch_visualization.shown.label") : i18n::message("settings.controls.touch_visualization.hidden.label");
+  const i18n::Text hispeedAutoAdjustLabel =
+      context.settings.hispeedAutoAdjust ? i18n::message("settings.controls.hispeed_auto_adjust.hi_speed_auto_adjust_on.label")
+                                         : i18n::message("settings.controls.hispeed_auto_adjust.hi_speed_auto_adjust_off.label");
+  const i18n::Text archiveChartPreviewLabel =
+      context.settings.archiveChartPreviewEnabled ? i18n::message("settings.controls.archive_chart_preview.enabled.label") : i18n::message("settings.controls.archive_chart_preview.disabled.label");
+  const i18n::Text findBmsSkipUnarchivingLabel =
+      context.settings.findBmsSkipUnarchivingForNonSolidArchives ? i18n::message("settings.controls.find_bms_skip_unarchiving.on.label")
+                                                                 : i18n::message("settings.controls.find_bms_skip_unarchiving.off.label");
+  const i18n::Text judgementIndicatorLabel =
+      context.settings.judgementIndicatorEnabled ? i18n::message("settings.controls.judgement_indicator.enabled.label") : i18n::message("settings.controls.judgement_indicator.disabled.label");
+  const i18n::Text judgementIndicatorRenderModeLabel =
       formatJudgementIndicatorRenderModeLabel(
           context.settings.judgementIndicatorRenderMode);
-  const std::string judgementCounterPositionLabel =
+  const i18n::Text judgementCounterPositionLabel =
       formatJudgementCounterPositionLabel(
           context.settings.judgementCounterPosition);
-  const std::string judgementCounterModeLabel =
-      context.settings.judgementCounterEnabled ? "Enabled" : "Disabled";
-  const std::string judgementCounterSummaryLabel =
+  const i18n::Text judgementCounterModeLabel =
+      context.settings.judgementCounterEnabled ? i18n::message("settings.controls.judgement_counter_mode.enabled.label") : i18n::message("settings.controls.judgement_counter_mode.disabled.label");
+  const i18n::Text judgementCounterSummaryLabel =
       context.settings.judgementCounterEnabled ? judgementCounterPositionLabel
-                                               : "Disabled";
-  const std::string judgementTimingFastSlowLabel =
+                                               : i18n::message("settings.controls.judgement_counter_summary.disabled.label");
+  const i18n::Text judgementTimingFastSlowLabel =
       formatJudgementTimingDisplayCriteriaLabel(
           context.settings.judgementTimingFastSlowCriteria);
-  const std::string judgementTimingMillisecondsLabel =
+  const i18n::Text judgementTimingMillisecondsLabel =
       formatJudgementTimingDisplayCriteriaLabel(
           context.settings.judgementTimingMillisecondsCriteria);
-  const std::string gaugeBarPositionLabel =
+  const i18n::Text gaugeBarPositionLabel =
       formatGaugeBarPositionLabel(context.settings.gaugeBarPosition);
-  const std::string uiThemeLabel =
+  const i18n::Text uiThemeLabel =
       formatUiThemeModeLabel(context.settings.uiThemeMode);
 
-  syncOffsetInputText();
+  if (syncInputs) {
+    syncOffsetInputText();
+  }
   if (summaryOffsetValueText != nullptr) {
-    summaryOffsetValueText->setText(offsetLabel);
+    summaryOffsetValueText->setLocalizedText(offsetLabel);
   }
-  syncVisualOffsetInputText();
+  if (syncInputs) {
+    syncVisualOffsetInputText();
+  }
   if (summaryVisualOffsetValueText != nullptr) {
-    summaryVisualOffsetValueText->setText(visualOffsetLabel);
+    summaryVisualOffsetValueText->setLocalizedText(visualOffsetLabel);
   }
-  syncVisibleTimeInputText();
+  if (syncInputs) {
+    syncVisibleTimeInputText();
+  }
   if (summaryVisibleTimeValueText != nullptr) {
-    summaryVisibleTimeValueText->setText(visibleTimeLabel);
+    summaryVisibleTimeValueText->setLocalizedText(visibleTimeLabel);
   }
   if (summaryKeysoundValueText != nullptr) {
-    summaryKeysoundValueText->setText(keysoundLabel);
+    summaryKeysoundValueText->setLocalizedText(keysoundLabel);
   }
   if (summaryBgaValueText != nullptr) {
-    summaryBgaValueText->setText(bgaLabel);
+    summaryBgaValueText->setLocalizedText(bgaLabel);
   }
   if (summaryBgaDisplayValueText != nullptr) {
-    summaryBgaDisplayValueText->setText(bgaDisplayLabel);
+    summaryBgaDisplayValueText->setLocalizedText(bgaDisplayLabel);
   }
-  syncBgaBrightnessInputText();
+  if (syncInputs) {
+    syncBgaBrightnessInputText();
+  }
   if (summaryBgaBrightnessValueText != nullptr) {
-    summaryBgaBrightnessValueText->setText(bgaBrightnessLabel);
+    summaryBgaBrightnessValueText->setLocalizedText(bgaBrightnessLabel);
   }
-  syncBgaBlurInputText();
+  if (syncInputs) {
+    syncBgaBlurInputText();
+  }
   if (summaryBgaBlurValueText != nullptr) {
-    summaryBgaBlurValueText->setText(bgaBlurLabel);
+    summaryBgaBlurValueText->setLocalizedText(bgaBlurLabel);
   }
-  syncLaneAngleInputText();
+  if (syncInputs) {
+    syncLaneAngleInputText();
+  }
   if (summaryLaneAngleValueText != nullptr) {
-    summaryLaneAngleValueText->setText(laneAngleLabel);
+    summaryLaneAngleValueText->setLocalizedText(laneAngleLabel);
   }
-  syncLaneLengthInputText();
+  if (syncInputs) {
+    syncLaneLengthInputText();
+  }
   if (summaryLaneLengthValueText != nullptr) {
-    summaryLaneLengthValueText->setText(laneLengthLabel);
+    summaryLaneLengthValueText->setLocalizedText(laneLengthLabel);
   }
-  syncLaneBeamLengthInputText();
+  if (syncInputs) {
+    syncLaneBeamLengthInputText();
+  }
   if (summaryLaneBeamLengthValueText != nullptr) {
-    summaryLaneBeamLengthValueText->setText(laneBeamLengthLabel);
+    summaryLaneBeamLengthValueText->setLocalizedText(laneBeamLengthLabel);
   }
-  syncNoteStartPositionInputText();
+  if (syncInputs) {
+    syncNoteStartPositionInputText();
+  }
   if (summaryNoteStartPositionValueText != nullptr) {
-    summaryNoteStartPositionValueText->setText(noteStartPositionLabel);
+    summaryNoteStartPositionValueText->setLocalizedText(noteStartPositionLabel);
   }
   if (summaryPreviewPlayAreaWidthValueText != nullptr) {
-    summaryPreviewPlayAreaWidthValueText->setText(previewPlayAreaWidthLabel);
+    summaryPreviewPlayAreaWidthValueText->setLocalizedText(previewPlayAreaWidthLabel);
   }
   if (summaryJudgementTextYValueText != nullptr) {
-    summaryJudgementTextYValueText->setText(judgementTextYLabel);
+    summaryJudgementTextYValueText->setLocalizedText(judgementTextYLabel);
   }
   if (summaryJudgementIndicatorYValueText != nullptr) {
-    summaryJudgementIndicatorYValueText->setText(judgementIndicatorYLabel);
+    summaryJudgementIndicatorYValueText->setLocalizedText(judgementIndicatorYLabel);
   }
   if (summaryJudgementIndicatorWidthValueText != nullptr) {
-    summaryJudgementIndicatorWidthValueText->setText(
+    summaryJudgementIndicatorWidthValueText->setLocalizedText(
         judgementIndicatorWidthLabel);
   }
   if (summaryJudgementIndicatorRangeValueText != nullptr) {
-    summaryJudgementIndicatorRangeValueText->setText(
+    summaryJudgementIndicatorRangeValueText->setLocalizedText(
         judgementIndicatorRangeLabel);
   }
   if (summaryJudgementCounterPositionValueText != nullptr) {
-    summaryJudgementCounterPositionValueText->setText(
+    summaryJudgementCounterPositionValueText->setLocalizedText(
         judgementCounterSummaryLabel);
   }
   if (summaryJudgementTimingFastSlowValueText != nullptr) {
-    summaryJudgementTimingFastSlowValueText->setText(
+    summaryJudgementTimingFastSlowValueText->setLocalizedText(
         judgementTimingFastSlowLabel);
   }
   if (summaryJudgementTimingMillisecondsValueText != nullptr) {
-    summaryJudgementTimingMillisecondsValueText->setText(
+    summaryJudgementTimingMillisecondsValueText->setLocalizedText(
         judgementTimingMillisecondsLabel);
   }
   if (summaryGaugeBarPositionValueText != nullptr) {
-    summaryGaugeBarPositionValueText->setText(gaugeBarPositionLabel);
+    summaryGaugeBarPositionValueText->setLocalizedText(gaugeBarPositionLabel);
   }
   if (summaryNotePriorityValueText != nullptr) {
-    summaryNotePriorityValueText->setText(notePriorityLabel);
+    summaryNotePriorityValueText->setLocalizedText(notePriorityLabel);
   }
   if (summaryUiThemeValueText != nullptr) {
-    summaryUiThemeValueText->setText(uiThemeLabel);
+    summaryUiThemeValueText->setLocalizedText(uiThemeLabel);
   }
-  syncJudgementIndicatorYInputText();
-  syncJudgementIndicatorWidthInputText();
-  syncJudgementIndicatorRangeInputText();
+  if (syncInputs) {
+    syncJudgementIndicatorYInputText();
+  }
+  if (syncInputs) {
+    syncJudgementIndicatorWidthInputText();
+  }
+  if (syncInputs) {
+    syncJudgementIndicatorRangeInputText();
+  }
   if (keysoundModeText != nullptr) {
-    keysoundModeText->setText(keysoundLabel);
+    keysoundModeText->setLocalizedText(keysoundLabel);
   }
   if (prepMetronomeModeText != nullptr) {
-    prepMetronomeModeText->setText(prepMetronomeLabel);
+    prepMetronomeModeText->setLocalizedText(prepMetronomeLabel);
   }
   if (notePriorityModeText != nullptr) {
-    notePriorityModeText->setText(notePriorityLabel);
+    notePriorityModeText->setLocalizedText(notePriorityLabel);
   }
   if (showInvisibleNotesModeText != nullptr) {
-    showInvisibleNotesModeText->setText(invisibleNotesLabel);
+    showInvisibleNotesModeText->setLocalizedText(invisibleNotesLabel);
   }
   if (markProcessedNotesModeText != nullptr) {
-    markProcessedNotesModeText->setText(markProcessedNotesLabel);
+    markProcessedNotesModeText->setLocalizedText(markProcessedNotesLabel);
   }
   if (startLaneIndicatorsModeText != nullptr) {
-    startLaneIndicatorsModeText->setText(startLaneIndicatorsLabel);
+    startLaneIndicatorsModeText->setLocalizedText(startLaneIndicatorsLabel);
   }
   if (touchVisualizationModeText != nullptr) {
-    touchVisualizationModeText->setText(touchVisualizationLabel);
+    touchVisualizationModeText->setLocalizedText(touchVisualizationLabel);
   }
   if (hispeedAutoAdjustModeText != nullptr) {
-    hispeedAutoAdjustModeText->setText(hispeedAutoAdjustLabel);
+    hispeedAutoAdjustModeText->setLocalizedText(hispeedAutoAdjustLabel);
   }
   if (archiveChartPreviewModeText != nullptr) {
-    archiveChartPreviewModeText->setText(archiveChartPreviewLabel);
+    archiveChartPreviewModeText->setLocalizedText(archiveChartPreviewLabel);
   }
   if (findBmsSkipUnarchivingModeText != nullptr) {
-    findBmsSkipUnarchivingModeText->setText(findBmsSkipUnarchivingLabel);
+    findBmsSkipUnarchivingModeText->setLocalizedText(findBmsSkipUnarchivingLabel);
   }
   if (judgementIndicatorModeText != nullptr) {
-    judgementIndicatorModeText->setText(judgementIndicatorLabel);
+    judgementIndicatorModeText->setLocalizedText(judgementIndicatorLabel);
   }
   if (judgementIndicatorRenderModeText != nullptr) {
-    judgementIndicatorRenderModeText->setText(
+    judgementIndicatorRenderModeText->setLocalizedText(
         judgementIndicatorRenderModeLabel);
   }
   if (judgementCounterPositionText != nullptr) {
-    judgementCounterPositionText->setText(judgementCounterPositionLabel);
+    judgementCounterPositionText->setLocalizedText(judgementCounterPositionLabel);
   }
   if (judgementCounterModeText != nullptr) {
-    judgementCounterModeText->setText(judgementCounterModeLabel);
+    judgementCounterModeText->setLocalizedText(judgementCounterModeLabel);
   }
   if (judgementTimingFastSlowCriteriaText != nullptr) {
-    judgementTimingFastSlowCriteriaText->setText(judgementTimingFastSlowLabel);
+    judgementTimingFastSlowCriteriaText->setLocalizedText(judgementTimingFastSlowLabel);
   }
   if (judgementTimingMillisecondsCriteriaText != nullptr) {
-    judgementTimingMillisecondsCriteriaText->setText(
+    judgementTimingMillisecondsCriteriaText->setLocalizedText(
         judgementTimingMillisecondsLabel);
   }
   if (gaugeBarPositionText != nullptr) {
-    gaugeBarPositionText->setText(gaugeBarPositionLabel);
+    gaugeBarPositionText->setLocalizedText(gaugeBarPositionLabel);
   }
   if (bgaModeText != nullptr) {
-    bgaModeText->setText(bgaLabel);
+    bgaModeText->setLocalizedText(bgaLabel);
   }
   if (bgaDisplayModeText != nullptr) {
-    bgaDisplayModeText->setText(bgaDisplayLabel);
+    bgaDisplayModeText->setLocalizedText(bgaDisplayLabel);
   }
   if (uiThemeModeText != nullptr) {
-    uiThemeModeText->setText(uiThemeLabel);
+    uiThemeModeText->setLocalizedText(uiThemeLabel);
   }
   if (visibleTimeModeText != nullptr) {
-    visibleTimeModeText->setText(context.settings.visibleTimeUseMilliseconds
-                                     ? "Milliseconds"
-                                     : "Green Number");
+    visibleTimeModeText->setLocalizedText(context.settings.visibleTimeUseMilliseconds
+                                     ? i18n::message("settings.controls.milliseconds.label")
+                                     : i18n::message("settings.controls.green_number.label"));
   }
   applySemanticButtonStyle(visibleTimeModeButton, visibleTimeModeText,
                            context.settings.visibleTimeUseMilliseconds

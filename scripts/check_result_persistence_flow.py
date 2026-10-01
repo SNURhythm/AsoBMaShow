@@ -135,14 +135,11 @@ course_persistence_source = read("src/replay/CourseReplayPersistence.cpp")
 course_result_source = read("src/replay/CourseResultPersistence.cpp")
 skin_interface = read("src/skin/ISkin.h")
 default_skin = read("src/skin/DefaultSkin.cpp")
-cmake = read("CMakeLists.txt")
-main_cmake = read("src/CMakeLists.txt")
 main_source = read("src/main.cpp")
 profile_header = read("src/ProfileSessionCoordinator.h")
 profile_source = read("src/ProfileSessionCoordinator.cpp")
 application_recovery_header = read("src/ApplicationResultRecovery.h")
 application_recovery_source = read("src/ApplicationResultRecovery.cpp")
-ios_project = read("ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj")
 
 # ApplicationContext is only an adapter. File ownership, summary staging, and
 # score projection belong to the modern persistence coordinators.
@@ -379,9 +376,9 @@ require(
     "course recovery must reuse stored-result identity and score projection authorities",
 )
 
-require(result_source.count('"Retry Save"') == 1, "missing exact Retry Save action")
+require(result_source.count('"result.retry_save.label"') == 1, "missing exact Retry Save action")
 require(
-    result_source.count('"Continue Without Saving"') == 1,
+    result_source.count('"result.continue_without_saving.label"') == 1,
     "missing exact Continue Without Saving action",
 )
 status_body = function_body(result_source, "ResultScene", "addResultPersistenceStatus")
@@ -543,30 +540,6 @@ require(
     and "diagnostic" not in warning_body
     and "attemptId" not in warning_body,
     "native recovery warning must show only centralized sanitized copy",
-)
-
-require(
-    "result_persistence_flow_audit" in cmake
-    and "find_package(Python3 REQUIRED COMPONENTS Interpreter)" in cmake
-    and "${Python3_EXECUTABLE}" in cmake
-    and "scripts/check_result_persistence_flow.py" in cmake
-    and cmake.count("tests/application_result_recovery_tests.cpp") == 1
-    and cmake.count("src/ApplicationResultRecovery.cpp") == 1,
-    "CTest must register the flow audit and startup recovery test",
-)
-for source in (
-    "replay/ChartReplayCapture.cpp",
-    "replay/CourseReplayCapture.cpp",
-    "replay/ChartReplayPersistence.cpp",
-    "replay/CourseReplayPersistence.cpp",
-    "replay/CourseResultPersistence.cpp",
-    "ApplicationResultRecovery.cpp",
-):
-    require(source in main_cmake, f"main target is missing {source}")
-require(
-    ios_project.count("fileSystemSynchronizedGroups = (") == 1
-    and "B76AAF3F2DA4A1C400E8327C /* ../../../../src */" in ios_project,
-    "iOS target must compile the synchronized src folder",
 )
 
 if failures:

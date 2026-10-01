@@ -15,9 +15,11 @@ struct View {
   inline static unsigned serial = 0;
   unsigned generation = ++serial;
   std::string text;
+  i18n::Text localizedText;
   View() { live[this] = generation; }
   ~View() { live.erase(this); }
-  void setText(const std::string &value) { text = value; }
+  void setText(const std::string &value) { text = value; localizedText = value; }
+  void setLocalizedText(const i18n::Text &value) { localizedText = value; text = value.resolve(); }
   void setEditingText(const std::string &value) { text = value; }
   float getScrollOffset() { return 0; }
   void setScrollOffset(float) {}
@@ -74,7 +76,7 @@ struct SettingsScene {
   std::vector<View *> views;
   std::unique_ptr<Picker> soundSetFolderPicker = std::make_unique<Picker>();
   bool gameplaySkinControlsBuiltDisabled = false;
-  std::string gameplaySkinUiMessage;
+  STATUS_FIELD
   int lastLayoutWidth = -1, lastLayoutHeight = -1;
   int lastSafeTop = 0, lastSafeLeft = 0, lastSafeBottom = 0, lastSafeRight = 0;
   int activeTab = 1, lastLaidOutTab = -1;
@@ -105,6 +107,7 @@ void expect(bool condition, const char *message) {
 int main() {
   for (bool sameTab : {false, true}) {
     for (bool cancelled : {false, true}) {
+      i18n::setLanguage(i18n::Language::English);
       SettingsScene scene;
       scene.ensureLayoutUpToDate();
       const auto deletedGeneration = scene.skinSelectSoundSetInput.generation;
@@ -131,6 +134,16 @@ int main() {
       if (sameTab) {
         expect(scene.skinSelectSoundSetInput->text == (cancelled ? "original" : "chosen/sounds"),
                "late result must update only the rebuilt live control");
+      }
+      if (!cancelled) {
+        const i18n::Text retained = scene.gameplaySkinUiMessage;
+        i18n::setLanguage(i18n::Language::Japanese);
+        expect(retained.resolve() == "サウンドセットのフォルダーを変更しました: chosen/sounds",
+               "sound folder feedback retains its message and raw path after switching language");
+        if (sameTab) {
+          expect(scene.gameplaySkinUiMessageText->localizedText.resolve() == retained.resolve(),
+                 "visible sound folder feedback retains the same descriptor");
+        }
       }
       expect(TrackedInput::staleAccesses == 0, "late picker must never dereference a deleted view");
       scene.resetViewState();

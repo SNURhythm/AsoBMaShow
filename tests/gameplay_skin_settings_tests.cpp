@@ -1,4 +1,5 @@
 #include "scene/GameplaySkinSettingsController.h"
+#include "i18n/Localization.h"
 #include "support/ReadOnlyTreeCleanup.h"
 
 #include "skin/package/SkinAliasDetector.h"
@@ -441,7 +442,10 @@ struct Fixture {
             .clientId = commits.createClient(),
             .requestRescan = [&] { ++rescanRequests; },
             .cancelRescan = [&] { ++rescanCancellations; },
-            .rescanProgress = [&] { return rescanProgress; },
+            .rescanProgress = [&] {
+              if (failRescanProgress) throw std::runtime_error("injected progress failure");
+              return rescanProgress;
+            },
             .requestRevalidation =
                 [&](const SkinEntryId &) { ++revalidationRequests; },
             .catalogSnapshot =
@@ -494,6 +498,7 @@ struct Fixture {
   int rescanRequests = 0;
   int rescanCancellations = 0;
   SkinRescanProgress rescanProgress;
+  bool failRescanProgress = false;
   int revalidationRequests = 0;
   int catalogSnapshotCalls = 0;
   std::shared_ptr<const SkinPackageCatalogSnapshot> catalogOverride;
@@ -562,6 +567,79 @@ void installQueuedImport(Fixture &fixture,
                             !controller.snapshot().entries.empty();
                    }),
          "picked source prepares and publishes without a package-name gate");
+}
+
+void testFallbackPackageIdentityIsStableAcrossLanguages() {
+  Fixture fixture;
+  const auto folder = fixture.temp.root() / "ProviderSource";
+  writeText(folder / "play/play7.luaskin", "return { type = 0 }");
+  auto controller = fixture.makeController();
+  i18n::setLanguage(i18n::Language::English);
+  fixture.folderResults.push_back(
+      picked(folder, "../invalid", PlatformTemporaryPathKind::Directory));
+  installQueuedImport(fixture, *controller, false);
+  const auto installed = controller->snapshot().entries.front().entry.package;
+  expect(installed.directoryName == "Imported Skin",
+         "malformed provider names use the stable internal fallback");
+  for (const auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    fixture.folderResults.push_back(
+        picked(folder, "../invalid", PlatformTemporaryPathKind::Directory));
+    expect(controller->beginFolderImport().accepted,
+           "fallback source can be selected after changing language");
+    expect(pumpUntil(fixture, *controller, [&] {
+      return controller->snapshot().collisionPackage.has_value() ||
+             controller->snapshot().entries.size() > 1;
+    }), "fallback import reaches collision detection");
+    expect(controller->snapshot().collisionPackage == installed &&
+               controller->snapshot().entries.size() == 1 &&
+               controller->snapshot().preparedName &&
+               controller->snapshot().preparedName->suggestedPackageName ==
+                   installed.directoryName,
+           "language changes preserve package identity and replacement collision");
+    const auto renamed = controller->setSuggestedPackageName("Renamed Skin");
+    expect(renamed.accepted, "collision source name can be changed");
+    i18n::setLanguage(i18n::Language::English);
+    expect(renamed.message.resolve() == "Package name updated.",
+           "package name confirmation follows language changes");
+    controller->profileChanged(fixture.profileA, fixture.commits.createClient());
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testOperationMessagesFollowLanguage() {
+  Fixture fixture;
+  auto controller = fixture.makeController();
+  i18n::setLanguage(i18n::Language::Korean);
+  const auto requested = controller->requestRescan();
+  expect(requested.accepted && requested.message.resolve() == "게임플레이 스킨 재검색을 요청했습니다." &&
+             controller->snapshot().statusMessage == "스킨 검색 준비 중…",
+         "rescan action and busy status are localized in Korean");
+  i18n::setLanguage(i18n::Language::Japanese);
+  expect(requested.message.resolve() == i18n::tr("settings.skins.rescan_requested.message"),
+         "retained action feedback follows language changes");
+  controller->poll();
+  expect(controller->snapshot().statusMessage == "スキンのスキャンを準備中…",
+         "an existing busy status follows a language change");
+  controller->cancelRescan();
+  expect(controller->snapshot().statusMessage == "スキンのスキャンをキャンセルしました。",
+         "rescan cancellation is localized in Japanese");
+  i18n::setLanguage(i18n::Language::Korean);
+  controller->poll();
+  expect(controller->snapshot().statusMessage == "스킨 검색을 취소했습니다.",
+         "a completed status follows a language change");
+  controller->close();
+  expect(controller->requestRescan().message.resolve() == "현재 게임플레이 스킨을 재검색할 수 없습니다.",
+         "operation rejection is localized");
+  i18n::setLanguage(i18n::Language::English);
+  auto failing = fixture.makeController();
+  fixture.failRescanProgress = true;
+  const auto rejected = failing->requestRescan();
+  expect(!rejected.accepted, "progress provider failure rejects the action");
+  i18n::setLanguage(i18n::Language::Japanese);
+  expect(rejected.message.resolve() == i18n::tr("settings.skins.gameplay_skin_rescan_failed_observed.message"),
+         "rejected action preserves the controller status message identity");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testArchiveFolderSelectionAndDurableLayoutFlow() {
@@ -1630,6 +1708,8 @@ void testMusicSelectSelectionDefaultsToBuiltInAndSurvivesSanitize() {
 
 int main() {
   testSourceNameSuggestionPreservesTypedSemantics();
+  testFallbackPackageIdentityIsStableAcrossLanguages();
+  testOperationMessagesFollowLanguage();
   testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll();
   testArchiveFolderSelectionAndDurableLayoutFlow();
   testActivationPreparationDoesNotExposeCancellation();

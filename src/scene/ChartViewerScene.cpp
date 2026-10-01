@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ChartViewerScene.h"
 #include "ChartViewerNoteGeometry.h"
 #include "ChartListenStart.h"
@@ -2515,7 +2516,7 @@ void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
 
   practiceGhostReplay = replayData;
   practiceGhostReplay->id = kPracticeGhostReplayId;
-  practiceGhostReplay->createdAt = "Practice Ghost";
+  practiceGhostReplay->createdAt = i18n::tr("chart_viewer.practice_ghost.label");
   loadedGhostReplayId = kPracticeGhostReplayId;
   selectedGhostReplayIndex = -1;
 
@@ -2523,7 +2524,7 @@ void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
     canvasView->setGhostReplay(*practiceGhostReplay);
   }
   if (statusText != nullptr) {
-    statusText->setText("Practice ghost loaded");
+    statusText->setText(i18n::tr("chart_viewer.practice_ghost_loaded.label"));
   }
   updatePracticeGhostReplayButton();
   updateGhostControls();
@@ -2617,15 +2618,15 @@ void ChartViewerScene::initView() {
   header->addView(zoomText);
   header->addView(zoomInButton);
 
-  auto *randomButton = makeButton("Random", 118, 20);
+  auto *randomButton = makeButton(i18n::tr("chart_viewer.random.label"), 118, 20);
   randomButton->setOnClickListener([this]() { showRandomDrawer(); });
   header->addView(randomButton);
 
-  auto *optionButton = makeButton("Option", 106, 20);
+  auto *optionButton = makeButton(i18n::tr("chart_viewer.option.label"), 106, 20);
   optionButton->setOnClickListener([this]() { showOptionsDrawer(); });
   header->addView(optionButton);
 
-  auto *backButton = makeButton("Back", 92, 20);
+  auto *backButton = makeButton(i18n::tr("chart_viewer.back.label"), 92, 20);
   backButton->setOnClickListener([this]() { goBack(); });
   header->addView(backButton);
 
@@ -2648,35 +2649,35 @@ void ChartViewerScene::initView() {
   selectionText->setHeight(42);
   toolbar->addView(selectionText);
 
-  auto *listenButton = makeButton("Listen", 104, 19);
+  auto *listenButton = makeButton(i18n::tr("chart_viewer.listen.label"), 104, 19);
   listenButton->setOnClickListener([this]() { startListeningFromSelection(); });
   toolbar->addView(listenButton);
 
-  listenPauseButton = makeButton("Pause", 104, 18, &listenPauseText);
+  listenPauseButton = makeButton(i18n::tr("chart_viewer.pause.label"), 104, 18, &listenPauseText);
   listenPauseButton->setOnClickListener([this]() { toggleListenPause(); });
   listenPauseButton->setVisible(false);
   toolbar->addView(listenPauseButton);
 
-  listenStopButton = makeButton("Stop", 92, 18);
+  listenStopButton = makeButton(i18n::tr("chart_viewer.stop.label"), 92, 18);
   listenStopButton->setOnClickListener([this]() { stopListening(); });
   listenStopButton->setVisible(false);
   toolbar->addView(listenStopButton);
 
-  auto *practiceButton = makeButton("Practice", 116, 18);
+  auto *practiceButton = makeButton(i18n::tr("chart_viewer.practice.label"), 116, 18);
   practiceButton->setOnClickListener(
       [this]() { startPracticeFromSelection(false); });
   toolbar->addView(practiceButton);
 
-  auto *autoPlayButton = makeButton("Auto Play", 126, 18);
+  auto *autoPlayButton = makeButton(i18n::tr("chart_viewer.auto_play.label"), 126, 18);
   autoPlayButton->setOnClickListener(
       [this]() { startPracticeFromSelection(true); });
   toolbar->addView(autoPlayButton);
 
-  ghostLoadButton = makeButton("Ghost", 90, 18, &ghostLoadButtonText);
+  ghostLoadButton = makeButton(i18n::tr("chart_viewer.ghost.label"), 90, 18, &ghostLoadButtonText);
   ghostLoadButton->setOnClickListener([this]() { showGhostModal(); });
   toolbar->addView(ghostLoadButton);
 
-  ghostClearButton = makeButton("Clear", 92, 18, &ghostClearButtonText);
+  ghostClearButton = makeButton(i18n::tr("chart_viewer.clear.label"), 92, 18, &ghostClearButtonText);
   ghostClearButton->setOnClickListener([this]() { clearGhostReplay(); });
   ghostClearButton->setVisible(false);
   toolbar->addView(ghostClearButton);
@@ -2793,7 +2794,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
     drawerTitle->setFlex(1);
     drawerHeader->addView(drawerTitle);
 
-    auto *closeButton = makeButton("Close", 92, 19);
+    auto *closeButton = makeButton(i18n::tr("chart_viewer.random.close.label"), 92, 19);
     closeButton->setOnClickListener([this]() { hideRandomDrawer(); });
     drawerHeader->addView(closeButton);
     panel->addView(drawerHeader);
@@ -2819,7 +2820,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
   if (randomOptions.empty()) {
     randomDrawerPage = 0;
     auto *empty = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-    empty->setText("No active #RANDOM.");
+    empty->setText(i18n::tr("chart_viewer.no_active_random.message"));
     empty->setColor(ui_theme::sdl(ui_theme::textMuted()));
     empty->setWrap(true);
     empty->setHeight(84);
@@ -2846,7 +2847,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
       pager->setBorderWidth(1);
 
       auto *pageLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-      pageLabel->setText("Showing " + std::to_string(pageStart + 1) + "-" +
+      pageLabel->setText(i18n::tr("chart_viewer.showing.prefix") + std::to_string(pageStart + 1) + "-" +
                          std::to_string(pageEnd) + " / " +
                          std::to_string(totalOptions));
       pageLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
@@ -2856,7 +2857,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
       pageLabel->setHeight(42);
       pager->addView(pageLabel);
 
-      auto *prevPage = makeButton("Prev", 82, 17);
+      auto *prevPage = makeButton(i18n::tr("chart_viewer.prev.label"), 82, 17);
       prevPage->setOnClickListener([this]() {
         if (randomDrawerPage > 0) {
           --randomDrawerPage;
@@ -2865,7 +2866,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
       });
       pager->addView(prevPage);
 
-      auto *nextPage = makeButton("Next", 82, 17);
+      auto *nextPage = makeButton(i18n::tr("chart_viewer.next.label"), 82, 17);
       nextPage->setOnClickListener([this, maxPage]() {
         if (randomDrawerPage < maxPage) {
           ++randomDrawerPage;
@@ -2975,7 +2976,7 @@ void ChartViewerScene::parseAndRefresh(
   updatePracticeGhostReplayButton();
   updateGhostControls();
   if (statusText != nullptr) {
-    statusText->setText("Parsing...");
+    statusText->setText(i18n::tr("chart_viewer.parsing.progress"));
   }
 
   std::atomic_bool cancelled = false;
@@ -3009,7 +3010,7 @@ void ChartViewerScene::parseAndRefresh(
       canvasView->setChart(nullptr);
     }
     if (statusText != nullptr) {
-      statusText->setText("Parse failed");
+      statusText->setText(i18n::tr("chart_viewer.parse_failed.label"));
     }
     refreshHeaderText();
     updateSelectionText();
@@ -3025,7 +3026,7 @@ void ChartViewerScene::parseAndRefresh(
       canvasView->setChart(nullptr);
     }
     if (statusText != nullptr) {
-      statusText->setText("Play option failed");
+      statusText->setText(i18n::tr("chart_viewer.play_option_failed.label"));
     }
     refreshHeaderText();
     updateSelectionText();
@@ -3051,7 +3052,7 @@ void ChartViewerScene::parseAndRefresh(
     canvasView->setChart(chart.get());
   }
   if (statusText != nullptr) {
-    statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
+    statusText->setText(std::to_string(chart->Meta.TotalNotes) + i18n::tr("chart_viewer.notes.suffix"));
   }
   loadPracticeConfiguration();
   refreshHeaderText();
@@ -3132,7 +3133,7 @@ void ChartViewerScene::refreshHeaderText() {
     const std::string title =
         chart != nullptr && !chart->Meta.Title.empty() ? chart->Meta.Title
                                                        : record.meta.Title;
-    titleText->setText(title.empty() ? "Chart Viewer" : title);
+    titleText->setText(title.empty() ? i18n::tr("chart_viewer.chart_viewer.label") : title);
   }
   if (subtitleText != nullptr) {
     const auto &meta = chart != nullptr ? chart->Meta : record.meta;
@@ -3141,7 +3142,7 @@ void ChartViewerScene::refreshHeaderText() {
                           std::to_string(meta.KeyMode) + "K");
   }
   if (randomSummaryText != nullptr) {
-    randomSummaryText->setText(randomSummary() + " / Option: " +
+    randomSummaryText->setText(randomSummary() + i18n::tr("chart_viewer.option.suffix") +
                                viewerPlayOptionLabel());
   }
 }
@@ -3160,26 +3161,29 @@ void ChartViewerScene::updateSelectionText() {
     return;
   }
   if (canvasView == nullptr || !canvasView->hasSelectedTime()) {
-    selectionText->setText("Tap chart to set cursor.");
+    selectionText->setLocalizedText(i18n::message("chart_viewer.tap_chart_set_cursor.message"));
     return;
   }
 
   const auto range = canvasView->getPracticeRange();
-  std::string text = "Practice " + formatMicrosTime(range.startMicros) +
-                     " - " + formatMicrosTime(range.endMicros) +
-                     (range.active == practice::Marker::Start ? " / Start"
-                                                              : " / End");
+  auto text = i18n::message("chart_viewer.selection.range",
+      {{"start", formatMicrosTime(range.startMicros)},
+       {"end", formatMicrosTime(range.endMicros)},
+       {"marker", range.active == practice::Marker::Start
+                      ? i18n::message("chart_viewer.selection.start")
+                      : i18n::message("chart_viewer.selection.end")}});
   if (listenActive) {
-    text += " / Listening";
+    text = i18n::message("chart_viewer.selection.listening", {{"selection", text}});
   }
   if (loadedGhostReplayId == kPracticeGhostReplayId) {
-    text += " / Practice Ghost";
+    text = i18n::message("chart_viewer.selection.practice_ghost", {{"selection", text}});
   } else if (loadedGhostReplayId == kModernGhostReplayId) {
-    text += " / Saved Ghost";
+    text = i18n::message("chart_viewer.selection.saved_ghost", {{"selection", text}});
   } else if (loadedGhostReplayId >= 0) {
-    text += " / Ghost #" + std::to_string(loadedGhostReplayId);
+    text = i18n::message("chart_viewer.selection.ghost_number",
+        {{"selection", text}, {"id", std::to_string(loadedGhostReplayId)}});
   }
-  selectionText->setText(text);
+  selectionText->setLocalizedText(text);
 }
 
 void ChartViewerScene::updateListenControls() {
@@ -3192,7 +3196,7 @@ void ChartViewerScene::updateListenControls() {
     listenStopButton->setWidth(listenActive ? 92.0f : 0.0f);
   }
   if (listenPauseText != nullptr && listenActive) {
-    listenPauseText->setText(context.jukebox.isPaused() ? "Resume" : "Pause");
+    listenPauseText->setText(context.jukebox.isPaused() ? i18n::tr("chart_viewer.resume.label") : i18n::tr("chart_viewer.pause.label"));
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -3206,7 +3210,7 @@ void ChartViewerScene::updateGhostControls() {
     ghostClearButton->setWidth(hasGhost ? 92.0f : 0.0f);
   }
   if (ghostLoadButtonText != nullptr) {
-    ghostLoadButtonText->setText("Ghost");
+    ghostLoadButtonText->setText(i18n::tr("chart_viewer.ghost.label"));
   }
   updateSelectionText();
   if (rootLayout != nullptr) {
@@ -3251,7 +3255,7 @@ void ChartViewerScene::rebuildGhostModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Load Ghost");
+  title->setText(i18n::tr("chart_viewer.load_ghost.label"));
   title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   title->setHeight(42);
   panel->addView(title);
@@ -3297,9 +3301,9 @@ void ChartViewerScene::rebuildGhostModal() {
   footer->setHeight(kHeaderButtonHeight);
   footer->setFlexShrink(0);
 
-  auto *closeButton = makeButton("Close", 104, 19);
-  auto *clearButton = makeButton("Clear Ghost", 138, 18);
-  auto *loadButton = makeButton("Load", 104, 19);
+  auto *closeButton = makeButton(i18n::tr("chart_viewer.ghost.close.label"), 104, 19);
+  auto *clearButton = makeButton(i18n::tr("chart_viewer.clear_ghost.label"), 138, 18);
+  auto *loadButton = makeButton(i18n::tr("chart_viewer.load.label"), 104, 19);
   closeButton->setFlexGrow(1)
       ->setFlexShrink(1)
       ->setFlexBasis(0)
@@ -3328,7 +3332,7 @@ void ChartViewerScene::rebuildGhostModal() {
 void ChartViewerScene::showGhostModal() {
   if (chart == nullptr) {
     if (statusText != nullptr) {
-      statusText->setText("Open a chart first");
+      statusText->setText(i18n::tr("chart_viewer.open_chart_first.label"));
     }
     return;
   }
@@ -3367,10 +3371,10 @@ void ChartViewerScene::showGhostModal() {
                                   !practiceGhostReplay->events.empty();
     ghostModalEmptyText->setText(
         hasPracticeGhost
-            ? "Practice ghost available."
+            ? i18n::tr("chart_viewer.practice_ghost_available.message")
             : (ghostReplaySummaries.empty()
-                   ? "No saved replays."
-                   : "Select a replay."));
+                   ? i18n::tr("chart_viewer.no_saved_replays.message")
+                   : i18n::tr("chart_viewer.select_replay.message")));
   }
   updatePracticeGhostReplayButton();
   ghostModalRoot->setSize(rendering::window_width, rendering::window_height);
@@ -3407,7 +3411,7 @@ void ChartViewerScene::updatePracticeGhostReplayButton() {
   }
 
   practiceGhostReplayItem->setSummary(replaySummaryFromReplay(
-      *practiceGhostReplay, kPracticeGhostReplayId, "Practice Ghost"));
+      *practiceGhostReplay, kPracticeGhostReplayId, i18n::tr("chart_viewer.practice_ghost.label")));
   if (loadedGhostReplayId == kPracticeGhostReplayId) {
     practiceGhostReplayItem->onSelected();
   } else {
@@ -3421,19 +3425,19 @@ void ChartViewerScene::updatePracticeGhostReplayButton() {
 void ChartViewerScene::loadPracticeGhostReplay() {
   if (!practiceGhostReplay.has_value() || practiceGhostReplay->events.empty()) {
     if (statusText != nullptr) {
-      statusText->setText("No practice ghost available");
+      statusText->setText(i18n::tr("chart_viewer.no_practice_ghost_available.label"));
     }
     return;
   }
 
   if (statusText != nullptr) {
-    statusText->setText("Loading practice ghost...");
+    statusText->setText(i18n::tr("chart_viewer.loading_practice_ghost.progress"));
   }
   const ReplayData replay = *practiceGhostReplay;
   defer(
       [this, replay]() {
         applyGhostReplayData(replay, kPracticeGhostReplayId,
-                             "Practice ghost loaded");
+                             i18n::tr("chart_viewer.practice_ghost_loaded.label"));
         return true;
       },
       0, true);
@@ -3458,8 +3462,8 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
 
   if (replayChart == nullptr || parseCancelled) {
     if (statusText != nullptr) {
-      statusText->setText(parseCancelled ? "Ghost load cancelled"
-                                         : "Ghost parse failed");
+      statusText->setText(parseCancelled ? i18n::tr("chart_viewer.ghost_load_cancelled.label")
+                                         : i18n::tr("chart_viewer.ghost_parse_failed.label"));
     }
     return false;
   }
@@ -3476,7 +3480,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
     viewerPlayOption2 = previousPlayOption2;
     viewerPlayOption2Seed = previousPlayOption2Seed;
     if (statusText != nullptr) {
-      statusText->setText("Ghost play option failed");
+      statusText->setText(i18n::tr("chart_viewer.ghost_play_option_failed.label"));
     }
     return false;
   }
@@ -3524,7 +3528,7 @@ void ChartViewerScene::loadSelectedGhostReplay() {
   const ResultRecordSummary selected =
       ghostReplaySummaries[static_cast<std::size_t>(selectedGhostReplayIndex)];
   if (statusText != nullptr) {
-    statusText->setText("Loading ghost...");
+    statusText->setText(i18n::tr("chart_viewer.loading_ghost.progress"));
   }
 
   defer(
@@ -3544,7 +3548,7 @@ void ChartViewerScene::loadSelectedGhostReplay() {
                                       parseCancelled);
           if (!loaded.ready() || parseCancelled) {
             if (statusText != nullptr) {
-              statusText->setText("Ghost load failed");
+              statusText->setText(i18n::tr("chart_viewer.ghost_load_failed.label"));
             }
             return true;
           }
@@ -3556,11 +3560,11 @@ void ChartViewerScene::loadSelectedGhostReplay() {
           applyPreparedGhostReplayData(*loaded.replayData,
                                        std::move(loaded.chart),
                                        kModernGhostReplayId,
-                                       "Saved ghost loaded");
+                                       i18n::tr("chart_viewer.saved_ghost_loaded.label"));
           return true;
         }
         if (statusText != nullptr) {
-          statusText->setText("Ghost load failed");
+          statusText->setText(i18n::tr("chart_viewer.ghost_load_failed.label"));
         }
         return true;
       },
@@ -3573,7 +3577,7 @@ void ChartViewerScene::clearGhostReplay() {
   }
   loadedGhostReplayId = kNoGhostReplayId;
   if (statusText != nullptr && chart != nullptr) {
-    statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
+    statusText->setText(std::to_string(chart->Meta.TotalNotes) + i18n::tr("chart_viewer.notes.suffix"));
   }
   hideGhostModal();
   updatePracticeGhostReplayButton();
@@ -3620,13 +3624,13 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   header->setHeight(52);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
-  title->setText("Chart Option");
+  title->setText(i18n::tr("chart_viewer.chart_option.label"));
   title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   title->setVAlign(TextView::MIDDLE);
   title->setFlex(1);
   header->addView(title);
 
-  auto *closeButton = makeButton("Close", 98, 19);
+  auto *closeButton = makeButton(i18n::tr("chart_viewer.play_options.close.label"), 98, 19);
   closeButton->setOnClickListener([this]() { hideOptionsDrawer(); });
   header->addView(closeButton);
   panel->addView(header);
@@ -3649,7 +3653,7 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   currentRow->setHeight(52);
 
   auto *currentLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-  currentLabel->setText("Current");
+  currentLabel->setText(i18n::tr("chart_viewer.current.label"));
   currentLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   currentLabel->setVAlign(TextView::MIDDLE);
   currentLabel->setWidth(86);
@@ -3804,7 +3808,8 @@ void ChartViewerScene::refreshViewerOptionControls() {
        .assistOptionLocked = false,
        .playbackRatePercent = practiceConfiguration.playback.percent,
        .playbackLocked = false,
-       .clubMode = context.settings.gameplayClubModeEnabled});
+       .clubMode = context.settings.gameplayClubModeEnabled,
+       .profileId = context.profileManager.activeProfile().id});
 }
 
 void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
@@ -3846,7 +3851,7 @@ void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
       !play_options::validateLaneAssignOption(meta, option, &error)) {
     if (viewerPlayOptionsPanel != nullptr) {
       viewerPlayOptionsPanel->setLaneOrderMessage(
-          error.empty() ? "Invalid lane order." : error, true);
+          error.empty() ? i18n::tr("chart_viewer.invalid_lane_order.message") : error, true);
     }
     return;
   }
@@ -3857,7 +3862,7 @@ void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
                       : std::optional<std::vector<int>>(selectedRandomValues));
   refreshOptionsDrawer();
   if (viewerPlayOptionsPanel != nullptr) {
-    viewerPlayOptionsPanel->setLaneOrderMessage("Lane order applied.");
+    viewerPlayOptionsPanel->setLaneOrderMessage(i18n::tr("chart_viewer.lane_order_applied.message"));
   }
 }
 
@@ -3988,7 +3993,7 @@ void ChartViewerScene::onPracticeRangeChanged(
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
         practicePanel != nullptr) {
-      practicePanel->setPresetMessage("Could not save practice settings: " +
+      practicePanel->setPresetMessage(i18n::tr("chart_viewer.could_not_save_practice_settings.prefix") +
                                           error,
                                       true);
     }
@@ -4019,7 +4024,7 @@ void ChartViewerScene::onPracticeConfigurationChanged(
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
         practicePanel != nullptr) {
-      practicePanel->setPresetMessage("Could not save practice settings: " +
+      practicePanel->setPresetMessage(i18n::tr("chart_viewer.could_not_save_practice_settings.prefix") +
                                           error,
                                       true);
     }
@@ -4162,7 +4167,7 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
       practiceConfiguration, request, chart->Meta, practiceChartEndMicros);
   if (!application.applied()) {
     if (statusText != nullptr) {
-      statusText->setText(application.issue.value_or("Chart unavailable"));
+      statusText->setText(application.issue.value_or(i18n::tr("chart_viewer.chart_unavailable.label")));
     }
     return;
   }
@@ -4221,7 +4226,7 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
         practicePanel != nullptr) {
-      practicePanel->setPresetMessage("Could not save practice settings: " +
+      practicePanel->setPresetMessage(i18n::tr("chart_viewer.could_not_save_practice_settings.prefix") +
                                           error,
                                       true);
       refreshPracticePanel();
@@ -4230,9 +4235,10 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     }
   }
   if (statusText != nullptr) {
-    statusText->setText(replayGhostUnavailable
-                            ? "Section ready / replay ghost unavailable"
-                            : "Section ready");
+    statusText->setLocalizedText(i18n::message(
+        replayGhostUnavailable
+            ? "chart_viewer.section_ready_ghost_unavailable.label"
+            : "chart_viewer.section_ready.label"));
   }
   updatePracticeGhostReplayButton();
   updateGhostControls();
@@ -4280,7 +4286,7 @@ void ChartViewerScene::savePracticeAs(std::string name) {
   }
   refreshPracticePanel();
   if (practicePanel != nullptr) {
-    practicePanel->setPresetMessage("Preset saved.");
+    practicePanel->setPresetMessage(i18n::tr("chart_viewer.preset_saved.message"));
   }
 }
 
@@ -4302,7 +4308,7 @@ void ChartViewerScene::renamePracticePreset(std::string name) {
   (void)applyPracticePresetLoad(std::move(loaded), false);
   refreshPracticePanel();
   if (practicePanel != nullptr) {
-    practicePanel->setPresetMessage("Preset renamed.");
+    practicePanel->setPresetMessage(i18n::tr("chart_viewer.preset_renamed.message"));
   }
 }
 
@@ -4324,7 +4330,7 @@ void ChartViewerScene::updatePracticePreset() {
   (void)applyPracticePresetLoad(std::move(loaded), false);
   refreshPracticePanel();
   if (practicePanel != nullptr) {
-    practicePanel->setPresetMessage("Preset updated.");
+    practicePanel->setPresetMessage(i18n::tr("chart_viewer.preset_updated.message"));
   }
 }
 
@@ -4347,7 +4353,7 @@ void ChartViewerScene::deletePracticePreset() {
   }
   refreshPracticePanel();
   if (practicePanel != nullptr) {
-    practicePanel->setPresetMessage("Preset deleted.");
+    practicePanel->setPresetMessage(i18n::tr("chart_viewer.preset_deleted.message"));
   }
 }
 
@@ -4370,7 +4376,7 @@ void ChartViewerScene::startListeningFromSelection() {
   if (chart == nullptr || canvasView == nullptr ||
       !canvasView->hasSelectedTime()) {
     if (statusText != nullptr) {
-      statusText->setText("Set a cursor first");
+      statusText->setText(i18n::tr("chart_viewer.set_cursor_first.label"));
     }
     return;
   }
@@ -4382,9 +4388,9 @@ void ChartViewerScene::startListeningFromSelection() {
   if (statusText != nullptr) {
     statusText->setText(
         listenAudioLoaded
-            ? "Seeking audio..."
-            : (retainedListenResourcesForReload ? "Updating audio..."
-                                                : "Loading audio..."));
+            ? i18n::tr("chart_viewer.seeking_audio.progress")
+            : (retainedListenResourcesForReload ? i18n::tr("chart_viewer.updating_audio.progress")
+                                                : i18n::tr("chart_viewer.loading_audio.progress")));
   }
   listenActive = false;
   canvasView->clearPlaybackTime();
@@ -4411,7 +4417,7 @@ void ChartViewerScene::startListeningFromSelection() {
           context.jukebox.setVisualsEnabled(previousVisuals);
           if (cancelled) {
             if (statusText != nullptr) {
-              statusText->setText("Audio load cancelled");
+              statusText->setText(i18n::tr("chart_viewer.audio_load_cancelled.label"));
             }
             updateListenControls();
             return true;
@@ -4435,7 +4441,7 @@ void ChartViewerScene::startListeningFromSelection() {
             true);
         if (statusText != nullptr && chart != nullptr) {
           statusText->setText(std::to_string(chart->Meta.TotalNotes) +
-                              " notes");
+                              i18n::tr("chart_viewer.notes.suffix"));
         }
         updateSelectionText();
         updateListenControls();
@@ -4480,7 +4486,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
   if (!sanitized.playable()) {
     if (statusText != nullptr) {
       statusText->setText(sanitized.diagnostics.empty()
-                              ? "Practice configuration is not playable"
+                              ? i18n::tr("chart_viewer.practice_configuration_not_playable.label")
                               : sanitized.diagnostics.front());
     }
     return;
@@ -4509,8 +4515,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
 
   stopListening();
   if (statusText != nullptr) {
-    statusText->setText(autoPlay ? "Preparing auto play..."
-                                 : "Preparing practice...");
+    statusText->setText(autoPlay ? i18n::tr("chart_viewer.preparing_auto_play.progress")
+                                 : i18n::tr("chart_viewer.preparing_practice.progress"));
   }
 
   defer(
@@ -4531,14 +4537,14 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                   fspath_to_utf8(record.meta.BmsPath).c_str(),
                   autoPlay ? "practice autoplay" : "practice", e.what());
           archive_file::appendDebugLogLine(
-              std::string(autoPlay ? "Practice autoplay" : "Practice") +
+              std::string(autoPlay ? "Practice autoplay" : i18n::tr("chart_viewer.practice.label")) +
               " parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
               ": " + e.what());
         }
         if (practiceChart == nullptr || parseCancelled) {
           if (statusText != nullptr) {
-            statusText->setText(autoPlay ? "Auto play parse failed"
-                                         : "Practice parse failed");
+            statusText->setText(autoPlay ? i18n::tr("chart_viewer.auto_play_parse_failed.label")
+                                         : i18n::tr("chart_viewer.practice_parse_failed.label"));
           }
           return true;
         }
@@ -4546,8 +4552,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
         if (autoPlay && !applyViewerPlayOptions(*practiceChart,
                                                 "practice autoplay")) {
           if (statusText != nullptr) {
-            statusText->setText(autoPlay ? "Auto play option failed"
-                                         : "Practice play option failed");
+            statusText->setText(autoPlay ? i18n::tr("chart_viewer.auto_play_option_failed.label")
+                                         : i18n::tr("chart_viewer.practice_play_option_failed.label"));
           }
           return true;
         }
@@ -4560,8 +4566,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
         }
         if (parseCancelled) {
           if (statusText != nullptr) {
-            statusText->setText(autoPlay ? "Auto play load cancelled"
-                                         : "Practice load cancelled");
+            statusText->setText(autoPlay ? i18n::tr("chart_viewer.auto_play_load_cancelled.label")
+                                         : i18n::tr("chart_viewer.practice_load_cancelled.label"));
           }
           return true;
         }
@@ -4571,7 +4577,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
 
         if (statusText != nullptr && chart != nullptr) {
           statusText->setText(std::to_string(chart->Meta.TotalNotes) +
-                              " notes");
+                              i18n::tr("chart_viewer.notes.suffix"));
         }
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(
@@ -4814,17 +4820,15 @@ ChartViewerScene::scanActiveRandomOptions(
 
 std::string ChartViewerScene::randomSummary() const {
   if (selectedRandomValues.empty()) {
-    return "RANDOM: none";
+    return i18n::tr("chart_viewer.random.none");
   }
   if (selectedRandomValues.size() > kRandomSummaryLimit) {
-    return "RANDOM: " +
-           joinRandomValueRange(selectedRandomValues, 0, kRandomSummaryHead) +
-           " ... " +
-           joinRandomValueRange(selectedRandomValues,
-                                selectedRandomValues.size() -
-                                    kRandomSummaryTail,
-                                selectedRandomValues.size()) +
-           " (" + std::to_string(selectedRandomValues.size()) + " values)";
+    return i18n::format("chart_viewer.random.summary",
+        {{"values", joinRandomValueRange(selectedRandomValues, 0, kRandomSummaryHead) +
+                        " ... " + joinRandomValueRange(selectedRandomValues,
+                            selectedRandomValues.size() - kRandomSummaryTail,
+                            selectedRandomValues.size())},
+         {"count", std::to_string(selectedRandomValues.size())}});
   }
   return "RANDOM: " + joinRandomValues(selectedRandomValues);
 }
@@ -4835,7 +4839,8 @@ std::string ChartViewerScene::viewerPlayOptionLabel() const {
       viewerPlayOption2Seed);
   std::string result = label.empty() ? "NORMAL" : label;
   if (viewerLaneOrderSummary.has_value()) {
-    result += " / Lane " + *viewerLaneOrderSummary;
+    result = i18n::format("chart_viewer.option.lane_order",
+        {{"option", result}, {"order", *viewerLaneOrderSummary}});
   }
   return result;
 }

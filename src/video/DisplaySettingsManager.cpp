@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -22,18 +21,18 @@ bool hasResolution(const DisplayInfo &display, int width, int height) {
       });
 }
 
-std::string rollbackMessage(RollbackReason reason) {
+i18n::Text rollbackMessage(RollbackReason reason) {
   switch (reason) {
   case RollbackReason::Timeout:
-    return "Display preview timed out and was restored.";
+    return i18n::message("settings.audio_video.display.preview_timeout");
   case RollbackReason::FocusLost:
-    return "Display preview was restored after focus loss.";
+    return i18n::message("settings.audio_video.display.preview_focus_lost");
   case RollbackReason::Cancelled:
-    return "Display preview was cancelled and restored.";
+    return i18n::message("settings.audio_video.display.preview_cancelled");
   case RollbackReason::ApplyFailed:
-    return "Display apply failed and the previous state was restored.";
+    return i18n::message("settings.audio_video.display.apply_failed_restored");
   }
-  return "Display preview was restored.";
+  return i18n::message("settings.audio_video.display.preview_restored");
 }
 } // namespace
 
@@ -55,7 +54,7 @@ DisplaySettingsManager::~DisplaySettingsManager() {
     } else if (result.status == ApplyStatus::FailedUnrecoverable) {
       std::fprintf(stderr,
                    "Display rollback failed during manager teardown: %s\n",
-                   result.message.c_str());
+                   result.message.resolve().c_str());
     }
   }
 }
@@ -88,13 +87,13 @@ ApplyResult DisplaySettingsManager::applySafeStartupIntent() {
     return {.status = ApplyStatus::Unsupported,
             .effective = effectiveBefore,
             .message =
-                "The persisted frame cap is outside the supported range."};
+                i18n::message("settings.audio_video.display.persisted_cap_invalid")};
   }
   if (candidateCap != effectiveBefore.frameCap &&
       !backendCapabilities.canSetFrameCap) {
     return {.status = ApplyStatus::Unsupported,
             .effective = effectiveBefore,
-            .message = "Frame limiting is not supported on this platform."};
+            .message = i18n::message("settings.audio_video.display.cap_unsupported")};
   }
 
   std::string errorMessage;
@@ -102,8 +101,8 @@ ApplyResult DisplaySettingsManager::applySafeStartupIntent() {
     return {.status = ApplyStatus::FailedRolledBack,
             .effective = captureEffectiveSettings(),
             .message = errorMessage.empty()
-                           ? "Could not apply the persisted frame cap."
-                           : std::move(errorMessage)};
+                           ? i18n::message("settings.audio_video.display.persisted_cap_failed")
+                           : i18n::Text(std::move(errorMessage))};
   }
   lastWorkingIntent.frameCap = candidateCap;
   return {.status = ApplyStatus::Applied,
@@ -124,7 +123,7 @@ bool DisplaySettingsManager::displayFieldsEqual(
   return left.width == right.width && left.height == right.height;
 }
 
-std::optional<std::string> DisplaySettingsManager::unsupportedReason(
+std::optional<i18n::Text> DisplaySettingsManager::unsupportedReason(
     const player_settings::VideoSettings &candidate,
     const player_settings::VideoSettings &effective) const {
   switch (candidate.mode) {
@@ -133,17 +132,17 @@ std::optional<std::string> DisplaySettingsManager::unsupportedReason(
   case player_settings::DisplayMode::ExclusiveFullscreen:
     break;
   default:
-    return "The requested display mode is invalid.";
+    return i18n::message("settings.audio_video.display.mode_invalid");
   }
   if (candidate.displayIndex < 0) {
-    return "The requested display index is invalid.";
+    return i18n::message("settings.audio_video.display.index_invalid");
   }
   if (candidate.width <= 0 || candidate.height <= 0) {
-    return "The requested display size is invalid.";
+    return i18n::message("settings.audio_video.display.size_invalid");
   }
   if (candidate.frameCap != 0 &&
       (candidate.frameCap < 1 || candidate.frameCap > 1000)) {
-    return "The requested frame cap is outside the supported range.";
+    return i18n::message("settings.audio_video.display.cap_invalid");
   }
 
   const bool modeChanged = candidate.mode != effective.mode;
@@ -154,33 +153,33 @@ std::optional<std::string> DisplaySettingsManager::unsupportedReason(
   const bool frameCapChanged = candidate.frameCap != effective.frameCap;
 
   if (modeChanged && !backendCapabilities.canChangeMode) {
-    return "Display mode changes are not supported on this platform.";
+    return i18n::message("settings.audio_video.display.mode_unsupported");
   }
   if (displayChanged && !backendCapabilities.canSelectDisplay) {
-    return "Display selection is not supported on this platform.";
+    return i18n::message("settings.audio_video.display.selection_unsupported");
   }
   if (resolutionChanged && !backendCapabilities.canSelectResolution) {
-    return "Resolution selection is not supported on this platform.";
+    return i18n::message("settings.audio_video.display.resolution_unsupported");
   }
   if (vsyncChanged && !backendCapabilities.canChangeVsync) {
-    return "VSync changes are not supported on this platform.";
+    return i18n::message("settings.audio_video.display.vsync_unsupported");
   }
   if (frameCapChanged && !backendCapabilities.canSetFrameCap) {
-    return "Frame limiting is not supported on this platform.";
+    return i18n::message("settings.audio_video.display.cap_unsupported");
   }
 
   if (modeChanged || displayChanged || resolutionChanged) {
     const DisplayInfo *display =
         findDisplay(backendCapabilities, candidate.displayIndex);
     if (display == nullptr) {
-      return "The requested display is unavailable.";
+      return i18n::message("settings.audio_video.display.unavailable");
     }
     const bool exclusiveModeNeedsMatch =
         candidate.mode == player_settings::DisplayMode::ExclusiveFullscreen &&
         (modeChanged || displayChanged);
     if ((resolutionChanged || exclusiveModeNeedsMatch) &&
         !hasResolution(*display, candidate.width, candidate.height)) {
-      return "The requested resolution is unavailable on that display.";
+      return i18n::message("settings.audio_video.display.resolution_unavailable");
     }
   }
   return std::nullopt;
@@ -200,35 +199,37 @@ ApplyResult DisplaySettingsManager::rollback(const RuntimeState &previous,
   std::string displayError;
   const RestoreStatus displayStatus = backend.restore(previous, displayError);
   if (displayStatus == RestoreStatus::RetryableFailure) {
-    std::string message = "Display rollback is waiting for renderer access.";
+    i18n::Text message = i18n::message("settings.audio_video.display.rollback_waiting");
     if (!displayError.empty()) {
-      message += " " + displayError;
+      message = i18n::message("settings.audio_video.status_detail",
+                              {{"status", message}, {"detail", displayError}});
     }
     return {.status = ApplyStatus::RollbackPending,
             .effective = captureEffectiveSettings(),
             .message = std::move(message)};
   }
   if (displayStatus == RestoreStatus::Failed) {
-    std::ostringstream message;
+    i18n::Text message = i18n::message("settings.audio_video.display.restore_failed");
     if (!applyError.empty()) {
-      message << applyError << " ";
+      message = i18n::message("settings.audio_video.status_detail",
+                              {{"status", applyError}, {"detail", message}});
     }
-    message << "Could not restore the previous display state.";
     if (!displayError.empty()) {
-      message << " " << displayError;
+      message = i18n::message("settings.audio_video.status_detail",
+                              {{"status", message}, {"detail", displayError}});
     }
     return {.status = ApplyStatus::FailedUnrecoverable,
             .effective = captureEffectiveSettings(),
-            .message = message.str()};
+            .message = std::move(message)};
   }
 
   std::string frameCapError;
   const bool frameCapRestored =
       applyFrameCap(previous.settings.frameCap, frameCapError);
   if (frameCapRestored) {
-    std::string message =
+    i18n::Text message =
         reason == RollbackReason::ApplyFailed && !applyError.empty()
-            ? std::move(applyError)
+            ? i18n::Text(std::move(applyError))
             : rollbackMessage(reason);
     return {.status = reason == RollbackReason::ApplyFailed
                           ? ApplyStatus::FailedRolledBack
@@ -237,17 +238,20 @@ ApplyResult DisplaySettingsManager::rollback(const RuntimeState &previous,
             .message = std::move(message)};
   }
 
-  std::ostringstream message;
+  i18n::Text message = i18n::message("settings.audio_video.display.runtime_restore_failed");
   if (!applyError.empty()) {
-    message << applyError << " ";
+    message = i18n::message("settings.audio_video.status_detail",
+                            {{"status", applyError}, {"detail", message}});
   }
-  message << "Could not restore the previous runtime state.";
-  if (!frameCapRestored && !frameCapError.empty()) {
-    message << " Frame cap: " << frameCapError;
+  if (!frameCapError.empty()) {
+    message = i18n::message("settings.audio_video.status_detail",
+        {{"status", message},
+         {"detail", i18n::message("settings.audio_video.display.frame_cap_detail",
+                                  {{"detail", frameCapError}})}});
   }
   return {.status = ApplyStatus::FailedUnrecoverable,
           .effective = captureEffectiveSettings(),
-          .message = message.str()};
+          .message = std::move(message)};
 }
 
 ApplyResult DisplaySettingsManager::beginPreview(
@@ -276,8 +280,8 @@ ApplyResult DisplaySettingsManager::beginPreview(
       return {.status = ApplyStatus::FailedRolledBack,
               .effective = captureEffectiveSettings(),
               .message = frameCapError.empty()
-                             ? "Could not apply the requested frame cap."
-                             : std::move(frameCapError)};
+                             ? i18n::message("settings.audio_video.display.cap_failed")
+                             : i18n::Text(std::move(frameCapError))};
     }
     lastWorkingIntent = candidate;
     return {.status = ApplyStatus::Applied,
@@ -319,19 +323,19 @@ ApplyResult DisplaySettingsManager::beginPreview(
                                   .rollbackReason = std::nullopt};
   return {.status = ApplyStatus::PreviewPending,
           .effective = captureEffectiveSettings(),
-          .message = "Confirm the display settings within 15 seconds."};
+          .message = i18n::message("settings.audio_video.confirm_within_15_seconds.message")};
 }
 
 ApplyResult DisplaySettingsManager::confirmPreview() {
   if (!pendingPreview.has_value()) {
     return {.status = ApplyStatus::Unsupported,
             .effective = captureEffectiveSettings(),
-            .message = "There is no display preview to confirm."};
+            .message = i18n::message("settings.audio_video.display.no_preview")};
   }
   if (pendingPreview->rollbackReason.has_value()) {
     return {.status = ApplyStatus::RollbackPending,
             .effective = captureEffectiveSettings(),
-            .message = "This display preview is waiting to roll back."};
+            .message = i18n::message("settings.audio_video.display.preview_rollback_waiting")};
   }
 
   const auto effective = captureEffectiveSettings();
@@ -340,7 +344,7 @@ ApplyResult DisplaySettingsManager::confirmPreview() {
     return {.status = ApplyStatus::PreviewPending,
             .effective = effective,
             .message =
-                "The effective display changed; restore or apply again."};
+                i18n::message("settings.audio_video.display.runtime_changed")};
   }
   lastWorkingIntent = pendingPreview->candidate;
   pendingPreview.reset();

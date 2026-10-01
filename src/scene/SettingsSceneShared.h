@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 
 #include "SettingsScene.h"
 #include "SettingsPreviewChart.h"
@@ -23,6 +24,8 @@
 #include <string>
 
 namespace settings_scene {
+// Let Yoga size the button from its content and horizontal padding.
+inline constexpr int kFitContentWidth = -1;
 inline constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 
 struct SafeAreaInsets {
@@ -246,12 +249,12 @@ inline View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
   return {};
 }
 
-inline TextView *makeText(const std::string &text, int size, const Color &color,
+inline TextView *makeText(const i18n::Text &text, int size, const Color &color,
                           TextView::TextAlign align = TextView::LEFT,
                           TextView::TextVAlign valign = TextView::TOP) {
   auto *view = new TextView(kFontPath, size);
   view->setDeferredTextureMaterialization(true);
-  view->setText(text);
+  view->setLocalizedText(text);
   const auto themedProvider = themeTextColorProvider(color);
   if (themedProvider) {
     view->setThemedColor(themedProvider);
@@ -263,7 +266,7 @@ inline TextView *makeText(const std::string &text, int size, const Color &color,
   return view;
 }
 
-inline TextView *makeWrappedText(const std::string &text, int size,
+inline TextView *makeWrappedText(const i18n::Text &text, int size,
                                  const Color &color,
                                  TextView::TextAlign align = TextView::LEFT,
                                  TextView::TextVAlign valign = TextView::TOP) {
@@ -278,10 +281,22 @@ inline Button *makeButton(int width, int height, TextView *label,
                           const Color &pressedBackground,
                           const Color &normalBorder, const Color &hoverBorder,
                           const Color &pressedBorder, int borderWidth = 1) {
-  auto *button = new Button(0, 0, width, height);
+  const bool fitContent = width == kFitContentWidth;
+  auto *button = fitContent ? new Button() : new Button(0, 0, width, height);
   label->setAlign(TextView::CENTER);
   label->setVAlign(TextView::MIDDLE);
-  button->setContentView(label);
+  if (fitContent) {
+    button->setHeight(height);
+    button->setPadding(Edge::Left, 16.0f);
+    button->setPadding(Edge::Right, 16.0f);
+    button->setAlignSelf(YGAlignFlexStart);
+    button->setAlignItems(YGAlignCenter);
+    button->setJustifyContent(YGJustifyCenter);
+    button->setFlexShrink(0.0f);
+    button->addView(label);
+  } else {
+    button->setContentView(label);
+  }
   button->setCornerRadius(ui_theme::controlRadius());
   button->setBackgroundColors(normalBackground, hoverBackground,
                               pressedBackground);
@@ -360,7 +375,7 @@ inline Button *makeAccentButton(int width, int height, TextView *label,
 }
 
 inline Button *makeStepButton(const LayoutMetrics &metrics, int width,
-                              const std::string &label) {
+                              const i18n::Text &label) {
   return makeControlButton(width, metrics.actionButtonHeight,
                            makeText(label, metrics.bodyTextSize + 4,
                                     ui_theme::textPrimary(), TextView::CENTER,
@@ -369,7 +384,7 @@ inline Button *makeStepButton(const LayoutMetrics &metrics, int width,
 
 inline Button *makeResetButton(const LayoutMetrics &metrics) {
   return makeAccentButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
-                          makeText("Reset", metrics.bodyTextSize + 4,
+                          makeText(i18n::message("settings.options.reset.label"), metrics.bodyTextSize + 4,
                                    ui_theme::textPrimary(), TextView::CENTER,
                                    TextView::MIDDLE),
                           ui_theme::coral());
@@ -412,8 +427,8 @@ inline View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   return value;
 }
 
-inline View *makeCard(const LayoutMetrics &metrics, const std::string &title,
-                      const std::string &description, View *body, int minHeight,
+inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
+                      const i18n::Text &description, View *body, int minHeight,
                       int width = 0) {
   auto *card = new View();
   card->setFlexDirection(FlexDirection::Column);
@@ -446,7 +461,7 @@ inline View *makeCard(const LayoutMetrics &metrics, const std::string &title,
 }
 
 inline View *makeSummaryRow(const LayoutMetrics &metrics,
-                            const std::string &label, TextView **valueOut) {
+                            const i18n::Text &label, TextView **valueOut) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row);
   row->setJustifyContent(YGJustifySpaceBetween);
@@ -620,21 +635,21 @@ inline std::string formatVisibleTimeInputValue(int milliseconds,
       AppSettings::durationMillisecondsToGreenNumber(milliseconds));
 }
 
-inline std::string formatVisibleTimeBpmStrategyLabel(
+inline i18n::Text formatVisibleTimeBpmStrategyLabel(
     AppSettings::HiSpeedFixMode mode) {
   switch (mode) {
   case AppSettings::HiSpeedFixMode::Off:
-    return "Off";
+    return i18n::message("settings.options.off.label");
   case AppSettings::HiSpeedFixMode::Start:
-    return "Start BPM";
+    return i18n::message("settings.options.start_bpm.label");
   case AppSettings::HiSpeedFixMode::Max:
-    return "Max BPM";
+    return i18n::message("settings.options.max_bpm.label");
   case AppSettings::HiSpeedFixMode::Main:
-    return "Main BPM";
+    return i18n::message("settings.options.main_bpm.label");
   case AppSettings::HiSpeedFixMode::Min:
-    return "Min BPM";
+    return i18n::message("settings.options.min_bpm.label");
   }
-  return "Main BPM";
+  return i18n::message("settings.options.main_bpm.label");
 }
 
 inline std::string formatFloatValue(float value, int precision = 1) {
@@ -675,106 +690,107 @@ inline std::string formatPlayAreaWidthLabel(float width) {
   return formatFloatValue(clampPlayAreaWidth(width), 1);
 }
 
-inline std::string formatJudgementIndicatorRenderModeLabel(
+inline i18n::Text formatJudgementIndicatorRenderModeLabel(
     AppSettings::JudgementIndicatorRenderMode mode) {
   switch (mode) {
   case AppSettings::JudgementIndicatorRenderMode::World3D:
-    return "3D Space";
+    return i18n::message("settings.options.hud.position.world.label");
   case AppSettings::JudgementIndicatorRenderMode::Hud2D:
-    return "2D HUD";
+    return i18n::message("settings.options.hud.position.overlay.label");
   }
-  return "3D Space";
+  return i18n::message("settings.options.hud.position.world.label");
 }
 
-inline std::string formatJudgementCounterPositionLabel(
+inline i18n::Text formatJudgementCounterPositionLabel(
     AppSettings::JudgementCounterPosition position) {
   switch (position) {
   case AppSettings::JudgementCounterPosition::Top:
-    return "Top";
+    return i18n::message("settings.options.top.label");
   case AppSettings::JudgementCounterPosition::Left:
-    return "Left";
+    return i18n::message("settings.options.left.label");
   case AppSettings::JudgementCounterPosition::Right:
-    return "Right";
+    return i18n::message("settings.options.right.label");
   }
-  return "Top";
+  return i18n::message("settings.options.top.label");
 }
 
-inline std::string formatJudgementTimingDisplayCriteriaLabel(
+inline i18n::Text formatJudgementTimingDisplayCriteriaLabel(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
   switch (criteria) {
   case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
-    return "PGREAT OR BELOW";
+    return i18n::message("settings.options.pgreat_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
-    return "GREAT OR BELOW";
+    return i18n::message("settings.options.great_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
-    return "GOOD OR BELOW";
+    return i18n::message("settings.options.good_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
-    return "BAD OR BELOW";
+    return i18n::message("settings.options.bad_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::Off:
     return "OFF";
   }
-  return "GREAT OR BELOW";
+  return i18n::message("settings.options.great_below.badge");
 }
 
-inline std::string
+inline i18n::Text
 formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
   switch (position) {
   case AppSettings::GaugeBarPosition::World:
-    return "World";
+    return i18n::message("settings.options.world.label");
   case AppSettings::GaugeBarPosition::Left:
-    return "Left HUD";
+    return i18n::message("settings.options.left_hud.label");
   case AppSettings::GaugeBarPosition::Right:
-    return "Right HUD";
+    return i18n::message("settings.options.right_hud.label");
   }
-  return "World";
+  return i18n::message("settings.options.world.label");
 }
 
-inline std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
+inline i18n::Text formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
-    return "Fit";
+    return i18n::message("settings.options.fit.label");
   case AppSettings::BgaDisplayMode::Fill:
-    return "Fill";
+    return i18n::message("settings.options.fill.label");
   case AppSettings::BgaDisplayMode::Stretch:
-    return "Stretch";
+    return i18n::message("settings.options.stretch.label");
   case AppSettings::BgaDisplayMode::NoExpand:
-    return "No expansion";
+    return i18n::message("settings.options.no_expansion.label");
   }
-  return "Fit";
+  return i18n::message("settings.options.fit.label");
 }
 
-inline std::string
+inline i18n::Text
 formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
   switch (mode) {
   case AppSettings::NotePriorityMode::Lowest:
-    return "Lowest";
+    return i18n::message("settings.options.lowest.label");
   case AppSettings::NotePriorityMode::Combo:
-    return "Combo";
+    return i18n::message("settings.options.combo.label");
   case AppSettings::NotePriorityMode::Duration:
-    return "Duration";
+    return i18n::message("settings.options.duration.label");
   case AppSettings::NotePriorityMode::Score:
-    return "Score";
+    return i18n::message("settings.options.score.label");
   }
-  return "Lowest";
+  return i18n::message("settings.options.lowest.label");
 }
 
-inline std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
+inline i18n::Text formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
   switch (mode) {
   case AppSettings::UiThemeMode::Dark:
-    return "Dark";
+    return i18n::message("settings.options.dark.label");
   case AppSettings::UiThemeMode::Light:
-    return "Light";
+    return i18n::message("settings.options.light.label");
   }
-  return "Dark";
+  return i18n::message("settings.options.dark.label");
 }
 
-inline std::string formatTableCount(int chartCount) {
-  return std::to_string(chartCount) + (chartCount == 1 ? " chart" : " charts");
+inline i18n::Text formatTableCount(int chartCount) {
+  return i18n::message(chartCount == 1 ? "settings.options.chart_count.one" : "settings.options.chart_count.other",
+                      {{"count", std::to_string(chartCount)}});
 }
 
-inline std::string formatTableSource(const std::string &sourceUrl) {
+inline i18n::Text formatTableSource(const std::string &sourceUrl) {
   if (sourceUrl.empty()) {
-    return "No source URL";
+    return i18n::message("settings.options.no_source_url.label");
   }
   return sourceUrl;
 }
@@ -783,9 +799,9 @@ inline std::string formatChartEntryPath(const ChartEntry &entry) {
   return path_t_to_utf8(entry.path);
 }
 
-inline std::string formatChartEntryName(const ChartEntry &entry) {
+inline i18n::Text formatChartEntryName(const ChartEntry &entry) {
   if (!entry.removable) {
-    return "Default BMS";
+    return i18n::message("settings.options.default_bms.label");
   }
   const std::filesystem::path path(entry.path);
   const std::filesystem::path name = path.filename();
@@ -795,28 +811,32 @@ inline std::string formatChartEntryName(const ChartEntry &entry) {
   return fspath_to_utf8(name);
 }
 
-inline std::string formatChartEntrySource(const ChartEntry &entry) {
+inline i18n::Text formatChartEntrySource(const ChartEntry &entry) {
   const std::string pathText = formatChartEntryPath(entry);
   if (!entry.removable) {
-    return pathText +
-           "\nBuilt-in folder. Find BMS uses this as a fallback when no "
-           "writable library folder is available.";
+    return i18n::message("settings.options.chart_entry.source",
+                         {{"path", pathText},
+                          {"notice", i18n::message("settings.options.folder.builtin_download_fallback_notice")}});
   }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (!entry.iosBookmark.empty()) {
-    return pathText + "\nFiles access saved for future scans.";
+    return i18n::message("settings.options.chart_entry.source",
+                         {{"path", pathText},
+                          {"notice", i18n::message("settings.options.folder.access_saved_notice")}});
   }
 #endif
   return pathText;
 }
 
-inline std::string formatImportProgressText(int current, int total) {
+inline i18n::Text formatImportProgressText(int current, int total) {
   if (total <= 0) {
-    return "Preparing";
+    return i18n::message("settings.options.preparing.label");
   }
   const int safeCurrent = std::clamp(current, 0, total);
-  return std::to_string(safeCurrent) + " / " + std::to_string(total) +
-         (total == 1 ? " table" : " tables");
+  return i18n::message(total == 1 ? "settings.options.import.progress.one"
+                                 : "settings.options.import.progress.other",
+                      {{"current", std::to_string(safeCurrent)},
+                       {"total", std::to_string(total)}});
 }
 
 inline AppSettings::BgaDisplayMode

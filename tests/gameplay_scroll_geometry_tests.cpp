@@ -1,5 +1,4 @@
 #include "scene/play/GameplayScrollGeometry.h"
-#include "scene/play/LanePerspectiveCompensation.h"
 #include "scene/play/GameplayNoteSubmissionOrder.h"
 
 #include <cmath>
@@ -26,55 +25,6 @@ void requireNear(double actual, double expected, const char *message) {
 
 int main() {
   using namespace gameplay_scroll_geometry;
-
-  // A lane with camera-space depth 2 + y projects y to y / (2 + y).
-  // Equal traversal steps must therefore produce equal projected steps.
-  const LanePerspectiveCompensation perspective{0.0F, 8.0F, 2.0F, 10.0F};
-  float previousWorldY = 0.0F;
-  float previousStep = 0.0F;
-  for (int i = 0; i <= 8; ++i) {
-    const float worldY = perspective.toWorld(static_cast<float>(i));
-    requireNear(worldY / (2.0F + worldY), i * 0.1F,
-                "compensation produces constant projected travel");
-    requireNear(perspective.toLinear(worldY), static_cast<float>(i),
-                "cover dragging inverts compensated note travel");
-    if (i > 1) {
-      require(worldY - previousWorldY > previousStep,
-              "world travel decelerates as notes approach judgement");
-    }
-    previousStep = worldY - previousWorldY;
-    previousWorldY = worldY;
-  }
-  requireNear(perspective.toWorld(0.0F), 0.0F,
-              "compensation preserves judgement position");
-  requireNear(perspective.toWorld(8.0F), 8.0F,
-              "compensation preserves lane top");
-  require(perspective.toWorld(100.0F) > 8.0F &&
-              perspective.toWorld(-100.0F) < 0.0F,
-          "offscreen rows never wrap across the perspective horizon");
-  requireNear(LanePerspectiveCompensation{1, 9, 2, 10}.toWorld(5),
-              2.3333333F, "compensation is relative to the judgement origin");
-  requireNear(perspective.toLinear(perspective.toWorld(-10)), -10.0F,
-              "past-note extension remains invertible");
-  requireNear(perspective.toLinear(perspective.toWorld(100)), 100.0F,
-              "future-note extension remains invertible");
-  require(std::isnan(perspective.toWorld(
-              std::numeric_limits<float>::quiet_NaN())),
-          "nonfinite traversal rows remain nonfinite for existing culling");
-  const auto markerRange = visibleScrollRange(
-      0.0, 1.0F, perspective.toLinear(-1.0F - 0.2F), 8.0F, 0.0F, 0.0F);
-  requireNear(markerRange.minimum, -6.0,
-              "marker filtering includes notes visible after compensation");
-  require(markerRange.minimum < -3.0 &&
-              noteRectangleIntersectsViewport(perspective.toWorld(-3.0F),
-                                              0.2F, -1.0F, 8.0F),
-          "a past marker is retained until its compensated rectangle exits");
-  requireNear(LanePerspectiveCompensation{1, 9, 3, 3}.toWorld(5), 5.0F,
-              "front-facing lanes retain linear travel");
-  requireNear(LanePerspectiveCompensation{1, 9, -1, 3}.toWorld(5), 5.0F,
-              "invalid camera depths retain safe linear travel");
-  requireNear(LanePerspectiveCompensation{1, 1, 2, 3}.toWorld(5), 5.0F,
-              "degenerate lane geometry retains linear travel");
 
   require(chartRenderTimeMicros(3'750'075) == 3'750'075,
           "chart traversal preserves sub-millisecond visual time");

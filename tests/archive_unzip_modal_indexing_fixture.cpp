@@ -1,3 +1,4 @@
+#include "REPOSITORY_ROOT/src/scene/ArchiveUnzipPresentation.h"
 #include <cassert>
 #include <algorithm>
 #include <cstdint>
@@ -43,6 +44,7 @@ struct Control {
   std::string text;
   bool enabled = true;
   void setText(const std::string &value) { text = value; }
+  void setLocalizedText(const i18n::Text &value) { text = value.resolve(); }
   void setMinHeight(float) {}
   void setHeight(float) {}
   void setEnabled(bool value) { enabled = value; }
@@ -62,9 +64,9 @@ public:
   } callbacks_;
   std::string displayedProgress;
   std::uint64_t displayedCurrent = 0;
-  void updateProgress(double, const std::string &value,
+  void updateProgress(double, const i18n::Text &value,
                       std::uint64_t current = 0, std::uint64_t = 0) {
-    displayedProgress = value;
+    displayedProgress = value.resolve();
     displayedCurrent = current;
   }
   void setDeleteVisible(bool) {}

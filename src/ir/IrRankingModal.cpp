@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IrRankingModal.h"
 #include "../CanonicalDigest.h"
 #include "../ResultContracts.h"
@@ -57,6 +58,18 @@ void setFailure(IrRankingModalPresentation &presentation,
 
 } // namespace
 
+i18n::Text formatIrLocalComparison(const IrLocalComparison &comparison) {
+  return i18n::message(
+      "ir.ranking.local_comparison.message",
+      {{"label", comparison.label},
+       {"score", std::to_string(comparison.score)},
+       {"max_score", std::to_string(comparison.maxScore)},
+       {"rate", formatIrRankingRate(comparison.score, comparison.maxScore)},
+       {"lamp", clearTypeRankToLabel(comparison.clearType)},
+       {"bad_points", integerOrMissing(comparison.badPoints)},
+       {"max_combo", integerOrMissing(comparison.maxCombo)}});
+}
+
 std::string formatIrRankingRate(int score, int maxScore) {
   if (maxScore <= 0) {
     return std::string(kMissing);
@@ -111,8 +124,7 @@ makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept {
     if ((meta.KeyMode != 7 && meta.KeyMode != 14) || meta.TotalNotes <= 0 ||
         !result_contract::maximumScoreForNotes(meta.TotalNotes) || !validSha) {
       return {.diagnostic =
-                  "Bokutachi rankings require a 7-key or 14-key chart with "
-                  "positive notes and SHA-256 identity"};
+                  i18n::tr("ir.ranking.eligibility.chart_requirements")};
     }
     std::string md5 = meta.MD5;
     std::ranges::transform(md5, md5.begin(), [](unsigned char value) {
@@ -126,8 +138,7 @@ makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept {
                                   .totalNotes = meta.TotalNotes}};
   } catch (...) {
     return {.diagnostic =
-                "Bokutachi rankings require a 7-key or 14-key chart with "
-                "positive notes and SHA-256 identity"};
+                i18n::tr("ir.ranking.eligibility.chart_requirements")};
   }
 }
 
@@ -193,7 +204,7 @@ void IrRankingModalModel::open(IrRankingRequest request,
   presentation_ = {
       .state = IrRankingModalState::Loading,
       .chartTitle = std::move(chartTitle),
-      .statusText = "Loading rankings...",
+      .statusText = i18n::tr("ir.ranking.loading_rankings.progress"),
       .generation = expectedRequest_->generation,
       .comparison = expectedRequest_->localComparison,
   };
@@ -205,7 +216,7 @@ void IrRankingModalModel::refresh(std::uint64_t generation) {
   }
   expectedRequest_->generation = generation;
   presentation_.state = IrRankingModalState::Loading;
-  presentation_.statusText = "Loading rankings...";
+  presentation_.statusText = i18n::tr("ir.ranking.loading_rankings.progress");
   presentation_.detailText.clear();
   presentation_.fetchedAtText.clear();
   presentation_.canRefresh = false;
@@ -225,10 +236,13 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
       snapshot.generation != expectedRequest_->generation ||
       !snapshot.request || *snapshot.request != *expectedRequest_ ||
       (presentation_.revision != 0 &&
-       snapshot.revision <= presentation_.revision)) {
+       (snapshot.revision < presentation_.revision ||
+        (snapshot.revision == presentation_.revision &&
+         languageRevision_ == i18n::revision())))) {
     return false;
   }
 
+  languageRevision_ = i18n::revision();
   presentation_.revision = snapshot.revision;
   presentation_.generation = snapshot.generation;
   presentation_.detailText = snapshot.diagnostic;
@@ -241,7 +255,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
   switch (snapshot.state) {
   case IrRankingSnapshotState::Loading:
     presentation_.state = IrRankingModalState::Loading;
-    presentation_.statusText = "Loading rankings...";
+    presentation_.statusText = i18n::tr("ir.ranking.loading_rankings.progress");
     presentation_.canRefresh = false;
     presentation_.canRetry = false;
     presentation_.ranking.reset();
@@ -252,7 +266,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
   case IrRankingSnapshotState::Succeeded:
     if (!snapshot.ranking || snapshot.ranking->entries.empty()) {
       presentation_.state = IrRankingModalState::Empty;
-      presentation_.statusText = "No ranking entries yet";
+      presentation_.statusText = i18n::tr("ir.ranking.no_ranking_entries_yet.label");
       presentation_.canRefresh = true;
       presentation_.canRetry = true;
       presentation_.ranking = snapshot.ranking;
@@ -278,52 +292,51 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
         snapshot.ranking->nextPageToken.has_value() &&
         !snapshot.loadingNextPage && !snapshot.paginationBlocked;
     if (snapshot.loadingNextPage) {
-      presentation_.paginationStatusText = "Loading more rankings...";
+      presentation_.paginationStatusText = i18n::tr("ir.ranking.loading_more_rankings.progress");
     } else if (snapshot.paginationBlocked) {
       presentation_.paginationStatusText = snapshot.diagnostic.empty()
-                                               ? "More rankings unavailable - "
-                                                 "Refresh to retry"
-                                               : "More rankings unavailable: " +
+                                               ? i18n::tr("ir.ranking.more_rankings_unavailable_refresh_retry.label")
+                                               : i18n::tr("ir.ranking.more_rankings_unavailable.prefix") +
                                                      snapshot.diagnostic +
-                                                     " - Refresh to retry";
+                                                     i18n::tr("ir.ranking.refresh_retry.suffix");
       presentation_.detailText = snapshot.diagnostic;
     }
     break;
   case IrRankingSnapshotState::ChartNotFound:
     setFailure(presentation_, IrRankingModalState::NotFound,
-               "No Bokutachi ranking for this chart", snapshot.diagnostic,
+               i18n::tr("ir.ranking.no_bokutachi_ranking_chart.label"), snapshot.diagnostic,
                true);
     break;
   case IrRankingSnapshotState::AuthenticationRequired:
     setFailure(presentation_, IrRankingModalState::AuthenticationRequired,
-               "Authentication required",
+               i18n::tr("ir.ranking.authentication_required.label"),
                snapshot.diagnostic.empty()
-                   ? "Add or replace the Bokutachi API key in IR settings."
+                   ? i18n::tr("ir.ranking.add_replace_bokutachi_api_key_in_ir_settings.message")
                    : snapshot.diagnostic,
                true);
     break;
   case IrRankingSnapshotState::TransientFailure:
     setFailure(presentation_, IrRankingModalState::TransientFailure,
-               "Bokutachi is unavailable or this device is offline",
+               i18n::tr("ir.ranking.bokutachi_unavailable_device_offline.message"),
                snapshot.diagnostic, true);
     break;
   case IrRankingSnapshotState::Unsupported:
     setFailure(presentation_, IrRankingModalState::Unsupported,
-               "Rankings are unsupported", snapshot.diagnostic, false);
+               i18n::tr("ir.ranking.rankings_unsupported.label"), snapshot.diagnostic, false);
     break;
   case IrRankingSnapshotState::MalformedResponse:
     setFailure(presentation_, IrRankingModalState::Malformed,
-               "Bokutachi returned an invalid response", snapshot.diagnostic,
+               i18n::tr("ir.ranking.bokutachi_returned_invalid_response.label"), snapshot.diagnostic,
                true);
     break;
   case IrRankingSnapshotState::OversizedResponse:
     setFailure(presentation_, IrRankingModalState::Oversized,
-               "Bokutachi returned too much ranking data", snapshot.diagnostic,
+               i18n::tr("ir.ranking.bokutachi_returned_too_much_ranking_data.label"), snapshot.diagnostic,
                true);
     break;
   case IrRankingSnapshotState::Cancelled:
     setFailure(presentation_, IrRankingModalState::Cancelled,
-               "Ranking request cancelled", snapshot.diagnostic, true);
+               i18n::tr("ir.ranking.ranking_request_cancelled.label"), snapshot.diagnostic, true);
     break;
   case IrRankingSnapshotState::Closed:
     return false;

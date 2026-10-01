@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "MainMenuScene.h"
 #include "ResultRecordsLoader.h"
 #include "ChartRecordActions.h"
@@ -246,18 +247,22 @@ std::string findBmsTitleSearchQuery(const ChartMetaRecord &record) {
   return query;
 }
 
-std::string findBmsCandidateLabel(const BmsSearchCandidate &candidate,
+i18n::Text findBmsCandidateLabel(const BmsSearchCandidate &candidate,
                                   size_t index) {
-  std::string label = std::to_string(index + 1) + ". Download ";
+  i18n::Text name;
   if (!candidate.artist.empty() || !candidate.title.empty()) {
+    std::string metadata;
     if (!candidate.artist.empty()) {
-      label += "[" + candidate.artist + "] ";
+      metadata = "[" + candidate.artist + "] ";
     }
-    label += candidate.title.empty() ? candidate.name : candidate.title;
+    metadata += candidate.title.empty() ? candidate.name : candidate.title;
+    name = std::move(metadata);
   } else {
-    label += candidate.name.empty() ? "Horie archive" : candidate.name;
+    name = candidate.name.empty() ? i18n::message("library.find_bms.horie_archive.label")
+                                  : i18n::Text(candidate.name);
   }
-  return label;
+  return i18n::message("library.find_bms.candidate.download",
+      {{"number", std::to_string(index + 1)}, {"name", name}});
 }
 
 class FindBmsCandidateItemView : public View {
@@ -282,7 +287,7 @@ public:
   void setCandidate(const BmsSearchCandidate &candidate, size_t index,
                     bool selected) {
     if (label != nullptr) {
-      label->setText(findBmsCandidateLabel(candidate, index));
+      label->setLocalizedText(findBmsCandidateLabel(candidate, index));
     }
     if (selected) {
       onSelected();
@@ -461,7 +466,7 @@ std::vector<MainMenuParseLogRow>
 parseLogRowsFromLines(const std::vector<std::string> &lines) {
   std::vector<MainMenuParseLogRow> rows;
   if (lines.empty()) {
-    rows.push_back({0, "No parsing logs yet."});
+    rows.push_back({0, i18n::tr("menu.no_parsing_logs_yet.message")});
     return rows;
   }
 
@@ -671,9 +676,9 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
   }
 }
 
-TextView *makeModalLabel(const std::string &text) {
+TextView *makeModalLabel(const i18n::Text &text) {
   auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  label->setText(text);
+  label->setLocalizedText(text);
   label->setThemedColor(ui_theme::textSecondary);
   label->setHeight(28);
   return label;
@@ -688,11 +693,11 @@ View *makeModalOptionRow(float height = 58.0f) {
   return row;
 }
 
-Button *makeModalButton(const std::string &label, int fontSize,
+Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, 160, 58);
   auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
@@ -730,21 +735,21 @@ Color modalPanelBorder() {
 const char *chartScanProgressStageText(ChartScanProgressStage stage) {
   switch (stage) {
   case ChartScanProgressStage::Preparing:
-    return "Preparing library scan";
+    return i18n::tr("menu.preparing_library_scan.label");
   case ChartScanProgressStage::ScanningRoots:
-    return "Scanning folders";
+    return i18n::tr("menu.scanning_folders.label");
   case ChartScanProgressStage::IndexingArchives:
-    return "Indexing archives";
+    return i18n::tr("menu.indexing_archives.label");
   case ChartScanProgressStage::PreparingUpdates:
-    return "Preparing chart updates";
+    return i18n::tr("menu.preparing_chart_updates.label");
   case ChartScanProgressStage::RemovingDeleted:
-    return "Removing deleted charts";
+    return i18n::tr("menu.removing_deleted_charts.label");
   case ChartScanProgressStage::ParsingCharts:
-    return "Parsing charts";
+    return i18n::tr("menu.parsing_charts.label");
   case ChartScanProgressStage::ReadingArchive:
-    return "Reading archive entries";
+    return i18n::tr("menu.reading_archive_entries.label");
   }
-  return "Refreshing library";
+  return i18n::tr("menu.refreshing_library.label");
 }
 
 std::string formatMusicTime(long long micros) {
@@ -761,9 +766,9 @@ std::string formatMusicTime(long long micros) {
 
 std::string musicTrackDisplayName(const music_playlist::MusicTrack *track) {
   if (track == nullptr) {
-    return "No track selected";
+    return i18n::tr("menu.no_track_selected.label");
   }
-  std::string title = track->title.empty() ? "Untitled" : track->title;
+  std::string title = track->title.empty() ? i18n::tr("menu.untitled.label") : track->title;
   if (!track->artist.empty()) {
     title += " / " + track->artist;
   }
@@ -773,19 +778,20 @@ std::string musicTrackDisplayName(const music_playlist::MusicTrack *track) {
 std::string musicPlaylistTextSnapshot(
     const std::vector<music_playlist::MusicTrack> &tracks) {
   if (tracks.empty()) {
-    return "My Playlist\nEmpty";
+    return i18n::tr("menu.music_player.playlist.empty_summary");
   }
 
   constexpr std::size_t kVisibleTrackCount = 5;
   std::ostringstream text;
-  text << "My Playlist";
+  text << i18n::tr("menu.music_player.my_playlist.label");
   const std::size_t visibleCount =
       std::min(kVisibleTrackCount, tracks.size());
   for (std::size_t i = 0; i < visibleCount; ++i) {
     text << "\n" << (i + 1) << ". " << musicTrackDisplayName(&tracks[i]);
   }
   if (tracks.size() > visibleCount) {
-    text << "\n+" << (tracks.size() - visibleCount) << " more";
+    text << "\n" << i18n::format("menu.music_player.playlist.more",
+        {{"count", std::to_string(tracks.size() - visibleCount)}});
   }
   return text.str();
 }
@@ -875,14 +881,14 @@ void MainMenuScene::init() {
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
     if (replayExportJob_.inProgress()) {
-      return "A replay export is active.";
+      return i18n::tr("menu.replay_export_active.message");
     }
     if (archiveUnzipInProgress() ||
         findBmsTask.running()) {
-      return "A chart archive operation is active.";
+      return i18n::tr("menu.chart_archive_operation_active.message");
     }
     if (willStart.load(std::memory_order_acquire)) {
-      return "A chart or replay transition is active.";
+      return i18n::tr("menu.chart_replay_transition_active.message");
     }
     return std::nullopt;
   };
@@ -925,10 +931,10 @@ void MainMenuScene::onApplicationBackgroundChanged(bool background) {
     archiveUnzipModal_->cancelAndWait();
     if (wasRunning) {
       if (unzipButtonText != nullptr) {
-        unzipButtonText->setText("Unzip");
+        unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
       }
       if (replayStatusText != nullptr) {
-        replayStatusText->setText("Unzip cancelled");
+        replayStatusText->setLocalizedText(i18n::message("menu.unzip_cancelled.label"));
       }
     }
   }
@@ -977,7 +983,7 @@ void MainMenuScene::onResume() {
           .diagnostic = skin::SkinDiagnostic{
               .code = "skin.music_select.lifecycle_unavailable",
               .message =
-                  "The selected music-select skin service is unavailable."}};
+                  i18n::tr("menu.selected_music_select_skin_service_unavailable.message")}};
     }
     auto decision = decideMusicSelectLaunch(std::move(acquisition));
     if (decision.kind == MusicSelectLaunchKind::SelectedSkin &&
@@ -996,6 +1002,20 @@ void MainMenuScene::onResume() {
     return true;
   }, 0, true);
 #endif
+}
+
+void MainMenuScene::onLanguageChanged() {
+  Scene::onLanguageChanged();
+  // Rebind presentation only: reinitializing the scene would cancel workers,
+  // discard selection, and replace the user's filter and lane-order input.
+  if (folderRecyclerView != nullptr) folderRecyclerView->rebindVisibleItems();
+  if (recyclerView != nullptr) recyclerView->rebindVisibleItems();
+  refreshReadySettingsSummary();
+  refreshTasksButton();
+  refreshTasksModal(true);
+  refreshMusicModal();
+  refreshFindBmsModal(false);
+  if (rootLayout != nullptr) rootLayout->applyYogaLayout();
 }
 
 void MainMenuScene::reloadProfileSelectionsFromSettings() {
@@ -1051,7 +1071,7 @@ void MainMenuScene::applyThemeChange() {
 }
 
 void MainMenuScene::enqueueLibraryRefreshTask(
-    const std::string &title, const std::filesystem::path &folderToAdd,
+    const i18n::Text &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark, bool rebuildLibraryMetadata) {
   if (!context.chartLibraryTasks) {
     return;
@@ -1075,7 +1095,7 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
   }
   context.chartLibraryTasks->enqueue({
       .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
-      .title = "Index Downloaded BMS",
+      .title = i18n::message("menu.index_downloaded_bms.label"),
       .downloadedPath = path,
       .downloadedRemovedPaths = std::move(removedPaths),
       .downloadedTargetIdentity = targetIdentity,
@@ -1109,13 +1129,9 @@ void MainMenuScene::refreshTasksButton() {
     return;
   }
   const int count = activeLibraryTaskCount();
-  std::string label = std::to_string(count);
-  label += count == 1 ? " Task" : " Tasks";
-  if (label == displayedLibraryTasksButtonText) {
-    return;
-  }
-  displayedLibraryTasksButtonText = label;
-  tasksButtonText->setText(label);
+  tasksButtonText->setLocalizedText(i18n::message(
+      count == 1 ? "menu.task_count.one" : "menu.task_count.other",
+      {{"count", std::to_string(count)}}));
 }
 
 void MainMenuScene::initView(ApplicationContext &context) {
@@ -1256,7 +1272,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
-  musicStatusMessage.clear();
+  musicStatusMessage = {};
   chartRecordFilters = {};
   chartFilterPanelVisible = false;
   chartSortPanelVisible = false;
@@ -1411,7 +1427,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (archiveVirtualPath && !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
       if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setText("Archive preview disabled");
+        replayStatusText->setLocalizedText(i18n::message("menu.archive_preview_disabled.label"));
       }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
@@ -1434,7 +1450,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     if (suppressPreview) {
       if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setText("Unzipped chart selected");
+        replayStatusText->setLocalizedText(i18n::message("menu.unzipped_chart_selected.label"));
       }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
@@ -1466,7 +1482,31 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                       int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
-      folderView->setItem(item.label, item.depth, item.count, isSelected,
+      // Folder metadata stays raw; only application-owned folder kinds have
+      // translated labels. Rebinding preserves the list's selection and scroll.
+      std::string label = item.label;
+      switch (item.type) {
+      case LibraryFolderItem::Type::AllSongs:
+        label = i18n::tr("library.folders.all_songs.label");
+        break;
+      case LibraryFolderItem::Type::Favorites:
+        label = i18n::tr("library.folders.favorites.label");
+        break;
+      case LibraryFolderItem::Type::SolidArchives:
+        label = i18n::tr("library.folders.solid_archive.label");
+        break;
+      case LibraryFolderItem::Type::CoursesRoot:
+        label = i18n::tr("library.folders.courses.label");
+        break;
+      case LibraryFolderItem::Type::CourseGroup:
+        if (item.courseGroupName.empty()) {
+          label = i18n::tr("library.folders.ungrouped.label");
+        }
+        break;
+      default:
+        break;
+      }
+      folderView->setItem(label, item.depth, item.count, isSelected,
                           item.clearMarkFolder ? item.clearMarkRank
                                                : clearRankForFolder(item.key),
                           item.clearMarkFolder, item.expandable,
@@ -1593,19 +1633,19 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   nav->setBorderWidth(1);
 
   bool showAddFolderButton = false;
-  std::string addFolderButtonLabel = "Add Folder";
+  i18n::Text addFolderButtonLabel = i18n::message("menu.add_folder.label");
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showAddFolderButton = true;
 #elif TARGET_OS_ANDROID
   const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
   showAddFolderButton = true;
   addFolderButtonLabel =
-      androidFullFileAccessBuild ? "Add Folder" : "Import Folder";
+      androidFullFileAccessBuild ? i18n::message("menu.add_folder.label") : i18n::message("menu.import_folder.label");
 #endif
   if (showAddFolderButton) {
     auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, 50);
     auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-    addFolderText->setText(addFolderButtonLabel);
+    addFolderText->setLocalizedText(addFolderButtonLabel);
     addFolderText->setAlign(TextView::CENTER);
     addFolderText->setVAlign(TextView::MIDDLE);
     addFolderButton->setContentView(addFolderText);
@@ -1626,7 +1666,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 #if TARGET_OS_ANDROID
   auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, 50);
   auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  importArchiveText->setText("Import Archive");
+  importArchiveText->setLocalizedText(i18n::message("menu.import_archive.label"));
   importArchiveText->setAlign(TextView::CENTER);
   importArchiveText->setVAlign(TextView::MIDDLE);
   importArchiveButton->setContentView(importArchiveText);
@@ -1671,13 +1711,13 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->setHeight(58);
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
-  libraryTitle->setText("Song Select");
+  libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
   libraryTitle->setThemedColor(ui_theme::textPrimary);
   libraryTitle->setVAlign(TextView::MIDDLE);
   libraryTitle->setFlex(1);
   libraryHeader->addView(libraryTitle);
 
-  parseLogButton = makeModalButton("Log", 20, &parseLogButtonText);
+  parseLogButton = makeModalButton(i18n::message("menu.log.label"), 20, &parseLogButtonText);
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(50);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
@@ -1686,7 +1726,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
   libraryHeader->addView(parseLogButton);
 
-  musicButton = makeModalButton("Music", 20, &musicButtonText);
+  musicButton = makeModalButton(i18n::message("menu.music.label"), 20, &musicButtonText);
   musicButton->setWidth(122);
   musicButton->setHeight(50);
   musicButton->setOnClickListener([this, &context]() {
@@ -1707,7 +1747,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->addView(musicButton);
 
   irUploadsButton =
-      makeModalButton("IR Uploads", 20, &irUploadsButtonText);
+      makeModalButton(i18n::message("menu.ir_uploads.label"), 20, &irUploadsButtonText);
   irUploadsButton->setWidth(154);
   irUploadsButton->setHeight(50);
   irUploadsButton->setOnClickListener([this, &context]() {
@@ -1728,7 +1768,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                           ui_theme::hairlineStrong);
   libraryHeader->addView(irUploadsButton);
 
-  tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
+  tasksButton = makeModalButton(i18n::message("menu.task_count.empty"), 20, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(50);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
@@ -1783,7 +1823,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   filterRow->addView(chartSortButton);
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  filterLabel->setText("Search");
+  filterLabel->setLocalizedText(i18n::message("menu.search.label"));
   filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
@@ -1886,7 +1926,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readyGaugeRow->setGap(6);
   readyGaugeRow->setHeight(28);
   auto *readyGaugeLabelText = makeReadyStatusText();
-  readyGaugeLabelText->setText("Gauge:");
+  readyGaugeLabelText->setLocalizedText(i18n::message("menu.gauge.label"));
   readyGaugeLabelText->setThemedColor(ui_theme::textSecondary);
   readyGaugeLabelText->setWidth(70);
   readyGaugeText = makeReadyStatusText();
@@ -1947,7 +1987,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   startButton = new Button(0, 0, 220, 86);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   startButtonText = buttonText;
-  buttonText->setText("Start");
+  buttonText->setLocalizedText(i18n::message("menu.start.label"));
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   startButton->setContentView(buttonText);
@@ -1978,7 +2018,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   replayButton = new Button(0, 0, 220, 58);
   replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  replayButtonText->setText("Records");
+  replayButtonText->setLocalizedText(i18n::message("menu.records.label"));
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
@@ -2014,7 +2054,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   findBmsButton = new Button(0, 0, 220, 58);
   findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  findBmsButtonText->setText("Find BMS");
+  findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
   findBmsButton->setContentView(findBmsButtonText);
@@ -2032,7 +2072,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   unzipButton = new Button(0, 0, 220, 58);
   unzipButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  unzipButtonText->setText("Unzip");
+  unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
   unzipButton->setContentView(unzipButtonText);
@@ -2069,7 +2109,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   rankingsButton = new Button(0, 0, 220, 58);
   rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  rankingsButtonText->setText("Rankings");
+  rankingsButtonText->setLocalizedText(i18n::message("menu.rankings.label"));
   rankingsButtonText->setAlign(TextView::CENTER);
   rankingsButtonText->setVAlign(TextView::MIDDLE);
   rankingsButton->setContentView(rankingsButtonText);
@@ -2092,7 +2132,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   auto *viewerButton = new Button(0, 0, 105, 58);
   viewerButton->setFlex(1);
   auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  viewerButtonText->setText("Viewer");
+  viewerButtonText->setLocalizedText(i18n::message("menu.viewer.label"));
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
   viewerButton->setContentView(viewerButtonText);
@@ -2105,7 +2145,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   revealButton = new Button(0, 0, 105, 58);
   revealButton->setFlex(1);
   auto *revealButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  revealButtonText->setText("Reveal");
+  revealButtonText->setLocalizedText(i18n::message("menu.reveal.label"));
   revealButtonText->setAlign(TextView::CENTER);
   revealButtonText->setVAlign(TextView::MIDDLE);
   revealButton->setContentView(revealButtonText);
@@ -2134,7 +2174,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   auto *settingsButton = new Button(0, 0, 220, 64);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  settingsText->setText("Settings");
+  settingsText->setLocalizedText(i18n::message("menu.settings.label"));
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
   settingsButton->setContentView(settingsText);
@@ -2228,7 +2268,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const LibraryFolderItem allSongsItem{
       .key = "all",
-      .label = "All songs",
+      .label = i18n::tr("library.folders.all_songs.label"),
       .type = LibraryFolderItem::Type::AllSongs,
       .depth = 0,
       .count = allSongCount,
@@ -2242,7 +2282,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   folders.push_back({
       .key = "favorites",
-      .label = "Favorites",
+      .label = i18n::tr("library.folders.favorites.label"),
       .type = LibraryFolderItem::Type::Favorites,
       .depth = 0,
       .count = favoriteCount,
@@ -2252,7 +2292,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   if (solidArchiveCount > 0) {
     folders.push_back({
         .key = "solid-archives",
-        .label = "Solid Archive",
+        .label = i18n::tr("library.folders.solid_archive.label"),
         .type = LibraryFolderItem::Type::SolidArchives,
         .depth = 0,
         .count = solidArchiveCount,
@@ -2312,7 +2352,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   if (!courseTables.empty()) {
     const LibraryFolderItem coursesRootItem{
         .key = "courses",
-        .label = "Courses",
+        .label = i18n::tr("library.folders.courses.label"),
         .type = LibraryFolderItem::Type::CoursesRoot,
         .depth = 0,
         .count = -1,
@@ -2375,7 +2415,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         }
         for (const auto &group : groupsIt->second) {
           const std::string label =
-              group.groupName.empty() ? "Ungrouped" : group.groupName;
+              group.groupName.empty() ? i18n::tr("library.folders.ungrouped.label") : group.groupName;
           const std::string groupKey =
               folderKeyForCourseGroup(group.tableId, group.groupName);
           const bool duplicateSingletonGroup =
@@ -2950,13 +2990,13 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       activeFolder.courseId > 0) {
     ChartMetaRecord courseRecord;
     courseRecord.courseStart = true;
-    courseRecord.meta.Title = activeFolder.label.empty() ? "Course"
+    courseRecord.meta.Title = activeFolder.label.empty() ? i18n::tr("menu.course.label")
                                                          : activeFolder.label;
     courseRecord.meta.Artist = activeFolder.courseGroupName.empty()
-                                   ? "Course Mode"
+                                   ? i18n::tr("menu.course_mode.label")
                                    : activeFolder.courseGroupName;
     courseRecord.difficultyTableLabels =
-        activeFolder.label.empty() ? "Course" : activeFolder.label;
+        activeFolder.label.empty() ? i18n::tr("menu.course.label") : activeFolder.label;
     leadingRecord = std::move(courseRecord);
   }
 
@@ -3351,7 +3391,7 @@ void MainMenuScene::selectChartByPathAfterReload(
   if (activeFolder.type != LibraryFolderItem::Type::AllSongs) {
     activeFolder = {
         .key = "all",
-        .label = "All songs",
+        .label = i18n::tr("menu.all_songs.label"),
         .type = LibraryFolderItem::Type::AllSongs,
     };
     reloadFolderItems();
@@ -3505,7 +3545,7 @@ void MainMenuScene::openRankingsForSelection() {
       selectedLongNoteMode);
   if (best) {
     comparison = ir::IrLocalComparison{
-        .label = "Local PB",
+        .label = i18n::message("menu.local_pb.label"),
         .score = best->score,
         .maxScore = best->maxScore > 0
                         ? best->maxScore
@@ -3527,7 +3567,7 @@ void MainMenuScene::openRankingsForSelection() {
        .serverOrigin = settings->second.serverOrigin,
        .chart = *query.value,
        .localComparison = std::move(comparison)},
-      record->meta.Title.empty() ? "Selected chart" : record->meta.Title);
+      record->meta.Title.empty() ? i18n::tr("menu.selected_chart.label") : record->meta.Title);
 }
 
 MainMenuScene::EffectivePlayOptionSelection
@@ -3795,7 +3835,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackRatePercent = playbackRate,
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
-       .pacemakerTarget = profileSelections.pacemakerTarget});
+       .pacemakerTarget = profileSelections.pacemakerTarget,
+       .profileId = context.profileManager.activeProfile().id});
 }
 
 bool MainMenuScene::playbackSelectionLockedForCourse() const {
@@ -3852,7 +3893,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
     const bool optionEnabled =
         assist_options::isEnabled(effective.assistOption);
     if (!optionEnabled && percent == 100) {
-      readyAssistOptionText->setText("Assist off");
+      readyAssistOptionText->setLocalizedText(i18n::message("menu.assist_off.label"));
     } else {
       std::string reasons;
       if (optionEnabled) {
@@ -3864,12 +3905,12 @@ void MainMenuScene::refreshReadySettingsSummary() {
         }
         reasons += std::to_string(percent) + "%";
       }
-      readyAssistOptionText->setText("Assist · " + reasons);
+      readyAssistOptionText->setText(i18n::tr("menu.assist.prefix") + reasons);
     }
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
-        "Target · " +
+        i18n::tr("menu.target.prefix") +
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
 }
@@ -3927,23 +3968,23 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
   }
   if (activeFolder.type != LibraryFolderItem::Type::Course ||
       activeFolder.courseId <= 0) {
-    startButtonText->setText("Start");
+    startButtonText->setLocalizedText(i18n::message("library.folders.start.label"));
     return;
   }
   const auto selectedRecord = selectedRecordSnapshot();
   if (selectedRecord.has_value() && !selectedRecord->courseStart) {
-    startButtonText->setText("Start");
+    startButtonText->setLocalizedText(i18n::message("library.folders.start.label"));
     return;
   }
 
   const CourseValidationCache &validation = courseValidationForActiveFolder();
   if (validation.empty) {
-    startButtonText->setText("No Course");
+    startButtonText->setLocalizedText(i18n::message("library.folders.no_course.label"));
     return;
   }
 
-  startButtonText->setText(validation.firstMissingIndex >= 0 ? "Missing"
-                                                             : "Start Course");
+  startButtonText->setLocalizedText(validation.firstMissingIndex >= 0 ? i18n::message("library.folders.missing.label")
+                                                             : i18n::message("library.folders.start_course.label"));
 }
 
 void MainMenuScene::startSelectedCourse() {
@@ -3960,7 +4001,7 @@ void MainMenuScene::startSelectedCourse() {
   const CourseValidationCache &validation = courseValidationForActiveFolder();
   if (validation.empty) {
     if (replayStatusText != nullptr) {
-      replayStatusText->setText("No course charts");
+      replayStatusText->setLocalizedText(i18n::message("menu.no_course_charts.label"));
     }
     refreshStartButtonForActiveFolder();
     return;
@@ -3970,7 +4011,7 @@ void MainMenuScene::startSelectedCourse() {
   const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
     if (replayStatusText != nullptr) {
-      replayStatusText->setText("Course has missing charts");
+      replayStatusText->setLocalizedText(i18n::message("menu.course_has_missing_charts.label"));
     }
     int visibleMissingIndex = -1;
     const auto &missingRecord =
@@ -4032,7 +4073,7 @@ void MainMenuScene::startCourseDirect(
   }
 
   if (startButtonText != nullptr) {
-    startButtonText->setText("Loading...");
+    startButtonText->setLocalizedText(i18n::message("menu.loading.progress"));
   }
   ImageView::dropAllCache();
   if (previewWorker_ != nullptr) {
@@ -4079,7 +4120,7 @@ void MainMenuScene::startCourseDirect(
         }
         if (preparedChart == nullptr || parseCancelled) {
           if (replayStatusText != nullptr) {
-            replayStatusText->setText("Course start failed");
+            replayStatusText->setLocalizedText(i18n::message("menu.course_start_failed.label"));
           }
           return finishStart();
         }
@@ -4167,7 +4208,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   }
 
   if (startButtonText != nullptr) {
-    startButtonText->setText("Loading...");
+    startButtonText->setLocalizedText(i18n::message("menu.loading.progress"));
   }
   if (decideOverlay_ != nullptr) {
     decideOverlay_->setChart(record);
@@ -4430,9 +4471,9 @@ void MainMenuScene::toggleRevealContextMenu() {
        .width = revealButton->getWidth(),
        .height = revealButton->getHeight()},
       {{.id = "show-same-folder",
-        .label = "Show Same Folder",
+        .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
-       {.id = "reveal-file", .label = "Reveal File"}},
+       {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")}},
       220);
 }
 
@@ -4618,7 +4659,7 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
   unzipButtonSlot->setVisible(show);
   unzipButtonSlot->setHeight(show ? 58.0f : 0.0f);
   if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
-    unzipButtonText->setText("Unzipping...");
+    unzipButtonText->setLocalizedText(i18n::message("library.archive.unzipping.progress"));
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -4633,8 +4674,8 @@ void MainMenuScene::refreshUnzipButtonForSelection(
     visible = record->solidArchive;
   }
   if (unzipButtonText != nullptr && !archiveUnzipInProgress()) {
-    unzipButtonText->setText(record != nullptr && record->unzipAll
-                                ? "Unzip All" : "Unzip");
+    unzipButtonText->setLocalizedText(record != nullptr && record->unzipAll
+                                ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzip.label"));
   }
   setUnzipButtonVisible(visible);
 }
@@ -4677,12 +4718,12 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     return;
   }
   if (unzipButtonText != nullptr) {
-    unzipButtonText->setText(record.unzipAll ? "Unzip All" : "Unzipping...");
+    unzipButtonText->setLocalizedText(record.unzipAll ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzipping.progress"));
   }
   if (replayStatusText != nullptr) {
-    replayStatusText->setText(record.unzipAll
-                                 ? "Choose whether to keep or delete archives."
-                                 : "Unzipping full archive...");
+    replayStatusText->setLocalizedText(record.unzipAll
+                                 ? i18n::message("library.archive.choose_whether_keep_delete_archives.message")
+                                 : i18n::message("library.archive.unzipping_full_archive.progress"));
   }
   setUnzipButtonVisible(true);
 }
@@ -4696,16 +4737,16 @@ void MainMenuScene::buildUnzipProgressModal() {
   callbacks.libraryChanged = [this]() { requestLibraryReload(true); };
   callbacks.finished = [this](const ArchiveUnzipResult &result) {
     if (unzipButtonText != nullptr) {
-      unzipButtonText->setText(result.success ? "Unzipped" : "Unzip");
+      unzipButtonText->setLocalizedText(result.success ? i18n::message("library.archive.unzipped.label") : i18n::message("library.archive.unzip.label"));
     }
     if (result.success && !result.chartPath.empty()) {
       pendingSelectChartPath = result.chartPath;
     }
     if (replayStatusText != nullptr) {
-      replayStatusText->setText(result.message);
+      replayStatusText->setLocalizedText(result.message);
     }
     archive_file::appendDebugLogLine(
-        result.message + (result.chartPath.empty()
+        result.message.resolve() + (result.chartPath.empty()
                               ? ""
                               : ": " + fspath_to_utf8(result.chartPath)));
   };
@@ -4717,14 +4758,14 @@ void MainMenuScene::startLibraryRefresh() {
   if (willStart.load() || replayExportJob_.inProgress()) {
     return;
   }
-  enqueueLibraryRefreshTask("Refresh Library");
+  enqueueLibraryRefreshTask(i18n::message("menu.refresh_library.label"));
 }
 
 void MainMenuScene::startLibraryRebuild() {
   if (willStart.load() || replayExportJob_.inProgress()) {
     return;
   }
-  enqueueLibraryRefreshTask("Rebuild Library", std::filesystem::path(), "",
+  enqueueLibraryRefreshTask(i18n::message("menu.rebuild_library.label"), std::filesystem::path(), "",
                             true);
   tasksModalOpenRequested.store(true);
 }
@@ -4813,7 +4854,7 @@ void MainMenuScene::buildParseLogModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Parsing Logs");
+  title->setLocalizedText(i18n::message("menu.parsing_logs.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
@@ -4859,13 +4900,13 @@ void MainMenuScene::buildParseLogModal() {
   footer->addView(parseLogExportStatusText);
 
   parseLogExportButton =
-      makeModalButton("Export Log", 20, &parseLogExportButtonText);
+      makeModalButton(i18n::message("menu.export_log.label"), 20, &parseLogExportButtonText);
   parseLogExportButton->setWidth(160);
   parseLogExportButton->setOnClickListener(
       [this]() { startParseLogExport(); });
   footer->addView(parseLogExportButton);
 
-  parseLogCloseButton = makeModalButton("Close", 20, &parseLogCloseButtonText);
+  parseLogCloseButton = makeModalButton(i18n::message("menu.parse_log.close.label"), 20, &parseLogCloseButtonText);
   parseLogCloseButton->setWidth(130);
   parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
   styleThemedActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
@@ -4904,7 +4945,7 @@ void MainMenuScene::startParseLogExport() {
     return;
   }
   if (parseLogExportStatusText != nullptr) {
-    parseLogExportStatusText->setText("Preparing performance log...");
+    parseLogExportStatusText->setLocalizedText(i18n::message("menu.preparing_performance_log.progress"));
   }
   std::string logText = archive_file::debugLogText();
   const std::uint64_t exportLimit = std::max<std::uint64_t>(
@@ -4926,12 +4967,12 @@ void MainMenuScene::applyParseLogDocumentHandoff() {
   parseLogDocumentHandoff.close();
   if (parseLogExportStatusText != nullptr && result) {
     if (result->ok()) {
-      parseLogExportStatusText->setText("Performance log exported.");
+      parseLogExportStatusText->setLocalizedText(i18n::message("menu.performance_log_exported.message"));
     } else if (result->cancelled()) {
-      parseLogExportStatusText->setText("Log export cancelled.");
+      parseLogExportStatusText->setLocalizedText(i18n::message("menu.log_export_cancelled.message"));
     } else {
       const std::string message =
-          result->message.empty() ? "Log export failed." : result->message;
+          result->message.empty() ? i18n::tr("menu.log_export_failed.message") : result->message;
       parseLogExportStatusText->setText(message);
       SDL_Log("Performance log export failed: %s", message.c_str());
     }
@@ -4944,7 +4985,7 @@ void MainMenuScene::refreshParseLogExportControls() {
     return;
   }
   const bool enabled = !static_cast<bool>(parseLogDocumentHandoff);
-  parseLogExportButtonText->setText(enabled ? "Export Log" : "Exporting...");
+  parseLogExportButtonText->setLocalizedText(enabled ? i18n::message("menu.export_log.label") : i18n::message("menu.exporting.progress"));
   styleThemedActionButton(
       parseLogExportButton, parseLogExportButtonText, enabled,
       ui_theme::primaryAction, ui_theme::primaryActionHover,
@@ -5032,7 +5073,7 @@ void MainMenuScene::buildMusicModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Music Player");
+  title->setLocalizedText(i18n::message("menu.music_player.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
@@ -5059,11 +5100,11 @@ void MainMenuScene::buildMusicModal() {
 
   auto *sourceRow = makeModalOptionRow();
   musicSelectedButton =
-      makeModalButton("Play Selected", 18, &musicSelectedButtonText);
+      makeModalButton(i18n::message("menu.play_selected.label"), 18, &musicSelectedButtonText);
   musicSelectedButton->setFlex(1);
   musicSelectedButton->setOnClickListener(
       [this]() { playSelectedChartAsMusic(); });
-  musicRandomButton = makeModalButton("Random All", 20, &musicRandomButtonText);
+  musicRandomButton = makeModalButton(i18n::message("menu.random_all.label"), 20, &musicRandomButtonText);
   musicRandomButton->setFlex(1);
   musicRandomButton->setOnClickListener([this]() { playRandomMusicLibrary(); });
   sourceRow->addView(musicSelectedButton);
@@ -5072,22 +5113,22 @@ void MainMenuScene::buildMusicModal() {
 
   auto *playlistRow = makeModalOptionRow();
   musicAddSelectedButton =
-      makeModalButton("Add Selected", 18, &musicAddSelectedButtonText);
+      makeModalButton(i18n::message("menu.add_selected.label"), 18, &musicAddSelectedButtonText);
   musicAddSelectedButton->setFlex(1);
   musicAddSelectedButton->setOnClickListener(
       [this]() { addSelectedChartToMusicPlaylist(); });
   musicRemoveSelectedButton =
-      makeModalButton("Remove Selected", 16, &musicRemoveSelectedButtonText);
+      makeModalButton(i18n::message("menu.remove_selected.label"), 16, &musicRemoveSelectedButtonText);
   musicRemoveSelectedButton->setFlex(1);
   musicRemoveSelectedButton->setOnClickListener(
       [this]() { removeSelectedChartFromMusicPlaylist(); });
   musicPlaylistButton =
-      makeModalButton("Play Playlist", 18, &musicPlaylistButtonText);
+      makeModalButton(i18n::message("menu.play_playlist.label"), 18, &musicPlaylistButtonText);
   musicPlaylistButton->setFlex(1);
   musicPlaylistButton->setOnClickListener(
       [this]() { playSavedMusicPlaylist(); });
   musicClearPlaylistButton =
-      makeModalButton("Clear", 18, &musicClearPlaylistButtonText);
+      makeModalButton(i18n::message("menu.clear.label"), 18, &musicClearPlaylistButtonText);
   musicClearPlaylistButton->setFlex(1);
   musicClearPlaylistButton->setOnClickListener(
       [this]() { clearSavedMusicPlaylist(); });
@@ -5099,7 +5140,7 @@ void MainMenuScene::buildMusicModal() {
 
   auto *transportRow = makeModalOptionRow();
   musicPreviousButton =
-      makeModalButton("Previous", 16, &musicPreviousButtonText);
+      makeModalButton(i18n::message("menu.previous.label"), 16, &musicPreviousButtonText);
   musicPreviousButton->setFlex(1);
   musicPreviousButton->setOnClickListener(
       [this]() { playPreviousMusicTrack(); });
@@ -5108,7 +5149,7 @@ void MainMenuScene::buildMusicModal() {
   musicSeekBackwardButton->setFlex(1);
   musicSeekBackwardButton->setOnClickListener(
       [this]() { seekMusicRelative(-10000000LL); });
-  musicPlayPauseButton = makeModalButton("Play", 20, &musicPlayPauseButtonText);
+  musicPlayPauseButton = makeModalButton(i18n::message("menu.play.label"), 20, &musicPlayPauseButtonText);
   musicPlayPauseButton->setFlex(1);
   musicPlayPauseButton->setOnClickListener([this]() { toggleMusicPlayback(); });
   musicSeekForwardButton =
@@ -5116,10 +5157,10 @@ void MainMenuScene::buildMusicModal() {
   musicSeekForwardButton->setFlex(1);
   musicSeekForwardButton->setOnClickListener(
       [this]() { seekMusicRelative(10000000LL); });
-  musicNextButton = makeModalButton("Next", 20, &musicNextButtonText);
+  musicNextButton = makeModalButton(i18n::message("menu.next.label"), 20, &musicNextButtonText);
   musicNextButton->setFlex(1);
   musicNextButton->setOnClickListener([this]() { playNextMusicTrack(); });
-  musicStopButton = makeModalButton("Stop", 18, &musicStopButtonText);
+  musicStopButton = makeModalButton(i18n::message("menu.stop.label"), 18, &musicStopButtonText);
   musicStopButton->setFlex(1);
   musicStopButton->setOnClickListener([this]() { stopMusicPlayback(); });
   transportRow->addView(musicPreviousButton);
@@ -5137,7 +5178,7 @@ void MainMenuScene::buildMusicModal() {
   footer->setGap(12);
   footer->setHeight(58);
 
-  musicCloseButton = makeModalButton("Close", 20, &musicCloseButtonText);
+  musicCloseButton = makeModalButton(i18n::message("menu.music_player.close.label"), 20, &musicCloseButtonText);
   musicCloseButton->setWidth(130);
   musicCloseButton->setOnClickListener([this]() { hideMusicModal(); });
   footer->addView(musicCloseButton);
@@ -5182,14 +5223,14 @@ void MainMenuScene::refreshMusicModal() {
 
   std::string status;
   if (!musicStatusMessage.empty()) {
-    status += musicStatusMessage + "\n";
+    status += musicStatusMessage.resolve() + "\n";
   }
   if (!playback.supported) {
-    status += "Native music playback is unavailable on this platform.";
+    status += i18n::tr("menu.native_music_playback_unavailable_on_platform.message");
   } else if (!playback.loaded) {
-    status += "Choose Play Selected, Play Playlist, or Random All.";
+    status += i18n::tr("menu.choose_play_selected_play_playlist_random_all.message");
   } else {
-    status += playback.playing ? "Playing " : "Paused ";
+    status += playback.playing ? i18n::tr("menu.playing.prefix") : i18n::tr("menu.paused.prefix");
     status += formatMusicTime(playback.positionMicros) + " / " +
               formatMusicTime(playback.durationMicros);
   }
@@ -5199,7 +5240,8 @@ void MainMenuScene::refreshMusicModal() {
   }
   const std::size_t libraryTrackCount = context.musicPlayer.LibraryTrackCount();
   if (libraryTrackCount > 0) {
-    status += "  Library tracks: " + std::to_string(libraryTrackCount);
+    status += "  " + i18n::format("menu.music_player.library_tracks.count",
+        {{"count", std::to_string(libraryTrackCount)}});
   }
   musicStatusText->setText(status);
   musicPlaylistText->setText(
@@ -5207,8 +5249,8 @@ void MainMenuScene::refreshMusicModal() {
           context.musicPlayer.DefaultPlaylistTracksSnapshot()));
 
   if (musicPlayPauseButtonText != nullptr) {
-    musicPlayPauseButtonText->setText(
-        playback.playing ? "Pause" : (playback.loaded ? "Resume" : "Play"));
+    musicPlayPauseButtonText->setLocalizedText(
+        playback.playing ? i18n::message("menu.pause.label") : (playback.loaded ? i18n::message("menu.resume.label") : i18n::message("menu.play.label")));
   }
 
   styleThemedActionButton(musicSelectedButton, musicSelectedButtonText, true,
@@ -5269,7 +5311,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
 
   const int selected = recyclerView->selectedIndex;
   if (selected < 0 || selected >= recyclerView->size()) {
-    musicStatusMessage = "Select a chart first.";
+    musicStatusMessage = i18n::message("menu.select_chart_first.message");
     refreshMusicModal();
     return;
   }
@@ -5277,7 +5319,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
   const ChartMetaRecord record = recyclerView->get(selected);
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
-    musicStatusMessage = "Selected chart cannot be played as music.";
+    musicStatusMessage = i18n::message("menu.selected_chart_unable_played_as_music.message");
     refreshMusicModal();
     return;
   }
@@ -5291,9 +5333,8 @@ void MainMenuScene::playSelectedChartAsMusic() {
                                .chartCount = 1};
   context.musicPlayer.SetNowPlaying({music_playlist::MakeTrack(musicRecord)});
 
-  std::string statusMessage;
-  context.musicPlayer.PlayCurrentAsync(statusMessage, "Playing selected chart.");
-  musicStatusMessage = statusMessage;
+  context.musicPlayer.PlayCurrentAsync(
+      musicStatusMessage, i18n::message("menu.playing_selected_chart.message"));
   refreshMusicModal();
 }
 
@@ -5305,7 +5346,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
 
   const int selected = recyclerView->selectedIndex;
   if (selected < 0 || selected >= recyclerView->size()) {
-    musicStatusMessage = "Select a chart first.";
+    musicStatusMessage = i18n::message("menu.music_player.select_chart_first.message");
     refreshMusicModal();
     return;
   }
@@ -5313,7 +5354,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
   const ChartMetaRecord record = recyclerView->get(selected);
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
-    musicStatusMessage = "Selected chart cannot be added to a playlist.";
+    musicStatusMessage = i18n::message("menu.music_player.selected_chart_unable_added_playlist.message");
     refreshMusicModal();
     return;
   }
@@ -5321,7 +5362,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.AddChartToDefaultPlaylist(record.meta,
                                                     errorMessage)) {
-    musicStatusMessage = "Added selected chart to My Playlist.";
+    musicStatusMessage = i18n::message("menu.music_player.added_selected_chart_my_playlist.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5336,7 +5377,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
 
   const int selected = recyclerView->selectedIndex;
   if (selected < 0 || selected >= recyclerView->size()) {
-    musicStatusMessage = "Select a chart first.";
+    musicStatusMessage = i18n::message("menu.music_player.select_chart_first.message");
     refreshMusicModal();
     return;
   }
@@ -5344,7 +5385,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
   const ChartMetaRecord record = recyclerView->get(selected);
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
-    musicStatusMessage = "Selected chart cannot be removed from a playlist.";
+    musicStatusMessage = i18n::message("menu.music_player.selected_chart_unable_removed_from_playlist.message");
     refreshMusicModal();
     return;
   }
@@ -5352,7 +5393,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.RemoveChartFromDefaultPlaylist(record.meta,
                                                          errorMessage)) {
-    musicStatusMessage = "Removed selected chart from My Playlist.";
+    musicStatusMessage = i18n::message("menu.music_player.removed_selected_chart_from_my_playlist.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5369,8 +5410,9 @@ void MainMenuScene::playSavedMusicPlaylist() {
   if (!context.musicPlayer.StartDefaultPlaylist(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    context.musicPlayer.PlayCurrentAsync(errorMessage, "Playing My Playlist.");
-    musicStatusMessage = errorMessage;
+    context.musicPlayer.PlayCurrentAsync(
+        musicStatusMessage,
+        i18n::message("menu.music_player.playing_my_playlist.message"));
   }
   refreshMusicModal();
 }
@@ -5378,7 +5420,7 @@ void MainMenuScene::playSavedMusicPlaylist() {
 void MainMenuScene::clearSavedMusicPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.ClearDefaultPlaylist(errorMessage)) {
-    musicStatusMessage = "Cleared My Playlist.";
+    musicStatusMessage = i18n::message("menu.music_player.cleared_my_playlist.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5396,9 +5438,8 @@ void MainMenuScene::playRandomMusicLibrary() {
       !context.musicPlayer.StartRandomLibrary(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    context.musicPlayer.PlayCurrentAsync(errorMessage,
-                                         "Playing Now Playing.");
-    musicStatusMessage = errorMessage;
+    context.musicPlayer.PlayCurrentAsync(
+        musicStatusMessage, i18n::message("menu.playing_now_playing.message"));
   }
   refreshMusicModal();
 }
@@ -5406,23 +5447,23 @@ void MainMenuScene::playRandomMusicLibrary() {
 void MainMenuScene::toggleMusicPlayback() {
   std::string errorMessage;
   const auto playback = context.musicPlayer.PlaybackState();
-  bool ok = false;
   if (playback.playing) {
-    ok = context.musicPlayer.Pause(errorMessage);
+    context.musicPlayer.Pause(errorMessage);
+    musicStatusMessage = errorMessage;
   } else if (playback.loaded) {
-    ok = context.musicPlayer.Resume(errorMessage);
+    context.musicPlayer.Resume(errorMessage);
+    musicStatusMessage = errorMessage;
   } else {
-    ok = context.musicPlayer.PlayCurrentAsync(errorMessage,
-                                              "Playing current track.");
+    context.musicPlayer.PlayCurrentAsync(
+        musicStatusMessage, i18n::message("menu.playing_current_track.message"));
   }
-  musicStatusMessage = errorMessage;
   refreshMusicModal();
 }
 
 void MainMenuScene::seekMusicRelative(long long deltaMicros) {
   const auto playback = context.musicPlayer.PlaybackState();
   if (!playback.supported || !playback.loaded) {
-    musicStatusMessage = "No music is loaded.";
+    musicStatusMessage = i18n::message("menu.playback.no_track_error");
     refreshMusicModal();
     return;
   }
@@ -5434,7 +5475,9 @@ void MainMenuScene::seekMusicRelative(long long deltaMicros) {
 
   std::string errorMessage;
   if (context.musicPlayer.Seek(targetMicros, errorMessage)) {
-    musicStatusMessage = "Seeked to " + formatMusicTime(targetMicros) + ".";
+    musicStatusMessage = i18n::message(
+        "menu.music_player.seeked_to.message",
+        {{"time", formatMusicTime(targetMicros)}});
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5447,9 +5490,8 @@ void MainMenuScene::playNextMusicTrack() {
   }
   context.jukebox.stop();
 
-  std::string errorMessage;
-  context.musicPlayer.PlayNextAsync(errorMessage, "Playing next track.");
-  musicStatusMessage = errorMessage;
+  context.musicPlayer.PlayNextAsync(
+      musicStatusMessage, i18n::message("menu.playing_next_track.message"));
   refreshMusicModal();
 }
 
@@ -5459,17 +5501,15 @@ void MainMenuScene::playPreviousMusicTrack() {
   }
   context.jukebox.stop();
 
-  std::string errorMessage;
-  context.musicPlayer.PlayPreviousAsync(errorMessage,
-                                        "Playing previous track.");
-  musicStatusMessage = errorMessage;
+  context.musicPlayer.PlayPreviousAsync(
+      musicStatusMessage, i18n::message("menu.playing_previous_track.message"));
   refreshMusicModal();
 }
 
 void MainMenuScene::stopMusicPlayback() {
   std::string errorMessage;
   if (context.musicPlayer.Stop(errorMessage)) {
-    musicStatusMessage = "Stopped.";
+    musicStatusMessage = i18n::message("menu.stopped.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5512,7 +5552,7 @@ void MainMenuScene::buildTasksModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Tasks");
+  title->setLocalizedText(i18n::message("menu.tasks.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
@@ -5548,7 +5588,7 @@ void MainMenuScene::buildTasksModal() {
   footer->setHeight(58);
 
   tasksRefreshButton =
-      makeModalButton("Refresh List", 18, &tasksRefreshButtonText);
+      makeModalButton(i18n::message("menu.refresh_list.label"), 18, &tasksRefreshButtonText);
   tasksRefreshButton->setWidth(150);
   tasksRefreshButton->setOnClickListener([this]() {
     requestLibraryScanFlush();
@@ -5560,7 +5600,7 @@ void MainMenuScene::buildTasksModal() {
                           ui_theme::successActionPressed,
                           ui_theme::accentBorder);
 
-  tasksCloseButton = makeModalButton("Close", 20, &tasksCloseButtonText);
+  tasksCloseButton = makeModalButton(i18n::message("menu.tasks.close.label"), 20, &tasksCloseButtonText);
   tasksCloseButton->setWidth(130);
   tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
   styleThemedActionButton(tasksCloseButton, tasksCloseButtonText, true,
@@ -5595,7 +5635,7 @@ void MainMenuScene::hideTasksModal() {
   }
 }
 
-void MainMenuScene::refreshTasksModal() {
+void MainMenuScene::refreshTasksModal(bool force) {
   if (tasksModalRoot == nullptr || tasksText == nullptr) {
     return;
   }
@@ -5603,7 +5643,7 @@ void MainMenuScene::refreshTasksModal() {
   const auto snapshot = context.chartLibraryTasks
                             ? context.chartLibraryTasks->snapshot()
                             : chart_library_tasks::Snapshot{};
-  if (snapshot.revision == displayedLibraryTasksRevision &&
+  if (!force && snapshot.revision == displayedLibraryTasksRevision &&
       snapshot.progress.revision == displayedLibraryProgressRevision) {
     return;
   }
@@ -5632,15 +5672,16 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
   }
 
   if (activeTasks.empty() && recentTasks.empty()) {
-    return "No parsing tasks.";
+    return i18n::tr("menu.no_parsing_tasks.message");
   }
 
   std::ostringstream text;
   if (activeTasks.empty()) {
-    text << "No active tasks.\n\nRecent tasks\n\n";
+    text << i18n::tr("menu.no_active_tasks_recent_tasks.label");
   } else {
-    text << activeTasks.size()
-         << (activeTasks.size() == 1 ? " active task" : " active tasks")
+    text << i18n::format(activeTasks.size() == 1 ? "menu.tasks.active_count.one"
+                                                : "menu.tasks.active_count.other",
+                            {{"count", std::to_string(activeTasks.size())}})
          << "\n\n";
   }
 
@@ -5648,23 +5689,23 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
     std::string statusText;
     switch (task.status) {
     case LibraryTaskStatus::Queued:
-      statusText = "Queued";
+      statusText = i18n::tr("menu.queued.label");
       break;
     case LibraryTaskStatus::Running:
-      statusText = "Running";
+      statusText = i18n::tr("menu.running.label");
       break;
     case LibraryTaskStatus::Complete:
-      statusText = "Complete";
+      statusText = i18n::tr("menu.complete.label");
       break;
     case LibraryTaskStatus::Failed:
-      statusText = "Failed";
+      statusText = i18n::tr("menu.failed.label");
       break;
     case LibraryTaskStatus::Paused:
-      statusText = "Paused";
+      statusText = i18n::tr("menu.paused.label");
       break;
     }
 
-    text << task.title << "\n";
+    text << task.title.resolve() << "\n";
     text << statusText;
     if (task.status == LibraryTaskStatus::Running) {
       if (progressSnapshot.valid && progressSnapshot.taskId == task.id) {
@@ -5681,11 +5722,11 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
           text << " (" << task.current << " / " << task.total << ")";
         }
         if (!task.detail.empty()) {
-          text << "\n" << task.detail;
+          text << "\n" << task.detail.resolve();
         }
       }
-    } else if (!task.detail.empty() && task.detail != statusText) {
-      text << "\n" << task.detail;
+    } else if (!task.detail.empty() && task.detail.resolve() != statusText) {
+      text << "\n" << task.detail.resolve();
     }
     text << "\n\n";
   };
@@ -5695,7 +5736,7 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
   }
 
   if (!activeTasks.empty() && !recentTasks.empty()) {
-    text << "Recent tasks\n\n";
+    text << i18n::tr("menu.recent_tasks.label");
   }
 
   constexpr std::size_t kMaxRecentTasksShown = 8;
@@ -5745,13 +5786,13 @@ void MainMenuScene::buildFindBmsModal() {
       ->setBorderWidth(1);
 
   findBmsModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  findBmsModalTitleText->setText("Find BMS");
+  findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
   findBmsModalTitleText->setThemedColor(ui_theme::textPrimary);
   findBmsModalTitleText->setHeight(42);
   panel->addView(findBmsModalTitleText);
 
   findBmsStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  findBmsStatusText->setText("Preparing lookup");
+  findBmsStatusText->setLocalizedText(i18n::message("library.find_bms.preparing_lookup.label"));
   findBmsStatusText->setThemedColor(ui_theme::textPrimary);
   findBmsStatusText->setWrap(true);
   findBmsStatusText->setOverflow(TextView::TextOverflow::Hidden);
@@ -5817,15 +5858,15 @@ void MainMenuScene::buildFindBmsModal() {
   footer->setGap(12);
   footer->setHeight(58);
 
-  findBmsCloseButton = makeModalButton("Cancel", 20, &findBmsCloseButtonText);
+  findBmsCloseButton = makeModalButton(i18n::message("library.find_bms.cancel.label"), 20, &findBmsCloseButtonText);
   findBmsKeepFilesButton =
-      makeModalButton("Keep Files", 18, &findBmsKeepFilesButtonText);
+      makeModalButton(i18n::message("library.find_bms.keep_files.label"), 18, &findBmsKeepFilesButtonText);
   findBmsDeleteFilesButton =
-      makeModalButton("Delete Files", 18, &findBmsDeleteFilesButtonText);
-  findBmsOpenButton = makeModalButton("Source", 18, &findBmsOpenButtonText);
-  findBmsGoogleButton = makeModalButton("Search", 18, &findBmsGoogleButtonText);
+      makeModalButton(i18n::message("library.find_bms.delete_files.label"), 18, &findBmsDeleteFilesButtonText);
+  findBmsOpenButton = makeModalButton(i18n::message("library.find_bms.source.label"), 18, &findBmsOpenButtonText);
+  findBmsGoogleButton = makeModalButton(i18n::message("library.find_bms.search.label"), 18, &findBmsGoogleButtonText);
   findBmsRefreshButton =
-      makeModalButton("Refresh", 18, &findBmsRefreshButtonText);
+      makeModalButton(i18n::message("library.find_bms.refresh.label"), 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
   findBmsKeepFilesButton->setWidth(150);
@@ -5903,7 +5944,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.02;
   findBmsProgressLog.clear();
-  findBmsProgressLog.push_back("Preparing lookup");
+  findBmsProgressLog.push_back(i18n::tr("library.find_bms.preparing_lookup.label"));
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
   const BmsSearchDownloadOptions downloadOptions{
@@ -5943,7 +5984,7 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.09;
   findBmsProgressLog.clear();
-  findBmsProgressLog.push_back("Preparing Horie archive download");
+  findBmsProgressLog.push_back(i18n::tr("library.find_bms.preparing_horie_archive_download.label"));
   findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
   findBmsTask.start([candidate, record, downloadRoot, downloadOptions](
                         std::atomic_bool &cancelled,
@@ -5964,8 +6005,8 @@ void MainMenuScene::startFindBmsPendingArtifactResolution(
   BmsSearchResult result = findBmsResult;
   findBmsPendingDecision = decision;
   findBmsProgressMessage =
-      decision == BmsSearchPendingArtifactDecision::Keep ? "Keeping files"
-                                                        : "Deleting files";
+      decision == BmsSearchPendingArtifactDecision::Keep ? i18n::tr("library.find_bms.keeping_files.label")
+                                                        : i18n::tr("library.find_bms.deleting_files.label");
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.95;
@@ -5989,7 +6030,7 @@ void MainMenuScene::hideFindBmsModal() {
   findBmsModalRoot->setVisible(false);
 }
 
-void MainMenuScene::refreshFindBmsModal() {
+void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
   if (findBmsModalRoot == nullptr) {
     return;
   }
@@ -5998,47 +6039,47 @@ void MainMenuScene::refreshFindBmsModal() {
   const auto policy =
       findBmsDialogPolicy(findBmsTask.running(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
-    findBmsModalTitleText->setText("Find BMS");
+    findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
   }
 
-  std::string statusText;
+  i18n::Text statusText;
   if (running) {
     if (findBmsPendingDecision) {
       statusText = *findBmsPendingDecision ==
                            BmsSearchPendingArtifactDecision::Keep
-                       ? "Keeping files"
-                       : "Deleting files";
+                       ? i18n::message("library.find_bms.keeping_files.label")
+                       : i18n::message("library.find_bms.deleting_files.label");
     } else {
-      statusText = findBmsProgressDisplayText(findBmsProgressMessage,
+      statusText = findBmsProgressDisplayMessage(findBmsProgressMessage,
                                               findBmsProgressCurrent,
                                               findBmsProgressTotal, true);
     }
   } else {
     switch (findBmsResult.status) {
     case BmsSearchResult::Status::Downloaded:
-      statusText = "Download complete";
+      statusText = i18n::message("library.find_bms.download_complete.label");
       break;
     case BmsSearchResult::Status::NoDownloadLink:
     case BmsSearchResult::Status::UnsupportedLink:
-      statusText = "Manual download needed";
+      statusText = i18n::message("library.find_bms.manual_download_needed.label");
       break;
     case BmsSearchResult::Status::NotFound:
-      statusText = "Not found";
+      statusText = i18n::message("library.find_bms.not_found.label");
       break;
     case BmsSearchResult::Status::AmbiguousCandidates:
-      statusText = "Choose a match";
+      statusText = i18n::message("library.find_bms.choose_match.label");
       break;
     case BmsSearchResult::Status::HashMismatch:
-      statusText = findBmsResult.pendingArtifact ? "Chart mismatch"
-                                                 : "Decision complete";
+      statusText = findBmsResult.pendingArtifact ? i18n::message("library.find_bms.chart_mismatch.label")
+                                                 : i18n::message("library.find_bms.decision_complete.label");
       break;
     case BmsSearchResult::Status::DownloadFailed:
-      statusText = "Download failed";
+      statusText = i18n::message("library.find_bms.download_failed.label");
       break;
     }
   }
   if (findBmsStatusText != nullptr) {
-    findBmsStatusText->setText(statusText);
+    findBmsStatusText->setLocalizedText(statusText);
     const bool failed =
         !running &&
         (findBmsResult.status == BmsSearchResult::Status::DownloadFailed ||
@@ -6053,47 +6094,48 @@ void MainMenuScene::refreshFindBmsModal() {
       findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
       !findBmsResult.candidates.empty();
 
-  std::string detail;
-  if (!findBmsModalChart.meta.Title.empty()) {
-    detail += findBmsModalChart.meta.Title + "\n";
-  }
+  i18n::Text detail;
   if (running && findBmsPendingDecision) {
-    detail += "Resolving the downloaded files. This dialog cannot close yet.";
+    detail = i18n::message("library.find_bms.resolving_downloaded_files_dialog_unable_close_yet.message");
   } else if (!running && findBmsResult.pendingArtifact) {
-    detail += findBmsResult.message.empty()
-                  ? "Choose Keep Files or Delete Files to continue."
-                  : findBmsResult.message;
+    detail = findBmsResult.message.empty()
+                  ? i18n::message("library.find_bms.choose_keep_files_delete_files_continue.message")
+                  : findBmsDownloadFailureMessage(findBmsResult);
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += "Adding downloaded charts to the library.";
+    detail = i18n::message("library.find_bms.adding_downloaded_charts_library.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
-    detail += "Download from the source, then refresh.";
+    detail = i18n::message("library.find_bms.download_from_source_then_refresh.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::UnsupportedLink) {
-    detail += "Download from the source, then refresh.";
+    detail = i18n::message("library.find_bms.download_from_source_then_refresh.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NotFound) {
-    detail += "Try searching by title.";
+    detail = i18n::message("library.find_bms.try_searching_by_title.message");
   } else if (!running && findBmsResult.status ==
                              BmsSearchResult::Status::AmbiguousCandidates) {
-    detail += "Choose an archive below.";
+    detail = i18n::message("library.find_bms.choose_archive_below.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::HashMismatch) {
-    detail += findBmsResult.message.empty()
-                  ? "The downloaded archive does not match this chart."
-                  : findBmsResult.message;
+    detail = findBmsResult.message.empty()
+                  ? i18n::message("library.find_bms.downloaded_archive_does_not_match_chart.message")
+                  : findBmsDownloadFailureMessage(findBmsResult);
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
-    detail += findBmsDownloadFailureDetail(findBmsResult);
+    detail = findBmsDownloadFailureMessage(findBmsResult);
   } else {
-    detail += "Searching available sources...";
+    detail = i18n::message("library.find_bms.searching_available_sources.progress");
+  }
+  if (!findBmsModalChart.meta.Title.empty()) {
+    detail = i18n::message("library.find_bms.chart_detail",
+        {{"title", findBmsModalChart.meta.Title}, {"detail", detail}});
   }
   if (findBmsDetailText != nullptr) {
-    findBmsDetailText->setText(detail);
+    findBmsDetailText->setLocalizedText(detail);
   }
 
-  if (findBmsCandidateRecyclerView != nullptr) {
+  if (refreshCandidates && findBmsCandidateRecyclerView != nullptr) {
     findBmsCandidateRecyclerView->setVisible(showCandidateList);
     const int visibleRows =
         showCandidateList
@@ -6134,7 +6176,7 @@ void MainMenuScene::refreshFindBmsModal() {
   const bool hasRefreshAction =
       policy.showNormalResultActions && !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
-    findBmsCloseButtonText->setText(running ? "Cancel" : "Close");
+    findBmsCloseButtonText->setLocalizedText(running ? i18n::message("library.find_bms.cancel.label") : i18n::message("library.find_bms.close.label"));
   }
   if (findBmsCloseButton != nullptr) {
     findBmsCloseButton->setVisible(policy.showCloseOrCancel);
@@ -6157,9 +6199,9 @@ void MainMenuScene::refreshFindBmsModal() {
         findBmsResult.fallbackUrl.empty() && !findBmsResult.downloadUrl.empty();
     const bool bmsSearchSource =
         manualSourceUrl.find("bmssearch.net") != std::string::npos;
-    findBmsOpenButtonText->setText(
-        downloadSource ? "Download"
-                       : (bmsSearchSource ? "BMS Search" : "Source"));
+    findBmsOpenButtonText->setLocalizedText(
+        downloadSource ? i18n::message("library.find_bms.download.label")
+                       : (bmsSearchSource ? i18n::message("library.find_bms.bms_search.label") : i18n::message("library.find_bms.source.label")));
   }
   if (findBmsOpenButton != nullptr) {
     findBmsOpenButton->setVisible(!running && hasSource);
@@ -6208,12 +6250,11 @@ void MainMenuScene::applyFindBmsUpdates() {
   auto &progressEvents = updates.progress;
   auto &result = updates.result;
 
-  auto appendLogLine = [this](const std::string &logLine) {
+  auto appendLogLine = [this](const std::string &logLine, bool replace = false) {
     if (logLine.empty()) {
       return;
     }
-    if (!findBmsProgressLog.empty() &&
-        shouldReplaceFindBmsLogLine(findBmsProgressLog.back(), logLine)) {
+    if (!findBmsProgressLog.empty() && replace) {
       findBmsProgressLog.back() = logLine;
     } else if (findBmsProgressLog.empty() ||
                findBmsProgressLog.back() != logLine) {
@@ -6226,12 +6267,14 @@ void MainMenuScene::applyFindBmsUpdates() {
 
   bool shouldRefresh = false;
   for (const auto &progress : progressEvents) {
+    const bool replace =
+        shouldReplaceFindBmsLogLine(findBmsProgressMessage, progress.message);
     findBmsProgressMessage = progress.message;
     findBmsProgressCurrent = progress.downloadedBytes;
     findBmsProgressTotal = progress.totalBytes;
     findBmsProgressFraction =
         findBmsProgressFractionFor(progress, findBmsProgressFraction);
-    appendLogLine(findBmsProgressEventDisplayText(progress, true));
+    appendLogLine(findBmsProgressEventDisplayText(progress, true), replace);
     shouldRefresh = true;
   }
   if (result) {
@@ -6595,7 +6638,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
                                       *cancelled, selections, randomInfo)) {
       if (!cancelled->load()) {
         queueReplayLoadCompletion([this] {
-          (void)finishReplayLoadFailure("AutoPlay failed", {}, "Autoplay chart could not be prepared.");
+          (void)finishReplayLoadFailure(i18n::tr("menu.auto_play_failed.label"), {}, i18n::tr("menu.autoplay_chart_failed_prepared.message"));
         });
       }
       return;
@@ -6608,7 +6651,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
                                autoPlayPlayback, autoPlayRuleset]() mutable {
       auto *chart = setSelectedChart(std::move(*preparedChart), true, false);
       if (!chart) {
-        (void)finishReplayLoadFailure("AutoPlay failed", {}, "Prepared autoplay chart is unavailable.");
+        (void)finishReplayLoadFailure(i18n::tr("menu.auto_play_failed.label"), {}, i18n::tr("menu.prepared_autoplay_chart_unavailable.message"));
         return;
       }
       if (recordsModal_) {
@@ -6677,8 +6720,8 @@ void MainMenuScene::startModernReplayPlayback(
             const std::string diagnostic = std::move(loaded.diagnostic);
             queueReplayLoadCompletion([this, diagnostic]() {
               (void)finishReplayLoadFailure(
-                  "Watch failed", diagnostic,
-                  "Replay playback could not be prepared.");
+                  i18n::tr("menu.watch_failed.label"), diagnostic,
+                  i18n::tr("menu.replay_playback_failed_prepared.message"));
             });
             return;
           }
@@ -6704,15 +6747,15 @@ void MainMenuScene::startModernReplayPlayback(
                renderGhosts]() mutable {
                 auto &loaded = completion->loaded;
                 if (!loaded.diagnostic.empty()) {
-                  publishReplayLoadDiagnostic("Watch warning",
+                  publishReplayLoadDiagnostic(i18n::tr("menu.watch_warning.label"),
                                               loaded.diagnostic);
                 }
                 auto *chart =
                     setSelectedChart(std::move(loaded.chart), true, false);
                 if (chart == nullptr) {
                   (void)finishReplayLoadFailure(
-                      "Watch failed", {},
-                      "Prepared replay chart is unavailable.");
+                      i18n::tr("menu.watch_failed.label"), {},
+                      i18n::tr("menu.prepared_replay_chart_unavailable.message"));
                   return;
                 }
                 StartOptions replayOptions{
@@ -6736,7 +6779,7 @@ void MainMenuScene::startModernReplayPlayback(
         } catch (...) {
           queueReplayLoadCompletion([this]() {
             (void)finishReplayLoadFailure(
-                "Watch failed", {}, "Replay playback could not be prepared.");
+                i18n::tr("menu.watch_failed.label"), {}, i18n::tr("menu.replay_playback_failed_prepared.message"));
           });
         }
       });
@@ -6782,8 +6825,8 @@ void MainMenuScene::startModernGBattlePlayback(
             const std::string diagnostic = std::move(loaded.diagnostic);
             queueReplayLoadCompletion([this, diagnostic]() {
               (void)finishReplayLoadFailure(
-                  "G-Battle failed", diagnostic,
-                  "G-Battle replay could not be prepared.");
+                  i18n::tr("menu.g_battle_failed.label"), diagnostic,
+                  i18n::tr("menu.g_battle_replay_failed_prepared.message"));
             });
             return;
           }
@@ -6812,15 +6855,15 @@ void MainMenuScene::startModernGBattlePlayback(
                playback]() mutable {
                 auto &loaded = completion->loaded;
                 if (!loaded.diagnostic.empty()) {
-                  publishReplayLoadDiagnostic("G-Battle warning",
+                  publishReplayLoadDiagnostic(i18n::tr("menu.g_battle_warning.label"),
                                               loaded.diagnostic);
                 }
                 auto *chart =
                     setSelectedChart(std::move(loaded.chart), true, false);
                 if (chart == nullptr) {
                   (void)finishReplayLoadFailure(
-                      "G-Battle failed", {},
-                      "Prepared replay chart is unavailable.");
+                      i18n::tr("menu.g_battle_failed.label"), {},
+                      i18n::tr("menu.prepared_replay_chart_unavailable.message"));
                   return;
                 }
                 auto recordData = loaded.replayData;
@@ -6854,8 +6897,8 @@ void MainMenuScene::startModernGBattlePlayback(
         } catch (...) {
           queueReplayLoadCompletion([this]() {
             (void)finishReplayLoadFailure(
-                "G-Battle failed", {},
-                "G-Battle replay could not be prepared.");
+                i18n::tr("menu.g_battle_failed.label"), {},
+                i18n::tr("menu.g_battle_replay_failed_prepared.message"));
           });
         }
       });
@@ -6901,8 +6944,8 @@ void MainMenuScene::startModernCourseReplayPlayback(
             const std::string diagnostic = std::move(loaded.diagnostic);
             queueReplayLoadCompletion([this, diagnostic]() {
               (void)finishReplayLoadFailure(
-                  "course Watch failed", diagnostic,
-                  "Course replay playback could not be prepared.");
+                  i18n::tr("menu.course_watch_failed.label"), diagnostic,
+                  i18n::tr("menu.course_replay_playback_failed_prepared.message"));
             });
             return;
           }
@@ -6916,8 +6959,8 @@ void MainMenuScene::startModernCourseReplayPlayback(
           if (session == nullptr) {
             queueReplayLoadCompletion([this]() {
               (void)finishReplayLoadFailure(
-                  "course Watch failed", {},
-                  "Prepared course replay session is unavailable.");
+                  i18n::tr("menu.course_watch_failed.label"), {},
+                  i18n::tr("menu.prepared_course_replay_session_unavailable.message"));
             });
             return;
           }
@@ -6925,8 +6968,8 @@ void MainMenuScene::startModernCourseReplayPlayback(
           auto chart = session->takePreparedCourseChart(session->currentIndex);
           if (!stageReplay || !chart) {
             queueReplayLoadCompletion([this] {
-              (void)finishReplayLoadFailure("course Watch failed", {},
-                                           "Prepared course replay chart is unavailable.");
+              (void)finishReplayLoadFailure(i18n::tr("menu.course_watch_failed.label"), {},
+                                           i18n::tr("menu.prepared_course_replay_chart_unavailable.message"));
             });
             return;
           }
@@ -6940,7 +6983,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
           auto preparedChart = std::make_shared<std::unique_ptr<bms_parser::Chart>>(std::move(chart));
           queueReplayLoadCompletion(
               [this, preparedChart, options = std::move(options), warning]() mutable {
-                if (!warning.empty()) publishReplayLoadDiagnostic("course Watch warning", warning);
+                if (!warning.empty()) publishReplayLoadDiagnostic(i18n::tr("menu.course_watch_warning.label"), warning);
                 if (recordsModal_) recordsModal_->hide();
                 context.sceneManager->changeScene(std::make_unique<GamePlayScene>(
                     context, std::move(*preparedChart), std::move(options)), true);
@@ -6949,8 +6992,8 @@ void MainMenuScene::startModernCourseReplayPlayback(
         } catch (...) {
           queueReplayLoadCompletion([this]() {
             (void)finishReplayLoadFailure(
-                "course Watch failed", {},
-                "Course replay playback could not be prepared.");
+                i18n::tr("menu.course_watch_failed.label"), {},
+                i18n::tr("menu.course_replay_playback_failed_prepared.message"));
           });
         }
       });
@@ -7060,13 +7103,13 @@ void MainMenuScene::startReplayLoadWorker(
     try {
       work(cancelled);
     } catch (const std::exception &error) {
-      const auto diagnostic = replay_records::diagnosticOr(error.what(), "Records preparation failed.");
+      const auto diagnostic = replay_records::diagnosticOr(error.what(), i18n::tr("menu.records_preparation_failed.message"));
       queueReplayLoadCompletion([this, diagnostic] {
-        (void)finishReplayLoadFailure("preparation failed", diagnostic, "Records preparation failed.");
+        (void)finishReplayLoadFailure("preparation failed", diagnostic, i18n::tr("menu.records_preparation_failed.message"));
       });
     } catch (...) {
       queueReplayLoadCompletion([this] {
-        (void)finishReplayLoadFailure("preparation failed", {}, "Records preparation failed.");
+        (void)finishReplayLoadFailure("preparation failed", {}, i18n::tr("menu.records_preparation_failed.message"));
       });
     }
   });
@@ -7106,9 +7149,9 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
       true);
 }
 
-bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
-                                      const std::string &progressMessage,
-                                      const std::string &statusMessage) {
+bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,
+                                      const i18n::Text &progressMessage,
+                                      const i18n::Text &statusMessage) {
   if (!replayExportJob_.tryBegin()) {
     return false;
   }
@@ -7125,7 +7168,7 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
     recordsModal_->setStatus(statusMessage);
   }
   if (replayStatusText != nullptr) {
-    replayStatusText->setText(statusMessage);
+    replayStatusText->setLocalizedText(statusMessage);
   }
   return true;
 }
@@ -7139,8 +7182,8 @@ void MainMenuScene::preparePreviewForReplayExport() {
 
 void MainMenuScene::startAutoPlayVideoExport(
     const ChartMetaRecord &record, ReplayVideoExportOptions options) {
-  if (!beginReplayExport("Exporting Replay", "Preparing export",
-                         "Exporting...")) {
+  if (!beginReplayExport(i18n::message("menu.exporting_replay.label"), i18n::message("menu.preparing_export.label"),
+                         i18n::message("menu.exporting.progress"))) {
     return;
   }
 
@@ -7159,7 +7202,7 @@ void MainMenuScene::startAutoPlayVideoExport(
           std::atomic_bool &cancelled) -> ReplayVideoExportResult {
         preparePreviewForReplayExport();
         if (cancelled) {
-          return {.success = false, .message = "Replay export cancelled"};
+          return {.success = false, .message = i18n::tr("menu.replay_export_cancelled.label")};
         }
 
         std::unique_ptr<bms_parser::Chart> chart;
@@ -7178,7 +7221,7 @@ void MainMenuScene::startAutoPlayVideoExport(
           return {.success = false, .message = "No Chart"};
         }
         if (options.stop.stop_requested()) {
-          return {.success = false, .message = "Replay export cancelled"};
+          return {.success = false, .message = i18n::tr("menu.replay_export_cancelled.label")};
         }
 
         const auto playInfo =
@@ -7201,8 +7244,8 @@ void MainMenuScene::startAutoPlayVideoExport(
 void MainMenuScene::startModernReplayVideoExport(
     const ChartMetaRecord &record, ModernChartResultRecord modern,
     ReplayVideoExportOptions options) {
-  if (!beginReplayExport("Exporting Replay", "Preparing export",
-                         "Exporting...")) {
+  if (!beginReplayExport(i18n::message("menu.exporting_replay.label"), i18n::message("menu.preparing_export.label"),
+                         i18n::message("menu.exporting.progress"))) {
     return;
   }
 
@@ -7212,26 +7255,26 @@ void MainMenuScene::startModernReplayVideoExport(
           std::atomic_bool &cancelled) -> ReplayVideoExportResult {
         preparePreviewForReplayExport();
         if (cancelled) {
-          return {.success = false, .message = "Replay export cancelled"};
+          return {.success = false, .message = i18n::tr("menu.replay_export_cancelled.label")};
         }
         auto consumer = replay::makeRuntimeChartReplayConsumer(
             context.replayRepository);
         auto loaded = consumer.load(modern, record.meta.BmsPath, cancelled);
         if (cancelled) {
           return {.success = false,
-                  .message = "Replay export preparation was cancelled."};
+                  .message = i18n::tr("menu.replay_export_preparation_cancelled.message")};
         }
         if (!loaded.ready()) {
           return {.success = false,
                   .message = replay_records::diagnosticOr(
                       loaded.diagnostic,
-                      "Replay export playback could not be prepared.")};
+                      i18n::tr("menu.replay_export_playback_failed_prepared.message"))};
         }
         if (!loaded.diagnostic.empty()) {
           publishReplayLoadDiagnostic("video export warning", loaded.diagnostic);
         }
         if (options.stop.stop_requested()) {
-          return {.success = false, .message = "Replay export cancelled"};
+          return {.success = false, .message = i18n::tr("menu.replay_export_cancelled.label")};
         }
         return ReplayVideoExporter::Export(
             context, loaded.chart.get(), *loaded.replayData, options);
@@ -7245,8 +7288,8 @@ void MainMenuScene::startModernCourseReplayVideoExport(
     return;
   }
   auto chartPaths = std::move(currentSelection->completedChartPaths);
-  if (!beginReplayExport("Exporting Course Replay", "Preparing export",
-                         "Exporting...")) {
+  if (!beginReplayExport(i18n::message("menu.exporting_course_replay.label"), i18n::message("menu.preparing_export.label"),
+                         i18n::message("menu.exporting.progress"))) {
     return;
   }
 
@@ -7256,27 +7299,27 @@ void MainMenuScene::startModernCourseReplayVideoExport(
           std::atomic_bool &cancelled) -> ReplayVideoExportResult {
         preparePreviewForReplayExport();
         if (cancelled) {
-          return {.success = false, .message = "Replay export cancelled"};
+          return {.success = false, .message = i18n::tr("menu.replay_export_cancelled.label")};
         }
         auto consumer = replay::makeRuntimeCourseReplayConsumer(
             context.replayRepository);
         auto loaded = consumer.load(modern, chartPaths, cancelled);
         if (cancelled) {
           return {.success = false,
-                  .message = "Course replay export preparation was cancelled."};
+                  .message = i18n::tr("menu.course_replay_export_preparation_cancelled.message")};
         }
         if (!loaded.ready()) {
           return {.success = false,
                   .message = replay_records::diagnosticOr(
                       loaded.diagnostic,
-                      "Course replay export playback could not be prepared.")};
+                      i18n::tr("menu.course_replay_export_playback_failed_prepared.message"))};
         }
         if (!loaded.diagnostic.empty()) {
           publishReplayLoadDiagnostic("course video export warning",
                                       loaded.diagnostic);
         }
         if (options.stop.stop_requested()) {
-          return {.success = false, .message = "Replay export cancelled"};
+          return {.success = false, .message = i18n::tr("menu.replay_export_cancelled.label")};
         }
         return ReplayVideoExporter::ExportCourseReplay(
             context, std::move(loaded), options);
@@ -7343,7 +7386,7 @@ void MainMenuScene::startModernReplayIrUpload(
   replayIrUploadInProgress = true;
   if (recordsModal_ != nullptr) {
     recordsModal_->setIrUploadInProgress(true);
-    recordsModal_->showIrFeedback("Preparing IR...");
+    recordsModal_->showIrFeedback(i18n::message("menu.preparing_ir.progress"));
   }
   if (previewWorker_ != nullptr) {
     previewWorker_->cancel();
@@ -7360,7 +7403,7 @@ void MainMenuScene::startModernReplayIrUpload(
               replay_records::uploadSavedResult(context, modern.result.attemptId));
         } catch (...) {
           finishReplayIrUpload(modern.result.attemptId,
-                               "IR upload could not be prepared.");
+                               i18n::tr("menu.ir_upload_failed_prepared.message"));
         }
         return true;
       },
@@ -7372,7 +7415,7 @@ void MainMenuScene::finishReplayIrUpload(std::string attemptId,
   replayIrUploadInProgress = false;
   std::string safeMessage = ir::sanitizeDiagnostic(message);
   if (safeMessage.empty()) {
-    safeMessage = "IR upload could not be queued.";
+    safeMessage = i18n::tr("menu.ir_upload_failed_queued.message");
   }
   if (recordsModal_ != nullptr) {
     recordsModal_->setIrUploadInProgress(false);
@@ -7632,24 +7675,25 @@ void MainMenuScene::applyReplayExportResult() {
 
   if (replayStatusText != nullptr) {
     if (result->success) {
-      replayStatusText->setText(
-          result->message == "Saved to Photos" ? "Saved" : "Exported");
+      replayStatusText->setLocalizedText(
+          result->message == "Saved to Photos" ? i18n::message("menu.saved.label") : i18n::message("menu.exported.label"));
     } else if (result->message == "No Chart") {
-      replayStatusText->setText("No Chart");
+      replayStatusText->setLocalizedText(i18n::message("menu.no_chart.label"));
     } else {
       replayStatusText->setText(replay_records::diagnosticOr(
-          result->message, "Replay export failed."));
+          result->message, i18n::tr("menu.replay_export_failed.message")));
     }
   }
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(false);
     recordsModal_->returnToList(
         result->success
-            ? (result->message == "Saved to Photos" ? "Saved" : "Exported")
+            ? (result->message == "Saved to Photos" ? i18n::message("menu.saved.label") : i18n::message("menu.exported.label"))
             : (result->message == "No Chart"
-                   ? "No Chart"
-                   : replay_records::diagnosticOr(result->message,
-                                        "Replay export failed.")));
+                   ? i18n::message("menu.no_chart.label")
+                   : (result->message.empty()
+                          ? i18n::message("menu.replay_export_failed.message")
+                          : i18n::Text(result->message))));
   }
 
   if (result->success) {
@@ -7694,7 +7738,7 @@ void MainMenuScene::update(float dt) {
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
-  std::string nativeMusicStatusMessage;
+  i18n::Text nativeMusicStatusMessage;
   if (context.musicPlayer.ProcessNativeControlEvents(
           nativeMusicStatusMessage)) {
     musicStatusMessage = nativeMusicStatusMessage;

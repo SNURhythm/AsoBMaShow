@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IntroScene.h"
 
 #include "MusicSelectScene.h"
@@ -65,11 +66,11 @@ void IntroScene::buildView() {
   title->setWidth(720)->setHeight(92);
   rootLayout_->addView(title);
 
-  startButton_ = button("Start");
+  startButton_ = button(i18n::tr("intro.start.label"));
   startButton_->setOnClickListener([this] { start(); });
   rootLayout_->addView(startButton_);
 
-  settingsButton_ = button("Settings");
+  settingsButton_ = button(i18n::tr("intro.settings.label"));
   settingsButton_->setOnClickListener([this] { openSettings(); });
   rootLayout_->addView(settingsButton_);
   rootLayout_->applyYogaLayout();
@@ -89,7 +90,7 @@ void IntroScene::start() {
     acquisition.failure = skin::GameplaySkinAcquisitionFailure{
         .diagnostic = skin::SkinDiagnostic{
             .code = "skin.music_select.lifecycle_unavailable",
-            .message = "The selected music-select skin service is unavailable."}};
+            .message = i18n::tr("intro.selected_music_select_skin_service_unavailable.message")}};
   }
   auto decision = decideMusicSelectLaunch(std::move(acquisition));
   if (decision.kind == MusicSelectLaunchKind::SelectedSkin &&

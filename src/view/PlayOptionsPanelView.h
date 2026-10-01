@@ -32,6 +32,7 @@ struct PlayOptionsPanelState {
   bool playbackLocked = false;
   bool clubMode = false;
   std::string pacemakerTarget = "BEST";
+  std::string profileId;
 };
 
 struct PlayOptionsPanelCallbacks {

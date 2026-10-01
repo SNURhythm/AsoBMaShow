@@ -1,4 +1,17 @@
+#include "../src/view/View.h"
+#include <functional>
+#include <memory>
+#include <string>
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wkeyword-macro"
+#endif
+#define private public
 #include "../src/view/Button.h"
+#undef private
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -55,6 +68,58 @@ SDL_Event mouseSynthesizedFingerEvent(Uint32 type, float x, float y) {
   return event;
 }
 
+SDL_Event mouseMotion(Uint32 which, int x, int y) {
+  SDL_Event event{};
+  event.type = SDL_MOUSEMOTION;
+  event.motion.which = which;
+  event.motion.x = x;
+  event.motion.y = y;
+  return event;
+}
+
+SDL_Event fingerEvent(Uint32 type, int x, int y) {
+  SDL_Event event{};
+  event.type = type;
+  event.tfinger.touchId = 1;
+  event.tfinger.fingerId = 7;
+  event.tfinger.x = static_cast<float>(x) / rendering::window_width;
+  event.tfinger.y = static_cast<float>(y) / rendering::window_height;
+  return event;
+}
+
+void testTouchReleaseClearsHoverBeforeClick() {
+  for (const bool releaseInside : {true, false}) {
+    Button button(0, 0, 100, 50);
+    int clicks = 0;
+    button.setOnClickListener([&]() {
+      REQUIRE(!button.isHovered);
+      REQUIRE(button.activeTouchId == -1);
+      ++clicks;
+    });
+    auto mouse = mouseMotion(1, 10, 10);
+    button.handleEvents(mouse);
+    REQUIRE(button.isHovered);
+    auto down = fingerEvent(SDL_FINGERDOWN, 10, 10);
+    REQUIRE(!button.handleEvents(down));
+    auto syntheticMotion = mouseMotion(SDL_TOUCH_MOUSEID, 10, 10);
+    button.handleEvents(syntheticMotion);
+    auto up = fingerEvent(SDL_FINGERUP, releaseInside ? 10 : 150, 10);
+    REQUIRE(!button.handleEvents(up));
+    REQUIRE(!button.isHovered);
+    REQUIRE(button.activeTouchId == -1);
+    REQUIRE(clicks == (releaseInside ? 1 : 0));
+
+    // SDL may deliver its touch-generated mouse motion after finger-up.
+    button.handleEvents(syntheticMotion);
+    REQUIRE(!button.isHovered);
+    button.handleEvents(mouse);
+    REQUIRE(button.isHovered);
+    auto mouseLeave = mouseMotion(1, 150, 10);
+    button.handleEvents(mouseLeave);
+    REQUIRE(!button.isHovered);
+  }
+}
+
 void click(Button &button) {
   auto down = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
   auto up = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
@@ -64,6 +129,7 @@ void click(Button &button) {
 } // namespace
 
 int main() {
+  testTouchReleaseClearsHoverBeforeClick();
   Button button(0, 0, 100, 50);
   int clicks = 0;
   button.setOnClickListener([&]() { ++clicks; });

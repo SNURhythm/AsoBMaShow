@@ -148,11 +148,11 @@ public:
     irBadgeCallbackStableKey_.reset();
     irBadge->setOnClickListener({});
 
-    titleText->setText(
+    titleText->setLocalizedText(
         summary.autoPlay
-            ? "AUTO PLAY"
-            : (!summary.displayedTime.empty() ? summary.displayedTime
-                                              : "IR Record"));
+            ? i18n::message("records.auto_play.label")
+            : (!summary.displayedTime.empty() ? i18n::Text(summary.displayedTime)
+                                              : i18n::message("records.ir_record.label")));
     detailText->setText(result_record_ui::detailLabel(summary));
     scoreText->setText(result_record_ui::scoreLabel(summary));
     currentRank = result_record_ui::scoreRank(summary).value_or("");

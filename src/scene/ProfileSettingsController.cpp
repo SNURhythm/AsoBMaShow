@@ -8,21 +8,28 @@
 #include <utility>
 
 namespace {
-ProfileResult profileFailure(ProfileError error, std::string message) {
-  return {.error = error, .message = std::move(message)};
+template <typename Result> struct PresentedResult : Result {
+  i18n::Text text;
+  PresentedResult() = default;
+  PresentedResult(Result value) : Result(std::move(value)), text(this->message) {}
+  PresentedResult(ProfileError error, i18n::Text value)
+      : Result{.error = error, .message = value.resolve()}, text(std::move(value)) {}
+};
+
+PresentedResult<ProfileResult> profileFailure(ProfileError error, i18n::Text message) {
+  return {error, std::move(message)};
 }
 
-ProfileArchiveResult archiveFailure(ProfileError error, std::string message) {
-  return {.error = error, .message = std::move(message)};
+PresentedResult<ProfileArchiveResult> archiveFailure(ProfileError error, i18n::Text message) {
+  return {error, std::move(message)};
 }
 
-ProfileSwitchResult switchFailure(ProfileError error, std::string message) {
-  return {.error = error, .message = std::move(message)};
+PresentedResult<ProfileSwitchResult> switchFailure(ProfileError error, i18n::Text message) {
+  return {error, std::move(message)};
 }
 
-std::string exceptionMessage(const std::exception &error,
-                             std::string_view operation) {
-  return std::string(operation) + ": " + error.what();
+i18n::Text exceptionMessage(const std::exception &error, const char *operation) {
+  return i18n::message(operation, {{"detail", error.what()}});
 }
 
 } // namespace
@@ -57,6 +64,7 @@ const std::string &ProfileSettingsController::confirmationProfileId() const {
 ProfileSettingsPhase ProfileSettingsController::phase() const { return phase_; }
 
 const ProfileSettingsStatus &ProfileSettingsController::status() const {
+  status_.message = status_.text.resolve();
   return status_;
 }
 
@@ -73,7 +81,7 @@ bool ProfileSettingsController::contains(std::string_view profileId) const {
 bool ProfileSettingsController::refresh() {
   if (!dependencies_.listProfiles) {
     setFailure(ProfileError::SwitchBlocked, {},
-               "Player profile services are unavailable.");
+               i18n::message("settings.profiles.controller.services_unavailable"));
     return false;
   }
   ProfileListResult result;
@@ -81,20 +89,20 @@ bool ProfileSettingsController::refresh() {
     result = dependencies_.listProfiles();
   } catch (const std::exception &error) {
     setFailure(ProfileError::IoFailure,
-               exceptionMessage(error, "Unable to read player profiles"), {});
+               exceptionMessage(error, "settings.profiles.controller.read_failed_detail"), {});
     return false;
   } catch (...) {
-    setFailure(ProfileError::IoFailure, {}, "Unable to read player profiles.");
+    setFailure(ProfileError::IoFailure, {}, i18n::message("settings.profiles.controller.read_failed"));
     return false;
   }
   if (!result.ok()) {
     setFailure(result.error, std::move(result.message),
-               "Unable to read player profiles.");
+               i18n::message("settings.profiles.controller.read_failed"));
     return false;
   }
   if (result.profiles.empty()) {
     setFailure(ProfileError::IntegrityFailure, {},
-               "No valid profiles found.");
+               i18n::message("settings.profiles.controller.no_valid_profiles"));
     return false;
   }
   const bool activeExists =
@@ -103,7 +111,7 @@ bool ProfileSettingsController::refresh() {
       });
   if (!activeExists) {
     setFailure(ProfileError::IntegrityFailure, {},
-               "The active profile is missing.");
+               i18n::message("settings.profiles.controller.active_missing"));
     return false;
   }
 
@@ -143,18 +151,18 @@ bool ProfileSettingsController::select(std::string_view profileId) {
 ProfileActionEligibility ProfileSettingsController::destructiveEligibility(
     std::string_view profileId) const {
   if (!contains(profileId)) {
-    return {.enabled = false, .reason = "Profile unavailable."};
+    return {.enabled = false, .reason = i18n::message("settings.profiles.controller.unavailable").resolve(), .text = i18n::message("settings.profiles.controller.unavailable")};
   }
   if (profileId == activeProfileId_) {
     return {.enabled = false,
-            .reason = "Activate another profile first."};
+            .reason = i18n::message("settings.profiles.controller.activate_another").resolve(), .text = i18n::message("settings.profiles.controller.activate_another")};
   }
   if (profiles_.size() <= 1) {
-    return {.enabled = false, .reason = "Keep at least one profile."};
+    return {.enabled = false, .reason = i18n::message("settings.profiles.controller.keep_one").resolve(), .text = i18n::message("settings.profiles.controller.keep_one")};
   }
   if (phase_ != ProfileSettingsPhase::Idle) {
     return {.enabled = false,
-            .reason = "Finish the current profile action first."};
+            .reason = i18n::message("settings.profiles.controller.finish_current").resolve(), .text = i18n::message("settings.profiles.controller.finish_current")};
   }
   return {.enabled = true};
 }
@@ -169,45 +177,40 @@ ProfileActionEligibility ProfileSettingsController::overwriteEligibility(
   return destructiveEligibility(profileId);
 }
 
-ProfileResult
-ProfileSettingsController::unavailableResult(std::string message) const {
-  return profileFailure(ProfileError::SwitchBlocked, std::move(message));
-}
-
 ProfileArchiveResult
 ProfileSettingsController::unavailableArchiveResult(std::string message) const {
   return archiveFailure(ProfileError::SwitchBlocked, std::move(message));
 }
 
-void ProfileSettingsController::setFailure(ProfileError, std::string message,
-                                           std::string fallback) {
+void ProfileSettingsController::setFailure(ProfileError, i18n::Text message,
+                                           i18n::Text fallback) {
   status_ = {.kind = ProfileSettingsStatusKind::Error,
-             .message =
+             .text =
                  message.empty() ? std::move(fallback) : std::move(message)};
 }
 
-void ProfileSettingsController::setSuccess(std::string message,
-                                           std::string fallback) {
+void ProfileSettingsController::setSuccess(i18n::Text message,
+                                           i18n::Text fallback) {
   if (message.empty()) {
     status_ = {.kind = ProfileSettingsStatusKind::Success,
-               .message = std::move(fallback)};
+               .text = std::move(fallback)};
   } else {
     status_ = {.kind = ProfileSettingsStatusKind::Warning,
-               .message = std::move(message)};
+               .text = std::move(message)};
   }
 }
 
 bool ProfileSettingsController::refreshAfterMutation(
     std::optional<std::string> preferredProfileId,
-    const std::string &operationError) {
+    const i18n::Text &operationError) {
   const std::string priorSelection = selectedProfileId_;
   if (!refresh()) {
     if (!operationError.empty()) {
-      const std::string refreshError = status_.message;
+      const i18n::Text refreshError = status_.text;
       status_ = {.kind = ProfileSettingsStatusKind::Error,
-                 .message = operationError + (refreshError.empty()
-                                                  ? std::string{}
-                                                  : "; " + refreshError)};
+                 .text = refreshError.empty() ? operationError :
+                     i18n::message("settings.profiles.controller.combined_errors",
+                                   {{"operation", operationError}, {"refresh", refreshError}})};
     }
     return false;
   }
@@ -222,13 +225,13 @@ bool ProfileSettingsController::refreshAfterMutation(
 }
 
 ProfileResult ProfileSettingsController::finishMutation(
-    ProfileResult result, std::string successText,
-    std::optional<std::string> preferredProfileId) {
+    ProfileResult result, i18n::Text successText,
+    std::optional<std::string> preferredProfileId, i18n::Text failureText) {
   if (!result.ok()) {
-    const std::string operationError =
-        result.message.empty() ? "The profile action failed." : result.message;
+    const i18n::Text operationError = !failureText.empty() ? failureText :
+        (result.message.empty() ? i18n::message("settings.profiles.controller.action_failed") : i18n::Text(result.message));
     if (refreshAfterMutation(std::nullopt, operationError)) {
-      setFailure(result.error, result.message, "The profile action failed.");
+      setFailure(result.error, operationError, {});
     }
     return result;
   }
@@ -241,42 +244,45 @@ ProfileResult ProfileSettingsController::finishMutation(
   return result;
 }
 
-bool ProfileSettingsController::flushActiveState(std::string &errorMessage) {
-  errorMessage.clear();
+bool ProfileSettingsController::flushActiveState(i18n::Text &errorMessage) {
+  errorMessage = {};
+  std::string diagnostic;
   if (!dependencies_.flushSettings) {
-    errorMessage = "Settings persistence is unavailable.";
+    errorMessage = i18n::message("settings.profiles.controller.settings_unavailable");
     return false;
   }
   try {
-    if (!dependencies_.flushSettings(errorMessage)) {
+    if (!dependencies_.flushSettings(diagnostic)) {
+      errorMessage = diagnostic;
       if (errorMessage.empty()) {
-        errorMessage = "Unable to save the active profile settings.";
+        errorMessage = i18n::message("settings.profiles.controller.save_active_settings_failed");
       }
       return false;
     }
   } catch (const std::exception &error) {
-    errorMessage = exceptionMessage(error, "Unable to save profile settings");
+    errorMessage = exceptionMessage(error, "settings.profiles.controller.save_settings_failed_detail");
     return false;
   } catch (...) {
-    errorMessage = "Unable to save profile settings.";
+    errorMessage = i18n::message("settings.profiles.controller.save_settings_failed");
     return false;
   }
   if (!dependencies_.flushInput) {
-    errorMessage = "Input persistence is unavailable.";
+    errorMessage = i18n::message("settings.profiles.controller.input_unavailable");
     return false;
   }
   try {
-    if (!dependencies_.flushInput(errorMessage)) {
+    if (!dependencies_.flushInput(diagnostic)) {
+      errorMessage = diagnostic;
       if (errorMessage.empty()) {
-        errorMessage = "Unable to save the active input profile.";
+        errorMessage = i18n::message("settings.profiles.controller.save_active_input_failed");
       }
       return false;
     }
   } catch (const std::exception &error) {
-    errorMessage = exceptionMessage(error, "Unable to save input profile");
+    errorMessage = exceptionMessage(error, "settings.profiles.controller.save_input_failed_detail");
     return false;
   } catch (...) {
-    errorMessage = "Unable to save input profile.";
+    errorMessage = i18n::message("settings.profiles.controller.save_input_failed");
     return false;
   }
   return true;
@@ -295,16 +301,16 @@ bool ProfileSettingsController::acquireArchivePipeline() {
   try {
     if (!dependencies_.beginArchivePipeline(errorMessage)) {
       setFailure(ProfileError::SwitchBlocked, std::move(errorMessage),
-                 "Another profile archive action is active.");
+                 i18n::message("settings.profiles.controller.archive_busy"));
       return false;
     }
   } catch (const std::exception &error) {
     setFailure(ProfileError::SwitchBlocked,
-               exceptionMessage(error, "Unable to start archive action"), {});
+               exceptionMessage(error, "settings.profiles.controller.archive_start_failed_detail"), {});
     return false;
   } catch (...) {
     setFailure(ProfileError::SwitchBlocked, {},
-               "Unable to start archive action.");
+               i18n::message("settings.profiles.controller.archive_start_failed"));
     return false;
   }
   archivePipelineHeld_ = true;
@@ -332,31 +338,33 @@ void ProfileSettingsController::releaseArchivePipeline() {
 std::optional<std::uint64_t>
 ProfileSettingsController::beginSkinProfileCatalogMutation(
     std::optional<std::string_view> existingTarget,
-    std::string &errorMessage) {
-  errorMessage.clear();
+    i18n::Text &errorMessage) {
+  errorMessage = {};
+  std::string diagnostic;
   if (!dependencies_.beginSkinProfileCatalogMutation) {
     if (nextFallbackSkinMutationToken_ ==
         std::numeric_limits<std::uint64_t>::max()) {
-      errorMessage = "Profile mutation tokens are exhausted.";
+      errorMessage = i18n::message("settings.profiles.controller.tokens_exhausted");
       return std::nullopt;
     }
     return ++nextFallbackSkinMutationToken_;
   }
   try {
     auto token = dependencies_.beginSkinProfileCatalogMutation(existingTarget,
-                                                               errorMessage);
+                                                               diagnostic);
+    errorMessage = diagnostic;
     if (!token || *token == 0) {
       if (errorMessage.empty()) {
-        errorMessage = "Gameplay skin profile state is busy.";
+        errorMessage = i18n::message("settings.profiles.controller.skin_busy");
       }
       return std::nullopt;
     }
     return token;
   } catch (const std::exception &error) {
     errorMessage =
-        exceptionMessage(error, "Unable to fence gameplay skin profiles");
+        exceptionMessage(error, "settings.profiles.controller.skin_fence_failed_detail");
   } catch (...) {
-    errorMessage = "Unable to fence gameplay skin profiles.";
+    errorMessage = i18n::message("settings.profiles.controller.skin_fence_failed");
   }
   return std::nullopt;
 }
@@ -387,17 +395,17 @@ void ProfileSettingsController::abandonArchiveSkinMutation() noexcept {
 
 ProfileResult ProfileSettingsController::create(std::string name) {
   if (!actionsEnabled() || !dependencies_.create) {
-    auto result = unavailableResult("Profile creation is unavailable.");
-    setFailure(result.error, result.message, {});
+    auto result = profileFailure(ProfileError::SwitchBlocked, i18n::message("settings.profiles.controller.create_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
-  std::string barrierError;
+  i18n::Text barrierError;
   const auto token =
       beginSkinProfileCatalogMutation(std::nullopt, barrierError);
   if (!token) {
     auto result = profileFailure(ProfileError::SwitchBlocked,
                                  std::move(barrierError));
-    setFailure(result.error, result.message, {});
+    setFailure(result.error, result.text, {});
     return result;
   }
   bool mutationSucceeded = false;
@@ -405,18 +413,18 @@ ProfileResult ProfileSettingsController::create(std::string name) {
     finishSkinProfileCatalogMutation(*token, mutationSucceeded, true);
   });
   const auto profileCountBefore = profiles_.size();
-  ProfileResult result;
+  PresentedResult<ProfileResult> result;
   try {
     result = dependencies_.create(std::move(name));
   } catch (const std::exception &error) {
     result = profileFailure(
         ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to create profile"));
+        exceptionMessage(error, "settings.profiles.controller.create_failed_detail"));
   } catch (...) {
     result =
-        profileFailure(ProfileError::IoFailure, "Unable to create profile.");
+        profileFailure(ProfileError::IoFailure, i18n::message("settings.profiles.controller.create_failed"));
   }
-  result = finishMutation(std::move(result), "Profile created.", std::nullopt);
+  result = finishMutation(result, i18n::message("settings.profiles.controller.created"), std::nullopt, result.text);
   mutationSucceeded =
       result.ok() || profiles_.size() > profileCountBefore;
   return result;
@@ -425,32 +433,32 @@ ProfileResult ProfileSettingsController::create(std::string name) {
 ProfileResult ProfileSettingsController::rename(std::string_view profileId,
                                                 std::string name) {
   if (!actionsEnabled() || !dependencies_.rename) {
-    auto result = unavailableResult("Profile renaming is unavailable.");
-    setFailure(result.error, result.message, {});
+    auto result = profileFailure(ProfileError::SwitchBlocked, i18n::message("settings.profiles.controller.rename_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   if (!contains(profileId)) {
     auto result = profileFailure(ProfileError::NotFound,
-                                 "The selected profile is unavailable.");
-    setFailure(result.error, result.message, {});
+                                 i18n::message("settings.profiles.controller.selected_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   try {
     return finishMutation(dependencies_.rename(profileId, std::move(name)),
-                          "Profile renamed.", std::string(profileId));
+                          i18n::message("settings.profiles.controller.renamed"), std::string(profileId));
   } catch (const std::exception &error) {
     auto result =
         profileFailure(ProfileError::IoFailure,
-                       exceptionMessage(error, "Unable to rename profile"));
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
+                       exceptionMessage(error, "settings.profiles.controller.rename_failed_detail"));
+    if (refreshAfterMutation(std::nullopt, result.text)) {
+      setFailure(result.error, result.text, {});
     }
     return result;
   } catch (...) {
     auto result =
-        profileFailure(ProfileError::IoFailure, "Unable to rename profile.");
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
+        profileFailure(ProfileError::IoFailure, i18n::message("settings.profiles.controller.rename_failed"));
+    if (refreshAfterMutation(std::nullopt, result.text)) {
+      setFailure(result.error, result.text, {});
     }
     return result;
   }
@@ -459,32 +467,32 @@ ProfileResult ProfileSettingsController::rename(std::string_view profileId,
 ProfileResult ProfileSettingsController::duplicate(std::string_view profileId,
                                                    std::string name) {
   if (!actionsEnabled() || !dependencies_.duplicate) {
-    auto result = unavailableResult("Profile duplication is unavailable.");
-    setFailure(result.error, result.message, {});
+    auto result = profileFailure(ProfileError::SwitchBlocked, i18n::message("settings.profiles.controller.duplicate_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   if (!contains(profileId)) {
     auto result = profileFailure(ProfileError::NotFound,
-                                 "The selected profile is unavailable.");
-    setFailure(result.error, result.message, {});
+                                 i18n::message("settings.profiles.controller.selected_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   if (profileId == activeProfileId_) {
-    std::string errorMessage;
+    i18n::Text errorMessage;
     if (!flushActiveState(errorMessage)) {
       auto result =
           profileFailure(ProfileError::IoFailure, std::move(errorMessage));
-      setFailure(result.error, result.message, {});
+      setFailure(result.error, result.text, {});
       return result;
     }
   }
-  std::string barrierError;
+  i18n::Text barrierError;
   const auto token =
       beginSkinProfileCatalogMutation(std::nullopt, barrierError);
   if (!token) {
     auto result = profileFailure(ProfileError::SwitchBlocked,
                                  std::move(barrierError));
-    setFailure(result.error, result.message, {});
+    setFailure(result.error, result.text, {});
     return result;
   }
   bool mutationSucceeded = false;
@@ -492,19 +500,19 @@ ProfileResult ProfileSettingsController::duplicate(std::string_view profileId,
     finishSkinProfileCatalogMutation(*token, mutationSucceeded, true);
   });
   const auto profileCountBefore = profiles_.size();
-  ProfileResult result;
+  PresentedResult<ProfileResult> result;
   try {
     result = dependencies_.duplicate(profileId, std::move(name));
   } catch (const std::exception &error) {
     result = profileFailure(
         ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to duplicate profile"));
+        exceptionMessage(error, "settings.profiles.controller.duplicate_failed_detail"));
   } catch (...) {
     result = profileFailure(ProfileError::IoFailure,
-                            "Unable to duplicate profile.");
+                            i18n::message("settings.profiles.controller.duplicate_failed"));
   }
   result =
-      finishMutation(std::move(result), "Profile duplicated.", std::nullopt);
+      finishMutation(result, i18n::message("settings.profiles.controller.duplicated"), std::nullopt, result.text);
   mutationSucceeded =
       result.ok() || profiles_.size() > profileCountBefore;
   return result;
@@ -516,21 +524,21 @@ ProfileResult ProfileSettingsController::remove(std::string_view profileId) {
     auto result =
         profileFailure(contains(profileId) ? ProfileError::SwitchBlocked
                                            : ProfileError::NotFound,
-                       eligibility.reason);
-    setFailure(result.error, result.message, {});
+                       eligibility.text);
+    setFailure(result.error, result.text, {});
     return result;
   }
   if (!dependencies_.remove) {
-    auto result = unavailableResult("Profile deletion is unavailable.");
-    setFailure(result.error, result.message, {});
+    auto result = profileFailure(ProfileError::SwitchBlocked, i18n::message("settings.profiles.controller.delete_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
-  std::string barrierError;
+  i18n::Text barrierError;
   const auto token = beginSkinProfileCatalogMutation(profileId, barrierError);
   if (!token) {
     auto result = profileFailure(ProfileError::SwitchBlocked,
                                  std::move(barrierError));
-    setFailure(result.error, result.message, {});
+    setFailure(result.error, result.text, {});
     return result;
   }
   bool mutationSucceeded = false;
@@ -539,18 +547,18 @@ ProfileResult ProfileSettingsController::remove(std::string_view profileId) {
     finishSkinProfileCatalogMutation(*token, mutationSucceeded,
                                      profileStillExists);
   });
-  ProfileResult result;
+  PresentedResult<ProfileResult> result;
   try {
     result = dependencies_.remove(profileId);
   } catch (const std::exception &error) {
     result = profileFailure(
         ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to delete profile"));
+        exceptionMessage(error, "settings.profiles.controller.delete_failed_detail"));
   } catch (...) {
     result =
-        profileFailure(ProfileError::IoFailure, "Unable to delete profile.");
+        profileFailure(ProfileError::IoFailure, i18n::message("settings.profiles.controller.delete_failed"));
   }
-  result = finishMutation(std::move(result), "Profile deleted.", std::nullopt);
+  result = finishMutation(result, i18n::message("settings.profiles.controller.deleted"), std::nullopt, result.text);
   profileStillExists = contains(profileId);
   mutationSucceeded = result.ok() || !profileStillExists;
   return result;
@@ -560,57 +568,57 @@ ProfileSwitchResult
 ProfileSettingsController::activate(std::string_view profileId) {
   if (!actionsEnabled() || !dependencies_.activate) {
     auto result = switchFailure(ProfileError::SwitchBlocked,
-                                "Profile activation is unavailable.");
-    setFailure(result.error, result.message, {});
+                                i18n::message("settings.profiles.controller.activate_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   if (!contains(profileId)) {
     auto result = switchFailure(ProfileError::NotFound,
-                                "The selected profile is unavailable.");
-    setFailure(result.error, result.message, {});
+                                i18n::message("settings.profiles.controller.selected_unavailable"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   const std::string targetProfileId(profileId);
   const std::string activeProfileIdBefore = activeProfileId_;
-  ProfileSwitchResult result;
+  PresentedResult<ProfileSwitchResult> result;
   try {
     result = dependencies_.activate(targetProfileId);
   } catch (const std::exception &error) {
     result =
         switchFailure(ProfileError::IoFailure,
-                      exceptionMessage(error, "Unable to activate profile"));
+                      exceptionMessage(error, "settings.profiles.controller.activate_failed_detail"));
   } catch (...) {
     result =
-        switchFailure(ProfileError::IoFailure, "Unable to activate profile.");
+        switchFailure(ProfileError::IoFailure, i18n::message("settings.profiles.controller.activate_failed"));
   }
   const bool refreshed = refreshAfterMutation(
       result.ok() ? std::optional<std::string>(targetProfileId) : std::nullopt,
-      result.ok() ? std::string{} : result.message);
+      result.ok() ? i18n::Text{} : result.text);
   const bool authoritativeCommit =
       refreshed && activeProfileId_ == targetProfileId &&
       (result.ok() || activeProfileIdBefore != targetProfileId);
   if (authoritativeCommit) {
     if (!result.ok()) {
-      const std::string detail =
+      result = PresentedResult<ProfileSwitchResult>(ProfileError::None,
           result.message.empty()
-              ? "the switch reported a follow-up error."
-              : "the switch reported a follow-up error: " + result.message;
-      result = {.message = "Profile activated, but " + detail};
+              ? i18n::message("settings.profiles.controller.activation_followup")
+              : i18n::message("settings.profiles.controller.activation_followup_detail",
+                              {{"detail", result.text}}));
     }
-    setSuccess(result.message, "Profile activated.");
+    setSuccess(result.text, i18n::message("settings.profiles.controller.activated"));
     return result;
   }
   if (!result.ok()) {
     if (refreshed) {
-      setFailure(result.error, result.message, "Profile activation failed.");
+      setFailure(result.error, result.text, i18n::message("settings.profiles.controller.activation_failed"));
     }
     return result;
   }
   if (refreshed) {
     result = switchFailure(
         ProfileError::IntegrityFailure,
-        "Profile activation did not make the selected profile active.");
-    setFailure(result.error, result.message, {});
+        i18n::message("settings.profiles.controller.activation_not_committed"));
+    setFailure(result.error, result.text, {});
   }
   return result;
 }
@@ -622,15 +630,15 @@ ProfileSettingsController::requestDelete(std::string_view profileId) {
     auto result =
         profileFailure(contains(profileId) ? ProfileError::SwitchBlocked
                                            : ProfileError::NotFound,
-                       eligibility.reason);
-    setFailure(result.error, result.message, {});
+                       eligibility.text);
+    setFailure(result.error, result.text, {});
     return result;
   }
   selectedProfileId_ = std::string(profileId);
   confirmationPriorStatus_ = status_;
   confirmationProfileId_ = selectedProfileId_;
   phase_ = ProfileSettingsPhase::ConfirmDelete;
-  status_ = {.kind = ProfileSettingsStatusKind::Info, .message = {}};
+  status_ = {.kind = ProfileSettingsStatusKind::Info, .text = {}};
   const auto found =
       std::ranges::find_if(profiles_, [&](const PlayerProfile &candidate) {
         return candidate.id == profileId;
@@ -641,8 +649,8 @@ ProfileSettingsController::requestDelete(std::string_view profileId) {
 ProfileResult ProfileSettingsController::confirmDelete() {
   if (phase_ != ProfileSettingsPhase::ConfirmDelete ||
       confirmationProfileId_.empty()) {
-    auto result = unavailableResult("There is no profile deletion to confirm.");
-    setFailure(result.error, result.message, {});
+    auto result = profileFailure(ProfileError::SwitchBlocked, i18n::message("settings.profiles.controller.no_delete_confirmation"));
+    setFailure(result.error, result.text, {});
     return result;
   }
   const std::string profileId = confirmationProfileId_;
@@ -657,15 +665,15 @@ ProfileSettingsController::requestOverwrite(std::string_view profileId) {
     auto result =
         profileFailure(contains(profileId) ? ProfileError::SwitchBlocked
                                            : ProfileError::NotFound,
-                       eligibility.reason);
-    setFailure(result.error, result.message, {});
+                       eligibility.text);
+    setFailure(result.error, result.text, {});
     return result;
   }
   selectedProfileId_ = std::string(profileId);
   confirmationPriorStatus_ = status_;
   confirmationProfileId_ = selectedProfileId_;
   phase_ = ProfileSettingsPhase::ConfirmOverwrite;
-  status_ = {.kind = ProfileSettingsStatusKind::Info, .message = {}};
+  status_ = {.kind = ProfileSettingsStatusKind::Info, .text = {}};
   const auto found =
       std::ranges::find_if(profiles_, [&](const PlayerProfile &candidate) {
         return candidate.id == profileId;
@@ -716,7 +724,7 @@ bool ProfileSettingsController::beginPreparedExportPicker(
   }
   phase_ = ProfileSettingsPhase::PickingExport;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
-             .message = "Choose where to save the profile."};
+             .text = i18n::message("settings.profiles.controller.choose_save")};
   return true;
 }
 
@@ -731,7 +739,7 @@ void ProfileSettingsController::cancelPicker() {
   }
 }
 
-bool ProfileSettingsController::failPicker(std::string message) {
+bool ProfileSettingsController::failPicker(i18n::Text message) {
   if (phase_ != ProfileSettingsPhase::PickingImport &&
       phase_ != ProfileSettingsPhase::PickingExport) {
     return false;
@@ -740,14 +748,14 @@ bool ProfileSettingsController::failPicker(std::string message) {
   clearTransientPhase();
   releaseArchivePipeline();
   setFailure(ProfileError::IoFailure, std::move(message),
-             "Unable to access the selected profile archive document.");
+             i18n::message("settings.profiles.controller.document_failed"));
   return true;
 }
 
 ProfileArchiveResult ProfileArchiveTask::execute() {
   if (!operation_) {
     return archiveFailure(ProfileError::SwitchBlocked,
-                          "This profile archive task has already run.");
+                          i18n::message("settings.profiles.controller.task_already_run"));
   }
   auto operation = std::move(operation_);
   operation_ = {};
@@ -758,7 +766,7 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginExport(
     std::string_view profileId, const std::filesystem::path &destination) {
   if (!actionsEnabled() || !contains(profileId)) {
     setFailure(ProfileError::SwitchBlocked, {},
-               "Finish the current profile action first.");
+               i18n::message("settings.profiles.controller.finish_current"));
     return std::nullopt;
   }
   if (!acquireArchivePipeline()) {
@@ -766,13 +774,13 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginExport(
   }
   if (destination.empty()) {
     setFailure(ProfileError::IoFailure, {},
-               "Choose a profile archive destination.");
+               i18n::message("settings.profiles.controller.choose_destination"));
     clearTransientPhase();
     releaseArchivePipeline();
     return std::nullopt;
   }
   if (profileId == activeProfileId_) {
-    std::string errorMessage;
+    i18n::Text errorMessage;
     if (!flushActiveState(errorMessage)) {
       clearTransientPhase();
       releaseArchivePipeline();
@@ -784,7 +792,7 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginExport(
     clearTransientPhase();
     releaseArchivePipeline();
     setFailure(ProfileError::SwitchBlocked, {},
-               "Profile export is unavailable.");
+               i18n::message("settings.profiles.controller.export_unavailable"));
     return std::nullopt;
   }
 
@@ -793,23 +801,24 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginExport(
   confirmationPriorStatus_.reset();
   phase_ = ProfileSettingsPhase::PreparingExport;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
-             .message = "Preparing profile archive..."};
+             .text = i18n::message("settings.profiles.controller.preparing")};
   const std::uint64_t generation = nextArchiveGeneration_++;
   activeArchiveGeneration_ = generation;
   auto operation = dependencies_.exportProfile;
+  activeArchiveFailureText_ = std::make_shared<i18n::Text>();
+  const auto failureText = activeArchiveFailureText_;
   const std::string stableId(profileId);
   return ProfileArchiveTask(
       ProfileArchiveTaskKind::Export, generation,
-      [operation = std::move(operation), stableId, destination]() mutable {
+      [operation = std::move(operation), stableId, destination, failureText]() mutable -> ProfileArchiveResult {
         try {
           return operation(stableId, destination);
         } catch (const std::exception &error) {
-          return archiveFailure(
-              ProfileError::IoFailure,
-              exceptionMessage(error, "Unable to export profile"));
+          *failureText = exceptionMessage(error, "settings.profiles.controller.export_failed_detail");
+          return archiveFailure(ProfileError::IoFailure, *failureText);
         } catch (...) {
-          return archiveFailure(ProfileError::IoFailure,
-                                "Unable to export profile.");
+          *failureText = i18n::message("settings.profiles.controller.export_failed");
+          return archiveFailure(ProfileError::IoFailure, *failureText);
         }
       });
 }
@@ -834,8 +843,8 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
       releaseArchivePipeline();
     }
     setFailure(ProfileError::SwitchBlocked, {},
-               createImport ? "Finish the current profile action first."
-                            : "Confirm the overwrite target first.");
+               createImport ? i18n::message("settings.profiles.controller.finish_current")
+                            : i18n::message("settings.profiles.controller.confirm_overwrite"));
     return std::nullopt;
   }
   if (!acquireArchivePipeline()) {
@@ -847,7 +856,7 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
   if (archive.empty()) {
     clearTransientPhase();
     releaseArchivePipeline();
-    setFailure(ProfileError::IoFailure, {}, "Choose a profile archive file.");
+    setFailure(ProfileError::IoFailure, {}, i18n::message("settings.profiles.controller.choose_archive"));
     return std::nullopt;
   }
   if (!createImport) {
@@ -859,7 +868,7 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
     if (!eligibility.enabled) {
       clearTransientPhase();
       releaseArchivePipeline();
-      setFailure(ProfileError::SwitchBlocked, eligibility.reason, {});
+      setFailure(ProfileError::SwitchBlocked, eligibility.text, {});
       return std::nullopt;
     }
   }
@@ -867,11 +876,11 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
     clearTransientPhase();
     releaseArchivePipeline();
     setFailure(ProfileError::SwitchBlocked, {},
-               "Profile import is unavailable.");
+               i18n::message("settings.profiles.controller.import_unavailable"));
     return std::nullopt;
   }
 
-  std::string barrierError;
+  i18n::Text barrierError;
   std::optional<std::string_view> existingTarget;
   if (!createImport) {
     existingTarget = *options.overwriteProfileId;
@@ -882,7 +891,7 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
     clearTransientPhase();
     releaseArchivePipeline();
     setFailure(ProfileError::SwitchBlocked, std::move(barrierError),
-               "Gameplay skin profile state is busy.");
+               i18n::message("settings.profiles.controller.skin_busy"));
     return std::nullopt;
   }
 
@@ -892,24 +901,25 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
     confirmationPriorStatus_.reset();
     phase_ = ProfileSettingsPhase::Importing;
     status_ = {.kind = ProfileSettingsStatusKind::Info,
-               .message = "Importing profile archive..."};
+               .text = i18n::message("settings.profiles.controller.importing")};
     const std::uint64_t generation = nextArchiveGeneration_++;
     activeArchiveGeneration_ = generation;
     activeArchiveSkinMutationTarget_ =
         createImport ? std::nullopt : options.overwriteProfileId;
     auto operation = dependencies_.importProfile;
+    activeArchiveFailureText_ = std::make_shared<i18n::Text>();
+    const auto failureText = activeArchiveFailureText_;
     return ProfileArchiveTask(
         ProfileArchiveTaskKind::Import, generation,
-        [operation = std::move(operation), archive, options]() mutable {
+        [operation = std::move(operation), archive, options, failureText]() mutable -> ProfileArchiveResult {
           try {
             return operation(archive, options);
           } catch (const std::exception &error) {
-            return archiveFailure(
-                ProfileError::IoFailure,
-                exceptionMessage(error, "Unable to import profile"));
+            *failureText = exceptionMessage(error, "settings.profiles.controller.import_failed_detail");
+            return archiveFailure(ProfileError::IoFailure, *failureText);
           } catch (...) {
-            return archiveFailure(ProfileError::IoFailure,
-                                  "Unable to import profile.");
+            *failureText = i18n::message("settings.profiles.controller.import_failed");
+            return archiveFailure(ProfileError::IoFailure, *failureText);
           }
         });
   } catch (...) {
@@ -918,7 +928,7 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
     clearTransientPhase();
     releaseArchivePipeline();
     setFailure(ProfileError::IoFailure, {},
-               "Unable to retain the profile import mutation barrier.");
+               i18n::message("settings.profiles.controller.retain_barrier_failed"));
     return std::nullopt;
   }
 }
@@ -937,6 +947,9 @@ bool ProfileSettingsController::completeArchive(
     return false;
   }
 
+  const i18n::Text failureText = activeArchiveFailureText_
+                                      ? *activeArchiveFailureText_ : i18n::Text{};
+  activeArchiveFailureText_.reset();
   activeArchiveGeneration_ = 0;
   const auto skinMutationToken =
       std::exchange(activeArchiveSkinMutationToken_, 0);
@@ -946,10 +959,10 @@ bool ProfileSettingsController::completeArchive(
   releaseArchivePipeline();
   const std::string preferred =
       result.profile ? result.profile->id : selectedProfileId_;
-  const std::string operationError =
+  const i18n::Text operationError =
       result.ok()
           ? std::string{}
-          : (result.message.empty() ? "The profile archive action failed."
+          : (!failureText.empty() ? failureText : result.message.empty() ? i18n::message("settings.profiles.controller.archive_failed")
                                     : result.message);
   const bool refreshed = refreshAfterMutation(preferred, operationError);
   const bool profileStillExists =
@@ -958,15 +971,15 @@ bool ProfileSettingsController::completeArchive(
                                    profileStillExists);
   if (!result.ok()) {
     if (refreshed) {
-      setFailure(result.error, result.message,
-                 "The profile archive action failed.");
+      setFailure(result.error, operationError,
+                 i18n::message("settings.profiles.controller.archive_failed"));
     }
     return true;
   }
   if (refreshed) {
     setSuccess(result.message, kind == ProfileArchiveTaskKind::Export
-                                   ? "Profile exported."
-                                   : "Profile imported.");
+                                   ? i18n::message("settings.profiles.controller.exported")
+                                   : i18n::message("settings.profiles.controller.imported"));
   }
   return true;
 }
@@ -984,9 +997,9 @@ ProfileArchiveResult ProfileSettingsController::exportProfile(
     std::string_view profileId, const std::filesystem::path &destination) {
   auto task = beginExport(profileId, destination);
   if (!task) {
-    return unavailableArchiveResult(status_.message.empty()
-                                        ? "Profile export could not start."
-                                        : status_.message);
+    return unavailableArchiveResult(status_.text.empty()
+                                        ? i18n::message("settings.profiles.controller.export_start_failed").resolve()
+                                        : status_.text.resolve());
   }
   const auto kind = task->kind();
   const auto generation = task->generation();
@@ -1000,9 +1013,9 @@ ProfileSettingsController::importProfile(const std::filesystem::path &archive,
                                          const ProfileImportOptions &options) {
   auto task = beginImport(archive, options);
   if (!task) {
-    return unavailableArchiveResult(status_.message.empty()
-                                        ? "Profile import could not start."
-                                        : status_.message);
+    return unavailableArchiveResult(status_.text.empty()
+                                        ? i18n::message("settings.profiles.controller.import_start_failed").resolve()
+                                        : status_.text.resolve());
   }
   const auto kind = task->kind();
   const auto generation = task->generation();
@@ -1011,23 +1024,24 @@ ProfileSettingsController::importProfile(const std::filesystem::path &archive,
   return result;
 }
 
-void ProfileSettingsController::recordError(std::string message) {
+void ProfileSettingsController::recordError(i18n::Text message) {
   if (message.empty()) {
-    message = "The profile action failed.";
+    message = i18n::message("settings.profiles.controller.action_failed");
   }
   status_ = {.kind = ProfileSettingsStatusKind::Error,
-             .message = std::move(message)};
+             .text = std::move(message)};
 }
 
-void ProfileSettingsController::recordWarning(std::string message) {
+void ProfileSettingsController::recordWarning(i18n::Text message) {
   if (message.empty()) {
     return;
   }
   if (status_.kind == ProfileSettingsStatusKind::Warning &&
-      !status_.message.empty() && status_.message != message) {
-    status_.message += " " + message;
+      !status_.text.empty() && status_.text != message) {
+    status_.text = i18n::message("settings.profiles.controller.combined_warnings",
+                                  {{"prior", status_.text}, {"warning", message}});
     return;
   }
   status_ = {.kind = ProfileSettingsStatusKind::Warning,
-             .message = std::move(message)};
+             .text = std::move(message)};
 }

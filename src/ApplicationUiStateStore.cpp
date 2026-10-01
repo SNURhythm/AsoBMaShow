@@ -1,6 +1,7 @@
 #include "ApplicationUiStateStore.h"
 
 #include "VersionedJson.h"
+#include "i18n/Localization.h"
 
 #include <array>
 #include <string_view>
@@ -78,6 +79,16 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
     return result;
   }
 
+  const auto language = loaded.document.find("language");
+  if (language != loaded.document.end()) {
+    if (language->is_string() &&
+        i18n::isLanguagePreference(language->get<std::string>())) {
+      result.state.language = language->get<std::string>();
+    } else {
+      result.diagnostics.emplace_back("Unsupported language; using system language");
+    }
+  }
+
   const auto toolbar = loaded.document.find("musicSelectToolbar");
   if (toolbar == loaded.document.end() || !toolbar->is_object()) {
     result.status = ApplicationUiStateLoadStatus::Invalid;
@@ -112,6 +123,8 @@ bool ApplicationUiStateStore::SaveAtomic(const std::filesystem::path &path,
   const auto &toolbar = state.musicSelectToolbar;
   const json document = {
       {"schemaVersion", ApplicationUiState::kSchemaVersion},
+      {"language", i18n::isLanguagePreference(state.language)
+                       ? state.language : "system"},
       {"musicSelectToolbar",
        {{"mode", modeName(toolbar.mode)},
         {"x", toolbar.x},
