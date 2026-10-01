@@ -4,6 +4,14 @@ AsoBMaShow is licensed under GPL-3.0-or-later. Some bundled or linked
 third-party components have their own notices and additional distribution
 requirements.
 
+## iPad hardware button data
+
+The Guided Access cue includes an offline subset of DeviceKit hardware
+identifiers and AppMana's Apple dimensional-drawing measurements, under MIT
+licenses. Source versions and coordinate derivations are recorded in
+`docs/ipad-hardware-button-cue.md`; notices are bundled in
+`assets/legal/ipad-device-data.txt`. Apple drawings are referenced, not bundled.
+
 ## 7-Zip SDK
 
 AsoBMaShow uses the 7-Zip SDK through the vcpkg `7zip` port for indexed archive

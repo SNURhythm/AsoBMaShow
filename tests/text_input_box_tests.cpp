@@ -453,6 +453,28 @@ void testReminderDescriptionPreservesLineBreaks() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testHardwareButtonCueTextFits() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const auto key : {"gameplay.ipad_gesture_reminder.home_button",
+                           "gameplay.ipad_gesture_reminder.top_button"}) {
+      TextView view("assets/fonts/notosanscjkjp.ttf", 22);
+      view.setDeferredTextureMaterialization(true);
+      view.setSize(360, 112);
+      view.setPadding(Edge::All, 8);
+      view.setWrap(true);
+      view.setAlign(TextView::CENTER);
+      view.setLocalizedText(i18n::message(key));
+      view.applyYogaLayout();
+      expect(view.textureWidth() <= view.getContentWidth() &&
+             view.textureHeight() <= view.getContentHeight(),
+             "localized hardware cue fits inside its padded label");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testDeferredTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -520,6 +542,7 @@ int main() {
   testMultilineAlignmentAcrossFonts();
   testComposedTextPreservesDescenders();
   testReminderDescriptionPreservesLineBreaks();
+  testHardwareButtonCueTextFits();
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();

@@ -9,6 +9,7 @@
 #include "../../BeatorajaScoreMetrics.h"
 #include "GameplayBmsResourceAvailability.h"
 #include "GamePlayStartup.h"
+#include "GuidedAccessButtonCue.h"
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
@@ -3783,6 +3784,25 @@ void GamePlayScene::showGuidedAccessReminder() {
     help->setVAlign(TextView::MIDDLE);
     help->setThemedColor(ui_theme::textSecondary);
     overlay->addView(help);
+    auto *controls = new View();
+    controls->setFlexDirection(FlexDirection::Row);
+    controls->setGap(20);
+    overlay->addView(controls);
+    auto *back = new Button();
+    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    label->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.back"));
+    label->setAlign(TextView::CENTER);
+    label->setVAlign(TextView::MIDDLE);
+    label->setThemedColor(ui_theme::textPrimary);
+    back->setContentView(label);
+    back->setSize(300, 64);
+    back->setCornerRadius(ui_theme::controlRadius());
+    back->setThemedBackgroundColors(
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
+    back->setOnClickListener([this]() { returnFromGuidedAccessReminder(); });
+    controls->addView(back);
     auto *dismiss = new Button();
     auto *dismissLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     dismissLabel->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.dismiss"));
@@ -3790,35 +3810,60 @@ void GamePlayScene::showGuidedAccessReminder() {
     dismissLabel->setVAlign(TextView::MIDDLE);
     dismissLabel->setThemedColor(ui_theme::textPrimary);
     dismiss->setContentView(dismissLabel);
-    dismiss->setSize(240, 52);
+    dismiss->setSize(300, 64);
     dismiss->setCornerRadius(ui_theme::controlRadius());
     dismiss->setThemedBackgroundColors(
         []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
         []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
         []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
     dismiss->setOnClickListener([this]() { guidedAccessReminderDismissed = true; });
-    overlay->addView(dismiss);
-    auto *back = new Button();
-    auto *label = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
-    label->setText(ui_icons::textForCodepoint(kIconBack));
-    label->setAlign(TextView::CENTER);
-    label->setVAlign(TextView::MIDDLE);
-    label->setThemedColor(ui_theme::textPrimary);
-    back->setContentView(label);
-    back->setSize(52, 52);
-    back->setPosition(32, 32, YGPositionTypeAbsolute);
-    back->setCornerRadius(ui_theme::controlRadius());
-    back->setThemedBackgroundColors(
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
-    back->setOnClickListener([this]() { returnFromGuidedAccessReminder(); });
-    overlay->addView(back);
+    controls->addView(dismiss);
+    guidedAccessButtonMarker = new View();
+    guidedAccessButtonMarker->setPosition(0, 0, YGPositionTypeAbsolute);
+    guidedAccessButtonMarker->setCornerRadius(3);
+    overlay->addView(guidedAccessButtonMarker);
+    guidedAccessButtonHint = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    guidedAccessButtonHint->setPosition(0, 0, YGPositionTypeAbsolute);
+    guidedAccessButtonHint->setAlign(TextView::CENTER);
+    guidedAccessButtonHint->setVAlign(TextView::MIDDLE);
+    guidedAccessButtonHint->setWrap(true);
+    guidedAccessButtonHint->setPadding(Edge::All, 8);
+    guidedAccessButtonHint->setThemedColor(ui_theme::textPrimary);
+    guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
+    guidedAccessButtonHint->setCornerRadius(ui_theme::controlRadius());
+    overlay->addView(guidedAccessButtonHint);
   }
   guidedAccessReminderLayout->setSize(rendering::window_width,
                                      rendering::window_height);
   guidedAccessReminderLayout->setVisible(true);
   const bool confirming = guidedAccessReminder.confirming();
+  ipad_hardware::ButtonLocation buttonLocation;
+  gameplay::ButtonCueInsets cueInsets;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  buttonLocation = GetIOSHardwareButtonLocation();
+  const auto safeInsets = GetIOSSafeAreaInsetsNormalized();
+  cueInsets = {static_cast<int>(safeInsets.top * rendering::window_height),
+               static_cast<int>(safeInsets.right * rendering::window_width),
+               static_cast<int>(safeInsets.bottom * rendering::window_height),
+               static_cast<int>(safeInsets.left * rendering::window_width)};
+#endif
+  const auto cue = gameplay::layoutButtonCue(buttonLocation, rendering::window_width,
+                                            rendering::window_height, cueInsets);
+  guidedAccessButtonMarker->setVisible(!confirming && cue.marker.width > 0);
+  guidedAccessButtonMarker->setSize(cue.marker.width, cue.marker.height);
+  guidedAccessButtonMarker->setPositionNoLayout(cue.marker.x, cue.marker.y);
+  // Three gentle pulses suggest triple-clicking, followed by a pause.
+  const float pulseTime = static_cast<float>(SDL_GetTicks64() % 1800);
+  const float pulse = pulseTime < 900 ? std::sin(3.14159265F * pulseTime / 300) : 0;
+  guidedAccessButtonMarker->setBackgroundColor(
+      ui_theme::withAlpha(ui_theme::lime(), 150 + static_cast<int>(105 * pulse * pulse)));
+  guidedAccessButtonHint->setVisible(!confirming && cue.label.width > 0);
+  guidedAccessButtonHint->setSize(cue.label.width, cue.label.height);
+  guidedAccessButtonHint->setPositionNoLayout(cue.label.x, cue.label.y);
+  guidedAccessButtonHint->setLocalizedText(i18n::message(
+      buttonLocation.button == ipad_hardware::Button::Home
+          ? "gameplay.ipad_gesture_reminder.home_button"
+          : "gameplay.ipad_gesture_reminder.top_button"));
   const float progress = guidedAccessReminder.progress();
   const bool locked = confirming && progress >= 0.18F;
   guidedAccessReminderIcon->setText(
@@ -6813,6 +6858,8 @@ void GamePlayScene::cleanupScene() {
   guidedAccessReminderIcon = nullptr;
   guidedAccessReminderTitle = nullptr;
   guidedAccessReminderHelp = nullptr;
+  guidedAccessButtonMarker = nullptr;
+  guidedAccessButtonHint = nullptr;
   guidedAccessReminderPending = false;
   skinResetLayoutButton = nullptr;
   SDL_Log("Cleaned up GamePlayScene");

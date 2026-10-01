@@ -37,6 +37,7 @@
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 
 namespace {
@@ -5522,6 +5523,48 @@ bool IsIOSGuidedAccessEnabled() {
     SDL_Log("iOS Guided Access: %s (polled change)", current ? "enabled" : "disabled");
   }
   return current;
+}
+
+ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
+  using namespace ipad_hardware;
+  static const Model model = [] {
+#if TARGET_OS_SIMULATOR
+    if (const char *identifier = std::getenv("SIMULATOR_MODEL_IDENTIFIER")) {
+      return modelForIdentifier(identifier);
+    }
+#endif
+    struct utsname systemInfo{};
+    return uname(&systemInfo) == 0 ? modelForIdentifier(systemInfo.machine) : Model{};
+  }();
+  UIWindow *window = FindActiveWindow();
+  Orientation orientation = Orientation::Unknown;
+  bool fillsBuiltInScreen = false;
+  if (window != nil && window.screen == UIScreen.mainScreen) {
+    // Interface and device orientation reverse the landscape enum names.
+    // Use the scene so rotation lock and a tablet lying flat remain correct.
+    switch (window.windowScene.interfaceOrientation) {
+      case UIInterfaceOrientationPortrait: orientation = Orientation::Portrait; break;
+      case UIInterfaceOrientationPortraitUpsideDown:
+        orientation = Orientation::PortraitUpsideDown; break;
+      case UIInterfaceOrientationLandscapeLeft: orientation = Orientation::LandscapeLeft; break;
+      case UIInterfaceOrientationLandscapeRight: orientation = Orientation::LandscapeRight; break;
+      default: break;
+    }
+    UIView *view = window.rootViewController.view;
+    if (view != nil) {
+      const CGRect viewport = [view convertRect:view.bounds
+                             toCoordinateSpace:window.screen.coordinateSpace];
+      const CGRect screen = window.screen.bounds;
+      // Split View, Stage Manager, and external displays cannot place a cue
+      // against the hardware by treating the app's edges as screen edges.
+      fillsBuiltInScreen = screen.size.width > 0 && screen.size.height > 0 &&
+          std::abs(viewport.origin.x - screen.origin.x) < 1.0 &&
+          std::abs(viewport.origin.y - screen.origin.y) < 1.0 &&
+          std::abs(viewport.size.width - screen.size.width) < 1.0 &&
+          std::abs(viewport.size.height - screen.size.height) < 1.0;
+    }
+  }
+  return locateButton(model, orientation, fillsBuiltInScreen);
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

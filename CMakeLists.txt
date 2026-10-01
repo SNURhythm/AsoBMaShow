@@ -5664,6 +5664,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME ios_guided_access_status_tests
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/ios_guided_access_status_tests.py)
+        add_test(NAME ios_hardware_button_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/ios_hardware_button_tests.py)
         add_test(NAME unzip_marker_io_tests
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
         set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)
@@ -7345,6 +7348,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(guided_access_reminder_tests tests/guided_access_reminder_tests.cpp)
     target_compile_features(guided_access_reminder_tests PRIVATE cxx_std_23)
 
+    add_executable(ipad_hardware_button_tests tests/ipad_hardware_button_tests.cpp)
+    target_compile_features(ipad_hardware_button_tests PRIVATE cxx_std_23)
+
     add_executable(start_select_control_tests
         tests/start_select_control_tests.cpp
     )
@@ -8689,6 +8695,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(realtime_gameplay_input_registration_tests)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
     asobmashow_register_test(guided_access_reminder_tests)
+    asobmashow_register_test(ipad_hardware_button_tests)
     asobmashow_register_test(start_select_control_tests)
     asobmashow_register_test(beatoraja_hispeed_tests)
     asobmashow_register_test(settings_scene_preview_authority_tests)
