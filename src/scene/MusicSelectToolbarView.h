@@ -6,15 +6,18 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <set>
 #include <vector>
 
 class TextView;
+class Button;
 
 enum class MusicSelectToolbarControl {
   Drag,
   ChartViewer,
   ChartRecords,
   RevealChart,
+  Download,
   MusicPlayer,
   Tasks,
   PlayOptions,
@@ -29,6 +32,7 @@ struct MusicSelectToolbarCallbacks {
   std::function<void()> openChartViewer;
   std::function<void()> openChartRecords;
   std::function<void()> revealChart;
+  std::function<void()> download;
   std::function<void()> openMusicPlayer;
   std::function<void()> openTasks;
   std::function<void()> openPlayOptions;
@@ -41,6 +45,7 @@ struct MusicSelectToolbarRenderedControl {
   MusicSelectToolbarControl control = MusicSelectToolbarControl::Drag;
   std::uint32_t codepoint = 0;
   TextView *icon = nullptr;
+  Button *button = nullptr;
 };
 
 class MusicSelectToolbarView final : public View {
@@ -58,6 +63,8 @@ public:
 
   void applyState(MusicSelectToolbarState state);
   void activateControl(MusicSelectToolbarControl control);
+  void setControlEnabled(MusicSelectToolbarControl control, bool enabled);
+  [[nodiscard]] bool isControlEnabled(MusicSelectToolbarControl control) const;
   void setViewportSize(int width, int height);
 
 private:
@@ -74,6 +81,7 @@ private:
   MusicSelectToolbarState state_;
   MusicSelectToolbarCallbacks callbacks_;
   std::vector<MusicSelectToolbarRenderedControl> controls_;
+  std::set<MusicSelectToolbarControl> disabledControls_;
   int viewportWidth_ = 0;
   int viewportHeight_ = 0;
   bool mouseDragging_ = false;

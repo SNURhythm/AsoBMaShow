@@ -370,13 +370,7 @@ void MusicSelectBarManager::rebuildRows(
     rowIndex_.try_emplace((*rows_)[index].id.value, index);
   }
   selectedIndex_ = 0;
-  if (preferred) {
-    const auto found = std::ranges::find((*rows_), *preferred,
-                                         &MusicSelectBar::id);
-    if (found != (*rows_).end()) {
-      selectedIndex_ = static_cast<std::size_t>(found - (*rows_).begin());
-    }
-  }
+  if (preferred) (void)select(*preferred);
 }
 
 bool MusicSelectBarManager::open(const MusicSelectBarId &id) {
@@ -559,9 +553,29 @@ bool MusicSelectBarManager::select(const MusicSelectBarId &id) {
     return true;
   }
   const auto found = rowIndex_.find(id.value);
-  if (found == rowIndex_.end()) return false;
-  selectedIndex_ = found->second;
-  return true;
+  if (found != rowIndex_.end()) {
+    selectedIndex_ = found->second;
+    return true;
+  }
+  // Missing MD5-only table entries gain a SHA256 identity after downloading.
+  // Keep their previous ID usable within the same table/folder context.
+  const auto md5Marker = id.value.rfind(":md5:");
+  if (md5Marker == std::string::npos) return false;
+  const std::string_view previous(id.value);
+  for (std::size_t index = 0; index < rows_->size(); ++index) {
+    const auto &row = (*rows_)[index];
+    if (row.kind != skin::MusicSelectBarKind::Song || !row.chart ||
+        row.chart->meta.MD5.empty() || row.chart->meta.SHA256.empty() ||
+        row.chart->meta.MD5 != previous.substr(md5Marker + 5)) continue;
+    const std::string_view current(row.id.value);
+    if (current.size() > md5Marker &&
+        current.substr(0, md5Marker) == previous.substr(0, md5Marker) &&
+        current.substr(md5Marker) == ":sha256:" + row.chart->meta.SHA256) {
+      selectedIndex_ = index;
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<MusicSelectBar>

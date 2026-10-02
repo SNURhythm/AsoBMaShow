@@ -196,6 +196,10 @@ struct Callbacks {
   std::function<void(const ModernCourseResultRecord &, bool)> recallModernCourse;
   std::function<void(const IrRemoteRecordId &, const std::string &)> recallRemote;
 };
+struct FindBmsModal {
+  FindBmsTask task;
+  void cancelAndWait() { task.stopAndWait(); }
+};
 struct FindBmsLifetime {
   std::atomic_bool workerFinished = false;
   std::atomic_bool dependenciesAlive = true;
@@ -227,8 +231,8 @@ struct MainMenuScene {
   ReplayRecordsModal modal;
   ReplayRecordsModal *recordsModal_ = &modal;
   PreviewWorker *previewWorker_ = nullptr;
-  // Preserve the production ordering: Find BMS worker precedes its state.
-  FindBmsTask findBmsTask;
+  // Explicit owner teardown must stop the modal before callback dependencies.
+  std::unique_ptr<FindBmsModal> findBmsModal_ = std::make_unique<FindBmsModal>();
   FindBmsDependencies findBmsDependencies;
   std::atomic_bool willStart = false;
   replay::ReplayExportJob replayExportJob_;
@@ -473,7 +477,7 @@ void testDestructionStopsFindBmsBeforeStatusDependencies() {
   auto released = release.get_future().share();
   auto scene = std::make_unique<MainMenuScene>();
   scene->findBmsDependencies.lifetime = &lifetime;
-  scene->findBmsTask.start(
+  scene->findBmsModal_->task.start(
       [&](std::atomic_bool &cancelled, BmsSearchDownloadProgressCallback) {
         entered.set_value();
         const auto deadline = std::chrono::steady_clock::now() + 5s;

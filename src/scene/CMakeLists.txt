@@ -8,6 +8,7 @@ target_sources(main PRIVATE
     CourseGameplaySessionBuilder.cpp
     DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
+    FindBmsModal.cpp
     FindBmsProgressPresentation.cpp
     FindBmsTask.cpp
     IrUploadsController.cpp

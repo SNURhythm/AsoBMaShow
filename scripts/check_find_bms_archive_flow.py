@@ -13,6 +13,8 @@ root = (
 settings_path = root / "src/scene/SettingsSceneLayout.cpp"
 settings_tables_path = root / "src/scene/SettingsSceneTables.cpp"
 main_menu_path = root / "src/scene/MainMenuScene.cpp"
+modal_path = root / "src/scene/FindBmsModal.cpp"
+music_select_path = root / "src/scene/MusicSelectScene.cpp"
 download_support_path = root / "src/bms_search/DownloadSupport.cpp"
 horie_path = root / "src/bms_search/HorieYuukaDriver.cpp"
 package_sources_path = root / "src/bms_search/PackageSourceDrivers.cpp"
@@ -23,6 +25,8 @@ for path in (
     settings_path,
     settings_tables_path,
     main_menu_path,
+    modal_path,
+    music_select_path,
     download_support_path,
     horie_path,
     package_sources_path,
@@ -36,6 +40,8 @@ for path in (
 settings_source = settings_path.read_text(encoding="utf-8")
 settings_tables_source = settings_tables_path.read_text(encoding="utf-8")
 main_menu_source = main_menu_path.read_text(encoding="utf-8")
+modal_source = modal_path.read_text(encoding="utf-8")
+music_select_source = music_select_path.read_text(encoding="utf-8")
 download_support_source = download_support_path.read_text(encoding="utf-8")
 horie_source = horie_path.read_text(encoding="utf-8")
 package_sources_source = package_sources_path.read_text(encoding="utf-8")
@@ -58,33 +64,31 @@ require(
     "Settings must toggle the persisted Find BMS option",
 )
 require(
-    main_menu_source.count("skipUnarchivingForNonSolidArchives") >= 2,
+    modal_source.count("callbacks_.downloadOptions()") == 2
+    and "findBmsSkipUnarchivingForNonSolidArchives" in main_menu_source
+    and "findBmsSkipUnarchivingForNonSolidArchives" in music_select_source,
     "automatic and candidate downloads must capture the option",
 )
 require(
-    "startFindBmsPendingArtifactResolution(" in main_menu_source
-    and "BmsSearchPendingArtifactDecision::Keep" in main_menu_source
-    and "BmsSearchPendingArtifactDecision::Delete" in main_menu_source,
+    "startPendingArtifactResolution(" in modal_source
+    and "BmsSearchPendingArtifactDecision::Keep" in modal_source
+    and "BmsSearchPendingArtifactDecision::Delete" in modal_source,
     "Find BMS mismatch UI must expose Keep and Delete",
 )
 require(
-    'makeModalButton(i18n::message("library.find_bms.keep_files.label")' in main_menu_source
-    and 'makeModalButton(i18n::message("library.find_bms.delete_files.label")' in main_menu_source,
+    'makeModalButton(i18n::message("library.find_bms.keep_files.label")' in modal_source
+    and 'makeModalButton(i18n::message("library.find_bms.delete_files.label")' in modal_source,
     "Find BMS mismatch actions must use the approved visible labels",
 )
 require(
     "findBmsDialogPolicy(findBmsTask.running(), findBmsResult)"
-    in main_menu_source,
+    in modal_source,
     "Find BMS dismissal must use the tested dialog policy",
 )
-close_handler_start = main_menu_source.find(
-    "findBmsCloseButton->setOnClickListener([this]()"
-)
-close_handler_end = main_menu_source.find(
-    "findBmsKeepFilesButton->setOnClickListener", close_handler_start
-)
-close_handler = main_menu_source[close_handler_start:close_handler_end]
-close_apply_index = close_handler.find("applyFindBmsUpdates();")
+close_handler_start = modal_source.find("void FindBmsModal::cancelOrClose()")
+close_handler_end = modal_source.find("void FindBmsModal::build(", close_handler_start)
+close_handler = modal_source[close_handler_start:close_handler_end]
+close_apply_index = close_handler.find("update();")
 close_policy_index = close_handler.find("findBmsDialogPolicy(")
 require(
     close_apply_index >= 0
@@ -92,14 +96,10 @@ require(
     and close_apply_index < close_policy_index,
     "Find BMS close action must apply queued results before dismissal policy",
 )
-hide_handler_start = main_menu_source.find(
-    "void MainMenuScene::hideFindBmsModal()"
-)
-hide_handler_end = main_menu_source.find(
-    "void MainMenuScene::refreshFindBmsModal()", hide_handler_start
-)
-hide_handler = main_menu_source[hide_handler_start:hide_handler_end]
-hide_apply_index = hide_handler.find("applyFindBmsUpdates();")
+hide_handler_start = modal_source.find("void FindBmsModal::hide()")
+hide_handler_end = modal_source.find("void FindBmsModal::refresh(", hide_handler_start)
+hide_handler = modal_source[hide_handler_start:hide_handler_end]
+hide_apply_index = hide_handler.find("update();")
 hide_policy_index = hide_handler.find("findBmsDialogPolicy(")
 require(
     hide_apply_index >= 0
@@ -121,11 +121,13 @@ require(
     "Settings must persist the selected Find BMS download folder",
 )
 require(
-    "SelectPrimaryStorageEntry()" in main_menu_source,
+    "SelectPrimaryStorageEntry()" in modal_source,
     "Find BMS must resolve the repository-selected download folder",
 )
 require(
-    main_menu_source.count("preferredBmsDownloadRoot()") >= 3,
+    modal_source.count("callbacks_.downloadRoot()") == 2
+    and "return findBmsDownloadRoot(" in main_menu_source
+    and "return findBmsDownloadRoot(" in music_select_source,
     "automatic and candidate downloads must share destination resolution",
 )
 require(
@@ -148,18 +150,15 @@ require(
 )
 require(
     "enqueueDownloadedPathIndexTask(" in main_menu_source
-    and "findBmsResult.outputPath" in main_menu_source,
+    and "result.outputPath" in main_menu_source
+    and ".downloadedPath = result.outputPath" in music_select_source
+    and "callbacks_.filesReady(" in modal_source
+    and "findBmsModalChart, findBmsResult," in modal_source,
     "successful Find BMS downloads must index their exact committed output",
 )
-apply_find_bms_start = main_menu_source.find(
-    "void MainMenuScene::applyFindBmsUpdates()"
-)
-apply_find_bms_end = main_menu_source.find(
-    "void MainMenuScene::openFindBmsResultUrl(", apply_find_bms_start
-)
-apply_find_bms = main_menu_source[apply_find_bms_start:apply_find_bms_end]
 require(
-    "findBmsResult.removedPaths" in apply_find_bms,
+    "result.removedPaths" in main_menu_source
+    and "result.removedPaths" in music_select_source,
     "Find BMS results must pass removed package variants to indexing",
 )
 download_task_start = library_operations_source.find(
@@ -199,8 +198,8 @@ require(
 require(
     main_menu_source.count(
         "findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration"
-    )
-    >= 2,
+    ) == 1
+    and modal_source.count("callbacks_.downloadStarted();") == 2,
     "automatic and candidate downloads must capture chart selection generation",
 )
 require(

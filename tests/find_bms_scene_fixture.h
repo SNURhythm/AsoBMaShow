@@ -1,4 +1,5 @@
-// Real service result types, task, dialog policy, and complete scene methods.
+// Real service result types, task, dialog policy, complete shared modal methods,
+// and Main Menu callback wiring.
 // Service definitions below replace network/filesystem effects with controlled
 // calls. View and indexing doubles check the application-thread handoff.
 #include "scene/FindBmsDialogPolicy.h"
@@ -67,6 +68,7 @@ struct ChartMeta {
 };
 struct ChartMetaRecord { ChartMeta meta; };
 namespace main_menu_library {
+using FindBmsChartIdentity = std::string;
 std::string findBmsChartIdentity(const ChartMeta &meta) { return meta.SHA256; }
 }
 namespace rendering { constexpr int window_width = 1280, window_height = 720; }
@@ -77,8 +79,19 @@ struct FindBmsModal {
   void setSize(int, int) { assert(owner == std::this_thread::get_id()); }
   void setVisible(bool value) { assert(owner == std::this_thread::get_id()); visible = value; }
 };
+struct FindBmsModalCallbacks {
+  std::function<std::filesystem::path()> downloadRoot;
+  std::function<BmsSearchDownloadOptions()> downloadOptions;
+  std::function<void()> downloadStarted;
+  std::function<void(const ChartMetaRecord &, const BmsSearchResult &, bool)> filesReady;
+  std::function<void()> refreshLibrary;
+};
 class MainMenuScene {
 public:
+  MainMenuScene() { buildFindBmsCallbacks(); }
+  FindBmsModalCallbacks callbacks_;
+  void buildFindBmsCallbacks();
+  void startLibraryRefresh() {}
   ~MainMenuScene() { findBmsTask.stopAndWait(); }
   FindBmsTask findBmsTask;
   FindBmsModal modal;
@@ -159,6 +172,9 @@ void testSceneLookupProgressAndIndexHandoff() {
   MainMenuScene scene;
   scene.showFindBmsModal({{"sha256", "md5", "Title", "Artist"}});
   gate.wait();
+  scene.showFindBmsModal({{"different", "other", "Other title", "Other artist"}});
+  assert(scene.findBmsModalChart.meta.SHA256 == "sha256");
+  ++scene.chartSelectionGeneration; // Selection can move while downloading.
   assert(calls.lookups == 1 && calls.sha256 == "sha256" && calls.md5 == "md5");
   assert(calls.title == "Title" && calls.artist == "Artist");
   assert(calls.root == "library-root" && calls.skipUnarchiving);
@@ -241,6 +257,10 @@ void testSceneCancellationKeepsPendingArtifactVisible() {
   gate.release.set_value();
   applyUntilIdle(scene);
   assert(calls.cancellationObserved && scene.findBmsResult.pendingArtifact);
+  scene.modal.visible = false;
+  scene.showFindBmsModal({{"different", "other", "Other title", "Other artist"}});
+  assert(scene.modal.visible);
+  assert(calls.lookups == 1 && scene.findBmsModalChart.meta.MD5 == "md5");
   scene.hideFindBmsModal();
   assert(scene.modal.visible && scene.indexed.empty());
 }
@@ -270,7 +290,9 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   scene.findBmsResult.candidates = {{.id = "candidate-1"}};
   scene.startFindBmsCandidateDownload(1);
   assert(calls.downloads == 0);
+  scene.chartSelectionGeneration = 9;
   scene.startFindBmsCandidateDownload(0);
+  assert(scene.findBmsSelectionGenerationAtDownloadStart == 9);
   applyUntilIdle(scene);
   assert(calls.downloads == 1 && calls.candidateId == "candidate-1");
   assert(calls.sha256 == "sha256" && calls.md5 == "md5" && calls.skipUnarchiving);
@@ -281,7 +303,8 @@ void testSceneCandidateAndPendingArtifactDecisions() {
     scene.findBmsResult.pendingArtifact = BmsSearchPendingArtifact{.sourcePath = "staged.zip"};
     const bool keep = decision == BmsSearchPendingArtifactDecision::Keep;
     calls.result = {.status = BmsSearchResult::Status::HashMismatch,
-                    .message = keep ? "Kept" : "Deleted", .outputPath = keep ? "kept.zip" : ""};
+                    .message = keep ? "Kept" : "Deleted", .outputPath = keep ? "kept.zip" : "",
+                    .removedPaths = {"obsolete.bms"}};
     scene.startFindBmsPendingArtifactResolution(decision);
     applyUntilIdle(scene);
     assert(calls.decision == decision && calls.resolvedArtifact->sourcePath == "staged.zip");
@@ -290,5 +313,6 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   assert(calls.resolutions == 2 && scene.indexed.size() == 1);
   assert(scene.indexed[0].path == "kept.zip" && scene.indexed[0].identity.empty());
   assert(scene.indexed[0].generation == 0);
+  assert(scene.indexed[0].removed == std::vector<std::filesystem::path>{"obsolete.bms"});
 }
 } // namespace

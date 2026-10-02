@@ -8301,7 +8301,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
-    set_tests_properties(text_input_box_tests difficulty_table_importer_tests PROPERTIES
+    set_tests_properties(text_input_box_tests difficulty_table_importer_tests button_enabled_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
@@ -8510,6 +8510,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
     if(APPLE)
+        asobmashow_register_test(button_enabled_tests button_disabled_metal_tests --metal-only)
+        set_tests_properties(button_disabled_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
             src/rendering/UiBatchRenderer.cpp

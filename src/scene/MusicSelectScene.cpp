@@ -2,6 +2,7 @@
 #include "MusicSelectScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
+#include "MusicSelectRecords.h"
 
 #include "../PlatformOpen.h"
 #include "../targets.h"
@@ -653,6 +654,7 @@ void MusicSelectScene::onPause() {
   recordsResumeAudioPending_ = false;
   recordsTask_.cancelAndWait();
   finishRecordsLoading();
+  if (findBmsModal_) findBmsModal_->cancelAndWait();
   if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
@@ -712,6 +714,7 @@ void MusicSelectScene::onLanguageChanged() {
   // Native retained controls update in place; skin content, playback, and
   // in-progress directory work belong to the active selector session.
   refreshTasksModal(true);
+  if (findBmsModal_) findBmsModal_->refresh();
   if (modalLayer_ != nullptr) modalLayer_->applyYogaLayout();
 }
 
@@ -1459,7 +1462,12 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     if (errorView_ != nullptr) (void)errorView_->handleEvents(event);
     return {};
   }
+  refreshToolbarAvailability();
   if (selectorInputBlocked()) resetLogicalInput();
+  if (findBmsModal_ && findBmsModal_->isVisible()) {
+    (void)findBmsModal_->handleEvents(event);
+    return {};
+  }
   if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) {
     (void)archiveUnzipModal_->handleEvents(event);
     return {};
@@ -2869,6 +2877,7 @@ void MusicSelectScene::consumeActions() {
 bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
+         (findBmsModal_ && findBmsModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
          (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
@@ -3343,6 +3352,10 @@ void MusicSelectScene::update(float) {
   applyRecordsExportProgress();
   applyRecordsExportResult();
   updateRecordServices();
+  if (findBmsModal_) {
+    findBmsModal_->resize(rendering::window_width, rendering::window_height);
+    findBmsModal_->update();
+  }
   if (archiveUnzipModal_) {
     archiveUnzipModal_->resize(rendering::window_width,
                                rendering::window_height);
@@ -3404,6 +3417,7 @@ void MusicSelectScene::update(float) {
     previewAudio_->switchTo(std::move(preview->path));
   }
   updateRanking();
+  refreshToolbarAvailability();
 }
 
 void MusicSelectScene::renderScene() {
@@ -3435,6 +3449,7 @@ void MusicSelectScene::enterError(
     std::vector<skin::SkinDiagnostic> diagnostics) {
   if (failed_) return;
   failed_ = true;
+  if (findBmsModal_) findBmsModal_->cancelAndWait();
   if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   stopInputListening();
@@ -3612,6 +3627,88 @@ void MusicSelectScene::revealSelectedChartInFileManager() {
     SDL_Log("Failed to reveal chart file %s: %s",
             fspath_to_utf8(selected.chart->meta.BmsPath).c_str(), error.c_str());
   }
+}
+
+bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control) const {
+  if (!sceneActive_ || failed_ || selectorInputBlocked() ||
+      context.appInBackground.load(std::memory_order_acquire)) return false;
+  const auto snapshot = bars_.readView();
+  const auto *selected = snapshot.selectedIndex < snapshot.rowCount()
+      ? &snapshot.rowAt(snapshot.selectedIndex) : nullptr;
+  const auto *chart = selected && selected->kind == skin::MusicSelectBarKind::Song && selected->chart
+      ? &*selected->chart : nullptr;
+  const bool present = chart && !chart->unavailable && !chart->meta.BmsPath.empty();
+  switch (control) {
+  case MusicSelectToolbarControl::ChartViewer:
+    return present && !chart->solidArchive;
+  case MusicSelectToolbarControl::ChartRecords:
+    return modalLayer_ && selected && musicSelectRecordsTarget(*selected).has_value();
+  case MusicSelectToolbarControl::RevealChart:
+    return present && modalOverlayPortal_;
+  case MusicSelectToolbarControl::Download:
+    return modalLayer_ && context.chartLibraryTasks && chart &&
+           chart->unavailable && !chart->solidArchive &&
+           (!chart->meta.SHA256.empty() || !chart->meta.MD5.empty() || !chart->meta.Title.empty());
+  case MusicSelectToolbarControl::Tasks:
+    return modalLayer_ && context.chartLibraryTasks;
+  case MusicSelectToolbarControl::PlayOptions:
+    return modalLayer_ != nullptr;
+  case MusicSelectToolbarControl::MusicPlayer:
+  case MusicSelectToolbarControl::IrUploads:
+  case MusicSelectToolbarControl::Settings:
+    return context.sceneManager != nullptr;
+  default:
+    return true;
+  }
+}
+
+void MusicSelectScene::refreshToolbarAvailability() {
+  if (!toolbar_) return;
+  for (const auto &control : toolbar_->controls()) {
+    toolbar_->setControlEnabled(control.control, toolbarControlAvailable(control.control));
+  }
+}
+
+void MusicSelectScene::openDownload() {
+  if (!toolbarControlAvailable(MusicSelectToolbarControl::Download)) return;
+  const auto snapshot = bars_.readView();
+  const auto record = *snapshot.rowAt(snapshot.selectedIndex).chart;
+  if (!findBmsModal_) {
+    findBmsModal_ = FindBmsModal::Create(modalLayer_, {
+        .downloadRoot = [this] {
+          return findBmsDownloadRoot(chartSession_ ? &*chartSession_ : nullptr);
+        },
+        .downloadOptions = [this] {
+          return BmsSearchDownloadOptions{.skipUnarchivingForNonSolidArchives =
+              context.settings.findBmsSkipUnarchivingForNonSolidArchives};
+        },
+        .filesReady = [this](const ChartMetaRecord &record, const BmsSearchResult &result,
+                             bool matched) {
+          if (!context.chartLibraryTasks) return;
+          context.chartLibraryTasks->enqueue({
+              .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
+              .title = i18n::message("menu.index_downloaded_bms.label"),
+              .downloadedPath = result.outputPath,
+              .downloadedRemovedPaths = result.removedPaths,
+              .downloadedTargetIdentity = matched
+                  ? main_menu_library::findBmsChartIdentity(record.meta)
+                  : main_menu_library::FindBmsChartIdentity{},
+          });
+        },
+        .refreshLibrary = [this] {
+          if (context.chartLibraryTasks) {
+            context.chartLibraryTasks->enqueue({
+                .kind = chart_library_tasks::TaskKind::RefreshLibrary,
+                .title = i18n::message("menu.refresh_list.label"),
+            });
+          }
+        },
+    });
+  }
+  if (!findBmsModal_) return;
+  findBmsModal_->show(record);
+  resetLogicalInput();
+  refreshToolbarAvailability();
 }
 
 void MusicSelectScene::openTasks() {
@@ -3954,6 +4051,7 @@ void MusicSelectScene::syncToolbar() {
   }
   if (toolbar_ != nullptr) {
     toolbar_->applyState(state);
+    refreshToolbarAvailability();
     return;
   }
   auto toolbar = MusicSelectToolbarView::Create(
@@ -3961,6 +4059,7 @@ void MusicSelectScene::syncToolbar() {
       {.openChartViewer = [this] { openChartViewer(); },
        .openChartRecords = [this] { openChartRecords(); },
        .revealChart = [this] { revealChart(); },
+       .download = [this] { openDownload(); },
        .openMusicPlayer = [this] { openMusicPlayer(); },
        .openTasks = [this] { openTasks(); },
        .openPlayOptions = [this] { openPlayOptions(); },
@@ -3973,6 +4072,7 @@ void MusicSelectScene::syncToolbar() {
   if (toolbar) {
     toolbar_ = toolbar.get();
     addView(toolbar.release());
+    refreshToolbarAvailability();
   }
 }
 
@@ -4148,6 +4248,7 @@ void MusicSelectScene::cleanupScene() {
   recordsTask_.cancelAndWait();
   if (recordFileActions_) recordFileActions_->close();
   sceneActive_ = false;
+  findBmsModal_.reset();
   archiveUnzipModal_.reset();
   ++launchGeneration_;
   cancelDirectoryLoad();

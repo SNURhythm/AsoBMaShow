@@ -8,6 +8,7 @@
 #include "CourseRecordActions.h"
 #include "RecordFileActions.h"
 #include "ArchiveUnzipModal.h"
+#include "FindBmsModal.h"
 #include "../ReplayVideoExportTypes.h"
 #include "../replay/ReplayExportJob.h"
 #include "Scene.h"
@@ -137,6 +138,9 @@ private:
   [[nodiscard]] OverlayAnchor revealChartAnchor() const;
   void openMusicPlayer();
   void openTasks();
+  void openDownload();
+  bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
+  void refreshToolbarAvailability();
   void openPlayOptions();
   void openIrUploads();
   void openSettings();
@@ -306,6 +310,7 @@ private:
   void updateRecordServices();
 
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
+  std::unique_ptr<FindBmsModal> findBmsModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;
   DecideLoadingOverlay *decideOverlay_ = nullptr;

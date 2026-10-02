@@ -27,6 +27,8 @@ std::uint32_t codepointFor(MusicSelectToolbarControl control) {
     return ui_icons::kRecords;
   case MusicSelectToolbarControl::RevealChart:
     return ui_icons::kReveal;
+  case MusicSelectToolbarControl::Download:
+    return ui_icons::kDownload;
   case MusicSelectToolbarControl::MusicPlayer:
     return ui_icons::kMusic;
   case MusicSelectToolbarControl::Tasks:
@@ -122,6 +124,7 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::ChartViewer,
                 MusicSelectToolbarControl::ChartRecords,
                 MusicSelectToolbarControl::RevealChart,
+                MusicSelectToolbarControl::Download,
                 MusicSelectToolbarControl::MusicPlayer,
                 MusicSelectToolbarControl::Tasks,
                 MusicSelectToolbarControl::PlayOptions,
@@ -163,6 +166,8 @@ void MusicSelectToolbarView::rebuild() {
       continue;
     }
     auto *button = new Button();
+    controls_.back().button = button;
+    button->setEnabled(isControlEnabled(control));
     button->setWidth(kControlSize);
     button->setHeight(kControlSize);
     button->setCornerRadius(ui_theme::controlRadius());
@@ -181,6 +186,7 @@ void MusicSelectToolbarView::rebuild() {
 
 void MusicSelectToolbarView::activateControl(
     MusicSelectToolbarControl control) {
+  if (!isControlEnabled(control)) return;
   switch (control) {
   case MusicSelectToolbarControl::Drag:
     break;
@@ -198,6 +204,9 @@ void MusicSelectToolbarView::activateControl(
     if (callbacks_.revealChart) {
       callbacks_.revealChart();
     }
+    break;
+  case MusicSelectToolbarControl::Download:
+    if (callbacks_.download) callbacks_.download();
     break;
   case MusicSelectToolbarControl::MusicPlayer:
     if (callbacks_.openMusicPlayer) {
@@ -233,6 +242,33 @@ void MusicSelectToolbarView::activateControl(
   case MusicSelectToolbarControl::Hide:
     requestMode(MusicSelectToolbarMode::Hidden);
     break;
+  }
+}
+
+bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control) const {
+  if (disabledControls_.contains(control)) return false;
+  switch (control) {
+  case MusicSelectToolbarControl::ChartViewer: return bool(callbacks_.openChartViewer);
+  case MusicSelectToolbarControl::ChartRecords: return bool(callbacks_.openChartRecords);
+  case MusicSelectToolbarControl::RevealChart: return bool(callbacks_.revealChart);
+  case MusicSelectToolbarControl::Download: return bool(callbacks_.download);
+  case MusicSelectToolbarControl::MusicPlayer: return bool(callbacks_.openMusicPlayer);
+  case MusicSelectToolbarControl::Tasks: return bool(callbacks_.openTasks);
+  case MusicSelectToolbarControl::PlayOptions: return bool(callbacks_.openPlayOptions);
+  case MusicSelectToolbarControl::IrUploads: return bool(callbacks_.openIrUploads);
+  case MusicSelectToolbarControl::Settings: return bool(callbacks_.openSettings);
+  default: return true;
+  }
+}
+
+void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control,
+                                               bool enabled) {
+  if (enabled) disabledControls_.erase(control);
+  else disabledControls_.insert(control);
+  for (const auto &rendered : controls_) {
+    if (rendered.control == control && rendered.button) {
+      rendered.button->setEnabled(isControlEnabled(control));
+    }
   }
 }
 

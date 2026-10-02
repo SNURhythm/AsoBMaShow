@@ -14,6 +14,7 @@ inline constexpr uint32_t kDrag = 0xf58e;
 inline constexpr uint32_t kChartLine = 0xf201;
 inline constexpr uint32_t kRecords = 0xf03a;
 inline constexpr uint32_t kReveal = 0xf07c;
+inline constexpr uint32_t kDownload = 0xf019;
 inline constexpr uint32_t kMusic = 0xf001;
 inline constexpr uint32_t kTasks = 0xf0ae;
 inline constexpr uint32_t kPlayOptions = 0xf1de;

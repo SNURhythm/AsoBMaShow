@@ -6,7 +6,7 @@ add_custom_command(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/find_bms_scene_extract.py
             --root ${CMAKE_SOURCE_DIR} --output ${find_bms_scene_methods}
     DEPENDS tests/find_bms_scene_extract.py tests/gameplay_terminal_scene_extract.py
-            src/scene/MainMenuScene.cpp
+            src/scene/MainMenuScene.cpp src/scene/FindBmsModal.cpp
     VERBATIM
 )
 add_executable(find_bms_task_tests

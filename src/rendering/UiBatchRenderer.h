@@ -37,6 +37,7 @@ struct UiBatchState {
   std::optional<std::array<float, 16>> transform;
   std::array<UiBatchUniform, 2> uniforms{};
   std::size_t uniformCount = 0;
+  float textureOpacity = 1.0f;
 };
 
 struct UiBatchSubmission {

@@ -76,6 +76,31 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         del cls.fixture_executables
         del cls.fixture_objects
 
+    def test_download_reuses_shared_dialog_and_disables_unavailable_actions(self):
+        source = read_music_select_scene()
+        signatures = [
+            "bool MusicSelectScene::toolbarControlAvailable(",
+            "void MusicSelectScene::refreshToolbarAvailability()",
+            "void MusicSelectScene::openDownload()",
+        ]
+        methods = []
+        for signature in signatures:
+            start = source.index(signature)
+            opening = source.index("{", start)
+            methods.append(source[start:opening] + function_body(source, signature))
+        toolbar = (ROOT / "src/scene/MusicSelectToolbarView.h").read_text()
+        modal = (ROOT / "src/scene/FindBmsModal.h").read_text()
+        records = (ROOT / "src/scene/MusicSelectRecords.h").read_text()
+        fixture = (ROOT / "tests/music_select_download_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+            .replace("TOOLBAR_ENUM", "enum class MusicSelectToolbarControl " +
+                     function_body(toolbar, "enum class MusicSelectToolbarControl") + ";")
+            .replace("MODAL_CALLBACKS", "struct FindBmsModalCallbacks " +
+                     function_body(modal, "struct FindBmsModalCallbacks") + ";")
+            .replace("RECORDS_TARGET", "std::optional<ChartMetaRecord> musicSelectRecordsTarget(const MusicSelectBar &bar) " +
+                     function_body(records, "musicSelectRecordsTarget("))
+            .replace("SCENE_METHODS", "\n".join(methods)))
+
     def test_course_stage_and_result_navigation_preserve_records_owner(self):
         methods = []
         for file, signature in (

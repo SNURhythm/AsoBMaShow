@@ -91,6 +91,7 @@ struct MusicSelectScene : Scene {
     void cancelAndWait() { cancelled = true; }
   } unzipModal;
   UnzipModal *archiveUnzipModal_ = &unzipModal;
+  UnzipModal *findBmsModal_ = nullptr;
   SceneManager manager;
   struct { SceneManager *sceneManager; } context{&manager};
   bool failed_ = false;
@@ -121,6 +122,7 @@ struct MusicSelectScene : Scene {
   void buildErrorView() { ++errorViews; errorView_ = &errorRoot; }
   void enterError(std::vector<skin::SkinDiagnostic> diagnostics);
   void openSettings();
+  void refreshToolbarAvailability() {}
   EventHandleResult handleEvents(SDL_Event &event) {
     ERROR_EVENT_PREFIX
     ++normalEvents;

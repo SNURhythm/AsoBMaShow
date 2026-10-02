@@ -333,7 +333,7 @@ struct MusicSelectScene {
 
   void resetFailedLaunch(std::uint64_t generation);
   bool recordsResumeAudioPending_ = false;
-  Modal *archiveUnzipModal_ = nullptr;
+  Modal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr;
   bool selectorInputBlocked() const { return launching_; }
   void startArchiveUnzip(const ChartMetaRecord &) {}
   PublishedActions *skinSession_ = nullptr;
@@ -347,6 +347,7 @@ struct MusicSelectScene {
   void showDecideOverlay(const ChartMetaRecord &) {}
   void hideDecideOverlay() {}
   void syncToolbar() {}
+  void refreshToolbarAvailability() {}
   void configureSoundServices() {}
   void startInputListening() {}
   void onApplicationBackgroundChanged(bool) {}
