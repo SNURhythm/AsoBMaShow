@@ -1638,7 +1638,8 @@ public:
            "external result skin validates as selectable");
   }
 
-  GameplaySkinDocumentLoadResult configure(bool courseMode = false) {
+  GameplaySkinDocumentLoadResult configure(
+      bool courseMode = false, std::optional<ResultSkinData> initialData = std::nullopt) {
     if (!lease_ || !validation_.reconciledSettings ||
         validation_.configurationDigest.empty()) {
       return {};
@@ -1664,6 +1665,7 @@ public:
     data.courseStageCount = courseMode ? 2 : 0;
     data.courseStageIndex = courseMode ? 1 : 0;
     if (courseMode) data.courseTitles = {"First chart", "Second chart"};
+    if (initialData) data = std::move(*initialData);
     GameplaySkinDocumentLoader loader;
     return loader.load(
         {.sourceFormat = *format,
@@ -1687,6 +1689,16 @@ public:
            runtime.setFrameState(nullptr);
            return loaded;
          }});
+  }
+
+  GameplaySkinDocumentLoadResult configureCourseEntry(
+      std::string_view path, ResultSkinData data) {
+    const auto entry = normalizeEntryPath(package_, path);
+    if (!lease_ || !entry.entry) return {};
+    entry_ = *entry.entry;
+    GameplaySkinValidator validator(resources_);
+    validation_ = validator.validate(lease_->readView(), entry_, nullptr, {});
+    return configure(true, std::move(data));
   }
 
   bool hasCourseSongLog() const {
@@ -8920,6 +8932,65 @@ void testResultBridgeUsesRawChartBpmForResultProperties() {
          "speeds");
 }
 
+void testLitoneCourseCallbacksUseEveryStage(const fs::path &source) {
+  ExternalResultSkinFixture fixture(source, "Result/result.luaskin");
+  bms_parser::ChartMeta meta{.Title = "First chart", .TotalNotes = 100, .Bpm = 120.0};
+  RhythmState state(nullptr, false);
+  ResultSkinData data{.state = &state, .meta = &meta,
+                      .courseTitles = {"First chart", "Second chart"},
+                      .courseMode = true, .courseStageCount = 2};
+  for (std::size_t index = 0; index < 2; ++index) {
+    data.courseStageIndex = index;
+    meta.Title = data.courseTitles[index];
+    state.judgeCount[PGreat] = index == 0 ? 80 : 40;
+    state.judgeCount[Good] = 100 - state.judgeCount[PGreat];
+    state.currentGauge = index == 0 ? 85.2F : 42.7F;
+    auto stage = fixture.configureCourseEntry("Result/result.luaskin", data);
+    expect(stage.document.has_value(), "real LITONE chart result loads in course order");
+    if (!stage.document) return;
+  }
+  meta.Title = "Two-chart course";
+  meta.TotalNotes = 200;
+  state.judgeCount[PGreat] = 120;
+  state.judgeCount[Good] = 80;
+  data.courseResult = true;
+  data.courseTitle = meta.Title;
+  auto final = fixture.configureCourseEntry("Result/course.luaskin", data);
+  expect(final.document.has_value(), "real LITONE aggregate result loads after both charts");
+  if (!final.document || !final.document->luaRuntime) return;
+  auto &runtime = *final.document->luaRuntime;
+  expect(runtime.enterRenderPhase().ok && runtime.beginFrame(1).ok,
+         "real LITONE course callbacks enter the render phase");
+  const auto &model = final.document->model.model;
+  for (const auto &[name, expected] :
+       std::array<std::pair<std::string_view, double>, 5>{{
+           {"course_groovegauge1", 85}, {"course_groovegauge2", 42},
+           {"course_rate1", 80}, {"course_rate2", 40}, {"course_averagerate", 60}}}) {
+    const auto object = std::ranges::find_if(model.objects, [&](const auto &candidate) {
+      return candidate.authoredName == name;
+    });
+    const auto *number = object == model.objects.end()
+                             ? nullptr : std::get_if<SkinNumberObject>(&object->payload);
+    expect(number != nullptr, std::string("real LITONE creates Lua number ") + std::string(name));
+    if (!number) continue;
+    const auto property = std::ranges::find_if(model.integerProperties, [&](const auto &candidate) {
+      return candidate.id == number->value;
+    });
+    const auto *callback = property == model.integerProperties.end()
+                               ? nullptr : std::get_if<LuaCallbackId>(&property->source);
+    expect(callback != nullptr, "course number retains its authored Lua callback");
+    if (!callback) continue;
+    const auto value = runtime.invoke(*callback, {});
+    const auto actual = value.value && std::holds_alternative<std::int64_t>(*value.value)
+                            ? std::optional<double>(std::get<std::int64_t>(*value.value))
+                            : value.value && std::holds_alternative<double>(*value.value)
+                                  ? std::optional<double>(std::get<double>(*value.value))
+                                  : std::nullopt;
+    expect(!value.failure && actual == expected,
+           std::string("real LITONE Lua callback displays course data: ") + std::string(name));
+  }
+}
+
 void testRequestedExternalResultSkinCreatesSession() {
   const char *configuredRoot =
       std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ROOT");
@@ -8953,6 +9024,7 @@ void testRequestedExternalResultSkinCreatesSession() {
       std::getenv("ASOBMASHOW_EXTERNAL_RESULT_COURSE_MODE") != nullptr) {
     expect(fixture.hasCourseSongLog(),
            "real LITONE12 course scripts persist achievement and gauge data");
+    testLitoneCourseCallbacksUseEveryStage(source);
   }
 }
 
