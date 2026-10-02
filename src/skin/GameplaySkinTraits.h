@@ -11,6 +11,11 @@ namespace skin {
 // c2ed5db1a46145ed10790c3872f717e95b59db9d.  Keep the skin type rather than
 // deriving it from key mode: the enum also distinguishes 24K single and
 // double play while charts expose the latter as key mode 48.
+// Sparse BMS modes retain the channel identities of these skin layouts.
+[[nodiscard]] constexpr int compatibleGameplaySkinKeyMode(int keyMode) noexcept {
+  return keyMode == 4 ? 5 : (keyMode == 6 || keyMode == 8) ? 7 : keyMode;
+}
+
 struct GameplaySkinTrait {
   int skinType = -1;
   int keyMode = 0;
@@ -21,8 +26,8 @@ struct GameplaySkinTrait {
 inline constexpr std::array<GameplaySkinTrait, 7> kGameplaySkinTraits = {{
     {.skinType = 0, .keyMode = 7, .label = "7K"},
     {.skinType = 1, .keyMode = 5, .label = "5K"},
-    {.skinType = 2, .keyMode = 14, .label = "14K"},
-    {.skinType = 3, .keyMode = 10, .label = "10K"},
+    {.skinType = 2, .keyMode = 14, .label = "7K DP"},
+    {.skinType = 3, .keyMode = 10, .label = "5K DP"},
     {.skinType = 4, .keyMode = 9, .label = "9K"},
     {.skinType = 16, .keyMode = 24, .label = "24K"},
     {.skinType = 17, .keyMode = 48, .label = "24K Double"},
@@ -46,7 +51,7 @@ gameplaySkinTraitForSkinType(int skinType) noexcept {
 [[nodiscard]] inline std::optional<GameplaySkinTrait>
 gameplaySkinTraitForKeyMode(int keyMode) noexcept {
   for (const auto &trait : kGameplaySkinTraits) {
-    if (trait.keyMode == keyMode) {
+    if (trait.keyMode == compatibleGameplaySkinKeyMode(keyMode)) {
       return trait;
     }
   }

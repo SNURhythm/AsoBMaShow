@@ -1559,27 +1559,29 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   bridge.discardFrame();
 }
 
-void testLongNoteHoldTimersUseCapturedLaneState() {
+void testLongNoteHoldTimersUseCapturedLaneState(int keyMode = 7, int lane = 0) {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
     return;
   }
 
   PlayfieldChartVisualModel chart;
-  chart.keyCount = 7;
+  chart.keyCount = keyMode;
   // Aso stores 7K in visible order (scratch, then keys); Beatoraja maps the
   // key at raw BMS lane 0 to skin offset 1 and the scratch to offset 0.
   chart.laneOrder = {7, 0};
+  if (lane != 0 && lane != 7) chart.laneOrder.push_back(lane);
+  const int offset = lane == 7 ? 0 : lane + 1;
   chart.notes = {
       {.id = 1,
        .timelineId = 1,
        .pairId = 2,
-       .lane = 0,
+       .lane = lane,
        .kind = ChartVisualNoteKind::LongHead},
       {.id = 2,
        .timelineId = 2,
        .pairId = 1,
-       .lane = 0,
+       .lane = lane,
        .kind = ChartVisualNoteKind::LongTail},
   };
   ValidatedBeatorajaSkinModel model;
@@ -1598,8 +1600,10 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longActive = true},
                  {.id = 2, .longActive = true}};
   bridge.beginFrame(state, projectionAt(212));
-  expect(bridge.timerProperty({71}) == 6'000'000 &&
-             bridge.timerProperty({70}) == kPlayfieldTimestampOff,
+  expect(bridge.booleanProperty({keyMode == 4 || keyMode == 5 ? 161 : 160}).value,
+         "compatible chart modes enable the authored skin mode condition");
+  expect(bridge.timerProperty({70 + offset}) == 6'000'000 &&
+             bridge.timerProperty({offset == 0 ? 71 : 70}) == kPlayfieldTimestampOff,
          "Beatoraja 1P hold timers use captured long-note state and the "
          "source lane offset, not a stale judge timestamp");
   bridge.discardFrame();
@@ -1609,7 +1613,7 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longActive = false},
                  {.id = 2, .longActive = false}};
   bridge.beginFrame(state, projectionAt(213));
-  expect(bridge.timerProperty({71}) == kPlayfieldTimestampOff,
+  expect(bridge.timerProperty({70 + offset}) == kPlayfieldTimestampOff,
          "Beatoraja 1P hold timer turns off when its captured long note ends");
   bridge.discardFrame();
 
@@ -1617,8 +1621,8 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longActive = true, .longReactive = true},
                  {.id = 2, .longActive = true, .longReactive = true}};
   bridge.beginFrame(state, projectionAt(214));
-  expect(bridge.timerProperty({251}) == 7'000'000 &&
-             bridge.timerProperty({271}) == kPlayfieldTimestampOff,
+  expect(bridge.timerProperty({250 + offset}) == 7'000'000 &&
+             bridge.timerProperty({270 + offset}) == kPlayfieldTimestampOff,
          "normal-range HCN active timer uses the captured increase state, "
          "not the generic long-note hold state");
   bridge.discardFrame();
@@ -1627,8 +1631,8 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longDamaged = true},
                  {.id = 2, .longDamaged = true}};
   bridge.beginFrame(state, projectionAt(215));
-  expect(bridge.timerProperty({251}) == kPlayfieldTimestampOff &&
-             bridge.timerProperty({271}) == 7'000'000,
+  expect(bridge.timerProperty({250 + offset}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({270 + offset}) == 7'000'000,
          "normal-range HCN damage timer stays independent from active HCN");
   bridge.discardFrame();
 }
@@ -3883,7 +3887,9 @@ int main() {
   testPracticeMenuSelectorsAndEventsRequireCapturedMenuState();
   testLiftHiddenOffsetsFollowPinnedLaneRenderer();
   testRemainingDirectGameplayStatePropertyWiring();
-  testLongNoteHoldTimersUseCapturedLaneState();
+  for (const auto [keyMode, lane] : {std::pair{4, 4}, {5, 0}, {6, 6}, {7, 0}, {8, 7}}) {
+    testLongNoteHoldTimersUseCapturedLaneState(keyMode, lane);
+  }
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();

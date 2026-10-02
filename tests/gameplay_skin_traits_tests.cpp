@@ -15,9 +15,18 @@ void require(bool condition, const char *message) {
 }
 
 void testPinnedBeatorajaGameplayTraitMapping() {
+  for (const auto [keys, type] : {std::pair{4, 1}, {6, 0}, {8, 0}}) {
+    const auto gameplay = skin::gameplaySkinTraitForKeyMode(keys);
+    const auto target = skin::gameplaySkinTargetForKeyMode(keys);
+    require(gameplay && gameplay->skinType == type && target && target->skinType == type,
+            "4K shares 5K skins; 6K and 8K share 7K skins");
+  }
   const auto ten = skin::gameplaySkinTraitForSkinType(3);
-  require(ten.has_value() && ten->keyMode == 10 && ten->label == "10K",
-          "Beatoraja play10 type maps to 10K");
+  require(ten.has_value() && ten->keyMode == 10 && ten->label == "5K DP",
+          "Beatoraja play10 type is labeled 5K DP");
+
+  require(skin::gameplaySkinTraitForKeyMode(14)->label == "7K DP",
+          "14-key charts are labeled 7K DP");
 
   const auto double24 = skin::gameplaySkinTraitForKeyMode(48);
   require(double24.has_value() && double24->skinType == 17 &&

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameplaySkinTraits.h"
+
 #include <array>
 #include <optional>
 #include <string_view>
@@ -18,8 +20,8 @@ struct SkinTargetTrait {
 inline constexpr std::array<SkinTargetTrait, 10> kSkinTargetTraits = {{
     {0, SkinTargetKind::Gameplay, 7, "7K"},
     {1, SkinTargetKind::Gameplay, 5, "5K"},
-    {2, SkinTargetKind::Gameplay, 14, "14K"},
-    {3, SkinTargetKind::Gameplay, 10, "10K"},
+    {2, SkinTargetKind::Gameplay, 14, "7K DP"},
+    {3, SkinTargetKind::Gameplay, 10, "5K DP"},
     {4, SkinTargetKind::Gameplay, 9, "9K"},
     {5, SkinTargetKind::MusicSelect, 0, "Music Select"},
     {7, SkinTargetKind::Result, 0, "Result"},
@@ -43,7 +45,7 @@ skinTargetTraitForType(int skinType) noexcept {
 [[nodiscard]] constexpr std::optional<SkinTargetTrait>
 gameplaySkinTargetForKeyMode(int keyMode) noexcept {
   for (const auto &trait : kSkinTargetTraits) {
-    if (trait.kind == SkinTargetKind::Gameplay && trait.keyMode == keyMode) {
+    if (trait.kind == SkinTargetKind::Gameplay && trait.keyMode == compatibleGameplaySkinKeyMode(keyMode)) {
       return trait;
     }
   }

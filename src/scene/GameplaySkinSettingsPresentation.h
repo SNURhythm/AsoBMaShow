@@ -10,6 +10,10 @@
 
 namespace skin {
 
+// Negative skin types identify additional mode tabs, never catalog types.
+[[nodiscard]] std::vector<SkinTargetTrait> gameplaySkinSettingsTargets();
+[[nodiscard]] int gameplaySkinSettingsSelectionType(int tabSkinType) noexcept;
+
 struct GameplaySkinSettingsActionAvailability {
   bool ordinaryActions = false;
   bool canCancel = false;

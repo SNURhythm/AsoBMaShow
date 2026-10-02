@@ -1,4 +1,5 @@
 #include "PlaySkinStateBridge.h"
+#include "../GameplaySkinTraits.h"
 
 #include "BeatorajaBooleanPropertyNames.h"
 #include "BeatorajaIntegerPropertyNames.h"
@@ -183,7 +184,7 @@ beatorajaPlayerOneSkinLaneOffset(const PlayfieldChartVisualModel &chart,
   // BMS lane IDs, including scratch at 7 (and 15 for 2P), so preserve that
   // distinction here. 2P has no gameplay authority yet and is intentionally
   // not projected into 1P timer IDs.
-  switch (chart.keyCount) {
+  switch (skin::compatibleGameplaySkinKeyMode(chart.keyCount)) {
   case 5:
     if (lane == 7) {
       return 0;
@@ -1759,8 +1760,9 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1160:
   case 1161: {
     // BooleanPropertyFactory compares SongData's Mode id. Aso's immutable
-    // visual model retains that same canonical key-mode count.
-    const int keyMode = context_.chartModel.keyCount;
+    // visual model retains the actual key count; sparse modes use the
+    // compatible skin mode for authored skin conditions.
+    const int keyMode = skin::compatibleGameplaySkinKeyMode(context_.chartModel.keyCount);
     const int expected = *id == 160   ? 7
                          : *id == 161 ? 5
                          : *id == 162 ? 14

@@ -951,9 +951,15 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
 
   require(!lifecycle.acquireForNextChart(7).has_value() &&
               lifecycle.acquireForNextChart(5).has_value() &&
+              lifecycle.acquireForNextChart(4).has_value() &&
               !lifecycle.acquireForNextChart(10).has_value(),
           "next-chart acquisition selects only the skin trait matching the "
           "chart keymode");
+  fake.setSelectedSkinEntries({{0, fake.entry}});
+  require(lifecycle.acquireForNextChart(6).has_value() &&
+              lifecycle.acquireForNextChart(8).has_value() &&
+              !lifecycle.acquireForNextChart(4).has_value(),
+          "6K and 8K acquire the selected 7K skin while 4K uses the 5K selection");
 }
 
 void testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure() {
