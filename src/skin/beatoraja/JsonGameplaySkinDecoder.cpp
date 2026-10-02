@@ -986,20 +986,29 @@ struct JsonBindingRegistry {
   std::optional<std::variant<SkinBuiltinPropertySelector, LuaCallbackId>>
   selector(const Json *authored, SkinBindingType type,
            std::optional<int> fallback, std::string_view path) {
+    const auto fallbackSelector = [&]()
+        -> std::optional<std::variant<SkinBuiltinPropertySelector, LuaCallbackId>> {
+      if (fallback) {
+        SkinBuiltinPropertySelector selector{*fallback};
+        if (context.builtins.contains(type, selector)) return selector;
+      }
+      return std::nullopt;
+    };
     std::optional<SkinBuiltinPropertySelector> result;
     if (authored != nullptr && !authored->is_null()) {
       if (const auto numeric = integerValue(*authored)) {
+        if (type.kind == SkinBindingKind::StringWriter) return fallbackSelector();
         result = SkinBuiltinPropertySelector{*numeric};
       } else if (authored->is_string()) {
         result = SkinBuiltinPropertySelector{authored->get<std::string>()};
       } else {
-        return std::nullopt;
+        return fallbackSelector();
       }
     } else if (fallback) {
       result = SkinBuiltinPropertySelector{*fallback};
     }
     if (!result) {
-      return std::nullopt;
+      return fallbackSelector();
     }
     // JSON has name factories only for read properties; timer and writer/event
     // strings are always scripts in the pinned serializer.
@@ -1012,9 +1021,9 @@ struct JsonBindingRegistry {
         (script == nullptr || namedFactory)) {
       return *result;
     }
-    if (script == nullptr) return std::nullopt;
+    if (script == nullptr) return fallbackSelector();
     context.result.requiresLua = true;
-    if (!context.compileScript) return std::nullopt;
+    if (!context.compileScript) return fallbackSelector();
     auto compiled = context.compileScript(*script, type.kind);
     if (!compiled.callback) {
       context.warning(compiled.failure ? compiled.failure->code
@@ -1023,7 +1032,7 @@ struct JsonBindingRegistry {
                           (compiled.failure ? compiled.failure->message
                                             : "Lua script did not compile"),
                       context.source(authored));
-      return std::nullopt;
+      return fallbackSelector();
     }
     return *compiled.callback;
   }
@@ -1979,12 +1988,16 @@ SkinObjectPayload buildImageSet(BuildState &state,
                                 const DefinitionReference &reference) {
   const Json &definition = *reference.value;
   SkinImageObject output;
+  const auto ordinal = static_cast<std::uint32_t>(reference.authoredIndex);
+  const auto path = bindingPath("imageset", reference.authoredIndex, "value");
   output.stateIndex = state.bindings.integer(
-      member(definition, "value"),
-      integerField(definition, "ref", 0, state.context, "JsonSkin.ImageSet"),
-      SkinIntegerPropertyDomain::ImageIndex,
-      static_cast<std::uint32_t>(reference.authoredIndex),
-      bindingPath("imageset", reference.authoredIndex, "value"));
+      member(definition, "value"), std::nullopt,
+      SkinIntegerPropertyDomain::IntegerValue, ordinal, path);
+  if (!output.stateIndex) {
+    output.stateIndex = state.bindings.integer(
+        nullptr, integerField(definition, "ref", 0, state.context, "JsonSkin.ImageSet"),
+        SkinIntegerPropertyDomain::ImageIndex, ordinal, path);
+  }
   output.clickEvent = state.bindings.event(
       member(definition, "act"),
       static_cast<std::uint32_t>(reference.authoredIndex),
@@ -2047,16 +2060,17 @@ SkinObjectPayload buildFloat(BuildState &state,
     output.gain = atlas->format.gain;
     output.perDigitOffsets = std::move(atlas->format.perDigitOffsets);
   }
-  output.value = state.bindings
-                     .floating(member(definition, "value"),
-                               integerField(definition, "ref", 0,
-                                            state.context,
-                                            "JsonSkin.FloatValue"),
-                               SkinFloatPropertyDomain::FloatValue,
-                               static_cast<std::uint32_t>(reference.authoredIndex),
-                               bindingPath("floatvalue", reference.authoredIndex,
-                                           "value"))
-                     .value_or(SkinFloatPropertyId{});
+  const auto ordinal = static_cast<std::uint32_t>(reference.authoredIndex);
+  const auto path = bindingPath("floatvalue", reference.authoredIndex, "value");
+  auto property = state.bindings.floating(
+      member(definition, "value"), std::nullopt, SkinFloatPropertyDomain::Rate,
+      ordinal, path);
+  if (!property) {
+    property = state.bindings.floating(
+        nullptr, integerField(definition, "ref", 0, state.context, "JsonSkin.FloatValue"),
+        SkinFloatPropertyDomain::FloatValue, ordinal, path);
+  }
+  output.value = property.value_or(SkinFloatPropertyId{});
   output.spacing = integerField(definition, "space", 0, state.context,
                                 "JsonSkin.FloatValue");
   output.alignment = integerField(definition, "align", 0, state.context,
@@ -2105,17 +2119,15 @@ SkinObjectPayload buildText(BuildState &state,
                                "JsonSkin.Text"),
   };
   const Json *event = member(definition, "event");
-  const bool implicitWriter = event == nullptr || event->is_null();
   output.writer = state.bindings.stringWriter(
-      event,
-      implicitWriter
-          ? std::optional<int>(integerField(definition, "ref", 0,
-                                            state.context, "JsonSkin.Text"))
-          : std::nullopt,
-      static_cast<std::uint32_t>(reference.authoredIndex),
+      event, std::nullopt, static_cast<std::uint32_t>(reference.authoredIndex),
       bindingPath("text", reference.authoredIndex, "event"));
-  if (implicitWriter && output.writer) {
-    output.editable = true;
+  if (!output.writer) {
+    output.writer = state.bindings.stringWriter(
+        nullptr, integerField(definition, "ref", 0, state.context, "JsonSkin.Text"),
+        static_cast<std::uint32_t>(reference.authoredIndex),
+        bindingPath("text", reference.authoredIndex, "ref"));
+    if (output.writer) output.editable = true;
   }
   return output;
 }
@@ -2127,15 +2139,12 @@ SkinObjectPayload buildSlider(BuildState &state,
   output.knob = spriteForImage(state, reference, "slider");
   const bool isRefNum = booleanField(definition, "isRefNum", false,
                                      state.context, "JsonSkin.Slider");
-  if (member(definition, "value") != nullptr &&
-      !member(definition, "value")->is_null()) {
-    output.value = state.bindings
-                       .floating(member(definition, "value"), std::nullopt,
-                                 SkinFloatPropertyDomain::Rate,
-                                 static_cast<std::uint32_t>(reference.authoredIndex),
-                                 bindingPath("slider", reference.authoredIndex,
-                                             "value"))
-                       .value_or(SkinFloatPropertyId{});
+  const auto explicitValue = state.bindings.floating(
+      member(definition, "value"), std::nullopt, SkinFloatPropertyDomain::Rate,
+      static_cast<std::uint32_t>(reference.authoredIndex),
+      bindingPath("slider", reference.authoredIndex, "value"));
+  if (explicitValue) {
+    output.value = *explicitValue;
     output.writer = state.bindings.floatWriter(
         member(definition, "event"), std::nullopt,
         static_cast<std::uint32_t>(reference.authoredIndex),
@@ -2167,7 +2176,7 @@ SkinObjectPayload buildSlider(BuildState &state,
     if (booleanField(definition, "changeable", true, state.context,
                      "JsonSkin.Slider")) {
       output.writer = state.bindings.floatWriter(
-          member(definition, "event"), type,
+          nullptr, type,
           static_cast<std::uint32_t>(reference.authoredIndex),
           bindingPath("slider", reference.authoredIndex, "event"));
     }
@@ -2176,7 +2185,8 @@ SkinObjectPayload buildSlider(BuildState &state,
                                   "JsonSkin.Slider");
   output.range = integerField(definition, "range", 0, state.context,
                               "JsonSkin.Slider");
-  output.changeable = booleanField(definition, "changeable", true,
+  output.changeable = explicitValue.has_value() ||
+                      booleanField(definition, "changeable", true,
                                    state.context, "JsonSkin.Slider");
   return output;
 }
@@ -2197,15 +2207,12 @@ SkinObjectPayload buildGraph(BuildState &state,
   }
   SkinGraphObject output;
   output.fill = spriteForImage(state, reference, "graph");
-  if (member(definition, "value") != nullptr &&
-             !member(definition, "value")->is_null()) {
-    output.value = state.bindings
-                       .floating(member(definition, "value"), std::nullopt,
-                                 SkinFloatPropertyDomain::Rate,
-                                 static_cast<std::uint32_t>(reference.authoredIndex),
-                                 bindingPath("graph", reference.authoredIndex,
-                                             "value"))
-                       .value_or(SkinFloatPropertyId{});
+  const auto explicitValue = state.bindings.floating(
+      member(definition, "value"), std::nullopt, SkinFloatPropertyDomain::Rate,
+      static_cast<std::uint32_t>(reference.authoredIndex),
+      bindingPath("graph", reference.authoredIndex, "value"));
+  if (explicitValue) {
+    output.value = *explicitValue;
   } else if (booleanField(definition, "isRefNum", false, state.context,
                           "JsonSkin.Graph")) {
     output.value = SkinSliderObject::IntegerRangeSource{

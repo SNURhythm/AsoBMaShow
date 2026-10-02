@@ -3587,7 +3587,8 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     }
     object.direction = slider->second.direction;
     object.range = static_cast<double>(slider->second.range);
-    object.changeable = slider->second.changeable;
+    object.changeable = slider->second.explicitValue.has_value() ||
+                        slider->second.changeable;
     output = std::move(object);
     return true;
   }
@@ -4790,12 +4791,30 @@ bool decodeRequiredBinding(GameplayDecodeRequest &request,
                            const LuaValueHandle &value, SkinBindingType type,
                            LuaValuePath path, std::string pathText,
                            std::uint32_t, std::optional<int> fallbackNumeric,
-                           Id &output) {
+                           Id &output,
+                           std::optional<SkinBindingType> serializedType = {}) {
+  auto authoredType = serializedType.value_or(type);
+  if (type.kind == SkinBindingKind::FloatProperty) {
+    authoredType.floatDomain = SkinFloatPropertyDomain::Rate;
+  }
   auto decoded = decoder.decode(
-      value, {.type = type,
-              .path = std::move(path),
-              .authoredOrdinal = nextBindingOrdinal(decoder, type.kind),
-              .fallbackNumeric = fallbackNumeric});
+      value, {.type = authoredType,
+              .path = path,
+              .authoredOrdinal = nextBindingOrdinal(decoder, type.kind)});
+  if (!decoded.id && fallbackNumeric &&
+      (!decoded.failure || !luaSkinBindingFailureIsFatal(decoded.failure->code))) {
+    // The serializer resolves first; JsonSkinObjectLoader then chooses the ref
+    // overload for any null property, including unknown IDs and invalid scripts.
+    auto fallback = decoder.decode(
+        value, {.type = type,
+                .path = std::move(path),
+                .authoredOrdinal = nextBindingOrdinal(decoder, type.kind),
+                .fallbackNumeric = fallbackNumeric,
+                .numericFallbackOnly = true});
+    if (fallback.id || fallback.failure || !decoded.failure) {
+      decoded = std::move(fallback);
+    }
+  }
   if (!decoded.id) {
     output = Id{};
     if (!decoded.failure) {
@@ -4836,6 +4855,11 @@ bool decodeOptionalBinding(GameplayDecodeRequest &request,
     if (!decoded.failure ||
         decoded.failure->code == "skin_lua_binding_missing") {
       return true;
+    }
+    if ((type.kind == SkinBindingKind::StringWriter ||
+         type.kind == SkinBindingKind::FloatProperty) &&
+        !luaSkinBindingFailureIsFatal(decoded.failure->code)) {
+      decoded.failure->severity = DiagnosticSeverity::Warning;
     }
     output.reset();
     return retainBindingFailure(request, std::move(decoded),
@@ -4968,7 +4992,9 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
                         imageSet.retainedBindingValue, "value"),
             bindingPathText("imageset", imageSet.authoredIndex, "value"),
             imageSet.authoredIndex - 1, imageSet.stateSelector,
-            imageSet.stateIndex) ||
+            imageSet.stateIndex,
+            SkinBindingType{.kind = SkinBindingKind::IntegerProperty,
+                            .integerDomain = SkinIntegerPropertyDomain::IntegerValue}) ||
         !decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::Event},
             bindingPath("imageset", imageSet.authoredIndex,
@@ -5104,7 +5130,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
         return false;
       }
       text.writerWasExplicit = text.writer && static_cast<bool>(*text.writer);
-    } else if (builtins.contains(
+    }
+    if (!text.writer && builtins.contains(
                    writerType, SkinBuiltinPropertySelector{text.refSelector}) &&
                !decodeOptionalBinding(
                    request, decoder, value, writerType,
