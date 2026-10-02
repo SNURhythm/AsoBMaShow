@@ -119,3 +119,14 @@ makeLocalResultPresentation(const bms_parser::ChartMeta &meta,
                             ResultLocalPresentationOptions options);
 [[nodiscard]] ResultPresentationModel
 makeRemoteResultPresentation(const ir::IrRemoteScore &score);
+
+struct CoursePlaySession;
+
+struct ResultCourseStagePresentation {
+  std::string title;
+  // An unplayed chart has no score or gauge, rather than a fabricated zero.
+  std::optional<ResultPresentationModel> result;
+};
+
+[[nodiscard]] std::vector<ResultCourseStagePresentation>
+makeCourseStagePresentations(const CoursePlaySession &session);

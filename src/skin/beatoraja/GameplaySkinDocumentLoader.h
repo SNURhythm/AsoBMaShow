@@ -36,6 +36,9 @@ struct GameplaySkinDocumentRequest {
   // identity before configured Lua is allowed to run.
   std::string_view expectedConfigurationDigest;
   LuaRuntimePurpose luaPurpose = LuaRuntimePurpose::Gameplay;
+  // Session-only state binding for modules evaluated by the entry's first require.
+  // Catalog inspection deliberately ignores this callback.
+  std::function<LuaValueResult(LuaSkinRuntime &)> loadHeaderLua;
   LuaConfiguredGameplayDocumentLoad loadConfiguredLua;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
@@ -76,8 +79,8 @@ public:
   [[nodiscard]] InspectedGameplaySkinDocument
   inspect(GameplaySkinDocumentRequest) const;
 
-  // Full session preparation. The Lua callback binds the caller's initial
-  // authoritative frame around loadConfigured; static formats ignore it.
+  // Full session preparation. Callbacks bind the caller's initial authority
+  // during header/configured execution; static formats ignore them.
   [[nodiscard]] GameplaySkinDocumentLoadResult
   load(GameplaySkinDocumentRequest) const;
 };

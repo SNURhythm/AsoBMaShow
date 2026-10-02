@@ -300,6 +300,10 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::Gameplay,
+         .loadHeaderLua = [&context](LuaSkinRuntime &runtime) {
+           ResultSkinStateBridge bridge(context.initialData, 1, 0);
+           return runtime.loadHeader(&bridge);
+         },
          .loadConfiguredLua = [&context](
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &configuration,

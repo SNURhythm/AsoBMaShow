@@ -137,7 +137,9 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
   }
 
   LuaSkinTableDecoder decoder(request.safetyPolicy);
-  auto headerValue = runtime.runtime->loadHeader();
+  auto headerValue = configured && request.loadHeaderLua
+                         ? request.loadHeaderLua(*runtime.runtime)
+                         : runtime.runtime->loadHeader();
   if (!headerValue.value) {
     appendFailure(result.diagnostics, std::move(headerValue.failure),
                   "skin_lua_header_load_failed",

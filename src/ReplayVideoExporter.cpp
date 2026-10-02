@@ -3694,6 +3694,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     data.currentClearRankOverride = clearRank;
     data.courseResult = true;
+    data.courseMode = true;
+    data.courseStageIndex = stages.empty() ? 0 : stages.size() - 1;
+    data.courseStageCount = std::max({
+        replay.entryFacts.size(), replay.stages.size(),
+        static_cast<std::size_t>(std::max(0, replay.totalCharts))});
     data.courseTitle = courseMeta.Title;
     for (const auto &stage : stages)
       data.courseTitles.push_back(stage.chart->Meta.Title);
@@ -3997,6 +4002,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.configuration = makeResultSkinConfiguration(settings);
       data.configuration->irAccountName = context.irAccountNameSnapshot();
       data.songReviewFavorite = chartMetadataAuthority.songReviewFavorite;
+      data.courseMode = true;
+      data.courseStageIndex = stageIndex;
+      data.courseStageCount = std::max({
+          replay.entryFacts.size(), replay.stages.size(),
+          static_cast<std::size_t>(std::max(0, replay.totalCharts))});
       data.gameplayGraph = stage.gameplayGraph;
       data.outGraphPlaceholder = &stageResultGraphPlaceholder;
       data.showControls = false;

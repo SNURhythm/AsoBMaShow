@@ -327,6 +327,7 @@ private:
   void addRemoteButtons();
   void addRemoteIrStatus();
   void addCourseButtons();
+  void showCourseDetails();
   void buildResultTouchControls();
   void setResultTouchControlsHidden(bool hidden);
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
@@ -398,6 +399,7 @@ private:
   Button *persistenceRetryButton = nullptr;
   Button *persistenceDetailsButton = nullptr;
   BlockingOverlayView *persistenceDetailsModalRoot = nullptr;
+  BlockingOverlayView *courseDetailsModalRoot = nullptr;
   TextView *persistenceDetailsStateText = nullptr;
   TextView *persistenceDetailsReasonText = nullptr;
   TextView *persistenceDetailsReferenceText = nullptr;

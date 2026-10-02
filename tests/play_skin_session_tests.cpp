@@ -754,6 +754,7 @@ struct ActivationFixtureOptions {
   bool audioBearing = false;
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
+  bool courseResultLog = false;
   bool resultEventExec = false;
   bool resultVideoEventAnimation = false;
   bool resultNestedEventExec = false;
@@ -965,6 +966,17 @@ if skin_config then
     error("configured phase did not reuse exactly one fresh header state")
   end
  )lua";
+    if (options.courseResultLog) {
+      script.insert(script.find("if skin_config then"), R"lua(
+if not skin_config and type(main_state.option) == "function" then
+  _G.course_loaded = main_state.option(290)
+  _G.course_rate = main_state.number(115)
+  _G.course_decimal = main_state.number(116)
+  _G.course_gauge = main_state.number(107)
+  _G.course_gauge_decimal = main_state.number(407)
+end
+)lua");
+    }
     if (options.requireConfiguredState) {
       script += R"lua(
   if main_state.option(81) ~= true then
@@ -994,6 +1006,17 @@ if skin_config then
     marker:close()
   end
 )lua";
+    if (options.courseResultLog) {
+      script += R"lua(
+  -- Result scripts such as LITONE12 record stage values while loading.
+  if _G.course_loaded then
+    local log = assert(io.open("configured-phase-marker.txt", "w"))
+    log:write(string.format("%d:%d:%d:%d", _G.course_rate,
+        _G.course_decimal, _G.course_gauge, _G.course_gauge_decimal))
+    log:close()
+  end
+)lua";
+    }
     if (options.audioBearing) {
       script += R"lua(
   assert(main_state.audio_preload("session-audio.ogg") == true)
@@ -1512,9 +1535,8 @@ if skin_config then
     return validation_.configurationDigest;
   }
   fs::path configuredMarkerPath() const {
-    const auto overlay =
-        deriveSkinPrivateOverlayRoot(roots_, profile_, entry_);
-    return *overlay.root / "skin/configured-phase-marker.txt";
+    return roots_.visiblePackages / entry_.package.directoryName /
+           "skin/configured-phase-marker.txt";
   }
   const std::shared_ptr<SessionTextureDevice> &device() const noexcept {
     return device_;
@@ -1561,7 +1583,8 @@ public:
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
                .profileOverlays = temp_.root() / "overlays"},
-        package_(*normalizePackageId("ExternalResultSkin").package),
+        package_(normalizePackageId(source.filename().string()).package.value_or(
+            *normalizePackageId("ExternalResultSkin").package)),
         profile_(*makeSkinProfileId(
             "77777777-7777-4777-8777-777777777777")),
         state_(nullptr, false) {
@@ -1615,7 +1638,7 @@ public:
            "external result skin validates as selectable");
   }
 
-  GameplaySkinDocumentLoadResult configure() {
+  GameplaySkinDocumentLoadResult configure(bool courseMode = false) {
     if (!lease_ || !validation_.reconciledSettings ||
         validation_.configurationDigest.empty()) {
       return {};
@@ -1636,6 +1659,11 @@ public:
       return {};
     }
     ResultSkinData data{.state = &state_, .meta = &meta_, .context = nullptr};
+    data.courseMode = courseMode;
+    data.courseResult = courseMode && validation_.metadata->skinType == 15;
+    data.courseStageCount = courseMode ? 2 : 0;
+    data.courseStageIndex = courseMode ? 1 : 0;
+    if (courseMode) data.courseTitles = {"First chart", "Second chart"};
     GameplaySkinDocumentLoader loader;
     return loader.load(
         {.sourceFormat = *format,
@@ -1645,6 +1673,10 @@ public:
          .desiredSettings = &*validation_.reconciledSettings,
          .expectedConfigurationDigest = validation_.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::Gameplay,
+         .loadHeaderLua = [&data](LuaSkinRuntime &runtime) {
+           ResultSkinStateBridge bridge(data, 1, 0);
+           return runtime.loadHeader(&bridge);
+         },
          .loadConfiguredLua = [&data](
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &configuration,
@@ -1657,14 +1689,25 @@ public:
          }});
   }
 
+  bool hasCourseSongLog() const {
+    std::ifstream log(roots_.visiblePackages / package_.directoryName /
+                      "Result/playerdata/coursesongs.json");
+    const std::string contents((std::istreambuf_iterator<char>(log)), {});
+    return contents.find("\"rate\"") != std::string::npos &&
+           contents.find("\"groove\"") != std::string::npos;
+  }
+
 private:
   static bool copyLuaSources(const fs::path &source, const fs::path &target) {
     std::error_code error;
     for (fs::recursive_directory_iterator iterator(source, error), end;
          !error && iterator != end; iterator.increment(error)) {
-      if (!iterator->is_regular_file(error)) {
+      if (iterator->is_directory(error)) {
+        fs::create_directories(target / iterator->path().lexically_relative(source), error);
+        if (error) break;
         continue;
       }
+      if (!iterator->is_regular_file(error)) continue;
       const auto extension = iterator->path().extension();
       if (extension != ".lua" && extension != ".luaskin") {
         continue;
@@ -7228,6 +7271,26 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
          "legacy double begin is rejected deterministically");
 }
 
+void testCourseResultLuaLogsAchievementAndGaugeDuringLoad() {
+  for (const int skinType : {7, 15}) {
+    ActivationFixture fixture({.skinType = skinType, .courseResultLog = true});
+    if (!fixture.ready()) return;
+    bms_parser::ChartMeta meta{.TotalNotes = 10};
+    RhythmState state(nullptr, false);
+    state.judgeCount[PGreat] = 5;
+    state.currentGauge = 72.5F;
+    auto created = ResultSkinSession::create(
+        fixture.takeActivation(),
+        fixture.resultContext({.state = &state, .meta = &meta,
+                               .courseResult = skinType == 15, .courseMode = true}));
+    std::ifstream log(fixture.configuredMarkerPath());
+    std::string values;
+    log >> values;
+    expect(created.session != nullptr && values == "50:0:72:5",
+           "stage and final course Lua scripts can persist achievement and gauge while loading");
+  }
+}
+
 void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
   ActivationFixture fixture({.skinType = 7,
                              .audioBearing = true,
@@ -7832,6 +7895,27 @@ void testResultBridgeUsesProjectedKeyModeForScorePoint() {
   const auto point = bridge.integerProperty({100}, {});
   expect(point.supported && point.value == 150'000,
          "result score point uses the result's projected key mode and maximum combo");
+}
+
+void testResultBridgeExposesCourseModeForSkinLogs() {
+  ResultSkinStateBridge chartResult({}, 1, 0);
+  ResultSkinStateBridge courseResult({.courseResult = true}, 1, 0);
+  ResultSkinStateBridge firstStage(
+      {.courseMode = true, .courseStageIndex = 0, .courseStageCount = 2}, 1, 0);
+  ResultSkinStateBridge lastStage(
+      {.courseMode = true, .courseStageIndex = 1, .courseStageCount = 2}, 1, 0);
+  expect(firstStage.booleanProperty({290}).value &&
+             firstStage.booleanProperty({280}).value &&
+             !firstStage.booleanProperty({289}).value &&
+             lastStage.booleanProperty({290}).value &&
+             !lastStage.booleanProperty({281}).value &&
+             lastStage.booleanProperty({289}).value,
+         "stage result course flags follow beatoraja's course index semantics");
+  expect(!chartResult.booleanProperty({290}).value &&
+             courseResult.booleanProperty({290}).value &&
+             courseResult.booleanProperty({std::string("mode_course")}).value &&
+             !courseResult.booleanProperty({-290}).value,
+         "course results expose mode_course used by LITONE12 song logging");
 }
 
 void testResultBridgeMatchesResultAliasesAndTimerUnits() {
@@ -8855,7 +8939,8 @@ void testRequestedExternalResultSkinCreatesSession() {
           ? configuredEntry
           : "result.luaskin";
   ExternalResultSkinFixture fixture(source, entryPath);
-  auto configured = fixture.configure();
+  auto configured = fixture.configure(
+      std::getenv("ASOBMASHOW_EXTERNAL_RESULT_COURSE_MODE") != nullptr);
   if (!configured.document) {
     for (const auto &diagnostic : configured.diagnostics) {
       std::cerr << "external result session diagnostic: " << diagnostic.code
@@ -8864,6 +8949,11 @@ void testRequestedExternalResultSkinCreatesSession() {
   }
   expect(configured.document.has_value(),
          "requested external result skin configures its result document");
+  if (source.filename() == "LITONE12" &&
+      std::getenv("ASOBMASHOW_EXTERNAL_RESULT_COURSE_MODE") != nullptr) {
+    expect(fixture.hasCourseSongLog(),
+           "real LITONE12 course scripts persist achievement and gauge data");
+  }
 }
 
 } // namespace
@@ -8990,6 +9080,7 @@ int main(int argc, char **argv) {
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
+  testCourseResultLuaLogsAchievementAndGaugeDuringLoad();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
   testResultLuaSessionRoutesOpenIrEvent();
   testResultLuaSessionDefersNestedCustomEventsToTheNextFrame();
@@ -9016,6 +9107,7 @@ int main(int argc, char **argv) {
   testResultBridgeComparesExactBadPointsForRecordFlags();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeUsesProjectedKeyModeForScorePoint();
+  testResultBridgeExposesCourseModeForSkinLogs();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
   testResultBridgeUsesSourceImageIndexFactoryFallbacks();

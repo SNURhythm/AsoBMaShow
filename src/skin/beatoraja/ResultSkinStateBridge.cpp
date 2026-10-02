@@ -467,8 +467,20 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   }
   if (*id == 1 || *id == 2 || *id == 3 || *id == 5 || *id == 21 ||
       *id == 22 || *id == 23 || *id == 80 || *id == 1030 ||
-      *id == 1031 || *id == 290 || *id == 291 || *id == 292 || *id == 293) {
+      *id == 1031 || *id == 291 || *id == 292 || *id == 293) {
     return supported(false);
+  }
+  const bool courseMode = data_.courseMode || data_.courseResult;
+  if (*id == 290) return supported(courseMode);
+  if (*id >= 280 && *id <= 283) {
+    const auto stage = static_cast<std::size_t>(*id - 280);
+    return supported(courseMode && data_.courseStageCount > 0 &&
+                     data_.courseStageIndex == stage &&
+                     stage != data_.courseStageCount - 1);
+  }
+  if (*id == 289) {
+    return supported(courseMode && data_.courseStageCount > 0 &&
+                     data_.courseStageIndex == data_.courseStageCount - 1);
   }
   // BooleanPropertyFactory evaluates this pair only for BMSPlayer. A result
   // MainState therefore exposes neither option, including AUTO PLAY results.

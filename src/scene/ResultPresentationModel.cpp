@@ -2,6 +2,7 @@
 #include "ResultPresentationModel.h"
 
 #include "../ResultContracts.h"
+#include "../CoursePlaySession.h"
 #include "../ScoreRankUtils.h"
 #include "../view/ClearLampColors.h"
 #include "../view/UiTheme.h"
@@ -559,4 +560,25 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   }
   model.readOnlyIrUploaded = true;
   return model;
+}
+
+std::vector<ResultCourseStagePresentation>
+makeCourseStagePresentations(const CoursePlaySession &session) {
+  std::vector<ResultCourseStagePresentation> stages;
+  stages.reserve(session.entries.size());
+  for (std::size_t index = 0; index < session.entries.size(); ++index) {
+    ResultCourseStagePresentation stage{.title = session.entries[index].meta.Title};
+    if (index < session.completedResults.size()) {
+      const auto &completed = session.completedResults[index];
+      stage.result = makeLocalResultPresentation(completed.meta, completed.state, {});
+      // Combo carries across charts in a course; it is not a stage-only record.
+      stage.result->maxCombo.reset();
+      stage.result->comboComparison.reset();
+      stage.result->badPoints = countFor(completed.state, Bad) +
+                                countFor(completed.state, Poor) +
+                                countFor(completed.state, Kpoor);
+    }
+    stages.push_back(std::move(stage));
+  }
+  return stages;
 }

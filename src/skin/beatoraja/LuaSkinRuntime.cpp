@@ -1373,12 +1373,24 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   }
 }
 
-LuaValueResult LuaSkinRuntime::loadHeader() {
+LuaValueResult LuaSkinRuntime::loadHeader(ISkinFrameState *initialState) {
   if (!impl_ || impl_->phase != LuaRuntimePhase::Created) {
     return {.failure = makeDiagnostic(
                 "skin_lua_phase_invalid",
                 "Lua header execution is invalid in the current phase")};
   }
+  if (initialState != nullptr) {
+    if (auto failure = impl_->hostModules->enableStateAccessors()) {
+      return {.failure = std::move(failure)};
+    }
+  }
+  struct InitialFrameBinding {
+    LuaSkinHostModules *modules;
+    ~InitialFrameBinding() {
+      if (modules != nullptr) modules->setFrameState(nullptr);
+    }
+  } binding{initialState != nullptr ? impl_->hostModules.get() : nullptr};
+  if (initialState != nullptr) impl_->hostModules->setFrameState(initialState);
   lua_pushnil(impl_->state);
   lua_setglobal(impl_->state, "skin_config");
   auto result = impl_->runEntry();
