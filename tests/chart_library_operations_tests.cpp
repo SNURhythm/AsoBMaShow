@@ -31,6 +31,11 @@ namespace {
 
 std::string desktopPickerResult;
 std::atomic_int desktopPickerCalls = 0;
+std::mutex desktopPickerBlockMutex;
+std::condition_variable desktopPickerBlockCondition;
+bool desktopPickerBlocked = false;
+bool desktopPickerEntered = false;
+bool desktopPickerReleased = false;
 
 int failures = 0;
 
@@ -1067,7 +1072,68 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 
 extern "C" char *tinyfd_selectFolderDialog(const char *, const char *) {
   ++desktopPickerCalls;
+  std::unique_lock lock(desktopPickerBlockMutex);
+  if (desktopPickerBlocked) {
+    desktopPickerEntered = true;
+    desktopPickerBlockCondition.notify_all();
+    desktopPickerBlockCondition.wait(lock, [] { return desktopPickerReleased; });
+  }
   return desktopPickerResult.empty() ? nullptr : desktopPickerResult.data();
+}
+
+void testDesktopFolderPickerShutdownAbandonsAnOpenDialog() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  expect(repository.EnsureReady(), "shutdown picker repository is ready");
+  chart_library_tasks::ChartLibraryTaskService tasks(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  desktopPickerResult = (temp.path() / "late selection").string();
+  {
+    std::lock_guard lock(desktopPickerBlockMutex);
+    desktopPickerBlocked = true;
+    desktopPickerEntered = false;
+    desktopPickerReleased = false;
+  }
+  auto picker = std::make_unique<chart_library_platform::FolderActionService>(repository, tasks);
+  picker->requestAddFolder();
+  {
+    std::unique_lock lock(desktopPickerBlockMutex);
+    expect(desktopPickerBlockCondition.wait_for(lock, std::chrono::seconds(3),
+        [] { return desktopPickerEntered; }), "native picker opens before shutdown");
+  }
+  std::mutex destructionMutex;
+  std::condition_variable destructionCondition;
+  bool destroyed = false;
+  std::thread shutdown([picker = std::move(picker), &destructionMutex,
+                        &destructionCondition, &destroyed]() mutable {
+    picker.reset();
+    std::lock_guard lock(destructionMutex);
+    destroyed = true;
+    destructionCondition.notify_all();
+  });
+  {
+    std::unique_lock lock(destructionMutex);
+    expect(destructionCondition.wait_for(lock, std::chrono::milliseconds(500),
+        [&] { return destroyed; }), "shutdown does not wait for an open desktop folder dialog");
+  }
+  {
+    std::lock_guard lock(desktopPickerBlockMutex);
+    desktopPickerReleased = true;
+    desktopPickerBlockCondition.notify_all();
+  }
+  shutdown.join();
+  // Wait for the native call and its borrowed result buffer to be released.
+  std::lock_guard dialogLock(platform_native_dialog::operationMutex());
+  {
+    std::lock_guard lock(desktopPickerBlockMutex);
+    desktopPickerBlocked = false;
+  }
+  auto session = repository.OpenSession();
+  expect(session->SelectEffectiveEntries().empty(),
+         "a dialog completed after shutdown cannot register its selected folder");
+  expect(tasks.snapshot().tasks.empty(), "a late selection cannot queue a scan after shutdown");
 }
 
 void testDesktopFolderPickerWaitsForOtherNativeDialogs() {
@@ -1124,6 +1190,7 @@ void testDesktopFolderPickingRegistersAndQueuesScan() {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     expect(!picker.active(), "desktop picker finishes");
+    picker.poll();
     auto session = repository.OpenSession();
     const auto entries = session->SelectEffectiveEntries();
     expect(std::ranges::any_of(entries, [](const ChartEntry &entry) {
@@ -1139,9 +1206,41 @@ void testDesktopFolderPickingRegistersAndQueuesScan() {
   }
 }
 
+void testDesktopFolderRepickPreservesTheUnpolledSelection() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  expect(repository.EnsureReady(), "repick repository is ready");
+  chart_library_tasks::ChartLibraryTaskService tasks(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  chart_library_platform::FolderActionService picker(repository, tasks);
+  for (const auto *name : {"first folder", "second folder"}) {
+    desktopPickerResult = (temp.path() / name).string();
+    picker.requestAddFolder();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (picker.active() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(!picker.active(), "repeated native folder selection completes");
+  }
+  picker.poll();
+  picker.poll();
+  const auto entries = repository.OpenSession()->SelectEffectiveEntries();
+  for (const auto *name : {"first folder", "second folder"}) {
+    expect(std::ranges::any_of(entries, [&](const ChartEntry &entry) {
+      return std::filesystem::path(entry.path) == temp.path() / name;
+    }), "starting another picker preserves the preceding unpolled selection");
+  }
+  expect(tasks.snapshot().tasks.size() == 2,
+         "each selected folder queues exactly one scan across repeated polls");
+}
+
 int main() {
+  testDesktopFolderPickerShutdownAbandonsAnOpenDialog();
   testDesktopFolderPickerWaitsForOtherNativeDialogs();
   testDesktopFolderPickingRegistersAndQueuesScan();
+  testDesktopFolderRepickPreservesTheUnpolledSelection();
   testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput();
   testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();
   testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal();

@@ -77,21 +77,6 @@ void hashCombine(std::size_t &seed, std::size_t value) noexcept {
 
 } // namespace
 
-bool luaSkinBindingFailureIsFatal(std::string_view code) noexcept {
-  return code == "skin_lua_binding_invalid" ||
-         code == "skin_lua_allocator_limit_exceeded" ||
-         code == "skin_lua_binding_work_limit_exceeded" ||
-         code == "skin_lua_binding_limit_exceeded" ||
-         code == "skin_lua_callback_limit_exceeded" ||
-         code == "skin_lua_host_limit_exceeded" ||
-         code == "skin_lua_wall_time_limit_exceeded" ||
-         code == "skin_lua_instruction_limit_exceeded" ||
-         code == "skin_lua_return_limit_exceeded" ||
-         code == "skin_lua_stack_limit_exceeded" ||
-         code == "skin_lua_binding_path_too_deep" ||
-         code == "skin_lua_runtime_create_failed";
-}
-
 bool LuaSkinBindingDecoder::InternKey::operator==(
     const InternKey &other) const noexcept {
   return script == other.script && sameType(type, other.type) &&

@@ -986,6 +986,7 @@ struct JsonBindingRegistry {
   std::optional<std::variant<SkinBuiltinPropertySelector, LuaCallbackId>>
   selector(const Json *authored, SkinBindingType type,
            std::optional<int> fallback, std::string_view path) {
+    if (context.failed) return std::nullopt;
     const auto fallbackSelector = [&]()
         -> std::optional<std::variant<SkinBuiltinPropertySelector, LuaCallbackId>> {
       if (fallback) {
@@ -1026,6 +1027,14 @@ struct JsonBindingRegistry {
     if (!context.compileScript) return fallbackSelector();
     auto compiled = context.compileScript(*script, type.kind);
     if (!compiled.callback) {
+      if (compiled.failure &&
+          luaSkinBindingFailureIsFatal(compiled.failure->code)) {
+        context.error(compiled.failure->code,
+                      "JSON binding '" + std::string(path) + "': " +
+                          compiled.failure->message,
+                      context.source(authored));
+        return std::nullopt;
+      }
       context.warning(compiled.failure ? compiled.failure->code
                                        : "skin_json_callback_compile_failed",
                       "JSON binding '" + std::string(path) + "': " +

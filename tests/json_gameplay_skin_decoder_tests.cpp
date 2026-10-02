@@ -74,6 +74,50 @@ JsonGameplaySkinDecodeResult decodeInline(std::string_view text) {
       gameplaySkinBuiltinCatalog());
 }
 
+void testFatalScriptCompilerFailuresRejectModel() {
+  constexpr std::string_view text = R"json({
+    "type":0,"customTimers":[
+      {"id":10000,"timer":"function() return 0 end"},
+      {"id":10001,"timer":"function() return 1 end"}]
+  })json";
+  int compilations = 0;
+  const auto decodeWithFailure = [&](std::string_view code) {
+    compilations = 0;
+    return JsonGameplaySkinDecoder{}.decode(
+        std::as_bytes(std::span(text)), fixtureEntry("script-failure.json"),
+        nullptr, gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, {}, {},
+        [code, &compilations](std::string_view, SkinBindingKind) -> LuaCallbackCompileResult {
+          ++compilations;
+          return {.failure = SkinDiagnostic{.code = std::string(code),
+                                            .message = "script compiler failed"}};
+        });
+  };
+  for (const std::string_view code : {"skin_lua_instruction_limit_exceeded",
+                                      "skin_lua_wall_time_limit_exceeded",
+                                      "skin_lua_allocator_limit_exceeded",
+                                      "skin_lua_callback_limit_exceeded"}) {
+    const auto decoded = decodeWithFailure(code);
+    expect(!decoded.model,
+           "fatal Lua script compilation failure rejects the JSON model");
+    expect(compilations == 1,
+           "JSON stops compiling further scripts after a fatal Lua compiler failure");
+    expect(std::ranges::any_of(decoded.diagnostics, [&](const auto &diagnostic) {
+             return diagnostic.code == code &&
+                    diagnostic.severity == DiagnosticSeverity::Error;
+           }),
+           "fatal Lua compiler diagnostics retain error severity in JSON");
+  }
+  const auto malformed = decodeWithFailure("skin_lua_callback_script_invalid");
+  expect(compilations == 2 && malformed.model &&
+             malformed.model->customTimers.size() == 2 &&
+             !malformed.model->customTimers.front().timer &&
+             !malformed.model->customTimers.back().timer &&
+             std::ranges::none_of(malformed.diagnostics, [](const auto &diagnostic) {
+               return diagnostic.severity == DiagnosticSeverity::Error;
+             }),
+         "malformed JSON timer scripts retain the recoverable passive fallback");
+}
+
 const SkinObjectDefinition *findObject(const BeatorajaSkinModel &model,
                                        std::string_view name) {
   const auto found = std::ranges::find_if(
@@ -1098,6 +1142,7 @@ void testCancellationStopsMidJsonModelFold() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testFatalScriptCompilerFailuresRejectModel();
   testResolvedPropertyFallbacks();
   testAllFieldFixtureCoversThePinnedJsonLedger();
   testPinnedDefaultsProduceTypedStaticModel();

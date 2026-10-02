@@ -3686,7 +3686,9 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
               "Song-list commands exceed the fixed frame limit."));
           return result;
         }
-      } else if (number && dynamic.number) {
+      } else if (number && dynamic.number && dynamic.geometry->rgba[3] > 0.0F) {
+        // SkinNumber prepares its value and animation above, but its image
+        // draw returns before setting blend when the prepared alpha is zero.
         auto destination = fakeDestination(*presentation);
         auto lowered = lowerNumeric(inputs, *initial.object, destination,
                                     *dynamic.geometry, *dynamic.number);

@@ -139,7 +139,21 @@ struct LuaSkinBindingDecodeResult {
 // Invalid decoder requests and session-global resource failures abort model
 // decoding. User-authored binding failures remain typed zero dependencies for
 // the validator to dispose at object/session scope.
-[[nodiscard]] bool luaSkinBindingFailureIsFatal(std::string_view code) noexcept;
+[[nodiscard]] inline bool
+luaSkinBindingFailureIsFatal(std::string_view code) noexcept {
+  return code == "skin_lua_binding_invalid" ||
+         code == "skin_lua_allocator_limit_exceeded" ||
+         code == "skin_lua_binding_work_limit_exceeded" ||
+         code == "skin_lua_binding_limit_exceeded" ||
+         code == "skin_lua_callback_limit_exceeded" ||
+         code == "skin_lua_host_limit_exceeded" ||
+         code == "skin_lua_wall_time_limit_exceeded" ||
+         code == "skin_lua_instruction_limit_exceeded" ||
+         code == "skin_lua_return_limit_exceeded" ||
+         code == "skin_lua_stack_limit_exceeded" ||
+         code == "skin_lua_binding_path_too_deep" ||
+         code == "skin_lua_runtime_create_failed";
+}
 
 struct LuaSkinBindingDecoderPolicy {
   static constexpr std::size_t maxBindingsPerKind = 20'000;

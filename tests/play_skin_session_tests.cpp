@@ -1868,7 +1868,8 @@ ParityCommandOutput parityCommandOutput(const SkinCommandBuffer &commands) {
 
 class FormatParityFixture final {
 public:
-  explicit FormatParityFixture(bool scriptedJson = false)
+  explicit FormatParityFixture(bool scriptedJson = false,
+                               std::string_view jsonOverride = {})
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
@@ -1974,6 +1975,9 @@ return skin
           {"id":"text","dst":[{"x":100,"y":100,"w":200,"h":40}]}
         ]
       })json");
+    }
+    if (!jsonOverride.empty()) {
+      writeText(source / "skin/parity.json", jsonOverride);
     }
     writeText(source / "skin/commented.json", R"json(/* production comment */
 {
@@ -2422,6 +2426,44 @@ void testScriptedJsonUsesLivePropertiesAndGlobalUtilities() {
                  parityCommandOutput(*changed.evaluation.submitReady).quads,
                  [](const auto &quad) { return quad.object == 1; }),
          "JSON property callbacks observe updated frame state after configuration");
+}
+
+void testScriptedJsonRejectsFatalRuntimeCompilationLimits() {
+  {
+    FormatParityFixture fixture(false, R"json({
+      "type":0,"w":640,"h":480,
+      "source":[{"id":"atlas","path":"resources/fixture.png"}],
+      "image":[{"id":"image","src":"atlas","w":40,"h":20}],
+      "customTimers":[{"id":10000,"timer":"(function() while true do end end)()"}],
+      "destination":[{"id":"image","dst":[{"x":10,"y":100,"w":40,"h":20}]}]
+    })json");
+    const auto created = fixture.create("skin/parity.json", 116);
+    expect(!created.session,
+           "Standard JSON sessions reject a timer factory that exhausts the Lua load quota");
+    expect(std::ranges::any_of(created.diagnostics, [](const auto &diagnostic) {
+             return (diagnostic.code == "skin_lua_instruction_limit_exceeded" ||
+                     diagnostic.code == "skin_lua_wall_time_limit_exceeded") &&
+                    diagnostic.severity == DiagnosticSeverity::Error;
+           }),
+           "actual JSON timer factory quota failure remains an activation error");
+  }
+  {
+    FormatParityFixture fixture(false, R"json({
+      "type":0,"w":640,"h":480,
+      "source":[{"id":"atlas","path":"resources/fixture.png"}],
+      "image":[{"id":"image","src":"atlas","w":40,"h":20}],
+      "customTimers":[{"id":10000,"timer":")"}],
+      "destination":[{"id":"image","dst":[{"x":10,"y":100,"w":40,"h":20}]}]
+    })json");
+    auto created = fixture.create("skin/parity.json", 117);
+    expect(created.session && created.session->hasLuaRuntimeForTesting(),
+           "ordinary malformed JSON timer scripts still activate with a passive fallback");
+    if (!created.session) return;
+    const auto frame = created.session->prepareFrame(stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 1,
+           "recoverable malformed-script JSON continues rendering its ordinary image");
+  }
 }
 
 void testCommentedJsonCreatesProductionSession() {
@@ -10020,6 +10062,7 @@ int main(int argc, char **argv) {
   testLr2DeclaredFalseOptionActivatesNegatedInclude();
   testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold();
   testScriptedJsonUsesLivePropertiesAndGlobalUtilities();
+  testScriptedJsonRejectsFatalRuntimeCompilationLimits();
   testCommentedJsonCreatesProductionSession();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testSessionOwnsLuaAudioAndRollsBackBeforePublication();

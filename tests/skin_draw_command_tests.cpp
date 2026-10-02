@@ -3269,6 +3269,74 @@ void testFontTextUsesRetainedBlendAcrossObjectsAndFrames() {
   }
 }
 
+void testTransparentMusicSelectLevelDoesNotChangeRetainedFontBlend() {
+  for (const bool bitmap : {false, true}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(2, {.x = 0, .y = 0, .w = 10, .h = 10});
+    resources.addImageAtlas(3, glyphRegions(10), 100, 20);
+    resources.addTextAtlas(4, bitmap ? bitmapAtlas(0) : avAtlas());
+    FakeState state;
+    SkinNumberObject number;
+    number.digits.positive = glyphSprite(3, glyphRegions(10));
+    number.digits.glyphsPerAnimationFrame = 10;
+    number.digitCount = 1;
+    auto level = destination(3, 2, 5.0).presentation;
+    level.blend = SkinBlendMode::Additive;
+    level.frames.front().rgba[3] = 0;
+    SkinSongListObject songList{
+        .center = 0,
+        .listOn = {{.object = 2,
+                    .destination = destination(2, 1, 100.0).presentation}},
+        .level = {{.object = 3, .destination = std::move(level)}}};
+    auto text = textObject(4, true);
+    std::get<SkinTextObject>(text.payload).literal = "A";
+    ValidatedBeatorajaSkinModel model;
+    model.model.header.type = 5;
+    model.model.objects = {
+        {.id = 1, .authoredName = "song-list", .payload = std::move(songList),
+         .authoredOrdinal = 1, .critical = true},
+        imageObject(2, 2, true),
+        {.id = 3, .authoredName = "transparent-level", .payload = std::move(number),
+         .authoredOrdinal = 3, .critical = true},
+        std::move(text)};
+    auto wrapper = destination(1, 10, 0.0);
+    wrapper.presentation.frames.clear();
+    model.model.destinations = {std::move(wrapper), destination(4, 20, 60.0)};
+    MusicSelectSongListFrame frame;
+    frame.bars = {{.kind = MusicSelectBarKind::Song, .exists = true, .level = 7}};
+    const auto runFrame = [&](std::uint64_t serial) {
+      return evaluate(
+          renderer, runtime, model, resources, state, serial, 0, nullptr,
+          std::nullopt, nullptr, 1, false, nullptr, nullptr, &frame,
+          SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    };
+    const auto expectNormalFontBlend = [&](const SkinFrameEvaluationResult &result,
+                                           std::string_view message) {
+      const SkinGlyphRunCommand *run = nullptr;
+      if (result.submitReady) {
+        for (const auto &command : result.submitReady->commands) {
+          if (command.sourceObject == 4) {
+            run = std::get_if<SkinGlyphRunCommand>(&command.payload);
+          }
+        }
+      }
+      expect(run && run->state.blend == SkinBlendMode::Normal, message);
+    };
+    const auto first = runFrame(1);
+    expect(first.submitReady &&
+               std::ranges::none_of(first.submitReady->commands,
+                   [](const auto &command) { return command.sourceObject == 3; }),
+           "a transparent nested numeric level performs no image draw");
+    expectNormalFontBlend(first,
+        "a transparent additive level does not affect the following font blend");
+    model.model.destinations.erase(model.model.destinations.begin());
+    expectNormalFontBlend(runFrame(2),
+        "a transparent nested level cannot contaminate retained font blend next frame");
+  }
+}
+
 void testWarmedTextStillHonorsRemainingFrameGlyphBudget() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -7556,6 +7624,7 @@ int main(int argc, char **argv) {
   testFalseDestinationSkipsTextValueCallback();
   testCompatibilityHiddenTextStillUpdatesFollowingImage();
   testFontTextUsesRetainedBlendAcrossObjectsAndFrames();
+  testTransparentMusicSelectLevelDoesNotChangeRetainedFontBlend();
   testCompatibilityFontsSelectTheirOwnSamplingPaths();
   testLr2ImageFontSplitsMixedGlyphFiltersWithoutReordering();
   testCompatibilityImageUsesBeatorajaBilinearFilter();
