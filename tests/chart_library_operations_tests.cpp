@@ -3,6 +3,7 @@
 #include "ArchiveFile.h"
 #include "ArchiveRAII.h"
 #include "Utils.h"
+#include "NativeDialogMutex.h"
 #include "bms_parser.hpp"
 #include "sqlite3.h"
 
@@ -29,6 +30,7 @@
 namespace {
 
 std::string desktopPickerResult;
+std::atomic_int desktopPickerCalls = 0;
 
 int failures = 0;
 
@@ -1064,7 +1066,44 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 } // namespace
 
 extern "C" char *tinyfd_selectFolderDialog(const char *, const char *) {
+  ++desktopPickerCalls;
   return desktopPickerResult.empty() ? nullptr : desktopPickerResult.data();
+}
+
+void testDesktopFolderPickerWaitsForOtherNativeDialogs() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  expect(repository.EnsureReady(), "serialized picker repository is ready");
+  chart_library_tasks::ChartLibraryTaskService tasks(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  desktopPickerResult.clear();
+  desktopPickerCalls = 0;
+  std::unique_lock otherDialog(platform_native_dialog::operationMutex());
+  {
+    chart_library_platform::FolderActionService picker(repository, tasks);
+    picker.requestAddFolder();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    expect(picker.active() && desktopPickerCalls == 0,
+           "library picker waits while another native dialog owns its result buffer");
+    otherDialog.unlock();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (picker.active() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(!picker.active() && desktopPickerCalls == 1,
+           "library picker opens once after the other dialog finishes");
+    expect(tasks.snapshot().tasks.empty(), "cancelled dialog queues no library scan");
+  }
+  otherDialog.lock();
+  {
+    chart_library_platform::FolderActionService picker(repository, tasks);
+    picker.requestAddFolder();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  expect(desktopPickerCalls == 1,
+         "destroying a queued library picker cancels without opening another dialog");
 }
 
 void testDesktopFolderPickingRegistersAndQueuesScan() {
@@ -1101,6 +1140,7 @@ void testDesktopFolderPickingRegistersAndQueuesScan() {
 }
 
 int main() {
+  testDesktopFolderPickerWaitsForOtherNativeDialogs();
   testDesktopFolderPickingRegistersAndQueuesScan();
   testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput();
   testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();

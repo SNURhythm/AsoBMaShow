@@ -22,6 +22,7 @@
 #include "../AndroidNatives.h"
 #else
 #include "../tinyfiledialogs.h"
+#include "../NativeDialogMutex.h"
 #endif
 
 namespace chart_library_platform {
@@ -240,9 +241,16 @@ void FolderActionService::requestAddFolder() {
     impl_->pickerThread = std::jthread(
         [state = impl_.get()](const std::stop_token &stopToken) {
           ScopeExit reset([state] { state->pickerActive.store(false); });
+          std::unique_lock dialogLock(platform_native_dialog::operationMutex(),
+                                      std::defer_lock);
+          while (!stopToken.stop_requested() &&
+                 !dialogLock.try_lock_for(std::chrono::milliseconds(50))) {}
+          if (!dialogLock.owns_lock() || stopToken.stop_requested()) return;
           const auto title = i18n::tr("menu.add_folder.label");
-          const char *folder = tinyfd_selectFolderDialog(title, nullptr);
-          if (folder && *folder && !stopToken.stop_requested()) {
+          const char *selected = tinyfd_selectFolderDialog(title, nullptr);
+          const std::string folder = selected ? selected : "";
+          dialogLock.unlock();
+          if (!folder.empty() && !stopToken.stop_requested()) {
             state->enqueueFolder(std::filesystem::path(utf8_to_path_t(folder)), "");
           }
         });
