@@ -103,6 +103,7 @@ public:
   FindBmsModal modal;
   FindBmsModal *findBmsModalRoot = &modal;
   struct { struct { bool findBmsSkipUnarchivingForNonSolidArchives = true; } settings; } context;
+  bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
@@ -128,7 +129,9 @@ public:
     assert(modal.owner == std::this_thread::get_id());
     indexed.push_back({path, identity, generation, removed});
   }
-  void showFindBmsModal(const ChartMetaRecord &record);
+  void showFindBmsModal(const ChartMetaRecord &record, bool requireConfirmation = false);
+  void startLookup();
+  void cancelAndWait();
   void startFindBmsCandidateDownload(size_t index);
   void startFindBmsPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
@@ -145,6 +148,79 @@ void applyUntilIdle(MainMenuScene &scene) {
     std::this_thread::yield();
   }
   assert(!scene.findBmsTask.running());
+}
+
+// Starting work from show(record, true), or forgetting to consume/clear the
+// confirmation, would violate these transport and callback boundary checks.
+void testConfirmationDefersAllWorkUntilExplicitSearch() {
+  ServiceCalls calls;
+  serviceCalls = &calls;
+  MainMenuScene scene;
+  int roots = 0, options = 0, started = 0;
+  scene.callbacks_.downloadRoot = [&] { ++roots; return std::filesystem::path("confirmed-root"); };
+  scene.callbacks_.downloadOptions = [&] { ++options; return BmsSearchDownloadOptions{}; };
+  scene.callbacks_.downloadStarted = [&] { ++started; };
+  ChartMetaRecord record{{"confirmed-sha", "confirmed-md5", "Confirmed title", "Confirmed artist"}};
+  scene.showFindBmsModal(record, true);
+  assert(!scene.findBmsTask.running());
+  assert(scene.modal.visible && scene.findBmsProgressLog.empty());
+  assert(calls.lookups == 0 && calls.downloads == 0 && calls.resolutions == 0);
+  assert(roots == 0 && options == 0 && started == 0 && scene.indexed.empty());
+  scene.applyFindBmsUpdates();
+  assert(!scene.findBmsTask.running() && calls.lookups == 0);
+
+  record.meta = {"changed-sha", "changed-md5", "Changed title", "Changed artist"};
+  Gate gate;
+  calls.gate = &gate;
+  scene.startLookup();
+  gate.wait();
+  scene.startLookup();
+  assert(roots == 1 && options == 1 && started == 1 && calls.lookups == 1);
+  assert(calls.sha256 == "confirmed-sha" && calls.md5 == "confirmed-md5");
+  assert(calls.title == "Confirmed title" && calls.artist == "Confirmed artist");
+  assert(calls.root == "confirmed-root");
+  scene.showFindBmsModal(record, true);
+  assert(scene.findBmsModalChart.meta.SHA256 == "confirmed-sha");
+  gate.release.set_value();
+  applyUntilIdle(scene);
+  scene.startLookup();
+  assert(!scene.findBmsTask.running() && calls.lookups == 1);
+  assert(roots == 1 && options == 1 && started == 1);
+}
+
+void testDismissedConfirmationCannotStartLookup() {
+  for (int dismissal = 0; dismissal < 3; ++dismissal) {
+    ServiceCalls calls;
+    serviceCalls = &calls;
+    MainMenuScene scene;
+    int callbacks = 0;
+    scene.callbacks_.downloadRoot = [&] { ++callbacks; return std::filesystem::path{}; };
+    scene.callbacks_.downloadOptions = [&] { ++callbacks; return BmsSearchDownloadOptions{}; };
+    scene.callbacks_.downloadStarted = [&] { ++callbacks; };
+    scene.showFindBmsModal({{"sha", "md5", "Title", "Artist"}}, true);
+    assert(!scene.findBmsTask.running());
+    if (dismissal == 0) scene.cancelFindBms();
+    else if (dismissal == 1) scene.hideFindBmsModal();
+    else scene.cancelAndWait();
+    assert(!scene.modal.visible);
+    scene.startLookup();
+    assert(!scene.findBmsTask.running());
+    assert(calls.lookups == 0 && callbacks == 0 && scene.indexed.empty());
+  }
+}
+
+void testConfirmationReopenPreservesPendingArtifact() {
+  ServiceCalls calls;
+  serviceCalls = &calls;
+  MainMenuScene scene;
+  scene.findBmsModalChart = {{"original", "md5", "Original title", "Artist"}};
+  scene.findBmsResult.pendingArtifact = BmsSearchPendingArtifact{.sourcePath = "staged.zip"};
+  scene.showFindBmsModal({{"replacement", "other", "Other title", "Artist"}}, true);
+  scene.startLookup();
+  assert(scene.modal.visible && !scene.findBmsTask.running());
+  assert(scene.findBmsModalChart.meta.SHA256 == "original");
+  assert(scene.findBmsResult.pendingArtifact->sourcePath == "staged.zip");
+  assert(calls.lookups == 0 && calls.resolutions == 0);
 }
 
 void testImmediateArtifactCompletionKeepsActionsGatedUntilHandoff() {

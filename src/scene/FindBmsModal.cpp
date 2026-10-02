@@ -246,7 +246,8 @@ FindBmsModal::FindBmsModal(FindBmsModalCallbacks callbacks)
 
 FindBmsModal::~FindBmsModal() {
   cancelAndWait();
-  for (auto *button : {findBmsCloseButton, findBmsRetryButton, findBmsKeepFilesButton,
+  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+                       findBmsKeepFilesButton,
                        findBmsDeleteFilesButton, findBmsOpenButton,
                        findBmsGoogleButton, findBmsRefreshButton}) {
     if (button != nullptr) button->setOnClickListener(nullptr);
@@ -269,6 +270,7 @@ void FindBmsModal::resize(int width, int height) {
 }
 
 void FindBmsModal::cancelAndWait() {
+  findBmsAwaitingConfirmation = false;
   findBmsTask.stopAndWait();
   if (findBmsModalRoot != nullptr) findBmsModalRoot->setVisible(false);
 }
@@ -407,6 +409,9 @@ void FindBmsModal::build(View *parent) {
   footer->setHeight(58);
 
   findBmsCloseButton = makeModalButton(i18n::message("library.find_bms.cancel.label"), 20, &findBmsCloseButtonText);
+  findBmsConfirmButton = makeModalButton(
+      i18n::message("library.find_bms.search_and_download.label"), 20,
+      &findBmsConfirmButtonText);
   findBmsRetryButton = makeModalButton(i18n::message("library.find_bms.retry.label"), 20, &findBmsRetryButtonText);
   findBmsKeepFilesButton =
       makeModalButton(i18n::message("library.find_bms.keep_files.label"), 18, &findBmsKeepFilesButtonText);
@@ -418,6 +423,7 @@ void FindBmsModal::build(View *parent) {
       makeModalButton(i18n::message("library.find_bms.refresh.label"), 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
+  findBmsConfirmButton->setWidth(240);
   findBmsRetryButton->setWidth(150);
   findBmsKeepFilesButton->setWidth(150);
   findBmsDeleteFilesButton->setWidth(150);
@@ -425,6 +431,7 @@ void FindBmsModal::build(View *parent) {
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() { cancelOrClose(); });
+  findBmsConfirmButton->setOnClickListener([this]() { startLookup(); });
   findBmsRetryButton->setOnClickListener([this]() {
     findBmsTask.retryDownload();
     refresh(false);
@@ -451,6 +458,7 @@ void FindBmsModal::build(View *parent) {
   });
 
   footer->addView(findBmsCloseButton);
+  footer->addView(findBmsConfirmButton);
   footer->addView(findBmsRetryButton);
   footer->addView(findBmsKeepFilesButton);
   footer->addView(findBmsDeleteFilesButton);
@@ -464,7 +472,7 @@ void FindBmsModal::build(View *parent) {
   refresh();
 }
 
-void FindBmsModal::show(const ChartMetaRecord &record) {
+void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation) {
   if (findBmsModalRoot == nullptr) return;
   if (findBmsTask.running() || findBmsResult.pendingArtifact) {
     // A retained scene may hide the dialog while a keep/delete decision is
@@ -477,6 +485,28 @@ void FindBmsModal::show(const ChartMetaRecord &record) {
   findBmsModalChart = record;
   findBmsResult = {};
   findBmsPendingDecision.reset();
+  findBmsAwaitingConfirmation = true;
+  findBmsProgressMessage.clear();
+  findBmsProgressCurrent = 0;
+  findBmsProgressTotal = 0;
+  findBmsProgressFraction = 0.0;
+  findBmsProgressLog.clear();
+  findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
+  findBmsModalRoot->setVisible(true);
+  if (requireConfirmation) {
+    refresh();
+  } else {
+    startLookup();
+  }
+}
+
+void FindBmsModal::startLookup() {
+  if (!findBmsAwaitingConfirmation || findBmsTask.running() ||
+      findBmsResult.pendingArtifact) {
+    return;
+  }
+  findBmsAwaitingConfirmation = false;
+  const ChartMetaRecord record = findBmsModalChart;
   if (!record.meta.SHA256.empty()) {
     findBmsResult.patternUrl =
         BmsSearchService::patternUrlForSha256(record.meta.SHA256);
@@ -499,8 +529,6 @@ void FindBmsModal::show(const ChartMetaRecord &record) {
                                  : BmsSearchDownloadOptions{};
   downloadOptions.requestRetry = findBmsTask.retryCallback();
   if (callbacks_.downloadStarted) callbacks_.downloadStarted();
-  findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
-  findBmsModalRoot->setVisible(true);
   findBmsTask.start([record, downloadRoot, downloadOptions](
                         std::atomic_bool &cancelled,
                         BmsSearchDownloadProgressCallback progress) {
@@ -577,6 +605,7 @@ void FindBmsModal::hide() {
       !findBmsDialogPolicy(running, findBmsResult).canDismiss) {
     return;
   }
+  findBmsAwaitingConfirmation = false;
   findBmsModalRoot->setVisible(false);
 }
 
@@ -594,7 +623,9 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
 
   i18n::Text statusText;
-  if (retryRequest) {
+  if (findBmsAwaitingConfirmation) {
+    statusText = i18n::message("library.find_bms.chart_not_installed.label");
+  } else if (retryRequest) {
     statusText = i18n::message("library.find_bms.download_failed.label");
   } else if (running) {
     if (findBmsPendingDecision) {
@@ -635,7 +666,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     findBmsStatusText->setLocalizedText(statusText);
     const bool failed =
         retryRequest.has_value() ||
-        (!running &&
+        (!findBmsAwaitingConfirmation && !running &&
          (findBmsResult.status == BmsSearchResult::Status::DownloadFailed ||
           findBmsResult.status == BmsSearchResult::Status::HashMismatch ||
           findBmsResult.status == BmsSearchResult::Status::NotFound));
@@ -644,12 +675,15 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
 
   const bool showCandidateList =
-      !running && policy.showNormalResultActions &&
+      !findBmsAwaitingConfirmation && !running &&
+      policy.showNormalResultActions &&
       findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
       !findBmsResult.candidates.empty();
 
   i18n::Text detail;
-  if (retryRequest) {
+  if (findBmsAwaitingConfirmation) {
+    detail = i18n::message("library.find_bms.confirm_download.detail");
+  } else if (retryRequest) {
     detail = i18n::message(
         retryRequest->canResume ? "library.find_bms.resume_prompt.message"
                                 : "library.find_bms.retry_prompt.message",
@@ -710,6 +744,9 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     }
   }
 
+  if (findBmsProgressTrack != nullptr) {
+    findBmsProgressTrack->setVisible(!findBmsAwaitingConfirmation);
+  }
   const double fraction =
       (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded)
           ? 1.0
@@ -723,23 +760,33 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   const bool downloaded =
       !running && findBmsResult.status == BmsSearchResult::Status::Downloaded;
   const bool hasSource =
-      policy.showNormalResultActions && !manualSourceUrl.empty() &&
+      !findBmsAwaitingConfirmation && policy.showNormalResultActions &&
+      !manualSourceUrl.empty() &&
       findBmsResult.status != BmsSearchResult::Status::Downloaded &&
       findBmsResult.status != BmsSearchResult::Status::NotFound;
   const bool hasSearchAction =
-      policy.showNormalResultActions && !downloaded &&
+      !findBmsAwaitingConfirmation && policy.showNormalResultActions &&
+      !downloaded &&
       (!findBmsModalChart.meta.SHA256.empty() ||
        !findBmsModalChart.meta.MD5.empty() ||
        !findBmsModalChart.meta.Title.empty() ||
        !findBmsModalChart.meta.Artist.empty());
   const bool hasRefreshAction =
-      policy.showNormalResultActions && !running && !downloaded;
+      !findBmsAwaitingConfirmation && policy.showNormalResultActions &&
+      !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
-    findBmsCloseButtonText->setLocalizedText(running ? i18n::message("library.find_bms.cancel.label") : i18n::message("library.find_bms.close.label"));
+    findBmsCloseButtonText->setLocalizedText(
+        (running || findBmsAwaitingConfirmation)
+            ? i18n::message("library.find_bms.cancel.label")
+            : i18n::message("library.find_bms.close.label"));
   }
   if (findBmsCloseButton != nullptr) {
     findBmsCloseButton->setVisible(policy.showCloseOrCancel);
     findBmsCloseButton->setWidth(policy.showCloseOrCancel ? 130.0f : 0.0f);
+  }
+  if (findBmsConfirmButton != nullptr) {
+    findBmsConfirmButton->setVisible(findBmsAwaitingConfirmation);
+    findBmsConfirmButton->setWidth(findBmsAwaitingConfirmation ? 240.0f : 0.0f);
   }
   if (findBmsRetryButtonText != nullptr) {
     findBmsRetryButtonText->setLocalizedText(i18n::message(
@@ -788,6 +835,10 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(findBmsConfirmButton, findBmsConfirmButtonText,
+                          findBmsAwaitingConfirmation, ui_theme::successAction,
+                          ui_theme::successActionHover,
+                          ui_theme::successActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(findBmsRetryButton, findBmsRetryButtonText,
                           retryRequest.has_value(), ui_theme::successAction,
                           ui_theme::successActionHover,

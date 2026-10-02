@@ -219,6 +219,9 @@ void testDestructionUnblocksRetryPrompt() {
 #include "find_bms_scene_fixture.h"
 
 int main() {
+  testConfirmationDefersAllWorkUntilExplicitSearch();
+  testDismissedConfirmationCannotStartLookup();
+  testConfirmationReopenPreservesPendingArtifact();
   testCandidateDownloadLabelRetainsLanguageAndMetadata();
   testProgressRetainsLast160EventsInOrderAndResultIsTakenOnce();
   testCancellationReturnsImmediatelyAndStillDeliversServiceResult();

@@ -7,7 +7,6 @@
 #include "../view/UiTheme.h"
 
 #include <algorithm>
-#include <cmath>
 #include <utility>
 
 namespace {
@@ -21,32 +20,13 @@ std::uint32_t codepointFor(MusicSelectToolbarControl control) {
   switch (control) {
   case MusicSelectToolbarControl::Drag:
     return ui_icons::kDrag;
-  case MusicSelectToolbarControl::ChartViewer:
-    return ui_icons::kChartLine;
-  case MusicSelectToolbarControl::ChartRecords:
-    return ui_icons::kRecords;
-  case MusicSelectToolbarControl::RevealChart:
-    return ui_icons::kReveal;
-  case MusicSelectToolbarControl::Download:
-    return ui_icons::kDownload;
-  case MusicSelectToolbarControl::MusicPlayer:
-    return ui_icons::kMusic;
-  case MusicSelectToolbarControl::Tasks:
-    return ui_icons::kTasks;
-  case MusicSelectToolbarControl::PlayOptions:
-    return ui_icons::kPlayOptions;
-  case MusicSelectToolbarControl::IrUploads:
-    return ui_icons::kIrUploads;
-  case MusicSelectToolbarControl::Settings:
-    return ui_icons::kSettings;
   case MusicSelectToolbarControl::Collapse:
     return ui_icons::kCollapse;
   case MusicSelectToolbarControl::Expand:
     return ui_icons::kExpand;
-  case MusicSelectToolbarControl::Hide:
-    return ui_icons::kHide;
+  default:
+    return 0;
   }
-  return ui_icons::kDrag;
 }
 
 TextView *makeIcon(std::uint32_t codepoint) {
@@ -121,30 +101,15 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::Expand}
           : std::vector<MusicSelectToolbarControl>{
                 MusicSelectToolbarControl::Drag,
-                MusicSelectToolbarControl::ChartViewer,
-                MusicSelectToolbarControl::ChartRecords,
-                MusicSelectToolbarControl::RevealChart,
-                MusicSelectToolbarControl::Download,
-                MusicSelectToolbarControl::MusicPlayer,
-                MusicSelectToolbarControl::Tasks,
+                MusicSelectToolbarControl::ChartMenu,
                 MusicSelectToolbarControl::PlayOptions,
-                MusicSelectToolbarControl::IrUploads,
-                MusicSelectToolbarControl::Settings,
-                MusicSelectToolbarControl::Collapse,
-                MusicSelectToolbarControl::Hide};
+                MusicSelectToolbarControl::MoreMenu,
+                MusicSelectToolbarControl::Collapse};
 
   // Yoga's declared size includes both padding and border.
   const float inset = kPadding + kBorderWidth;
   const float availableWidth =
       std::max(kControlSize, static_cast<float>(viewportWidth_) - inset * 2);
-  const std::size_t columns = std::clamp<std::size_t>(
-      static_cast<std::size_t>(
-          std::floor((availableWidth + kGap) / (kControlSize + kGap))),
-      1, layout.size());
-  const std::size_t rows = (layout.size() + columns - 1) / columns;
-  setWidth(inset * 2.0F + kControlSize * columns +
-           kGap * (columns - 1));
-  setHeight(inset * 2.0F + kControlSize * rows + kGap * (rows - 1));
   setPadding(Edge::All, kPadding);
   setGap(kGap);
   setFlexDirection(FlexDirection::Row);
@@ -156,19 +121,55 @@ void MusicSelectToolbarView::rebuild() {
   setCornerRadius(ui_theme::controlRadius());
   setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
 
+  std::vector<float> widths;
   for (const auto control : layout) {
     const auto codepoint = codepointFor(control);
-    auto *icon = makeIcon(codepoint);
-    controls_.push_back(
-        {.control = control, .codepoint = codepoint, .icon = icon});
+    TextView *content = nullptr;
+    TextView *label = nullptr;
+    float width = kControlSize;
+    if (codepoint != 0) {
+      content = makeIcon(codepoint);
+    } else {
+      label = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+      std::string text;
+      switch (control) {
+      case MusicSelectToolbarControl::ChartMenu:
+        text = std::string(i18n::tr("music_select.toolbar.chart.label")) + " ▾";
+        break;
+      case MusicSelectToolbarControl::MoreMenu:
+        text = std::string(i18n::tr("music_select.toolbar.more.label")) + " ▾";
+        break;
+      case MusicSelectToolbarControl::PlayOptions:
+        text = i18n::tr("music_select.toolbar.play_options.label");
+        break;
+      default:
+        break;
+      }
+      label->setText(text);
+      label->setAlign(TextView::CENTER);
+      label->setVAlign(TextView::MIDDLE);
+      label->setOverflow(TextView::TextOverflow::Hidden);
+      label->setThemedColor(ui_theme::textPrimary);
+      width = std::min(availableWidth,
+                       std::max(kControlSize,
+                                static_cast<float>(label->measureTextWidth(text)) +
+                                    24));
+      content = label;
+    }
+    widths.push_back(width);
+    controls_.push_back({.control = control,
+                         .codepoint = codepoint,
+                         .icon = label ? nullptr : content,
+                         .label = label});
     if (control == MusicSelectToolbarControl::Drag) {
-      addView(icon);
+      addView(content);
       continue;
     }
     auto *button = new Button();
     controls_.back().button = button;
     button->setEnabled(isControlEnabled(control));
-    button->setWidth(kControlSize);
+    button->setWidth(width);
+    button->setFlexShrink(0.0F);
     button->setHeight(kControlSize);
     button->setCornerRadius(ui_theme::controlRadius());
     button->setThemedBackgroundColors(ui_theme::control,
@@ -178,10 +179,29 @@ void MusicSelectToolbarView::rebuild() {
                                   ui_theme::accentBorder,
                                   ui_theme::accentBorderStrong);
     button->setStyledBorderWidth(1);
-    button->setContentView(icon);
+    button->setContentView(content);
     button->setOnClickListener([this, control] { activateControl(control); });
     addView(button);
   }
+  float rowWidth = 0;
+  float widestRow = 0;
+  int rows = 1;
+  for (const float width : widths) {
+    if (rowWidth > 0 && rowWidth + kGap + width > availableWidth) {
+      widestRow = std::max(widestRow, rowWidth);
+      rowWidth = 0;
+      ++rows;
+    }
+    rowWidth += (rowWidth > 0 ? kGap : 0) + width;
+  }
+  setWidth(inset * 2 + std::max(widestRow, rowWidth));
+  setHeight(inset * 2 + kControlSize * rows + kGap * (rows - 1));
+}
+
+void MusicSelectToolbarView::onLanguageChanged() {
+  rebuild();
+  place(state_.hasPosition ? state_.x : kDefaultPosition,
+        state_.hasPosition ? state_.y : kDefaultPosition);
 }
 
 void MusicSelectToolbarView::activateControl(
@@ -189,6 +209,12 @@ void MusicSelectToolbarView::activateControl(
   if (!isControlEnabled(control)) return;
   switch (control) {
   case MusicSelectToolbarControl::Drag:
+    break;
+  case MusicSelectToolbarControl::ChartMenu:
+    if (callbacks_.openChartMenu) callbacks_.openChartMenu();
+    break;
+  case MusicSelectToolbarControl::MoreMenu:
+    if (callbacks_.openMoreMenu) callbacks_.openMoreMenu();
     break;
   case MusicSelectToolbarControl::ChartViewer:
     if (callbacks_.openChartViewer) {
@@ -204,9 +230,6 @@ void MusicSelectToolbarView::activateControl(
     if (callbacks_.revealChart) {
       callbacks_.revealChart();
     }
-    break;
-  case MusicSelectToolbarControl::Download:
-    if (callbacks_.download) callbacks_.download();
     break;
   case MusicSelectToolbarControl::MusicPlayer:
     if (callbacks_.openMusicPlayer) {
@@ -239,19 +262,17 @@ void MusicSelectToolbarView::activateControl(
   case MusicSelectToolbarControl::Expand:
     requestMode(MusicSelectToolbarMode::Expanded);
     break;
-  case MusicSelectToolbarControl::Hide:
-    requestMode(MusicSelectToolbarMode::Hidden);
-    break;
   }
 }
 
 bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control) const {
   if (disabledControls_.contains(control)) return false;
   switch (control) {
+  case MusicSelectToolbarControl::ChartMenu: return bool(callbacks_.openChartMenu);
+  case MusicSelectToolbarControl::MoreMenu: return bool(callbacks_.openMoreMenu);
   case MusicSelectToolbarControl::ChartViewer: return bool(callbacks_.openChartViewer);
   case MusicSelectToolbarControl::ChartRecords: return bool(callbacks_.openChartRecords);
   case MusicSelectToolbarControl::RevealChart: return bool(callbacks_.revealChart);
-  case MusicSelectToolbarControl::Download: return bool(callbacks_.download);
   case MusicSelectToolbarControl::MusicPlayer: return bool(callbacks_.openMusicPlayer);
   case MusicSelectToolbarControl::Tasks: return bool(callbacks_.openTasks);
   case MusicSelectToolbarControl::PlayOptions: return bool(callbacks_.openPlayOptions);

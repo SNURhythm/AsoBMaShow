@@ -81,6 +81,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         signatures = [
             "bool MusicSelectScene::toolbarControlAvailable(",
             "void MusicSelectScene::refreshToolbarAvailability()",
+            "bool MusicSelectScene::canDownloadSelectedChart() const",
             "void MusicSelectScene::openDownload()",
         ]
         methods = []
@@ -387,6 +388,9 @@ int main() {
             "reload must discard the old provider before configuration can rebuild its index",
         )
 
+    def test_missing_chart_activation_offers_download(self):
+        self.run_directory_loading_fixture("testMissingChartActivationOffersDownload")
+
     def run_directory_loading_fixture(self, test_name):
         source = read_music_select_scene()
         signatures = [
@@ -412,7 +416,7 @@ int main() {
         moved = function_body(source, "void MusicSelectScene::selectedBarMoved()")
         launch = function_body(source, "void MusicSelectScene::launchSelected(")
         methods.append("void MusicSelectScene::launchSelected(bool autoplay, bool practice)" +
-                       launch[:launch.index("const auto record = *selected.chart;")] + "}")
+                       launch[:launch.index("if (systemSound_) systemSound_->playDecide();")] + "}")
         guard_start = moved.index("if (directoryRequest_ &&")
         guard_end = moved.index("requestFolderStatus(snapshot);", guard_start)
         reload = function_body(source, "void MusicSelectScene::reloadLibrary(")
@@ -728,7 +732,10 @@ int main() {
         self.compile_and_run(fixture.replace("SCENE_CALLBACKS", callbacks))
 
     def test_toolbar_reveal_uses_native_file_action_on_mobile(self):
-        signatures = ["OverlayAnchor MusicSelectScene::revealChartAnchor() const",
+        signatures = ["OverlayAnchor MusicSelectScene::toolbarControlAnchor(MusicSelectToolbarControl control) const",
+                      "OverlayAnchor MusicSelectScene::revealChartAnchor() const",
+                      "void MusicSelectScene::ensureToolbarContextMenu()",
+                      "void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control)",
                       "void MusicSelectScene::revealChart()",
                       "void MusicSelectScene::revealSelectedChartInFileManager()"]
         source = read_music_select_scene()
@@ -764,11 +771,11 @@ struct View {
   int getX() const { return 200; } int getY() const { return 100; }
   int getWidth() const { return 40; } int getHeight() const { return 40; }
 };
-enum class MusicSelectToolbarControl { RevealChart };
-struct Control { MusicSelectToolbarControl control; View *icon; };
+enum class MusicSelectToolbarControl { ChartMenu, MoreMenu, RevealChart, ChartViewer, ChartRecords, MusicPlayer, Tasks, IrUploads, Settings };
+struct Control { MusicSelectToolbarControl control; View *button; };
 struct Toolbar : View {
   View icon;
-  std::vector<Control> controls() { return {{MusicSelectToolbarControl::RevealChart, &icon}}; }
+  std::vector<Control> controls() { return {{MusicSelectToolbarControl::ChartMenu, &icon}, {MusicSelectToolbarControl::MoreMenu, &icon}}; }
 };
 struct OverlayPortal {};
 struct ContextMenuView {
@@ -825,6 +832,18 @@ struct MusicSelectScene {
   bool openSameFolder(bool notify) { assert(notify && !selectorInputBlocked()); ++folders; return true; }
   void resetLogicalInput() { ++resets; }
   void executeEvent(const skin::Action &) { ++legacyEvents; }
+  std::vector<std::string> invoked;
+  bool allowAction = true;
+  bool toolbarControlAvailable(MusicSelectToolbarControl) const { return allowAction; }
+  void openChartViewer() { assert(!selectorInputBlocked()); invoked.push_back("viewer"); }
+  void openChartRecords() { assert(!selectorInputBlocked()); invoked.push_back("records"); }
+  void openMusicPlayer() { assert(!selectorInputBlocked()); invoked.push_back("music"); }
+  void openTasks() { assert(!selectorInputBlocked()); invoked.push_back("tasks"); }
+  void openIrUploads() { assert(!selectorInputBlocked()); invoked.push_back("ir"); }
+  void openSettings() { assert(!selectorInputBlocked()); invoked.push_back("settings"); }
+  void ensureToolbarContextMenu();
+  void openToolbarMenu(MusicSelectToolbarControl control);
+  OverlayAnchor toolbarControlAnchor(MusicSelectToolbarControl control) const;
   void revealChart();
   void revealSelectedChartInFileManager();
   OverlayAnchor revealChartAnchor() const;
@@ -879,6 +898,34 @@ int main() {
   scene.bars_.selectedIndex = 1;
   scene.revealChart();
   assert(!menu.isOpen());
+  scene.bars_ = Bars{};
+  scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
+  assert(menu.actions.size() == 4 && menu.actions[0].label.resolve() == "View chart");
+  scene.revealContextMenu_->select(0);
+  assert(scene.invoked == std::vector<std::string>{"viewer"});
+  scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
+  scene.revealContextMenu_->select(1);
+  assert(scene.invoked.back() == "records");
+  scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
+  assert(!menu.actions[2].enabled && menu.actions[3].enabled);
+  scene.revealContextMenu_->select(3);
+  assert(platform_open::calls == 5 && !menu.isOpen());
+  const std::vector<std::string> moreActions{"music", "tasks", "ir", "settings"};
+  for (int index = 0; index < 4; ++index) {
+    scene.openToolbarMenu(MusicSelectToolbarControl::MoreMenu);
+    assert(menu.actions.size() == 4);
+    for (const auto &action : menu.actions) {
+      assert(action.id != "download" && action.id != "hide");
+      assert(!action.label.resolve().empty());
+    }
+    scene.revealContextMenu_->select(index);
+    assert(scene.invoked.back() == moreActions[index] && !menu.isOpen());
+  }
+  scene.openToolbarMenu(MusicSelectToolbarControl::MoreMenu);
+  scene.allowAction = false; // Recheck eligibility if state changes after opening.
+  const auto before = scene.invoked.size();
+  scene.revealContextMenu_->select(0);
+  assert(scene.invoked.size() == before && !menu.isOpen());
 }
 '''
         self.compile_and_run(fixture.replace("ANCHORS", anchors).replace(

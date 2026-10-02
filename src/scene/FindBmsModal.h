@@ -32,7 +32,7 @@ public:
   FindBmsModal(const FindBmsModal &) = delete;
   FindBmsModal &operator=(const FindBmsModal &) = delete;
 
-  void show(const ChartMetaRecord &record);
+  void show(const ChartMetaRecord &record, bool requireConfirmation = false);
   void update();
   void resize(int width, int height);
   void refresh(bool refreshCandidates = true);
@@ -46,6 +46,7 @@ public:
 private:
   explicit FindBmsModal(FindBmsModalCallbacks callbacks);
   void build(View *parent);
+  void startLookup();
   void startCandidateDownload(size_t candidateIndex);
   void startPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
   void cancelOrClose();
@@ -60,6 +61,7 @@ private:
   TextView *findBmsStatusText = nullptr;
   TextView *findBmsDetailText = nullptr;
   Button *findBmsCloseButton = nullptr;
+  Button *findBmsConfirmButton = nullptr;
   Button *findBmsRetryButton = nullptr;
   Button *findBmsKeepFilesButton = nullptr;
   Button *findBmsDeleteFilesButton = nullptr;
@@ -68,12 +70,14 @@ private:
   Button *findBmsRefreshButton = nullptr;
   RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
   TextView *findBmsCloseButtonText = nullptr;
+  TextView *findBmsConfirmButtonText = nullptr;
   TextView *findBmsRetryButtonText = nullptr;
   TextView *findBmsKeepFilesButtonText = nullptr;
   TextView *findBmsDeleteFilesButtonText = nullptr;
   TextView *findBmsOpenButtonText = nullptr;
   TextView *findBmsGoogleButtonText = nullptr;
   TextView *findBmsRefreshButtonText = nullptr;
+  bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;

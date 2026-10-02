@@ -394,6 +394,7 @@ struct MusicSelectScene {
   void applyDirectoryLoads() { ++directoryPublications; }
   void requestFolderStatus(const Bars &) {}
   void updateRanking() {}
+  void openDownload() {}
   void launchSelected(bool, bool) {}
   void cancelDirectoryLoad() { restoreDirectories_.clear(); }
   bool openSameFolder(bool) { return false; }

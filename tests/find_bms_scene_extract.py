@@ -20,6 +20,8 @@ def main():
         "bool shouldReplaceFindBmsLogLine(",
         "double findBmsProgressFractionFor(",
         "void FindBmsModal::show(",
+        "void FindBmsModal::startLookup()",
+        "void FindBmsModal::cancelAndWait()",
         "void FindBmsModal::startCandidateDownload(",
         "void FindBmsModal::startPendingArtifactResolution(",
         "void FindBmsModal::hide()",

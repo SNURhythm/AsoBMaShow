@@ -2339,7 +2339,11 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     return;
   }
   const auto record = *selected.chart;
-  if (record.unavailable || record.solidArchive ||
+  if (record.unavailable) {
+    openDownload();
+    return;
+  }
+  if (record.solidArchive ||
       record.meta.BmsPath.empty()) {
     return;
   }
@@ -3545,13 +3549,13 @@ void MusicSelectScene::openChartViewer() {
       std::nullopt, SceneReturnTarget::Retained(this)), true);
 }
 
-OverlayAnchor MusicSelectScene::revealChartAnchor() const {
+OverlayAnchor MusicSelectScene::toolbarControlAnchor(MusicSelectToolbarControl control) const {
   OverlayAnchor sourceAnchor{};
   if (toolbar_ != nullptr) {
     const View *anchor = toolbar_;
-    for (const auto &control : toolbar_->controls()) {
-      if (control.control == MusicSelectToolbarControl::RevealChart && control.icon) {
-        anchor = control.icon;
+    for (const auto &rendered : toolbar_->controls()) {
+      if (rendered.control == control && rendered.button) {
+        anchor = rendered.button;
         break;
       }
     }
@@ -3559,6 +3563,86 @@ OverlayAnchor MusicSelectScene::revealChartAnchor() const {
                     .width = anchor->getWidth(), .height = anchor->getHeight()};
   }
   return sourceAnchor;
+}
+
+OverlayAnchor MusicSelectScene::revealChartAnchor() const {
+  return toolbarControlAnchor(MusicSelectToolbarControl::ChartMenu);
+}
+
+void MusicSelectScene::ensureToolbarContextMenu() {
+  if (revealContextMenu_) return;
+  revealContextMenu_ = std::make_unique<ContextMenuView>(
+      modalOverlayPortal_, ContextMenuView::Callbacks{
+          .onOpenChanged = [this](bool) { resetLogicalInput(); },
+          .onActionSelected = [this](const std::string &actionId) {
+            // Dismiss before dispatch: selector commands are gated while the
+            // menu is open, and some commands retain or replace this scene.
+            revealContextMenu_->dismiss();
+            if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
+            using Control = MusicSelectToolbarControl;
+            if (actionId == "show-same-folder") {
+              if (toolbarControlAvailable(Control::RevealChart) && chartSession_)
+                (void)openSameFolder(true);
+            } else if (actionId == "reveal-file") {
+              if (toolbarControlAvailable(Control::RevealChart)) revealSelectedChartInFileManager();
+            } else if (actionId == "chart-viewer") {
+              if (toolbarControlAvailable(Control::ChartViewer)) openChartViewer();
+            } else if (actionId == "chart-records") {
+              if (toolbarControlAvailable(Control::ChartRecords)) openChartRecords();
+            } else if (actionId == "music-player") {
+              if (toolbarControlAvailable(Control::MusicPlayer)) openMusicPlayer();
+            } else if (actionId == "tasks") {
+              if (toolbarControlAvailable(Control::Tasks)) openTasks();
+            } else if (actionId == "ir-uploads") {
+              if (toolbarControlAvailable(Control::IrUploads)) openIrUploads();
+            } else if (actionId == "settings") {
+              if (toolbarControlAvailable(Control::Settings)) openSettings();
+            }
+          }});
+}
+
+void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control) {
+  if (revealContextMenu_ && revealContextMenu_->isOpen()) {
+    revealContextMenu_->dismiss();
+    return;
+  }
+  using Control = MusicSelectToolbarControl;
+  if ((control != Control::ChartMenu && control != Control::MoreMenu) ||
+      !toolbar_ || !modalOverlayPortal_ || !toolbarControlAvailable(control)) return;
+  std::vector<ContextMenuView::Action> actions;
+  if (control == Control::ChartMenu) {
+    const auto snapshot = bars_.readView();
+    const auto *selected = snapshot.selectedIndex < snapshot.rowCount()
+        ? &snapshot.rowAt(snapshot.selectedIndex) : nullptr;
+    const auto *chart = selected && selected->chart ? &*selected->chart : nullptr;
+    actions = {
+        {.id = "chart-viewer", .label = i18n::message("music_select.toolbar.view_chart.label"),
+         .enabled = toolbarControlAvailable(Control::ChartViewer)},
+        {.id = "chart-records", .label = i18n::message("menu.records.label"),
+         .enabled = toolbarControlAvailable(Control::ChartRecords)},
+        {.id = "show-same-folder", .label = i18n::message("music_select.show_same_folder.label"),
+         .enabled = toolbarControlAvailable(Control::RevealChart) && chartSession_ &&
+                    chart && !chart->solidArchive &&
+                    (!chart->meta.Folder.empty() || !chart->meta.BmsPath.parent_path().empty())},
+        {.id = "reveal-file", .label = i18n::message("music_select.reveal_file.label"),
+         .enabled = toolbarControlAvailable(Control::RevealChart)},
+    };
+  } else {
+    actions = {
+        {.id = "music-player", .label = i18n::message("menu.music_player.label"),
+         .enabled = toolbarControlAvailable(Control::MusicPlayer)},
+        {.id = "tasks", .label = i18n::message("menu.tasks.label"),
+         .enabled = toolbarControlAvailable(Control::Tasks)},
+        {.id = "ir-uploads", .label = i18n::message("menu.ir_uploads.label"),
+         .enabled = toolbarControlAvailable(Control::IrUploads)},
+        {.id = "settings", .label = i18n::message("menu.settings.label"),
+         .enabled = toolbarControlAvailable(Control::Settings)},
+    };
+  }
+  ensureToolbarContextMenu();
+  revealContextMenu_->setViewportSize(rendering::window_width, rendering::window_height);
+  revealContextMenu_->propagateThemeChange();
+  revealContextMenu_->show(toolbarControlAnchor(control), std::move(actions), 260);
 }
 
 void MusicSelectScene::revealChart() {
@@ -3574,22 +3658,7 @@ void MusicSelectScene::revealChart() {
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
       selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) return;
 
-  if (!revealContextMenu_) {
-    revealContextMenu_ = std::make_unique<ContextMenuView>(
-        modalOverlayPortal_, ContextMenuView::Callbacks{
-            .onOpenChanged = [this](bool) { resetLogicalInput(); },
-            .onActionSelected = [this](const std::string &actionId) {
-              // ContextMenuView normally dismisses after the callback. Unblock
-              // selector actions before invoking the selected command.
-              revealContextMenu_->dismiss();
-              if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
-              if (actionId == "show-same-folder") {
-                (void)openSameFolder(true);
-              } else if (actionId == "reveal-file") {
-                revealSelectedChartInFileManager();
-              }
-            }});
-  }
+  ensureToolbarContextMenu();
   const auto folder = selected.chart->meta.Folder.empty()
                           ? selected.chart->meta.BmsPath.parent_path()
                           : selected.chart->meta.Folder;
@@ -3639,16 +3708,19 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
       ? &*selected->chart : nullptr;
   const bool present = chart && !chart->unavailable && !chart->meta.BmsPath.empty();
   switch (control) {
+  case MusicSelectToolbarControl::ChartMenu:
+    return modalOverlayPortal_ &&
+           (toolbarControlAvailable(MusicSelectToolbarControl::ChartViewer) ||
+            toolbarControlAvailable(MusicSelectToolbarControl::ChartRecords) ||
+            toolbarControlAvailable(MusicSelectToolbarControl::RevealChart));
+  case MusicSelectToolbarControl::MoreMenu:
+    return modalOverlayPortal_ && (context.sceneManager || context.chartLibraryTasks);
   case MusicSelectToolbarControl::ChartViewer:
     return present && !chart->solidArchive;
   case MusicSelectToolbarControl::ChartRecords:
     return modalLayer_ && selected && musicSelectRecordsTarget(*selected).has_value();
   case MusicSelectToolbarControl::RevealChart:
     return present && modalOverlayPortal_;
-  case MusicSelectToolbarControl::Download:
-    return modalLayer_ && context.chartLibraryTasks && chart &&
-           chart->unavailable && !chart->solidArchive &&
-           (!chart->meta.SHA256.empty() || !chart->meta.MD5.empty() || !chart->meta.Title.empty());
   case MusicSelectToolbarControl::Tasks:
     return modalLayer_ && context.chartLibraryTasks;
   case MusicSelectToolbarControl::PlayOptions:
@@ -3664,13 +3736,30 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
 
 void MusicSelectScene::refreshToolbarAvailability() {
   if (!toolbar_) return;
-  for (const auto &control : toolbar_->controls()) {
-    toolbar_->setControlEnabled(control.control, toolbarControlAvailable(control.control));
+  using Control = MusicSelectToolbarControl;
+  for (const auto control : {Control::ChartMenu, Control::MoreMenu,
+       Control::ChartViewer, Control::ChartRecords, Control::RevealChart,
+       Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
+       Control::IrUploads, Control::Settings}) {
+    toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
   }
 }
 
+bool MusicSelectScene::canDownloadSelectedChart() const {
+  if (!sceneActive_ || failed_ || selectorInputBlocked() ||
+      context.appInBackground.load(std::memory_order_acquire) ||
+      !modalLayer_ || !context.chartLibraryTasks) return false;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return false;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  const auto *chart = selected.kind == skin::MusicSelectBarKind::Song && selected.chart
+      ? &*selected.chart : nullptr;
+  return chart && chart->unavailable && !chart->solidArchive &&
+         (!chart->meta.SHA256.empty() || !chart->meta.MD5.empty() || !chart->meta.Title.empty());
+}
+
 void MusicSelectScene::openDownload() {
-  if (!toolbarControlAvailable(MusicSelectToolbarControl::Download)) return;
+  if (!canDownloadSelectedChart()) return;
   const auto snapshot = bars_.readView();
   const auto record = *snapshot.rowAt(snapshot.selectedIndex).chart;
   if (!findBmsModal_) {
@@ -3706,7 +3795,7 @@ void MusicSelectScene::openDownload() {
     });
   }
   if (!findBmsModal_) return;
-  findBmsModal_->show(record);
+  findBmsModal_->show(record, true);
   resetLogicalInput();
   refreshToolbarAvailability();
 }
@@ -4056,10 +4145,11 @@ void MusicSelectScene::syncToolbar() {
   }
   auto toolbar = MusicSelectToolbarView::Create(
       state,
-      {.openChartViewer = [this] { openChartViewer(); },
+      {.openChartMenu = [this] { openToolbarMenu(MusicSelectToolbarControl::ChartMenu); },
+       .openMoreMenu = [this] { openToolbarMenu(MusicSelectToolbarControl::MoreMenu); },
+       .openChartViewer = [this] { openChartViewer(); },
        .openChartRecords = [this] { openChartRecords(); },
        .revealChart = [this] { revealChart(); },
-       .download = [this] { openDownload(); },
        .openMusicPlayer = [this] { openMusicPlayer(); },
        .openTasks = [this] { openTasks(); },
        .openPlayOptions = [this] { openPlayOptions(); },

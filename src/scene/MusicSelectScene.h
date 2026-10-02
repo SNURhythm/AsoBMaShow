@@ -134,11 +134,15 @@ private:
   void openChartViewer();
   void openChartRecords();
   void revealChart();
+  void ensureToolbarContextMenu();
+  void openToolbarMenu(MusicSelectToolbarControl control);
+  [[nodiscard]] OverlayAnchor toolbarControlAnchor(MusicSelectToolbarControl control) const;
   void revealSelectedChartInFileManager();
   [[nodiscard]] OverlayAnchor revealChartAnchor() const;
   void openMusicPlayer();
   void openTasks();
   void openDownload();
+  bool canDownloadSelectedChart() const;
   bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
   void refreshToolbarAvailability();
   void openPlayOptions();

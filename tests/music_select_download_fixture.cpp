@@ -12,7 +12,7 @@ struct View {};
 struct FindBmsModal {
   FindBmsModalCallbacks callbacks;
   ChartMetaRecord shown;
-  bool visible = false;
+  bool visible = false, confirmation = false;
   int shows = 0;
   static std::unique_ptr<FindBmsModal> Create(View *parent, FindBmsModalCallbacks callbacks) {
     assert(parent);
@@ -20,7 +20,9 @@ struct FindBmsModal {
     result->callbacks = std::move(callbacks);
     return result;
   }
-  void show(const ChartMetaRecord &record) { shown = record; visible = true; ++shows; }
+  void show(const ChartMetaRecord &record, bool requireConfirmation = false) {
+    shown = record; confirmation = requireConfirmation; visible = true; ++shows;
+  }
   bool isVisible() const { return visible; }
 };
 struct TaskService {
@@ -34,7 +36,7 @@ main_menu_library::FindBmsChartIdentity main_menu_library::findBmsChartIdentity(
 
 struct Toolbar {
   struct Control { MusicSelectToolbarControl control; };
-  std::vector<Control> entries{{MusicSelectToolbarControl::Download},
+  std::vector<Control> entries{{MusicSelectToolbarControl::ChartMenu},
                               {MusicSelectToolbarControl::ChartViewer},
                               {MusicSelectToolbarControl::ChartRecords}};
   std::map<MusicSelectToolbarControl, bool> enabled;
@@ -65,6 +67,7 @@ struct MusicSelectScene {
   void resetLogicalInput() { ++resets; }
   bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
   void refreshToolbarAvailability();
+  bool canDownloadSelectedChart() const;
   void openDownload();
 };
 
@@ -81,7 +84,7 @@ int main() {
   scene.modalLayer_ = &layer;
   scene.modalOverlayPortal_ = &portal;
   scene.toolbar_ = &toolbar;
-  assert(!scene.toolbarControlAvailable(Control::Download));
+  assert(!scene.canDownloadSelectedChart());
   scene.openDownload();
   assert(!scene.findBmsModal_);
   ChartMetaRecord missing;
@@ -90,7 +93,7 @@ int main() {
   missing.meta.Title = "Missing chart";
   scene.bars_.rows = {{.kind = skin::MusicSelectBarKind::Song, .chart = missing}};
   scene.refreshToolbarAvailability();
-  assert(toolbar.enabled[Control::Download]);
+  assert(scene.canDownloadSelectedChart());
   assert(!toolbar.enabled[Control::ChartViewer] && !toolbar.enabled[Control::ChartRecords]);
   assert(!scene.toolbarControlAvailable(Control::RevealChart));
   for (bool *guard : {&scene.failed_, &scene.blocked}) {
@@ -109,8 +112,9 @@ int main() {
   scene.context.settings.findBmsSkipUnarchivingForNonSolidArchives = true;
   scene.openDownload();
   auto *modal = scene.findBmsModal_.get();
+  assert(modal && modal->confirmation);
   assert(modal && modal->shown.meta.MD5 == missing.meta.MD5 && scene.resets == 1);
-  assert(!toolbar.enabled[Control::Download]);
+  assert(!scene.canDownloadSelectedChart());
   scene.openDownload();
   assert(modal->shows == 1);
   assert(modal->callbacks.downloadRoot() == "download-root" && rootCalls == 1);
@@ -138,17 +142,17 @@ int main() {
   chart.unavailable = false;
   chart.meta.BmsPath = "local/chart.bms";
   scene.refreshToolbarAvailability();
-  assert(!toolbar.enabled[Control::Download]);
+  assert(!scene.canDownloadSelectedChart());
   assert(toolbar.enabled[Control::ChartViewer] && toolbar.enabled[Control::ChartRecords]);
   assert(scene.toolbarControlAvailable(Control::RevealChart));
   chart.solidArchive = true;
   assert(!scene.toolbarControlAvailable(Control::ChartViewer));
   assert(!scene.toolbarControlAvailable(Control::ChartRecords));
   chart.unavailable = true;
-  assert(!scene.toolbarControlAvailable(Control::Download));
+  assert(!scene.canDownloadSelectedChart());
   scene.bars_.rows = {{.kind = skin::MusicSelectBarKind::Grade, .courseKey = "course"}};
   assert(scene.toolbarControlAvailable(Control::ChartRecords));
-  assert(!scene.toolbarControlAvailable(Control::Download));
+  assert(!scene.canDownloadSelectedChart());
   scene.bars_.rows = {{.kind = skin::MusicSelectBarKind::Folder}};
   assert(!scene.toolbarControlAvailable(Control::ChartViewer));
   assert(!scene.toolbarControlAvailable(Control::ChartRecords));

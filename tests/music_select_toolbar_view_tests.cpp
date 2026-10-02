@@ -42,10 +42,11 @@ void expect(bool condition, const std::string &message) {
 MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
                                       std::vector<MusicSelectToolbarState> &saved) {
   return {
+      .openChartMenu = [&] { actions.emplace_back("chart-menu"); },
+      .openMoreMenu = [&] { actions.emplace_back("more-menu"); },
       .openChartViewer = [&] { actions.emplace_back("viewer"); },
       .openChartRecords = [&] { actions.emplace_back("records"); },
       .revealChart = [&] { actions.emplace_back("reveal"); },
-      .download = [&] { actions.emplace_back("download"); },
       .openMusicPlayer = [&] { actions.emplace_back("music"); },
       .openTasks = [&] { actions.emplace_back("tasks"); },
       .openPlayOptions = [&] { actions.emplace_back("play-options"); },
@@ -55,31 +56,31 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
   };
 }
 
-void testExpandedUsesOnlyExactFontAwesomeControls() {
+void testExpandedShowsLabeledMenuEntrypoints() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create(
-      {}, callbacks(actions, saved), rendering::window_width,
-      rendering::window_height);
-  expect(toolbar != nullptr, "expanded state constructs a toolbar");
-  const std::vector<std::uint32_t> expected = {
-      ui_icons::kDrag,        ui_icons::kChartLine, ui_icons::kRecords,
-      ui_icons::kReveal,      ui_icons::kDownload,              ui_icons::kMusic,     ui_icons::kTasks,
-      ui_icons::kPlayOptions, ui_icons::kIrUploads, ui_icons::kSettings,
-      ui_icons::kCollapse,    ui_icons::kHide};
-  expect(toolbar->controls().size() == expected.size(),
-         "expanded toolbar has drag plus chart and application controls");
-  for (std::size_t index = 0;
-       index < toolbar->controls().size() && index < expected.size(); ++index) {
-    const auto &control = toolbar->controls()[index];
-    expect(control.codepoint == expected[index],
-           "expanded control uses its assigned codepoint");
-    expect(control.icon->primaryFontPath() == ui_icons::kFontAwesomeSolidPath,
-           "every toolbar control uses Font Awesome Solid");
-    expect(control.icon->getText() ==
-               ui_icons::textForCodepoint(expected[index]),
-           "every toolbar control contains only its icon glyph");
+      {}, callbacks(actions, saved), 800, 300);
+  toolbar->applyYogaLayout();
+  expect(toolbar->controls().size() == 5,
+         "expanded toolbar has only drag, two menus, play options, and collapse");
+  int labels = 0;
+  for (const auto &control : toolbar->controls()) {
+    if (control.label) {
+      ++labels;
+      expect(!control.label->getText().empty(), "primary actions have readable labels");
+      expect(control.button && control.button->getWidth() > 48,
+             "label buttons reserve more room than icon buttons");
+      toolbar->activateControl(control.control);
+    } else {
+      expect(control.icon &&
+                 control.icon->primaryFontPath() == ui_icons::kFontAwesomeSolidPath,
+             "drag and collapse retain recognizable icons");
+    }
   }
+  expect(labels == 3 && actions == std::vector<std::string>{
+             "chart-menu", "play-options", "more-menu"},
+         "labeled controls expose chart menu, play options, and more menu in order");
 }
 
 void testUnavailableCallbacksDisableButtons() {
@@ -87,8 +88,7 @@ void testUnavailableCallbacksDisableButtons() {
   for (std::size_t index = 0; index < toolbar->controls().size(); ++index) {
     const auto control = toolbar->controls()[index].control;
     if (control == MusicSelectToolbarControl::Drag ||
-        control == MusicSelectToolbarControl::Collapse ||
-        control == MusicSelectToolbarControl::Hide) continue;
+        control == MusicSelectToolbarControl::Collapse) continue;
     const auto *button = dynamic_cast<const Button *>(toolbar->getChildren()[index]);
     expect(button && !button->isEnabled(),
            "an unavailable toolbar action is rendered as a disabled Button");
@@ -99,22 +99,20 @@ void testDisabledActionsStayDisabledAcrossRebuilds() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved), 800, 300);
-  toolbar->setControlEnabled(MusicSelectToolbarControl::Download, false);
-  toolbar->activateControl(MusicSelectToolbarControl::Download);
+  toolbar->setControlEnabled(MusicSelectToolbarControl::ChartViewer, false);
+  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
   expect(actions.empty(), "disabled toolbar actions cannot dispatch callbacks");
   toolbar->applyState({.mode = MusicSelectToolbarMode::Collapsed});
   toolbar->applyState({.mode = MusicSelectToolbarMode::Expanded});
   toolbar->setViewportSize(300, 600);
-  for (const auto &control : toolbar->controls()) {
-    if (control.control == MusicSelectToolbarControl::Download) {
-      expect(control.button && !control.button->isEnabled(),
-             "disabled selection state survives expand and viewport rebuilds");
-    }
-  }
-  toolbar->setControlEnabled(MusicSelectToolbarControl::Download, true);
-  toolbar->activateControl(MusicSelectToolbarControl::Download);
-  expect(actions == std::vector<std::string>{"download"},
-         "a newly eligible selection re-enables the download action");
+  expect(!toolbar->isControlEnabled(MusicSelectToolbarControl::ChartViewer),
+         "disabled menu action state survives expand and viewport rebuilds");
+  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
+  expect(actions.empty(), "rebuilding cannot re-enable an ineligible menu action");
+  toolbar->setControlEnabled(MusicSelectToolbarControl::ChartViewer, true);
+  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
+  expect(actions == std::vector<std::string>{"viewer"},
+         "a newly eligible selection re-enables the chart viewer action");
 }
 
 void testCollapsedAndHiddenShapes() {
@@ -144,8 +142,8 @@ void testExpandedToolbarWrapsWithinANarrowViewport() {
   auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved),
                                                  500, 300);
   toolbar->applyYogaLayout();
-  expect(toolbar->getWidth() <= 500 && toolbar->getHeight() > 64,
-         "expanded controls wrap instead of extending past a narrow viewport");
+  expect(toolbar->getWidth() < 500 && toolbar->getHeight() == 66,
+         "compact expanded controls fit on one row in a medium viewport");
 
   toolbar->setViewportSize(260, 300);
   toolbar->applyYogaLayout();
@@ -191,18 +189,19 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
   toolbar->activateControl(MusicSelectToolbarControl::ChartRecords);
   toolbar->activateControl(MusicSelectToolbarControl::RevealChart);
-  toolbar->activateControl(MusicSelectToolbarControl::Download);
   toolbar->activateControl(MusicSelectToolbarControl::MusicPlayer);
   toolbar->activateControl(MusicSelectToolbarControl::Tasks);
   toolbar->activateControl(MusicSelectToolbarControl::PlayOptions);
   toolbar->activateControl(MusicSelectToolbarControl::IrUploads);
   toolbar->activateControl(MusicSelectToolbarControl::Settings);
   expect(actions == std::vector<std::string>({"viewer", "records", "reveal",
-                                               "download", "music", "tasks", "play-options",
+                                               "music", "tasks", "play-options",
                                                "ir", "settings"}),
          "toolbar exposes chart and application actions");
 
   toolbar->activateControl(MusicSelectToolbarControl::Collapse);
+  expect(toolbar->controls().size() == 5,
+         "collapse keeps event targets alive until deferred callbacks run");
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Collapsed &&
              toolbar->controls().size() == 2,
@@ -212,7 +211,7 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::Expand);
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Expanded &&
-             toolbar->controls().size() == 12,
+             toolbar->controls().size() == 5,
          "expand persists and rebuilds the toolbar");
 
   toolbar->applyYogaLayout();
@@ -243,10 +242,6 @@ void testActionsModesAndDragPersist() {
   expect(toolbar->state().hasPosition && !saved.empty() &&
              saved.back() == toolbar->state(),
          "drag release persists the final authored position");
-
-  toolbar->activateControl(MusicSelectToolbarControl::Hide);
-  expect(toolbar->state().mode == MusicSelectToolbarMode::Hidden,
-         "hide persists hidden state for owner removal");
 }
 
 void testPersistedSettingsStateAppliesToAnExistingToolbar() {
@@ -264,7 +259,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
                        .x = 80.0F,
                        .y = 60.0F,
                        .hasPosition = true});
-  expect(toolbar->getVisible() && toolbar->controls().size() == 12 &&
+  expect(toolbar->getVisible() && toolbar->controls().size() == 5 &&
              toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");
@@ -280,7 +275,7 @@ int main() {
     std::cerr << "FAIL: bgfx noop initialization failed\n";
     return 1;
   }
-  testExpandedUsesOnlyExactFontAwesomeControls();
+  testExpandedShowsLabeledMenuEntrypoints();
   testUnavailableCallbacksDisableButtons();
   testDisabledActionsStayDisabledAcrossRebuilds();
   testCollapsedAndHiddenShapes();
