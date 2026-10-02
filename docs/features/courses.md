@@ -37,3 +37,4 @@ the course cases in repository and result-persistence integration tests.
 - [Gameplay and scoring](gameplay-and-scoring.md)
 - [Replays and video export](replays-and-video-export.md)
 - [Results, records, and persistence](results-records-and-persistence.md)
+- [LITONE12 result animations and retained course history](../skin-compat/litone12-course-results.md)

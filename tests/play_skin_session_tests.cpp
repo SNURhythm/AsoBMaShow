@@ -7909,6 +7909,40 @@ void testResultBridgeUsesProjectedKeyModeForScorePoint() {
          "result score point uses the result's projected key mode and maximum combo");
 }
 
+void testResultBridgeMatchesBeatorajaCourseClearAnimations() {
+  struct Case {
+    int lamp;
+    float gauge;
+    bool courseMode;
+    bool courseResult;
+    bool clear;
+  };
+  // MusicResult converts the course chart's FAILED lamp to NO PLAY.
+  // BooleanPropertyFactory 90/91 still checks the separate course failure.
+  for (const auto test : {
+           Case{kNoClearTypeRank, 42.0F, true, false, true},
+           Case{kNoClearTypeRank, 0.0F, true, false, false},
+           Case{kNoClearTypeRank, 42.0F, false, false, true},
+           Case{kClearTypeFailedRank, 42.0F, false, false, false},
+           Case{kClearTypeFailedRank, 0.0F, true, true, false},
+           Case{kClearTypeFailedRank + 1, 42.0F, true, true, true}}) {
+    RhythmState state(nullptr, false);
+    state.currentGauge = test.gauge;
+    ResultSkinStateBridge bridge(
+        {.state = &state, .courseResult = test.courseResult,
+         .courseMode = test.courseMode, .currentClearRankOverride = test.lamp},
+        1, 0);
+    const auto clear = bridge.booleanProperty({90});
+    const auto failed = bridge.booleanProperty({91});
+    expect(clear.supported && clear.value == test.clear &&
+               failed.supported && failed.value == !test.clear,
+           "course animation uses beatoraja's FAILED equality and current stage gauge");
+    expect(bridge.booleanProperty({std::string("result_clear")}).value == test.clear &&
+               bridge.booleanProperty({std::string("result_fail")}).value == !test.clear,
+           "named result animation properties agree with numeric selectors");
+  }
+}
+
 void testResultBridgeExposesCourseModeForSkinLogs() {
   ResultSkinStateBridge chartResult({}, 1, 0);
   ResultSkinStateBridge courseResult({.courseResult = true}, 1, 0);
@@ -9179,6 +9213,7 @@ int main(int argc, char **argv) {
   testResultBridgeComparesExactBadPointsForRecordFlags();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeUsesProjectedKeyModeForScorePoint();
+  testResultBridgeMatchesBeatorajaCourseClearAnimations();
   testResultBridgeExposesCourseModeForSkinLogs();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();

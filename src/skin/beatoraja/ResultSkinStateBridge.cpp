@@ -653,7 +653,14 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                           ? std::optional<int>(data_.state->getClearTypeRank())
                           : (data_.presentation ? data_.presentation->lampRank
                                                 : std::nullopt));
-    const bool clear = lamp && *lamp > kClearTypeFailedRank;
+    // BooleanPropertyFactory 90/91 compares FAILED by equality: a course
+    // stage's NO PLAY lamp can still show the clear animation. MusicResult
+    // separately marks the running course failed when this stage's gauge
+    // reaches zero; use this stage, not the recalled course's final outcome.
+    const bool courseFailed = data_.courseMode && !data_.courseResult &&
+                              data_.state != nullptr &&
+                              data_.state->currentGauge <= 0.0F;
+    const bool clear = lamp && *lamp != kClearTypeFailedRank && !courseFailed;
     return supported(*id == 90 ? clear : !clear);
   }
   if (*id >= 300 && *id <= 307 && currentScore && maximum) {
