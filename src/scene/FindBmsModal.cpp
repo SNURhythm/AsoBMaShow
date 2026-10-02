@@ -831,6 +831,15 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     findBmsRefreshButton->setVisible(hasRefreshAction);
     findBmsRefreshButton->setWidth(hasRefreshAction ? 150.0f : 0.0f);
   }
+  // Visibility alone only suppresses drawing; hidden children still add gaps
+  // to the footer's flex layout, even when their width is zero.
+  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+                       findBmsKeepFilesButton, findBmsDeleteFilesButton,
+                       findBmsOpenButton, findBmsGoogleButton, findBmsRefreshButton}) {
+    if (button != nullptr) {
+      button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
+    }
+  }
 
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
