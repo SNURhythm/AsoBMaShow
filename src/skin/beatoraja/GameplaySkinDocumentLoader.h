@@ -17,9 +17,13 @@ namespace skin {
 
 class LuaSkinAudioBackend;
 
+// Invoke exactly once, synchronously, while the initial frame is bound. Model
+// decoding can execute callback factories and needs the same state as the entry.
+using LuaConfiguredGameplayDocumentContinuation = std::function<LuaValueResult()>;
 using LuaConfiguredGameplayDocumentLoad = std::function<LuaValueResult(
     LuaSkinRuntime &, const BeatorajaSkinConfiguration &,
-    std::vector<SkinDiagnostic> &)>;
+    std::vector<SkinDiagnostic> &,
+    const LuaConfiguredGameplayDocumentContinuation &)>;
 
 struct GameplaySkinDocumentRequest {
   GameplaySkinSourceFormat sourceFormat = GameplaySkinSourceFormat::Lua;
@@ -80,7 +84,8 @@ public:
   inspect(GameplaySkinDocumentRequest) const;
 
   // Full session preparation. Callbacks bind the caller's initial authority
-  // during header/configured execution; static formats ignore them.
+  // during header/configured execution and Lua model decoding; static formats
+  // ignore them.
   [[nodiscard]] GameplaySkinDocumentLoadResult
   load(GameplaySkinDocumentRequest) const;
 };

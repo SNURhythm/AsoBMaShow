@@ -199,8 +199,29 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
     return result;
   }
 
+  BeatorajaSkinModelDecodeResult decodedModel;
+  const LuaConfiguredGameplayDocumentContinuation loadAndDecode = [&] {
+    auto value = runtime.runtime->loadConfigured(*result.configuration);
+    if (value.value && !hasErrors(result.diagnostics) &&
+        !cancellationRequested(request, result)) {
+      decodedModel =
+          result.header->type == 5
+              ? decoder.decodeMusicSelect(
+                    *value.value,
+                    {.runtime = *runtime.runtime,
+                     .builtins = gameplaySkinBuiltinCatalog(),
+                     .safetyPolicy = request.safetyPolicy})
+              : decoder.decodeGameplay(
+                    *value.value,
+                    {.runtime = *runtime.runtime,
+                     .builtins = gameplaySkinBuiltinCatalog(),
+                     .safetyPolicy = request.safetyPolicy});
+      appendMoved(result.diagnostics, decodedModel.diagnostics);
+    }
+    return value;
+  };
   auto configuredValue = request.loadConfiguredLua(
-      *runtime.runtime, *result.configuration, result.diagnostics);
+      *runtime.runtime, *result.configuration, result.diagnostics, loadAndDecode);
   if (!configuredValue.value) {
     appendFailure(result.diagnostics, std::move(configuredValue.failure),
                   "skin_lua_configured_load_failed",
@@ -212,19 +233,6 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
       cancellationRequested(request, result)) {
     return result;
   }
-  auto decodedModel =
-      result.header->type == 5
-          ? decoder.decodeMusicSelect(
-                *configuredValue.value,
-                {.runtime = *runtime.runtime,
-                 .builtins = gameplaySkinBuiltinCatalog(),
-                 .safetyPolicy = request.safetyPolicy})
-          : decoder.decodeGameplay(
-                *configuredValue.value,
-                {.runtime = *runtime.runtime,
-                 .builtins = gameplaySkinBuiltinCatalog(),
-                 .safetyPolicy = request.safetyPolicy});
-  appendMoved(result.diagnostics, decodedModel.diagnostics);
   configuredValue.value.reset();
   if (!decodedModel.model || hasErrors(result.diagnostics) ||
       cancellationRequested(request, result)) {

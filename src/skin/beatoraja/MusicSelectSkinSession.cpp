@@ -466,8 +466,9 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
          .luaPurpose = LuaRuntimePurpose::MusicSelect,
          .loadConfiguredLua = [&context, &initialActions](
                                   LuaSkinRuntime &runtime,
-                                  const BeatorajaSkinConfiguration &configuration,
-                                  std::vector<SkinDiagnostic> &) {
+                                  const BeatorajaSkinConfiguration &,
+                                  std::vector<SkinDiagnostic> &,
+                                  const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
            if (context.initialLegacyInputGeneration) {
              runtime.setLegacyInputGeneration(
                  *context.initialLegacyInputGeneration);
@@ -481,7 +482,7 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
                        .floatValue = value});
                 }});
            LuaFrameStateBinding frameState(&runtime, &bridge);
-           return runtime.loadConfigured(configuration);
+           return loadAndDecode();
          },
          .safetyPolicy = safetyPolicy,
          .stop = context.stop});

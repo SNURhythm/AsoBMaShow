@@ -83,8 +83,19 @@ No external skins, Lua file persistence, or LITONE-specific tests were changed.
 Deduplication preserves the existing order of distinct offset IDs. It does not
 reproduce LibGDX's nondeterministic cuckoo-hash iteration order.
 
-The existing configured-loader binding lifetime is unchanged. Ordinary
-configured skin execution and frame callbacks have a state clock; a string
-factory that actively reads that clock during the later decoder trial can
-still lack a bound state. This is a separate lifecycle issue from the duplicate
-factory-instance finding L2.
+## Follow-up: factory clock binding
+
+Fixed the separate lifecycle issue found while implementing L2. String timer
+factories can read `main_state.time()` or start a `timer_util` timer during model
+decoding. Previously, the initial frame binding ended after configured script
+execution, before those factories ran.
+
+The document loader now runs configured execution and model decoding within
+the same initial state binding for gameplay, music select, result, and course
+result. Retained callbacks read subsequent frame clocks normally. Generic
+session regressions cover construction, later frames, and deliberate factory
+failures, including music select's existing policy of skipping invalid optional
+bindings. No clock cache or file-persistence behavior was added.
+
+Follow-up verification: full desktop/test build passed; all 409 CTest tests
+passed. Independent lifecycle review found no regressions.

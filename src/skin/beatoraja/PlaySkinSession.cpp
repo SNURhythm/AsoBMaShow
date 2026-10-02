@@ -665,7 +665,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .loadConfiguredLua =
              [&context](LuaSkinRuntime &runtime,
                         const BeatorajaSkinConfiguration &configuration,
-                        std::vector<SkinDiagnostic> &diagnostics) {
+                        std::vector<SkinDiagnostic> &diagnostics,
+                        const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
                if (context.captureLegacyInputGeneration) {
                  try {
                    runtime.setLegacyInputGeneration(
@@ -699,7 +700,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                          "Gameplay skin configuration could not bind its "
                          "initialized authoritative state.")};
                }
-               auto value = runtime.loadConfigured(configuration);
+               auto value = loadAndDecode();
                appendDiagnostics(diagnostics, bridge.diagnostics());
                bridge.discardFrame();
                return value;

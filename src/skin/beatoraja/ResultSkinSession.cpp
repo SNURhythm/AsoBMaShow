@@ -307,11 +307,12 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
          .loadConfiguredLua = [&context](
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &configuration,
-                                  std::vector<SkinDiagnostic> &) {
+                                  std::vector<SkinDiagnostic> &,
+                                  const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
            ResultSkinStateBridge bridge(context.initialData, 1, 0,
                                         &configuration);
            LuaFrameStateBinding frameState(&runtime, &bridge);
-           return runtime.loadConfigured(configuration);
+           return loadAndDecode();
          },
          .safetyPolicy = context.safetyPolicy, .stop = context.stop});
     result.diagnostics = std::move(loaded.diagnostics);

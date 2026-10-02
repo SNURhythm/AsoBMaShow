@@ -754,6 +754,8 @@ struct ActivationFixtureOptions {
   bool audioBearing = false;
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
+  bool clockReadingFactory = false;
+  bool failClockReadingFactory = false;
   bool courseResultLog = false;
   bool resultEventExec = false;
   bool resultVideoEventAnimation = false;
@@ -1036,7 +1038,39 @@ end
   assert(math.abs(main_state.volume_bg() - 0.25) < 0.000001)
 )lua";
     }
-    if (options.musicSelectDistributionGraph != 0) {
+    if (options.clockReadingFactory) {
+      script += R"lua(
+  local configured_clock = main_state.time()
+  function clock_factory()
+    local util = require("timer_util")
+    local timer = util.new_passive_timer()
+    assert(timer.turn_on())
+    local start = timer.timer()
+    assert(start == configured_clock and util.now_timer(start) == 0)
+)lua";
+      if (options.failClockReadingFactory) {
+        script += R"lua(
+    local marker = assert(io.open("configured-phase-marker.txt", "w"))
+    marker:write("factory failure after clock read")
+    marker:close()
+    error("factory failure after clock read")
+)lua";
+      }
+      script += R"lua(
+    return function()
+      local now = main_state.time()
+      assert(util.now_timer(start) == now - start)
+      local marker = assert(io.open("configured-phase-marker.txt", "w"))
+      marker:write(string.format("%d:%d", start, now))
+      marker:close()
+      return start
+    end
+  end
+)lua";
+      script += "  return { type = " + std::to_string(options.skinType) +
+                ", w = 1280, h = 720, destination = {}, "
+                "customTimers = {{id = 10000, timer = \"clock_factory()\"}} }\n";
+    } else if (options.musicSelectDistributionGraph != 0) {
       script += "\n  local shared = " + std::string(
           options.musicSelectDistributionGraph % 2 == 0 ? "true" : "false");
       script += "\n  local nested = " + std::string(
@@ -1681,11 +1715,12 @@ public:
          },
          .loadConfiguredLua = [&data](
                                   LuaSkinRuntime &runtime,
-                                  const BeatorajaSkinConfiguration &configuration,
-                                  std::vector<SkinDiagnostic> &) {
+                                  const BeatorajaSkinConfiguration &,
+                                  std::vector<SkinDiagnostic> &,
+                                  const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
            ResultSkinStateBridge bridge(data, 1, 0);
            runtime.setFrameState(&bridge);
-           auto loaded = runtime.loadConfigured(configuration);
+           auto loaded = loadAndDecode();
            runtime.setFrameState(nullptr);
            return loaded;
          }});
@@ -2529,6 +2564,73 @@ void testConfiguredLoadUsesTheInitializedAuthoritativeState() {
       PlaySkinSession::create(fixture.takeActivation(), fixture.context());
   expect(created.session != nullptr && created.diagnostics.empty(),
          "configured Lua load receives the initialized authoritative state");
+}
+
+void testTimerFactoriesUseInitialStateThroughDecoding() {
+  for (const int skinType : {0, 5, 7, 15}) {
+    for (const bool failFactory : {false, true}) {
+      ActivationFixture fixture({.skinType = skinType,
+                                 .clockReadingFactory = true,
+                                 .failClockReadingFactory = failFactory});
+      if (!fixture.ready()) return;
+      bool created = false;
+      bool rendered = false;
+      std::vector<SkinDiagnostic> diagnostics;
+      RenderContext renderContext;
+      if (skinType == 0) {
+        auto result = PlaySkinSession::create(fixture.takeActivation(),
+                                              fixture.context());
+        created = result.session != nullptr;
+        diagnostics = std::move(result.diagnostics);
+        if (created) {
+          rendered = result.session
+                         ->prepareFrame(stateAt(2), projectionAt(2), {}).ready();
+        }
+      } else if (skinType == 5) {
+        auto context = fixture.musicSelectContext();
+        context.initialFrame.elapsedMillis = 123;
+        auto result = MusicSelectSkinSession::create(
+            {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+             .sessionSerial = 109}, std::move(context));
+        created = result.session != nullptr;
+        diagnostics = std::move(result.diagnostics);
+        if (created) {
+          rendered = result.session->render(
+              renderContext, MusicSelectSkinFrame{.serial = 2, .elapsedMillis = 456});
+        }
+      } else {
+        auto result = ResultSkinSession::create(fixture.takeActivation(),
+                                                fixture.resultContext());
+        created = result.session != nullptr;
+        diagnostics = std::move(result.diagnostics);
+        if (created) rendered = result.session->render(renderContext, {}, 2, 456);
+      }
+      if (failFactory) {
+        std::ifstream marker(fixture.configuredMarkerPath());
+        std::string message;
+        std::getline(marker, message);
+        const bool expectedFailure = skinType == 5
+            ? created && rendered
+            : !created && std::ranges::any_of(diagnostics, [](const auto &diagnostic) {
+                return diagnostic.message.find("factory failure after clock read") !=
+                       std::string::npos;
+              });
+        // Selector compatibility skips an invalid optional binding; strict
+        // gameplay/result loading rejects it. Both must release all resources.
+        expect(expectedFailure && message == "factory failure after clock read" &&
+                   fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
+               "factory failures preserve admission policy and release resources");
+      } else {
+        std::ifstream marker(fixture.configuredMarkerPath());
+        std::string values;
+        marker >> values;
+        expect(created && rendered && values == (skinType == 0 ? "10000:20000"
+                                                 : skinType == 5 ? "123000:456000"
+                                                                 : "0:456000"),
+               "factory construction uses the initial clock and callbacks use subsequent frame clocks");
+      }
+    }
+  }
 }
 
 void testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary() {
@@ -4388,10 +4490,11 @@ void testMusicSelectLuaCallbackDispatch(std::string_view mode,
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::MusicSelect,
-         .loadConfiguredLua = [](LuaSkinRuntime &runtime,
-                                 const BeatorajaSkinConfiguration &configuration,
-                                 std::vector<SkinDiagnostic> &) {
-           return runtime.loadConfigured(configuration);
+         .loadConfiguredLua = [](LuaSkinRuntime &,
+                                 const BeatorajaSkinConfiguration &,
+                                 std::vector<SkinDiagnostic> &,
+                                 const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
+           return loadAndDecode();
          },
          .safetyPolicy = prepared.safetyPolicy});
     expect(loaded.document.has_value(), "strict callback dispatch runtime loads");
@@ -9139,6 +9242,7 @@ int main(int argc, char **argv) {
   testCallbackBindingWithoutRuntimeFailsValidation();
   testActivationCreatesAnOwningFreshStateSession();
   testConfiguredLoadUsesTheInitializedAuthoritativeState();
+  testTimerFactoriesUseInitialStateThroughDecoding();
   testLuaSessionCapturesLegacyInputAtEachAuthoritativeBoundary();
   testRepeatedPomyuObjectsShareCyclePreparation();
   testMalformedPomyuNumericDirectivesAbortTheCp932Character();

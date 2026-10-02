@@ -83,7 +83,9 @@
   capability restrictions.
 - Distinct offset IDs preserve their existing order; duplicating Java's
   nondeterministic hash-table iteration is outside this change.
-- The audit records the existing configured string-factory clock-binding
-  lifetime limitation separately from these nine fixes.
+- The follow-up fixes configured string-factory clock binding by keeping the
+  initial state bound through model decoding. Generic session regressions cover
+  all four skin targets, advancing clocks, and factory-failure cleanup while
+  preserving each target's existing error policy.
 
 Final verification: full desktop/test build passed; CTest passed 409/409; diff whitespace check passed.
