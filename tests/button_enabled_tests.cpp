@@ -1,4 +1,6 @@
 #include "../src/view/View.h"
+#include "../src/view/ScrollView.h"
+#include "../src/view/RecyclerView.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -465,6 +467,81 @@ void testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck() {
 }
 } // namespace
 
+static void testDisabledSiblingEndsCoveredScrollGestures() {
+  for (bool touch : {false, true}) {
+    View root(0, 0, 300, 300);
+    auto *scroll = new ScrollView(0, 60, 200, 200);
+    scroll->setPositionType(YGPositionTypeAbsolute);
+    auto *content = new View(0, 0, 200, 600);
+    scroll->setContentView(content);
+    root.addView(scroll);
+    auto *disabled = new Button(0, 0, 200, 50);
+    disabled->setPositionType(YGPositionTypeAbsolute);
+    disabled->setEnabled(false);
+    root.addView(disabled);
+    root.applyYogaLayout();
+    const auto send = [&](Uint32 type, int y, SDL_FingerID id = 7) {
+      SDL_Event event = touch ? fingerEvent(type, 20, y)
+          : type == SDL_MOUSEMOTION ? mouseMotion(1, 20, y)
+                                    : mouseEvent(type, 20, y);
+      if (touch) event.tfinger.fingerId = id;
+      root.handleEvents(event);
+    };
+    send(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 180);
+    send(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 100);
+    REQUIRE(scroll->getScrollOffset() == 80.0F);
+    send(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 25);
+    if (!touch) {
+      send(SDL_MOUSEMOTION, 80);
+      REQUIRE(scroll->getScrollOffset() == 80.0F);
+    }
+    send(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 180, 8);
+    send(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 120, 8);
+    REQUIRE(scroll->getScrollOffset() == 140.0F);
+    send(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 120, 8);
+  }
+}
+
+static void testDisabledSiblingEndsCoveredRecyclerGesture() {
+  for (const bool disabledRow : {false, true}) {
+    View root(0, 0, 300, 400);
+    auto *recycler = new RecyclerView<int>([](int a, int b) { return a == b; });
+    recycler->setPosition(0, 0, YGPositionTypeAbsolute);
+    recycler->setSize(200, 200);
+    recycler->onCreateView = [disabledRow](const int &item) -> View * {
+      if (disabledRow && item == 3) {
+        auto *button = new Button();
+        button->setEnabled(false);
+        return button;
+      }
+      return new View();
+    };
+    recycler->onBind = [](View *, const int &, int, bool) {};
+    root.addView(recycler);
+    recycler->setItems(std::vector<int>{1, 2, 3, 4, 5, 6});
+    int selections = 0;
+    recycler->onSelected = [&](const int &, int) { ++selections; };
+    auto *disabled = new Button(0, 250, 200, 50);
+    disabled->setPositionType(YGPositionTypeAbsolute);
+    disabled->setEnabled(false);
+    root.addView(disabled);
+    root.applyYogaLayout();
+    auto down = fingerEvent(SDL_FINGERDOWN, 20, 180);
+    auto move = fingerEvent(SDL_FINGERMOTION, 20, 100);
+    auto up = fingerEvent(SDL_FINGERUP, 20, disabledRow ? 175 : 275);
+    root.handleEvents(down);
+    root.handleEvents(move);
+    REQUIRE(recycler->scrollOffset == 80.0F);
+    root.handleEvents(up);
+    REQUIRE(selections == 0);
+    // The headless mouse position is (0, 0), inside the recycler. Touch release
+    // must stop suppressing genuine mouse selection even before another touch.
+    auto mouseDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 0, 0);
+    root.handleEvents(mouseDown);
+    REQUIRE(selections == 1);
+  }
+}
+
 static void testNavigationMayDestroyDispatchingViews() {
   for (const bool touch : {false, true}) {
     for (const bool throughButtonContent : {false, true}) {
@@ -523,6 +600,8 @@ int main(int argc, char **argv) {
   if (!renderOnly && !metalOnly) {
     testNavigationMayDestroyDispatchingViews();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
+    testDisabledSiblingEndsCoveredScrollGestures();
+    testDisabledSiblingEndsCoveredRecyclerGesture();
     testDisabledButtonBlocksUnderlyingPointerActions();
     testDisablingCancelsHoverAndActivePointerGestures();
   }

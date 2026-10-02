@@ -1,5 +1,6 @@
 #include "MusicSelectToolbarView.h"
 
+#include "../input/SDLPointerEvent.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/IconText.h"
@@ -343,6 +344,24 @@ bool MusicSelectToolbarView::insideDragHandle(float x, float y) const {
   return x >= getX() + kPadding &&
          x <= getX() + kPadding + kControlSize && y >= getY() + kPadding &&
          y <= getY() + kPadding + kControlSize;
+}
+
+void MusicSelectToolbarView::onPointerEventConsumed(const SDL_Event &event) {
+  if (event.type == SDL_MOUSEBUTTONUP && mouseDragging_ &&
+      event.button.button == SDL_BUTTON_LEFT &&
+      event.button.which != SDL_TOUCH_MOUSEID) {
+    mouseDragging_ = false;
+  } else if (event.type == SDL_FINGERUP && touchDragging_ != -1 &&
+             !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+             event.tfinger.fingerId == touchDragging_) {
+    touchDragging_ = -1;
+  } else {
+    return;
+  }
+  state_.x = static_cast<float>(getX());
+  state_.y = static_cast<float>(getY());
+  state_.hasPosition = true;
+  persist();
 }
 
 bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {

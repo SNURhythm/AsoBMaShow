@@ -264,6 +264,86 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");
 }
+
+void testDisabledChildReleaseFinishesToolbarDrag() {
+  for (const bool touch : {false, true}) {
+    std::vector<std::string> actions;
+    std::vector<MusicSelectToolbarState> saved;
+    auto toolbar = MusicSelectToolbarView::Create(
+        {}, callbacks(actions, saved), 800, 300);
+    toolbar->setControlEnabled(MusicSelectToolbarControl::ChartMenu, false);
+    toolbar->applyYogaLayout();
+    const auto pointerEvent = [touch](Uint32 mouseType, Uint32 touchType,
+                                     int x, int y, SDL_FingerID finger = 91) {
+      SDL_Event event{};
+      event.type = touch ? touchType : mouseType;
+      if (touch) {
+        event.tfinger.touchId = 1;
+        event.tfinger.fingerId = finger;
+        event.tfinger.x = static_cast<float>(x) / rendering::render_width;
+        event.tfinger.y = static_cast<float>(y) / rendering::render_height;
+      } else if (mouseType == SDL_MOUSEMOTION) {
+        event.motion.x = x;
+        event.motion.y = y;
+      } else {
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = x;
+        event.button.y = y;
+      }
+      return event;
+    };
+    auto down = pointerEvent(SDL_MOUSEBUTTONDOWN, SDL_FINGERDOWN,
+                             toolbar->getX() + 20, toolbar->getY() + 20);
+    expect(!toolbar->handleEvents(down), "toolbar begins the release regression drag");
+    auto motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, 800, 44);
+    toolbar->handleEvents(motion);
+    const int clampedX = toolbar->getX();
+    const int clampedY = toolbar->getY();
+    expect(clampedX + toolbar->getWidth() == 800,
+           "dragging beyond the viewport clamps the toolbar at its right edge");
+    const auto *chart = toolbar->controls()[1].button;
+    auto up = pointerEvent(SDL_MOUSEBUTTONUP, SDL_FINGERUP,
+                           chart->getX() + chart->getWidth() / 2,
+                           chart->getY() + chart->getHeight() / 2);
+    auto unrelatedUp = up;
+    if (touch) unrelatedUp.tfinger.fingerId = 92;
+    else unrelatedUp.button.button = SDL_BUTTON_RIGHT;
+    expect(!toolbar->handleEvents(unrelatedUp),
+           "disabled chart button consumes an unrelated pointer release");
+    auto syntheticUp = up;
+    if (touch) syntheticUp.tfinger.touchId = SDL_MOUSE_TOUCHID;
+    else syntheticUp.button.which = SDL_TOUCH_MOUSEID;
+    expect(!toolbar->handleEvents(syntheticUp),
+           "disabled chart button consumes a synthesized pointer release");
+    expect(saved.empty(), "unrelated and synthesized releases do not finish the drag");
+    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, clampedX - 20, 44);
+    toolbar->handleEvents(motion);
+    expect(toolbar->getX() < clampedX,
+           "the original drag remains active after unrelated releases");
+    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, 800, 44);
+    toolbar->handleEvents(motion);
+
+    expect(!toolbar->handleEvents(up), "disabled chart button consumes the drag release");
+    expect(saved.size() == 1 && saved.back().hasPosition &&
+               saved.back().x == clampedX && saved.back().y == clampedY,
+           "a consumed drag release persists the current clamped toolbar position");
+    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, 80, 100);
+    toolbar->handleEvents(motion);
+    expect(toolbar->getX() == clampedX && toolbar->getY() == clampedY,
+           "motion after a consumed release cannot keep dragging the toolbar");
+
+    down = pointerEvent(SDL_MOUSEBUTTONDOWN, SDL_FINGERDOWN,
+                         toolbar->getX() + 20, toolbar->getY() + 20, 92);
+    expect(!toolbar->handleEvents(down), "a new pointer can start the next toolbar drag");
+    const int nextStartX = toolbar->getX();
+    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION,
+                           nextStartX - 40, toolbar->getY() + 20, 92);
+    toolbar->handleEvents(motion);
+    expect(toolbar->getX() < nextStartX,
+           "the next pointer moves the toolbar after the previous release was consumed");
+    expect(actions.empty(), "releasing over a disabled chart control never activates it");
+  }
+}
 } // namespace
 
 int main() {
@@ -283,6 +363,7 @@ int main() {
   testControlsFitInsideToolbar();
   testActionsModesAndDragPersist();
   testPersistedSettingsStateAppliesToAnExistingToolbar();
+  testDisabledChildReleaseFinishesToolbarDrag();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

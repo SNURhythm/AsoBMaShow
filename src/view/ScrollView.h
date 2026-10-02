@@ -21,6 +21,7 @@ public:
 protected:
   void renderImpl(RenderContext &context) override;
   bool handleEventsImpl(SDL_Event &event) override;
+  void onPointerEventConsumed(const SDL_Event &event) override;
   void onLayout() override;
   void onMove(int newX, int newY) override;
   void onResize(int newWidth, int newHeight) override;

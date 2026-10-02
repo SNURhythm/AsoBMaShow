@@ -1,5 +1,6 @@
 #include "SnappedSlider.h"
 
+#include "../input/SDLPointerEvent.h"
 #include "UiTheme.h"
 
 #include <algorithm>
@@ -138,6 +139,20 @@ void SnappedSlider::renderImpl(RenderContext &context) {
   appendRoundedRect(context, thumbX - kThumbRadius, thumbY - kThumbRadius,
                     kThumbRadius * 2.0F, kThumbRadius * 2.0F, kThumbRadius,
                     thumbColor.toABGR());
+}
+
+void SnappedSlider::onPointerEventConsumed(const SDL_Event &event) {
+  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+    hovered = false;
+  } else if (event.type == SDL_MOUSEBUTTONUP &&
+             event.button.button == SDL_BUTTON_LEFT &&
+             event.button.which != SDL_TOUCH_MOUSEID) {
+    mouseDragging = false;
+  } else if (event.type == SDL_FINGERUP &&
+             !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+             event.tfinger.fingerId == activeTouchId) {
+    activeTouchId = -1;
+  }
 }
 
 bool SnappedSlider::handleEventsImpl(SDL_Event &event) {

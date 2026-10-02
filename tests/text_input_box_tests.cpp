@@ -225,6 +225,101 @@ void testFocusedInputConsumesItsInitiatingTouch() {
   input.endEditing();
 }
 
+SDL_Event selectionPointer(bool touch, Uint32 type, int x, int y,
+                           SDL_FingerID id = 7) {
+  SDL_Event event{};
+  event.type = type;
+  if (touch) {
+    event.tfinger.touchId = 1;
+    event.tfinger.fingerId = id;
+    event.tfinger.x = static_cast<float>(x) / rendering::window_width;
+    event.tfinger.y = static_cast<float>(y) / rendering::window_height;
+  } else if (type == SDL_MOUSEMOTION) {
+    event.motion.which = 1;
+    event.motion.state = SDL_BUTTON_LMASK;
+    event.motion.x = x;
+    event.motion.y = y;
+  } else {
+    event.button.which = 1;
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.x = x;
+    event.button.y = y;
+  }
+  return event;
+}
+
+void testConsumedReleaseEndsTextSelectionWithoutEndingEditing() {
+  for (bool touch : {false, true}) {
+    View root(0, 0, 240, 120);
+    auto *input = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 18);
+    input->setSize(240, 50);
+    input->setPosition(0, 0, YGPositionTypeAbsolute);
+    input->setEditingText("needle");
+    root.addView(input);
+    auto *disabled = new Button(0, 60, 240, 50);
+    disabled->setPosition(0, 60, YGPositionTypeAbsolute);
+    disabled->setEnabled(false);
+    root.addView(disabled);
+    root.applyYogaLayout();
+    input->beginEditing();
+    int changes = 0;
+    int finished = 0;
+    input->onTextChanged([&](const std::string &) { ++changes; });
+    input->onEditingFinished([&](const std::string &) { ++finished; });
+    auto down = selectionPointer(touch, touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN,
+                                 120, 25);
+    expect(!root.handleEvents(down), "focused field starts selection gesture");
+    auto unrelated = selectionPointer(touch, touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP,
+                                      220, 80, 8);
+    if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
+    expect(!root.handleEvents(unrelated), "disabled sibling consumes unrelated text release");
+    auto move = selectionPointer(touch, touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION,
+                                 60, 25);
+    expect(!root.handleEvents(move), "unrelated release preserves text selection gesture");
+    auto up = selectionPointer(touch, touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP,
+                               220, 80);
+    expect(!root.handleEvents(up), "disabled sibling consumes text selection release");
+    expect(input->getSelected() && input->getText() == "needle" &&
+               changes == 0 && finished == 0,
+           "covered selection release preserves focus and text without callbacks");
+    move = selectionPointer(touch, touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION,
+                            220, 25);
+    expect(root.handleEvents(move),
+           "released text selection does not capture subsequent pointer motion");
+    down = selectionPointer(touch, touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN,
+                            120, 25, 9);
+    expect(!root.handleEvents(down), "focused input accepts the next selection gesture");
+    input->endEditing();
+  }
+}
+
+void testConsumedReleaseCancelsPendingTextFocus() {
+  View root(0, 0, 240, 120);
+  auto *input = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 18);
+  input->setSize(240, 50);
+  input->setPosition(0, 0, YGPositionTypeAbsolute);
+  root.addView(input);
+  auto *disabled = new Button(0, 60, 240, 50);
+  disabled->setPosition(0, 60, YGPositionTypeAbsolute);
+  disabled->setEnabled(false);
+  root.addView(disabled);
+  root.applyYogaLayout();
+  auto down = selectionPointer(true, SDL_FINGERDOWN, 120, 25);
+  expect(!root.handleEvents(down) && !input->getSelected(),
+         "unfocused input waits for its touch release before opening the editor");
+  auto up = selectionPointer(true, SDL_FINGERUP, 220, 80);
+  expect(!root.handleEvents(up) && !input->getSelected(),
+         "covered pending-focus release does not focus the input");
+  up = selectionPointer(true, SDL_FINGERUP, 120, 25);
+  expect(root.handleEvents(up) && !input->getSelected(),
+         "a later unmatched release cannot revive cancelled pending focus");
+  down = selectionPointer(true, SDL_FINGERDOWN, 120, 25, 9);
+  up = selectionPointer(true, SDL_FINGERUP, 120, 25, 9);
+  expect(!root.handleEvents(down) && !root.handleEvents(up) && input->getSelected(),
+         "a fresh touch can still focus the input after cancellation");
+  input->endEditing();
+}
+
 void testBeginEditingUsesTheLatestDeclaredInputFrame() {
   nativeInputRect = {};
   TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
@@ -710,6 +805,8 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testConsumedReleaseEndsTextSelectionWithoutEndingEditing();
+  testConsumedReleaseCancelsPendingTextFocus();
   testMultilineAlignmentAcrossFonts();
   testComposedTextPreservesDescenders();
   testReminderDescriptionPreservesLineBreaks();

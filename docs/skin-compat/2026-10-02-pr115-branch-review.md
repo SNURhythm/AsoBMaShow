@@ -95,3 +95,42 @@ pass, following the two additional fixes above.
 The final all-target desktop build passed, followed by all 410 CTest tests in
 70.33 seconds. `git diff --check` passed. No Windows/mobile application build,
 deployment, or merge was performed in this continuation.
+
+## Review loop — 2026-10-03
+
+This pass reviewed the complete 223-file branch diff from `deb6b394` to
+`972e9e8bc`, including the subsequent shared download modal, provider-locked
+retry/resume flow, callback lifetime guards, and compact selection toolbar.
+Scoped parallel reviews covered downloads and native transfer handling,
+UI/input, Lua/JSON decoding and state bridges, rendering, and skin settings and
+package lifecycle. The coordinator checked onboarding, platform integration,
+course results/exports, and build tooling. The initial all-target desktop build
+and all 411 tests passed before corrections.
+
+The review confirmed one P2 event-routing regression across five controls:
+disabled buttons consume pointer releases, but covered gesture owners did not
+clear their active drag or touch state. Releasing a scroll, slider, text
+selection, or toolbar drag over a disabled button could keep movement active or
+block later input. Recycler touch dragging could also suppress subsequent mouse
+selection. Toolbar edge clamping and the practice panel's disabled preset
+actions provide concrete application paths.
+
+ScrollView, RecyclerView, SnappedSlider, TextInputBox, and the music selection
+toolbar now handle consumed releases. Cleanup preserves unrelated pointers and
+does not activate covered controls. Separately owned content receives the
+notification, and RecyclerView guards post-callback access if a row destroys
+the view. The toolbar saves its current clamped position when its drag ends.
+
+New public-event regressions failed before the fixes for continued scrolling,
+blocked recycler selection, continued slider/text gestures, and toolbar drag
+and persistence failures. All four affected test targets then passed. An
+independent combined fix review found no remaining actionable issue; the other
+branch review scopes were clean.
+
+Final verification: `cmake --build cmake-build-debug -j 6` passed;
+`ctest --test-dir cmake-build-debug --output-on-failure -j 6` passed all 411
+tests in 94.83 seconds; `git diff --check` passed.
+
+This pass did not run a Windows/mobile application build, physical-device
+network interruption test, deployment, or merge. Native transfer review used
+source inspection and the existing Foundation transport tests.

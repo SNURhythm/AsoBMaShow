@@ -12,6 +12,7 @@
 #endif
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
+#include "view/SnappedSlider.h"
 #include "view/TextView.h"
 #include "view/TextInputBox.h"
 #include "i18n/Localization.h"
@@ -61,6 +62,62 @@ void click(Button &button) {
   up.button.type = SDL_MOUSEBUTTONUP;
   button.handleEvents(down);
   button.handleEvents(up);
+}
+
+void testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture() {
+  for (bool touch : {false, true}) {
+    View root(0, 0, 240, 120);
+    int changes = 0;
+    auto *slider = new SnappedSlider([&](int) { ++changes; });
+    slider->setSize(240, 50);
+    slider->setPosition(0, 0, YGPositionTypeAbsolute);
+    root.addView(slider);
+    auto *disabled = new Button(0, 60, 240, 50);
+    disabled->setPosition(0, 60, YGPositionTypeAbsolute);
+    disabled->setEnabled(false);
+    root.addView(disabled);
+    root.applyYogaLayout();
+    const auto pointer = [&](Uint32 type, int x, int y, SDL_FingerID id = 7) {
+      SDL_Event event{};
+      event.type = type;
+      if (touch) {
+        event.tfinger.touchId = 1;
+        event.tfinger.fingerId = id;
+        event.tfinger.x = static_cast<float>(x) / rendering::window_width;
+        event.tfinger.y = static_cast<float>(y) / rendering::window_height;
+      } else if (type == SDL_MOUSEMOTION) {
+        event.motion.which = 1;
+        event.motion.x = x;
+        event.motion.y = y;
+      } else {
+        event.button.which = 1;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = x;
+        event.button.y = y;
+      }
+      return event;
+    };
+    auto down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 60, 25);
+    require(!root.handleEvents(down), "slider begins the gesture");
+    auto unrelated = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 220, 80, 8);
+    if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
+    require(!root.handleEvents(unrelated), "disabled sibling consumes unrelated release");
+    auto move = pointer(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 120, 25);
+    require(!root.handleEvents(move) && slider->value() == 50,
+            "unrelated release preserves the active slider gesture");
+    const int beforeRelease = changes;
+    auto up = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 220, 80);
+    require(!root.handleEvents(up), "disabled sibling consumes slider release");
+    require(slider->value() == 50 && changes == beforeRelease,
+            "covered release does not change the value or invoke its callback");
+    move = pointer(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 220, 25);
+    require(root.handleEvents(move) && slider->value() == 50 &&
+                changes == beforeRelease,
+            "released slider cannot keep changing on later pointer motion");
+    down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 220, 25, 9);
+    require(!root.handleEvents(down) && slider->value() > 50,
+            "slider accepts a fresh pointer after the covered release");
+  }
 }
 
 const TextView *buttonText(const Button &button) {
@@ -235,6 +292,7 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture();
   testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();

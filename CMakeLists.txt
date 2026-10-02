@@ -5096,6 +5096,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/ScrollView.cpp
         src/view/View.cpp
     )
     target_include_directories(button_enabled_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
