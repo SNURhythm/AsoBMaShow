@@ -4017,8 +4017,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.difficultyLabel =
           result_presentation::difficultyLabelForChart(
               context.chartRepository, chart.Meta);
-      data.currentClearLabelOverride = "NO PLAY";
-      data.currentClearRankOverride = kNoClearTypeRank;
+      const int clearRank = result_presentation::courseStageClearRank(
+          stage.resultState, chart.Meta, stageReplay.provenance.playback);
+      data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+      data.currentClearRankOverride = clearRank;
       data.previousBest = previousBest;
       data.previousLampBest =
           result_presentation::previousLampBestForReplayChart(

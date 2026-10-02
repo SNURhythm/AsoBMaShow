@@ -1159,6 +1159,40 @@ void testOffsetSentinelAndSourceAwarePrecedence() {
   }
 }
 
+void testDuplicateOffsetsApplyOnceWithoutDroppingUniqueOffsets() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.offsets.emplace(7, SkinPropertyLookup<SkinRuntimeOffset>{
+                               .value = {.x = 10}, .supported = true});
+  state.offsets.emplace(9, SkinPropertyLookup<SkinRuntimeOffset>{
+                               .value = {.x = 20}, .supported = true});
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {imageObject(1, 1, true)};
+  auto presented = destination(1, 10, 100.0);
+  presented.presentation.offsetIds = {0, 7, 7, -9, 200};
+  model.model.destinations = {std::move(presented)};
+  const auto checkX = [&](const SkinFrameEvaluationResult &result, float x) {
+    expect(result.submitReady && result.submitReady->commands.size() == 1,
+           "duplicate offsets keep a valid destination renderable");
+    if (result.submitReady && result.submitReady->commands.size() == 1) {
+      const auto &quad = std::get<SkinTexturedQuadCommand>(
+          result.submitReady->commands.front().payload);
+      expect(quad.vertices.front().x == x,
+             "each valid offset ID contributes to geometry exactly once");
+    }
+  };
+  checkX(evaluate(renderer, runtime, model, resources, state, 1), 110.0F);
+  model.model.destinations.front().presentation.offsetIds = {7, 9, 7, 9};
+  checkX(evaluate(renderer, runtime, model, resources, state, 2), 130.0F);
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById.emplace(7, ConfigOffset{.x = 30});
+  checkX(evaluate(renderer, runtime, model, resources, state, 3, 0,
+                  &configuration), 150.0F);
+}
+
 void testCriticalLuaCallbackFailureIsAlsoAtomic() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -4221,7 +4255,7 @@ void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
   detailDestination.loop = -1;
   detailDestination.frames = {
       {.timeMillis = 0, .x = 0.0, .y = 0.0, .width = 10.0, .height = 20.0}};
-  detailDestination.offsetIds = {7};
+  detailDestination.offsetIds = {7, 7};
 
   SkinJudgeObject judge;
   judge.grades.resize(7);
@@ -4297,7 +4331,7 @@ void testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder() {
   childDestination.conditions = {SkinBooleanPropertyId{1},
                                  SkinBooleanPropertyId{2}};
   childDestination.timer = SkinTimerPropertyId{1};
-  childDestination.offsetIds = {5};
+  childDestination.offsetIds = {5, 5};
   childDestination.frames = {
       {.timeMillis = 0, .x = 100.0, .y = 200.0, .width = 40.0, .height = 20.0}};
   SkinJudgeObject judge;
@@ -6858,6 +6892,7 @@ int main(int argc, char **argv) {
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();
   testCapturedFrameSerialMustMatchCallbacksAndProjection();
   testOffsetSentinelAndSourceAwarePrecedence();
+  testDuplicateOffsetsApplyOnceWithoutDroppingUniqueOffsets();
   testCriticalFailureCannotExposePartialBuffer();
   testCriticalLuaCallbackFailureIsAlsoAtomic();
   testOptionalFailureSuppressesOnlyItsObject();

@@ -220,8 +220,21 @@ void testObjectAccelerationAndPinnedOffsetAlphaBranches() {
   const auto steppedMidpoint = evaluateSkinDestinationAuthored(
       stepped, inputs(600'000, 0, {}, lowerAlpha));
   expect(steppedMidpoint.geometry &&
-             near(steppedMidpoint.geometry->rgba[3], 0.0),
-         "step acceleration applies and clamps alpha offsets");
+             near(steppedMidpoint.geometry->rgba[3], 128.0 / 255.0),
+         "changing step color skips alpha offsets between keyframes");
+  for (const auto [time, alpha] :
+       std::array<std::pair<std::int64_t, double>, 2>{{{100'000, 0.0},
+                                                     {1'100'000, 55.0 / 255.0}}}) {
+    const auto endpoint = evaluateSkinDestinationAuthored(
+        stepped, inputs(time, 0, {}, lowerAlpha));
+    expect(endpoint.geometry && near(endpoint.geometry->rgba[3], alpha),
+           "changing step color applies alpha offsets at exact keyframes");
+  }
+  stepped.frames[1].rgba = stepped.frames[0].rgba;
+  const auto fixedStep = evaluateSkinDestinationAuthored(
+      stepped, inputs(600'000, 0, {}, lowerAlpha));
+  expect(fixedStep.geometry && near(fixedStep.geometry->rgba[3], 0.0),
+         "fixed step color still applies and clamps mid-interval alpha offsets");
 }
 
 void testFractionalOffsetAndClipSuppression() {

@@ -180,6 +180,13 @@ void MusicSelectSkinStateBridge::setPublishedSongResources(
 SkinPropertyLookup<std::int64_t> MusicSelectSkinStateBridge::integerProperty(
     const SkinBuiltinPropertySelector &selector,
     SkinIntegerPropertyDomain domain) {
+  if (domain == SkinIntegerPropertyDomain::IntegerValue) {
+    if (const auto *name = std::get_if<std::string>(&selector.value);
+        name && *name == "time") {
+      return supported<std::int64_t>(
+          std::max<std::int64_t>(0, frame_->elapsedMillis) * 1'000);
+    }
+  }
   const auto &numeric = domain == SkinIntegerPropertyDomain::IntegerValue
                             ? frame_->properties.integers
                             : frame_->properties.imageIndexes;

@@ -2117,10 +2117,13 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   offsets.reserve(presentation.offsetIds.size());
   double relativeTranslationX = 0.0;
   double relativeTranslationY = 0.0;
+  std::array<bool, SkinCommandPolicy::maximumBeatorajaOffsetId + 1> seenOffsets{};
   for (const int id : presentation.offsetIds) {
-    if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId) {
+    if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId ||
+        seenOffsets[id]) {
       continue;
     }
+    seenOffsets[id] = true;
     const auto configured = inputs.configuration.offsetsById.find(id);
     if (!pinnedLaneCoverRuntimeOffset(id) &&
         configured != inputs.configuration.offsetsById.end()) {
@@ -4647,12 +4650,16 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
       bool offsetFailure = false;
       if (!judgeUsesConstructorDestinationWithoutFrame && destinationVisible) {
+        std::array<bool, SkinCommandPolicy::maximumBeatorajaOffsetId + 1>
+            seenOffsets{};
         for (const int id : destination.presentation.offsetIds) {
           // SkinObject.setOffsetID ignores the decoder's zero default and
           // every ID outside SkinProperty's pinned 1...199 range.
-          if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId) {
+          if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId ||
+              seenOffsets[id]) {
             continue;
           }
+          seenOffsets[id] = true;
           const auto found = inputs.configuration.offsetsById.find(id);
           if (!pinnedLaneCoverRuntimeOffset(id) &&
               found != inputs.configuration.offsetsById.end()) {

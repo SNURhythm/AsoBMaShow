@@ -7,6 +7,7 @@
 #include "GameplaySkinBuiltinCatalog.h"
 
 #include "../../LongNoteModeUtils.h"
+#include "../../ResultPresentationUtils.h"
 #include "../../scene/play/PlayfieldChartVisualModel.h"
 #include "../../scene/ResultPresentationModel.h"
 
@@ -350,6 +351,30 @@ std::optional<float> ResultSkinStateBridge::finalGauge() const noexcept {
   return data_.presentation ? data_.presentation->finalGauge : std::nullopt;
 }
 
+std::optional<int> ResultSkinStateBridge::currentClearRank() const {
+  if (data_.currentClearRankOverride) return data_.currentClearRankOverride;
+  if (data_.courseMode && !data_.courseResult && data_.state && data_.meta) {
+    return result_presentation::courseStageClearRank(*data_.state, *data_.meta);
+  }
+  if (data_.presentation) return data_.presentation->lampRank;
+  return data_.state ? std::optional<int>(data_.state->getClearTypeRank())
+                     : std::nullopt;
+}
+
+std::optional<int> ResultSkinStateBridge::currentClearImageIndex() const {
+  const auto rank = currentClearRank();
+  if (!rank) return std::nullopt;
+  if (data_.courseMode && !data_.courseResult &&
+      *rank == kClearTypeFullComboRank && data_.state) {
+    // Native storage has one FC rank; Beatoraja's current ScoreData also
+    // distinguishes Perfect (no GOOD) and Max (all PGREAT).
+    if (count(Good).value_or(0) == 0) {
+      return count(Great).value_or(0) == 0 ? 10 : 9;
+    }
+  }
+  return beatorajaClearTypeImageIndex(*rank);
+}
+
 std::optional<int>
 ResultSkinStateBridge::timing(Judgement judgement, bool early) const noexcept {
   if (data_.state != nullptr) {
@@ -647,12 +672,7 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                                 : !data_.backBmpAvailable);
   }
   if (*id == 90 || *id == 91) {
-    const auto lamp = data_.currentClearRankOverride
-                          ? data_.currentClearRankOverride
-                          : (data_.state != nullptr
-                          ? std::optional<int>(data_.state->getClearTypeRank())
-                          : (data_.presentation ? data_.presentation->lampRank
-                                                : std::nullopt));
+    const auto lamp = currentClearRank();
     // BooleanPropertyFactory 90/91 compares FAILED by equality: a course
     // stage's NO PLAY lamp can still show the clear animation. MusicResult
     // separately marks the running course failed when this stage's gauge
@@ -924,14 +944,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                                : 0);
       }
     case 370: {
-      const auto lamp = data_.currentClearRankOverride
-                            ? data_.currentClearRankOverride
-                            : (data_.presentation ? data_.presentation->lampRank
-                                                  : (data_.state ? std::optional<int>(
-                                                        data_.state->getClearTypeRank())
-                                                                 : std::nullopt));
-      return lamp ? supported<std::int64_t>(
-                        beatorajaClearTypeImageIndex(*lamp))
+      const auto lamp = currentClearImageIndex();
+      return lamp ? supported<std::int64_t>(*lamp)
                   : unsupported<std::int64_t>();
     }
     case 371: {
@@ -1428,14 +1442,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.meta ? std::optional<int>(javaDoubleToInt(data_.meta->Total))
                         : std::optional<int>(std::numeric_limits<int>::min());
     case 370: {
-      const auto lamp = data_.currentClearRankOverride
-                            ? data_.currentClearRankOverride
-                            : (data_.presentation ? data_.presentation->lampRank
-                                                  : (data_.state ? std::optional<int>(
-                                                        data_.state->getClearTypeRank())
-                                                                 : std::nullopt));
-      return lamp ? std::optional<int>(beatorajaClearTypeImageIndex(*lamp))
-                  : std::nullopt;
+      return currentClearImageIndex();
     }
     case 371: {
       const auto lamp = data_.previousLampBest

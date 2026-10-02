@@ -37,6 +37,10 @@ void testExactPropertyNamespacesAndAbsentValues() {
   MusicSelectSkinStateBridge bridge(frame);
   require(bridge.frameSerial() == 77,
           "bridge publishes the immutable frame serial");
+  const auto clock = bridge.integerProperty(
+      {.value = std::string("time")}, SkinIntegerPropertyDomain::IntegerValue);
+  require(clock.supported && clock.value == 1'234'000,
+          "Lua timer utilities read the selector frame clock in microseconds");
   require(bridge.booleanProperty({.value = std::string("select_folderbar")})
               .value,
           "named Boolean selectors resolve through the pinned namespace");

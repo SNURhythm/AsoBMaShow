@@ -129,7 +129,8 @@ SkinBuiltinBindingCatalogView fixtureBuiltins() {
   return SkinBuiltinBindingCatalogView(kFixtureBuiltins);
 }
 
-BeatorajaSkinModelDecodeResult decodeLuaFixture() {
+BeatorajaSkinModelDecodeResult decodeLuaFixture(
+    std::string_view name = "all_v1_objects.luaskin") {
   TempDirectory temp;
   const SkinStorageRoots roots{
       .visiblePackages = temp.root() / "visible",
@@ -147,7 +148,7 @@ BeatorajaSkinModelDecodeResult decodeLuaFixture() {
   if (!snapshot.prepared) return {};
 
   const auto entry =
-      *normalizeEntryPath(package, "all_v1_objects.luaskin").entry;
+      *normalizeEntryPath(package, name).entry;
   const auto fileSystem = [&]() {
     return LuaSkinFileSystem::create({.revision = snapshot.prepared->readView(),
                                       .entry = entry,
@@ -934,6 +935,29 @@ void testCrossFormatGameplayOverlap() {
   }
 }
 
+void testAuthoredAccelerationSurvivesFrameSortingAcrossFormats() {
+  const std::array decoded = {
+      decodeLuaFixture("authored_acceleration.luaskin"),
+      decodeJsonFixture("authored_acceleration.json"),
+      decodeLr2Fixture("authored_acceleration.lr2skin"),
+  };
+  for (const auto &result : decoded) {
+    expect(result.model && result.model->destinations.size() == 1,
+           "synthetic authored-order fixture decodes in each format");
+    if (!result.model || result.model->destinations.size() != 1) continue;
+    const auto &body = result.model->destinations.front().presentation;
+    for (const auto [time, x] :
+         std::array<std::pair<std::int64_t, double>, 3>{
+             {{0, 0.0}, {500'000, 25.0}, {1'000'000, 100.0}}}) {
+      const auto evaluated = evaluateSkinDestinationAuthored(
+          body, {.nowMicros = time});
+      expect(evaluated.geometry && evaluated.geometry->rect.x == x,
+             "Lua/JSON/LR2 use first authored acceleration before sorting, "
+             "including exact endpoints");
+    }
+  }
+}
+
 void testResultHeadersAreNotRejectedAsGameplayOnly() {
   for (const int type : {7, 15}) {
     const std::string source = "{\"type\":" + std::to_string(type) +
@@ -961,6 +985,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   testCrossFormatGameplayOverlap();
+  testAuthoredAccelerationSurvivesFrameSortingAcrossFormats();
   testResultHeadersAreNotRejectedAsGameplayOnly();
   if (failures == 0) {
     std::cout << "Beatoraja gameplay cross-format tests passed\n";

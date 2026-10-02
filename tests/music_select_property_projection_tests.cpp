@@ -83,6 +83,82 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
   return bars.rows.front();
 }
 
+void testSelectedScorePercentageProperties() {
+  MusicSelectBarManagerSnapshot bars;
+  (void)selectedSong(bars);
+  auto &song = bars.rows.front();
+  song.score->score = 813;
+  const auto values = projectMusicSelectProperties(AppSettings{}, bars, {});
+  const int expectedPercent[] = {50, 20, 10, 5, 2};
+  const double expectedRates[] = {0.5, 0.2, 0.1, 0.05, 0.02};
+  for (int index = 0; index < 5; ++index) {
+    const int id = 85 + index;
+    require(values.integers.contains(id) &&
+                values.integers.at(id) == expectedPercent[index],
+            "selected judgment percentages use the persisted score note count");
+    require(values.floats.contains(id) &&
+                std::abs(values.floats.at(id) - expectedRates[index]) < 0.000001,
+            "selected judgment float percentages are available to Lua properties");
+  }
+  for (const int id : {115, 155}) {
+    require(values.integers.contains(id) && values.integers.at(id) == 81 &&
+                values.integers.contains(id + 1) &&
+                values.integers.at(id + 1) == 30,
+            "total-score aliases expose both integer and fractional percent");
+  }
+  song.score->maxScore = 0;
+  const auto zero = projectMusicSelectProperties(AppSettings{}, bars, {});
+  for (int id = 85; id <= 89; ++id) {
+    require(!zero.integers.contains(id) && !zero.floats.contains(id),
+            "zero-note score judgment percentages retain unavailable sentinels");
+  }
+  require(zero.integers.contains(115) && zero.integers.at(115) == 100 &&
+              zero.integers.contains(116) && zero.integers.at(116) == 0,
+          "zero-note total score preserves ScoreDataProperty's full-rate default");
+  song.score.reset();
+  const auto missing = projectMusicSelectProperties(AppSettings{}, bars, {});
+  for (const int id : {85, 86, 87, 88, 89, 115, 116, 155, 156}) {
+    require(!missing.integers.contains(id),
+            "missing selected scores keep percentage numbers unavailable");
+  }
+}
+
+void testCourseGraphRatesUseCourseNotes() {
+  MusicSelectBar course;
+  course.kind = skin::MusicSelectBarKind::Grade;
+  course.courseTotalNotes = 1'000;
+  course.score = ScoreBestSnapshot{.score = 1'450,
+                                   .maxScore = 2'000,
+                                   .judgementCounts = {500, 250, 100, 50, 25},
+                                   .maxCombo = 612};
+  MusicSelectBarManagerSnapshot bars;
+  bars.rows.push_back(std::move(course));
+  const auto values = projectMusicSelectProperties(AppSettings{}, bars, {});
+  const double expected[] = {0.5, 0.25, 0.1, 0.05, 0.025, 0.612};
+  for (int index = 0; index < 6; ++index) {
+    const int id = 140 + index;
+    require(values.rates.contains(id) &&
+                std::abs(values.rates.at(id) - expected[index]) < 0.000001,
+            "course bars expose judgment and combo graph rates without a song chart");
+  }
+  require(values.rates.contains(147) &&
+              std::abs(values.rates.at(147) - 1.45) < 0.000001,
+          "course EX graph rate divides by notes without the song-only factor two");
+  bars.rows.front().courseTotalNotes = 0;
+  bars.rows.front().score->judgementCounts[1] = 0;
+  const auto zero = projectMusicSelectProperties(AppSettings{}, bars, {});
+  require(zero.rates.contains(140) && std::isinf(zero.rates.at(140)) &&
+              zero.rates.contains(141) && std::isnan(zero.rates.at(141)) &&
+              zero.rates.contains(147) && std::isinf(zero.rates.at(147)),
+          "scored zero-note courses retain Java floating-point division results");
+  bars.rows.front().score.reset();
+  const auto missing = projectMusicSelectProperties(AppSettings{}, bars, {});
+  for (const int id : {140, 141, 142, 143, 144, 145, 147}) {
+    require(missing.rates.contains(id) && missing.rates.at(id) == 0.0,
+            "unplayed course graph rates are zero");
+  }
+}
+
 void testProjectsSelectedSongAndPlayerConfiguration() {
   AppSettings settings;
   settings.skinModeFilterName = "14KEY";
@@ -656,6 +732,8 @@ void testPagedReadViewProjectsWithoutMaterializingRows() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testSelectedScorePercentageProperties();
+  testCourseGraphRatesUseCourseNotes();
   testArchiveActionsDoNotActivateRandomSelectSkinLayers();
   testPagedReadViewProjectsWithoutMaterializingRows();
   testProjectsSelectedSongAndPlayerConfiguration();

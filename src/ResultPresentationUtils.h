@@ -261,6 +261,25 @@ inline bms_parser::ChartMeta courseResultMeta(
   return meta;
 }
 
+inline int courseStageClearRank(
+    const RhythmState &state, const bms_parser::ChartMeta &meta,
+    const audio::PlaybackRate &playback = {}) {
+  // BMSPlayer retains combo achievements for course stages; MusicResult
+  // changes all other stage results from Failed to NoPlay. Judge counts are
+  // stage-local even when maxCombo carries a previous course stage's value.
+  const long long comboNotes = static_cast<long long>(state.judgeCount.at(PGreat)) +
+                               state.judgeCount.at(Great) +
+                               state.judgeCount.at(Good);
+  const bool fullCombo = meta.TotalNotes >= 0 &&
+                         comboNotes == meta.TotalNotes && state.comboBreak == 0;
+  return fullCombo && state.currentGauge > 0.0F &&
+                 state.getClearTypeRank() >= kClearTypeAssistedEasyClearRank &&
+                 !state.assistClearMark && !state.lightAssistClearMark &&
+                 playback.neutral()
+             ? kClearTypeFullComboRank
+             : kNoClearTypeRank;
+}
+
 inline bool isFullComboCourseResult(int completedCharts, int totalCharts,
                                     std::size_t resultStageCount,
                                     const RhythmState &state,

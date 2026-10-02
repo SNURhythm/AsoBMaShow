@@ -80,6 +80,9 @@ local shared = function(a, b)
   return (a or 0) + (b or 0) + 5
 end
 
+timer_serial = 0
+local timer_factory = "(function() timer_serial = timer_serial + 1; local value = timer_serial * 1000; return function() return value end end)()"
+
 local many_callbacks = {}
 for i = 1, 3000 do
   many_callbacks[i] = function() return i end
@@ -121,6 +124,8 @@ return {
     float_script = "1 / 4",
     string_script = "'scripted'",
     timer_script = "function() return 9001 end",
+    timer_factory_a = timer_factory,
+    timer_factory_b = timer_factory,
     timer_catalog_name = "123",
     timer_budget_a = "(function() for i = 1, 11000000 do end; return function() return 1 end end)()",
     timer_budget_b = "(function() for i = 1, 11000000 do end; return function() return 2 end end)()",
@@ -988,6 +993,36 @@ void testUnrecognizedScriptsCompileWithPinnedShapesAndBudgets() {
          "Timer trial execution is interrupted by the load quota");
 }
 
+void testIdenticalTimerFactoryStringsCreateIndependentClosures() {
+  auto session = fixture().session();
+  if (!session.runtime || !session.configured) return;
+  LuaSkinBindingDecoder decoder(*session.runtime, {});
+  const auto first = decodedId<SkinTimerPropertyId>(
+      decoder.decode(*session.configured,
+                     request(SkinBindingKind::TimerProperty, "timer_factory_a")),
+      "first timer factory compiles");
+  const auto second = decodedId<SkinTimerPropertyId>(
+      decoder.decode(*session.configured,
+                     request(SkinBindingKind::TimerProperty, "timer_factory_b")),
+      "identical second timer factory compiles independently");
+  expect(first != second, "authored timer factories must not intern by script text");
+  const auto bindings = decoder.bindings();
+  if (first.value == 0 || second.value == 0) return;
+  const auto firstCallback = *callbackSource(bindings.timerProperties[first.value - 1]);
+  const auto secondCallback = *callbackSource(bindings.timerProperties[second.value - 1]);
+  expect(session.runtime->enterRenderPhase().ok && session.runtime->beginFrame(1).ok,
+         "independent timer fixture enters a render frame");
+  for (const auto &[callback, expected] :
+       std::array{std::pair{firstCallback, std::int64_t{1000}},
+                  std::pair{secondCallback, std::int64_t{2000}},
+                  std::pair{firstCallback, std::int64_t{1000}}}) {
+    const auto result = session.runtime->invoke(callback, {});
+    const auto *value = result.value ? std::get_if<std::int64_t>(&*result.value) : nullptr;
+    expect(value && *value == expected && !result.failure,
+           "each factory preserves its own serial-number closure");
+  }
+}
+
 void testPassiveCustomTimerIsExplicitAndNeverUsesBindingZero() {
   const SkinCustomTimer passive{.id = 900, .timer = std::nullopt};
   const SkinCustomTimer active{.id = 901, .timer = SkinTimerPropertyId{1}};
@@ -998,6 +1033,7 @@ void testPassiveCustomTimerIsExplicitAndNeverUsesBindingZero() {
 } // namespace
 
 int main() {
+  testIdenticalTimerFactoryStringsCreateIndependentClosures();
   testPinnedDispatchAndTypedInterning();
   testMissingFieldUsesTypedNumericFallback();
   testNestedFunctionSurvivesConfiguredHandleDestruction();

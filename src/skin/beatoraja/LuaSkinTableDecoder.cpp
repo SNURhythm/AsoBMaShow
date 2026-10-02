@@ -3851,6 +3851,9 @@ bool normalizeDestination(GameplayDecodeRequest &request,
           .h = *clipHeight,
       };
     }
+    if (output.authoredAcceleration == 0) {
+      output.authoredAcceleration = current.acceleration;
+    }
     output.frames.push_back(current);
   }
   if (sortFrames) {

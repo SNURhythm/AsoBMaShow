@@ -619,8 +619,10 @@ ResultScene::ResultScene(
     local.laneOrderLabel = courseDisplay.laneOrder;
   }
   if (isCourseStageResult()) {
-    local.currentClearLabelOverride = "NO PLAY";
-    local.currentClearRankOverride = kNoClearTypeRank;
+    const int clearRank = result_presentation::courseStageClearRank(
+        local.resultState, local.meta, local.attemptProvenance.playback);
+    local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+    local.currentClearRankOverride = clearRank;
   } else if (isCourseFinalResult()) {
     local.headerDifficultyLabelOverride = "COURSE";
     const auto &session = *local.courseOptions.session;

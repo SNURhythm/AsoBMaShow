@@ -8443,6 +8443,53 @@ void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
          "result clear properties use Beatoraja ClearType IDs in every domain");
 }
 
+void testCourseStageClearLampsPreserveComboAchievements() {
+  struct Case {
+    int perfect, great, good, poor;
+    float gauge;
+    bool assist;
+    int expected;
+  };
+  const Case cases[] = {
+      {9, 0, 1, 0, 50.0F, false, 8},
+      {9, 1, 0, 0, 50.0F, false, 9},
+      {10, 0, 0, 0, 50.0F, false, 10},
+      {9, 0, 0, 1, 50.0F, false, 0},
+      {10, 0, 0, 0, 0.0F, false, 0},
+      {10, 0, 0, 0, 50.0F, true, 0},
+  };
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 10;
+  chart.Meta.KeyMode = 7;
+  for (const auto &test : cases) {
+    RhythmState state(&chart, false);
+    state.configureGauge(GaugeType::Grade, GaugeAutoShiftMode::None,
+                         GaugeProfile::CourseDefault);
+    state.currentGauge = test.gauge;
+    state.judgeCount[PGreat] = test.perfect;
+    state.judgeCount[Great] = test.great;
+    state.judgeCount[Good] = test.good;
+    state.judgeCount[Poor] = test.poor;
+    state.comboBreak = test.poor;
+    state.stagePassedNotes = 10;
+    // The carried course maximum must not hide this stage's broken combo.
+    state.maxCombo = 100;
+    state.setAssistClearMark(test.assist ? AssistClearMark::LightAssistedEasy
+                                        : AssistClearMark::None);
+    ResultSkinStateBridge bridge(
+        {.state = &state, .meta = &chart.Meta, .courseMode = true}, 1, 0);
+    for (const auto domain : {SkinIntegerPropertyDomain::IntegerValue,
+                              SkinIntegerPropertyDomain::ImageIndex}) {
+      const auto lamp = bridge.integerProperty({370}, domain);
+      expect(lamp.supported && lamp.value == test.expected,
+             "course-stage lamps retain FullCombo/Perfect/Max and suppress ordinary clears");
+    }
+    const auto clear = bridge.booleanProperty({90});
+    expect(clear.supported && clear.value == (test.gauge > 0.0F),
+           "course-stage clear animation depends on survival independently of lamp");
+  }
+}
+
 void testResultBridgeRetainsPreparedChartResultProperties() {
   bms_parser::ChartMeta meta{.Rank = 2,
                              .Bpm = 128.0,
@@ -9230,6 +9277,7 @@ int main(int argc, char **argv) {
   testResultBridgeDoesNotInventRemoteGaugeImageIndex();
   testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData();
   testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
+  testCourseStageClearLampsPreserveComboAchievements();
   testResultBridgeRetainsPreparedChartResultProperties();
   testResultBridgeProjectsIrRankingRows();
   testResultBridgeMapsNamedResultAndRankingProperties();

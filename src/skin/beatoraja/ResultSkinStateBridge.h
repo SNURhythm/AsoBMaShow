@@ -52,6 +52,8 @@ private:
   [[nodiscard]] std::optional<int> maxScore() const noexcept;
   [[nodiscard]] std::optional<int> maxCombo() const noexcept;
   [[nodiscard]] std::optional<float> finalGauge() const noexcept;
+  [[nodiscard]] std::optional<int> currentClearRank() const;
+  [[nodiscard]] std::optional<int> currentClearImageIndex() const;
   [[nodiscard]] std::optional<int>
   timing(Judgement judgement, bool early) const noexcept;
 

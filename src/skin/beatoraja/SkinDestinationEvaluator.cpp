@@ -40,6 +40,9 @@ float easedRate(float rate, int acceleration) {
 }
 
 int objectAcceleration(const SkinDestinationBody &destination) {
+  if (destination.authoredAcceleration != 0) {
+    return destination.authoredAcceleration;
+  }
   int acceleration = 0;
   for (const auto &frame : destination.frames) {
     if (acceleration == 0) {
@@ -371,9 +374,9 @@ evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
       applyRectOffset(*geometry.clip, offset);
     }
     geometry.angleDegrees += offset.r;
-    // SkinObject.prepareColor returns before offset alpha on an interpolated
-    // non-step frame.  Preserve that behavior exactly.
-    if (!interpolated || acceleration == 3 || fixedColor) {
+    // SkinObject.prepareColor returns before offset alpha between changing
+    // color keyframes, including step animations.
+    if (!interpolated || fixedColor) {
       geometry.rgba[3] = std::clamp(
           geometry.rgba[3] + static_cast<float>(offset.a) / 255.0F, 0.0F, 1.0F);
     }

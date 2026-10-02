@@ -241,9 +241,15 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
     }
   }
 
-  const auto repeated = interned_.find(internKey);
-  if (repeated != interned_.end()) {
-    return {.id = repeated->second};
+  // Timer scripts are factories: every authored property must execute its
+  // trial call, even when another property has identical source text.
+  const bool timerFactory =
+      isScript && request.type.kind == SkinBindingKind::TimerProperty;
+  if (!timerFactory) {
+    const auto repeated = interned_.find(internKey);
+    if (repeated != interned_.end()) {
+      return {.id = repeated->second};
+    }
   }
 
   const auto tooMany = [this](std::size_t size) {
@@ -304,6 +310,10 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
       }
     }
     bindingSource = *compiled.callback;
+    if (timerFactory) {
+      internKey.source = *compiled.callback;
+      internKey.script = false;
+    }
   }
 
   SkinDecodedBindingId decodedId;

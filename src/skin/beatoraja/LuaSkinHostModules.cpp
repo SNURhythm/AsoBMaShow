@@ -26,6 +26,7 @@ extern "C" {
 #include <cmath>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -626,6 +627,302 @@ int mainStateTimer(lua_State *state) {
                                  ? std::numeric_limits<std::int64_t>::min()
                                  : current->timerProperty({.value = id});
   lua_pushnumber(state, static_cast<lua_Number>(value));
+  return 1;
+}
+
+constexpr std::int64_t kUtilityTimerOff = std::numeric_limits<std::int64_t>::min();
+
+double utilityStringNumber(std::string_view text) {
+  // LuaString.scannumber trims ASCII spaces only. Its integer scan allows
+  // a minus after the optional hex prefix and falls back to decimal parsing
+  // only for base ten. Keep this separate from binding-source safe subsets.
+  while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+  while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+  if (text.empty()) return 0;
+  const bool hex = text.size() >= 2 && text[0] == '0' &&
+                   (text[1] == 'x' || text[1] == 'X');
+  const int base = hex ? 16 : 10;
+  std::string_view digits = hex ? text.substr(2) : text;
+  const bool negative = !digits.empty() && digits.front() == '-';
+  if (negative) digits.remove_prefix(1);
+  std::uint64_t accumulated = 0;
+  bool integer = true;
+  for (const unsigned char character : digits) {
+    const int digit = character >= '0' && character <= '9' ? character - '0'
+                      : character >= 'A' && character <= 'Z' ? character - 'A' + 10
+                      : character >= 'a' && character <= 'z' ? character - 'a' + 10
+                      : -1;
+    if (digit < 0 || digit >= base) {
+      integer = false;
+      break;
+    }
+    // The pinned Java scanner wraps long arithmetic and rejects negative
+    // intermediate results, rather than checking unsigned multiplication.
+    accumulated = accumulated * static_cast<unsigned>(base) + digit;
+    if (accumulated > static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int64_t>::max())) {
+      integer = false;
+      break;
+    }
+  }
+  if (integer) {
+    const double value = static_cast<double>(accumulated);
+    return negative ? -value : value;
+  }
+  if (hex) return 0;
+
+  // LuaString.scandouble examines at most 64 bytes, including its syntax
+  // check; trailing bytes beyond that prefix are intentionally ignored.
+  text = text.substr(0, 64);
+  for (const char character : text) {
+    if (!((character >= '0' && character <= '9') || character == '+' ||
+          character == '-' || character == '.' || character == 'e' ||
+          character == 'E')) {
+      return 0;
+    }
+  }
+  char decimal[65]{};
+  std::memcpy(decimal, text.data(), text.size());
+  char *end = nullptr;
+  const double value = std::strtod(decimal, &end);
+  return end == decimal + text.size() ? value : 0;
+}
+
+// LuaJ's tolong accepts nonnumeric values as zero and applies Java's
+// saturating floating-point conversion (including NaN -> 0).
+std::int64_t utilityLong(lua_State *state, int index) {
+  double value = 0;
+  if (lua_type(state, index) == LUA_TSTRING) {
+    std::size_t length = 0;
+    const char *text = lua_tolstring(state, index, &length);
+    value = utilityStringNumber({text, length});
+  } else {
+    value = lua_tonumber(state, index);
+  }
+  if (std::isnan(value)) return 0;
+  if (value >= static_cast<lua_Number>(std::numeric_limits<std::int64_t>::max()))
+    return std::numeric_limits<std::int64_t>::max();
+  if (value <= static_cast<lua_Number>(kUtilityTimerOff)) return kUtilityTimerOff;
+  return static_cast<std::int64_t>(value);
+}
+
+int utilityInt(lua_State *state, int index) {
+  // LuaJ narrows through a Java long, then keeps the low 32 bits.
+  return std::bit_cast<std::int32_t>(
+      static_cast<std::uint32_t>(utilityLong(state, index)));
+}
+
+std::int64_t utilityNow(lua_State *state) {
+  auto *current = frameState(state);
+  if (current == nullptr) {
+    luaL_error(state, "timer utility has no configured state");
+    return 0;
+  }
+  const auto result = current->integerProperty(
+      {.value = std::string{"time"}}, SkinIntegerPropertyDomain::IntegerValue);
+  if (!result.supported) {
+    luaL_error(state, "timer utility has no current time");
+    return 0;
+  }
+  return result.value;
+}
+
+std::int64_t utilityElapsed(std::int64_t now, std::int64_t start) {
+  // Java long subtraction wraps; do not introduce signed C++ overflow.
+  return std::bit_cast<std::int64_t>(static_cast<std::uint64_t>(now) -
+                                     static_cast<std::uint64_t>(start));
+}
+
+void pushUtilityState(lua_State *state, std::int64_t initial) {
+  new (lua_newuserdata(state, sizeof(std::int64_t))) std::int64_t(initial);
+}
+
+std::int64_t &utilityState(lua_State *state, int upvalue) {
+  return *static_cast<std::int64_t *>(
+      lua_touserdata(state, lua_upvalueindex(upvalue)));
+}
+
+int timerUtilNow(lua_State *state) {
+  const auto value = utilityLong(state, 1);
+  lua_pushnumber(state, static_cast<lua_Number>(
+      value == kUtilityTimerOff ? 0 : utilityElapsed(utilityNow(state), value)));
+  return 1;
+}
+
+int timerUtilIsOn(lua_State *state) {
+  lua_pushboolean(state, utilityLong(state, 1) != kUtilityTimerOff);
+  return 1;
+}
+
+int timerUtilIsOff(lua_State *state) {
+  lua_pushboolean(state, utilityLong(state, 1) == kUtilityTimerOff);
+  return 1;
+}
+
+int timerUtilReadTimer(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = static_cast<int>(lua_tointeger(state, lua_upvalueindex(2)));
+  lua_pushnumber(state, static_cast<lua_Number>(
+      current ? current->timerProperty({.value = id}) : kUtilityTimerOff));
+  return 1;
+}
+
+int timerUtilFunction(lua_State *state) {
+  const int id = utilityInt(state, 1);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushinteger(state, id);
+  lua_pushcclosure(state, timerUtilReadTimer, 2);
+  return 1;
+}
+
+int timerUtilObserve(lua_State *state) {
+  lua_pushvalue(state, lua_upvalueindex(2));
+  lua_call(state, 0, 1);
+  const bool on = lua_toboolean(state, -1) != 0;
+  lua_pop(state, 1);
+  auto &value = utilityState(state, 3);
+  if (on && value == kUtilityTimerOff) value = utilityNow(state);
+  else if (!on) value = kUtilityTimerOff;
+  lua_pushnumber(state, static_cast<lua_Number>(value));
+  return 1;
+}
+
+int timerUtilObserveBoolean(lua_State *state) {
+  luaL_checktype(state, 1, LUA_TFUNCTION);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushvalue(state, 1);
+  pushUtilityState(state, kUtilityTimerOff);
+  lua_pushcclosure(state, timerUtilObserve, 3);
+  return 1;
+}
+
+int passiveTimerRead(lua_State *state) {
+  lua_pushnumber(state, static_cast<lua_Number>(utilityState(state, 2)));
+  return 1;
+}
+
+int passiveTimerOn(lua_State *state) {
+  auto &value = utilityState(state, 2);
+  if (value == kUtilityTimerOff) value = utilityNow(state);
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int passiveTimerReset(lua_State *state) {
+  utilityState(state, 2) = utilityNow(state);
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int passiveTimerOff(lua_State *state) {
+  utilityState(state, 2) = kUtilityTimerOff;
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int timerUtilNewPassive(lua_State *state) {
+  lua_settop(state, 0);
+  pushUtilityState(state, kUtilityTimerOff);
+  lua_createtable(state, 0, 4);
+  const luaL_Reg functions[] = {{"timer", passiveTimerRead},
+                               {"turn_on", passiveTimerOn},
+                               {"turn_on_reset", passiveTimerReset},
+                               {"turn_off", passiveTimerOff}};
+  for (const auto &function : functions) {
+    lua_pushlightuserdata(state, host(state));
+    lua_pushvalue(state, 1);
+    lua_pushcclosure(state, function.func, 2);
+    lua_setfield(state, -2, function.name);
+  }
+  return 1;
+}
+
+enum class UtilityEventObservation { Boolean, TimerChange, TimerOn, TimerOff };
+
+int eventUtilObserve(lua_State *state) {
+  const auto mode = static_cast<UtilityEventObservation>(
+      lua_tointeger(state, lua_upvalueindex(5)));
+  lua_pushvalue(state, lua_upvalueindex(2));
+  lua_call(state, 0, 1);
+  const auto timer = utilityLong(state, -1);
+  const std::int64_t next = mode == UtilityEventObservation::Boolean
+                               ? lua_toboolean(state, -1) != 0
+                           : mode == UtilityEventObservation::TimerOn
+                               ? timer != kUtilityTimerOff
+                           : mode == UtilityEventObservation::TimerOff
+                               ? timer == kUtilityTimerOff
+                               : timer;
+  lua_pop(state, 1);
+  auto &previous = utilityState(state, 4);
+  bool execute = false;
+  if (mode == UtilityEventObservation::TimerChange) {
+    // Upstream remembers the last ON value across OFF observations.
+    execute = next != previous && next != kUtilityTimerOff;
+    if (execute) previous = next;
+  } else if (next != previous) {
+    previous = next;
+    execute = next != 0;
+  }
+  if (execute) {
+    lua_pushvalue(state, lua_upvalueindex(3));
+    lua_call(state, 0, 0);
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int createEventObserver(lua_State *state, UtilityEventObservation mode) {
+  luaL_checktype(state, 1, LUA_TFUNCTION);
+  luaL_checktype(state, 2, LUA_TFUNCTION);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushvalue(state, 1);
+  lua_pushvalue(state, 2);
+  pushUtilityState(state, mode == UtilityEventObservation::TimerChange
+                              ? kUtilityTimerOff : 0);
+  lua_pushinteger(state, static_cast<int>(mode));
+  lua_pushcclosure(state, eventUtilObserve, 5);
+  return 1;
+}
+
+int eventUtilObserveTrue(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::Boolean);
+}
+
+int eventUtilObserveTimer(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::TimerChange);
+}
+
+int eventUtilObserveTimerOn(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::TimerOn);
+}
+
+int eventUtilObserveTimerOff(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::TimerOff);
+}
+
+int eventUtilLimited(lua_State *state) {
+  const auto now = utilityNow(state);
+  auto &last = utilityState(state, 4);
+  const auto interval = lua_tointeger(state, lua_upvalueindex(3));
+  if (last == kUtilityTimerOff || utilityElapsed(now, last) / 1000 >= interval) {
+    last = now;
+    lua_pushvalue(state, lua_upvalueindex(2));
+    // Every upstream EventUtility adapter is a ZeroArgFunction, even when
+    // invoked with event arguments. The action's return value is discarded.
+    lua_call(state, 0, 0);
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int eventUtilMinInterval(lua_State *state) {
+  const int interval = utilityInt(state, 1);
+  luaL_checktype(state, 2, LUA_TFUNCTION);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushvalue(state, 2);
+  lua_pushinteger(state, interval);
+  pushUtilityState(state, kUtilityTimerOff);
+  lua_pushcclosure(state, eventUtilLimited, 4);
   return 1;
 }
 
@@ -2920,6 +3217,19 @@ void setLoaded(lua_State *state, const char *name) {
   lua_pop(state, 2);
 }
 
+void installUtilityModule(lua_State *state, LuaSkinHostModulesImpl *impl,
+                          const char *name, std::span<const luaL_Reg> functions) {
+  lua_getglobal(state, "package");
+  lua_getfield(state, -1, "loaded");
+  lua_createtable(state, 0, static_cast<int>(functions.size()));
+  for (const auto &function : functions) {
+    installClosure(state, impl, function.func);
+    lua_setfield(state, -2, function.name);
+  }
+  lua_setfield(state, -2, name);
+  lua_pop(state, 2);
+}
+
 void installFileMetatable(lua_State *state) {
   luaL_newmetatable(state, kHandleMetatable);
   lua_pushcfunction(state, fileHandleGc);
@@ -3061,8 +3371,21 @@ int installHost(lua_State *state) {
   lua_pop(state, 3);
 
   setLoaded(state, "main_state");
-  setLoaded(state, "timer_util");
-  setLoaded(state, "event_util");
+  const luaL_Reg timerFunctions[] = {
+      {"now_timer", timerUtilNow},
+      {"is_timer_on", timerUtilIsOn},
+      {"is_timer_off", timerUtilIsOff},
+      {"timer_function", timerUtilFunction},
+      {"timer_observe_boolean", timerUtilObserveBoolean},
+      {"new_passive_timer", timerUtilNewPassive}};
+  const luaL_Reg eventFunctions[] = {
+      {"event_observe_turn_true", eventUtilObserveTrue},
+      {"event_observe_timer", eventUtilObserveTimer},
+      {"event_observe_timer_on", eventUtilObserveTimerOn},
+      {"event_observe_timer_off", eventUtilObserveTimerOff},
+      {"event_min_interval", eventUtilMinInterval}};
+  installUtilityModule(state, impl, "timer_util", timerFunctions);
+  installUtilityModule(state, impl, "event_util", eventFunctions);
   return 0;
 }
 
