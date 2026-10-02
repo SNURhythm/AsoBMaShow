@@ -2394,6 +2394,36 @@ void testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent() {
          "missing glyph before malformed bytes retains scalar diagnostic precedence");
 }
 
+void testLuaFloatFormattingAcrossArithmeticBoundaries() {
+  // Float.toString(Float.intBitsToFloat(bits)), Java 8: subnormal/normal,
+  // 32-/64-bit arithmetic boundaries, exact powers of two, and maximum float.
+  const std::pair<std::uint32_t, std::string_view> cases[] = {
+      {0x00000001U, "1.4E-45"},
+      {0x00000002U, "2.8E-45"},
+      {0x007fffffU, "1.1754942E-38"},
+      {0x00800000U, "1.17549435E-38"},
+      {0x00800001U, "1.1754945E-38"},
+      {0x2f7fffffU, "2.3283063E-10"},
+      {0x2f800000U, "2.3283064E-10"},
+      {0x2f800001U, "2.3283067E-10"},
+      {0x3dcccccdU, "0.1"},
+      {0x4c000001U, "3.3554436E7"},
+      {0x5e800000U, "4.611686E18"},
+      {0x5f000000U, "9.223372E18"},
+      {0x68ffffffU, "9.671406E24"},
+      {0x69000000U, "9.6714065E24"},
+      {0x69000001U, "9.671408E24"},
+      {0x7f7fffffU, "3.4028235E38"},
+  };
+  for (const auto &[bits, expected] : cases) {
+    expect(luaJFloatString(std::bit_cast<float>(bits)) == expected,
+           "portable float arithmetic preserves pinned Java boundary rounding");
+    expect(luaJFloatString(std::bit_cast<float>(bits | 0x80000000U)) ==
+               "-" + std::string(expected),
+           "portable float arithmetic preserves negative boundary rounding");
+  }
+}
+
 void testLuaNumericTextUsesPinnedFormatting() {
   const std::pair<std::string_view, std::string_view> cases[] = {
       {"1.5", "1.5"}, {"1.23456789", "1.2345679"},
@@ -7609,6 +7639,7 @@ int main(int argc, char **argv) {
   testFalseDestinationSkipsNumericSourceTimerAfterValueLookup();
   testLuaNumericStringsMatchPinnedParser();
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
+  testLuaFloatFormattingAcrossArithmeticBoundaries();
   testLuaNumericTextUsesPinnedFormatting();
   testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();

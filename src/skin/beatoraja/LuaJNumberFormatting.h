@@ -1,17 +1,98 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
+#include <compare>
 #include <cstdint>
 #include <string>
 
 namespace skin {
 
+namespace detail {
+
+// Only the bounded operations needed for binary32 decimal digits. Four limbs
+// keep the same arithmetic on MSVC, where a native 128-bit integer is absent.
+class LuaJFloatInteger {
+public:
+  constexpr LuaJFloatInteger(std::uint32_t value = 0) : words_{value, 0, 0, 0} {}
+
+  explicit constexpr operator std::uint32_t() const { return words_[0]; }
+  explicit constexpr operator std::uint64_t() const {
+    return (std::uint64_t{words_[1]} << 32) | words_[0];
+  }
+
+  constexpr auto operator<=>(const LuaJFloatInteger &other) const {
+    for (int index = 3; index >= 0; --index) {
+      if (words_[index] != other.words_[index])
+        return words_[index] <=> other.words_[index];
+    }
+    return std::strong_ordering::equal;
+  }
+  constexpr bool operator==(const LuaJFloatInteger &) const = default;
+
+  constexpr LuaJFloatInteger &operator*=(std::uint32_t factor) {
+    std::uint64_t carry = 0;
+    for (auto &word : words_) {
+      const auto product = std::uint64_t{word} * factor + carry;
+      word = static_cast<std::uint32_t>(product);
+      carry = product >> 32;
+    }
+    return *this;
+  }
+  friend constexpr LuaJFloatInteger operator*(LuaJFloatInteger value,
+                                               std::uint32_t factor) {
+    return value *= factor;
+  }
+  friend constexpr LuaJFloatInteger operator+(LuaJFloatInteger value,
+                                               const LuaJFloatInteger &other) {
+    std::uint64_t carry = 0;
+    for (std::size_t index = 0; index < value.words_.size(); ++index) {
+      const auto sum = std::uint64_t{value.words_[index]} + other.words_[index] + carry;
+      value.words_[index] = static_cast<std::uint32_t>(sum);
+      carry = sum >> 32;
+    }
+    return value;
+  }
+  friend constexpr LuaJFloatInteger operator<<(const LuaJFloatInteger &value,
+                                                int shift) {
+    LuaJFloatInteger result;
+    for (int index = 3; index >= shift / 32; --index) {
+      result.words_[index] = value.words_[index - shift / 32] << (shift % 32);
+      if (shift % 32 != 0 && index > shift / 32)
+        result.words_[index] |= value.words_[index - shift / 32 - 1] >> (32 - shift % 32);
+    }
+    return result;
+  }
+
+  // Each digit starts with a remainder below ten times the denominator.
+  // Repeated subtraction avoids a general-purpose wide division routine.
+  constexpr int takeDigit(const LuaJFloatInteger &denominator) {
+    int digit = 0;
+    while (*this >= denominator) {
+      std::uint64_t borrow = 0;
+      for (std::size_t index = 0; index < words_.size(); ++index) {
+        const auto subtrahend = std::uint64_t{denominator.words_[index]} + borrow;
+        const auto word = std::uint64_t{words_[index]};
+        words_[index] = static_cast<std::uint32_t>(word - subtrahend);
+        borrow = word < subtrahend;
+      }
+      ++digit;
+    }
+    return digit;
+  }
+
+private:
+  std::array<std::uint32_t, 4> words_;
+};
+
+} // namespace detail
+
 // LuaDouble.tojstring narrows non-integral doubles to Float.toString. Use
 // decimal digit generation with the pinned Java float stopping boundaries,
 // including its narrower interval at powers of two. Binary32 needs at most
-// 114 bits for these scaled integers, so no allocating big integer is needed.
+// 128 bits for these scaled integers, so no allocating big integer is needed.
 inline std::string luaJFloatString(float value) {
   if (std::isnan(value)) return "NaN";
   if (std::isinf(value)) return value < 0 ? "-Infinity" : "Infinity";
@@ -46,7 +127,7 @@ inline std::string luaJFloatString(float value) {
     decimalExponent += static_cast<int>(digits.size()) - 1;
     while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
   } else {
-    using Wide = __uint128_t;
+    using Wide = detail::LuaJFloatInteger;
     const auto power5 = [](int exponent) {
       Wide result = 1;
       while (exponent-- > 0) result *= 5;
@@ -72,15 +153,15 @@ inline std::string luaJFloatString(float value) {
       denominatorTwos -= marginTwos;
       marginTwos = 0;
     }
-    Wide remainder = Wide{significand >> trailingZeros} *
-                     power5(numeratorFives) << numeratorTwos;
+    Wide remainder = power5(numeratorFives) *
+                     (significand >> trailingZeros) << numeratorTwos;
     const Wide denominator = power5(denominatorFives) << denominatorTwos;
     Wide margin = power5(numeratorFives) << marginTwos;
     const Wide tenDenominator = denominator * 10;
     const auto fiveBits = [&](int exponent) {
       if (exponent == 0) return 0;
       if (exponent >= 27) return exponent * 3;
-      auto value = power5(exponent);
+      auto value = static_cast<std::uint64_t>(power5(exponent));
       int count = 0;
       while (value != 0) { ++count; value >>= 1; }
       return count;
@@ -100,8 +181,8 @@ inline std::string luaJFloatString(float value) {
     bool low = false;
     bool high = false;
     do {
-      const int digit = static_cast<int>(remainder / denominator);
-      remainder = (remainder % denominator) * 10;
+      const int digit = remainder.takeDigit(denominator);
+      remainder *= 10;
       margin *= 10;
       if (arithmeticBits != 0) {
         // Java's fast path uses signed words, including overflow in b+m.

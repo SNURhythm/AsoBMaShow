@@ -59,3 +59,39 @@ this pass did not run a real native dialog or mobile device build. Live source
 availability for bundled table snapshots and randomized number-format parity
 were not independently tested. A clean review covers the inspected paths, not
 every possible external skin or runtime environment.
+
+## Continued review loop
+
+The next full pass started at `db3180c1ea13bf9113e0ec0730cbd19ce4ec35dc`.
+Fresh reviewers used medium reasoning for onboarding/platform/tooling and high
+reasoning for Lua semantics, rendering, and lifecycle/results. It found two
+additional issues:
+
+| Severity | Finding | Correction and evidence |
+| --- | --- | --- |
+| P1 | The new Lua float formatter used the compiler-specific `__uint128_t`, blocking the repository's MSVC Windows builds. | Replace it with four portable 32-bit limbs and only the bounded operations needed for decimal digit generation. A header compile rejecting native 128-bit extensions failed before the fix and passed afterward. Boundary regressions exercise subnormals, powers of two, wide arithmetic and both signs. |
+| P2 | Repeated destinations or image-set references to one JSON image recompiled its timer factory, creating distinct callback state for one authored property. | Cache compilation results by authored JSON field and binding kind. Repeated references share the callback while separate fields with identical scripts stay independent. The new regression failed two assertions before the fix; it also checks repeated image actions and text values. |
+
+The formatter replacement uses the standard integer widths documented by
+[Microsoft](https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64?view=msvc-170).
+A direct C++ comparison against Java 8 `Float.toString` matched all 5,627 cases:
+exponent boundaries and neighbors, signed values, special values, and 4,096
+seeded random bit patterns. Independent arithmetic review also checked digit,
+shift, carry and capacity bounds. Actual MSVC execution is unavailable on this
+macOS machine; the extension-rejection probe is a portability check, not a
+Windows application build.
+
+Independent JSON fix review verified that cache keys refer to stable nodes in
+the parsed document, separate authored fields remain independent, and fatal
+compilation failures still reject the model. The affected JSON decoder and
+renderer tests passed together in 1.59 seconds.
+
+A subsequent complete fresh review pass covered the updated branch with three
+new reviewers: medium reasoning for onboarding/platform/build tooling and high
+reasoning for Lua/lifecycle/settings and rendering/results/exports. All three
+reported no actionable introduced findings. This is the loop's clean stopping
+pass, following the two additional fixes above.
+
+The final all-target desktop build passed, followed by all 410 CTest tests in
+70.33 seconds. `git diff --check` passed. No Windows/mobile application build,
+deployment, or merge was performed in this continuation.

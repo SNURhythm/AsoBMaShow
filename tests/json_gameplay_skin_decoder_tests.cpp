@@ -118,6 +118,59 @@ void testFatalScriptCompilerFailuresRejectModel() {
          "malformed JSON timer scripts retain the recoverable passive fallback");
 }
 
+void testRepeatedDefinitionReferencesShareAuthoredTimerFactory() {
+  constexpr std::string_view text = R"json({
+    "type":0,
+    "source":[{"id":"atlas","path":"atlas.png"}],
+    "font":[{"id":"font","path":"font.ttf"}],
+    "image":[
+      {"id":"shared","src":"atlas","w":1,"h":1,"timer":"new_passive_timer().timer","act":"hits = (hits or 0) + 1"},
+      {"id":"independent","src":"atlas","w":1,"h":1,"timer":"new_passive_timer().timer"}],
+    "imageset":[{"id":"set","images":["shared"]}],
+    "text":[{"id":"label","font":"font","value":"text(10)"}],
+    "destination":[
+      {"id":"shared","dst":[{}]},
+      {"id":"shared","dst":[{}]},
+      {"id":"set","dst":[{}]},
+      {"id":"independent","dst":[{}]},
+      {"id":"label","dst":[{}]},
+      {"id":"label","dst":[{}]}]
+  })json";
+  std::uint32_t compilations = 0;
+  std::map<SkinBindingKind, int> compilationsByKind;
+  const auto decoded = JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(text)), fixtureEntry("shared-timer.json"),
+      nullptr, gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, {}, {},
+      [&compilations, &compilationsByKind](std::string_view, SkinBindingKind kind) -> LuaCallbackCompileResult {
+        ++compilationsByKind[kind];
+        return {.callback = LuaCallbackId{.slot = ++compilations, .generation = 1}};
+      });
+  expect(decoded.model && decoded.model->objects.size() == 6,
+         "repeated image destinations and an image-set reference decode");
+  expect(compilationsByKind[SkinBindingKind::TimerProperty] == 2,
+         "each authored image timer factory runs once regardless of references");
+  expect(compilationsByKind[SkinBindingKind::Event] == 1 &&
+             compilationsByKind[SkinBindingKind::StringProperty] == 1,
+         "repeated image actions and text values compile once per authored field");
+  if (!decoded.model || decoded.model->objects.size() != 6) return;
+  const auto callbackForObject = [&](std::size_t index) -> std::optional<LuaCallbackId> {
+    const auto *image = std::get_if<SkinImageObject>(&decoded.model->objects[index].payload);
+    if (!image || image->orderedStates.empty() || !image->orderedStates.front().timer) return {};
+    const auto timer = *image->orderedStates.front().timer;
+    for (const auto &binding : decoded.model->timerProperties) {
+      if (binding.id == timer) {
+        if (const auto *callback = std::get_if<LuaCallbackId>(&binding.source)) return *callback;
+      }
+    }
+    return {};
+  };
+  const auto shared = callbackForObject(0);
+  expect(shared && callbackForObject(1) == shared && callbackForObject(2) == shared,
+         "copies of a definition share its stateful timer callback");
+  expect(callbackForObject(3) && callbackForObject(3) != shared,
+         "separately authored identical timer scripts retain independent state");
+}
+
 const SkinObjectDefinition *findObject(const BeatorajaSkinModel &model,
                                        std::string_view name) {
   const auto found = std::ranges::find_if(
@@ -1143,6 +1196,7 @@ void testCancellationStopsMidJsonModelFold() {
 
 int main(int argc, char **argv) {
   testFatalScriptCompilerFailuresRejectModel();
+  testRepeatedDefinitionReferencesShareAuthoredTimerFactory();
   testResolvedPropertyFallbacks();
   testAllFieldFixtureCoversThePinnedJsonLedger();
   testPinnedDefaultsProduceTypedStaticModel();

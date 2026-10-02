@@ -982,6 +982,8 @@ struct JsonBindingRegistry {
   std::map<std::variant<int, std::string>, SkinFloatWriterId> floatWriterIds;
   std::map<std::variant<int, std::string>, SkinStringWriterId> stringWriterIds;
   std::map<std::variant<int, std::string>, SkinEventBindingId> eventIds;
+  std::map<const Json *, std::map<SkinBindingKind, LuaCallbackCompileResult>>
+      compiledScripts;
 
   std::optional<std::variant<SkinBuiltinPropertySelector, LuaCallbackId>>
   selector(const Json *authored, SkinBindingType type,
@@ -1025,7 +1027,17 @@ struct JsonBindingRegistry {
     if (script == nullptr) return fallbackSelector();
     context.result.requiresLua = true;
     if (!context.compileScript) return fallbackSelector();
-    auto compiled = context.compileScript(*script, type.kind);
+    // The serializer resolves a property once per authored field. Multiple
+    // destinations and nested image references reuse that property, including
+    // the stateful closure returned by a timer's trial call. Identical scripts
+    // in different fields still create independent properties.
+    auto &authoredCompilations = compiledScripts[authored];
+    auto found = authoredCompilations.find(type.kind);
+    if (found == authoredCompilations.end()) {
+      found = authoredCompilations.emplace(
+          type.kind, context.compileScript(*script, type.kind)).first;
+    }
+    const auto &compiled = found->second;
     if (!compiled.callback) {
       if (compiled.failure &&
           luaSkinBindingFailureIsFatal(compiled.failure->code)) {
