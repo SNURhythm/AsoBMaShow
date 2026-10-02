@@ -12,26 +12,29 @@
 
 namespace skin {
 
-inline double luaJStringNumber(std::string_view text) {
+inline std::optional<double> luaJStringNumberValue(std::string_view text) {
   // LuaString.scannumber trims ASCII spaces only. Its integer scan allows
   // a minus after the optional hex prefix and falls back to decimal parsing
   // only for base ten. Keep this separate from binding-source safe subsets.
   while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
   while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
-  if (text.empty()) return 0;
+  if (text.empty()) return std::nullopt;
   const bool hex = text.size() >= 2 && text[0] == '0' &&
                    (text[1] == 'x' || text[1] == 'X');
   const int base = hex ? 16 : 10;
   std::string_view digits = hex ? text.substr(2) : text;
+  if (digits.empty()) return std::nullopt;
   const bool negative = !digits.empty() && digits.front() == '-';
   if (negative) digits.remove_prefix(1);
   std::uint64_t accumulated = 0;
   bool integer = true;
   for (const unsigned char character : digits) {
-    const int digit = character >= '0' && character <= '9' ? character - '0'
+    // LuaJ subtracts the lowercase offset from every remaining hex byte,
+    // including the punctuation between 'Z' and 'a' (digit aliases 4..9).
+    const int digit = base <= 10 || (character >= '0' && character <= '9')
+                          ? character - '0'
                       : character >= 'A' && character <= 'Z' ? character - 'A' + 10
-                      : character >= 'a' && character <= 'z' ? character - 'a' + 10
-                      : -1;
+                      : character - 'a' + 10;
     if (digit < 0 || digit >= base) {
       integer = false;
       break;
@@ -49,7 +52,7 @@ inline double luaJStringNumber(std::string_view text) {
     const double value = static_cast<double>(accumulated);
     return negative ? -value : value;
   }
-  if (hex) return 0;
+  if (hex) return std::nullopt;
 
   // LuaString.scandouble examines at most 64 bytes, including its syntax
   // check; trailing bytes beyond that prefix are intentionally ignored.
@@ -58,14 +61,19 @@ inline double luaJStringNumber(std::string_view text) {
     if (!((character >= '0' && character <= '9') || character == '+' ||
           character == '-' || character == '.' || character == 'e' ||
           character == 'E')) {
-      return 0;
+      return std::nullopt;
     }
   }
   char decimal[65]{};
   std::memcpy(decimal, text.data(), text.size());
   char *end = nullptr;
   const double value = std::strtod(decimal, &end);
-  return end == decimal + text.size() ? value : 0;
+  if (end != decimal + text.size()) return std::nullopt;
+  return value;
+}
+
+inline double luaJStringNumber(std::string_view text) {
+  return luaJStringNumberValue(text).value_or(0);
 }
 
 inline std::int64_t luaJToLong(double value) noexcept {

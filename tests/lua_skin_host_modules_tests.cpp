@@ -1004,9 +1004,16 @@ public:
     return {};
   }
   SkinPropertyLookup<std::string_view>
-  stringProperty(const SkinBuiltinPropertySelector &) override { return {}; }
-  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override {
-    return {};
+  stringProperty(const SkinBuiltinPropertySelector &selector) override {
+    return selector.value == decltype(selector.value){10}
+               ? SkinPropertyLookup<std::string_view>{.value = "title", .supported = true}
+               : SkinPropertyLookup<std::string_view>{};
+  }
+  SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int id) override {
+    return id == 3
+               ? SkinPropertyLookup<SkinRuntimeOffset>{.value = {.x = 12, .a = 34},
+                                                       .supported = true}
+               : SkinPropertyLookup<SkinRuntimeOffset>{};
   }
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &selector) override {
     if (selector.value == decltype(selector.value){10002}) return 54321;
@@ -1837,6 +1844,98 @@ void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
          "Lua host I/O preserves UTF-8 virtual path bytes when constructing a physical path");
 }
 
+void testMainStateArgumentsUsePinnedLuaJConversions() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin");
+  lua_State *state = luaL_newstate();
+  if (!fileSystem || !state) {
+    expect(false, "argument fixture creates filesystem and Lua state");
+    if (state) lua_close(state);
+    return;
+  }
+  luaL_openlibs(state);
+  {
+    LuaSkinLegacyInputHost input({.pressedKeys = {0, 4, 29}});
+    auto modules = LuaSkinHostModules::create(
+        state, {.fileSystem = fileSystem.get(), .legacyInputHost = &input});
+    expect(modules.modules != nullptr, "argument fixture installs host modules");
+    if (modules.modules) {
+      SelectedMainState frame;
+      modules.modules->setFrameState(&frame);
+      expect(!modules.modules->enableStateAccessors(), "argument fixture enables state");
+      const auto run = [&](const char *source, std::string_view message) {
+        const int status = luaL_dostring(state, source);
+        if (status != 0) {
+          std::cerr << lua_tostring(state, -1) << '\n';
+          lua_pop(state, 1);
+        }
+        expect(status == 0, message);
+      };
+      run("m = require('main_state'); assert(m.option(4294967466))",
+          "option wraps its LuaJ integer ID");
+      run("assert(m.number('4294967386') == 900)",
+          "number wraps its numeric-string ID");
+      run("assert(m.float_number(4294967313) == 0.5)",
+          "float_number wraps its rate-property ID");
+      run("assert(m.text(4294967306) == 'title')",
+          "text wraps its string-property ID");
+      run("local o = m.offset(4294967299); assert(o.x == 12 and o.a == 34)",
+          "offset wraps its ID and returns the selected offset");
+      run("assert(m.timer(4294977298) == 54321)",
+          "timer wraps its ID");
+      run("assert(m.event_index(4294967386) == 90)",
+          "event_index wraps its ID and retains the image-index domain");
+      run("assert(m.judge(4294967298) == 7)",
+          "judge wraps its index");
+      std::vector<std::vector<int>> executed;
+      modules.modules->setEventExecutor({
+          .context = &executed,
+          .execute = [](void *context, int id, std::span<const int> arguments) noexcept {
+            auto &calls = *static_cast<std::vector<std::vector<int>> *>(context);
+            calls.push_back({id});
+            calls.back().insert(calls.back().end(), arguments.begin(), arguments.end());
+            return LuaSkinEventExecutionResult{};
+          }});
+      run(R"lua(
+assert(m.event_exec(4294967338, 4294967303, -3.9))
+assert(m.event_exec('42', nil, false))
+assert(m.event_exec('malformed', '\t7', '7\n'))
+assert(m.event_exec('0x2a', '0x-10', '1e999'))
+assert(m.event_exec(0/0, {}, function() end))
+assert(m.event_exec(true))
+)lua", "event arguments accept LuaJ coercion at the dispatch boundary");
+      expect(executed == std::vector<std::vector<int>>{
+                 {42, 7, -3}, {42, 0, 0}, {0, 0, 0}, {42, -16, -1},
+                 {0, 0, 0}, {0}},
+             "executor receives literal expected LuaJ event IDs and arguments");
+      run(R"lua(
+for _, key in ipairs({29, 4294967325, '29', ' 29 ', '2.9e1', '0x1d', '4294967325', 'A'}) do
+  assert(m.key_pressed(key), tostring(key))
+end
+for _, key in ipairs({'\t29', '29\n', 'unknown', '', '+', 'NaN', false}) do
+  assert(not m.key_pressed(key), tostring(key))
+end
+assert(not m.key_pressed(nil))
+assert(m.key_pressed('-') and m.key_pressed('0x-'))
+)lua", "key_pressed distinguishes LuaJ numeric strings from key names");
+      run(R"lua(
+for _, pair in ipairs({{'0x[', 4}, {'0x\\', 5}, {'0x]', 6}, {'0x^', 7}, {'0x_', 8}, {'0x`', 9}}) do
+  assert(m.set_volume_sys(pair[1]) and m.volume_sys() == pair[2], pair[1])
+end
+assert(m.key_pressed('0x['))
+assert(not m.key_pressed('['))
+)lua", "LuaJ hex scanning retains its punctuation digit aliases");
+      run(R"lua(
+assert(m.set_volume_bg('\t0.5') and m.volume_bg() == 0)
+assert(m.set_volume_key('0.5\n') and m.volume_key() == 0)
+assert(m.set_volume_sys('0x-1') and m.volume_sys() == -1)
+assert(m.set_volume_bg(' 0.125 ') and m.volume_bg() == 0.125)
+assert(m.set_volume_key(false) and m.volume_key() == 0)
+)lua", "volume setters use LuaJ string conversion before float narrowing");
+    }
+  }
+  lua_close(state);
+}
+
 void testTimerAndEventUtilityClosures() {
   auto fileSystem = fixture().createFileSystem("shape.luaskin");
   lua_State *state = luaL_newstate();
@@ -2070,6 +2169,7 @@ int main(int argc, char **argv) {
     benchmarkFileHelpers();
     return failures == 0 ? 0 : 1;
   }
+  testMainStateArgumentsUsePinnedLuaJConversions();
   testTimerAndEventUtilityClosures();
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
   testGetPathUsesBeatorajaEntryParentPaths();

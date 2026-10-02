@@ -537,9 +537,31 @@ ISkinFrameState *frameState(lua_State *state) {
   return host(state)->frameState;
 }
 
+constexpr std::int64_t kUtilityTimerOff = std::numeric_limits<std::int64_t>::min();
+
+std::optional<double> utilityNumberValue(lua_State *state, int index) {
+  if (lua_type(state, index) == LUA_TSTRING) {
+    std::size_t length = 0;
+    const char *text = lua_tolstring(state, index, &length);
+    return luaJStringNumberValue({text, length});
+  }
+  if (lua_type(state, index) == LUA_TNUMBER) return lua_tonumber(state, index);
+  return std::nullopt;
+}
+
+// LuaJ accepts nonnumeric values as zero, saturates to a Java long, then
+// keeps the low 32 bits when converting that long to an int.
+std::int64_t utilityLong(lua_State *state, int index) {
+  return luaJToLong(utilityNumberValue(state, index).value_or(0));
+}
+
+int utilityInt(lua_State *state, int index) {
+  return luaJToInt(utilityLong(state, index));
+}
+
 int mainStateOption(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.option has no configured state");
   }
@@ -553,7 +575,7 @@ int mainStateOption(lua_State *state) {
 
 int mainStateNumber(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.number has no configured state");
   }
@@ -568,7 +590,7 @@ int mainStateNumber(lua_State *state) {
 
 int mainStateFloatNumber(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.float_number has no configured state");
   }
@@ -583,7 +605,7 @@ int mainStateFloatNumber(lua_State *state) {
 
 int mainStateText(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.text has no configured state");
   }
@@ -597,7 +619,7 @@ int mainStateText(lua_State *state) {
 
 int mainStateOffset(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.offset has no configured state");
   }
@@ -623,38 +645,12 @@ int mainStateOffset(lua_State *state) {
 
 int mainStateTimer(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   const std::int64_t value = current == nullptr
                                  ? std::numeric_limits<std::int64_t>::min()
                                  : current->timerProperty({.value = id});
   lua_pushnumber(state, static_cast<lua_Number>(value));
   return 1;
-}
-
-constexpr std::int64_t kUtilityTimerOff = std::numeric_limits<std::int64_t>::min();
-
-// LuaJ's tolong accepts nonnumeric values as zero and applies Java's
-// saturating floating-point conversion (including NaN -> 0).
-std::int64_t utilityLong(lua_State *state, int index) {
-  double value = 0;
-  if (lua_type(state, index) == LUA_TSTRING) {
-    std::size_t length = 0;
-    const char *text = lua_tolstring(state, index, &length);
-    value = luaJStringNumber({text, length});
-  } else {
-    value = lua_tonumber(state, index);
-  }
-  if (std::isnan(value)) return 0;
-  if (value >= static_cast<lua_Number>(std::numeric_limits<std::int64_t>::max()))
-    return std::numeric_limits<std::int64_t>::max();
-  if (value <= static_cast<lua_Number>(kUtilityTimerOff)) return kUtilityTimerOff;
-  return static_cast<std::int64_t>(value);
-}
-
-int utilityInt(lua_State *state, int index) {
-  // LuaJ narrows through a Java long, then keeps the low 32 bits.
-  return std::bit_cast<std::int32_t>(
-      static_cast<std::uint32_t>(utilityLong(state, index)));
 }
 
 std::int64_t utilityNow(lua_State *state) {
@@ -891,11 +887,11 @@ int mainStateEventExec(lua_State *state) {
         state,
         "main_state.event_exec expects an event ID and zero to two arguments");
   }
-  const int eventId = boundedIntegerArgument(state, 1, 0, false);
+  const int eventId = utilityInt(state, 1);
   std::array<int, 2> arguments{};
   for (int index = 2; index <= count; ++index) {
     arguments[static_cast<std::size_t>(index - 2)] =
-        boundedIntegerArgument(state, index, 0, false);
+        utilityInt(state, index);
   }
   if (!impl->eventExecutor) {
     impl->storeError("skin_lua_event_executor_unavailable",
@@ -994,7 +990,7 @@ int pushFloatProperty(lua_State *state, int id,
 
 int mainStateEventIndex(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.event_index has no configured state");
   }
@@ -1025,7 +1021,7 @@ int mainStateGaugeType(lua_State *state) {
 }
 
 int mainStateJudge(lua_State *state) {
-  const int judge = boundedIntegerArgument(state, 1, 0, false);
+  const int judge = utilityInt(state, 1);
   return pushNamedInteger(state, "judge:" + std::to_string(judge));
 }
 
@@ -1072,7 +1068,7 @@ int mainStateVolumeSys(lua_State *state) {
 int mainStateSetVolume(lua_State *state, int id, std::string_view name) {
   auto *current = frameState(state);
   const double value = static_cast<double>(
-      static_cast<float>(lua_tonumber(state, 1)));
+      static_cast<float>(utilityNumberValue(state, 1).value_or(0)));
   if (current == nullptr || !current->setFloatProperty(id, value)) {
     return luaL_error(state, "main_state.%.*s has no writable audio state",
                       static_cast<int>(name.size()), name.data());
@@ -1096,22 +1092,8 @@ int mainStateSetVolumeSys(lua_State *state) {
 int mainStateKeyPressed(lua_State *state) {
   auto *impl = host(state);
   int keyCode = -1;
-  if (lua_type(state, 1) == LUA_TNUMBER) {
-    const double value = static_cast<double>(lua_tonumber(state, 1));
-    std::int64_t asLong = 0;
-    if (std::isnan(value)) {
-      asLong = 0;
-    } else if (value >=
-               static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-      asLong = std::numeric_limits<std::int64_t>::max();
-    } else if (value <=
-               static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
-      asLong = std::numeric_limits<std::int64_t>::min();
-    } else {
-      asLong = static_cast<std::int64_t>(value);
-    }
-    keyCode = static_cast<int>(std::bit_cast<std::int32_t>(
-        static_cast<std::uint32_t>(static_cast<std::uint64_t>(asLong))));
+  if (const auto value = utilityNumberValue(state, 1)) {
+    keyCode = luaJToInt(*value);
   } else {
     keyCode = LuaSkinLegacyInputHost::keyCode(luaToJString(state, 1));
   }
