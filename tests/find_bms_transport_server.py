@@ -14,6 +14,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
+    def do_HEAD(self):
+        route = urlsplit(self.path).path
+        if route == "/probe/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/probe/available")
+        else:
+            self.send_response(404 if route == "/probe/missing" else 200)
+        self.send_header("Content-Length", str(8 * 1024 * 1024 * 1024))
+        self.end_headers()
+
     def do_GET(self):
         route = urlsplit(self.path).path
         if route.startswith("/retry/"):
@@ -117,7 +127,7 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == "ignore-range":
             offset = 0
         payload = b"a" * 16384 + b"b" * 16384 + b"c" * 32768
-        if scenario == "exhausted":
+        if scenario == "exhausted" or scenario.startswith("prompt-"):
             payload += b"d" * 65536
         self.send_response(206 if offset else 200)
         self.send_header("Content-Length", str(len(payload) - offset))
@@ -130,7 +140,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         drop = (scenario in ("exhausted", "cancel") or
-                attempt <= (2 if scenario == "resume" else 1))
+                attempt <= (4 if scenario.startswith("prompt-") else
+                            2 if scenario == "resume" else 1))
         try:
             self.wfile.write(payload[offset:offset + 16384] if drop else payload[offset:])
             self.wfile.flush()

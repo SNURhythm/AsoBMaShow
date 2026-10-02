@@ -25,5 +25,6 @@ args.output.write_text("\n\n".join(extract(source, signature) for signature in [
     "bool ensureDownloadDirectory(",
     "std::optional<std::filesystem::path> saveIosDebugArtifacts(",
     "std::filesystem::path makeDownloadDirectory(",
+    "bool downloadAndExtractArchiveAttempt(",
     "bool downloadAndExtractArchive(",
 ]))

@@ -5722,7 +5722,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     --output ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
             DEPENDS ${transport_fixture_dir}/find_bms_transport_extract.py
                     src/iOSNatives.mm src/iOSNatives.hpp
-                    src/bms_search/DownloadSupport.cpp
+                    src/bms_search/DownloadSupport.cpp src/bms_search/Internal.h
             VERBATIM
         )
         add_executable(find_bms_ios_file_bridge_tests
@@ -5753,7 +5753,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         DEPENDS tests/find_bms_download_attempt_extract.py src/bms_search/DownloadSupport.cpp
         VERBATIM
     )
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/find_bms_provider_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --output ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
+        DEPENDS tests/find_bms_provider_extract.py tests/gameplay_terminal_scene_extract.py
+                src/bms_search/PackageSourceDrivers.cpp src/BmsSearchService.cpp
+        VERBATIM
+    )
     add_executable(find_bms_download_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
         ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
         tests/find_bms_download_tests.cpp
         src/bms_search/ArchiveSupport.cpp

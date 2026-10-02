@@ -158,6 +158,62 @@ void testDestructionCancelsAndJoinsBeforeReleasingWorkCaptures() {
   task.reset();
   assert(observed.expired());
 }
+
+void waitForRetryPrompt(FindBmsTask &task) {
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!task.retryRequest() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  assert(task.retryRequest());
+}
+
+void testRetryPromptKeepsWorkerAndNeedsExplicitDecision() {
+  FindBmsTask task;
+  auto retry = task.retryCallback();
+  std::atomic_int attempts{0};
+  assert(task.start([&](auto &cancelled, auto) {
+    ++attempts;
+    assert(retry("Connection lost", true));
+    assert(!cancelled.load());
+    ++attempts;
+    assert(!retry("Still offline", false));
+    assert(cancelled.load());
+    return BmsSearchResult{.status = BmsSearchResult::Status::DownloadFailed};
+  }));
+  waitForRetryPrompt(task);
+  assert(task.running() && attempts == 1);
+  assert(task.retryRequest()->message == "Connection lost");
+  assert(task.retryRequest()->canResume);
+  auto updates = task.takeUpdates();
+  assert(updates.retryChanged && !updates.result);
+  assert(!task.takeUpdates().retryChanged);
+  assert(task.retryDownload());
+  waitForRetryPrompt(task);
+  assert(attempts == 2 && !task.retryRequest()->canResume);
+  task.requestCancel();
+  assert(waitForResult(task).result);
+  assert(!task.retryRequest() && !task.retryDownload());
+  // Cancellation of a prompt must not poison the next operation.
+  assert(task.start([](auto &cancelled, auto) {
+    assert(!cancelled.load());
+    return BmsSearchResult{};
+  }));
+  assert(waitForResult(task).result);
+}
+
+void testDestructionUnblocksRetryPrompt() {
+  auto task = std::make_unique<FindBmsTask>();
+  auto retry = task->retryCallback();
+  std::atomic_bool stopped{false};
+  assert(task->start([&](auto &cancelled, auto) {
+    assert(!retry("Offline", true));
+    assert(cancelled.load());
+    stopped = true;
+    return BmsSearchResult{};
+  }));
+  waitForRetryPrompt(*task);
+  task.reset();
+  assert(stopped);
+}
 } // namespace
 
 #include "find_bms_scene_fixture.h"
@@ -168,8 +224,11 @@ int main() {
   testCancellationReturnsImmediatelyAndStillDeliversServiceResult();
   testStopJoinsArtifactResolutionAndReplacementDiscardsOldData();
   testDestructionCancelsAndJoinsBeforeReleasingWorkCaptures();
+  testRetryPromptKeepsWorkerAndNeedsExplicitDecision();
+  testDestructionUnblocksRetryPrompt();
   testImmediateArtifactCompletionKeepsActionsGatedUntilHandoff();
   testSceneLookupProgressAndIndexHandoff();
+  testSceneDownloadPromptRetriesExistingWorker();
   testSceneExtractionProgressPreservesHistoryAcrossLanguages();
   testSceneCancellationKeepsPendingArtifactVisible();
   testSceneCandidateAndPendingArtifactDecisions();

@@ -47,7 +47,7 @@ def main():
     pieces = [header[callback_start:callback_stop],
               objective_class(native, "AsoHttpsRedirectDelegate")]
     pieces.append("using IOSDownloadCheckpoint = std::function<bool()>;")
-    for name in ("DownloadURLTextIOS", "PostURLTextIOS"):
+    for name in ("DownloadURLTextIOS", "PostURLTextIOS", "ProbeDownloadURLIOS"):
         start = header.index("bool " + name + "(")
         pieces.append(header[start:header.index(";", start) + 1])
     bounded = "@interface AsoTextDownloadDelegate" in native
@@ -56,13 +56,15 @@ def main():
         pieces.append(objective_class(native, "AsoTextDownloadDelegate"))
     if "bool RequestURLTextIOS(" in native:
         pieces.append(function(native, "bool RequestURLTextIOS("))
-    for name in ("DownloadURLTextIOS", "PostURLTextIOS"):
+    for name in ("DownloadURLTextIOS", "PostURLTextIOS", "ProbeDownloadURLIOS"):
         pieces.append(function(native, "bool " + name + "("))
     for name in ("fetchUrlText", "postUrlText"):
         pieces.append(function(transport, "std::optional<std::string> " + name + "("))
     has_file_bridge = "bool DownloadURLToFileIOS(" in native
     pieces.insert(0, f"#define TRANSPORT_HAS_FILE_BRIDGE {int(has_file_bridge)}")
     if has_file_bridge:
+        start = header.index("bool DownloadURLToFileIOS(")
+        pieces.append(header[start:header.index(";", start) + 1])
         pieces.append(objective_class(native, "AsoFileDownloadDelegate"))
         pieces.append(function(native, "bool DownloadURLToFileIOS("))
     else:
@@ -71,6 +73,9 @@ def main():
     start = transport.index("struct IOSDownloadProgressContext")
     stop = transport.index("std::optional<std::string> fetchUrlText", start)
     pieces.append(transport[start:stop])
+    internal = (args.root / "src/bms_search/Internal.h").read_text()
+    start = internal.index("bool downloadUrlToFile(")
+    pieces.append(internal[start:internal.index(";", start) + 1])
     pieces.append(function(transport, "bool downloadUrlToFile("))
     args.output.write_text("\n\n".join(pieces))
 

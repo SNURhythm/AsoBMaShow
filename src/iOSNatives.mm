@@ -4509,7 +4509,10 @@ static bool RequestURLTextIOS(const std::string &url, std::string &body,
         [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]
             ? (NSHTTPURLResponse *)delegate->urlResponse
             : nil;
-    if (httpResponse != nil && httpResponse.statusCode >= 400) {
+    if (([method isEqualToString:@"HEAD"] &&
+         (httpResponse == nil || httpResponse.statusCode < 200 ||
+          httpResponse.statusCode >= 300)) ||
+        (httpResponse != nil && httpResponse.statusCode >= 400)) {
       errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
                      " while " + action + url;
       return false;
@@ -4533,6 +4536,15 @@ static bool RequestURLTextIOS(const std::string &url, std::string &body,
     body = std::move(delegate->responseBody);
     return true;
   }
+}
+
+bool ProbeDownloadURLIOS(const std::string &url, std::string &errorMessage,
+                         IOSDownloadCheckpoint checkpoint) {
+  std::string ignored;
+  // HEAD may advertise the full archive size, but never transfers its body.
+  return RequestURLTextIOS(url, ignored, errorMessage, @"HEAD",
+                           std::move(checkpoint),
+                           std::numeric_limits<std::size_t>::max());
 }
 
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
@@ -4644,7 +4656,8 @@ bool DownloadURLToFileIOS(const std::string &url,
                           std::uint64_t maximumBytes,
                           std::string &errorMessage,
                           IOSDownloadProgressCallback progressCallback,
-                          void *progressContext) {
+                          void *progressContext,
+                          std::function<bool(const std::string &, bool)> retryCallback) {
   @autoreleasepool {
     errorMessage.clear();
     if (cancelled.load()) {
@@ -4729,15 +4742,28 @@ bool DownloadURLToFileIOS(const std::string &url,
           return false;
         }
       }
-      if (cancelled.load() || attempt == maximumRetries || ![delegate canRetry]) {
+      if (cancelled.load() || ![delegate canRetry]) {
         break;
       }
       // Let Foundation preserve and validate the partial file and its HTTP
       // validators. Without resume data, retry this URL from the beginning.
       id savedData = delegate->requestError.userInfo[NSURLSessionDownloadTaskResumeData];
       resumeData = [savedData isKindOfClass:[NSData class]] ? savedData : nil;
+      const bool needsDecision = attempt == maximumRetries;
+      if (needsDecision) {
+        if (!retryCallback) break;
+        const std::string message = delegate->requestError.localizedDescription.UTF8String;
+        if (!retryCallback(message, resumeData != nil)) {
+          cancelled = true;
+          break;
+        }
+        // The completed task and its resume data stay alive throughout the
+        // prompt, so approval continues the same partial archive.
+        attempt = -1;
+      }
       delegate->requestError = nil;
       delegate->urlResponse = nil;
+      if (needsDecision) continue;
       const auto retryAt = std::chrono::steady_clock::now() +
                            std::chrono::seconds(1 << attempt);
       while (std::chrono::steady_clock::now() < retryAt) {

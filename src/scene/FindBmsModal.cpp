@@ -246,7 +246,7 @@ FindBmsModal::FindBmsModal(FindBmsModalCallbacks callbacks)
 
 FindBmsModal::~FindBmsModal() {
   cancelAndWait();
-  for (auto *button : {findBmsCloseButton, findBmsKeepFilesButton,
+  for (auto *button : {findBmsCloseButton, findBmsRetryButton, findBmsKeepFilesButton,
                        findBmsDeleteFilesButton, findBmsOpenButton,
                        findBmsGoogleButton, findBmsRefreshButton}) {
     if (button != nullptr) button->setOnClickListener(nullptr);
@@ -407,6 +407,7 @@ void FindBmsModal::build(View *parent) {
   footer->setHeight(58);
 
   findBmsCloseButton = makeModalButton(i18n::message("library.find_bms.cancel.label"), 20, &findBmsCloseButtonText);
+  findBmsRetryButton = makeModalButton(i18n::message("library.find_bms.retry.label"), 20, &findBmsRetryButtonText);
   findBmsKeepFilesButton =
       makeModalButton(i18n::message("library.find_bms.keep_files.label"), 18, &findBmsKeepFilesButtonText);
   findBmsDeleteFilesButton =
@@ -417,12 +418,17 @@ void FindBmsModal::build(View *parent) {
       makeModalButton(i18n::message("library.find_bms.refresh.label"), 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
+  findBmsRetryButton->setWidth(150);
   findBmsKeepFilesButton->setWidth(150);
   findBmsDeleteFilesButton->setWidth(150);
   findBmsOpenButton->setWidth(180);
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() { cancelOrClose(); });
+  findBmsRetryButton->setOnClickListener([this]() {
+    findBmsTask.retryDownload();
+    refresh(false);
+  });
   findBmsKeepFilesButton->setOnClickListener([this]() {
     startPendingArtifactResolution(
         BmsSearchPendingArtifactDecision::Keep);
@@ -445,6 +451,7 @@ void FindBmsModal::build(View *parent) {
   });
 
   footer->addView(findBmsCloseButton);
+  footer->addView(findBmsRetryButton);
   footer->addView(findBmsKeepFilesButton);
   footer->addView(findBmsDeleteFilesButton);
   footer->addView(findBmsOpenButton);
@@ -487,9 +494,10 @@ void FindBmsModal::show(const ChartMetaRecord &record) {
 
   const std::filesystem::path downloadRoot =
       callbacks_.downloadRoot ? callbacks_.downloadRoot() : std::filesystem::path{};
-  const BmsSearchDownloadOptions downloadOptions =
+  BmsSearchDownloadOptions downloadOptions =
       callbacks_.downloadOptions ? callbacks_.downloadOptions()
                                  : BmsSearchDownloadOptions{};
+  downloadOptions.requestRetry = findBmsTask.retryCallback();
   if (callbacks_.downloadStarted) callbacks_.downloadStarted();
   findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->setVisible(true);
@@ -514,9 +522,10 @@ void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
   const ChartMetaRecord record = findBmsModalChart;
   const std::filesystem::path downloadRoot =
       callbacks_.downloadRoot ? callbacks_.downloadRoot() : std::filesystem::path{};
-  const BmsSearchDownloadOptions downloadOptions =
+  BmsSearchDownloadOptions downloadOptions =
       callbacks_.downloadOptions ? callbacks_.downloadOptions()
                                  : BmsSearchDownloadOptions{};
+  downloadOptions.requestRetry = findBmsTask.retryCallback();
   findBmsResult = {};
   findBmsResult.candidates = {candidate};
   findBmsPendingDecision.reset();
@@ -577,6 +586,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
 
   const bool running = findBmsTask.running();
+  const auto retryRequest = findBmsTask.retryRequest();
   const auto policy =
       findBmsDialogPolicy(findBmsTask.running(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
@@ -584,7 +594,9 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
 
   i18n::Text statusText;
-  if (running) {
+  if (retryRequest) {
+    statusText = i18n::message("library.find_bms.download_failed.label");
+  } else if (running) {
     if (findBmsPendingDecision) {
       statusText = *findBmsPendingDecision ==
                            BmsSearchPendingArtifactDecision::Keep
@@ -622,10 +634,11 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   if (findBmsStatusText != nullptr) {
     findBmsStatusText->setLocalizedText(statusText);
     const bool failed =
-        !running &&
-        (findBmsResult.status == BmsSearchResult::Status::DownloadFailed ||
-         findBmsResult.status == BmsSearchResult::Status::HashMismatch ||
-         findBmsResult.status == BmsSearchResult::Status::NotFound);
+        retryRequest.has_value() ||
+        (!running &&
+         (findBmsResult.status == BmsSearchResult::Status::DownloadFailed ||
+          findBmsResult.status == BmsSearchResult::Status::HashMismatch ||
+          findBmsResult.status == BmsSearchResult::Status::NotFound));
     findBmsStatusText->setColor(
         ui_theme::sdl(failed ? ui_theme::coral() : ui_theme::textPrimary()));
   }
@@ -636,7 +649,12 @@ void FindBmsModal::refresh(bool refreshCandidates) {
       !findBmsResult.candidates.empty();
 
   i18n::Text detail;
-  if (running && findBmsPendingDecision) {
+  if (retryRequest) {
+    detail = i18n::message(
+        retryRequest->canResume ? "library.find_bms.resume_prompt.message"
+                                : "library.find_bms.retry_prompt.message",
+        {{"error", retryRequest->message}});
+  } else if (running && findBmsPendingDecision) {
     detail = i18n::message("library.find_bms.resolving_downloaded_files_dialog_unable_close_yet.message");
   } else if (!running && findBmsResult.pendingArtifact) {
     detail = findBmsResult.message.empty()
@@ -723,6 +741,15 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     findBmsCloseButton->setVisible(policy.showCloseOrCancel);
     findBmsCloseButton->setWidth(policy.showCloseOrCancel ? 130.0f : 0.0f);
   }
+  if (findBmsRetryButtonText != nullptr) {
+    findBmsRetryButtonText->setLocalizedText(i18n::message(
+        retryRequest && retryRequest->canResume ? "library.find_bms.resume.label"
+                                               : "library.find_bms.retry.label"));
+  }
+  if (findBmsRetryButton != nullptr) {
+    findBmsRetryButton->setVisible(retryRequest.has_value());
+    findBmsRetryButton->setWidth(retryRequest ? 150.0f : 0.0f);
+  }
   if (findBmsKeepFilesButton != nullptr) {
     findBmsKeepFilesButton->setVisible(policy.showPendingActions);
     findBmsKeepFilesButton->setWidth(policy.showPendingActions ? 150.0f
@@ -761,6 +788,10 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(findBmsRetryButton, findBmsRetryButtonText,
+                          retryRequest.has_value(), ui_theme::successAction,
+                          ui_theme::successActionHover,
+                          ui_theme::successActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(
       findBmsKeepFilesButton, findBmsKeepFilesButtonText,
       policy.showPendingActions, ui_theme::successAction,
@@ -806,7 +837,7 @@ void FindBmsModal::update() {
     }
   };
 
-  bool shouldRefresh = false;
+  bool shouldRefresh = updates.retryChanged;
   for (const auto &progress : progressEvents) {
     const bool replace =
         shouldReplaceFindBmsLogLine(findBmsProgressMessage, progress.message);

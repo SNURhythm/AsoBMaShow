@@ -60,6 +60,7 @@ private:
   TextView *findBmsStatusText = nullptr;
   TextView *findBmsDetailText = nullptr;
   Button *findBmsCloseButton = nullptr;
+  Button *findBmsRetryButton = nullptr;
   Button *findBmsKeepFilesButton = nullptr;
   Button *findBmsDeleteFilesButton = nullptr;
   Button *findBmsOpenButton = nullptr;
@@ -67,6 +68,7 @@ private:
   Button *findBmsRefreshButton = nullptr;
   RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
   TextView *findBmsCloseButtonText = nullptr;
+  TextView *findBmsRetryButtonText = nullptr;
   TextView *findBmsKeepFilesButtonText = nullptr;
   TextView *findBmsDeleteFilesButtonText = nullptr;
   TextView *findBmsOpenButtonText = nullptr;

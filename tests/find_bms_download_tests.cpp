@@ -1269,6 +1269,7 @@ void testFindBmsDownloadProgressDisplaysSizes() {
 
 #include "find_bms_extraction_fixture.h"
 #include "find_bms_verification_fixture.h"
+#include "find_bms_provider_fixture.h"
 
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--verification-guard") {
@@ -1278,6 +1279,8 @@ int main(int argc, char **argv) {
     return testRealVerification();
   }
   testRunningDetailFollowsProgress();
+  testProviderSelectionStopsAfterAFileIsFound();
+  testChosenProviderRetriesOnlyOnUserDecision();
   testExtractionLimitsAndCancellation();
 #if ASOBMSHOW_HAS_LIBARCHIVE
   testUnknownSizeStreamIsBounded();

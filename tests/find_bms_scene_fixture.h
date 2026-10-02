@@ -13,6 +13,8 @@ struct ServiceCalls {
   std::filesystem::path root;
   bool skipUnarchiving = false;
   bool cancellationObserved = false;
+  bool promptForRetry = false;
+  bool retryApproved = false;
   BmsSearchPendingArtifactDecision decision = BmsSearchPendingArtifactDecision::Keep;
   std::optional<BmsSearchPendingArtifact> resolvedArtifact;
   BmsSearchResult result;
@@ -37,6 +39,10 @@ BmsSearchResult BmsSearchService::findAndDownload(
   calls.skipUnarchiving = options.skipUnarchivingForNonSolidArchives;
   progress({"Downloading archive", 20, 100});
   progress({"Downloading archive", 40, 100});
+  if (calls.promptForRetry) {
+    assert(options.requestRetry);
+    calls.retryApproved = options.requestRetry("Connection lost", true);
+  }
   if (calls.gate) { calls.gate->block(); }
   calls.cancellationObserved = cancelled.load();
   return calls.result;
@@ -195,6 +201,29 @@ void testSceneLookupProgressAndIndexHandoff() {
   assert(scene.indexed.size() == 1);
   scene.hideFindBmsModal();
   assert(!scene.modal.visible);
+}
+
+void testSceneDownloadPromptRetriesExistingWorker() {
+  for (const bool retry : {true, false}) {
+    ServiceCalls calls;
+    serviceCalls = &calls;
+    calls.promptForRetry = true;
+    calls.result = {.status = BmsSearchResult::Status::DownloadFailed};
+    MainMenuScene scene;
+    scene.showFindBmsModal({{"sha256", "md5", "Title", "Artist"}});
+    waitForRetryPrompt(scene.findBmsTask);
+    scene.applyFindBmsUpdates();
+    const auto refreshes = scene.refreshes;
+    scene.hideFindBmsModal();
+    assert(scene.modal.visible);
+    assert(calls.lookups == 1 && scene.indexed.empty());
+    if (retry) assert(scene.findBmsTask.retryDownload());
+    else scene.cancelFindBms();
+    applyUntilIdle(scene);
+    assert(scene.refreshes > refreshes);
+    assert(calls.retryApproved == retry && calls.cancellationObserved != retry);
+    assert(calls.lookups == 1 && scene.indexed.empty());
+  }
 }
 
 void testSceneExtractionProgressPreservesHistoryAcrossLanguages() {
