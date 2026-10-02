@@ -209,6 +209,11 @@ public:
          .audioBackend = skin::createLuaSkinNoOutputAudioBackend(
              context.skinLiveResourceCounters),
          .liveResourceCounters = context.skinLiveResourceCounters,
+         .captureLegacyInputGeneration = [] {
+           return skin::LuaSkinLegacyInputGeneration{
+               .drawableWidth = rendering::render_width,
+               .drawableHeight = rendering::render_height};
+         },
          .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel),
          .stop = stop});
     for (const auto &diagnostic : created.diagnostics)
@@ -1427,6 +1432,10 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
       playLength);
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;
+    meta.Bpm = lastMeta.Bpm;
+    meta.MinBpm = lastMeta.MinBpm;
+    meta.MaxBpm = lastMeta.MaxBpm;
+    meta.Difficulty = lastMeta.Difficulty;
     meta.Rank = lastMeta.Rank;
     meta.RankType = lastMeta.RankType;
     meta.LnMode = lastMeta.LnMode;
@@ -3694,6 +3703,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     data.currentClearRankOverride = clearRank;
     data.courseResult = true;
+    data.courseMode = true;
+    data.courseStageIndex = stages.empty() ? 0 : stages.size() - 1;
+    data.courseStageCount = std::max({
+        replay.entryFacts.size(), replay.stages.size(),
+        static_cast<std::size_t>(std::max(0, replay.totalCharts))});
     data.courseTitle = courseMeta.Title;
     for (const auto &stage : stages)
       data.courseTitles.push_back(stage.chart->Meta.Title);
@@ -3997,6 +4011,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.configuration = makeResultSkinConfiguration(settings);
       data.configuration->irAccountName = context.irAccountNameSnapshot();
       data.songReviewFavorite = chartMetadataAuthority.songReviewFavorite;
+      data.courseMode = true;
+      data.courseStageIndex = stageIndex;
+      data.courseStageCount = std::max({
+          replay.entryFacts.size(), replay.stages.size(),
+          static_cast<std::size_t>(std::max(0, replay.totalCharts))});
       data.gameplayGraph = stage.gameplayGraph;
       data.outGraphPlaceholder = &stageResultGraphPlaceholder;
       data.showControls = false;
@@ -4007,8 +4026,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.difficultyLabel =
           result_presentation::difficultyLabelForChart(
               context.chartRepository, chart.Meta);
-      data.currentClearLabelOverride = "NO PLAY";
-      data.currentClearRankOverride = kNoClearTypeRank;
+      const int clearRank = result_presentation::courseStageClearRank(
+          stage.resultState, chart.Meta, stageReplay.provenance.playback);
+      data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+      data.currentClearRankOverride = clearRank;
       data.previousBest = previousBest;
       data.previousLampBest =
           result_presentation::previousLampBestForReplayChart(

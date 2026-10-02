@@ -15,7 +15,7 @@ from typing import NoReturn
 
 
 KNOWN_BACKENDS = ("metal", "spirv", "essl", "dx11")
-PINNED_BEATORAJA_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
+PINNED_BEATORAJA_COMMIT = "ad42f56c4658e968f93b24bf23440fe51cb9878e"
 GIT_EXECUTABLE_ENV = "ASOBMASHOW_GIT_EXECUTABLE"
 
 
@@ -108,11 +108,13 @@ def manifest_data(
                 "src/bms/player/beatoraja/skin/Skin.java",
                 "src/bms/player/beatoraja/skin/SkinObject.java",
                 "src/bms/player/beatoraja/skin/SkinText.java",
+                "src/bms/player/beatoraja/skin/StretchType.java",
+                "src/glsl/bilinear.frag",
             ],
             "compatibility_notes": [
                 "Blend ID 3 uses the documented source-minus-destination state; the pinned renderer restores ADD before the current sprite and is treated as an upstream state-order bug.",
-                "Nearest/linear sampling is isolated per command with clamp-to-edge instead of mutating a shared texture filter.",
-                "Glyph runs bind blend state explicitly instead of inheriting the preceding sprite state.",
+                "Nearest, hardware-linear, and alpha-preserving Beatoraja bilinear sampling are isolated per command with clamp-to-edge instead of mutating a shared texture filter.",
+                "Scalable and bitmap glyph runs inherit the last successfully submitted compatibility draw blend; image fonts use their image blend.",
                 "Destination rotation and clip geometry are consumed after command lowering and are not applied a second time by the backend.",
             ],
         },

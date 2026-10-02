@@ -202,6 +202,8 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
 std::optional<std::string>
 htmlBodyFromDownloadedFile(const std::filesystem::path &path);
 
+bool probeDownloadUrl(const std::string &url, std::string &errorMessage,
+                      const std::atomic_bool *cancelled);
 std::optional<std::string> fetchUrlText(
     const std::string &url, std::string &errorMessage,
     const std::atomic_bool *cancelled = nullptr,
@@ -212,7 +214,8 @@ std::optional<std::string> postUrlText(
     size_t maximumResponseBytes = 16ULL * 1024 * 1024);
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
-                       BmsSearchDownloadProgressCallback progressCallback);
+                       BmsSearchDownloadProgressCallback progressCallback,
+                       BmsSearchDownloadRetryCallback retryCallback = nullptr);
 std::filesystem::path makeDownloadDirectory(
     const std::filesystem::path &libraryRoot);
 bool downloadAndExtractArchive(

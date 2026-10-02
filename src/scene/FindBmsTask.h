@@ -4,6 +4,7 @@
 #include "../ThreadCompat.h"
 
 #include <deque>
+#include <condition_variable>
 #include <mutex>
 
 // Owns one Find BMS operation and its bounded progress/result handoff. All
@@ -17,6 +18,11 @@ public:
   struct Updates {
     std::deque<BmsSearchDownloadProgress> progress;
     std::optional<BmsSearchResult> result;
+    bool retryChanged = false;
+  };
+  struct RetryRequest {
+    std::string message;
+    bool canResume = false;
   };
 
   FindBmsTask() = default;
@@ -32,6 +38,9 @@ public:
   // stale artifact actions disabled through the application-thread handoff.
   bool running() const;
   Updates takeUpdates();
+  BmsSearchDownloadRetryCallback retryCallback();
+  std::optional<RetryRequest> retryRequest() const;
+  bool retryDownload();
   // Nonblocking: cancellation results still reach the dialog, including any
   // pending artifact that requires a keep/delete decision.
   void requestCancel();
@@ -41,6 +50,9 @@ public:
 private:
   static constexpr std::size_t kMaxPendingProgressEvents = 160;
   mutable std::mutex mutex_;
+  std::condition_variable retryCondition_;
+  std::optional<RetryRequest> retryRequest_;
+  bool retryRequested_ = false;
   bool running_ = false;
   Updates pending_;
   std::atomic_bool cancelled_ = false;

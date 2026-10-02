@@ -50,6 +50,7 @@ public:
 
 private:
   bool handleEventsImpl(SDL_Event &event) override;
+  void onPointerEventConsumed(const SDL_Event &event) override;
   void renderImpl(RenderContext &context) override;
   std::string editingText;
   std::string composition;

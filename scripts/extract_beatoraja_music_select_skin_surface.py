@@ -6,11 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 try:
+    from scripts.pinned_git_snapshot import pinned_git_snapshot, verify_pinned_commit
     from scripts.extract_beatoraja_gameplay_skin_surface import (
         add_feature,
         add_lua_exports,
@@ -22,6 +22,7 @@ try:
         top_level_public_fields,
     )
 except ModuleNotFoundError:
+    from pinned_git_snapshot import pinned_git_snapshot, verify_pinned_commit
     from extract_beatoraja_gameplay_skin_surface import (
         add_feature,
         add_lua_exports,
@@ -369,6 +370,11 @@ def _add_target_surface(features: dict[str, dict], root: Path) -> None:
 
 
 def extract(root: Path) -> dict:
+    with pinned_git_snapshot(root, PINNED_COMMIT, ("src",)) as snapshot:
+        return _extract(snapshot)
+
+
+def _extract(root: Path) -> dict:
     features: dict[str, dict] = {}
     _add_select_json_and_lua_objects(features, root)
     add_lua_exports(features, root)
@@ -434,17 +440,7 @@ def make_ledger(surface: dict) -> dict:
 
 
 def verify_commit(root: Path) -> None:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(f"cannot read Beatoraja commit: {completed.stderr.strip()}")
-    actual = completed.stdout.strip()
-    if actual != PINNED_COMMIT:
-        raise RuntimeError(f"expected pinned commit {PINNED_COMMIT}, got {actual}")
+    verify_pinned_commit(root, PINNED_COMMIT)
 
 
 def _json_text(value: dict) -> str:

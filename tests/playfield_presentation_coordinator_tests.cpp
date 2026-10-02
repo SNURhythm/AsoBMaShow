@@ -59,6 +59,7 @@ struct PresentationStats {
   skin::ViewportSettings lastViewport;
   skin::UiLogicalRect lastSafeUiBounds;
   PresentationTouchEvent lastTouch;
+  std::optional<UiLogicalPoint> pointerPosition;
   const PlayfieldVisualState *preparedState = nullptr;
   const PlayfieldProjectionResult *preparedProjection = nullptr;
   std::vector<std::string> events;
@@ -147,6 +148,9 @@ public:
     return {.kind = PresentationUiControlKind::LaneCover,
             .layoutRevision = stats_->layoutRevision,
             .permitsLegacyBuiltInFallback = true};
+  }
+  void setPointerPosition(UiLogicalPoint point) noexcept override {
+    stats_->pointerPosition = point;
   }
   PresentationTouchResult
   beginPresentationTouch(const PresentationTouchEvent &event) override {
@@ -282,6 +286,9 @@ public:
     return {.kind = PresentationUiControlKind::Slider,
             .layoutRevision = stats_->layoutRevision,
             .sourceObject = 99};
+  }
+  void setPointerPosition(UiLogicalPoint point) noexcept override {
+    stats_->pointerPosition = point;
   }
   PresentationTouchResult
   beginPresentationTouch(const PresentationTouchEvent &event) override {
@@ -728,6 +735,25 @@ void testPostDrawRecoverableFailureNeverCreatesHybrid() {
          "post-draw recoverable failure is recorded once");
 }
 
+void testPassivePointerForwardsWithoutCreatingCapture() {
+  auto builtIn = std::make_shared<PresentationStats>();
+  auto skinStats = std::make_shared<PresentationStats>();
+  FakeBga bga;
+  PlayfieldPresentationCoordinator coordinator({
+      .builtIn = std::make_unique<FakeBuiltIn>(builtIn),
+      .skin = std::make_unique<FakeSkin>(skinStats, identity()),
+      .bga = bga});
+  const UiLogicalPoint point{.x = 123.0F, .y = 456.0F};
+  coordinator.setPointerPosition(point);
+  expect(skinStats->pointerPosition == point && !builtIn->pointerPosition &&
+             skinStats->beginCalls == 0 && skinStats->updateCalls == 0,
+         "passive hover reaches only active skin without synthesizing capture");
+  auto replacement = std::make_shared<PresentationStats>();
+  coordinator.installSkinSession(std::make_unique<FakeSkin>(replacement, identity()));
+  expect(replacement->pointerPosition == point && replacement->beginCalls == 0,
+         "skin replacement retains pointer position without transferring capture");
+}
+
 void testEventFanoutAndTouchRoutingHaveOneAuthorityTarget() {
   auto builtIn = std::make_shared<PresentationStats>();
   auto skinStats = std::make_shared<PresentationStats>();
@@ -1043,6 +1069,7 @@ int main() {
   testCriticalSelectedSkinPrepareFailureReturnsTransactionDiagnostic();
   testPostDrawRecoverableFailureNeverCreatesHybrid();
   testEventFanoutAndTouchRoutingHaveOneAuthorityTarget();
+  testPassivePointerForwardsWithoutCreatingCapture();
   testSkinReplacementDoesNotTransferPointerOwnership();
   testPointerCaptureTableIsBoundedAndReleasedByCancel();
   testResetLayoutAppliesFitBeforeOneImmutablePersistenceRequest();

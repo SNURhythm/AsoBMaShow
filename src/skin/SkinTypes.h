@@ -138,7 +138,10 @@ struct ResultSkinData {
   std::string chartMd5;
   std::string chartSha256;
   bool autoPlayResult = false;
-  bool courseResult = false;
+  bool courseResult = false; // Final aggregate result, not an individual stage.
+  bool courseMode = false; // Both individual stages and the final course result.
+  std::size_t courseStageIndex = 0;
+  std::size_t courseStageCount = 0;
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;

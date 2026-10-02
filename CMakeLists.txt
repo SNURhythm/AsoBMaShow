@@ -811,6 +811,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -866,6 +867,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1142,6 +1144,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1191,6 +1194,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1244,6 +1248,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1628,6 +1633,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1692,6 +1698,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1757,6 +1764,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1865,6 +1873,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1929,6 +1938,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -5086,6 +5096,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/ScrollView.cpp
         src/view/View.cpp
     )
     target_include_directories(button_enabled_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -5527,6 +5538,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/scene_language_lifecycle_extract.py
                 --root ${CMAKE_SOURCE_DIR} --output ${scene_language_lifecycle_source}
         DEPENDS tests/scene_language_lifecycle_extract.py tests/scene_language_lifecycle_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/scene/IntroScene.cpp
                 src/scene/Scene.h src/scene/SceneManager.h src/scene/SceneManager.cpp
         VERBATIM
     )
@@ -5571,6 +5583,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(music_select_toolbar_view_tests PRIVATE cxx_std_23)
     target_link_libraries(music_select_toolbar_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(newcomer_tutorial_view_tests
+        tests/newcomer_tutorial_view_tests.cpp
+        src/scene/NewcomerTutorialView.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+    )
+    target_include_directories(newcomer_tutorial_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(newcomer_tutorial_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(newcomer_tutorial_view_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
 
@@ -5690,7 +5723,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     --output ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
             DEPENDS ${transport_fixture_dir}/find_bms_transport_extract.py
                     src/iOSNatives.mm src/iOSNatives.hpp
-                    src/bms_search/DownloadSupport.cpp
+                    src/bms_search/DownloadSupport.cpp src/bms_search/Internal.h
             VERBATIM
         )
         add_executable(find_bms_ios_file_bridge_tests
@@ -5721,7 +5754,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         DEPENDS tests/find_bms_download_attempt_extract.py src/bms_search/DownloadSupport.cpp
         VERBATIM
     )
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/find_bms_provider_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --output ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
+        DEPENDS tests/find_bms_provider_extract.py tests/gameplay_terminal_scene_extract.py
+                src/bms_search/PackageSourceDrivers.cpp src/BmsSearchService.cpp
+        VERBATIM
+    )
     add_executable(find_bms_download_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
         ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
         tests/find_bms_download_tests.cpp
         src/bms_search/ArchiveSupport.cpp
@@ -8269,7 +8312,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
-    set_tests_properties(text_input_box_tests PROPERTIES
+    set_tests_properties(text_input_box_tests difficulty_table_importer_tests button_enabled_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
@@ -8478,6 +8521,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
     if(APPLE)
+        asobmashow_register_test(button_enabled_tests button_disabled_metal_tests --metal-only)
+        set_tests_properties(button_disabled_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
             src/rendering/UiBatchRenderer.cpp
@@ -8653,6 +8701,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(image_alpha_bounds_tests)
     asobmashow_register_test(localization_tests)
     asobmashow_register_test(scene_language_lifecycle_tests)
+    asobmashow_register_test(newcomer_tutorial_view_tests)
+    set_tests_properties(newcomer_tutorial_view_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
@@ -8663,6 +8714,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_score_state_tests)
     asobmashow_register_test(playfield_visual_state_tests)
     asobmashow_register_test(gameplay_bga_target_tests)
+    if(APPLE)
+        add_test(NAME gameplay_bga_sampling_metal_tests
+            COMMAND gameplay_bga_target_tests --metal-sampling)
+        set_tests_properties(gameplay_bga_sampling_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device)
+    endif()
     asobmashow_register_test(bgfx_skin_texture_device_tests)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(gameplay_terminal_scene_tests)

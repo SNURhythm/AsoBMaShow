@@ -74,6 +74,103 @@ JsonGameplaySkinDecodeResult decodeInline(std::string_view text) {
       gameplaySkinBuiltinCatalog());
 }
 
+void testFatalScriptCompilerFailuresRejectModel() {
+  constexpr std::string_view text = R"json({
+    "type":0,"customTimers":[
+      {"id":10000,"timer":"function() return 0 end"},
+      {"id":10001,"timer":"function() return 1 end"}]
+  })json";
+  int compilations = 0;
+  const auto decodeWithFailure = [&](std::string_view code) {
+    compilations = 0;
+    return JsonGameplaySkinDecoder{}.decode(
+        std::as_bytes(std::span(text)), fixtureEntry("script-failure.json"),
+        nullptr, gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, {}, {},
+        [code, &compilations](std::string_view, SkinBindingKind) -> LuaCallbackCompileResult {
+          ++compilations;
+          return {.failure = SkinDiagnostic{.code = std::string(code),
+                                            .message = "script compiler failed"}};
+        });
+  };
+  for (const std::string_view code : {"skin_lua_instruction_limit_exceeded",
+                                      "skin_lua_wall_time_limit_exceeded",
+                                      "skin_lua_allocator_limit_exceeded",
+                                      "skin_lua_callback_limit_exceeded"}) {
+    const auto decoded = decodeWithFailure(code);
+    expect(!decoded.model,
+           "fatal Lua script compilation failure rejects the JSON model");
+    expect(compilations == 1,
+           "JSON stops compiling further scripts after a fatal Lua compiler failure");
+    expect(std::ranges::any_of(decoded.diagnostics, [&](const auto &diagnostic) {
+             return diagnostic.code == code &&
+                    diagnostic.severity == DiagnosticSeverity::Error;
+           }),
+           "fatal Lua compiler diagnostics retain error severity in JSON");
+  }
+  const auto malformed = decodeWithFailure("skin_lua_callback_script_invalid");
+  expect(compilations == 2 && malformed.model &&
+             malformed.model->customTimers.size() == 2 &&
+             !malformed.model->customTimers.front().timer &&
+             !malformed.model->customTimers.back().timer &&
+             std::ranges::none_of(malformed.diagnostics, [](const auto &diagnostic) {
+               return diagnostic.severity == DiagnosticSeverity::Error;
+             }),
+         "malformed JSON timer scripts retain the recoverable passive fallback");
+}
+
+void testRepeatedDefinitionReferencesShareAuthoredTimerFactory() {
+  constexpr std::string_view text = R"json({
+    "type":0,
+    "source":[{"id":"atlas","path":"atlas.png"}],
+    "font":[{"id":"font","path":"font.ttf"}],
+    "image":[
+      {"id":"shared","src":"atlas","w":1,"h":1,"timer":"new_passive_timer().timer","act":"hits = (hits or 0) + 1"},
+      {"id":"independent","src":"atlas","w":1,"h":1,"timer":"new_passive_timer().timer"}],
+    "imageset":[{"id":"set","images":["shared"]}],
+    "text":[{"id":"label","font":"font","value":"text(10)"}],
+    "destination":[
+      {"id":"shared","dst":[{}]},
+      {"id":"shared","dst":[{}]},
+      {"id":"set","dst":[{}]},
+      {"id":"independent","dst":[{}]},
+      {"id":"label","dst":[{}]},
+      {"id":"label","dst":[{}]}]
+  })json";
+  std::uint32_t compilations = 0;
+  std::map<SkinBindingKind, int> compilationsByKind;
+  const auto decoded = JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(text)), fixtureEntry("shared-timer.json"),
+      nullptr, gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, {}, {},
+      [&compilations, &compilationsByKind](std::string_view, SkinBindingKind kind) -> LuaCallbackCompileResult {
+        ++compilationsByKind[kind];
+        return {.callback = LuaCallbackId{.slot = ++compilations, .generation = 1}};
+      });
+  expect(decoded.model && decoded.model->objects.size() == 6,
+         "repeated image destinations and an image-set reference decode");
+  expect(compilationsByKind[SkinBindingKind::TimerProperty] == 2,
+         "each authored image timer factory runs once regardless of references");
+  expect(compilationsByKind[SkinBindingKind::Event] == 1 &&
+             compilationsByKind[SkinBindingKind::StringProperty] == 1,
+         "repeated image actions and text values compile once per authored field");
+  if (!decoded.model || decoded.model->objects.size() != 6) return;
+  const auto callbackForObject = [&](std::size_t index) -> std::optional<LuaCallbackId> {
+    const auto *image = std::get_if<SkinImageObject>(&decoded.model->objects[index].payload);
+    if (!image || image->orderedStates.empty() || !image->orderedStates.front().timer) return {};
+    const auto timer = *image->orderedStates.front().timer;
+    for (const auto &binding : decoded.model->timerProperties) {
+      if (binding.id == timer) {
+        if (const auto *callback = std::get_if<LuaCallbackId>(&binding.source)) return *callback;
+      }
+    }
+    return {};
+  };
+  const auto shared = callbackForObject(0);
+  expect(shared && callbackForObject(1) == shared && callbackForObject(2) == shared,
+         "copies of a definition share its stateful timer callback");
+  expect(callbackForObject(3) && callbackForObject(3) != shared,
+         "separately authored identical timer scripts retain independent state");
+}
+
 const SkinObjectDefinition *findObject(const BeatorajaSkinModel &model,
                                        std::string_view name) {
   const auto found = std::ranges::find_if(
@@ -494,7 +591,7 @@ void testAllGameplayFieldsPreserveOrderProvenanceAndPayloads() {
              text->shadowSmoothness == 0.75,
          "Text style, literal, property, writer, and editability fields decode");
   expect(slider != nullptr && slider->direction == 3 && slider->range == 120.0 &&
-             !slider->changeable && slider->writer.has_value(),
+             slider->changeable && slider->writer.has_value(),
          "Slider sprite, value, writer, direction, range, and flags decode");
   expect(graph != nullptr && graph->direction == 2,
          "Graph sprite, value, direction, and range-source fields decode");
@@ -684,14 +781,14 @@ void testMalformedUnboundedAndCallbackJsonFailAtDecoderBoundary() {
   const auto scripted = decodeText(R"({
     "type": 0,
     "source": [{"id":"atlas","path":"atlas.png"}],
-    "text": [{"id":"scripted","font":"missing","value":"return 1"}],
+    "text": [{"id":"scripted","font":"missing","value":"1 + 2"}],
     "destination": [{"id":"scripted","dst":[{}]}]
   })");
   expect(scripted.model &&
-             hasDiagnostic(scripted, "skin_json_callback_unsupported") &&
+             scripted.requiresLua &&
              std::ranges::all_of(scripted.model->stringProperties,
                                  isStaticBinding<SkinStringPropertyBinding>),
-         "a JSON Lua-script binding is diagnosed without creating a callback");
+         "catalog decoding defers JSON scripts without creating a callback");
 }
 
 void testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary() {
@@ -728,6 +825,156 @@ void testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary() {
                            "skin_json_distribution_graph_invalid_in_gameplay"),
          "negative generic Graph stays a diagnosed select-only object rather "
          "than becoming a gameplay graph");
+}
+
+void testResolvedPropertyFallbacks() {
+  const std::string text = R"json({
+    "type": 0,
+    "source": [
+      {"id":"atlas","path":"atlas.png"}
+    ],
+    "font": [
+      {"id":"font","path":"font.ttf"}
+    ],
+    "value": [
+      {"id":"invalid-number","src":"atlas","w":100,"h":10,"divx":10,"digit":3,"value":false,"ref":100},
+      {"id":"unknown-number","src":"atlas","w":100,"h":10,"divx":10,"digit":3,"value":999999,"ref":100},
+      {"id":"broken-number","src":"atlas","w":100,"h":10,"divx":10,"digit":3,"value":")","ref":100}
+    ],
+    "floatvalue": [
+      {"id":"float-ref","src":"atlas","w":120,"h":10,"divx":12,"iketa":2,"fketa":2,"value":null,"ref":1107},
+      {"id":"float-rate","src":"atlas","w":120,"h":10,"divx":12,"iketa":2,"fketa":2,"value":17,"ref":1107},
+      {"id":"float-null","src":"atlas","w":120,"h":10,"divx":12,"iketa":2,"fketa":2,"value":1107,"ref":17}
+    ],
+    "text": [
+      {"id":"invalid-text","font":"font","size":10,"ref":10,"value":{}},
+      {"id":"unknown-text","font":"font","size":10,"ref":10,"value":999999},
+      {"id":"numeric-writer","font":"font","size":10,"ref":30,"event":30},
+      {"id":"invalid-writer","font":"font","size":10,"ref":30,"event":false},
+      {"id":"broken-writer","font":"font","size":10,"ref":30,"event":")"},
+      {"id":"explicit-writer","font":"font","size":10,"ref":30,"event":"local value = ..."}
+    ],
+    "destination": [
+      {"id":"invalid-number","dst":[{}]},
+      {"id":"unknown-number","dst":[{}]},
+      {"id":"broken-number","dst":[{}]},
+      {"id":"float-ref","dst":[{}]},
+      {"id":"float-rate","dst":[{}]},
+      {"id":"float-null","dst":[{}]},
+      {"id":"invalid-text","dst":[{}]},
+      {"id":"unknown-text","dst":[{}]},
+      {"id":"numeric-writer","dst":[{}]},
+      {"id":"invalid-writer","dst":[{}]},
+      {"id":"broken-writer","dst":[{}]},
+      {"id":"explicit-writer","dst":[{}]},
+      {"id":"implicit-slider","dst":[{}]},
+      {"id":"integer-slider","dst":[{}]},
+      {"id":"explicit-slider","dst":[{}]},
+      {"id":"implicit-graph","dst":[{}]},
+      {"id":"integer-graph","dst":[{}]},
+      {"id":"set-value","dst":[{}]},
+      {"id":"set-ref","dst":[{}]},
+      {"id":"set-null","dst":[{}]}
+    ],
+    "slider": [
+      {"id":"implicit-slider","src":"atlas","w":10,"h":10,"value":999999,"type":17,"event":")"},
+      {"id":"integer-slider","src":"atlas","w":10,"h":10,"value":false,"type":100,"isRefNum":true,"min":0,"max":1000},
+      {"id":"explicit-slider","src":"atlas","w":10,"h":10,"value":17,"event":17,"changeable":false}
+    ],
+    "graph": [
+      {"id":"implicit-graph","src":"atlas","w":10,"h":10,"value":999999,"type":17},
+      {"id":"integer-graph","src":"atlas","w":10,"h":10,"value":false,"type":100,"isRefNum":true,"min":0,"max":1000}
+    ],
+    "image": [
+      {"id":"tile","src":"atlas","w":10,"h":10}
+    ],
+    "imageset": [
+      {"id":"set-value","images":["tile"],"value":90,"ref":90},
+      {"id":"set-ref","images":["tile"],"ref":90},
+      {"id":"set-null","images":["tile"],"value":999999,"ref":90}
+    ]
+  })json";
+  const auto decoded = JsonGameplaySkinDecoder{}.decode(
+      std::as_bytes(std::span(text)), fixtureEntry("fallback.json"), nullptr,
+      gameplaySkinBuiltinCatalog(), SkinSafetyPolicy{}, {}, {},
+      [](std::string_view script, SkinBindingKind) -> LuaCallbackCompileResult {
+        if (script == ")") return {.failure = SkinDiagnostic{
+            .code = "skin_lua_syntax_error", .message = "invalid test script"}};
+        return {.callback = LuaCallbackId{.slot = 1, .generation = 1}};
+      });
+  expect(decoded.model.has_value(), "fallback fixture decodes");
+  if (!decoded.model) return;
+  const auto &model = *decoded.model;
+  expect(model.objects.size() == 20, "all fallback destinations produce objects");
+  const auto builtin = [](const auto &bindings, auto id) -> std::optional<int> {
+    for (const auto &binding : bindings) {
+      if (binding.id != id) continue;
+      const auto *selector = std::get_if<SkinBuiltinPropertySelector>(&binding.source);
+      if (selector) {
+        if (const auto *number = std::get_if<int>(&selector->value)) return *number;
+      }
+    }
+    return {};
+  };
+  for (const auto &object : model.objects) {
+    const auto &name = object.authoredName;
+    if (const auto *number = std::get_if<SkinNumberObject>(&object.payload)) {
+      expect(builtin(model.integerProperties, number->value) == 100,
+             name + ": null integer property falls back to ref");
+    } else if (const auto *number = std::get_if<SkinFloatObject>(&object.payload)) {
+      const int expected = name == "float-ref" ? 1107 : 17;
+      expect(builtin(model.floatProperties, number->value) == expected,
+             name + ": float property uses the correct factory before ref fallback");
+      for (const auto &binding : model.floatProperties) {
+        if (binding.id == number->value) {
+          expect(binding.domain == (name == "float-rate" ? SkinFloatPropertyDomain::Rate
+                                                        : SkinFloatPropertyDomain::FloatValue),
+                 name + ": explicit float value and ref retain distinct domains");
+        }
+      }
+    } else if (std::holds_alternative<SkinSliderObject>(object.payload) ||
+               std::holds_alternative<SkinGraphObject>(object.payload)) {
+      const auto *slider = std::get_if<SkinSliderObject>(&object.payload);
+      const auto &value = slider ? slider->value : std::get<SkinGraphObject>(object.payload).value;
+      if (name.starts_with("integer-")) {
+        const auto *range = std::get_if<SkinSliderObject::IntegerRangeSource>(&value);
+        expect(range && builtin(model.integerProperties, range->value) == 100,
+               name + ": null value selects integer type overload");
+      } else {
+        const auto *rate = std::get_if<SkinFloatPropertyId>(&value);
+        expect(rate && builtin(model.floatProperties, *rate) == 17,
+               name + ": null value selects rate type overload");
+      }
+      if (slider && name != "integer-slider") {
+        expect(slider->writer && builtin(model.floatWriters, *slider->writer) == 17 &&
+                   slider->changeable,
+               name + ": selected constructor controls writer and interaction");
+      }
+    } else if (const auto *image = std::get_if<SkinImageObject>(&object.payload)) {
+      expect(image->stateIndex && builtin(model.integerProperties, *image->stateIndex) == 90,
+             name + ": image-set property retains the selected numeric source");
+      for (const auto &binding : model.integerProperties) {
+        if (image->stateIndex && binding.id == *image->stateIndex) {
+          expect(binding.domain == (name == "set-value" ? SkinIntegerPropertyDomain::IntegerValue
+                                                       : SkinIntegerPropertyDomain::ImageIndex),
+                 name + ": image-set value and ref use different factories");
+        }
+      }
+    } else if (const auto *text = std::get_if<SkinTextObject>(&object.payload)) {
+      if (name == "invalid-text" || name == "unknown-text") {
+        expect(text->value && builtin(model.stringProperties, *text->value) == 10,
+               name + ": null string property falls back to ref");
+      } else if (name == "explicit-writer") {
+        expect(text->writer && !text->editable &&
+                   !builtin(model.stringWriters, *text->writer),
+               "valid explicit writer retains precedence and editability");
+      } else {
+        expect(text->writer && builtin(model.stringWriters, *text->writer) == 30 &&
+                   text->editable,
+               name + ": null writer uses ref and implicit editability");
+      }
+    }
+  }
 }
 
 void testTextRefWriterFallbackAndExplicitEventPrecedence() {
@@ -775,11 +1022,10 @@ void testTextRefWriterFallbackAndExplicitEventPrecedence() {
   expect(omitted && nullEvent && explicitEvent && script &&
              writerSelector(omitted) == 30 && omitted->editable &&
              writerSelector(nullEvent) == 30 && nullEvent->editable &&
-             writerSelector(explicitEvent) == 30 && !explicitEvent->editable &&
-             !script->writer && !script->editable &&
-             hasDiagnostic(decoded, "skin_json_callback_unsupported"),
-         "Text uses ref writer only for absent/null event and marks only the "
-         "implicit writer editable");
+             !explicitEvent->writer && !explicitEvent->editable &&
+             writerSelector(script) == 30 && script->editable &&
+             decoded.requiresLua,
+         "Text falls back after null writer resolution; catalog scripts remain deferred");
 }
 
 void testJsonObjectDestinationAndMalformedFieldProvenance() {
@@ -949,6 +1195,9 @@ void testCancellationStopsMidJsonModelFold() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testFatalScriptCompilerFailuresRejectModel();
+  testRepeatedDefinitionReferencesShareAuthoredTimerFactory();
+  testResolvedPropertyFallbacks();
   testAllFieldFixtureCoversThePinnedJsonLedger();
   testPinnedDefaultsProduceTypedStaticModel();
   testAllGameplayFieldsPreserveOrderProvenanceAndPayloads();

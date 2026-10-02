@@ -12,7 +12,8 @@ public:
       const std::string &downloadUrl, const std::string &displayUrl,
       const std::filesystem::path &archivePath, std::atomic_bool &cancelled,
       std::string &errorMessage,
-      BmsSearchDownloadProgressCallback progressCallback);
+      BmsSearchDownloadProgressCallback progressCallback,
+      BmsSearchDownloadRetryCallback retryCallback = nullptr);
 
 private:
   static std::optional<std::string> fileId(const std::string &url);

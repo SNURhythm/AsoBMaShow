@@ -408,6 +408,34 @@ void testDefaultProfileRoutesThroughResolverAndAdapter() {
           "resolver-adapter path");
 }
 
+void testSparseModeKeyboardInputKeepsOriginalChannels() {
+  const auto profile = makeDefaultInputProfile();
+  for (int keys : {4, 6}) {
+    RecordingControl control;
+    LogicalGameplayInputAdapter adapter(control, {});
+    InputBindingResolver resolver(profile, makeGameplayInputScopes(keys),
+        {.onTransitions = [&](std::span<const input::LogicalInputTransition> transitions) {
+          adapter.apply(transitions);
+        }});
+    const std::vector<int> lanes = keys == 4 ? std::vector<int>{0, 1, 3, 4}
+                                           : std::vector<int>{0, 1, 2, 4, 5, 6};
+    const std::vector<SDL_Scancode> scans = keys == 4
+        ? std::vector<SDL_Scancode>{SDL_SCANCODE_D, SDL_SCANCODE_F, SDL_SCANCODE_J, SDL_SCANCODE_K}
+        : std::vector<SDL_Scancode>{SDL_SCANCODE_S, SDL_SCANCODE_D, SDL_SCANCODE_F,
+                                    SDL_SCANCODE_J, SDL_SCANCODE_K, SDL_SCANCODE_L};
+    std::vector<ControlCall> expected;
+    for (std::size_t index = 0; index < lanes.size(); ++index) {
+      resolver.consume(keyEvent(scans[index], true));
+      resolver.consume(keyEvent(scans[index], false));
+      expected.push_back({.kind = ControlCall::Kind::Press, .lane = lanes[index]});
+      expected.push_back({.kind = ControlCall::Kind::Release, .lane = lanes[index], .backSpin = false});
+    }
+    resolver.consume(keyEvent(SDL_SCANCODE_LSHIFT, true));
+    resolver.consume(keyEvent(SDL_SCANCODE_LSHIFT, false));
+    require(control.calls == expected, "4K and 6K keyboard input preserves sparse channels without scratch");
+  }
+}
+
 void testDirectKeyboardPolicyDoesNotReplayQueuedRegistryTap() {
   RecordingControl control;
   const InputProfile profile = makeDefaultInputProfile();
@@ -1438,6 +1466,7 @@ int main() {
   testAppliedObserverSeesOneCanonicalReplayStream();
   testResetReleasesOnlyHeldLogicalLanes();
   testDefaultProfileRoutesThroughResolverAndAdapter();
+  testSparseModeKeyboardInputKeepsOriginalChannels();
   testDirectKeyboardPolicyDoesNotReplayQueuedRegistryTap();
   testDirectKeyboardPolicyRejectsViewConsumedRegistryKeys();
   testDirectKeyboardPolicyStillAcceptsRegistryControllers();

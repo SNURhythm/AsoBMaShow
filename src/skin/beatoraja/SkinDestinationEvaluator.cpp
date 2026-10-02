@@ -40,6 +40,9 @@ float easedRate(float rate, int acceleration) {
 }
 
 int objectAcceleration(const SkinDestinationBody &destination) {
+  if (destination.authoredAcceleration != 0) {
+    return destination.authoredAcceleration;
+  }
   int acceleration = 0;
   for (const auto &frame : destination.frames) {
     if (acceleration == 0) {
@@ -371,9 +374,9 @@ evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
       applyRectOffset(*geometry.clip, offset);
     }
     geometry.angleDegrees += offset.r;
-    // SkinObject.prepareColor returns before offset alpha on an interpolated
-    // non-step frame.  Preserve that behavior exactly.
-    if (!interpolated || acceleration == 3 || fixedColor) {
+    // SkinObject.prepareColor returns before offset alpha between changing
+    // color keyframes, including step animations.
+    if (!interpolated || fixedColor) {
       geometry.rgba[3] = std::clamp(
           geometry.rgba[3] + static_cast<float>(offset.a) / 255.0F, 0.0F, 1.0F);
     }
@@ -411,9 +414,34 @@ projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
     return result;
   }
 
-  auto stretched = stretchSkinDestinationAuthored(destination, source);
+  auto resolved = destination;
+  Affine2D destinationToUi = viewport.authoredToUi;
+  if (destination.useDestinationResolution) {
+    const double scaleX = viewport.destinationScaleX;
+    const double scaleY = viewport.destinationScaleY;
+    if (!std::isfinite(scaleX) || !std::isfinite(scaleY) ||
+        scaleX <= 0.0 || scaleY <= 0.0) {
+      return result;
+    }
+    // Skin.setDestination scales into its destination resolution before
+    // SkinObject.draw stretches and rotates. The remaining affine contains
+    // only the selected canvas placement, Y inversion, and custom transform.
+    resolved.rect.x *= scaleX;
+    resolved.rect.y *= scaleY;
+    resolved.rect.width *= scaleX;
+    resolved.rect.height *= scaleY;
+    destinationToUi.m00 /= scaleX;
+    destinationToUi.m10 /= scaleX;
+    destinationToUi.m01 /= scaleY;
+    destinationToUi.m11 /= scaleY;
+  }
+  auto stretched = stretchSkinDestinationAuthored(resolved, source);
   const auto &rect = stretched.rect;
   const auto &region = stretched.region;
+  if (result.filter == SkinFilterMode::BeatorajaBilinear &&
+      rect.width == regionWidth(region) && rect.height == regionHeight(region)) {
+    result.filter = SkinFilterMode::Nearest;
+  }
   const double radians = destination.angleDegrees * std::numbers::pi / 180.0;
   const double cosine = std::cos(radians);
   const double sine = std::sin(radians);
@@ -428,7 +456,7 @@ projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
     const double x = corners[index][0] - pivotX;
     const double y = corners[index][1] - pivotY;
     const auto point =
-        apply(viewport.authoredToUi, pivotX + x * cosine - y * sine,
+        apply(destinationToUi, pivotX + x * cosine - y * sine,
               pivotY + x * sine + y * cosine);
     result.vertices[index] = point;
   }

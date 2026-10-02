@@ -151,6 +151,29 @@ void ScrollView::renderImpl(RenderContext &context) {
   renderPersistentScrollbar(context);
 }
 
+void ScrollView::onPointerEventConsumed(const SDL_Event &event) {
+  if (event.type == SDL_MOUSEBUTTONUP &&
+      event.button.button == SDL_BUTTON_LEFT &&
+      event.button.which != SDL_TOUCH_MOUSEID) {
+    mousePressedInside = false;
+    mouseDragging = false;
+    mouseCapturedByContent = false;
+    cancelMouseClick = false;
+  } else if (event.type == SDL_FINGERUP &&
+             !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+             event.tfinger.fingerId == activeTouchId) {
+    activeTouchId = -1;
+    touchPressedInside = false;
+    touchDragging = false;
+    touchCapturedByContent = false;
+    cancelTouchClick = false;
+    touchMomentum.stop();
+  }
+  // Content is owned separately from View's children. Cancel its pointer
+  // state without forwarding a release that could activate a covered control.
+  if (contentView) contentView->notifyPointerEventConsumed(event);
+}
+
 bool ScrollView::handleEventsImpl(SDL_Event &event) {
   if (contentView == nullptr) {
     return true;

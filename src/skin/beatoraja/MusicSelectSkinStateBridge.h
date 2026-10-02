@@ -41,11 +41,14 @@ struct MusicSelectPublishedSongResources {
 class MusicSelectSkinStateBridge final : public ISkinFrameState {
 public:
   explicit MusicSelectSkinStateBridge(
-      const MusicSelectSkinFrame &, MusicSelectSkinActionSink = {});
+      const MusicSelectSkinFrame &, MusicSelectSkinActionSink = {},
+      SkinSafetyPolicy = SkinSafetyPolicy{}, std::map<int, double> initialFloatValues = {});
   MusicSelectSkinStateBridge(const MusicSelectSkinFrame &,
                              std::map<int, std::int64_t> &,
                              const std::set<int> &,
-                             MusicSelectSkinActionSink = {});
+                             MusicSelectSkinActionSink = {},
+                             SkinSafetyPolicy = SkinSafetyPolicy{},
+                             std::map<int, double> initialFloatValues = {});
 
   std::uint64_t frameSerial() const noexcept override;
   SkinPropertyLookup<bool>
@@ -82,6 +85,7 @@ private:
   std::map<int, std::int64_t> *persistentCustomTimerValues_ = nullptr;
   const std::set<int> *activeCustomTimerIds_ = nullptr;
   MusicSelectSkinActionSink actionSink_;
+  SkinSafetyPolicy safetyPolicy_;
   std::map<int, double> floatOverrides_;
   std::optional<MusicSelectPublishedSongResources> publishedSongResources_;
 };

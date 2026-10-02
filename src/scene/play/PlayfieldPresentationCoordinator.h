@@ -72,6 +72,7 @@ public:
   touchHitRegions() const override;
   [[nodiscard]] PresentationUiHit
       hitTestUiControl(UiLogicalPoint) const override;
+  void setPointerPosition(UiLogicalPoint) noexcept override;
   PresentationTouchResult
   beginPresentationTouch(const PresentationTouchEvent &) override;
   PresentationTouchResult
@@ -156,6 +157,7 @@ private:
   PlayfieldPresentationConfig configuration_;
   std::vector<ReplayGhostEvent> replayGhostEvents_;
   std::optional<PendingFrame> pending_;
+  std::optional<UiLogicalPoint> pointerUiPosition_;
   std::optional<PresentationFailure> lastFailure_;
   long long lastEventMicros_ = 0;
   std::uint64_t lastFrameSerial_ = 0;

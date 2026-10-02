@@ -9,6 +9,7 @@
 #include "FileChecksum.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
+#include "skin/beatoraja/LuaJValueCoercion.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -80,7 +81,7 @@ public:
 
 class RuntimeHarness final {
 public:
-  RuntimeHarness()
+  explicit RuntimeHarness(std::string_view expression = "nil")
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
@@ -99,13 +100,22 @@ public:
               "return 0 end\n"
               "local ordered_rate=function() if callback_order~=2 then "
               "error('rate before timer') end return 0.5 end\n"
+              "local text_observed=false\n"
+              "local text_hidden=function() text_observed=false return false end\n"
+              "local text_value=function() text_observed=true return 'A' end\n"
+              "local text_seen=function() return text_observed end\n"
               "return {type=0,w=1280,h=720,name='command-test',"
               "host_fail_callback=fail,host_number_callback=number,"
               "host_fractional_number_callback=fractional_number,"
               "host_false_callback=hidden,"
               "host_forbidden_timer_callback=forbidden_timer,"
               "host_ordered_timer_callback=ordered_timer,"
-              "host_ordered_rate_callback=ordered_rate}");
+              "host_ordered_rate_callback=ordered_rate,"
+              "host_text_hidden_callback=text_hidden,"
+              "host_text_value_callback=text_value,"
+              "host_text_seen_callback=text_seen,"
+              "host_parity_callback=function() return " +
+                  std::string(expression) + " end}");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
     auto snapshot = snapshotter.snapshot(source, package_, {}, {});
     expect(snapshot.prepared.has_value(), "runtime fixture snapshots");
@@ -131,6 +141,7 @@ public:
     auto header = runtime_->loadHeader();
     expect(header.value.has_value(), "runtime header executes");
     if (header.value) {
+      parityCallback_ = header.value->callbackNamed("host_parity_callback");
       failCallback_ = header.value->callbackNamed("host_fail_callback");
       expect(failCallback_.has_value(), "runtime failure callback is retained");
       numberCallback_ = header.value->callbackNamed("host_number_callback");
@@ -143,6 +154,9 @@ public:
           header.value->callbackNamed("host_ordered_timer_callback");
       orderedRateCallback_ =
           header.value->callbackNamed("host_ordered_rate_callback");
+      textHiddenCallback_ = header.value->callbackNamed("host_text_hidden_callback");
+      textValueCallback_ = header.value->callbackNamed("host_text_value_callback");
+      textSeenCallback_ = header.value->callbackNamed("host_text_seen_callback");
       expect(numberCallback_ && fractionalNumberCallback_ && falseCallback_ &&
                  forbiddenTimerCallback_ && orderedTimerCallback_ &&
                  orderedRateCallback_,
@@ -156,6 +170,7 @@ public:
   }
 
   LuaSkinRuntime &runtime() { return *runtime_; }
+  LuaCallbackId parityCallback() const { return *parityCallback_; }
   LuaCallbackId failCallback() const { return *failCallback_; }
   LuaCallbackId numberCallback() const { return *numberCallback_; }
   LuaCallbackId fractionalNumberCallback() const {
@@ -167,6 +182,9 @@ public:
   }
   LuaCallbackId orderedTimerCallback() const { return *orderedTimerCallback_; }
   LuaCallbackId orderedRateCallback() const { return *orderedRateCallback_; }
+  LuaCallbackId textHiddenCallback() const { return *textHiddenCallback_; }
+  LuaCallbackId textValueCallback() const { return *textValueCallback_; }
+  LuaCallbackId textSeenCallback() const { return *textSeenCallback_; }
 
 private:
   TempDirectory temp_;
@@ -176,6 +194,7 @@ private:
   AcceptFiles aliases_;
   std::optional<PreparedSkinRevision> prepared_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
+  std::optional<LuaCallbackId> parityCallback_;
   std::optional<LuaCallbackId> failCallback_;
   std::optional<LuaCallbackId> numberCallback_;
   std::optional<LuaCallbackId> fractionalNumberCallback_;
@@ -183,6 +202,9 @@ private:
   std::optional<LuaCallbackId> forbiddenTimerCallback_;
   std::optional<LuaCallbackId> orderedTimerCallback_;
   std::optional<LuaCallbackId> orderedRateCallback_;
+  std::optional<LuaCallbackId> textHiddenCallback_;
+  std::optional<LuaCallbackId> textValueCallback_;
+  std::optional<LuaCallbackId> textSeenCallback_;
 };
 
 class FakeResources final : public SkinPreparedResourceView {
@@ -507,7 +529,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          const PlaySkinViewport *requestedViewport = nullptr,
          const SkinPreparedMovieView *movies = nullptr,
          const MusicSelectSongListFrame *musicSelectSongList = nullptr,
-         skin::SkinSafetyPolicy safetyPolicy = skin::SkinSafetyPolicy()) {
+         skin::SkinSafetyPolicy safetyPolicy = skin::SkinSafetyPolicy(),
+         std::optional<UiLogicalPoint> pointerUiPosition = {}) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto defaultViewport = viewport();
@@ -527,7 +550,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .markProcessedNotes = markProcessedNotes,
                                  .safetyPolicy = safetyPolicy,
                                  .gaugeRandomSource = gaugeRandomSource,
-                                 .musicSelectSongList = musicSelectSongList});
+                                 .musicSelectSongList = musicSelectSongList,
+                                 .pointerUiPosition = pointerUiPosition});
 }
 
 void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
@@ -1157,6 +1181,40 @@ void testOffsetSentinelAndSourceAwarePrecedence() {
     expect(quad.vertices.front().x == 30.0F,
            "configured offset has explicit precedence over dynamic fallback");
   }
+}
+
+void testDuplicateOffsetsApplyOnceWithoutDroppingUniqueOffsets() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.offsets.emplace(7, SkinPropertyLookup<SkinRuntimeOffset>{
+                               .value = {.x = 10}, .supported = true});
+  state.offsets.emplace(9, SkinPropertyLookup<SkinRuntimeOffset>{
+                               .value = {.x = 20}, .supported = true});
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {imageObject(1, 1, true)};
+  auto presented = destination(1, 10, 100.0);
+  presented.presentation.offsetIds = {0, 7, 7, -9, 200};
+  model.model.destinations = {std::move(presented)};
+  const auto checkX = [&](const SkinFrameEvaluationResult &result, float x) {
+    expect(result.submitReady && result.submitReady->commands.size() == 1,
+           "duplicate offsets keep a valid destination renderable");
+    if (result.submitReady && result.submitReady->commands.size() == 1) {
+      const auto &quad = std::get<SkinTexturedQuadCommand>(
+          result.submitReady->commands.front().payload);
+      expect(quad.vertices.front().x == x,
+             "each valid offset ID contributes to geometry exactly once");
+    }
+  };
+  checkX(evaluate(renderer, runtime, model, resources, state, 1), 110.0F);
+  model.model.destinations.front().presentation.offsetIds = {7, 9, 7, 9};
+  checkX(evaluate(renderer, runtime, model, resources, state, 2), 130.0F);
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById.emplace(7, ConfigOffset{.x = 30});
+  checkX(evaluate(renderer, runtime, model, resources, state, 3, 0,
+                  &configuration), 150.0F);
 }
 
 void testCriticalLuaCallbackFailureIsAlsoAtomic() {
@@ -1808,6 +1866,17 @@ void testFalseDestinationSkipsNumericSourceTimerAfterValueLookup() {
          "false destination resolves numeric value but never its source timer");
 }
 
+void testLuaNumericStringsMatchPinnedParser() {
+  const std::pair<std::string_view, int> cases[] = {
+      {"12oops", 0}, {"\t12\t", 0}, {" 12 ", 12}, {"12.5", 12},
+      {"0x-12", -18}, {"-0x12", 0}, {"+0x12", 0}, {"0x1p2", 0},
+      {"1e2", 100}, {"1e2x", 0}, {"4294967297", 1}};
+  for (const auto &[text, expected] : cases) {
+    expect(luaJToInt(LuaScalar{std::string(text)}) == expected,
+           "numeric callback strings use pinned LuaJ grammar and narrowing");
+  }
+}
+
 void testLuaFractionalNumberUsesPinnedIntegerCoercion() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -2325,6 +2394,79 @@ void testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent() {
          "missing glyph before malformed bytes retains scalar diagnostic precedence");
 }
 
+void testLuaFloatFormattingAcrossArithmeticBoundaries() {
+  // Float.toString(Float.intBitsToFloat(bits)), Java 8: subnormal/normal,
+  // 32-/64-bit arithmetic boundaries, exact powers of two, and maximum float.
+  const std::pair<std::uint32_t, std::string_view> cases[] = {
+      {0x00000001U, "1.4E-45"},
+      {0x00000002U, "2.8E-45"},
+      {0x007fffffU, "1.1754942E-38"},
+      {0x00800000U, "1.17549435E-38"},
+      {0x00800001U, "1.1754945E-38"},
+      {0x2f7fffffU, "2.3283063E-10"},
+      {0x2f800000U, "2.3283064E-10"},
+      {0x2f800001U, "2.3283067E-10"},
+      {0x3dcccccdU, "0.1"},
+      {0x4c000001U, "3.3554436E7"},
+      {0x5e800000U, "4.611686E18"},
+      {0x5f000000U, "9.223372E18"},
+      {0x68ffffffU, "9.671406E24"},
+      {0x69000000U, "9.6714065E24"},
+      {0x69000001U, "9.671408E24"},
+      {0x7f7fffffU, "3.4028235E38"},
+  };
+  for (const auto &[bits, expected] : cases) {
+    expect(luaJFloatString(std::bit_cast<float>(bits)) == expected,
+           "portable float arithmetic preserves pinned Java boundary rounding");
+    expect(luaJFloatString(std::bit_cast<float>(bits | 0x80000000U)) ==
+               "-" + std::string(expected),
+           "portable float arithmetic preserves negative boundary rounding");
+  }
+}
+
+void testLuaNumericTextUsesPinnedFormatting() {
+  const std::pair<std::string_view, std::string_view> cases[] = {
+      {"1.5", "1.5"}, {"1.23456789", "1.2345679"},
+      {"0.0001", "1.0E-4"}, {"0.001", "0.001"},
+      {"9999999.5", "1.0E7"}, {"1e20", "1.0E20"},
+      {"-0.0", "0"}, {"0/0", "nan"}, {"1/0", "inf"},
+      {"-1/0", "-inf"}, {"1.401298464324817e-45", "1.4E-45"},
+      {"1.1754943508222875e-38", "1.17549435E-38"},
+      {"1e-50", "0.0"}, {"1e40", "Infinity"},
+      {"2^83", "9.6714065E24"},
+      {"9223372036854775808.0", "9223372036854775807"}};
+  for (const auto &[expression, expected] : cases) {
+    RuntimeHarness runtime(expression);
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addTextAtlas(1, practiceAsciiAtlas());
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    model.model.stringProperties.push_back(
+        {.id = SkinStringPropertyId{1}, .source = runtime.parityCallback(),
+         .authoredOrdinal = 1});
+    model.model.objects.push_back(textObject(1, true, SkinStringPropertyId{1}));
+    auto presented = destination(1, 10, 100.0);
+    presented.presentation.frames.front().width = 300.0;
+    presented.presentation.frames.front().height = 20.0;
+    model.model.destinations.push_back(std::move(presented));
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    const std::string actual = result.submitReady &&
+                                     result.submitReady->commands.size() == 1
+                                 ? glyphRunText(result.submitReady->commands[0])
+                                 : "<no text>";
+    expect(actual == expected,
+           "numeric text callbacks preserve pinned LuaJ visible formatting");
+    if (actual != expected) {
+      std::cerr << expression << ": expected " << expected
+                << ", got " << actual << '\n';
+    }
+  }
+}
+
 void testTextUsesPreparedMetricsKerningAndAtlasUvs() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -2669,6 +2811,560 @@ void testFalseDestinationSkipsTextValueCallback() {
   expect(result.submitReady && result.submitReady->commands.empty() &&
              result.diagnostics.empty(),
          "false text destination does not invoke its value callback");
+}
+
+void testCompatibilityHiddenTextStillUpdatesFollowingImage() {
+  for (int hiddenBy = 0; hiddenBy < 6; ++hiddenBy) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(2, {.x = 0, .y = 0, .w = 10, .h = 10});
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    model.model.stringProperties.push_back(
+        {.id = SkinStringPropertyId{1}, .source = runtime.textValueCallback()});
+    model.model.booleanProperties = {
+        {.id = SkinBooleanPropertyId{1}, .source = runtime.textHiddenCallback()},
+        {.id = SkinBooleanPropertyId{2}, .source = runtime.textSeenCallback()}};
+    model.model.timerProperties.push_back(
+        {.id = SkinTimerPropertyId{1}, .source = SkinBuiltinPropertySelector{1}});
+    model.model.objects = {textObject(1, true, SkinStringPropertyId{1}),
+                           imageObject(2, 2, true)};
+    auto hidden = destination(1, 10, 10.0);
+    if (hiddenBy == 0) {
+      hidden.presentation.drawCondition = SkinBooleanPropertyId{1};
+    } else if (hiddenBy == 1) {
+      hidden.presentation.timer = SkinTimerPropertyId{1};
+    } else if (hiddenBy == 2) {
+      hidden.presentation.frames.front().timeMillis = 100;
+    } else if (hiddenBy == 3) {
+      hidden.presentation.conditions = {999};
+    } else if (hiddenBy == 4) {
+      hidden.presentation.frames.clear();
+    } else {
+      hidden.presentation.mouseRect = {.x = 0, .y = 0, .width = 10, .height = 10};
+    }
+    auto following = destination(2, 20, 60.0);
+    following.presentation.drawCondition = SkinBooleanPropertyId{2};
+    model.model.destinations = {std::move(hidden), std::move(following)};
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    if (hiddenBy < 3 || hiddenBy == 5) {
+      expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+                 result.submitReady->commands.front().sourceObject == 2 &&
+                 result.diagnostics.empty(),
+             "runtime-hidden text resolves its value before the following "
+             "image, without requiring a text atlas or emitting text");
+    } else {
+      expect(result.submitReady && result.submitReady->commands.empty(),
+             "configured-option and empty-destination pruning skip text values");
+    }
+    if (hiddenBy == 0) {
+      model.model.stringProperties.front().source = runtime.failCallback();
+      model.model.destinations.back().presentation.drawCondition.reset();
+      const auto failedValue = evaluate(
+          renderer, runtime, model, resources, state, 2, 0, nullptr,
+          std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+          SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+      expect(failedValue.submitReady &&
+                 failedValue.submitReady->commands.size() == 1 &&
+                 failedValue.submitReady->commands.front().sourceObject == 2 &&
+                 failedValue.diagnostics.empty(),
+             "a hidden text callback error keeps compatibility's empty-string "
+             "fallback and does not abort the following image");
+    }
+  }
+}
+
+void testMusicSelectHiddenTextStillUpdatesFollowingImage() {
+  for (const bool timerHidden : {false, true}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(3, {.x = 0, .y = 0, .w = 10, .h = 10});
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    model.model.header.type = 5;
+    model.model.stringProperties.push_back(
+        {.id = SkinStringPropertyId{1}, .source = runtime.textValueCallback()});
+    model.model.booleanProperties = {
+        {.id = SkinBooleanPropertyId{1}, .source = runtime.textHiddenCallback()},
+        {.id = SkinBooleanPropertyId{2}, .source = runtime.textSeenCallback()}};
+    model.model.timerProperties.push_back(
+        {.id = SkinTimerPropertyId{1}, .source = SkinBuiltinPropertySelector{1}});
+    SkinSongListPresentation child{
+        .object = 2, .destination = destination(2, 1, 10.0).presentation};
+    if (timerHidden) {
+      child.destination.timer = SkinTimerPropertyId{1};
+    } else {
+      child.destination.drawCondition = SkinBooleanPropertyId{1};
+    }
+    SkinSongListObject songList{.text = {child}};
+    model.model.objects = {
+        {.id = 1, .authoredName = "song-list", .payload = std::move(songList),
+         .authoredOrdinal = 1, .critical = true},
+        textObject(2, true, SkinStringPropertyId{1}), imageObject(3, 3, true)};
+    auto wrapper = destination(1, 10, 0.0);
+    wrapper.presentation.frames.clear();
+    auto following = destination(3, 20, 60.0);
+    following.presentation.drawCondition = SkinBooleanPropertyId{2};
+    model.model.destinations = {std::move(wrapper), std::move(following)};
+    MusicSelectSongListFrame frame;
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, &frame,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+               result.submitReady->commands.front().sourceObject == 3 &&
+               result.diagnostics.empty(),
+           "runtime-hidden song-list text resolves its value before following "
+           "objects without requiring a font atlas");
+  }
+}
+
+void testMusicSelectHiddenImageStillUpdatesSourceTimer() {
+  for (const bool timerHidden : {false, true}) {
+    RuntimeHarness runtime("(function() text_observed=true return 0 end)()");
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(3, {.x = 0, .y = 0, .w = 10, .h = 10});
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    model.model.header.type = 5;
+    model.model.booleanProperties = {
+        {.id = SkinBooleanPropertyId{1}, .source = runtime.textHiddenCallback()},
+        {.id = SkinBooleanPropertyId{2}, .source = runtime.textSeenCallback()}};
+    model.model.timerProperties = {
+        {.id = SkinTimerPropertyId{1}, .source = runtime.parityCallback()},
+        {.id = SkinTimerPropertyId{2}, .source = SkinBuiltinPropertySelector{1}}};
+    auto image = imageObject(2, 2, true);
+    auto &sprite = std::get<SkinImageObject>(image.payload).orderedStates.front();
+    sprite.timer = SkinTimerPropertyId{1};
+    sprite.cycleMillis = 100;
+    SkinSongListPresentation child{
+        .object = 2, .destination = destination(2, 1, 10.0).presentation};
+    if (timerHidden) {
+      child.destination.timer = SkinTimerPropertyId{2};
+    } else {
+      child.destination.drawCondition = SkinBooleanPropertyId{1};
+    }
+    SkinSongListObject songList{.label = {child}};
+    model.model.objects = {
+        {.id = 1, .authoredName = "song-list", .payload = std::move(songList),
+         .authoredOrdinal = 1, .critical = true},
+        std::move(image), imageObject(3, 3, true)};
+    auto wrapper = destination(1, 10, 0.0);
+    wrapper.presentation.frames.clear();
+    auto following = destination(3, 20, 60.0);
+    following.presentation.drawCondition = SkinBooleanPropertyId{2};
+    model.model.destinations = {std::move(wrapper), std::move(following)};
+    MusicSelectSongListFrame frame;
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, &frame,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+               result.submitReady->commands.front().sourceObject == 3 &&
+               result.diagnostics.empty(),
+           "runtime-hidden song-list image evaluates its animated source timer "
+           "before following objects without loading its texture");
+  }
+}
+
+void testMusicSelectNullNumberSkipsDestinationCallback() {
+  RuntimeHarness runtime("(function() text_observed=true return true end)()");
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(3, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 5;
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1}, .source = runtime.textSeenCallback()},
+      {.id = SkinBooleanPropertyId{2}, .source = runtime.parityCallback()}};
+  SkinNumberObject number;
+  number.digits.positive = glyphSprite(2, glyphRegions(10));
+  number.digits.glyphsPerAnimationFrame = 10;
+  number.digitCount = 2;
+  SkinSongListPresentation child{
+      .object = 2, .destination = destination(2, 1, 10.0).presentation};
+  child.destination.drawCondition = SkinBooleanPropertyId{2};
+  SkinSongListObject songList{.level = {child}};
+  model.model.objects = {
+      {.id = 1, .authoredName = "song-list", .payload = std::move(songList),
+       .authoredOrdinal = 1, .critical = true},
+      {.id = 2, .authoredName = "null-level", .payload = std::move(number),
+       .authoredOrdinal = 2, .critical = true},
+      imageObject(3, 3, true)};
+  auto wrapper = destination(1, 10, 0.0);
+  wrapper.presentation.frames.clear();
+  auto following = destination(3, 20, 60.0);
+  following.presentation.drawCondition = SkinBooleanPropertyId{1};
+  model.model.destinations = {std::move(wrapper), std::move(following)};
+  MusicSelectSongListFrame frame;
+  const auto result = evaluate(
+      renderer, runtime, model, resources, state, 1, 0, nullptr,
+      std::nullopt, nullptr, 1, false, nullptr, nullptr, &frame,
+      SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty(),
+         "a null nested number property suppresses its destination callback "
+         "before following objects prepare");
+}
+
+void testMouseRectUsesAuthoredOriginAndViewportBeforeRotationAndStretch() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {imageObject(1, 1, true)};
+  auto image = destination(1, 10, 10.0);
+  image.presentation.mouseRect = {.x = 0, .y = 0, .width = 10, .height = 10};
+  image.presentation.stretch = SkinStretchMode::NoResize;
+  image.presentation.frames.front().angleDegrees = 90;
+  image.presentation.offsetIds = {10};
+  state.offsets[10] = {.value = {.x = 100, .y = 50, .w = 20, .h = 10},
+                       .supported = true};
+  model.model.destinations = {image};
+  const auto playViewport = evaluatePlaySkinViewport(
+      {.width = 1280.0, .height = 720.0},
+      {.x = 100.0, .y = 200.0, .width = 640.0, .height = 360.0}, {});
+  const auto uiPoint = [&](double x, double y) {
+    const auto &m = playViewport.authoredToUi;
+    return UiLogicalPoint{.x = static_cast<float>(m.m00*x + m.m01*y + m.tx),
+                          .y = static_cast<float>(m.m10*x + m.m11*y + m.ty)};
+  };
+  const std::optional<UiLogicalPoint> points[] = {
+      {}, uiPoint(100, 65), uiPoint(110, 75), uiPoint(111, 75), uiPoint(110, 64)};
+  for (std::size_t index = 0; index < std::size(points); ++index) {
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, index + 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, &playViewport, nullptr, nullptr,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility}, points[index]);
+    const bool visible = index == 1 || index == 2;
+    expect(result.submitReady && result.submitReady->commands.size() == (visible ? 1U : 0U),
+           "mouseRect includes its authored edges after runtime offsets and "
+           "inverse viewport projection, independent of rotation/stretch");
+  }
+}
+
+void testMusicSelectLevelMouseRectUsesItsRowPrepareOffset() {
+  for (const bool inside : {false, true}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(2, {.x = 0, .y = 0, .w = 10, .h = 10});
+    resources.addImageAtlas(3, glyphRegions(10), 100, 20);
+    FakeState state;
+    SkinNumberObject number;
+    number.digits.positive = glyphSprite(3, glyphRegions(10));
+    number.digits.glyphsPerAnimationFrame = 10;
+    number.digitCount = 1;
+    auto level = destination(3, 2, 5.0).presentation;
+    level.mouseRect = {.x = 0, .y = 0, .width = 10, .height = 10};
+    SkinSongListObject songList{
+        .center = 0,
+        .listOn = {{.object = 2, .destination = destination(2, 1, 100.0).presentation}},
+        .level = {{.object = 3, .destination = level}}};
+    ValidatedBeatorajaSkinModel model;
+    model.model.header.type = 5;
+    model.model.objects = {
+        {.id = 1, .authoredName = "song-list", .payload = std::move(songList),
+         .authoredOrdinal = 1, .critical = true}, imageObject(2, 2, true),
+        {.id = 3, .authoredName = "level", .payload = std::move(number),
+         .authoredOrdinal = 3, .critical = true}};
+    auto wrapper = destination(1, 10, 0.0);
+    wrapper.presentation.frames.clear();
+    model.model.destinations = {wrapper};
+    MusicSelectSongListFrame frame;
+    frame.bars = {{.kind = MusicSelectBarKind::Song, .exists = true, .level = 7}};
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, &frame,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility},
+        UiLogicalPoint{.x = inside ? 110.0F : 10.0F, .y = 675.0F});
+    bool levelDrawn = false;
+    if (result.submitReady) {
+      levelDrawn = std::ranges::any_of(result.submitReady->commands,
+          [](const auto &command) { return command.sourceObject == 3; });
+    }
+    expect(result.submitReady && levelDrawn == inside,
+           "nested song level tests mouseRect after adding the prepared row origin");
+  }
+}
+
+void testCompatibilityImageUsesBeatorajaBilinearFilter() {
+  for (const bool compatibility : {false, true}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    model.model.objects = {imageObject(1, 1, true)};
+    auto image = destination(1, 10, 10.0);
+    image.presentation.filter = SkinFilterMode::Linear;
+    model.model.destinations = {image};
+    for (const bool unity : {false, true}) {
+      if (unity) {
+        auto &frame = model.model.destinations.front().presentation.frames.front();
+        frame.width = 10.0;
+        frame.height = 10.0;
+      }
+      const auto result = evaluate(
+          renderer, runtime, model, resources, state, unity ? 2 : 1, 0,
+          nullptr, std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+          SkinSafetyPolicy{compatibility ? SkinSafetyLevel::BeatorajaCompatibility
+                                         : SkinSafetyLevel::Standard});
+      const auto *quad = result.submitReady && !result.submitReady->commands.empty()
+          ? std::get_if<SkinTexturedQuadCommand>(&result.submitReady->commands.front().payload)
+          : nullptr;
+      const auto expected = compatibility
+          ? (unity ? SkinFilterMode::Nearest : SkinFilterMode::BeatorajaBilinear)
+          : SkinFilterMode::Linear;
+      expect(quad && quad->state.filter == expected,
+             "compatibility scaled filter uses Beatoraja bilinear and unity "
+             "uses nearest, while Standard retains linear");
+    }
+  }
+}
+
+void testCompatibilityFontsSelectTheirOwnSamplingPaths() {
+  for (int kind = 0; kind < 6; ++kind) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    auto atlas = kind == 0 ? avAtlas()
+                 : kind == 1 ? bitmapAtlas(0)
+                 : kind == 2 ? bitmapAtlas(1) : lr2ImageAtlas();
+    if (kind == 2) atlas.glyphs.at(U'A').bitmapFontType = 0;
+    if (kind >= 3) atlas.glyphs.at(U'A').region.h = 10;
+    resources.addTextAtlas(1, atlas);
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    auto text = textObject(1, true);
+    std::get<SkinTextObject>(text.payload).literal = "A";
+    model.model.objects = {std::move(text)};
+    auto presented = destination(1, 10, 10.0);
+    presented.presentation.frames.front().width = 100;
+    presented.presentation.frames.front().height = kind == 5 ? 20 : 10;
+    presented.presentation.filter = (kind == 1 || kind == 2 || kind == 3)
+        ? SkinFilterMode::Nearest : SkinFilterMode::Linear;
+    model.model.destinations = {presented};
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    const auto *run = result.submitReady && result.submitReady->commands.size() == 1
+        ? std::get_if<SkinGlyphRunCommand>(&result.submitReady->commands.front().payload)
+        : nullptr;
+    const auto expected = kind == 0 || kind == 2 ? SkinFilterMode::Linear
+        : kind == 1 || kind == 5 ? SkinFilterMode::BeatorajaBilinear
+                                : SkinFilterMode::Nearest;
+    expect(run && run->state.filter == expected &&
+               (kind != 2 || (run->state.distanceField.has_value() &&
+                             !run->fallbackColorOverlays.empty() &&
+                             run->fallbackColorFilter == SkinFilterMode::BeatorajaBilinear)),
+           "scalable, bitmap, distance-field and LR2 fonts preserve their "
+           "distinct compatibility sampling paths");
+  }
+}
+
+void testLr2ImageFontSplitsMixedGlyphFiltersWithoutReordering() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  auto atlas = lr2ImageAtlas();
+  atlas.glyphs.at(U'A').region.h = 10;
+  resources.addTextAtlas(1, atlas);
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(1, true);
+  std::get<SkinTextObject>(text.payload).literal = "ABA";
+  model.model.objects = {std::move(text)};
+  auto presented = destination(1, 10, 10.0);
+  presented.presentation.frames.front().width = 100;
+  presented.presentation.frames.front().height = 10;
+  presented.presentation.filter = SkinFilterMode::Linear;
+  presented.presentation.blend = SkinBlendMode::Additive;
+  model.model.destinations = {presented};
+  const auto result = evaluate(
+      renderer, runtime, model, resources, state, 1, 0, nullptr,
+      std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+      SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+  expect(result.submitReady && result.submitReady->commands.size() == 3,
+         "LR2 mixed intrinsic glyph heights split adjacent sampling runs");
+  if (!result.submitReady || result.submitReady->commands.size() != 3) return;
+  for (std::size_t index = 0; index < 3; ++index) {
+    const auto *run = std::get_if<SkinGlyphRunCommand>(&result.submitReady->commands[index].payload);
+    expect(run && run->glyphs.size() == 1 &&
+               run->glyphs.front().codepoint == (index == 1 ? U'B' : U'A') &&
+               run->state.filter == (index == 1 ? SkinFilterMode::BeatorajaBilinear
+                                                : SkinFilterMode::Nearest) &&
+               run->state.blend == SkinBlendMode::Additive,
+           "LR2 split commands keep authored glyph order, exact filtering and blend");
+  }
+}
+
+void testFontTextUsesRetainedBlendAcrossObjectsAndFrames() {
+  for (const int fontKind : {0, 1, 2}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+    resources.addTextAtlas(2, fontKind == 0 ? avAtlas()
+                              : fontKind == 1 ? bitmapAtlas(0)
+                                              : lr2ImageAtlas());
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    auto text = textObject(2, true);
+    std::get<SkinTextObject>(text.payload).literal = "A";
+    model.model.objects = {imageObject(1, 1, true), std::move(text)};
+    auto image = destination(1, 10, 10.0);
+    image.presentation.blend = SkinBlendMode::Additive;
+    image.presentation.loop = 0;
+    auto presentedText = destination(2, 20, 60.0);
+    presentedText.presentation.blend = SkinBlendMode::Multiply;
+    presentedText.presentation.loop = 0;
+    model.model.destinations = {image, presentedText};
+    const auto runFrame = [&](std::uint64_t frame, std::uint64_t session = 1) {
+      return evaluate(renderer, runtime, model, resources, state, frame, 0,
+                      nullptr, std::nullopt, nullptr, session, false, nullptr,
+                      nullptr, nullptr,
+                      SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    };
+    const auto expectTextBlend = [&](const SkinFrameEvaluationResult &result,
+                                     SkinBlendMode blend,
+                                     std::string_view message) {
+      const SkinGlyphRunCommand *run = nullptr;
+      if (result.submitReady) {
+        for (const auto &command : result.submitReady->commands) {
+          if (command.sourceObject == 2) {
+            run = std::get_if<SkinGlyphRunCommand>(&command.payload);
+          }
+        }
+      }
+      expect(run && run->state.blend == blend, message);
+    };
+    const auto expected = fontKind == 2 ? SkinBlendMode::Multiply
+                                         : SkinBlendMode::Additive;
+    expectTextBlend(runFrame(1), expected,
+                    "font text inherits additive image blend; LR2 image text "
+                    "sets its authored blend");
+    model.model.destinations.erase(model.model.destinations.begin());
+    expectTextBlend(runFrame(2), expected,
+                    "font text retains the last drawn blend across frames");
+    expectTextBlend(runFrame(3, 2),
+                    fontKind == 2 ? SkinBlendMode::Multiply
+                                  : SkinBlendMode::Normal,
+                    "a new skin session starts font text with normal blend");
+    if (fontKind != 2) {
+      model.model.objects.push_back(imageObject(3, 999, true));
+      model.model.destinations = {image, destination(3, 15, 20.0), presentedText};
+      const auto rejected = runFrame(4, 2);
+      expect(!rejected.submitReady,
+             "a missing critical image rejects the whole blend candidate");
+      model.model.destinations = {presentedText};
+      expectTextBlend(runFrame(5, 2), SkinBlendMode::Normal,
+                      "a rejected evaluation cannot advance retained blend");
+
+      auto invisible = image;
+      invisible.presentation.frames.front().rgba[3] = 0;
+      model.model.destinations = {invisible, presentedText};
+      expectTextBlend(runFrame(6, 2), SkinBlendMode::Normal,
+                      "a zero-alpha ordinary image does not set retained blend");
+      invisible = image;
+      invisible.presentation.frames.front().clip =
+          SkinSourceRect{.x = 2000, .y = 2000, .w = 10, .h = 10};
+      model.model.destinations = {invisible, presentedText};
+      expectTextBlend(runFrame(7, 2), SkinBlendMode::Normal,
+                      "an image rejected by its outer clip does not set blend");
+      model.model.destinations = {image, presentedText};
+      expectTextBlend(runFrame(8, 2), SkinBlendMode::Additive,
+                      "an actual image draw still updates retained blend");
+      auto replacement = model;
+      replacement.model.destinations = {presentedText};
+      expectTextBlend(evaluate(
+                          renderer, runtime, replacement, resources, state, 9, 0,
+                          nullptr, std::nullopt, nullptr, 2, false, nullptr,
+                          nullptr, nullptr,
+                          SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility}),
+                      SkinBlendMode::Normal,
+                      "replacement skin models do not inherit renderer blend");
+    }
+  }
+}
+
+void testTransparentMusicSelectLevelDoesNotChangeRetainedFontBlend() {
+  for (const bool bitmap : {false, true}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(2, {.x = 0, .y = 0, .w = 10, .h = 10});
+    resources.addImageAtlas(3, glyphRegions(10), 100, 20);
+    resources.addTextAtlas(4, bitmap ? bitmapAtlas(0) : avAtlas());
+    FakeState state;
+    SkinNumberObject number;
+    number.digits.positive = glyphSprite(3, glyphRegions(10));
+    number.digits.glyphsPerAnimationFrame = 10;
+    number.digitCount = 1;
+    auto level = destination(3, 2, 5.0).presentation;
+    level.blend = SkinBlendMode::Additive;
+    level.frames.front().rgba[3] = 0;
+    SkinSongListObject songList{
+        .center = 0,
+        .listOn = {{.object = 2,
+                    .destination = destination(2, 1, 100.0).presentation}},
+        .level = {{.object = 3, .destination = std::move(level)}}};
+    auto text = textObject(4, true);
+    std::get<SkinTextObject>(text.payload).literal = "A";
+    ValidatedBeatorajaSkinModel model;
+    model.model.header.type = 5;
+    model.model.objects = {
+        {.id = 1, .authoredName = "song-list", .payload = std::move(songList),
+         .authoredOrdinal = 1, .critical = true},
+        imageObject(2, 2, true),
+        {.id = 3, .authoredName = "transparent-level", .payload = std::move(number),
+         .authoredOrdinal = 3, .critical = true},
+        std::move(text)};
+    auto wrapper = destination(1, 10, 0.0);
+    wrapper.presentation.frames.clear();
+    model.model.destinations = {std::move(wrapper), destination(4, 20, 60.0)};
+    MusicSelectSongListFrame frame;
+    frame.bars = {{.kind = MusicSelectBarKind::Song, .exists = true, .level = 7}};
+    const auto runFrame = [&](std::uint64_t serial) {
+      return evaluate(
+          renderer, runtime, model, resources, state, serial, 0, nullptr,
+          std::nullopt, nullptr, 1, false, nullptr, nullptr, &frame,
+          SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    };
+    const auto expectNormalFontBlend = [&](const SkinFrameEvaluationResult &result,
+                                           std::string_view message) {
+      const SkinGlyphRunCommand *run = nullptr;
+      if (result.submitReady) {
+        for (const auto &command : result.submitReady->commands) {
+          if (command.sourceObject == 4) {
+            run = std::get_if<SkinGlyphRunCommand>(&command.payload);
+          }
+        }
+      }
+      expect(run && run->state.blend == SkinBlendMode::Normal, message);
+    };
+    const auto first = runFrame(1);
+    expect(first.submitReady &&
+               std::ranges::none_of(first.submitReady->commands,
+                   [](const auto &command) { return command.sourceObject == 3; }),
+           "a transparent nested numeric level performs no image draw");
+    expectNormalFontBlend(first,
+        "a transparent additive level does not affect the following font blend");
+    model.model.destinations.erase(model.model.destinations.begin());
+    expectNormalFontBlend(runFrame(2),
+        "a transparent nested level cannot contaminate retained font blend next frame");
+  }
 }
 
 void testWarmedTextStillHonorsRemainingFrameGlyphBudget() {
@@ -4221,7 +4917,7 @@ void testJudgeMaxGaugeFallsBackImageAndDetailIndependently() {
   detailDestination.loop = -1;
   detailDestination.frames = {
       {.timeMillis = 0, .x = 0.0, .y = 0.0, .width = 10.0, .height = 20.0}};
-  detailDestination.offsetIds = {7};
+  detailDestination.offsetIds = {7, 7};
 
   SkinJudgeObject judge;
   judge.grades.resize(7);
@@ -4297,7 +4993,7 @@ void testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder() {
   childDestination.conditions = {SkinBooleanPropertyId{1},
                                  SkinBooleanPropertyId{2}};
   childDestination.timer = SkinTimerPropertyId{1};
-  childDestination.offsetIds = {5};
+  childDestination.offsetIds = {5, 5};
   childDestination.frames = {
       {.timeMillis = 0, .x = 100.0, .y = 200.0, .width = 40.0, .height = 20.0}};
   SkinJudgeObject judge;
@@ -4434,6 +5130,71 @@ SkinNoteObject gameplayNoteObject(FakeResources &resources,
     }
   }
   return note;
+}
+
+void testNonvisualDrawsStillSetFontBlend() {
+  for (const int kind : {0, 1, 2}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+    resources.addTextAtlas(3, avAtlas());
+    FakeState state;
+    state.gaugeResult = {.supported = true, .value = 40.0, .gaugeType = 0,
+                         .minimum = 0.0, .maximum = 100.0, .border = 20.0};
+    ValidatedBeatorajaSkinModel model;
+    SkinObjectDefinition special{.id = 2, .authoredName = "direct-draw",
+                                  .authoredOrdinal = 2, .critical = true};
+    if (kind == 1) {
+      special.payload = gaugeObject(resources, SkinGaugeAnimationType::Increase);
+    } else if (kind == 2) {
+      resources.addImage(2, {.x = 0, .y = 0, .w = 10, .h = 10});
+      SkinGraphObject graph;
+      graph.fill = singleFrameSprite(2);
+      graph.value = SkinFloatPropertyId{1};
+      special.payload = graph;
+      state.floatResult = {.value = 0.0, .supported = true};
+      model.model.floatProperties.push_back(
+          {.id = SkinFloatPropertyId{1},
+           .domain = SkinFloatPropertyDomain::Rate,
+           .source = SkinBuiltinPropertySelector{102}});
+    } else {
+      special.payload = gameplayNoteObject(resources);
+    }
+    model.model.objects = {imageObject(1, 1, true), std::move(special),
+                           textObject(3, true)};
+    model.model.booleanProperties.push_back(
+        {.id = SkinBooleanPropertyId{1}, .source = runtime.falseCallback()});
+    auto image = destination(1, 10, 10.0);
+    image.presentation.blend = SkinBlendMode::Additive;
+    auto direct = destination(2, 20, 20.0);
+    if (kind == 1) direct.presentation.frames.front().rgba[3] = 0;
+    auto text = destination(3, 30, 60.0);
+    text.presentation.blend = SkinBlendMode::Additive;
+    model.model.destinations = {image, direct, text};
+    for (const bool hidden : {false, true}) {
+      if (hidden) {
+        model.model.destinations[1].presentation.drawCondition =
+            SkinBooleanPropertyId{1};
+      }
+      const auto result = evaluate(
+          renderer, runtime, model, resources, state, hidden ? 2 : 1, 0,
+          nullptr, std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+          SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+      const SkinGlyphRunCommand *run = nullptr;
+      if (result.submitReady) {
+        for (const auto &command : result.submitReady->commands) {
+          if (command.sourceObject == 3) {
+            run = std::get_if<SkinGlyphRunCommand>(&command.payload);
+          }
+        }
+      }
+      expect(run && run->state.blend == (hidden ? SkinBlendMode::Additive
+                                               : SkinBlendMode::Normal),
+             "drawn empty lane, zero-alpha gauge and zero-rate graph set blend; hidden "
+             "ones leave preceding image blend intact");
+    }
+  }
 }
 
 void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
@@ -6858,6 +7619,7 @@ int main(int argc, char **argv) {
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();
   testCapturedFrameSerialMustMatchCallbacksAndProjection();
   testOffsetSentinelAndSourceAwarePrecedence();
+  testDuplicateOffsetsApplyOnceWithoutDroppingUniqueOffsets();
   testCriticalFailureCannotExposePartialBuffer();
   testCriticalLuaCallbackFailureIsAlsoAtomic();
   testOptionalFailureSuppressesOnlyItsObject();
@@ -6875,7 +7637,10 @@ int main(int argc, char **argv) {
   testFloatTruncatesAndUsesPositiveAlignmentShift();
   testZeroCycleNumericSpriteDoesNotConsultItsTimer();
   testFalseDestinationSkipsNumericSourceTimerAfterValueLookup();
+  testLuaNumericStringsMatchPinnedParser();
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
+  testLuaFloatFormattingAcrossArithmeticBoundaries();
+  testLuaNumericTextUsesPinnedFormatting();
   testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
   testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();
@@ -6888,6 +7653,18 @@ int main(int argc, char **argv) {
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
   testSelectorCompatibilitySkipsTransientlyMissingGlyphs();
   testFalseDestinationSkipsTextValueCallback();
+  testCompatibilityHiddenTextStillUpdatesFollowingImage();
+  testFontTextUsesRetainedBlendAcrossObjectsAndFrames();
+  testTransparentMusicSelectLevelDoesNotChangeRetainedFontBlend();
+  testCompatibilityFontsSelectTheirOwnSamplingPaths();
+  testLr2ImageFontSplitsMixedGlyphFiltersWithoutReordering();
+  testCompatibilityImageUsesBeatorajaBilinearFilter();
+  testMouseRectUsesAuthoredOriginAndViewportBeforeRotationAndStretch();
+  testMusicSelectLevelMouseRectUsesItsRowPrepareOffset();
+  testMusicSelectHiddenTextStillUpdatesFollowingImage();
+  testMusicSelectHiddenImageStillUpdatesSourceTimer();
+  testMusicSelectNullNumberSkipsDestinationCallback();
+  testNonvisualDrawsStillSetFontBlend();
   testWarmedTextStillHonorsRemainingFrameGlyphBudget();
   testTextGlyphLimitFailsBeforePublishingACommand();
   testTextAlignmentWrappingAndShrinkUsePreparedAdvances();

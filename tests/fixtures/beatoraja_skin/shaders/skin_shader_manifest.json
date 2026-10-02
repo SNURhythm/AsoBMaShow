@@ -1,23 +1,25 @@
 {
   "beatoraja_reference": {
-    "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+    "commit": "ad42f56c4658e968f93b24bf23440fe51cb9878e",
     "compatibility_notes": [
       "Blend ID 3 uses the documented source-minus-destination state; the pinned renderer restores ADD before the current sprite and is treated as an upstream state-order bug.",
-      "Nearest/linear sampling is isolated per command with clamp-to-edge instead of mutating a shared texture filter.",
-      "Glyph runs bind blend state explicitly instead of inheriting the preceding sprite state.",
+      "Nearest, hardware-linear, and alpha-preserving Beatoraja bilinear sampling are isolated per command with clamp-to-edge instead of mutating a shared texture filter.",
+      "Scalable and bitmap glyph runs inherit the last successfully submitted compatibility draw blend; image fonts use their image blend.",
       "Destination rotation and clip geometry are consumed after command lowering and are not applied a second time by the backend."
     ],
     "paths": [
       "src/bms/player/beatoraja/skin/Skin.java",
       "src/bms/player/beatoraja/skin/SkinObject.java",
-      "src/bms/player/beatoraja/skin/SkinText.java"
+      "src/bms/player/beatoraja/skin/SkinText.java",
+      "src/bms/player/beatoraja/skin/StretchType.java",
+      "src/glsl/bilinear.frag"
     ]
   },
   "format": 2,
   "outputs": {
     "shaders/dx11/fs_skin_quad.bin": {
-      "bytes": 423,
-      "sha256": "5cf679e8f27d515107a55bfbcb589866e362b72a29cdfb1ecfd7759db4d09798"
+      "bytes": 2012,
+      "sha256": "151ae3ac62d5b02bf4a8e10db43f7e3f1fabec1c80d1484739932e79e723aa0c"
     },
     "shaders/dx11/fs_skin_yuvrgb.bin": {
       "bytes": 1065,
@@ -32,8 +34,8 @@
       "sha256": "dc1c4943cf793d8271c086a7046a01bb80b362f7ee7b971652cb33f34f48c401"
     },
     "shaders/essl/fs_skin_quad.bin": {
-      "bytes": 1855,
-      "sha256": "8dfaf0b341a0736e089071c2be3904ba321ff8dc34803c6d054e10dda0c1c716"
+      "bytes": 2662,
+      "sha256": "421f549c756281a8dde2831dc12d24973b47f98df894e3d2ad4b2d7d546ad0c6"
     },
     "shaders/essl/fs_skin_yuvrgb.bin": {
       "bytes": 2099,
@@ -48,8 +50,8 @@
       "sha256": "71e87d33c05496600a124e5a5a0c7c5ff4e320a94648032c54d8582fecc43072"
     },
     "shaders/metal/fs_skin_quad.bin": {
-      "bytes": 644,
-      "sha256": "0e24a172ed9fc7d93aee6da610279d38d24d72e65583a8b75772dad5bd46951e"
+      "bytes": 2133,
+      "sha256": "812fce1438e4b122f23941dc47ef4425dd20575b19ca5d0048dd0ac8fcec2659"
     },
     "shaders/metal/fs_skin_yuvrgb.bin": {
       "bytes": 1267,
@@ -64,8 +66,8 @@
       "sha256": "cb0786a33a7ab0cfe9c7818df177e33e427f7bed24ff0ceb07ae086617d10ff6"
     },
     "shaders/spirv/fs_skin_quad.bin": {
-      "bytes": 863,
-      "sha256": "414ffd61c469689872b2cc034d37431907aa142281be144f51a350c38df78f73"
+      "bytes": 2568,
+      "sha256": "85d0dc347f69f9cbfdf9e22ddc2525feae481bda788862727fec428cef3ef9c6"
     },
     "shaders/spirv/fs_skin_yuvrgb.bin": {
       "bytes": 1701,
@@ -86,8 +88,8 @@
   ],
   "sources": {
     "shader_src/fs_skin_quad.sc": {
-      "bytes": 166,
-      "sha256": "e72e4a196b49036d8c9d6946aa1b0a9cc74b62dfb35caea60e56937ad74173ed"
+      "bytes": 1228,
+      "sha256": "150e837979f6c91b97c8360db284b6663a2391ca838e56fac1a538db22fdb06b"
     },
     "shader_src/fs_skin_yuvrgb.sc": {
       "bytes": 451,

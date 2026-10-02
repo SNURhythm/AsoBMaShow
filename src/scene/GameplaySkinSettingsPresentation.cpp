@@ -213,11 +213,26 @@ std::string formatProgressBytes(std::uint64_t bytes) {
 
 } // namespace
 
+std::vector<SkinTargetTrait> gameplaySkinSettingsTargets() {
+  std::vector<SkinTargetTrait> targets(skinTargetTraits().begin(), skinTargetTraits().end());
+  for (const auto &[keys, label] : {std::pair{4, "4K"}, {6, "6K"}, {8, "8K"}}) {
+    targets.push_back({-keys, SkinTargetKind::Gameplay, keys, label});
+  }
+  const auto order = [](const SkinTargetTrait &target) {
+    if (target.kind != SkinTargetKind::Gameplay) return std::pair{100, target.skinType};
+    const int keys = target.keyMode == 10 ? 5 : target.keyMode == 14 ? 7
+                   : target.keyMode == 48 ? 24 : target.keyMode;
+    return std::pair{keys, target.keyMode};
+  };
+  std::ranges::sort(targets, {}, order);
+  return targets;
+}
+
 bool gameplaySkinEntrySelectableForTarget(
     const GameplaySkinEntryRow &entry,
     const SkinTargetTrait &target) noexcept {
   if (entry.validation != SkinValidationDisposition::SelectableGameplay ||
-      entry.metadata.skinType != target.skinType) {
+      entry.metadata.skinType != skinSourceTypeForTarget(target.skinType)) {
     return false;
   }
   if (target.kind != SkinTargetKind::MusicSelect) {

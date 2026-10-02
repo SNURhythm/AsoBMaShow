@@ -9,6 +9,7 @@
 enum class IntroSceneChoice : std::uint8_t {
   Start,
   Settings,
+  Tutorial,
 };
 
 struct IntroSceneNavigationResult {
@@ -37,10 +38,12 @@ public:
       IntroSceneChoice next = choice_;
       switch (action.kind) {
       case MusicSelectInputActionKind::MoveNext:
-        next = IntroSceneChoice::Settings;
+        next = choice_ == IntroSceneChoice::Start ? IntroSceneChoice::Settings
+                                                : IntroSceneChoice::Tutorial;
         break;
       case MusicSelectInputActionKind::MovePrevious:
-        next = IntroSceneChoice::Start;
+        next = choice_ == IntroSceneChoice::Tutorial ? IntroSceneChoice::Settings
+                                                   : IntroSceneChoice::Start;
         break;
       case MusicSelectInputActionKind::Play:
         result.activated = choice_;

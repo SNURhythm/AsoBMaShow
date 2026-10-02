@@ -137,7 +137,9 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
   }
 
   LuaSkinTableDecoder decoder(request.safetyPolicy);
-  auto headerValue = runtime.runtime->loadHeader();
+  auto headerValue = configured && request.loadHeaderLua
+                         ? request.loadHeaderLua(*runtime.runtime)
+                         : runtime.runtime->loadHeader();
   if (!headerValue.value) {
     appendFailure(result.diagnostics, std::move(headerValue.failure),
                   "skin_lua_header_load_failed",
@@ -197,8 +199,29 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
     return result;
   }
 
+  BeatorajaSkinModelDecodeResult decodedModel;
+  const LuaConfiguredGameplayDocumentContinuation loadAndDecode = [&] {
+    auto value = runtime.runtime->loadConfigured(*result.configuration);
+    if (value.value && !hasErrors(result.diagnostics) &&
+        !cancellationRequested(request, result)) {
+      decodedModel =
+          result.header->type == 5
+              ? decoder.decodeMusicSelect(
+                    *value.value,
+                    {.runtime = *runtime.runtime,
+                     .builtins = gameplaySkinBuiltinCatalog(),
+                     .safetyPolicy = request.safetyPolicy})
+              : decoder.decodeGameplay(
+                    *value.value,
+                    {.runtime = *runtime.runtime,
+                     .builtins = gameplaySkinBuiltinCatalog(),
+                     .safetyPolicy = request.safetyPolicy});
+      appendMoved(result.diagnostics, decodedModel.diagnostics);
+    }
+    return value;
+  };
   auto configuredValue = request.loadConfiguredLua(
-      *runtime.runtime, *result.configuration, result.diagnostics);
+      *runtime.runtime, *result.configuration, result.diagnostics, loadAndDecode);
   if (!configuredValue.value) {
     appendFailure(result.diagnostics, std::move(configuredValue.failure),
                   "skin_lua_configured_load_failed",
@@ -210,19 +233,6 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
       cancellationRequested(request, result)) {
     return result;
   }
-  auto decodedModel =
-      result.header->type == 5
-          ? decoder.decodeMusicSelect(
-                *configuredValue.value,
-                {.runtime = *runtime.runtime,
-                 .builtins = gameplaySkinBuiltinCatalog(),
-                 .safetyPolicy = request.safetyPolicy})
-          : decoder.decodeGameplay(
-                *configuredValue.value,
-                {.runtime = *runtime.runtime,
-                 .builtins = gameplaySkinBuiltinCatalog(),
-                 .safetyPolicy = request.safetyPolicy});
-  appendMoved(result.diagnostics, decodedModel.diagnostics);
   configuredValue.value.reset();
   if (!decodedModel.model || hasErrors(result.diagnostics) ||
       cancellationRequested(request, result)) {
@@ -243,7 +253,8 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
   return result;
 }
 
-DecodedGameplaySkinDocument decodeJson(GameplaySkinDocumentRequest &request) {
+DecodedGameplaySkinDocument decodeJson(GameplaySkinDocumentRequest &request,
+                                       bool configured) {
   DecodedGameplaySkinDocument result;
   const auto bytes = request.documentFileSystem.readEntry(documentByteLimit(
       request, JsonGameplaySkinDecoderPolicy::maxDocumentBytes));
@@ -262,12 +273,84 @@ DecodedGameplaySkinDocument decodeJson(GameplaySkinDocumentRequest &request) {
                                 request.desiredSettings,
                                 gameplaySkinBuiltinCatalog(),
                                 request.safetyPolicy, request.stop);
+  if (configured && decoded.requiresLua && decoded.model &&
+      decoded.configuration && decoded.reconciledSettings &&
+      !decoded.cancelled && !hasErrors(decoded.diagnostics)) {
+    const auto &digest = decoded.configuration->lowercaseSha256;
+    if (digest.empty() ||
+        digest != skinConfigurationDigest(*decoded.reconciledSettings) ||
+        (!request.expectedConfigurationDigest.empty() &&
+         digest != request.expectedConfigurationDigest)) {
+      result.diagnostics.push_back(documentDiagnostic(
+          "skin.session.configuration_digest_mismatch",
+          "JSON property configuration does not match the validated identity.",
+          request.entry.packageRelativePath));
+      return result;
+    }
+    if (!request.luaFileSystem ||
+        request.luaFileSystem->entry() != request.entry ||
+        !request.loadConfiguredLua) {
+      result.diagnostics.push_back(documentDiagnostic(
+          "skin_lua_initial_state_missing",
+          "Scripted JSON requires its retained filesystem and initial frame.",
+          request.entry.packageRelativePath));
+      return result;
+    }
+    auto created = LuaSkinRuntime::create(
+        {.purpose = request.luaPurpose,
+         .fileSystem = std::move(request.luaFileSystem),
+         .safetyPolicy = request.safetyPolicy,
+         .httpTransport = std::move(request.luaHttpTransport),
+         .audioBackend = std::move(request.luaAudioBackend),
+         .stop = request.stop});
+    if (!created.runtime) {
+      appendFailure(result.diagnostics, std::move(created.failure),
+                    "skin_lua_runtime_create_failed",
+                    "JSON property runtime could not be created",
+                    request.entry.packageRelativePath);
+      return result;
+    }
+    JsonGameplaySkinDecodeResult scripted;
+    const LuaConfiguredGameplayDocumentContinuation loadAndDecode = [&] {
+      auto value = created.runtime->loadConfiguredProperties(*decoded.configuration);
+      if (value.value && !cancellationRequested(request, result)) {
+        scripted = decoder.decode(
+            bytes.bytes, request.entry, &*decoded.reconciledSettings,
+            gameplaySkinBuiltinCatalog(), request.safetyPolicy, request.stop, {},
+            [&](std::string_view script, SkinBindingKind kind) {
+              const auto scriptKind =
+                  kind == SkinBindingKind::TimerProperty
+                      ? LuaCallbackScriptKind::Timer
+                      : kind == SkinBindingKind::Event ||
+                                kind == SkinBindingKind::FloatWriter ||
+                                kind == SkinBindingKind::StringWriter
+                            ? LuaCallbackScriptKind::Statement
+                            : LuaCallbackScriptKind::ReturnExpression;
+              return created.runtime->compileCallbackScript(script, scriptKind);
+            });
+      }
+      return value;
+    };
+    auto loaded = request.loadConfiguredLua(*created.runtime,
+                                           *decoded.configuration,
+                                           result.diagnostics, loadAndDecode);
+    if (!loaded.value) {
+      appendFailure(result.diagnostics, std::move(loaded.failure),
+                    "skin_lua_configured_load_failed",
+                    "JSON properties could not be configured",
+                    request.entry.packageRelativePath);
+      return result;
+    }
+    loaded.value.reset();
+    decoded = std::move(scripted);
+    result.runtime = std::move(created.runtime);
+  }
   result.header = std::move(decoded.header);
   result.configuration = std::move(decoded.configuration);
   result.reconciledSettings = std::move(decoded.reconciledSettings);
   result.model = std::move(decoded.model);
-  result.cancelled = decoded.cancelled;
-  result.diagnostics = std::move(decoded.diagnostics);
+  result.cancelled = result.cancelled || decoded.cancelled;
+  appendMoved(result.diagnostics, decoded.diagnostics);
   (void)cancellationRequested(request, result);
   return result;
 }
@@ -359,7 +442,7 @@ DecodedGameplaySkinDocument decode(GameplaySkinDocumentRequest &request,
   case GameplaySkinSourceFormat::Lua:
     return decodeLua(request, configuredLua);
   case GameplaySkinSourceFormat::Json:
-    return decodeJson(request);
+    return decodeJson(request, configuredLua);
   case GameplaySkinSourceFormat::Lr2:
     return decodeLr2(request);
   }

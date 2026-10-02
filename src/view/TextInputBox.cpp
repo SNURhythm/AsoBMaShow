@@ -1,4 +1,5 @@
 #include "TextInputBox.h"
+#include "../input/SDLPointerEvent.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "Button.h"
@@ -227,6 +228,24 @@ size_t TextInputBox::getPrevUnicodePos(size_t pos) {
   }
   return pos;
 }
+void TextInputBox::onPointerEventConsumed(const SDL_Event &event) {
+  if (event.type == SDL_MOUSEBUTTONUP &&
+      event.button.button == SDL_BUTTON_LEFT &&
+      event.button.which != SDL_TOUCH_MOUSEID) {
+    isDraggingSelection = false;
+  } else if (event.type == SDL_FINGERUP &&
+             !sdl_pointer_event::isMouseSynthesizedTouch(event)) {
+    if (event.tfinger.fingerId == pendingFocusTouchId) {
+      pendingFocusTouchId = -1;
+    }
+    if (event.tfinger.fingerId == activeTouchId) {
+      activeTouchId = -1;
+      isDraggingSelection = false;
+    }
+  }
+  if (clearButton) clearButton->notifyPointerEventConsumed(event);
+}
+
 bool TextInputBox::handleEventsImpl(SDL_Event &event) {
   if (isClearButtonVisible() && !clearButton->handleEvents(event)) {
     return false;

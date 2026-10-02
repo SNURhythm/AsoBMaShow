@@ -7,6 +7,7 @@
 #include "GameplaySkinBuiltinCatalog.h"
 
 #include "../../LongNoteModeUtils.h"
+#include "../../ResultPresentationUtils.h"
 #include "../../scene/play/PlayfieldChartVisualModel.h"
 #include "../../scene/ResultPresentationModel.h"
 
@@ -267,10 +268,13 @@ ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
                                              std::uint64_t frameSerial,
                                              std::int64_t elapsedMillis,
                                              const BeatorajaSkinConfiguration *configuration,
-                                             const BeatorajaSkinModel *model)
-    : data_(std::move(data)), frameSerial_(frameSerial),
+                                             const BeatorajaSkinModel *model,
+                                             std::unordered_map<int, std::int64_t> *persistentCustomTimers,
+                                             ResultSkinAudioState audioState)
+    : data_(std::move(data)), audioState_(std::move(audioState)), frameSerial_(frameSerial),
       elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)),
-      configuration_(configuration), model_(model) {
+      configuration_(configuration), model_(model),
+      persistentCustomTimers_(persistentCustomTimers) {
   const bool gaugeOmitted = data_.gameplayGraph.dynamic != nullptr &&
                             data_.gameplayGraph.dynamic->gaugeHistoryOmitted;
   if (!gaugeOmitted && data_.state != nullptr) {
@@ -348,6 +352,30 @@ std::optional<int> ResultSkinStateBridge::maxCombo() const noexcept {
 std::optional<float> ResultSkinStateBridge::finalGauge() const noexcept {
   if (data_.state != nullptr) return data_.state->currentGauge;
   return data_.presentation ? data_.presentation->finalGauge : std::nullopt;
+}
+
+std::optional<int> ResultSkinStateBridge::currentClearRank() const {
+  if (data_.currentClearRankOverride) return data_.currentClearRankOverride;
+  if (data_.courseMode && !data_.courseResult && data_.state && data_.meta) {
+    return result_presentation::courseStageClearRank(*data_.state, *data_.meta);
+  }
+  if (data_.presentation) return data_.presentation->lampRank;
+  return data_.state ? std::optional<int>(data_.state->getClearTypeRank())
+                     : std::nullopt;
+}
+
+std::optional<int> ResultSkinStateBridge::currentClearImageIndex() const {
+  const auto rank = currentClearRank();
+  if (!rank) return std::nullopt;
+  if (data_.courseMode && !data_.courseResult &&
+      *rank == kClearTypeFullComboRank && data_.state) {
+    // Native storage has one FC rank; Beatoraja's current ScoreData also
+    // distinguishes Perfect (no GOOD) and Max (all PGREAT).
+    if (count(Good).value_or(0) == 0) {
+      return count(Great).value_or(0) == 0 ? 10 : 9;
+    }
+  }
+  return beatorajaClearTypeImageIndex(*rank);
 }
 
 std::optional<int>
@@ -467,8 +495,20 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
   }
   if (*id == 1 || *id == 2 || *id == 3 || *id == 5 || *id == 21 ||
       *id == 22 || *id == 23 || *id == 80 || *id == 1030 ||
-      *id == 1031 || *id == 290 || *id == 291 || *id == 292 || *id == 293) {
+      *id == 1031 || *id == 291 || *id == 292 || *id == 293) {
     return supported(false);
+  }
+  const bool courseMode = data_.courseMode || data_.courseResult;
+  if (*id == 290) return supported(courseMode);
+  if (*id >= 280 && *id <= 283) {
+    const auto stage = static_cast<std::size_t>(*id - 280);
+    return supported(courseMode && data_.courseStageCount > 0 &&
+                     data_.courseStageIndex == stage &&
+                     stage != data_.courseStageCount - 1);
+  }
+  if (*id == 289) {
+    return supported(courseMode && data_.courseStageCount > 0 &&
+                     data_.courseStageIndex == data_.courseStageCount - 1);
   }
   // BooleanPropertyFactory evaluates this pair only for BMSPlayer. A result
   // MainState therefore exposes neither option, including AUTO PLAY results.
@@ -635,13 +675,15 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                                 : !data_.backBmpAvailable);
   }
   if (*id == 90 || *id == 91) {
-    const auto lamp = data_.currentClearRankOverride
-                          ? data_.currentClearRankOverride
-                          : (data_.state != nullptr
-                          ? std::optional<int>(data_.state->getClearTypeRank())
-                          : (data_.presentation ? data_.presentation->lampRank
-                                                : std::nullopt));
-    const bool clear = lamp && *lamp > kClearTypeFailedRank;
+    const auto lamp = currentClearRank();
+    // BooleanPropertyFactory 90/91 compares FAILED by equality: a course
+    // stage's NO PLAY lamp can still show the clear animation. MusicResult
+    // separately marks the running course failed when this stage's gauge
+    // reaches zero; use this stage, not the recalled course's final outcome.
+    const bool courseFailed = data_.courseMode && !data_.courseResult &&
+                              data_.state != nullptr &&
+                              data_.state->currentGauge <= 0.0F;
+    const bool clear = lamp && *lamp != kClearTypeFailedRank && !courseFailed;
     return supported(*id == 90 ? clear : !clear);
   }
   if (*id >= 300 && *id <= 307 && currentScore && maximum) {
@@ -905,14 +947,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                                : 0);
       }
     case 370: {
-      const auto lamp = data_.currentClearRankOverride
-                            ? data_.currentClearRankOverride
-                            : (data_.presentation ? data_.presentation->lampRank
-                                                  : (data_.state ? std::optional<int>(
-                                                        data_.state->getClearTypeRank())
-                                                                 : std::nullopt));
-      return lamp ? supported<std::int64_t>(
-                        beatorajaClearTypeImageIndex(*lamp))
+      const auto lamp = currentClearImageIndex();
+      return lamp ? supported<std::int64_t>(*lamp)
                   : unsupported<std::int64_t>();
     }
     case 371: {
@@ -1081,23 +1117,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
              data_.playerHistory->judgementCounts[2] +
              data_.playerHistory->judgementCounts[3];
     case 57:
-      return data_.context != nullptr
-                 ? std::optional<int>(static_cast<int>(
-                       data_.context->settings.audioVideo.audio.masterVolume *
-                       100.0F))
-                 : std::nullopt;
     case 58:
-      return data_.context != nullptr
-                 ? std::optional<int>(static_cast<int>(
-                       data_.context->settings.audioVideo.audio.keysoundVolume *
-                       100.0F))
-                 : std::nullopt;
     case 59:
-      return data_.context != nullptr
-                 ? std::optional<int>(static_cast<int>(
-                       data_.context->settings.audioVideo.audio.bgmVolume *
-                       100.0F))
-                 : std::nullopt;
+      if (const auto volume = audioVolume(*id - 40)) {
+        return javaDoubleToInt(*volume * 100.0F);
+      }
+      return std::nullopt;
     case 165:
       // MusicResult is entered only after BMSResource preparation, so the
       // source's combined BGA/audio load progress is complete.
@@ -1409,14 +1434,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.meta ? std::optional<int>(javaDoubleToInt(data_.meta->Total))
                         : std::optional<int>(std::numeric_limits<int>::min());
     case 370: {
-      const auto lamp = data_.currentClearRankOverride
-                            ? data_.currentClearRankOverride
-                            : (data_.presentation ? data_.presentation->lampRank
-                                                  : (data_.state ? std::optional<int>(
-                                                        data_.state->getClearTypeRank())
-                                                                 : std::nullopt));
-      return lamp ? std::optional<int>(beatorajaClearTypeImageIndex(*lamp))
-                  : std::nullopt;
+      return currentClearImageIndex();
     }
     case 371: {
       const auto lamp = data_.previousLampBest
@@ -1561,21 +1579,7 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
                                ? std::optional<int>(data_.pacemaker->targetScore)
                                : data_.state != nullptr ? std::optional<int>(0)
                                                         : std::nullopt;
-  if (data_.context != nullptr) {
-    switch (*id) {
-    case 17:
-      return supported(
-          static_cast<double>(data_.context->settings.audioVideo.audio.masterVolume));
-    case 18:
-      return supported(static_cast<double>(
-          data_.context->settings.audioVideo.audio.keysoundVolume));
-    case 19:
-      return supported(
-          static_cast<double>(data_.context->settings.audioVideo.audio.bgmVolume));
-    default:
-      break;
-    }
-  }
+  if (const auto volume = audioVolume(*id)) return supported<double>(*volume);
   if (*id == 310) {
     return data_.configuration
                ? supported(static_cast<double>(data_.configuration->gameplayHispeed))
@@ -1874,8 +1878,9 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   const auto id = integerSelector(selector);
   constexpr auto kTimerOff = std::numeric_limits<std::int64_t>::min();
   if (!id) return kTimerOff;
-  if (const auto custom = customTimerValues_.find(*id);
-      custom != customTimerValues_.end()) {
+  const auto &timers = persistentCustomTimers_ != nullptr
+                           ? *persistentCustomTimers_ : customTimerValues_;
+  if (const auto custom = timers.find(*id); custom != timers.end()) {
     return custom->second;
   }
   // Result timers are timestamps, not elapsed values. MusicResult and
@@ -1889,8 +1894,55 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   return kTimerOff;
 }
 
+std::optional<float> ResultSkinStateBridge::audioVolume(int id) const noexcept {
+  if (id < 17 || id > 19) return std::nullopt;
+  if (const auto &value = audioState_.volumes[static_cast<std::size_t>(id - 17)]) {
+    return value;
+  }
+  if (data_.context == nullptr) return std::nullopt;
+  const auto &audio = data_.context->settings.audioVideo.audio;
+  switch (id) {
+  case 17: return audio.masterVolume;
+  case 18: return audio.keysoundVolume;
+  case 19: return audio.bgmVolume;
+  default: return std::nullopt;
+  }
+}
+
+bool ResultSkinStateBridge::setFloatProperty(int id, double value) {
+  if (id < 17 || id > 19 || !audioState_.write) return false;
+  if (audioState_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    if (!std::isfinite(value)) return false;
+    value = std::clamp(value, 0.0, 1.0);
+  }
+  const float written = static_cast<float>(value);
+  try {
+    if (!audioState_.write(id, written)) return false;
+    audioState_.volumes[static_cast<std::size_t>(id - 17)] = written;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool ResultSkinStateBridge::setTimerProperty(int id, std::int64_t value) {
+  if (id < 10'000 || id > 19'999) return false;
+  if (model_ != nullptr) {
+    for (auto timer = model_->customTimers.rbegin();
+         timer != model_->customTimers.rend(); ++timer) {
+      if (timer->id != id) continue;
+      if (timer->timer) return true;
+      break;
+    }
+  }
+  setCustomTimer(id, value);
+  return true;
+}
+
 void ResultSkinStateBridge::setCustomTimer(int id, std::int64_t value) {
-  customTimerValues_.insert_or_assign(id, value);
+  auto &timers = persistentCustomTimers_ != nullptr
+                     ? *persistentCustomTimers_ : customTimerValues_;
+  timers.insert_or_assign(id, value);
 }
 
 std::span<const SkinProjectedNoteView>

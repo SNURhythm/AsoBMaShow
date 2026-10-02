@@ -884,6 +884,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     return column;
   }
 
+  gameplaySkinSettingsController->setActiveTarget(gameplaySkinActiveTraitSkinType);
   const auto &snapshot = gameplaySkinSettingsController->snapshot();
   const auto actionAvailability =
       skin::gameplaySkinSettingsActionAvailability(snapshot);
@@ -1129,9 +1130,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                            i18n::message("settings.skins.import_zip_unpacked_folder.message"), imports,
                            metrics.modeCardHeight, metrics.cardsWidth));
 
-  std::vector<skin::SkinTargetTrait> traits(
-      skin::skinTargetTraits().begin(), skin::skinTargetTraits().end());
-  std::ranges::sort(traits, {}, &skin::SkinTargetTrait::skinType);
+  const auto traits = skin::gameplaySkinSettingsTargets();
   if (!std::ranges::any_of(traits, [this](const auto &trait) {
         return trait.skinType == gameplaySkinActiveTraitSkinType;
       })) {
@@ -1169,6 +1168,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         return;
       }
       gameplaySkinActiveTraitSkinType = skinType;
+      gameplaySkinSettingsController->setActiveTarget(skinType);
       gameplaySkinTraitDropdownOpen = false;
       gameplaySkinConfigurationDropdownOpenKey.clear();
       lastLayoutWidth = -1;

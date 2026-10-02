@@ -1,0 +1,9 @@
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  image = {{id = "image", src = "atlas", w = 10, h = 10}},
+  destination = {{id = "image", loop = -1, dst = {
+    {time = 1000, x = 100, y = 0, w = 10, h = 10, acc = 1},
+    {time = 0, x = 0, acc = 2}
+  }}}
+}

@@ -6,6 +6,7 @@
 #include "../SkinSafetyPolicy.h"
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -26,8 +27,12 @@ struct JsonGameplaySkinDecodeResult {
   std::optional<EntryProfileSettings> reconciledSettings;
   std::optional<BeatorajaSkinModel> model;
   std::vector<SkinDiagnostic> diagnostics;
+  bool requiresLua = false;
   bool cancelled = false;
 };
+
+using JsonSkinScriptCompiler = std::function<LuaCallbackCompileResult(
+    std::string_view, SkinBindingKind)>;
 
 class JsonGameplaySkinDecoder final {
 public:
@@ -37,7 +42,8 @@ public:
       SkinBuiltinBindingCatalogView builtins,
       SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{},
       std::stop_token stop = {},
-      StaticSkinDecodeCheckpoint checkpoint = {}) const;
+      StaticSkinDecodeCheckpoint checkpoint = {},
+      JsonSkinScriptCompiler compileScript = {}) const;
 };
 
 } // namespace skin

@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -2464,6 +2465,7 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
 }
 - (void)detachProgress;
 - (void)cleanupStaging;
+- (BOOL)canRetry;
 @end
 
 @implementation AsoFileDownloadDelegate
@@ -2500,6 +2502,25 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
 
 - (void)dealloc {
   [self cleanupStaging];
+}
+
+- (BOOL)canRetry {
+  if (abortRequested.load() || rejectedInsecureRedirect ||
+      rejectedInvalidRedirect || failureMessage != nil || hasDownloadedFile ||
+      ![requestError.domain isEqualToString:NSURLErrorDomain]) {
+    return NO;
+  }
+  switch (requestError.code) {
+  case NSURLErrorTimedOut:
+  case NSURLErrorCannotFindHost:
+  case NSURLErrorCannotConnectToHost:
+  case NSURLErrorNetworkConnectionLost:
+  case NSURLErrorDNSLookupFailed:
+  case NSURLErrorNotConnectedToInternet:
+    return YES;
+  default:
+    return NO;
+  }
 }
 
 - (BOOL)admitSpaceAtPath:(NSString *)path
@@ -4488,7 +4509,10 @@ static bool RequestURLTextIOS(const std::string &url, std::string &body,
         [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]
             ? (NSHTTPURLResponse *)delegate->urlResponse
             : nil;
-    if (httpResponse != nil && httpResponse.statusCode >= 400) {
+    if (([method isEqualToString:@"HEAD"] &&
+         (httpResponse == nil || httpResponse.statusCode < 200 ||
+          httpResponse.statusCode >= 300)) ||
+        (httpResponse != nil && httpResponse.statusCode >= 400)) {
       errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
                      " while " + action + url;
       return false;
@@ -4512,6 +4536,15 @@ static bool RequestURLTextIOS(const std::string &url, std::string &body,
     body = std::move(delegate->responseBody);
     return true;
   }
+}
+
+bool ProbeDownloadURLIOS(const std::string &url, std::string &errorMessage,
+                         IOSDownloadCheckpoint checkpoint) {
+  std::string ignored;
+  // HEAD may advertise the full archive size, but never transfers its body.
+  return RequestURLTextIOS(url, ignored, errorMessage, @"HEAD",
+                           std::move(checkpoint),
+                           std::numeric_limits<std::size_t>::max());
 }
 
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
@@ -4623,7 +4656,8 @@ bool DownloadURLToFileIOS(const std::string &url,
                           std::uint64_t maximumBytes,
                           std::string &errorMessage,
                           IOSDownloadProgressCallback progressCallback,
-                          void *progressContext) {
+                          void *progressContext,
+                          std::function<bool(const std::string &, bool)> retryCallback) {
   @autoreleasepool {
     errorMessage.clear();
     if (cancelled.load()) {
@@ -4673,6 +4707,9 @@ bool DownloadURLToFileIOS(const std::string &url,
     NSURLSessionConfiguration *configuration =
         [NSURLSessionConfiguration ephemeralSessionConfiguration];
     configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    // Offline failures must reach the bounded retry loop instead of waiting
+    // for NSURLSession's much longer resource timeout.
+    configuration.waitsForConnectivity = NO;
     NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
     delegateQueue.maxConcurrentOperationCount = 1;
     NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
@@ -4684,20 +4721,57 @@ bool DownloadURLToFileIOS(const std::string &url,
       [delegate detachProgress];
       [delegate cleanupStaging];
     });
-    NSURLSessionDownloadTask *task = [session downloadTaskWithRequest:request];
-    [task resume];
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(190);
-    while (dispatch_semaphore_wait(
-               delegate->semaphore,
-               dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) != 0) {
+    constexpr int maximumRetries = 3;
+    NSData *resumeData = nil;
+    for (int attempt = 0; ; ++attempt) {
       if (cancelled.load()) {
         errorMessage = "Download cancelled.";
         return false;
       }
-      if (std::chrono::steady_clock::now() >= deadline) {
-        errorMessage = "Timed out while downloading " + url;
-        return false;
+      NSURLSessionDownloadTask *task = resumeData != nil
+          ? [session downloadTaskWithResumeData:resumeData]
+          : [session downloadTaskWithRequest:request];
+      [task resume];
+      // The request timeout handles stalled transfers. An overall wall-clock
+      // deadline would also kill large downloads that are still progressing.
+      while (dispatch_semaphore_wait(
+                 delegate->semaphore,
+                 dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) != 0) {
+        if (cancelled.load()) {
+          errorMessage = "Download cancelled.";
+          return false;
+        }
+      }
+      if (cancelled.load() || ![delegate canRetry]) {
+        break;
+      }
+      // Let Foundation preserve and validate the partial file and its HTTP
+      // validators. Without resume data, retry this URL from the beginning.
+      id savedData = delegate->requestError.userInfo[NSURLSessionDownloadTaskResumeData];
+      resumeData = [savedData isKindOfClass:[NSData class]] ? savedData : nil;
+      const bool needsDecision = attempt == maximumRetries;
+      if (needsDecision) {
+        if (!retryCallback) break;
+        const std::string message = delegate->requestError.localizedDescription.UTF8String;
+        if (!retryCallback(message, resumeData != nil)) {
+          cancelled = true;
+          break;
+        }
+        // The completed task and its resume data stay alive throughout the
+        // prompt, so approval continues the same partial archive.
+        attempt = -1;
+      }
+      delegate->requestError = nil;
+      delegate->urlResponse = nil;
+      if (needsDecision) continue;
+      const auto retryAt = std::chrono::steady_clock::now() +
+                           std::chrono::seconds(1 << attempt);
+      while (std::chrono::steady_clock::now() < retryAt) {
+        if (cancelled.load()) {
+          errorMessage = "Download cancelled.";
+          return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
     }
     [delegate detachProgress];

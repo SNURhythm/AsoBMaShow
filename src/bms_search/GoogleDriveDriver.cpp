@@ -153,7 +153,8 @@ bool GoogleDriveDriver::resolveWarningDownload(
     const std::string &downloadUrl, const std::string &displayUrl,
     const std::filesystem::path &archivePath, std::atomic_bool &cancelled,
     std::string &errorMessage,
-    BmsSearchDownloadProgressCallback progressCallback) {
+    BmsSearchDownloadProgressCallback progressCallback,
+    BmsSearchDownloadRetryCallback retryCallback) {
   const auto fileId = fileIdFromUrls(downloadUrl, displayUrl);
   if (!fileId) {
     return true;
@@ -175,7 +176,7 @@ bool GoogleDriveDriver::resolveWarningDownload(
     progressCallback({.message = "Confirming Google Drive download"});
   }
   if (!downloadUrlToFile(*confirmedDownloadUrl, archivePath, cancelled,
-                         errorMessage, progressCallback)) {
+                         errorMessage, progressCallback, std::move(retryCallback))) {
     return false;
   }
 

@@ -1035,6 +1035,38 @@ void testOpeningProviderBackedIdSurvivesSelectedRowCacheEviction() {
 }
 
 int main(int argc, char **argv) {
+  {
+    auto table = fixture();
+    table.bars[0].children = {{"table:1:sha256:first"}, {"table:1:md5:target"}};
+    table.bars[2].id = table.bars[0].children[0];
+    table.bars[3].id = table.bars[0].children[1];
+    table.bars[3].chart.emplace();
+    table.bars[3].chart->unavailable = true;
+    table.bars[3].chart->meta.MD5 = "target";
+    table.bars[3].chart->meta.Title = "Two";
+    const auto missingId = table.bars[3].id;
+    MusicSelectBarManager manager(table);
+    require(manager.open({"folder:a"}) && manager.select(missingId),
+            "download fixture selects the second missing table entry");
+    const auto previous = manager.readView();
+    table.bars[3].chart->unavailable = false;
+    table.bars[3].chart->meta.SHA256 = "downloaded";
+    table.bars[3].chart->meta.BmsPath = "downloaded/chart.bms";
+    table.bars[3].id = {"table:1:sha256:downloaded"};
+    table.bars[0].children[1] = table.bars[3].id;
+    manager.refresh(table);
+    restoreMusicSelectDirectory(manager, previous,
+        [](const MusicSelectBar &) { return false; },
+        [](const MusicSelectBarId &) { return false; });
+    const auto restored = manager.readView();
+    require(restored.selectedIndex == 1 &&
+                restored.rowAt(restored.selectedIndex).id == table.bars[3].id,
+            "indexing an MD5-only download keeps the selected chart after it gains SHA256");
+    require(!manager.select({"table:2:md5:target"}) &&
+                !manager.select({"table:very-long-unrelated-context:md5:target"}) &&
+                !manager.select({"table:1:md5:other"}),
+            "download identity fallback requires the same table context and exact MD5");
+  }
   testPinnedUnavailableSongOrdering();
   testPagedRowsStayLazyAcrossNavigationAndConfiguration();
   testPagedProviderLifetimeAndExplicitEnumeration();

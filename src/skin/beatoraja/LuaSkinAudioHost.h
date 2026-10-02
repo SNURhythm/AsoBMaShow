@@ -65,7 +65,8 @@ public:
   LuaSkinAudioHost &operator=(const LuaSkinAudioHost &) = delete;
 
   [[nodiscard]] LuaSkinAudioOperationResult
-  play(std::string_view path, float volume, bool loop) noexcept;
+  play(std::string_view path, float volume, bool loop,
+       std::optional<float> systemVolume = std::nullopt) noexcept;
   [[nodiscard]] LuaSkinAudioOperationResult
   preload(std::string_view path) noexcept;
   [[nodiscard]] LuaSkinAudioOperationResult

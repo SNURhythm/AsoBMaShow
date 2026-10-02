@@ -11,6 +11,7 @@ enum class ResultTouchControlAction : unsigned char {
   ExportPhoto,
   SelectSection,
   Next,
+  CourseDetails,
   Hide,
 };
 
@@ -23,6 +24,7 @@ struct ResultTouchControlAvailability {
   bool exportPhoto = false;
   bool selectSection = false;
   bool next = false;
+  bool courseDetails = false;
 };
 
 struct ResultTouchControlState {
@@ -54,6 +56,7 @@ inline ResultTouchControlPresentation makeResultTouchControlPresentation(
   if (availability.exportPhoto) result.actions.push_back(ResultTouchControlAction::ExportPhoto);
   if (availability.selectSection) result.actions.push_back(ResultTouchControlAction::SelectSection);
   if (availability.next) result.actions.push_back(ResultTouchControlAction::Next);
+  if (availability.courseDetails) result.actions.push_back(ResultTouchControlAction::CourseDetails);
   result.actions.push_back(ResultTouchControlAction::Hide);
   return result;
 }

@@ -282,12 +282,27 @@ void exerciseLoopback(Fetch fetch, const std::string &method,
   }
 }
 
+void exerciseDownloadProbe(const std::string &origin) {
+  std::atomic_bool cancelled{false};
+  for (const std::string route : {"available", "missing", "redirect"}) {
+    std::string error;
+    const bool found = actual_curl::probeDownloadUrl(
+        origin + "/probe/" + route, error, &cancelled);
+    expect(found == (route != "missing"), "HEAD availability: " + route);
+  }
+  cancelled.store(true);
+  std::string error;
+  expect(!actual_curl::probeDownloadUrl(origin + "/probe/available", error, &cancelled),
+         "cancelled availability probe stops");
+}
+
 int main(int argc, char **argv) {
   exercise(asobmshow::bms_search::fetchUrlText, "GET");
   exercise(asobmshow::bms_search::postUrlText, "POST");
   if (argc == 2) {
     const std::string origin = argv[1];
     if (!origin.starts_with("http://127.0.0.1:")) return 2;
+    exerciseDownloadProbe(origin);
     exerciseLoopback(actual_curl::fetchUrlText, "GET", origin);
     exerciseLoopback(actual_curl::postUrlText, "POST", origin);
   }

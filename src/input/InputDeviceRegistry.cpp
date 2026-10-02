@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <deque>
 #include <mutex>
 #include <utility>
@@ -357,7 +358,30 @@ InputDeviceRegistry::~InputDeviceRegistry() {
   queueState_->close();
 }
 
+std::optional<InputDeviceRegistry::PointerPosition>
+InputDeviceRegistry::pointerPosition() const noexcept {
+  const std::lock_guard lock(legacyInputMutex_);
+  return pointerPosition_;
+}
+
 void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
+  std::optional<PointerPosition> pointer;
+  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+    pointer = PointerPosition{static_cast<float>(event.motion.x),
+                              static_cast<float>(event.motion.y), false};
+  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+             event.button.which != SDL_TOUCH_MOUSEID) {
+    pointer = PointerPosition{static_cast<float>(event.button.x),
+                              static_cast<float>(event.button.y), false};
+  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
+             event.tfinger.touchId != SDL_MOUSE_TOUCHID &&
+             std::isfinite(event.tfinger.x) && std::isfinite(event.tfinger.y)) {
+    pointer = PointerPosition{event.tfinger.x, event.tfinger.y, true};
+  }
+  if (pointer) {
+    const std::lock_guard lock(legacyInputMutex_);
+    pointerPosition_ = pointer;
+  }
   for (const auto &backend : backends_) {
     backend->handleSdlEvent(event);
   }

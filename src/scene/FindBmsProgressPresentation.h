@@ -15,3 +15,5 @@ i18n::Text findBmsProgressDisplayMessage(const std::string &message,
                                         std::uint64_t downloadedBytes,
                                         std::uint64_t totalBytes,
                                         bool includeBytes);
+
+i18n::Text findBmsRunningDetailMessage(const std::string &message);

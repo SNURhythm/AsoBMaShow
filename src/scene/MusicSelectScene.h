@@ -8,6 +8,7 @@
 #include "CourseRecordActions.h"
 #include "RecordFileActions.h"
 #include "ArchiveUnzipModal.h"
+#include "FindBmsModal.h"
 #include "../ReplayVideoExportTypes.h"
 #include "../replay/ReplayExportJob.h"
 #include "Scene.h"
@@ -133,10 +134,17 @@ private:
   void openChartViewer();
   void openChartRecords();
   void revealChart();
+  void ensureToolbarContextMenu();
+  void openToolbarMenu(MusicSelectToolbarControl control);
+  [[nodiscard]] OverlayAnchor toolbarControlAnchor(MusicSelectToolbarControl control) const;
   void revealSelectedChartInFileManager();
   [[nodiscard]] OverlayAnchor revealChartAnchor() const;
   void openMusicPlayer();
   void openTasks();
+  void openDownload();
+  bool canDownloadSelectedChart() const;
+  bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
+  void refreshToolbarAvailability();
   void openPlayOptions();
   void openIrUploads();
   void openSettings();
@@ -306,6 +314,7 @@ private:
   void updateRecordServices();
 
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
+  std::unique_ptr<FindBmsModal> findBmsModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;
   DecideLoadingOverlay *decideOverlay_ = nullptr;
@@ -330,6 +339,7 @@ private:
   };
   std::optional<SkinActivationIdentity> activeSkinIdentity_;
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
+  std::optional<UiLogicalPoint> skinPointerUiPosition_;
   std::future<skin::MusicSelectSkinSessionPreparationResult>
       skinPreparation_;
   std::stop_source skinPreparationStop_;

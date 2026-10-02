@@ -11,12 +11,16 @@
 #include "utils/Stopwatch.h"
 #include "video/VideoPlayer.h"
 
+#include <bx/math.h>
+
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1309,17 +1313,121 @@ void testRealVideoAdapterHonorsBoundedGeneratedFixture() {
           "within its pre-allocation decoded budget");
 }
 
+void testEmbeddedImageResetsSkinSamplingOnMetal() {
+  const auto fixtureDirectory = std::filesystem::temp_directory_path() /
+      ("asobmashow-bga-sampling-" + std::to_string(SDL_GetPerformanceCounter()));
+  std::filesystem::create_directories(fixtureDirectory);
+  const auto cleanup = makeScopeExit([&] {
+    std::error_code ignored;
+    std::filesystem::remove_all(fixtureDirectory, ignored);
+  });
+  // Uncompressed top-origin BGRA TGA: white opaque / red transparent.
+  const std::array<unsigned char, 34> tga{
+      0,0,2,0,0,0,0,0,0,0,0,0,2,0,2,0,32,40,
+      255,255,255,255, 0,0,255,0, 255,255,255,255, 0,0,255,0};
+  {
+    std::ofstream file(fixtureDirectory / "sampling.tga", std::ios::binary);
+    file.write(reinterpret_cast<const char *>(tga.data()), tga.size());
+  }
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = fixtureDirectory;
+  chart.ReferencedBmpTable.emplace(1, "sampling.tga");
+  appendBgaTimeline(chart, 0, 1, -1);
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+
+  const auto output = bgfx::createTexture2D(8, 4, false, 1,
+      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(8, 4, false, 1,
+      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  require(bgfx::isValid(output) && bgfx::isValid(readback) && bgfx::isValid(framebuffer),
+          "BGA sampling probe creates real Metal readback resources");
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0.0F, 8.0F, 4.0F, 0.0F, 0.0F, 100.0F, 0.0F,
+               bgfx::getCaps()->homogeneousDepth);
+  bgfx::setViewFrameBuffer(rendering::ui_view, framebuffer);
+  bgfx::setViewRect(rendering::ui_view, 0, 0, 8, 4);
+  bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+  bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+  bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_COLOR, 0x080a0effU);
+  auto target = makeLoadedImageTarget(GameplayBgaRole::Base, 1);
+  target.destination = {{{.x = 0, .y = 4}, {.x = 8, .y = 4},
+                         {.x = 8, .y = 0}, {.x = 0, .y = 0}}};
+  const auto sampling = rendering::UniformCache::getInstance().getVec4("u_skinSampling");
+  const auto sampler = rendering::UniformCache::getInstance().getSampler("s_texColor");
+  const auto program = rendering::ShaderManager::getInstance().getProgram(
+      "vs_skin_quad.bin", "fs_skin_quad.bin");
+  const std::uint32_t white = 0xffffffffU;
+  const auto primeTexture = bgfx::createTexture2D(1, 1, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, bgfx::copy(&white, sizeof(white)));
+  struct PrimeVertex { float x, y, z, u, v; std::uint32_t rgba; };
+  bgfx::VertexLayout primeLayout;
+  primeLayout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+      .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+      .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true).end();
+  const auto render = [&](float precedingSkinSampling, std::uint64_t sequence) {
+    const auto frame = jukebox.prepareVisualFrameAt(sequence, 0, {});
+    require(frame.base.has_value() && jukebox.preflight(frame, std::span(&target, 1)).ready,
+            "BGA sampling probe prepares the actual loaded image");
+    jukebox.commitPrepared(frame);
+    const std::array<float, 4> prior{precedingSkinSampling, 0, 0, 0};
+    bgfx::touch(rendering::ui_view);
+    bgfx::TransientVertexBuffer primeBuffer;
+    bgfx::allocTransientVertexBuffer(&primeBuffer, 3, primeLayout);
+    const std::array<PrimeVertex, 3> primeVertices{{
+        {-3, -3, 0, 0, 0, white}, {-2, -3, 0, 1, 0, white}, {-2, -2, 0, 1, 1, white}}};
+    std::memcpy(primeBuffer.data, primeVertices.data(), sizeof(primeVertices));
+    bgfx::setVertexBuffer(0, &primeBuffer);
+    bgfx::setTexture(0, sampler, primeTexture, BGFX_SAMPLER_POINT);
+    bgfx::setUniform(sampling, prior.data());
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(rendering::ui_view, program);
+    jukebox.submitPrepared(frame, target);
+    bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    auto current = bgfx::frame();
+    std::vector<std::uint8_t> pixels(8 * 4 * 4);
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    require(ready != std::numeric_limits<std::uint32_t>::max(),
+            "BGA sampling probe schedules readback");
+    for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
+    require(current >= ready, "BGA sampling probe completes readback");
+    jukebox.finalizePrepared(frame);
+    return pixels;
+  };
+  const auto ordinary = render(0, 901);
+  const auto afterFilteredSkin = render(1, 902);
+  require(ordinary[0] > 100, "BGA sampling probe actually renders the image");
+  require(ordinary == afterFilteredSkin,
+          "embedded BGA hardware filtering ignores the preceding skin sampling uniform");
+  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer);
+  bgfx::destroy(readback);
+  bgfx::destroy(output);
+  bgfx::destroy(primeTexture);
+  bgfx::frame();
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  const bool metalSampling = argc == 2 && std::string_view(argv[1]) == "--metal-sampling";
+  SDL_SetHint(SDL_HINT_APPLE_RWFROMFILE_USE_RESOURCES, "0");
   bgfx::Init init;
-  init.type = bgfx::RendererType::Noop;
-  init.resolution.width = 64;
-  init.resolution.height = 64;
+  init.type = metalSampling ? bgfx::RendererType::Metal : bgfx::RendererType::Noop;
+  init.fallback = false;
+  init.resolution.width = metalSampling ? 0 : 64;
+  init.resolution.height = metalSampling ? 0 : 64;
   require(bgfx::init(init), "headless bgfx initializes for Jukebox BGA tests");
   rendering::PosTexCoord0Vertex::init();
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
+  if (metalSampling) {
+    testEmbeddedImageResetsSkinSamplingOnMetal();
+  } else {
   testGameplayBgaCompositeStateDefaultsToBuiltInFullscreen();
   testBgaDrawTargetRoleIsIndependentOfViewId();
   testPinnedRoleAndMediaSelectExactBgaMaterials();
@@ -1347,6 +1455,7 @@ int main() {
   testZeroStartAndFrameBoundariesAreDeterministic();
   testMissCompositionSuppressesBaseAndLayerWithoutFallback();
   testRealVideoAdapterHonorsBoundedGeneratedFixture();
+  }
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();

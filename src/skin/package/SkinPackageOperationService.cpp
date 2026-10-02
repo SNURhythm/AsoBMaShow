@@ -217,6 +217,7 @@ struct SkinPackageOperationService::Impl {
     VersionedSkinProfileSettings base;
     SkinEntryId entry;
     SkinProfileSettings candidate;
+    std::optional<int> targetSkinType;
   };
   struct GarbageCollectionRequest {};
   struct ReconcileProfileActivationsRequest {
@@ -713,7 +714,7 @@ struct SkinPackageOperationService::Impl {
               result.emplace(
                   store.prepareActivation(operation.base, operation.entry,
                                           std::move(operation.candidate),
-                                          validator, slot.stop->get_token()));
+                                          validator, slot.stop->get_token(), operation.targetSkinType));
             } catch (...) {
               result.emplace(failed("skin activation preparation failed"));
             }
@@ -1088,11 +1089,12 @@ SkinPackageOperationService::submitRemove(SkinPackageId package) {
 
 SkinPackageOperationHandle SkinPackageOperationService::submitPrepareActivation(
     VersionedSkinProfileSettings base, SkinEntryId entry,
-    SkinProfileSettings candidate) {
+    SkinProfileSettings candidate, std::optional<int> targetSkinType) {
   return impl_->enqueue(Impl::RequestPayload(
       Impl::PrepareActivationRequest{.base = std::move(base),
                                      .entry = std::move(entry),
-                                     .candidate = std::move(candidate)}));
+                                     .candidate = std::move(candidate),
+                                     .targetSkinType = targetSkinType}));
 }
 
 SkinPackageOperationHandle

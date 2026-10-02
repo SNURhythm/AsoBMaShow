@@ -17,16 +17,20 @@ namespace skin {
 
 class LuaSkinAudioBackend;
 
+// Invoke exactly once, synchronously, while the initial frame is bound. Model
+// decoding can execute callback factories and needs the same state as the entry.
+using LuaConfiguredGameplayDocumentContinuation = std::function<LuaValueResult()>;
 using LuaConfiguredGameplayDocumentLoad = std::function<LuaValueResult(
     LuaSkinRuntime &, const BeatorajaSkinConfiguration &,
-    std::vector<SkinDiagnostic> &)>;
+    std::vector<SkinDiagnostic> &,
+    const LuaConfiguredGameplayDocumentContinuation &)>;
 
 struct GameplaySkinDocumentRequest {
   GameplaySkinSourceFormat sourceFormat = GameplaySkinSourceFormat::Lua;
   SkinEntryId entry;
   LuaSkinFileSystem &documentFileSystem;
-  // Required only for Lua. Static formats must leave this null so dispatch
-  // cannot accidentally create a Lua VM for JSON or LR2 documents.
+  // Required for Lua and script-bearing JSON sessions. Static JSON never
+  // creates a VM; LR2 leaves this null. Catalog JSON inspection ignores it.
   std::unique_ptr<LuaSkinFileSystem> luaFileSystem;
   std::unique_ptr<LuaSkinHttpTransport> luaHttpTransport;
   std::shared_ptr<LuaSkinAudioBackend> luaAudioBackend;
@@ -36,6 +40,9 @@ struct GameplaySkinDocumentRequest {
   // identity before configured Lua is allowed to run.
   std::string_view expectedConfigurationDigest;
   LuaRuntimePurpose luaPurpose = LuaRuntimePurpose::Gameplay;
+  // Session-only state binding for modules evaluated by the entry's first require.
+  // Catalog inspection deliberately ignores this callback.
+  std::function<LuaValueResult(LuaSkinRuntime &)> loadHeaderLua;
   LuaConfiguredGameplayDocumentLoad loadConfiguredLua;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
@@ -76,8 +83,9 @@ public:
   [[nodiscard]] InspectedGameplaySkinDocument
   inspect(GameplaySkinDocumentRequest) const;
 
-  // Full session preparation. The Lua callback binds the caller's initial
-  // authoritative frame around loadConfigured; static formats ignore it.
+  // Full session preparation. Callbacks bind the caller's initial authority
+  // during header/configured execution and callback factory decoding, including
+  // script-bearing JSON. Static documents ignore them.
   [[nodiscard]] GameplaySkinDocumentLoadResult
   load(GameplaySkinDocumentRequest) const;
 };

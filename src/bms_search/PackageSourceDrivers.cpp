@@ -114,9 +114,11 @@ PackageSourceLookupResult KonmaiDriver::lookupByMd5(
 PackageSourceLookupResult WriggleDriver::lookupByMd5(
     const std::string &md5, const std::atomic_bool &cancelled) {
   PackageSourceLookupResult result;
-  (void)cancelled;
   result.sourceName = "Wriggle";
   result.sourceUrl = "https://bms.wrigglebug.xyz/download/package/" + md5;
+  if (!probeDownloadUrl(result.sourceUrl, result.errorMessage, &cancelled)) {
+    return result;
+  }
   result.candidate =
       packageDownloadCandidate(result.sourceUrl, md5 + ".7z", md5);
   return result;
@@ -133,7 +135,6 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     return false;
   }
 
-  std::optional<BmsSearchResult> lastDownloadFailure;
   std::string lastLookupError;
   struct PackageSource {
     const char *name;
@@ -183,32 +184,28 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     if (!lookup.sourceUrl.empty()) {
       attempt.fallbackUrl = lookup.sourceUrl;
     }
-    bool downloadedArchive = false;
     const std::string effectiveArchiveKey =
         archiveKey.empty() ? md5Hash : archiveKey;
-    const bool finished = downloadAndExtractArchive(
+    downloadAndExtractArchive(
         lookup.candidate->downloadUrl, lookup.candidate->originalUrl,
         effectiveArchiveKey, libraryRoot, cancelled, progressCallback, options,
-        attempt, lookup.candidate->archiveName, effectiveArchiveKey,
-        &downloadedArchive);
-    if (finished || downloadedArchive || cancelled.load()) {
-      result = std::move(attempt);
-      return true;
-    }
+        attempt, lookup.candidate->archiveName, effectiveArchiveKey);
 
-    if (!attempt.message.empty()) {
+    if (attempt.status == BmsSearchResult::Status::DownloadFailed &&
+        !attempt.message.empty()) {
       attempt.message = lookup.sourceName + ": " + attempt.message;
       if (!attempt.presentationMessage.empty()) {
         attempt.presentationMessage = i18n::message("library.find_bms.result.source_detail",
             {{"source", lookup.sourceName}, {"detail", attempt.presentationMessage}});
       }
     }
-    lastDownloadFailure = std::move(attempt);
+    // A downloadable file commits this operation to its provider. Failure or
+    // cancellation must not silently start another provider's archive.
+    result = std::move(attempt);
+    return true;
   }
 
-  if (lastDownloadFailure) {
-    result = std::move(*lastDownloadFailure);
-  } else if (!lastLookupError.empty() && result.message.empty()) {
+  if (!lastLookupError.empty() && result.message.empty()) {
     result.status = BmsSearchResult::Status::NotFound;
     result.message = lastLookupError;
   }

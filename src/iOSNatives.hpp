@@ -148,6 +148,8 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int &preferredWidth,
                                            int &preferredHeight);
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height);
+bool ProbeDownloadURLIOS(const std::string &url, std::string &errorMessage,
+                         IOSDownloadCheckpoint checkpoint);
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage,
                         IOSDownloadCheckpoint checkpoint = nullptr,
@@ -168,7 +170,8 @@ bool DownloadURLToFileIOS(const std::string &url,
                           std::uint64_t maximumBytes,
                           std::string &errorMessage,
                           IOSDownloadProgressCallback progressCallback = nullptr,
-                          void *progressContext = nullptr);
+                          void *progressContext = nullptr,
+                          std::function<bool(const std::string &, bool)> retryCallback = nullptr);
 bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           const IOSNormalizedRect &sourceAnchor,

@@ -12,6 +12,8 @@ bool FindBmsTask::start(Work work) {
     }
     running_ = true;
     pending_ = {};
+    retryRequest_.reset();
+    retryRequested_ = false;
   }
   if (worker_.joinable()) {
     worker_.join();
@@ -52,8 +54,48 @@ FindBmsTask::Updates FindBmsTask::takeUpdates() {
   return std::exchange(pending_, {});
 }
 
+BmsSearchDownloadRetryCallback FindBmsTask::retryCallback() {
+  return [this](const std::string &message, bool canResume) {
+    std::unique_lock lock(mutex_);
+    if (cancelled_.load() || !running_) return false;
+    retryRequest_ = RetryRequest{message, canResume};
+    retryRequested_ = false;
+    pending_.retryChanged = true;
+    retryCondition_.wait(lock, [this] {
+      return cancelled_.load() || retryRequested_;
+    });
+    const bool retry = retryRequested_ && !cancelled_.load();
+    retryRequest_.reset();
+    retryRequested_ = false;
+    pending_.retryChanged = true;
+    return retry;
+  };
+}
+
+std::optional<FindBmsTask::RetryRequest> FindBmsTask::retryRequest() const {
+  std::lock_guard lock(mutex_);
+  if (cancelled_.load() || retryRequested_) return std::nullopt;
+  return retryRequest_;
+}
+
+bool FindBmsTask::retryDownload() {
+  {
+    std::lock_guard lock(mutex_);
+    if (!retryRequest_ || retryRequested_ || cancelled_.load()) return false;
+    retryRequested_ = true;
+    pending_.retryChanged = true;
+  }
+  retryCondition_.notify_all();
+  return true;
+}
+
 void FindBmsTask::requestCancel() {
-  cancelled_ = true;
+  {
+    std::lock_guard lock(mutex_);
+    cancelled_ = true;
+    pending_.retryChanged = true;
+  }
+  retryCondition_.notify_all();
   if (worker_.joinable()) {
     worker_.request_stop();
   }
@@ -66,4 +108,6 @@ void FindBmsTask::stopAndWait() {
   }
   std::lock_guard lock(mutex_);
   pending_ = {};
+  retryRequest_.reset();
+  retryRequested_ = false;
 }

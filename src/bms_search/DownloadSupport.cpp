@@ -119,6 +119,12 @@ void reportIOSDownloadProgress(void *context, std::uint64_t downloadedBytes,
        .totalBytes = totalBytes});
 }
 
+bool probeDownloadUrl(const std::string &url, std::string &errorMessage,
+                      const std::atomic_bool *cancelled) {
+  return ProbeDownloadURLIOS(url, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); });
+}
+
 std::optional<std::string> fetchUrlText(
     const std::string &url, std::string &errorMessage,
     const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
@@ -167,7 +173,8 @@ std::optional<std::string> postUrlText(
 
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
-                       BmsSearchDownloadProgressCallback progressCallback) {
+                       BmsSearchDownloadProgressCallback progressCallback,
+                       BmsSearchDownloadRetryCallback retryCallback) {
   if (cancelled.load()) {
     errorMessage = "Download cancelled.";
     return false;
@@ -180,7 +187,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
       .progressCallback = &progressCallback};
   if (!DownloadURLToFileIOS(url, path, cancelled, maximumArchiveBytes,
                             errorMessage, reportIOSDownloadProgress,
-                            &progressContext)) {
+                            &progressContext, std::move(retryCallback))) {
     return false;
   }
   if (progressCallback) {
@@ -264,6 +271,54 @@ bool curlTextReceiveFailed(const CurlTextResponseContext &context,
     return true;
   }
   return false;
+}
+
+bool probeDownloadUrl(const std::string &url, std::string &errorMessage,
+                      const std::atomic_bool *cancelled) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return false;
+  }
+  std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  CurlEasyHandle curl(curl_easy_init());
+  if (curl == nullptr) {
+    errorMessage = "Failed to initialize HTTP client.";
+    return false;
+  }
+  CurlTextResponseContext context{.maximumResponseBytes = 0,
+                                  .cancelled = cancelled};
+  char curlError[CURL_ERROR_SIZE] = {};
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlTextProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
+  ConfigureCurlTrustStore(curl.get());
+  const CURLcode result = curl_easy_perform(curl.get());
+  long statusCode = 0;
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
+  if (curlTextReceiveFailed(context, errorMessage)) return false;
+  if (result != CURLE_OK) {
+    errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    errorMessage = "HTTP " + std::to_string(statusCode) + " while checking " + url;
+    return false;
+  }
+  return true;
 }
 
 std::optional<std::string> fetchUrlText(
@@ -444,7 +499,9 @@ int curlProgress(void *userdata, curl_off_t downloadTotal,
 
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
-                       BmsSearchDownloadProgressCallback progressCallback) {
+                       BmsSearchDownloadProgressCallback progressCallback,
+                       BmsSearchDownloadRetryCallback retryCallback) {
+  (void)retryCallback; // Nonresumable transports retry the complete archive attempt.
 #if TARGET_OS_ANDROID
   if (cancelled.load()) {
     errorMessage = "Download cancelled.";
@@ -548,7 +605,7 @@ std::filesystem::path makeDownloadDirectory(
   return Utils::GetDocumentsPath("BMS") / "BMSSEARCH";
 }
 
-bool downloadAndExtractArchive(
+static bool downloadAndExtractArchiveAttempt(
     const std::string &downloadUrl, const std::string &displayUrl,
     const std::string &archiveKey, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
@@ -622,7 +679,7 @@ bool downloadAndExtractArchive(
 
   std::string downloadError;
   if (!downloadUrlToFile(downloadUrl, archivePath, cancelled, downloadError,
-                         progressCallback)) {
+                         progressCallback, options.requestRetry)) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         downloadError.empty() ? "Download failed." : downloadError;
@@ -638,7 +695,7 @@ bool downloadAndExtractArchive(
   std::string driveWarningError;
   if (!GoogleDriveDriver::resolveWarningDownload(
           downloadUrl, result.downloadUrl, archivePath, cancelled,
-          driveWarningError, progressCallback)) {
+          driveWarningError, progressCallback, options.requestRetry)) {
     saveDebugArtifacts();
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
@@ -703,6 +760,38 @@ bool downloadAndExtractArchive(
     attemptCleanup.dismiss();
   }
   return processed;
+}
+
+bool downloadAndExtractArchive(
+    const std::string &downloadUrl, const std::string &displayUrl,
+    const std::string &archiveKey, const std::filesystem::path &libraryRoot,
+    std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
+    BmsSearchResult &result, const std::string &suggestedArchiveName,
+    const std::string &storageIdentity, bool *downloadedArchive) {
+  const BmsSearchResult lookupContext = result;
+  for (;;) {
+    const bool finished = downloadAndExtractArchiveAttempt(
+        downloadUrl, displayUrl, archiveKey, libraryRoot, cancelled,
+        progressCallback, options, result, suggestedArchiveName,
+        storageIdentity, downloadedArchive);
+    if (finished || cancelled.load() || result.pendingArtifact ||
+        !options.requestRetry) {
+      return finished;
+    }
+    // Keep the chosen URL and provider. Platforms without a retained native
+    // resume token restart this file only after an explicit user decision.
+    if (!options.requestRetry(result.message, false)) {
+      cancelled = true;
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Download cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
+      return false;
+    }
+    if (cancelled.load()) return false;
+    result = lookupContext;
+  }
 }
 
 

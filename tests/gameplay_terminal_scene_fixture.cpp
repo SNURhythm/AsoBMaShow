@@ -1122,6 +1122,34 @@ void testAuthoredCourseStageLiveCarry() {
   }
 }
 
+void testCourseResultKeepsLastChartMetadata() {
+  CoursePlaySession session;
+  session.courseName = "Metadata course";
+  session.entries.resize(2);
+  auto &last = session.entries.back().meta;
+  last.Bpm = 180;
+  last.MinBpm = 150;
+  last.MaxBpm = 210;
+  last.Difficulty = 4;
+  last.TotalNotes = 100;
+  last.PlayLength = 2'000'000;
+  session.entries.front().meta.TotalNotes = 200;
+  session.entries.front().meta.PlayLength = 3'000'000;
+  RhythmState state(nullptr, false);
+  session.completedResults.emplace_back(session.entries.front().meta, state);
+  session.completedResults.emplace_back(last, state);
+  for (const std::size_t index : {1U, 2U}) {
+    session.currentIndex = index;
+    const auto meta = courseResultMetaForSession(session);
+    require(meta.Bpm == 180 && meta.MinBpm == 150 && meta.MaxBpm == 210 &&
+                meta.Difficulty == 4,
+            "course-result skins retain last-chart BPM and difficulty");
+    require(meta.Title == "Metadata course" && meta.TotalNotes == 300 &&
+                meta.PlayLength == 5'000'000 && meta.PlayLevel == 2,
+            "last-chart metadata preserves aggregate course identity and totals");
+  }
+}
+
 void testCourseAbort() {
   for (const bool modern : {false, true}) {
     for (const bool midway : {false, true}) {
@@ -1886,6 +1914,7 @@ int main(int argc, char **argv) {
                           "course-menu", "result-retry", "replay", "retry", "practice", "fallback"}) {
     testActualDoublePlayFlipPreparation(path);
   }
+  testCourseResultKeepsLastChartMetadata();
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();

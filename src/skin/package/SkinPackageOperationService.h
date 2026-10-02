@@ -168,7 +168,7 @@ public:
   [[nodiscard]] SkinPackageOperationHandle submitRemove(SkinPackageId package);
   [[nodiscard]] SkinPackageOperationHandle
   submitPrepareActivation(VersionedSkinProfileSettings base, SkinEntryId entry,
-                          SkinProfileSettings candidate);
+                          SkinProfileSettings candidate, std::optional<int> targetSkinType = std::nullopt);
   [[nodiscard]] SkinPackageOperationHandle submitGarbageCollection();
   [[nodiscard]] SkinPackageOperationHandle
   submitReconcileProfileActivations(std::vector<SkinProfileId> profiles);

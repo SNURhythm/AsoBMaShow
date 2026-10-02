@@ -18,8 +18,14 @@ struct BmsSearchDownloadProgress {
 using BmsSearchDownloadProgressCallback =
     std::function<void(const BmsSearchDownloadProgress &)>;
 
+// Runs on the download worker. Keep the current transfer alive while waiting
+// for the user's decision; true retries/resumes it, false cancels it.
+using BmsSearchDownloadRetryCallback =
+    std::function<bool(const std::string &message, bool canResume)>;
+
 struct BmsSearchDownloadOptions {
   bool skipUnarchivingForNonSolidArchives = false;
+  BmsSearchDownloadRetryCallback requestRetry;
 };
 
 enum class BmsSearchPendingArtifactKind { Archive, ExtractedDirectory };

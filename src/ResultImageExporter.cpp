@@ -472,6 +472,10 @@ bms_parser::ChartMeta courseResultMetaForReplay(
       replay.courseName, replay.courseGroupName, chartCount,
       totalNotes, playLength);
   if (!charts.empty() && charts.back() != nullptr) {
+    meta.Bpm = charts.back()->Meta.Bpm;
+    meta.MinBpm = charts.back()->Meta.MinBpm;
+    meta.MaxBpm = charts.back()->Meta.MaxBpm;
+    meta.Difficulty = charts.back()->Meta.Difficulty;
     meta.Rank = charts.back()->Meta.Rank;
     meta.RankType = charts.back()->Meta.RankType;
   }

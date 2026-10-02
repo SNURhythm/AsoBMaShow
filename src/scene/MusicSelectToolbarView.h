@@ -6,12 +6,16 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <set>
 #include <vector>
 
 class TextView;
+class Button;
 
 enum class MusicSelectToolbarControl {
   Drag,
+  ChartMenu,
+  MoreMenu,
   ChartViewer,
   ChartRecords,
   RevealChart,
@@ -22,10 +26,11 @@ enum class MusicSelectToolbarControl {
   Settings,
   Collapse,
   Expand,
-  Hide,
 };
 
 struct MusicSelectToolbarCallbacks {
+  std::function<void()> openChartMenu;
+  std::function<void()> openMoreMenu;
   std::function<void()> openChartViewer;
   std::function<void()> openChartRecords;
   std::function<void()> revealChart;
@@ -41,6 +46,8 @@ struct MusicSelectToolbarRenderedControl {
   MusicSelectToolbarControl control = MusicSelectToolbarControl::Drag;
   std::uint32_t codepoint = 0;
   TextView *icon = nullptr;
+  TextView *label = nullptr;
+  Button *button = nullptr;
 };
 
 class MusicSelectToolbarView final : public View {
@@ -58,6 +65,8 @@ public:
 
   void applyState(MusicSelectToolbarState state);
   void activateControl(MusicSelectToolbarControl control);
+  void setControlEnabled(MusicSelectToolbarControl control, bool enabled);
+  [[nodiscard]] bool isControlEnabled(MusicSelectToolbarControl control) const;
   void setViewportSize(int width, int height);
 
 private:
@@ -65,7 +74,9 @@ private:
                          MusicSelectToolbarCallbacks callbacks,
                          int viewportWidth, int viewportHeight);
   bool handleEventsImpl(SDL_Event &event) override;
+  void onPointerEventConsumed(const SDL_Event &event) override;
   void rebuild();
+  void onLanguageChanged() override;
   void requestMode(MusicSelectToolbarMode mode);
   void persist();
   void place(float x, float y);
@@ -74,6 +85,7 @@ private:
   MusicSelectToolbarState state_;
   MusicSelectToolbarCallbacks callbacks_;
   std::vector<MusicSelectToolbarRenderedControl> controls_;
+  std::set<MusicSelectToolbarControl> disabledControls_;
   int viewportWidth_ = 0;
   int viewportHeight_ = 0;
   bool mouseDragging_ = false;

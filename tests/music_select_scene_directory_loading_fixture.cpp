@@ -252,6 +252,8 @@ struct MusicSelectScene {
   void syncResolvedFilters() {}
   void configureSoundServices() {}
   void beginSkinTextEditing(int) {}
+  int downloadPrompts = 0;
+  void openDownload() { ++downloadPrompts; }
   void launchSelected(bool autoplay = false, bool practice = false);
   bool openSameFolder(bool) { return false; }
   bool loadDirectoryChildren(const MusicSelectBar &directory) {
@@ -274,6 +276,18 @@ struct MusicSelectScene {
 };
 
 SCENE_METHODS
+
+void testMissingChartActivationOffersDownload() {
+  MusicSelectScene scene;
+  auto missing = song();
+  missing.chart->unavailable = true;
+  missing.chart->meta.BmsPath.clear();
+  scene.bars_.refresh({.bars = {missing}, .root = {missing.id}});
+  scene.selectedBarMoved();
+  expect(scene.downloadPrompts == 0, "browsing a missing chart does not prompt");
+  scene.launchSelected();
+  expect(scene.downloadPrompts == 1, "activating a missing chart opens confirmation");
+}
 
 void testArchiveConfirmation() {
   MusicSelectScene scene;
@@ -598,7 +612,8 @@ void testFailedSceneCancelsReadyAutoplay() {
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   const std::string test = argv[1];
-  if (test == "testArchiveConfirmation") testArchiveConfirmation();
+  if (test == "testMissingChartActivationOffersDownload") testMissingChartActivationOffersDownload();
+  else if (test == "testArchiveConfirmation") testArchiveConfirmation();
   else if (test == "testSolidArchiveDirectory") testSolidArchiveDirectory();
   else if (test == "testUnzipAllConfirmation") testUnzipAllConfirmation();
   else if (test == "testFailedPageRecovery") testFailedPageRecovery();

@@ -26,6 +26,7 @@
 #include "../view/IconText.h"
 #include "../view/OverlayPortal.h"
 #include "../view/TextView.h"
+#include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
@@ -41,6 +42,8 @@
 #include "ResultTouchControls.h"
 
 #include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
 #include "../rendering/Color.h"
@@ -315,6 +318,8 @@ courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
 
 SkinGameplayGraphState courseGameplayGraphForSession(
     const CoursePlaySession &session, const RhythmState &courseState) {
+  const int gaugeType = gaugeTypeIndex(courseState.gaugeType);
+  bool needsLegacyGaugeHistory = false;
   std::vector<SkinGameplayGraphState> stages;
   stages.reserve(session.entries.size());
   for (const auto &stage : session.completedResults) {
@@ -329,12 +334,35 @@ SkinGameplayGraphState courseGameplayGraphForSession(
     if (graph.dynamic == nullptr) {
       graph.dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
     }
+    if (gaugeType >= 0 &&
+        static_cast<std::size_t>(gaugeType) < graph.dynamic->gaugeHistories.size() &&
+        !graph.dynamic->gaugeHistoryOmitted &&
+        graph.dynamic->gaugeHistories[gaugeType].empty() &&
+        !stage.state.gaugeHistory.empty()) {
+      needsLegacyGaugeHistory = true;
+    }
     stages.push_back(std::move(graph));
   }
   for (std::size_t index = session.completedResults.size();
        index < session.entries.size(); ++index) {
     stages.push_back(
         courseGraphPaddingForEntry(session.entries[index], session.gaugeType));
+  }
+
+  if (needsLegacyGaugeHistory) {
+    // A partial sampled trace is not usable alongside an event-history fallback.
+    // Merge chart/gauge metadata without samples, then use the complete durable
+    // course history below. Retain explicit omission and oversized-trace flags.
+    for (auto &stage : stages) {
+      auto dynamic =
+          std::make_shared<SkinGameplayDynamicGraphState>(*stage.dynamic);
+      for (auto &history : dynamic->gaugeHistories) {
+        dynamic->gaugeHistoryOmitted = dynamic->gaugeHistoryOmitted ||
+                                      history.size() > kSkinMaximumGaugeGraphSamples;
+        history.clear();
+      }
+      stage.dynamic = std::move(dynamic);
+    }
   }
 
   SkinGameplayGraphState combined = combineSkinGameplayGraphStates(stages);
@@ -358,16 +386,18 @@ SkinGameplayGraphState courseGameplayGraphForSession(
 
   auto dynamic =
       std::make_shared<SkinGameplayDynamicGraphState>(*combined.dynamic);
-  const int gaugeType = gaugeTypeIndex(courseState.gaugeType);
   if (gaugeType >= 0 &&
       static_cast<std::size_t>(gaugeType) < dynamic->gaugeHistories.size()) {
     const std::size_t gaugeIndex = static_cast<std::size_t>(gaugeType);
     if (!dynamic->gaugeHistoryOmitted &&
-        dynamic->gaugeHistories[gaugeIndex].empty() &&
+        (needsLegacyGaugeHistory || dynamic->gaugeHistories[gaugeIndex].empty()) &&
         !courseState.gaugeHistory.empty()) {
-      // A legacy/no-graph result has no source-equivalent 500 ms log. Keep
+      // Padding can make the combined log nonempty even when a played stage
+      // has only durable history. Use the complete aggregate fallback, not a
+      // partial sampled log. A legacy result has no exact 500 ms log. Keep
       // the available state history, but do not attach stage offsets whose
       // sample coordinates cannot match it.
+      dynamic->gaugeHistories[gaugeIndex].clear();
       copySkinGameplayGaugeHistoryForDisplay(
           *dynamic, dynamic->gaugeHistories, courseState.gaugeHistory,
           courseState.gaugeType);
@@ -418,6 +448,11 @@ courseResultMetaForSession(const CoursePlaySession &session) {
       totalNotesForCourse(session), totalPlayLengthForCourse(session));
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
+    // CourseResult keeps the current SongData for chart properties.
+    meta.Bpm = currentMeta->Bpm;
+    meta.MinBpm = currentMeta->MinBpm;
+    meta.MaxBpm = currentMeta->MaxBpm;
+    meta.Difficulty = currentMeta->Difficulty;
     meta.Rank = currentMeta->Rank;
     meta.RankType = currentMeta->RankType;
     meta.BmsPath = currentMeta->BmsPath;
@@ -429,6 +464,11 @@ courseResultMetaForSession(const CoursePlaySession &session) {
     meta.TotalBackSpinNotes = currentMeta->TotalBackSpinNotes;
   } else if (!session.completedResults.empty()) {
     const auto &lastMeta = session.completedResults.back().meta;
+    // CourseResult keeps the current SongData for chart properties.
+    meta.Bpm = lastMeta.Bpm;
+    meta.MinBpm = lastMeta.MinBpm;
+    meta.MaxBpm = lastMeta.MaxBpm;
+    meta.Difficulty = lastMeta.Difficulty;
     meta.Rank = lastMeta.Rank;
     meta.RankType = lastMeta.RankType;
     meta.BmsPath = lastMeta.BmsPath;
@@ -616,8 +656,10 @@ ResultScene::ResultScene(
     local.laneOrderLabel = courseDisplay.laneOrder;
   }
   if (isCourseStageResult()) {
-    local.currentClearLabelOverride = "NO PLAY";
-    local.currentClearRankOverride = kNoClearTypeRank;
+    const int clearRank = result_presentation::courseStageClearRank(
+        local.resultState, local.meta, local.attemptProvenance.playback);
+    local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+    local.currentClearRankOverride = clearRank;
   } else if (isCourseFinalResult()) {
     local.headerDifficultyLabelOverride = "COURSE";
     const auto &session = *local.courseOptions.session;
@@ -722,6 +764,10 @@ bool ResultScene::startSelectedResultSkin() {
              return context.settings.audioVideo.audio.masterVolume;
            }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,
+       .captureLegacyInputGeneration = [this] {
+         return context.inputDeviceRegistry.legacyInputGeneration(
+             rendering::render_width, rendering::render_height);
+       },
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
   for (auto &diagnostic : created.diagnostics) {
     appendDiagnostic(entry, revisionDigest, configurationDigest,
@@ -868,6 +914,9 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.autoPlayResult = local->autoPlayResult;
   data.courseResult = isCourseFinalResult();
   if (local->courseOptions.session != nullptr) {
+    data.courseMode = true;
+    data.courseStageIndex = local->courseOptions.session->currentIndex;
+    data.courseStageCount = local->courseOptions.session->entries.size();
     data.courseTitles = local->courseOptions.session->beatorajaSkinStageTitles();
     if (isCourseFinalResult()) {
       data.courseTitle = local->courseOptions.session->courseName;
@@ -2124,6 +2173,7 @@ void ResultScene::buildResultTouchControls() {
       availability.next = true;
       availability.exportPhoto = !local->autoPlayResult;
     } else if (isCourseFinalResult()) {
+      availability.courseDetails = local->courseOptions.session != nullptr;
       const auto &course = local->courseOptions;
       availability.replay = course.session != nullptr &&
                              course.session->courseReplayData != nullptr &&
@@ -2267,6 +2317,10 @@ void ResultScene::buildResultTouchControls() {
       label = i18n::tr("result.next.label");
       accent = ui_theme::successAction();
       callback = [this]() { continueCourse(); };
+      break;
+    case ResultTouchControlAction::CourseDetails:
+      label = i18n::tr("result.course.details.label");
+      callback = [this]() { showCourseDetails(); };
       break;
     case ResultTouchControlAction::Hide:
       label = i18n::tr("result.hide.label");
@@ -2691,6 +2745,119 @@ void ResultScene::openRankings() {
       std::move(title));
 }
 
+void ResultScene::showCourseDetails() {
+  const auto *local = localSource();
+  if (local == nullptr || local->courseOptions.session == nullptr ||
+      rootLayout == nullptr) return;
+  if (courseDetailsModalRoot != nullptr) {
+    courseDetailsModalRoot->setVisible(true);
+    return;
+  }
+  courseDetailsModalRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  courseDetailsModalRoot->setPositionType(YGPositionTypeAbsolute);
+  courseDetailsModalRoot->setPosition(Edge::Left, 0);
+  courseDetailsModalRoot->setPosition(Edge::Top, 0);
+  courseDetailsModalRoot->setZIndex(2300);
+  courseDetailsModalRoot->setFlexDirection(FlexDirection::Column);
+  courseDetailsModalRoot->setAlignItems(YGAlignCenter);
+  courseDetailsModalRoot->setJustifyContent(YGJustifyCenter);
+  courseDetailsModalRoot->setBackgroundColor(ui_theme::scrim());
+
+  auto *panel = new View();
+  panel->setName("courseDetailsPanel");
+  panel->setSize(std::min(900, rendering::window_width - 32),
+                 std::max(1, rendering::window_height - 32));
+  panel->setFlexDirection(FlexDirection::Column);
+  panel->setAlignItems(YGAlignStretch);
+  panel->setPadding(Edge::All, 20);
+  panel->setGap(12);
+  panel->setCornerRadius(ui_theme::panelRadius());
+  panel->setBackgroundColor(ui_theme::panelStrong());
+  const auto label = [](const std::string &text, int size, Color color) {
+    auto *view = new TextView("assets/fonts/notosanscjkjp.ttf", size);
+    view->setText(text);
+    view->setColor(ui_theme::sdl(color));
+    view->setHeight(size + 12);
+    view->setFlexShrink(0);
+    view->setOverflow(TextView::TextOverflow::Marquee);
+    return view;
+  };
+  panel->addView(label(i18n::tr("result.course.details.label"), 28,
+                       ui_theme::textPrimary()));
+  if (const auto grade = gradeCard(local->presentation)) {
+    panel->addView(label(std::string(i18n::tr("result.course.achievement.label")) + ": " +
+                            grade->rate + "  ·  " + grade->grade,
+                        22, ui_theme::cyan()));
+  }
+  auto *scroll = new ScrollView();
+  scroll->setFlex(1);
+  scroll->setMinHeight(0);
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Column);
+  content->setAlignItems(YGAlignStretch);
+  content->setGap(16);
+  auto stages = makeCourseStagePresentations(*local->courseOptions.session);
+  for (std::size_t index = 0; index < stages.size(); ++index) {
+    auto &stage = stages[index];
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Column);
+    row->setAlignItems(YGAlignStretch);
+    row->setFlexShrink(0);
+    row->setPadding(Edge::All, 12);
+    row->setGap(6);
+    row->setBackgroundColor(ui_theme::resultBackdrop());
+    row->setCornerRadius(ui_theme::controlRadius());
+    row->addView(label(std::to_string(index + 1) + ". " + stage.title, 22,
+                       ui_theme::textPrimary()));
+    if (stage.result) {
+      const auto &result = *stage.result;
+      const auto grade = gradeCard(result);
+      row->addView(label(
+          std::string(i18n::tr("result.course.achievement.label")) + ": " +
+              (grade ? grade->rate : "—") + "  ·  EX " +
+              std::to_string(result.score.value_or(0)) + " / " +
+              std::to_string(result.maxScore.value_or(0)),
+          20, ui_theme::cyan()));
+      std::ostringstream gauge;
+      gauge << std::fixed << std::setprecision(1)
+            << result.finalGauge.value_or(0.0F);
+      row->addView(label(
+          "BP " + std::to_string(result.badPoints.value_or(0)) +
+              "  ·  " + result.gaugeType.value_or("GAUGE") + " " + gauge.str() + "%",
+          18, ui_theme::textSecondary()));
+      if (!result.gaugeSeries.empty()) {
+        auto *graph = new ResultGaugeGraphView(std::move(stage.result->gaugeSeries));
+        graph->setHeight(100);
+        graph->setFlexShrink(0);
+        row->addView(graph);
+      }
+    } else {
+      row->addView(label(i18n::tr("result.course.not_played.label"), 20,
+                         ui_theme::textMuted()));
+    }
+    content->addView(row);
+  }
+  scroll->setContentView(content);
+  panel->addView(scroll);
+  auto *close = new Button();
+  auto *closeText = label(i18n::tr("result.close.label"), 22,
+                           ui_theme::textPrimary());
+  closeText->setAlign(TextView::CENTER);
+  closeText->setVAlign(TextView::MIDDLE);
+  close->setContentView(closeText);
+  close->setHeight(52);
+  close->setFlexShrink(0);
+  close->setBackgroundColors(ui_theme::infoAction(), ui_theme::infoActionHover(),
+                              ui_theme::infoActionPressed());
+  close->setCornerRadius(ui_theme::controlRadius());
+  close->setOnClickListener([this]() { courseDetailsModalRoot->setVisible(false); });
+  panel->addView(close);
+  courseDetailsModalRoot->addView(panel);
+  rootLayout->addView(courseDetailsModalRoot);
+  rootLayout->applyYogaLayout();
+}
+
 void ResultScene::addCourseButtons() {
   auto *local = localSource();
   if (local == nullptr || rootLayout == nullptr) {
@@ -2723,6 +2890,15 @@ void ResultScene::addCourseButtons() {
     button->setStyledBorderWidth(1);
     return std::pair<Button *, TextView *>(button, text);
   };
+
+  if (isCourseFinalResult() && courseOptions.session != nullptr) {
+    auto [detailsButton, ignoredText] = makeButton(
+        i18n::tr("result.course.details.label"), ui_theme::infoAction(),
+        ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
+        ui_theme::cyan(), [this]() { showCourseDetails(); });
+    (void)ignoredText;
+    actionHost->addView(detailsButton);
+  }
 
   if (isCourseStageResult()) {
     auto [nextButton, ignoredText] = makeButton(
@@ -4158,10 +4334,41 @@ void ResultScene::consumeResultSkinBuiltinEvents() {
 
 EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::optional<UiLogicalPoint> observedPointer;
+  UiLogicalPoint point;
+  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+             event.button.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
+             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
+    observedPointer = point;
+  }
+  if (observedPointer) {
+    resultSkinPointerUiPosition = observedPointer;
+    if (resultSkinSession) resultSkinSession->setPointerPosition(*observedPointer);
+  }
+#endif
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (resultSkinFadeoutStartedMillis) {
     return {};
   }
 #endif
+  if (courseDetailsModalRoot != nullptr && courseDetailsModalRoot->getVisible()) {
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+      courseDetailsModalRoot->setVisible(false);
+    } else {
+      courseDetailsModalRoot->handleEvents(event);
+    }
+    return {};
+  }
   // Result overlays and touch controls are rendered above a selected skin and
   // must receive the corresponding pointer event first.
   const bool resultSkinPointerContinuation =
@@ -4188,6 +4395,19 @@ bool ResultScene::renderViewBeforeScene(const View *view) const {
 void ResultScene::renderScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (resultSkinSession) {
+    if (const auto pointer = context.inputDeviceRegistry.pointerPosition()) {
+      UiLogicalPoint point;
+      if (pointer->normalized) {
+        rendering::normalizedToUi(pointer->x, pointer->y, point.x, point.y);
+      } else {
+        rendering::screenToUi(pointer->x * rendering::widthScale,
+                              pointer->y * rendering::heightScale, point.x, point.y);
+      }
+      resultSkinPointerUiPosition = point;
+    }
+    if (resultSkinPointerUiPosition) {
+      resultSkinSession->setPointerPosition(*resultSkinPointerUiPosition);
+    }
     RenderContext renderContext(context.uiBatchRenderer);
     RenderContext::UiBatchScope uiBatchScope(renderContext);
     ResultSkinData skinData = makeResultSkinData();
@@ -4205,7 +4425,8 @@ void ResultScene::renderScene() {
         local != nullptr && isCourseStageResult() &&
         local->courseOptions.session != nullptr &&
         local->courseOptions.session->courseReplayPlayback;
-    if (persistenceDecisionRequired()) {
+    if (persistenceDecisionRequired() ||
+        (courseDetailsModalRoot != nullptr && courseDetailsModalRoot->getVisible())) {
       resultSkinFadeoutStartedMillis.reset();
     } else if (!courseReplayRestOwnsTransition &&
                elapsedMillis > resultSkinSession->sceneMillis()) {
@@ -4236,6 +4457,13 @@ void ResultScene::renderScene() {
     persistenceDetailsModalRoot->setSize(rendering::window_width,
                                          rendering::window_height);
   }
+  if (courseDetailsModalRoot != nullptr) {
+    courseDetailsModalRoot->setSize(rendering::window_width, rendering::window_height);
+    if (auto *panel = courseDetailsModalRoot->findViewByName("courseDetailsPanel")) {
+      panel->setSize(std::max(1, std::min(900, rendering::window_width - 32)),
+                     std::max(1, rendering::window_height - 32));
+    }
+  }
   if (rankingOverlayPortal != nullptr) {
     rankingOverlayPortal->setSize(rendering::window_width,
                                   rendering::window_height);
@@ -4263,6 +4491,7 @@ void ResultScene::cleanupScene() {
   persistenceRetryButton = nullptr;
   persistenceDetailsButton = nullptr;
   persistenceDetailsModalRoot = nullptr;
+  courseDetailsModalRoot = nullptr;
   persistenceDetailsStateText = nullptr;
   persistenceDetailsReasonText = nullptr;
   persistenceDetailsReferenceText = nullptr;

@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "CoursePlaySession.h"
 #include "i18n/Localization.h"
 #include "scene/ResultPhotoExportPresentation.h"
 #include "scene/ResultSkinFailurePresentation.h"
@@ -264,6 +265,37 @@ ir::IrRemoteScore remoteScore() {
       .inputDevice = "KEYBOARD",
       .client = "AsoBMaShow",
   };
+}
+
+void testCourseStageDetailsPreservePerChartFacts() {
+  CoursePlaySession session;
+  bms_parser::ChartMeta first{.Title = "First", .TotalNotes = 10};
+  bms_parser::ChartMeta second{.Title = "Second", .TotalNotes = 20};
+  session.entries = {{first}, {second}, {{.Title = "Unplayed"}}};
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 4;
+  state.judgeCount[Great] = 2;
+  state.maxCombo = 5;
+  state.currentGauge = 72.5F;
+  state.gaugeHistory = {100.0F, 72.5F};
+  session.completedResults.emplace_back(first, state);
+  state.judgeCount[PGreat] = 10;
+  state.judgeCount[Great] = 0;
+  state.currentGauge = 0.0F;
+  state.gaugeHistory = {72.5F, 0.0F};
+  session.completedResults.emplace_back(second, state);
+  const auto stages = makeCourseStagePresentations(session);
+  expect(stages.size() == 3 && stages[0].title == "First" &&
+             stages[1].title == "Second" && !stages[2].result,
+         "course details retain order and distinguish unplayed charts");
+  expect(stages[0].result->score == 10 && stages[0].result->maxScore == 20 &&
+             !stages[0].result->maxCombo &&
+             gradeCard(*stages[0].result)->rate == "50.00%" &&
+             stages[0].result->finalGauge == 72.5F &&
+             stages[1].result->finalGauge == 0.0F &&
+             stages[0].result->gaugeSeries.front().points.back() == 72.5F &&
+             stages[1].result->gaugeSeries.front().points.back() == 0.0F,
+         "each chart uses its own EX achievement and gauge, including failure");
 }
 
 void testLocalNormalParity() {
@@ -1142,6 +1174,13 @@ void testResultTouchControlsHideAndRestorePresentation() {
                                     ResultTouchControlAction::Hide},
          "selected touch result skins expose the built-in actions and Hide");
 
+  const auto course = makeResultTouchControlPresentation(
+      {.skinSelected = true}, {.back = true, .courseDetails = true});
+  expect(course.actions == std::vector<ResultTouchControlAction>{
+             ResultTouchControlAction::Back, ResultTouchControlAction::CourseDetails,
+             ResultTouchControlAction::Hide},
+         "custom course skins retain access to the application chart breakdown");
+
   const auto hidden = makeResultTouchControlPresentation(
       {.skinSelected = true, .hidden = true},
       availability);
@@ -1215,6 +1254,7 @@ int main() {
     return 1;
   }
   ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
+  testCourseStageDetailsPreservePerChartFacts();
   testLocalNormalParity();
   testLocalPacemakerAndRecallParity();
   testLocalGasGaugeOrder();

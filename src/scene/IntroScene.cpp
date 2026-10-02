@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "IntroScene.h"
+#include "MainMenuScene.h"
 
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
@@ -73,12 +74,19 @@ void IntroScene::buildView() {
   settingsButton_ = button(i18n::tr("intro.settings.label"));
   settingsButton_->setOnClickListener([this] { openSettings(); });
   rootLayout_->addView(settingsButton_);
+  tutorialButton_ = button(i18n::tr("tutorial.replay.label"));
+  tutorialButton_->setOnClickListener([this] { startTutorial(); });
+  rootLayout_->addView(tutorialButton_);
   rootLayout_->applyYogaLayout();
   layoutWidth_ = rendering::window_width;
   layoutHeight_ = rendering::window_height;
 }
 
 void IntroScene::start() {
+  if (!context.applicationUiState.newcomerTutorialCompleted) {
+    startTutorial();
+    return;
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skin::GameplaySkinAcquisition acquisition;
   if (context.gameplaySkinLifecycle) {
@@ -114,6 +122,14 @@ void IntroScene::openSettings() {
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
       SceneReturnTarget::Registered("Intro")));
+}
+
+void IntroScene::startTutorial() {
+  // Gameplay and other menu screens return to the registered MainMenu.
+  // Register the tutorial instance so those returns resume its retained state.
+  context.sceneManager->registerScene(
+      "MainMenu", std::make_unique<MainMenuScene>(context, true));
+  context.sceneManager->changeScene("MainMenu");
 }
 
 EventHandleResult IntroScene::handleEvents(SDL_Event &event) {
@@ -161,6 +177,7 @@ void IntroScene::cleanupScene() {
   rootLayout_ = nullptr;
   startButton_ = nullptr;
   settingsButton_ = nullptr;
+  tutorialButton_ = nullptr;
   layoutWidth_ = -1;
   layoutHeight_ = -1;
 }
@@ -197,16 +214,15 @@ void IntroScene::stopInputListening() {
 }
 
 void IntroScene::syncNavigationSelection() {
-  if (startButton_ == nullptr || settingsButton_ == nullptr) return;
-  const bool startSelected = navigation_.choice() == IntroSceneChoice::Start;
-  startButton_->setSelected(startSelected);
-  settingsButton_->setSelected(!startSelected);
-  startButton_->setThemedBorderColors(
-      startSelected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
-      ui_theme::accentBorder, ui_theme::accentBorderStrong);
-  settingsButton_->setThemedBorderColors(
-      startSelected ? ui_theme::hairlineStrong : ui_theme::accentBorderStrong,
-      ui_theme::accentBorder, ui_theme::accentBorderStrong);
+  const std::array buttons{startButton_, settingsButton_, tutorialButton_};
+  for (std::size_t i = 0; i < buttons.size(); ++i) {
+    if (buttons[i] == nullptr) continue;
+    const bool selected = static_cast<std::size_t>(navigation_.choice()) == i;
+    buttons[i]->setSelected(selected);
+    buttons[i]->setThemedBorderColors(
+        selected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
+        ui_theme::accentBorder, ui_theme::accentBorderStrong);
+  }
 }
 
 void IntroScene::processNavigationInput() {
@@ -218,6 +234,8 @@ void IntroScene::processNavigationInput() {
   if (!result.activated) return;
   if (*result.activated == IntroSceneChoice::Settings) {
     openSettings();
+  } else if (*result.activated == IntroSceneChoice::Tutorial) {
+    startTutorial();
   } else {
     start();
   }

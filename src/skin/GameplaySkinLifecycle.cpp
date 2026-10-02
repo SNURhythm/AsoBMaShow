@@ -58,7 +58,12 @@ bool sameIdentity(const PlaySkinSessionIdentity &left,
 }
 
 bool selectsGameplayEntry(const SkinProfileSettings &settings,
-                          const SkinEntryId &entry) {
+                          const SkinEntryId &entry,
+                          std::optional<int> target = std::nullopt) {
+  if (target) {
+    const auto selected = settings.selectedSkinEntries.find(*target);
+    return selected != settings.selectedSkinEntries.end() && selected->second == entry;
+  }
   return std::ranges::any_of(
       settings.selectedSkinEntries,
       [&entry](const auto &selection) { return selection.second == entry; });
@@ -107,9 +112,9 @@ GameplaySkinLifecycleDependencies makeProductionDependencies(
           },
       .submitPrepareActivation =
           [&operations](VersionedSkinProfileSettings base, SkinEntryId entry,
-                        SkinProfileSettings candidate) {
+                        SkinProfileSettings candidate, std::optional<int> target) {
             auto handle = operations.submitPrepareActivation(
-                std::move(base), std::move(entry), std::move(candidate));
+                std::move(base), std::move(entry), std::move(candidate), target);
             GameplaySkinLifecycleOperationSubmission result{.ticket =
                                                                 handle.ticket};
             if (handle.ticket == 0) {
@@ -237,6 +242,7 @@ struct GameplaySkinLifecycle::Impl {
 
   struct WriterChain {
     std::uint64_t generation = 0;
+    int targetSkinType = 0;
     PlaySkinSessionIdentity identity;
     VersionedSkinProfileSettings base;
     std::deque<SkinConfigurationWriteRequest> pending;
@@ -249,6 +255,7 @@ struct GameplaySkinLifecycle::Impl {
   struct PendingRevalidation {
     VersionedSkinProfileSettings base;
     SkinEntryId entry;
+    std::optional<int> targetSkinType;
   };
 
   struct PendingViewportCommit {
@@ -429,9 +436,9 @@ struct GameplaySkinLifecycle::Impl {
       return;
     }
     auto candidate = writer->base.settings;
-    const auto found = candidate.entries.find(writer->identity.entry);
-    if (found == candidate.entries.end() ||
-        !selectsGameplayEntry(candidate, writer->identity.entry)) {
+    const auto found = candidate.entriesForTarget(writer->targetSkinType).find(writer->identity.entry);
+    if (found == candidate.entriesForTarget(writer->targetSkinType).end() ||
+        !selectsGameplayEntry(candidate, writer->identity.entry, writer->targetSkinType)) {
       invalidateWriterChain(
           "skin.lifecycle.writer_entry_changed",
           "The selected gameplay skin entry changed before writer commit");
@@ -441,15 +448,15 @@ struct GameplaySkinLifecycle::Impl {
       applyWrite(found->second, write);
     }
     candidate.sanitize();
-    if (!selectsGameplayEntry(candidate, writer->identity.entry) ||
-        !candidate.entries.contains(writer->identity.entry)) {
+    if (!selectsGameplayEntry(candidate, writer->identity.entry, writer->targetSkinType) ||
+        !candidate.entriesForTarget(writer->targetSkinType).contains(writer->identity.entry)) {
       invalidateWriterChain(
           "skin.lifecycle.writer_candidate_invalid",
           "The gameplay skin writer candidate failed sanitization");
       return;
     }
     auto submission = deps.submitPrepareActivation(
-        writer->base, writer->identity.entry, std::move(candidate));
+        writer->base, writer->identity.entry, std::move(candidate), writer->targetSkinType);
     appendAll(std::move(submission.diagnostics), SkinDiagnosticPhase::Session,
               writer->identity);
     if (submission.ticket == 0) {
@@ -526,12 +533,20 @@ struct GameplaySkinLifecycle::Impl {
     } catch (...) {
       return;
     }
-    if (!selectsGameplayEntry(work.base.settings, work.entry)) {
-      return;
+    if (!selectsGameplayEntry(work.base.settings, work.entry, work.targetSkinType)) {
+      // Native source types may be normalized during recovery. Additional
+      // modes have independent settings and must never follow another mode.
+      if (!work.targetSkinType || *work.targetSkinType < 0) return;
+      const auto normalized = std::ranges::find_if(
+          work.base.settings.selectedSkinEntries, [&work](const auto &selection) {
+            return selection.first >= 0 && selection.second == work.entry;
+          });
+      if (normalized == work.base.settings.selectedSkinEntries.end()) return;
+      work.targetSkinType = normalized->first;
     }
     SkinProfileSettings candidate = work.base.settings;
     auto submission = deps.submitPrepareActivation(
-        std::move(work.base), std::move(work.entry), std::move(candidate));
+        std::move(work.base), std::move(work.entry), std::move(candidate), work.targetSkinType);
     appendAll(std::move(submission.diagnostics),
               SkinDiagnosticPhase::Validation);
     if (submission.ticket != 0) {
@@ -613,8 +628,8 @@ struct GameplaySkinLifecycle::Impl {
           const auto base = deps.snapshotProfile(*activeProfile);
           for (const auto &[skinType, entry] :
                base.settings.selectedSkinEntries) {
-            (void)skinType;
-            pendingRevalidations.push_back({.base = base, .entry = entry});
+            pendingRevalidations.push_back(
+                {.base = base, .entry = entry, .targetSkinType = skinType});
           }
         } catch (...) {
         }
@@ -647,7 +662,7 @@ struct GameplaySkinLifecycle::Impl {
       }
       const auto &successor = *prepared->prepared;
       const auto successorEntry =
-          successor.candidateProfileSettings.entries.find(writer->identity.entry);
+          successor.candidateProfileSettings.entriesForTarget(writer->targetSkinType).find(writer->identity.entry);
       const bool identityChanged =
           successor.profileId != writer->identity.profileId ||
           successor.expectedProfileGeneration != writer->base.generation ||
@@ -655,8 +670,8 @@ struct GameplaySkinLifecycle::Impl {
           successor.activation.revision.revision().lowercaseSha256 !=
               writer->identity.revisionDigest ||
           !selectsGameplayEntry(successor.candidateProfileSettings,
-                                writer->identity.entry) ||
-          successorEntry == successor.candidateProfileSettings.entries.end() ||
+                                writer->identity.entry, writer->targetSkinType) ||
+          successorEntry == successor.candidateProfileSettings.entriesForTarget(writer->targetSkinType).end() ||
           successorEntry->second != successor.activation.reconciledSettings ||
           skinConfigurationDigest(successor.activation.reconciledSettings) !=
               successor.activation.configurationDigest;
@@ -741,14 +756,14 @@ struct GameplaySkinLifecycle::Impl {
               ActivationCommitDisposition::ActivatedRequested &&
           completion.result.profileSnapshot && completion.result.activation) {
         const auto successorEntry =
-            completion.result.profileSnapshot->settings.entries.find(
+            completion.result.profileSnapshot->settings.entriesForTarget(writer->targetSkinType).find(
                 writer->identity.entry);
         const bool exactSuccessor =
             writer->commitSuccessor &&
             *completion.result.profileSnapshot == *writer->commitSuccessor &&
             ownerStillMatches(*writer->commitSuccessor) &&
             successorEntry !=
-                completion.result.profileSnapshot->settings.entries.end() &&
+                completion.result.profileSnapshot->settings.entriesForTarget(writer->targetSkinType).end() &&
             completion.result.activation->entry == writer->identity.entry &&
             completion.result.activation->revision.revision().lowercaseSha256 ==
                 writer->identity.revisionDigest &&
@@ -777,11 +792,11 @@ struct GameplaySkinLifecycle::Impl {
     }
     try {
       auto snapshot = deps.snapshotProfile(identity.profileId);
-      if (!selectsGameplayEntry(snapshot.settings, identity.entry)) {
+      if (!selectsGameplayEntry(snapshot.settings, identity.entry, currentTargetSkinType)) {
         return std::nullopt;
       }
-      const auto entry = snapshot.settings.entries.find(identity.entry);
-      if (entry == snapshot.settings.entries.end()) {
+      const auto entry = snapshot.settings.entriesForTarget(currentTargetSkinType).find(identity.entry);
+      if (entry == snapshot.settings.entriesForTarget(currentTargetSkinType).end()) {
         return std::nullopt;
       }
       auto expectedConfigurationDigest = identity.configurationDigest;
@@ -801,8 +816,8 @@ struct GameplaySkinLifecycle::Impl {
         }
         if (matchesPendingWriter) {
           const auto committedEntry =
-              writer->base.settings.entries.find(identity.entry);
-          if (committedEntry == writer->base.settings.entries.end()) {
+              writer->base.settings.entriesForTarget(writer->targetSkinType).find(identity.entry);
+          if (committedEntry == writer->base.settings.entriesForTarget(writer->targetSkinType).end()) {
             return std::nullopt;
           }
           expectedConfigurationDigest =
@@ -842,12 +857,12 @@ struct GameplaySkinLifecycle::Impl {
       return {.disposition = GameplayViewportPersistenceDisposition::Rejected,
               .diagnostic = std::move(diagnostic)};
     }
-    const auto found = base->settings.entries.find(identity.entry);
-    if (found == base->settings.entries.end()) {
+    const auto found = base->settings.entriesForTarget(currentTargetSkinType).find(identity.entry);
+    if (found == base->settings.entriesForTarget(currentTargetSkinType).end()) {
       return {.disposition = GameplayViewportPersistenceDisposition::Rejected};
     }
     auto candidate = base->settings;
-    candidate.entries.at(identity.entry).viewport = viewport;
+    candidate.entriesForTarget(currentTargetSkinType).at(identity.entry).viewport = viewport;
     candidate.sanitize();
     auto submission = deps.submitProfileSettings(*base, candidate);
     appendAll(std::move(submission.diagnostics), SkinDiagnosticPhase::Session,
@@ -1027,6 +1042,7 @@ struct GameplaySkinLifecycle::Impl {
   GameplaySkinLifecycleDependencies deps;
   std::optional<SkinProfileId> activeProfile;
   std::optional<PlaySkinSessionIdentity> currentIdentity;
+  int currentTargetSkinType = 0;
   std::string lastSkinRevisionDigest;
   std::optional<WriterChain> writer;
   std::deque<PendingRevalidation> pendingRevalidations;
@@ -1090,10 +1106,11 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
     const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
     for (const auto &[skinType, entry] :
          snapshot.settings.selectedSkinEntries) {
-      (void)skinType;
-      const auto configured = snapshot.settings.entries.find(entry);
-      if (configured == snapshot.settings.entries.end()) {
-        impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
+      const auto &targetEntries = snapshot.settings.entriesForTarget(skinType);
+      const auto configured = targetEntries.find(entry);
+      if (configured == targetEntries.end()) {
+        impl_->pendingRevalidations.push_back(
+            {.base = snapshot, .entry = entry, .targetSkinType = skinType});
         continue;
       }
       const auto digest = skinConfigurationDigest(configured->second);
@@ -1103,7 +1120,8 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
               : AcquireActivationResult{};
       if (!acquired.activation || acquired.activation->entry != entry ||
           acquired.activation->configurationDigest != digest) {
-        impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
+        impl_->pendingRevalidations.push_back(
+            {.base = snapshot, .entry = entry, .targetSkinType = skinType});
       }
     }
   } catch (...) {
@@ -1143,8 +1161,8 @@ void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
     const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
     for (const auto &[skinType, entry] :
          snapshot.settings.selectedSkinEntries) {
-      (void)skinType;
-      impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
+      impl_->pendingRevalidations.push_back(
+          {.base = snapshot, .entry = entry, .targetSkinType = skinType});
     }
   } catch (...) {
   }
@@ -1193,9 +1211,13 @@ void GameplaySkinLifecycle::requestRevalidation(const SkinEntryId &entry) {
     return;
   }
   try {
-    impl_->pendingRevalidations.push_back(
-        {.base = impl_->deps.snapshotProfile(*impl_->activeProfile),
-         .entry = entry});
+    const auto base = impl_->deps.snapshotProfile(*impl_->activeProfile);
+    for (const auto &[target, selected] : base.settings.selectedSkinEntries) {
+      if (selected == entry) {
+        impl_->pendingRevalidations.push_back(
+            {.base = base, .entry = entry, .targetSkinType = target});
+      }
+    }
   } catch (...) {
   }
 }
@@ -1236,8 +1258,8 @@ void GameplaySkinLifecycle::poll() {
     for (auto &snapshot : impl_->deps.takeRevalidationRequests()) {
       for (const auto &[skinType, entry] :
            snapshot.settings.selectedSkinEntries) {
-        (void)skinType;
-        impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
+        impl_->pendingRevalidations.push_back(
+            {.base = snapshot, .entry = entry, .targetSkinType = skinType});
       }
     }
   }
@@ -1299,8 +1321,8 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
       return {};
     }
     requestedEntry = selectedTrait->second;
-    const auto selected = base.settings.entries.find(*requestedEntry);
-    if (selected == base.settings.entries.end()) {
+    const auto selected = base.settings.entriesForTarget(skinType).find(*requestedEntry);
+    if (selected == base.settings.entriesForTarget(skinType).end()) {
       return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
               .failure = GameplaySkinAcquisitionFailure{
                   .entry = std::move(requestedEntry),
@@ -1359,8 +1381,10 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
     if (chartBoundary) {
       const auto chainGeneration = ++impl_->nextChainGeneration;
       impl_->writer.emplace(Impl::WriterChain{
-          .generation = chainGeneration, .identity = identity, .base = base});
+          .generation = chainGeneration, .targetSkinType = skinType,
+          .identity = identity, .base = base});
       impl_->currentIdentity = identity;
+      impl_->currentTargetSkinType = skinType;
     }
     if (identity.revisionDigest != impl_->lastSkinRevisionDigest) {
       impl_->lastSkinRevisionDigest = identity.revisionDigest;

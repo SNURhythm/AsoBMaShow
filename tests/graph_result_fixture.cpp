@@ -41,12 +41,14 @@ void testCoursePadding() {
 
 void testCourseFallback() {
   bms_parser::Chart chart;
+  chart.Meta.PlayLength = 1'000'000;
   RhythmState state(&chart, false);
   state.gaugeHistory = {20.0F, 80.0F};
   CoursePlaySession session;
   session.entries.resize(1);
   session.completedResults.emplace_back(chart.Meta, state);
   auto graphChart = std::make_shared<SkinGameplayChartGraphState>();
+  graphChart->judgementDistributionSeconds = 1;
   auto graphDynamic = std::make_shared<SkinGameplayDynamicGraphState>();
   session.completedResults.front().gameplayGraph =
       {.chart = graphChart, .dynamic = graphDynamic};
@@ -54,6 +56,17 @@ void testCourseFallback() {
   require(legacy.dynamic->gaugeHistories[gaugeTypeIndex(state.gaugeType)] ==
               state.gaugeHistory,
           "admitted legacy result without sampled graph retains event fallback");
+
+  session.entries.resize(2);
+  session.entries.back().meta.PlayLength = 1'000'000;
+  RhythmState partialCourse = state;
+  partialCourse.gaugeHistory = {20.0F, 80.0F, 0.0F, 0.0F, 0.0F};
+  const auto partial = courseGameplayGraphForSession(session, partialCourse);
+  require(partial.dynamic->gaugeHistories[gaugeTypeIndex(state.gaugeType)] ==
+              partialCourse.gaugeHistory &&
+              partial.dynamic->gaugeHistorySections.empty(),
+          "unplayed zero padding must not hide a played stage's saved gauge history");
+  session.entries.resize(1);
 
   session.completedResults.clear();
   session.entries.front().meta.PlayLength = 5'000'000'000LL;

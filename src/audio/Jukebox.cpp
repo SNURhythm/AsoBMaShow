@@ -1083,6 +1083,7 @@ Jukebox::Jukebox(Stopwatch *stopwatch,
                  std::unique_ptr<audio::IBackendFactory> backendFactory)
     : audio(stopwatch, std::move(backendFactory)), stopwatch(stopwatch) {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
+  skinSampling = rendering::UniformCache::getInstance().getVec4("u_skinSampling");
   bgaPlaceholderProgram = prepareGameplayBgaProgram(SHADER_SIMPLE);
   bgaEmbeddedImageProgram =
       prepareGameplayBgaProgram("vs_skin_quad.bin", "fs_skin_quad.bin");
@@ -1451,7 +1452,7 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
                            ? "BGA layer image companion is unavailable."
                            : "BGA image texture is unavailable.");
       }
-      if (!bgfx::isValid(s_texColor)) {
+      if (!bgfx::isValid(s_texColor) || !bgfx::isValid(skinSampling)) {
         return failure("gameplay_bga.image.preflight",
                        "BGA image sampler is unavailable.");
       }
@@ -1566,6 +1567,8 @@ void Jukebox::submitPrepared(const PreparedGameplayBgaFrame &frame,
     bgfx::setScissor();
   }
   if (!plan.placeholder) {
+    const std::array<float, 4> sampling{};
+    bgfx::setUniform(skinSampling, sampling.data());
     bgfx::setTexture(0, s_texColor, plan.imageTexture,
                      plan.imageSamplerFlags);
   }

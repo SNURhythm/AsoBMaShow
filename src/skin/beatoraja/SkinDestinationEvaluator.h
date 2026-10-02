@@ -71,6 +71,9 @@ struct AuthoredDestinationGeometry {
   SkinBlendMode blend = SkinBlendMode::Normal;
   SkinFilterMode filter = SkinFilterMode::Nearest;
   SkinStretchMode stretch = SkinStretchMode::Stretch;
+  // Compatibility resolves stretch and rotation in the logical destination
+  // canvas, before custom viewport transforms and physical-pixel scaling.
+  bool useDestinationResolution = false;
 };
 
 struct SkinSourceRegionGeometry {

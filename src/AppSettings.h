@@ -212,7 +212,7 @@ public:
   float playAreaWidth8K = kDefaultPlayAreaWidth;
   float playAreaWidth10K = kDefaultPlayAreaWidth;
   float playAreaWidth14K = kDefaultPlayAreaWidth;
-  NotePriorityMode notePriorityMode = NotePriorityMode::Lowest;
+  NotePriorityMode notePriorityMode = NotePriorityMode::Combo;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;

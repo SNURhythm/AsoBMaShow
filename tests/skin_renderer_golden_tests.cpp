@@ -217,6 +217,8 @@ struct GoldenCase {
   unsigned height = 0;
   skin::ViewportSettings viewport;
   std::optional<int> widgetFrame;
+  bool bilinearProbe = false;
+  bool fractionalProbe = false;
 };
 
 std::vector<GoldenCase> goldenCases() {
@@ -644,7 +646,18 @@ std::vector<std::uint8_t> renderGolden(const GoldenCase &fixture) {
     return {};
   }
 
-  const auto image = createTexture(imageTexture());
+  const auto image = createTexture(fixture.fractionalProbe
+      ? SyntheticTexture{.width = 4, .height = 4,
+          .rgba = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+                   0,0,0,0, 128,64,192,128, 32,224,64,64, 0,0,0,0,
+                   0,0,0,0, 240,16,80,192, 8,128,248,32, 0,0,0,0,
+                   0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0}}
+      : fixture.bilinearProbe ? SyntheticTexture{.width = 4, .height = 4,
+          .rgba = {255,255,255,255, 255,255,255,255, 255,0,0,0, 255,0,0,0,
+                   255,255,255,255, 255,255,255,255, 255,0,0,0, 255,0,0,0,
+                   255,255,255,255, 255,255,255,255, 255,0,0,0, 255,0,0,0,
+                   255,255,255,255, 255,255,255,255, 255,0,0,0, 255,0,0,0}}
+      : imageTexture());
   const auto atlas = createTexture(atlasTexture());
   const auto output =
       bgfx::createTexture2D(static_cast<std::uint16_t>(fixture.width),
@@ -701,9 +714,18 @@ std::vector<std::uint8_t> renderGolden(const GoldenCase &fixture) {
   bgfx::touch(rendering::ui_view);
   RenderContext context;
   rendering::SkinQuadBatchRenderer renderer;
-  const auto commands = fixture.widgetFrame
+  auto commands = fixture.widgetFrame
                             ? buildWidgetScene(viewport, *fixture.widgetFrame)
                             : buildScene(viewport);
+  if (fixture.bilinearProbe) {
+    commands.clear();
+    commands.push_back(draw(0, projectedQuad(
+        viewport, {.x = 0, .y = 0, .width = 160, .height = 90}, 1,
+        {.x = 0, .y = 0, .w = 4, .h = 4}, skin::SkinBlendMode::Normal,
+        skin::SkinFilterMode::BeatorajaBilinear,
+        fixture.fractionalProbe ? std::array<float, 4>{0.5F, 0.75F, 0.25F, 0.5F}
+                                : std::array<float, 4>{1, 1, 1, 1})));
+  }
   renderer.begin(context, resources);
   expect(renderer.submit(commands),
          "golden scene passes whole-buffer preflight on real backend");
@@ -784,6 +806,9 @@ void verifyGolden(const GoldenCase &fixture) {
 } // namespace
 
 int main() {
+  // The fixture runs from the source root. Ignore stale executable-side shader
+  // copies that Cocoa otherwise searches before the working directory.
+  SDL_SetHint(SDL_HINT_APPLE_RWFROMFILE_USE_RESOURCES, "0");
   expect(goldenCaseNames() ==
              std::vector<std::string>{"fit_16x9", "stretch_16x9", "custom_16x9",
                                       "fit_4x3", "stretch_4x3", "custom_4x3",
@@ -812,6 +837,38 @@ int main() {
       verifyGolden(fixture);
     }
   }
+
+  const auto edge = renderGolden({.name = "bilinear_alpha_probe", .width = 8,
+                                  .height = 4,
+                                  .viewport = {.mode = skin::ViewportMode::Stretch},
+                                  .bilinearProbe = true});
+  if (edge.size() == 8 * 4 * 4) {
+    const auto channel = [&](unsigned x, unsigned c) { return edge[(8 + x) * 4 + c]; };
+    expect(channel(4, 0) == 8 && channel(4, 1) == 10 && channel(4, 2) == 14,
+           "filtered transparent center preserves the background without an alpha fringe");
+    expect(std::abs(int(channel(3, 0)) - 191) <= 1 &&
+               std::abs(int(channel(3, 1)) - 191) <= 1 &&
+               std::abs(int(channel(3, 2)) - 191) <= 1,
+           "filtered opaque center interpolates premultiplied neighbors while retaining center alpha");
+  } else {
+    expect(false, "bilinear alpha probe has complete readback");
+  }
+
+  const auto fractional = renderGolden({.name = "bilinear_fractional_probe", .width = 8,
+      .height = 8, .viewport = {.mode = skin::ViewportMode::Stretch},
+      .bilinearProbe = true, .fractionalProbe = true});
+  if (fractional.size() == 8 * 8 * 4) {
+    // At UV (7/16,7/16), the four texel weights are 9/16,3/16,3/16,1/16.
+    // The pinned shader divides premultiplied RGB by128/255, retains that
+    // center alpha, applies packed tint, then composites over (8,10,14).
+    expect(std::abs(int(fractional[(3 * 8 + 3) * 4]) - 24) <= 1 &&
+               std::abs(int(fractional[(3 * 8 + 3) * 4 + 1]) - 19) <= 1 &&
+               std::abs(int(fractional[(3 * 8 + 3) * 4 + 2]) - 19) <= 1,
+           "bilinear uses both axes and preserves fractional center alpha under tint");
+  } else {
+    expect(false, "fractional bilinear probe has complete readback");
+  }
+  verifyGolden(goldenCases().front());
 
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();

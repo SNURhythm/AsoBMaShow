@@ -41,6 +41,7 @@
 #include "path.h"
 #include "targets.h"
 #include "tinyfiledialogs.h"
+#include "NativeDialogMutex.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -648,10 +649,15 @@ public:
                     }
                     return path;
                   }
-                  char *selected =
-                      tinyfd_selectFolderDialog("Select Folder", nullptr);
+                  std::optional<std::string> selected;
+                  {
+                    std::lock_guard dialogLock(platform_native_dialog::operationMutex());
+                    if (const char *path = tinyfd_selectFolderDialog("Select Folder", nullptr)) {
+                      selected = path;
+                    }
+                  }
                   std::string folder;
-                  if (selected == nullptr) {
+                  if (!selected) {
                     std::cerr << "tinyfd_selectFolderDialog error: "
                               << std::strerror(errno) << std::endl;
                     std::cout << "Failed to open folder select dialog.\n";
@@ -680,7 +686,7 @@ public:
                       return std::nullopt;
                     }
                   } else {
-                    folder = selected;
+                    folder = *selected;
                   }
                   return std::filesystem::path(folder);
                 },
@@ -725,7 +731,6 @@ public:
              .rebuildLibraryMetadata = true});
       }
     };
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
     chartLibraryFolderActions =
         std::make_unique<chart_library_platform::FolderActionService>(
             chartRepository, *chartLibraryTasks);
@@ -734,7 +739,6 @@ public:
         chartLibraryFolderActions->requestAddFolder();
       }
     };
-#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     initializeGameplaySkinServices();
 #endif

@@ -1,5 +1,6 @@
 #include "MusicSelectToolbarView.h"
 
+#include "../input/SDLPointerEvent.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/IconText.h"
@@ -7,7 +8,6 @@
 #include "../view/UiTheme.h"
 
 #include <algorithm>
-#include <cmath>
 #include <utility>
 
 namespace {
@@ -21,30 +21,13 @@ std::uint32_t codepointFor(MusicSelectToolbarControl control) {
   switch (control) {
   case MusicSelectToolbarControl::Drag:
     return ui_icons::kDrag;
-  case MusicSelectToolbarControl::ChartViewer:
-    return ui_icons::kChartLine;
-  case MusicSelectToolbarControl::ChartRecords:
-    return ui_icons::kRecords;
-  case MusicSelectToolbarControl::RevealChart:
-    return ui_icons::kReveal;
-  case MusicSelectToolbarControl::MusicPlayer:
-    return ui_icons::kMusic;
-  case MusicSelectToolbarControl::Tasks:
-    return ui_icons::kTasks;
-  case MusicSelectToolbarControl::PlayOptions:
-    return ui_icons::kPlayOptions;
-  case MusicSelectToolbarControl::IrUploads:
-    return ui_icons::kIrUploads;
-  case MusicSelectToolbarControl::Settings:
-    return ui_icons::kSettings;
   case MusicSelectToolbarControl::Collapse:
     return ui_icons::kCollapse;
   case MusicSelectToolbarControl::Expand:
     return ui_icons::kExpand;
-  case MusicSelectToolbarControl::Hide:
-    return ui_icons::kHide;
+  default:
+    return 0;
   }
-  return ui_icons::kDrag;
 }
 
 TextView *makeIcon(std::uint32_t codepoint) {
@@ -119,29 +102,15 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::Expand}
           : std::vector<MusicSelectToolbarControl>{
                 MusicSelectToolbarControl::Drag,
-                MusicSelectToolbarControl::ChartViewer,
-                MusicSelectToolbarControl::ChartRecords,
-                MusicSelectToolbarControl::RevealChart,
-                MusicSelectToolbarControl::MusicPlayer,
-                MusicSelectToolbarControl::Tasks,
+                MusicSelectToolbarControl::ChartMenu,
                 MusicSelectToolbarControl::PlayOptions,
-                MusicSelectToolbarControl::IrUploads,
-                MusicSelectToolbarControl::Settings,
-                MusicSelectToolbarControl::Collapse,
-                MusicSelectToolbarControl::Hide};
+                MusicSelectToolbarControl::MoreMenu,
+                MusicSelectToolbarControl::Collapse};
 
   // Yoga's declared size includes both padding and border.
   const float inset = kPadding + kBorderWidth;
   const float availableWidth =
       std::max(kControlSize, static_cast<float>(viewportWidth_) - inset * 2);
-  const std::size_t columns = std::clamp<std::size_t>(
-      static_cast<std::size_t>(
-          std::floor((availableWidth + kGap) / (kControlSize + kGap))),
-      1, layout.size());
-  const std::size_t rows = (layout.size() + columns - 1) / columns;
-  setWidth(inset * 2.0F + kControlSize * columns +
-           kGap * (columns - 1));
-  setHeight(inset * 2.0F + kControlSize * rows + kGap * (rows - 1));
   setPadding(Edge::All, kPadding);
   setGap(kGap);
   setFlexDirection(FlexDirection::Row);
@@ -153,17 +122,55 @@ void MusicSelectToolbarView::rebuild() {
   setCornerRadius(ui_theme::controlRadius());
   setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
 
+  std::vector<float> widths;
   for (const auto control : layout) {
     const auto codepoint = codepointFor(control);
-    auto *icon = makeIcon(codepoint);
-    controls_.push_back(
-        {.control = control, .codepoint = codepoint, .icon = icon});
+    TextView *content = nullptr;
+    TextView *label = nullptr;
+    float width = kControlSize;
+    if (codepoint != 0) {
+      content = makeIcon(codepoint);
+    } else {
+      label = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+      std::string text;
+      switch (control) {
+      case MusicSelectToolbarControl::ChartMenu:
+        text = std::string(i18n::tr("music_select.toolbar.chart.label")) + " ▾";
+        break;
+      case MusicSelectToolbarControl::MoreMenu:
+        text = std::string(i18n::tr("music_select.toolbar.more.label")) + " ▾";
+        break;
+      case MusicSelectToolbarControl::PlayOptions:
+        text = i18n::tr("music_select.toolbar.play_options.label");
+        break;
+      default:
+        break;
+      }
+      label->setText(text);
+      label->setAlign(TextView::CENTER);
+      label->setVAlign(TextView::MIDDLE);
+      label->setOverflow(TextView::TextOverflow::Hidden);
+      label->setThemedColor(ui_theme::textPrimary);
+      width = std::min(availableWidth,
+                       std::max(kControlSize,
+                                static_cast<float>(label->measureTextWidth(text)) +
+                                    24));
+      content = label;
+    }
+    widths.push_back(width);
+    controls_.push_back({.control = control,
+                         .codepoint = codepoint,
+                         .icon = label ? nullptr : content,
+                         .label = label});
     if (control == MusicSelectToolbarControl::Drag) {
-      addView(icon);
+      addView(content);
       continue;
     }
     auto *button = new Button();
-    button->setWidth(kControlSize);
+    controls_.back().button = button;
+    button->setEnabled(isControlEnabled(control));
+    button->setWidth(width);
+    button->setFlexShrink(0.0F);
     button->setHeight(kControlSize);
     button->setCornerRadius(ui_theme::controlRadius());
     button->setThemedBackgroundColors(ui_theme::control,
@@ -173,16 +180,42 @@ void MusicSelectToolbarView::rebuild() {
                                   ui_theme::accentBorder,
                                   ui_theme::accentBorderStrong);
     button->setStyledBorderWidth(1);
-    button->setContentView(icon);
+    button->setContentView(content);
     button->setOnClickListener([this, control] { activateControl(control); });
     addView(button);
   }
+  float rowWidth = 0;
+  float widestRow = 0;
+  int rows = 1;
+  for (const float width : widths) {
+    if (rowWidth > 0 && rowWidth + kGap + width > availableWidth) {
+      widestRow = std::max(widestRow, rowWidth);
+      rowWidth = 0;
+      ++rows;
+    }
+    rowWidth += (rowWidth > 0 ? kGap : 0) + width;
+  }
+  setWidth(inset * 2 + std::max(widestRow, rowWidth));
+  setHeight(inset * 2 + kControlSize * rows + kGap * (rows - 1));
+}
+
+void MusicSelectToolbarView::onLanguageChanged() {
+  rebuild();
+  place(state_.hasPosition ? state_.x : kDefaultPosition,
+        state_.hasPosition ? state_.y : kDefaultPosition);
 }
 
 void MusicSelectToolbarView::activateControl(
     MusicSelectToolbarControl control) {
+  if (!isControlEnabled(control)) return;
   switch (control) {
   case MusicSelectToolbarControl::Drag:
+    break;
+  case MusicSelectToolbarControl::ChartMenu:
+    if (callbacks_.openChartMenu) callbacks_.openChartMenu();
+    break;
+  case MusicSelectToolbarControl::MoreMenu:
+    if (callbacks_.openMoreMenu) callbacks_.openMoreMenu();
     break;
   case MusicSelectToolbarControl::ChartViewer:
     if (callbacks_.openChartViewer) {
@@ -230,9 +263,34 @@ void MusicSelectToolbarView::activateControl(
   case MusicSelectToolbarControl::Expand:
     requestMode(MusicSelectToolbarMode::Expanded);
     break;
-  case MusicSelectToolbarControl::Hide:
-    requestMode(MusicSelectToolbarMode::Hidden);
-    break;
+  }
+}
+
+bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control) const {
+  if (disabledControls_.contains(control)) return false;
+  switch (control) {
+  case MusicSelectToolbarControl::ChartMenu: return bool(callbacks_.openChartMenu);
+  case MusicSelectToolbarControl::MoreMenu: return bool(callbacks_.openMoreMenu);
+  case MusicSelectToolbarControl::ChartViewer: return bool(callbacks_.openChartViewer);
+  case MusicSelectToolbarControl::ChartRecords: return bool(callbacks_.openChartRecords);
+  case MusicSelectToolbarControl::RevealChart: return bool(callbacks_.revealChart);
+  case MusicSelectToolbarControl::MusicPlayer: return bool(callbacks_.openMusicPlayer);
+  case MusicSelectToolbarControl::Tasks: return bool(callbacks_.openTasks);
+  case MusicSelectToolbarControl::PlayOptions: return bool(callbacks_.openPlayOptions);
+  case MusicSelectToolbarControl::IrUploads: return bool(callbacks_.openIrUploads);
+  case MusicSelectToolbarControl::Settings: return bool(callbacks_.openSettings);
+  default: return true;
+  }
+}
+
+void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control,
+                                               bool enabled) {
+  if (enabled) disabledControls_.erase(control);
+  else disabledControls_.insert(control);
+  for (const auto &rendered : controls_) {
+    if (rendered.control == control && rendered.button) {
+      rendered.button->setEnabled(isControlEnabled(control));
+    }
   }
 }
 
@@ -286,6 +344,24 @@ bool MusicSelectToolbarView::insideDragHandle(float x, float y) const {
   return x >= getX() + kPadding &&
          x <= getX() + kPadding + kControlSize && y >= getY() + kPadding &&
          y <= getY() + kPadding + kControlSize;
+}
+
+void MusicSelectToolbarView::onPointerEventConsumed(const SDL_Event &event) {
+  if (event.type == SDL_MOUSEBUTTONUP && mouseDragging_ &&
+      event.button.button == SDL_BUTTON_LEFT &&
+      event.button.which != SDL_TOUCH_MOUSEID) {
+    mouseDragging_ = false;
+  } else if (event.type == SDL_FINGERUP && touchDragging_ != -1 &&
+             !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+             event.tfinger.fingerId == touchDragging_) {
+    touchDragging_ = -1;
+  } else {
+    return;
+  }
+  state_.x = static_cast<float>(getX());
+  state_.y = static_cast<float>(getY());
+  state_.hasPosition = true;
+  persist();
 }
 
 bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {

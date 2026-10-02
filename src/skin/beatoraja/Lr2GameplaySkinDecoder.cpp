@@ -695,6 +695,9 @@ private:
     }
     frame.timeMillis = forcedTime.value_or(values[2]);
     frame.acceleration = values[7];
+    if (body.authoredAcceleration == 0) {
+      body.authoredAcceleration = frame.acceleration;
+    }
     const auto channel = [](int value) {
       return static_cast<std::uint8_t>(std::clamp(value, 0, 255));
     };

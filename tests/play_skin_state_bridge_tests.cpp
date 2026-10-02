@@ -793,6 +793,65 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
          "discard is an idempotent frame closure");
 }
 
+void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 3;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(73);
+  state.authority.stagePassedNotes = 1;
+  state.authority.judgementCounters = {{PGreat, 0}};
+  state.authority.bestScore = 5;
+  state.authority.bestScoreTarget = {.enabled = true,
+                                     .finalScore = 5,
+                                     .totalNotes = 3};
+  state.authority.pacemakerTarget = {.enabled = true,
+                                     .finalScore = 4,
+                                     .totalNotes = 3,
+                                     .usesReplayProgression = true,
+                                     .scoreAfterNotes = {0, 2, 2, 4}};
+  state.authority.pacemakerStatus = {.enabled = true, .targetScore = 2};
+  const auto expectRate = [&](int id, float expected, const char *message) {
+    const auto value = bridge.floatProperty({id}, SkinFloatPropertyDomain::Rate);
+    expect(value.supported && std::abs(value.value - expected) < 0.0000001,
+           message);
+  };
+  bridge.beginFrame(state, projectionAt(73));
+  expectRate(112, 1.0F / 6.0F,
+             "best rate without a ghost uses the projected integer score at stage progress");
+  expectRate(114, 1.0F / 6.0F,
+             "rival rate uses linear stage progress even for a replay target");
+  bridge.discardFrame();
+
+  state.clock.serial = 74;
+  state.authority.bestScoreTarget.usesReplayProgression = true;
+  state.authority.bestScoreTarget.scoreAfterNotes = {0, 2, 3, 5};
+  bridge.beginFrame(state, projectionAt(74));
+  expectRate(112, 1.0F / 3.0F,
+             "best ghost rate uses the ghost score at the stage passed-note count");
+  bridge.discardFrame();
+
+  state.clock.serial = 75;
+  state.authority.bestScoreTarget.scoreAfterNotes.pop_back();
+  bridge.beginFrame(state, projectionAt(75));
+  expectRate(112, 1.0F / 6.0F,
+             "a best ghost with different note count falls back to linear progress");
+  bridge.discardFrame();
+
+  chart.staticMetadata.totalNotes = 0;
+  state.clock.serial = 76;
+  state.authority.stagePassedNotes = 0;
+  bridge.beginFrame(state, projectionAt(76));
+  expectRate(112, 0.0F, "empty charts expose zero current-best rate");
+  expectRate(114, 0.0F, "empty charts expose zero current-rival rate");
+  bridge.discardFrame();
+}
+
 void testMainStateConvenienceAccessorsUseCanonicalSourceProperties() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1559,27 +1618,86 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   bridge.discardFrame();
 }
 
-void testLongNoteHoldTimersUseCapturedLaneState() {
+void testSparseModeInputTimersUseOriginalChannels() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) return;
+  for (int keys : {4, 6, 8}) {
+    PlayfieldChartVisualModel chart;
+    chart.keyCount = keys;
+    chart.laneOrder = keys == 4 ? std::vector<int>{0, 1, 3, 4}
+                    : keys == 6 ? std::vector<int>{0, 1, 2, 4, 5, 6}
+                                : std::vector<int>{7, 0, 1, 2, 3, 4, 5, 6};
+    ValidatedBeatorajaSkinModel model;
+    BeatorajaSkinConfiguration configuration;
+    const auto mutations = makePinnedSkinEventMutationTableV1();
+    PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+                               .configuration = configuration, .runtime = &runtime.runtime(),
+                               .mutationTable = mutations});
+    auto state = stateAt(400 + keys);
+    state.sceneStartMicros = 0;
+    state.lanes.resize(chart.laneOrder.size());
+    for (std::size_t index = 0; index < state.lanes.size(); ++index) {
+      auto &lane = state.lanes[index];
+      lane.pressed = true;
+      lane.pressMicros = 1'000 * (index + 1);
+      lane.bombMicros = 2'000 * (index + 1);
+      lane.beatorajaJudgeValue = static_cast<int>(index + 1);
+    }
+    bridge.beginFrame(state, projectionAt(400 + keys));
+    for (std::size_t index = 0; index < chart.laneOrder.size(); ++index) {
+      const int rawLane = chart.laneOrder[index];
+      const int offset = rawLane == 7 ? 0 : rawLane + 1;
+      expect(bridge.timerProperty({100 + offset}) == 1'000 * (index + 1) &&
+                 bridge.timerProperty({50 + offset}) == 2'000 * (index + 1) &&
+                 bridge.integerProperty({500 + offset}, SkinIntegerPropertyDomain::ImageIndex).value == static_cast<int>(index + 1),
+             "key-on, bomb and judge indicators stay on the authored channel");
+    }
+    if (keys != 8) {
+      expect(bridge.timerProperty({100}) == kPlayfieldTimestampOff &&
+                 bridge.timerProperty({keys == 4 ? 103 : 104}) == kPlayfieldTimestampOff,
+             "scratch and the omitted middle key stay inactive for 4K and 6K");
+    }
+    bridge.discardFrame();
+    ++state.clock.serial;
+    for (auto &lane : state.lanes) {
+      lane.pressed = false;
+      lane.releaseMicros = lane.pressMicros + 10'000;
+    }
+    bridge.beginFrame(state, projectionAt(state.clock.serial));
+    for (std::size_t index = 0; index < chart.laneOrder.size(); ++index) {
+      const int rawLane = chart.laneOrder[index];
+      const int offset = rawLane == 7 ? 0 : rawLane + 1;
+      expect(bridge.timerProperty({100 + offset}) == kPlayfieldTimestampOff &&
+                 bridge.timerProperty({120 + offset}) == 11'000 + 1'000 * index,
+             "key-off returns to the same authored lane without shifting input");
+    }
+    bridge.discardFrame();
+  }
+}
+
+void testLongNoteHoldTimersUseCapturedLaneState(int keyMode = 7, int lane = 0) {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
     return;
   }
 
   PlayfieldChartVisualModel chart;
-  chart.keyCount = 7;
+  chart.keyCount = keyMode;
   // Aso stores 7K in visible order (scratch, then keys); Beatoraja maps the
   // key at raw BMS lane 0 to skin offset 1 and the scratch to offset 0.
   chart.laneOrder = {7, 0};
+  if (lane != 0 && lane != 7) chart.laneOrder.push_back(lane);
+  const int offset = lane == 7 ? 0 : lane + 1;
   chart.notes = {
       {.id = 1,
        .timelineId = 1,
        .pairId = 2,
-       .lane = 0,
+       .lane = lane,
        .kind = ChartVisualNoteKind::LongHead},
       {.id = 2,
        .timelineId = 2,
        .pairId = 1,
-       .lane = 0,
+       .lane = lane,
        .kind = ChartVisualNoteKind::LongTail},
   };
   ValidatedBeatorajaSkinModel model;
@@ -1598,8 +1716,10 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longActive = true},
                  {.id = 2, .longActive = true}};
   bridge.beginFrame(state, projectionAt(212));
-  expect(bridge.timerProperty({71}) == 6'000'000 &&
-             bridge.timerProperty({70}) == kPlayfieldTimestampOff,
+  expect(bridge.booleanProperty({keyMode == 4 || keyMode == 5 ? 161 : 160}).value,
+         "compatible chart modes enable the authored skin mode condition");
+  expect(bridge.timerProperty({70 + offset}) == 6'000'000 &&
+             bridge.timerProperty({offset == 0 ? 71 : 70}) == kPlayfieldTimestampOff,
          "Beatoraja 1P hold timers use captured long-note state and the "
          "source lane offset, not a stale judge timestamp");
   bridge.discardFrame();
@@ -1609,7 +1729,7 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longActive = false},
                  {.id = 2, .longActive = false}};
   bridge.beginFrame(state, projectionAt(213));
-  expect(bridge.timerProperty({71}) == kPlayfieldTimestampOff,
+  expect(bridge.timerProperty({70 + offset}) == kPlayfieldTimestampOff,
          "Beatoraja 1P hold timer turns off when its captured long note ends");
   bridge.discardFrame();
 
@@ -1617,8 +1737,8 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longActive = true, .longReactive = true},
                  {.id = 2, .longActive = true, .longReactive = true}};
   bridge.beginFrame(state, projectionAt(214));
-  expect(bridge.timerProperty({251}) == 7'000'000 &&
-             bridge.timerProperty({271}) == kPlayfieldTimestampOff,
+  expect(bridge.timerProperty({250 + offset}) == 7'000'000 &&
+             bridge.timerProperty({270 + offset}) == kPlayfieldTimestampOff,
          "normal-range HCN active timer uses the captured increase state, "
          "not the generic long-note hold state");
   bridge.discardFrame();
@@ -1627,8 +1747,8 @@ void testLongNoteHoldTimersUseCapturedLaneState() {
   state.notes = {{.id = 1, .longDamaged = true},
                  {.id = 2, .longDamaged = true}};
   bridge.beginFrame(state, projectionAt(215));
-  expect(bridge.timerProperty({251}) == kPlayfieldTimestampOff &&
-             bridge.timerProperty({271}) == 7'000'000,
+  expect(bridge.timerProperty({250 + offset}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({270 + offset}) == 7'000'000,
          "normal-range HCN damage timer stays independent from active HCN");
   bridge.discardFrame();
 }
@@ -3159,9 +3279,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   const auto currentBestRate =
       bridge.floatProperty({112}, SkinFloatPropertyDomain::Rate);
   expect(currentBestRate.supported &&
-             std::abs(currentBestRate.value - 28.0 / 834.0) < 0.000001,
-         "current-best rate uses the same passed-note projection as "
-         "ScoreDataProperty.getNowBestScore");
+             std::abs(currentBestRate.value - 143.0F / 834.0F) < 0.000001,
+         "current-best rate projects its score at the authoritative "
+         "stage passed-note count");
   for (const auto [id, expected] :
        std::array{std::pair{500, 2LL}, std::pair{501, 3LL},
                   std::pair{507, 9LL}, std::pair{510, -1LL}}) {
@@ -3182,9 +3302,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{102, 1.0},
            std::pair{110, 456.0 / 834.0},
            std::pair{111, 456.0 / 400.0},
-           std::pair{112, 28.0 / 834.0},
+           std::pair{112, 143.0 / 834.0},
            std::pair{113, 300.0 / 834.0},
-           std::pair{114, 240.0 / 834.0},
+           std::pair{114, 239.0 / 834.0},
            std::pair{115, 500.0 / 834.0}}) {
     const auto value = bridge.floatProperty({id});
     expect(value.supported && std::abs(value.value - expected) < 0.000001,
@@ -3876,6 +3996,7 @@ int main() {
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();
   testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
+  testCurrentReferenceRatesUseStageProgressAndBestGhost();
   testMainStateConvenienceAccessorsUseCanonicalSourceProperties();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
@@ -3883,7 +4004,10 @@ int main() {
   testPracticeMenuSelectorsAndEventsRequireCapturedMenuState();
   testLiftHiddenOffsetsFollowPinnedLaneRenderer();
   testRemainingDirectGameplayStatePropertyWiring();
-  testLongNoteHoldTimersUseCapturedLaneState();
+  for (const auto [keyMode, lane] : {std::pair{4, 4}, {5, 0}, {6, 6}, {7, 0}, {8, 7}}) {
+    testLongNoteHoldTimersUseCapturedLaneState(keyMode, lane);
+  }
+  testSparseModeInputTimersUseOriginalChannels();
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();

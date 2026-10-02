@@ -241,9 +241,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
-    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
-      return *fallbackResult;
-    }
   }
   return result;
 }

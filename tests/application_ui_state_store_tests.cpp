@@ -111,6 +111,32 @@ void testPathIsDeviceScoped() {
                  "application-ui-state.json",
          "application UI state is not profile-scoped");
 }
+
+void testTutorialCompletionSurvivesRestart() {
+  TempDirectory temp;
+  const auto path = applicationUiStatePath(temp.path());
+  expect(!ApplicationUiStateStore::Load(path).state.newcomerTutorialCompleted,
+         "a new installation offers the tutorial");
+  ApplicationUiState state;
+  state.newcomerTutorialCompleted = true;
+  state.language = "ko";
+  std::string diagnostic;
+  expect(ApplicationUiStateStore::SaveAtomic(path, state, diagnostic),
+         "tutorial completion saves");
+  expect(ApplicationUiStateStore::Load(path).state == state,
+         "finishing or skipping the tutorial persists with the chosen language");
+  nlohmann::json document;
+  { std::ifstream input(path); input >> document; }
+  document.erase("newcomerTutorialCompleted");
+  { std::ofstream output(path); output << document; }
+  expect(!ApplicationUiStateStore::Load(path).state.newcomerTutorialCompleted,
+         "older state without tutorial completion offers the tour once");
+  document["newcomerTutorialCompleted"] = "true";
+  { std::ofstream output(path); output << document; }
+  const auto loaded = ApplicationUiStateStore::Load(path);
+  expect(!loaded.state.newcomerTutorialCompleted && loaded.state.language == "ko",
+         "invalid completion does not hide the tutorial or reset language");
+}
 } // namespace
 
 int main() {
@@ -118,6 +144,7 @@ int main() {
   testEveryModeAndAuthoredPositionRoundTrips();
   testPathIsDeviceScoped();
   testLanguagePreferenceRoundTripsAndMigrates();
+  testTutorialCompletionSurvivesRestart();
   if (failures != 0) {
     std::cerr << failures << " application UI state test(s) failed\n";
     return 1;

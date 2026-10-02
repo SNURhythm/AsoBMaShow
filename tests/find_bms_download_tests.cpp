@@ -1244,6 +1244,15 @@ void testActualSourceProgressLocalizesWithoutChangingMetadata() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testRunningDetailFollowsProgress() {
+  i18n::setLanguage(i18n::Language::English);
+  assert(findBmsRunningDetailMessage("").resolve() == "Searching available sources...");
+  assert(findBmsRunningDetailMessage("Downloading archive").resolve() == "Downloading archive");
+  assert(findBmsRunningDetailMessage("Extracting archive").resolve() == "Extracting archive");
+  assert(findBmsRunningDetailMessage("Searching Horie archive").resolve() ==
+         findBmsProgressDisplayText("Searching Horie archive", 0, 0, false));
+}
+
 void testFindBmsDownloadProgressDisplaysSizes() {
   assert(findBmsProgressDisplayText("Downloading archive", 19503513,
                                     46451917, true) ==
@@ -1260,6 +1269,7 @@ void testFindBmsDownloadProgressDisplaysSizes() {
 
 #include "find_bms_extraction_fixture.h"
 #include "find_bms_verification_fixture.h"
+#include "find_bms_provider_fixture.h"
 
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--verification-guard") {
@@ -1268,6 +1278,9 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--verification") {
     return testRealVerification();
   }
+  testRunningDetailFollowsProgress();
+  testProviderSelectionStopsAfterAFileIsFound();
+  testChosenProviderRetriesOnlyOnUserDecision();
   testExtractionLimitsAndCancellation();
 #if ASOBMSHOW_HAS_LIBARCHIVE
   testUnknownSizeStreamIsBounded();

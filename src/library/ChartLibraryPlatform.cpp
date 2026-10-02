@@ -20,6 +20,9 @@
 #include <unordered_map>
 #elif TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
+#else
+#include "../tinyfiledialogs.h"
+#include "../NativeDialogMutex.h"
 #endif
 
 namespace chart_library_platform {
@@ -99,6 +102,15 @@ struct FolderActionService::Impl {
   chart_library_tasks::ChartLibraryTaskService *tasks = nullptr;
   std::jthread pickerThread;
   std::atomic_bool pickerActive = false;
+#if !TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_ANDROID
+  struct DesktopPickerState {
+    std::atomic_bool active = false;
+    std::mutex mutex;
+    std::optional<std::string> folder;
+  };
+  std::shared_ptr<DesktopPickerState> desktopPicker =
+      std::make_shared<DesktopPickerState>();
+#endif
 
   void enqueueFolder(const std::filesystem::path &folder,
                      const std::string &bookmark) {
@@ -172,7 +184,13 @@ FolderActionService::~FolderActionService() {
 #endif
   if (impl_ && impl_->pickerThread.joinable()) {
     impl_->pickerThread.request_stop();
+#if !TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_ANDROID
+    // The native dialog cannot be interrupted. Its worker owns only result
+    // state, so abandoning it cannot access the repository or task service.
+    impl_->pickerThread.detach();
+#else
     impl_->pickerThread.join();
+#endif
   }
 }
 
@@ -231,6 +249,33 @@ void FolderActionService::requestAddFolder() {
   } else {
     impl_->requestImport(true);
   }
+#else
+  const auto state = impl_->desktopPicker;
+  if (state->active.exchange(true)) return;
+  try {
+    const std::string title = i18n::tr("menu.add_folder.label");
+    if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
+    poll();
+    impl_->pickerThread = std::jthread(
+        [state, title](const std::stop_token &stopToken) {
+          ScopeExit reset([state] { state->active.store(false); });
+          std::unique_lock dialogLock(platform_native_dialog::operationMutex(),
+                                      std::defer_lock);
+          while (!stopToken.stop_requested() &&
+                 !dialogLock.try_lock_for(std::chrono::milliseconds(50))) {}
+          if (!dialogLock.owns_lock() || stopToken.stop_requested()) return;
+          const char *selected = tinyfd_selectFolderDialog(title.c_str(), nullptr);
+          const std::string folder = selected ? selected : "";
+          dialogLock.unlock();
+          if (!folder.empty() && !stopToken.stop_requested()) {
+            std::lock_guard lock(state->mutex);
+            state->folder = folder;
+          }
+        });
+  } catch (...) {
+    state->active.store(false, std::memory_order_release);
+    throw;
+  }
 #endif
 }
 
@@ -240,12 +285,28 @@ void FolderActionService::requestImportArchive() {
 #endif
 }
 
-void FolderActionService::poll() {}
+void FolderActionService::poll() {
+#if !TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_ANDROID
+  if (!impl_) return;
+  std::optional<std::string> folder;
+  {
+    std::lock_guard lock(impl_->desktopPicker->mutex);
+    folder = std::exchange(impl_->desktopPicker->folder, std::nullopt);
+  }
+  if (folder) {
+    impl_->enqueueFolder(std::filesystem::path(utf8_to_path_t(*folder)), "");
+  }
+#endif
+}
 
 bool FolderActionService::active() const noexcept {
   if (!impl_) return false;
+#if !TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_ANDROID
+  return impl_->desktopPicker->active.load(std::memory_order_acquire);
+#else
   if (impl_->pickerActive.load(std::memory_order_acquire)) return true;
   return false;
+#endif
 }
 
 struct SoundSetFolderPicker::Impl {

@@ -164,6 +164,7 @@ public:
   static PlaySkinSessionCreateResult create(ValidatedSkinActivation,
                                             PlaySkinSessionContext);
   ~PlaySkinSession() override;
+  void setPointerPosition(UiLogicalPoint) noexcept override;
 
   [[nodiscard]] RuntimeSkinConfigurationSelection
   runtimeConfigurationSelection() const;
@@ -259,6 +260,7 @@ public:
 #endif
 
 private:
+  std::optional<UiLogicalPoint> pointerUiPosition_;
   struct OwnedActivation;
   struct TouchCapture {
     long long pointerId = 0;
@@ -330,6 +332,7 @@ private:
   static constexpr std::size_t maximumQueuedStringBytes =
       SkinResourcePolicy::maximumRuntimeStringBytes;
   std::vector<QueuedInteraction> queuedInteractions_;
+  std::vector<SetSkinAudioVolume> initialAudioVolumeWrites_;
   std::size_t queuedStringBytes_ = 0;
   std::uint64_t nextInteractionSequence_ = 1;
   std::optional<FocusedTextInput> focusedTextInput_;

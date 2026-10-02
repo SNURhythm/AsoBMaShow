@@ -262,6 +262,8 @@ struct SkinFrameInputs {
   // the preceding frame. The session consumes this only to refresh the
   // affected atlas; it does not alter property evaluation or draw order.
   std::function<void(SkinObjectId, std::string_view)> observedTextValue;
+  // No pointer sample yet retains Beatoraja's authored (0, 0) default.
+  std::optional<UiLogicalPoint> pointerUiPosition;
 };
 
 [[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(
@@ -403,7 +405,8 @@ struct SkinFrameEvaluationResult {
 class Skin2DRenderer final {
 public:
   // Legacy adapter: existing standalone evaluators retain internal ownership
-  // of LuaSkinRuntime::beginFrame until coordinator migration is complete.
+  // of LuaSkinRuntime::beginFrame and commit successful evaluated blend state.
+  // Session-owned evaluation instead defers blend publication until submit.
   SkinFrameEvaluationResult evaluateFrame(const SkinFrameInputs &);
   // Session path: the typed token proves beginFrame already occurred, so
   // evaluation must not begin the runtime a second time.
@@ -411,13 +414,13 @@ public:
       const SkinFrameInputs &, SkinExternalFrameOwnership &&);
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinResourceCatalog &, RenderContext &,
-                            rendering::SkinQuadBatchRenderer &) const;
+                            rendering::SkinQuadBatchRenderer &);
   // Result skins can own movie objects but do not have gameplay BGA state.
   // Preserve authored movie/quad order without requiring a BGA transaction.
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinPreparedResourceView &, RenderContext &,
                             rendering::SkinQuadBatchRenderer &,
-                            SkinMovieCatalog *, const PlaySkinViewport &) const
+                            SkinMovieCatalog *, const PlaySkinViewport &)
       noexcept;
   // Optional application overlays use the same UI batch path as authored
   // skin commands, but are submitted after the skin's atomic BGA commit.
@@ -430,8 +433,17 @@ public:
       const SkinCommandBuffer &, const SkinPreparedResourceView &,
       RenderContext &, rendering::SkinQuadBatchRenderer &,
       SkinMovieCatalog *, const PlaySkinViewport &,
-      const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const
+      const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &)
       noexcept;
+  [[nodiscard]] SkinRetainedBlendState captureRetainedBlendState() const noexcept {
+    return {retainedBlendSessionSerial_, retainedBlendModelIdentity_,
+            retainedBlend_};
+  }
+  void restoreRetainedBlendState(const SkinRetainedBlendState &state) noexcept {
+    retainedBlendSessionSerial_ = state.sessionSerial;
+    retainedBlendModelIdentity_ = state.modelIdentity;
+    retainedBlend_ = state.blend;
+  }
   void setGeneratedTextureLiveCounters(
       std::shared_ptr<SkinLiveResourceCounters> counters) noexcept {
     generatedTextureCache_.setLiveResourceCounters(std::move(counters));
@@ -446,6 +458,12 @@ public:
 private:
   SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,
                                                bool beginRuntimeFrame);
+
+  void commitRetainedBlendState(const SkinCommandBuffer &buffer) noexcept {
+    if (buffer.retainedBlendAfterSubmit) {
+      restoreRetainedBlendState(*buffer.retainedBlendAfterSubmit);
+    }
+  }
 
   struct GaugeAnimationState {
     int animation = 0;
@@ -465,6 +483,9 @@ private:
   SkinGeneratedTextureCache generatedTextureCache_;
   std::uint64_t externalOwnershipSessionSerial_ = 0;
   std::uint64_t lastExternalOwnershipFrameSerial_ = 0;
+  std::uint64_t retainedBlendSessionSerial_ = 0;
+  const ValidatedBeatorajaSkinModel *retainedBlendModelIdentity_ = nullptr;
+  SkinBlendMode retainedBlend_ = SkinBlendMode::Normal;
 };
 
 #if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)

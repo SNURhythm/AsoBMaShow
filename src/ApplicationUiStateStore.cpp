@@ -90,6 +90,14 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
   }
 
   const auto toolbar = loaded.document.find("musicSelectToolbar");
+  const auto tutorial = loaded.document.find("newcomerTutorialCompleted");
+  if (tutorial != loaded.document.end()) {
+    if (tutorial->is_boolean()) {
+      result.state.newcomerTutorialCompleted = tutorial->get<bool>();
+    } else {
+      result.diagnostics.emplace_back("Invalid tutorial completion; offering tutorial");
+    }
+  }
   if (toolbar == loaded.document.end() || !toolbar->is_object()) {
     result.status = ApplicationUiStateLoadStatus::Invalid;
     result.diagnostics.emplace_back(
@@ -125,6 +133,7 @@ bool ApplicationUiStateStore::SaveAtomic(const std::filesystem::path &path,
       {"schemaVersion", ApplicationUiState::kSchemaVersion},
       {"language", i18n::isLanguagePreference(state.language)
                        ? state.language : "system"},
+      {"newcomerTutorialCompleted", state.newcomerTutorialCompleted},
       {"musicSelectToolbar",
        {{"mode", modeName(toolbar.mode)},
         {"x", toolbar.x},

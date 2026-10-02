@@ -205,7 +205,7 @@
       "type": 17,
       "changeable": false,
       "value": "mastervolume",
-      "event": "mastervolume",
+      "event": 17,
       "isRefNum": false,
       "min": 4,
       "max": 9

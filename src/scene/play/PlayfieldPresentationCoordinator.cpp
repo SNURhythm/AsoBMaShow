@@ -1,6 +1,7 @@
 #include "PlayfieldPresentationCoordinator.h"
 
 #include <limits>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -50,6 +51,7 @@ void PlayfieldPresentationCoordinator::installSkinSession(
     std::unique_ptr<CoordinatedPlaySkinSession> session) {
   cancelAndClearActiveTouches();
   skin_ = std::move(session);
+  if (pointerUiPosition_) setPointerPosition(*pointerUiPosition_);
   pending_.reset();
   lastFailure_.reset();
   markTouchTargetChanged();
@@ -58,6 +60,7 @@ void PlayfieldPresentationCoordinator::installSkinSession(
 void PlayfieldPresentationCoordinator::clearSkinSession() noexcept {
   cancelAndClearActiveTouches();
   skin_.reset();
+  if (pointerUiPosition_) setPointerPosition(*pointerUiPosition_);
   pending_.reset();
   markTouchTargetChanged();
 }
@@ -495,9 +498,20 @@ PlayfieldPresentationCoordinator::hitTestUiControl(UiLogicalPoint point) const {
   return hit;
 }
 
+void PlayfieldPresentationCoordinator::setPointerPosition(UiLogicalPoint point) noexcept {
+  if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+  pointerUiPosition_ = point;
+  if (activeMode() == PresentationMode::Skin) {
+    skin_->setPointerPosition(point);
+  } else {
+    builtIn_->setPointerPosition(point);
+  }
+}
+
 PresentationTouchResult
 PlayfieldPresentationCoordinator::beginPresentationTouch(
     const PresentationTouchEvent &event) {
+  setPointerPosition(event.uiPoint);
   lastEventMicros_ = event.eventMicros;
   synchronizeTouchRevisions();
   if (event.hit.kind == PresentationUiControlKind::None ||
@@ -535,6 +549,7 @@ PlayfieldPresentationCoordinator::beginPresentationTouch(
 PresentationTouchResult
 PlayfieldPresentationCoordinator::updatePresentationTouch(
     const PresentationTouchEvent &event) {
+  setPointerPosition(event.uiPoint);
   lastEventMicros_ = event.eventMicros;
   TouchCapture *capture = findTouchCapture(event.pointerId);
   if (capture == nullptr ||

@@ -11,7 +11,14 @@ class Button : public View {
 private:
   void renderImpl(RenderContext &context) override;
   bool handleEventsImpl(SDL_Event &event) override;
+  void onPointerEventConsumed(const SDL_Event &event) override;
   void onThemeChanged() override;
+  [[nodiscard]] float renderOpacity() const noexcept override {
+    return enabled ? 1.0f : 0.45f;
+  }
+  [[nodiscard]] bool shouldHandleChildEvents() const noexcept override {
+    return enabled;
+  }
 
 private:
   std::function<void()> onClickListener;

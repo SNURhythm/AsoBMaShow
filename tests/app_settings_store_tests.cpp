@@ -716,6 +716,28 @@ void testPlayerConfigurationSkinStringsAreBounded() {
          "plain sound-set path string");
 }
 
+void testCompatibleSkinModesPersistIndependentConfigurations() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  AppSettings settings;
+  const auto package = skin::normalizePackageId("SharedSkin");
+  const auto entry = *skin::normalizeEntryPath(*package.package, "play7.luaskin").entry;
+  settings.skin.selectedSkinEntries = {{0, entry}, {-6, entry}, {-8, entry}};
+  settings.skin.entries[entry].options["Lane"] = 7;
+  settings.skin.modeEntries[-6][entry].options["Lane"] = 6;
+  settings.skin.modeEntries[-8][entry].options["Lane"] = 8;
+  settings.skin.modeEntries[-6][entry].viewport.scaleX = 1.5F;
+  settings.skin.modeEntries[-8][entry].viewport.scaleX = 2.0F;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "independent mode settings save: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.skin.selectedSkinEntries == settings.skin.selectedSkinEntries,
+         "compatible modes retain separate skin selections");
+  expect(loaded.settings.skin.modeEntries == settings.skin.modeEntries &&
+             loaded.settings.skin.entries.at(entry).options.at("Lane") == 7,
+         "same skin retains separate mode options and viewport after restart");
+}
+
 void testSkinTargetSelectionsSurviveRestart() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
@@ -1792,6 +1814,7 @@ int main() {
   testMissingBgaExpandSelectorMigratesFromDisplayMode();
   testConfiguredTargetListSkinStringsRoundTrip();
   testPlayerConfigurationSkinStringsAreBounded();
+  testCompatibleSkinModesPersistIndependentConfigurations();
   testSkinTargetSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();

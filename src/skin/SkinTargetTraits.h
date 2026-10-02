@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameplaySkinTraits.h"
+
 #include <array>
 #include <optional>
 #include <string_view>
@@ -18,8 +20,8 @@ struct SkinTargetTrait {
 inline constexpr std::array<SkinTargetTrait, 10> kSkinTargetTraits = {{
     {0, SkinTargetKind::Gameplay, 7, "7K"},
     {1, SkinTargetKind::Gameplay, 5, "5K"},
-    {2, SkinTargetKind::Gameplay, 14, "14K"},
-    {3, SkinTargetKind::Gameplay, 10, "10K"},
+    {2, SkinTargetKind::Gameplay, 14, "7K DP"},
+    {3, SkinTargetKind::Gameplay, 10, "5K DP"},
     {4, SkinTargetKind::Gameplay, 9, "9K"},
     {5, SkinTargetKind::MusicSelect, 0, "Music Select"},
     {7, SkinTargetKind::Result, 0, "Result"},
@@ -28,12 +30,27 @@ inline constexpr std::array<SkinTargetTrait, 10> kSkinTargetTraits = {{
     {17, SkinTargetKind::Gameplay, 48, "24K Double"},
 }};
 
+// Application settings identities are independent of the compatible source type.
+[[nodiscard]] constexpr bool isAdditionalGameplaySkinTarget(int type) noexcept {
+  return type == -4 || type == -6 || type == -8;
+}
+
+[[nodiscard]] constexpr int skinSourceTypeForTarget(int type) noexcept {
+  return type == -4 ? 1 : (type == -6 || type == -8) ? 0 : type;
+}
+
 [[nodiscard]] constexpr const auto &skinTargetTraits() noexcept {
   return kSkinTargetTraits;
 }
 
 [[nodiscard]] constexpr std::optional<SkinTargetTrait>
 skinTargetTraitForType(int skinType) noexcept {
+  switch (skinType) {
+  case -4: return SkinTargetTrait{-4, SkinTargetKind::Gameplay, 4, "4K"};
+  case -6: return SkinTargetTrait{-6, SkinTargetKind::Gameplay, 6, "6K"};
+  case -8: return SkinTargetTrait{-8, SkinTargetKind::Gameplay, 8, "8K"};
+  default: break;
+  }
   for (const auto &trait : kSkinTargetTraits) {
     if (trait.skinType == skinType) return trait;
   }
@@ -42,6 +59,9 @@ skinTargetTraitForType(int skinType) noexcept {
 
 [[nodiscard]] constexpr std::optional<SkinTargetTrait>
 gameplaySkinTargetForKeyMode(int keyMode) noexcept {
+  if (keyMode == 4 || keyMode == 6 || keyMode == 8) {
+    return skinTargetTraitForType(-keyMode);
+  }
   for (const auto &trait : kSkinTargetTraits) {
     if (trait.kind == SkinTargetKind::Gameplay && trait.keyMode == keyMode) {
       return trait;

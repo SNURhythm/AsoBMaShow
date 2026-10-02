@@ -121,13 +121,6 @@ void Button::renderImpl(RenderContext &context) {
     background = hoverBackgroundColor;
     border = hoverBorderColor;
   }
-  if (!enabled) {
-    background.a = static_cast<uint8_t>(
-        static_cast<unsigned int>(background.a) * 45U / 100U);
-    border.a = static_cast<uint8_t>(
-        static_cast<unsigned int>(border.a) * 45U / 100U);
-  }
-
   const float radius = getCornerRadius();
   if (hasStyledBorder && styleBorderWidth > 0) {
     drawButtonRect(context, getX(), getY(), getWidth(), getHeight(), radius,
@@ -288,20 +281,73 @@ void Button::onResize(int newWidth, int newHeight) {
   syncContentFrame(*this, contentView.get(), true);
 }
 
+void Button::onPointerEventConsumed(const SDL_Event &event) {
+  switch (event.type) {
+  case SDL_MOUSEMOTION:
+    if (event.motion.which != SDL_TOUCH_MOUSEID) {
+      isHovered = false;
+    }
+    break;
+  case SDL_MOUSEBUTTONUP:
+    if (event.button.button == SDL_BUTTON_LEFT &&
+        event.button.which != SDL_TOUCH_MOUSEID) {
+      mousePressedInside = false;
+    }
+    break;
+  case SDL_FINGERUP:
+    if (!sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+        event.tfinger.fingerId == activeTouchId) {
+      activeTouchId = -1;
+      isHovered = false;
+    }
+    break;
+  default:
+    break;
+  }
+  if (contentView) {
+    contentView->notifyPointerEventConsumed(event);
+  }
+}
+
 bool Button::handleEventsImpl(SDL_Event &event) {
+  EventDispatchLifetime lifetime(*this);
   if (!enabled) {
     mousePressedInside = false;
     isHovered = false;
     activeTouchId = -1;
-    return true;
+    switch (event.type) {
+    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEBUTTONUP: {
+      int uiX = 0;
+      int uiY = 0;
+      mouseEventToUi(event.button, uiX, uiY);
+      return !isInsideButton(*this, uiX, uiY);
+    }
+    case SDL_MOUSEMOTION:
+    case SDL_FINGERMOTION:
+      // ScrollView treats consumed motion as a captured child drag. Inert
+      // buttons leave motion available to scrollers, as enabled buttons do.
+      return true;
+    case SDL_FINGERDOWN:
+    case SDL_FINGERUP: {
+      float uiX = 0.0f;
+      float uiY = 0.0f;
+      fingerEventToUi(event.tfinger, uiX, uiY);
+      return !isInsideButton(*this, uiX, uiY);
+    }
+    default:
+      return true;
+    }
   }
   if (sdl_pointer_event::isMouseSynthesizedTouch(event)) {
     return true;
   }
   if (contentView) {
     if (!contentView->handleEvents(event)) {
+      if (lifetime.alive()) onPointerEventConsumed(event);
       return false;
     }
+    if (!lifetime.alive()) return false;
   }
 
   switch (event.type) {

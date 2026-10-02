@@ -3,17 +3,42 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import subprocess
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    retry_requests = {}
+    retry_lock = threading.Lock()
 
     def log_message(self, *_args):
         pass
 
+    def do_HEAD(self):
+        route = urlsplit(self.path).path
+        if route == "/probe/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/probe/available")
+        else:
+            self.send_response(404 if route == "/probe/missing" else 200)
+        self.send_header("Content-Length", str(8 * 1024 * 1024 * 1024))
+        self.end_headers()
+
     def do_GET(self):
         route = urlsplit(self.path).path
+        if route.startswith("/retry/"):
+            self.retry_download(route.removeprefix("/retry/"))
+            return
+        if route == "/retry-stats":
+            scenario = parse_qs(urlsplit(self.path).query)["scenario"][0]
+            with self.retry_lock:
+                offsets = self.retry_requests.get(scenario, [])
+                payload = ",".join(str(offset) for offset in offsets).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if route.startswith("/ios-metadata/"):
             self.ios_metadata(route.removeprefix("/ios-metadata"))
             return
@@ -86,6 +111,45 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.do_GET()
+
+    def retry_download(self, scenario):
+        requested_range = self.headers.get("Range", "bytes=0-")
+        offset = int(requested_range.removeprefix("bytes=").split("-")[0])
+        with self.retry_lock:
+            offsets = self.retry_requests.setdefault(scenario, [])
+            offsets.append(offset)
+            attempt = len(offsets)
+        if scenario == "permanent":
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if scenario == "ignore-range":
+            offset = 0
+        payload = b"a" * 16384 + b"b" * 16384 + b"c" * 32768
+        if scenario == "exhausted" or scenario.startswith("prompt-"):
+            payload += b"d" * 65536
+        self.send_response(206 if offset else 200)
+        self.send_header("Content-Length", str(len(payload) - offset))
+        if scenario != "restart":
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("ETag", '"retry-fixture-v1"')
+            self.send_header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+        if offset:
+            self.send_header("Content-Range", f"bytes {offset}-{len(payload) - 1}/{len(payload)}")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        drop = (scenario in ("exhausted", "cancel") or
+                attempt <= (4 if scenario.startswith("prompt-") else
+                            2 if scenario == "resume" else 1))
+        try:
+            self.wfile.write(payload[offset:offset + 16384] if drop else payload[offset:])
+            self.wfile.flush()
+            if drop:
+                time.sleep(0.1)  # Deliver the partial body before disconnecting.
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True
 
     def ios_metadata(self, route):
         if route in ("/redirect", "/redirect-over", "/invalid-redirect"):

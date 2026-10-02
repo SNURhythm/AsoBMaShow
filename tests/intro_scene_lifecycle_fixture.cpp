@@ -111,6 +111,7 @@ public:
   void startInputListening();
   void stopInputListening();
   View *rootLayout_ = nullptr, *startButton_ = nullptr, *settingsButton_ = nullptr;
+  View *tutorialButton_ = nullptr;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0, inputDeviceSubscription_ = 0;
   int layoutWidth_ = -1, layoutHeight_ = -1;

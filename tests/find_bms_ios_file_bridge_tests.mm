@@ -231,6 +231,132 @@ bool expectedFile(const std::filesystem::path &path, char value, size_t size) {
 }
 
 #if TRANSPORT_HAS_FILE_BRIDGE
+void exerciseDownloadRecovery(const std::string &origin,
+                               const std::filesystem::path &root) {
+  const auto destination = root / "archive.zip";
+  const std::string expected = std::string(16384, 'a') +
+                               std::string(16384, 'b') +
+                               std::string(32768, 'c');
+  for (const std::string scenario : {"resume", "restart", "ignore-range",
+                                     "permanent", "exhausted", "cancel"}) {
+    std::ofstream(destination, std::ios::trunc) << "zzz";
+    std::atomic_bool cancelled{false};
+    std::atomic_bool finished{false};
+    std::thread canceller;
+    if (scenario == "cancel") {
+      canceller = std::thread([&] {
+        while (!finished.load()) {
+          std::string history;
+          std::string historyError;
+          if (DownloadURLTextIOS(origin + "/retry-stats?scenario=cancel",
+                                  history, historyError) && !history.empty())
+            break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        cancelled.store(true);
+      });
+    }
+    std::string error;
+    const auto start = std::chrono::steady_clock::now();
+    const bool success = downloadUrlToFile(origin + "/retry/" + scenario,
+        destination, cancelled, error, {});
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    finished.store(true);
+    if (canceller.joinable()) canceller.join();
+    const bool recoverable = scenario == "resume" || scenario == "restart" ||
+                             scenario == "ignore-range";
+    expect(success == recoverable, scenario + " retries the current archive URL");
+    if (recoverable) {
+      std::ifstream input(destination, std::ios::binary);
+      const std::string actual{std::istreambuf_iterator<char>(input),
+                                std::istreambuf_iterator<char>()};
+      expect(actual == expected, scenario + " exact completed archive bytes");
+      expect(error.empty(), scenario + " clears recovered network errors");
+    } else {
+      expect(expectedFile(destination, 'z', 3), scenario + " preserves prior destination");
+      expect(!error.empty(), scenario + " reports terminal failure");
+    }
+    std::string stats;
+    std::string statsError;
+    expect(DownloadURLTextIOS(origin + "/retry-stats?scenario=" + scenario,
+                              stats, statsError), scenario + " fetch request history");
+    if (scenario == "resume")
+      expect(stats == "0,16384,32768", "dropped transfers resume from their saved byte offsets");
+    if (scenario == "restart")
+      expect(stats == "0,0", "nonresumable transfer restarts at the same URL");
+    if (scenario == "ignore-range")
+      expect(stats == "0,16384", "server ignoring range can safely restart the archive");
+    if (scenario == "permanent")
+      expect(stats == "0", "permanent HTTP error does not retry");
+    if (scenario == "exhausted")
+      expect(std::count(stats.begin(), stats.end(), ',') == 3,
+             "network retry budget stops after four attempts");
+    if (scenario == "cancel") {
+      expect(stats == "0", "cancellation during retry delay prevents another request");
+      expect(error.find("cancel") != std::string::npos &&
+                 elapsed < std::chrono::seconds(1),
+             "retry wait promptly reports cancellation");
+    }
+    size_t entries = 0;
+    for (const auto &entry : std::filesystem::directory_iterator(root)) {
+      (void)entry;
+      ++entries;
+    }
+    expect(entries == 2, scenario + " no private staging files leaked");
+    std::cout << "recovery " << scenario << " requests=" << stats
+              << " success=" << success << " error=" << error << '\n';
+  }
+}
+
+void exerciseDownloadRecoveryDecision(const std::string &origin,
+                                       const std::filesystem::path &root) {
+  const auto destination = root / "archive.zip";
+  for (const bool resume : {true, false}) {
+    const std::string scenario = resume ? "prompt-resume" : "prompt-cancel";
+    std::ofstream(destination, std::ios::trunc) << "zzz";
+    std::atomic_bool cancelled{false};
+    int prompts = 0;
+    std::string error;
+    const bool success = downloadUrlToFile(origin + "/retry/" + scenario,
+        destination, cancelled, error, {}, [&](const std::string &message, bool canResume) {
+          ++prompts;
+          expect(!message.empty() && canResume, "interrupted download offers native resume");
+          std::string history;
+          std::string historyError;
+          expect(DownloadURLTextIOS(origin + "/retry-stats?scenario=" + scenario,
+                                    history, historyError), "read paused request history");
+          expect(std::count(history.begin(), history.end(), ',') == 3,
+                 "requesting user decision does not start another transfer");
+          return resume;
+        });
+    expect(prompts == 1 && success == resume, "user controls recovery after retries are exhausted");
+    if (resume) {
+      std::ifstream input(destination, std::ios::binary);
+      const std::string actual{std::istreambuf_iterator<char>(input),
+                                std::istreambuf_iterator<char>()};
+      expect(actual == std::string(16384, 'a') + std::string(16384, 'b') +
+                         std::string(32768, 'c') + std::string(65536, 'd'),
+             "user-approved resume preserves the complete archive");
+      std::string history;
+      std::string historyError;
+      const bool readHistory = DownloadURLTextIOS(
+          origin + "/retry-stats?scenario=" + scenario, history, historyError);
+      const auto lastOffset = history.find_last_of(',');
+      // Foundation may retain fewer bytes than the server sent before a drop.
+      expect(readHistory && std::count(history.begin(), history.end(), ',') == 4 &&
+                 lastOffset != std::string::npos &&
+                 std::stoull(history.substr(lastOffset + 1)) > 0,
+             "user-approved resume continues the retained partial file");
+      std::cout << "user recovery requests=" << history << '\n';
+    } else {
+      expect(cancelled.load() && error.find("cancel") != std::string::npos,
+             "declining resume cancels instead of failing through to another provider");
+      expect(expectedFile(destination, 'z', 3), "declining resume preserves existing file");
+    }
+  }
+}
+
 struct DownloadCapacityFixture {
   std::uint64_t downloadFree = 0;
   std::uint64_t stagingFree = 0;
@@ -550,11 +676,26 @@ void exerciseFileFaults(const std::string &origin,
 
 #include "ios_metadata_transport_tests.mm"
 
+void exerciseDownloadProbe(const std::string &origin) {
+  std::atomic_bool cancelled{false};
+  for (const std::string route : {"available", "missing", "redirect"}) {
+    std::string error;
+    const bool found = probeDownloadUrl(
+        origin + "/probe/" + route, error, &cancelled);
+    expect(found == (route != "missing"), "HEAD availability: " + route);
+  }
+  cancelled.store(true);
+  std::string error;
+  expect(!probeDownloadUrl(origin + "/probe/available", error, &cancelled),
+         "cancelled availability probe stops");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   @autoreleasepool {
     const std::string origin = argv[1];
     if (!origin.starts_with("http://127.0.0.1:")) return 2;
+    exerciseDownloadProbe(origin);
     const auto root = std::filesystem::temp_directory_path() /
         ("asobmshow-transport-" + std::string(NSUUID.UUID.UUIDString.UTF8String));
     std::filesystem::create_directory(root);
@@ -632,6 +773,8 @@ int main(int argc, char **argv) {
     expect(expectedFile(destination, 'a', 16384) && wholeFileReads.load() == 0,
            "actual Find BMS archive caller uses the file bridge");
 #if TRANSPORT_HAS_FILE_BRIDGE
+    exerciseDownloadRecovery(origin, root);
+    exerciseDownloadRecoveryDecision(origin, root);
     exerciseDownloadPreflight(origin, root);
     exerciseDownloadCapacity(root);
     exerciseFileFaults(origin, root);

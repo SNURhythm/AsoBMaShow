@@ -24,8 +24,16 @@ for _, module_name in ipairs({"ffi", "jit", "socket", "http"}) do
 end
 
 assert(next(require("main_state")) == nil)
-assert(next(require("timer_util")) == nil)
-assert(next(require("event_util")) == nil)
+local timer_util = require("timer_util")
+local passive = timer_util.new_passive_timer()
+assert(timer_util.is_timer_off(passive.timer()))
+local event_count = 0
+local observe = require("event_util").event_observe_turn_true(
+  function() return true end,
+  function() event_count = event_count + 1 end)
+observe()
+observe()
+assert(event_count == 1)
 
 local first_luajava = require("luajava")
 local second_luajava = require("luajava")

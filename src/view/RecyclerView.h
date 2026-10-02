@@ -60,12 +60,17 @@ private:
   }
 
   inline bool handleEventsImpl(SDL_Event &event) override {
+    EventDispatchLifetime lifetime(*this);
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) {
       return true;
     }
     if (shouldForwardEventToVisibleItems(event)) {
       for (auto it = viewEntries.rbegin(); it != viewEntries.rend(); ++it) {
-        if (it->first != nullptr && !it->first->handleEvents(event)) {
+        if (it->first == nullptr) continue;
+        const bool propagate = it->first->handleEvents(event);
+        if (!lifetime.alive()) return false;
+        if (!propagate) {
+          onPointerEventConsumed(event);
           return false;
         }
       }
@@ -260,6 +265,24 @@ private:
     }
     }
     return true;
+  }
+
+  void onPointerEventConsumed(const SDL_Event &event) override {
+    if (event.type == SDL_FINGERUP &&
+        !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+        event.tfinger.fingerId == touchId) {
+      touchId = -1;
+      touchPressIndex = -1;
+      touchDragging = false;
+      touchMomentum.stop();
+    }
+    // Virtualized rows are not View children, but still own pointer state.
+    for (const auto &entry : viewEntries) {
+      if (entry.first) entry.first->notifyPointerEventConsumed(event);
+    }
+    for (auto *entry : recycledViewEntries) {
+      if (entry) entry->notifyPointerEventConsumed(event);
+    }
   }
 
 public:

@@ -249,15 +249,16 @@ int favoriteIndex(int flags, int favorite, int invisible) {
 }
 
 int integerRate(int score, int maximum) {
-  return maximum > 0 ? static_cast<int>((static_cast<double>(score) /
-                                         static_cast<double>(maximum)) * 100.0)
+  // ScoreDataProperty stores its rate as a Java float before scaling.
+  return maximum > 0 ? static_cast<int>((static_cast<float>(score) /
+                                         static_cast<float>(maximum)) * 100.0F)
                      : 100;
 }
 
 int integerRateAfterDot(int score, int maximum) {
   return maximum > 0
-             ? static_cast<int>((static_cast<double>(score) /
-                                 static_cast<double>(maximum)) * 10'000.0) %
+             ? static_cast<int>((static_cast<float>(score) /
+                                 static_cast<float>(maximum)) * 10'000.0F) %
                    100
              : 0;
 }
@@ -384,6 +385,13 @@ void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
     // Both resolve to this selected ScoreData in MusicSelector.
     out.integers[80 + judge] = count;
     out.integers[110 + judge] = count;
+    // These percentage properties use ScoreData.notes, independently of
+    // the currently selected chart's graph denominator.
+    if (const int notes = maximum / 2; notes > 0) {
+      out.integers[85 + judge] =
+          static_cast<int>(static_cast<long long>(count) * 100 / notes);
+      out.floats[85 + judge] = static_cast<float>(count) / notes;
+    }
   }
   out.integers[423] = score.fast;
   out.integers[424] = score.slow;
@@ -396,6 +404,10 @@ void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
   out.integers[101] = score.score;
   out.integers[102] = integerRate(score.score, maximum);
   out.integers[103] = integerRateAfterDot(score.score, maximum);
+  for (const int id : {115, 155}) {
+    out.integers[id] = out.integers[102];
+    out.integers[id + 1] = out.integers[103];
+  }
   out.integers[154] = selectableNextRank(score);
   out.integers[105] = score.maxCombo.value_or(0);
   out.integers[150] = 0;
@@ -522,6 +534,25 @@ void projectSelectedBar(Properties &out,
   if (selected->rivalScore) {
     out.imageIndexes[371] =
         std::clamp(selected->presentation.rivalLamp, 0, 10);
+  }
+  if (course) {
+    for (int judge = 0; judge < 5; ++judge) {
+      out.rates[140 + judge] = 0.0;
+    }
+    out.rates[145] = 0.0;
+    out.rates[147] = 0.0;
+    if (selected->score) {
+      const auto &score = *selected->score;
+      const auto notes = selected->courseTotalNotes;
+      for (int judge = 0; judge < 5; ++judge) {
+        out.rates[140 + judge] = static_cast<float>(
+            score.judgementCounts[static_cast<std::size_t>(judge)]) / notes;
+      }
+      out.rates[145] = static_cast<float>(score.maxCombo.value_or(0)) / notes;
+      // FloatPropertyFactory's GradeBar branch divides EX by notes, while
+      // only its SongBar branch applies the additional factor of two.
+      out.rates[147] = static_cast<float>(score.score) / notes;
+    }
   }
   if (!selected->chart) return;
 

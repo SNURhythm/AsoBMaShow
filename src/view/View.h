@@ -16,6 +16,7 @@
 #include "../rendering/common.h"
 #include "../rendering/UiBatchRenderer.h"
 #include "../rendering/ShaderManager.h"
+#include "../rendering/UniformCache.h"
 #include "../rendering/Color.h"
 #include "../RAII.h"
 #include "bgfx/bgfx.h"
@@ -66,6 +67,16 @@ struct RenderContext {
                      std::span<const std::uint16_t> indices,
                      const rendering::UiBatchState &state) const {
     if (uiBatch != nullptr) {
+      if (opacity < 1.0f) {
+        std::vector<rendering::PosColorVertex> faded(vertices.begin(),
+                                                    vertices.end());
+        for (auto &vertex : faded) {
+          const auto alpha = static_cast<std::uint32_t>(
+              static_cast<float>(vertex.abgr >> 24U) * opacity);
+          vertex.abgr = (vertex.abgr & 0x00ffffffU) | (alpha << 24U);
+        }
+        return uiBatch->appendColor(faded, indices, state);
+      }
       return uiBatch->appendColor(vertices, indices, state);
     }
     return false;
@@ -76,6 +87,39 @@ struct RenderContext {
       std::span<const std::uint16_t> indices,
       const rendering::UiBatchState &state) const {
     if (uiBatch != nullptr) {
+      if (opacity < 1.0f) {
+        auto faded = state;
+        auto &shaders = rendering::ShaderManager::getInstance();
+        if (state.program.idx == shaders.getProgram(SHADER_TEXT).idx) {
+          faded.program = shaders.getProgram("vs_skin_quad.bin",
+                                              "fs_skin_quad.bin");
+          faded.textureOpacity *= opacity;
+          // UI textures use ordinary sampling regardless of the last skin
+          // draw's filter uniform.
+          faded.uniforms[0] = {
+              .handle = rendering::UniformCache::getInstance().getVec4(
+                  "u_skinSampling"),
+              .value = {0.0f, 0.0f, 0.0f, 0.0f}};
+          faded.uniformCount = 1;
+        } else if (state.program.idx ==
+                   shaders.getProgram(SHADER_UI_SHADOW).idx) {
+          faded.uniforms[0].value[3] *= opacity;
+        } else if (state.program.idx ==
+                   shaders.getProgram("vs_text.bin", "fs_image_fade.bin").idx) {
+          // ImageView's directional UV progress p is in [0, 1]. Its alpha
+          // multiplier is 1-s+s*p. Fold opacity c into the existing shader:
+          // s'=1-c+c*s, p'=c*s*p/s', so 1-s'+s'*p'=c*(1-s+s*p).
+          auto &params = faded.uniforms[0].value;
+          const float strength = params[3];
+          const float fadedStrength = 1.0f - opacity + opacity * strength;
+          const float progressScale = opacity * strength / fadedStrength;
+          for (std::size_t i = 0; i < 3; ++i) {
+            params[i] *= progressScale;
+          }
+          params[3] = fadedStrength;
+        }
+        return uiBatch->appendTextured(vertices, indices, faded);
+      }
       return uiBatch->appendTextured(vertices, indices, state);
     }
     return false;
@@ -124,6 +168,20 @@ struct RenderContext {
 
   private:
     RenderContext &context;
+  };
+
+  struct OpacityScope {
+    OpacityScope(RenderContext &context, float value) noexcept
+        : context(context), previous(context.opacity) {
+      context.opacity *= std::clamp(value, 0.0f, 1.0f);
+    }
+    ~OpacityScope() { context.opacity = previous; }
+    OpacityScope(const OpacityScope &) = delete;
+    OpacityScope &operator=(const OpacityScope &) = delete;
+
+  private:
+    RenderContext &context;
+    float previous;
   };
 
   inline void pushScissor(int x, int y, int width, int height) {
@@ -291,6 +349,7 @@ private:
   std::array<float, 16> transformMatrix{};
   rendering::UiBatchRenderer *uiBatch = nullptr;
   std::size_t uiBatchDepth = 0;
+  float opacity = 1.0f;
 };
 
 struct ScissorScope {
@@ -326,6 +385,30 @@ private:
 };
 
 class View {
+protected:
+  // Navigation can synchronously destroy the dispatching view. Keep the
+  // lifetime check on the caller's stack, without allocating per event/view.
+  class EventDispatchLifetime {
+    friend class View;
+  public:
+    explicit EventDispatchLifetime(View &view)
+        : view_(&view), previous_(view.activeEventDispatch_) {
+      view.activeEventDispatch_ = this;
+    }
+    ~EventDispatchLifetime() {
+      if (view_ != nullptr) view_->activeEventDispatch_ = previous_;
+    }
+    EventDispatchLifetime(const EventDispatchLifetime &) = delete;
+    EventDispatchLifetime &operator=(const EventDispatchLifetime &) = delete;
+    bool alive() const { return view_ != nullptr; }
+  private:
+    View *view_;
+    EventDispatchLifetime *previous_;
+  };
+
+private:
+  EventDispatchLifetime *activeEventDispatch_ = nullptr;
+
 public:
   using ThemeColorProvider = std::function<Color()>;
 
@@ -372,6 +455,10 @@ public:
   View &operator=(View &&) = delete;
 
   virtual ~View() {
+    for (auto *dispatch = activeEventDispatch_; dispatch != nullptr;
+         dispatch = dispatch->previous_) {
+      dispatch->view_ = nullptr;
+    }
     dirtyRoots.erase(this);
     for (auto *view : children) {
       dirtyRoots.erase(view);
@@ -394,6 +481,7 @@ public:
     if (!isVisible)
       return;
     sortChildrenIfNeeded();
+    RenderContext::OpacityScope opacityScope(context, renderOpacity());
     RenderTransformScope transformScope(
         context, rotationDegrees,
         static_cast<float>(getX()) + static_cast<float>(getWidth()) * 0.5f,
@@ -444,14 +532,44 @@ public:
     if (!isVisible) {
       return true;
     }
+    EventDispatchLifetime lifetime(*this);
     sortChildrenIfNeeded();
+    if (!shouldHandleChildEvents()) {
+      return handleEventsImpl(event);
+    }
     // Let top-most children handle first.
     for (auto it = children.rbegin(); it != children.rend(); ++it) {
-      if (!(*it)->handleEvents(event)) {
+      View *handled = *it;
+      const bool propagate = handled->handleEvents(event);
+      if (!lifetime.alive()) return false;
+      if (!propagate) {
+        // Covered siblings still need to finish pointer state, without
+        // receiving the event as an actionable click or touch release.
+        // A click listener can append views, invalidating the old iterator.
+        const auto current =
+            std::find(children.rbegin(), children.rend(), handled);
+        if (current != children.rend()) {
+          for (auto covered = current + 1; covered != children.rend();
+               ++covered) {
+            (*covered)->notifyPointerEventConsumed(event);
+          }
+        }
+        onPointerEventConsumed(event);
         return false;
       }
     }
     return handleEventsImpl(event);
+  }
+
+  void notifyPointerEventConsumed(const SDL_Event &event) {
+    if (event.type != SDL_MOUSEMOTION && event.type != SDL_MOUSEBUTTONUP &&
+        event.type != SDL_FINGERUP) {
+      return;
+    }
+    for (auto *child : children) {
+      child->notifyPointerEventConsumed(event);
+    }
+    onPointerEventConsumed(event);
   }
 
   using TemporaryEventListener = std::function<void(SDL_Event &)>;
@@ -624,6 +742,10 @@ public:
   }
 
 protected:
+  [[nodiscard]] virtual float renderOpacity() const noexcept { return 1.0f; }
+  [[nodiscard]] virtual bool shouldHandleChildEvents() const noexcept {
+    return true;
+  }
   [[nodiscard]] std::optional<RenderBounds> textFitBounds() const;
   [[nodiscard]] virtual RenderBounds renderingBounds() const {
     return {.x = static_cast<float>(getX()),
@@ -636,6 +758,7 @@ protected:
   }
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
+  virtual void onPointerEventConsumed(const SDL_Event &event) {}
   virtual void onThemeChanged();
   virtual void onLanguageChanged();
   // onResize

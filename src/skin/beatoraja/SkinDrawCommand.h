@@ -74,6 +74,7 @@ struct SkinGlyphRunCommand {
   // standard fallback-face glyphs bilinearly in white. Keeping that overlay
   // in the same value-owned command preserves its post-layout ordering.
   std::vector<SkinGlyphInstance> fallbackColorOverlays;
+  SkinFilterMode fallbackColorFilter = SkinFilterMode::Linear;
   SkinRenderState state;
 };
 
@@ -115,10 +116,18 @@ struct SkinBatchRange {
   std::size_t commandCount = 0;
 };
 
+struct SkinRetainedBlendState {
+  std::uint64_t sessionSerial = 0;
+  const ValidatedBeatorajaSkinModel *modelIdentity = nullptr;
+  SkinBlendMode blend = SkinBlendMode::Normal;
+};
+
 struct SkinCommandBuffer {
   std::uint64_t frameSerial = 0;
   std::vector<SkinDrawCommand> commands;
   std::vector<SkinBatchRange> adjacentBatches;
+  // Session evaluations publish this only after all backend preflights pass.
+  std::optional<SkinRetainedBlendState> retainedBlendAfterSubmit;
 };
 
 } // namespace skin

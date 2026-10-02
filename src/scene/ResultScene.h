@@ -327,6 +327,7 @@ private:
   void addRemoteButtons();
   void addRemoteIrStatus();
   void addCourseButtons();
+  void showCourseDetails();
   void buildResultTouchControls();
   void setResultTouchControlsHidden(bool hidden);
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
@@ -383,6 +384,7 @@ private:
   bool resultSkinActivationFailed = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
+  std::optional<UiLogicalPoint> resultSkinPointerUiPosition;
   std::uint64_t resultSkinFrameSerial = 0;
   long long resultSkinStartedMicros = 0;
   std::optional<long long> resultSkinFadeoutStartedMillis;
@@ -398,6 +400,7 @@ private:
   Button *persistenceRetryButton = nullptr;
   Button *persistenceDetailsButton = nullptr;
   BlockingOverlayView *persistenceDetailsModalRoot = nullptr;
+  BlockingOverlayView *courseDetailsModalRoot = nullptr;
   TextView *persistenceDetailsStateText = nullptr;
   TextView *persistenceDetailsReasonText = nullptr;
   TextView *persistenceDetailsReferenceText = nullptr;

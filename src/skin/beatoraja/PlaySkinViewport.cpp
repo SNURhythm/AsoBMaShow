@@ -95,6 +95,8 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
   if (!stretch) {
     scaleX = scaleY = std::min(scaleX, scaleY);
   }
+  result.destinationScaleX = scaleX;
+  result.destinationScaleY = scaleY;
   double tx = safeUiBounds.x + (safeUiBounds.width - authoredSize.width * scaleX) / 2.0;
   double ty = safeUiBounds.y + (safeUiBounds.height - authoredSize.height * scaleY) / 2.0 +
               authoredSize.height * scaleY;

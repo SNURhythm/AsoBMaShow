@@ -1328,6 +1328,29 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  for (int keys : {4, 6}) {
+    auto sparse = beatorajaLaneModel;
+    sparse.keyCount = keys;
+    sparse.laneOrder = keys == 4 ? std::vector<int>{0, 1, 3, 4}
+                                : std::vector<int>{0, 1, 2, 4, 5, 6};
+    sparse.notes.clear();
+    for (int lane : sparse.laneOrder) {
+      sparse.notes.push_back({.id = static_cast<ChartVisualId>(700 + lane),
+                              .timelineId = 600, .lane = lane,
+                              .authoredOrdinal = static_cast<std::uint32_t>(lane)});
+    }
+    PlayfieldProjection sparseProjection;
+    const auto result = sparseProjection.project(sparse, beatorajaLaneState, {});
+    const auto views = adaptPlayfieldProjectionForSkin(result);
+    std::vector<int> lanes;
+    for (const auto &note : views.notes) lanes.push_back(note.lane);
+    if (lanes != sparse.laneOrder) {
+
+      std::cerr << "4K/6K notes must keep original channels without scratch or the middle key\n";
+      return EXIT_FAILURE;
+    }
+  }
+
   // SkinNote/LaneRenderer consumes the abstract scroll delta with its own
   // note.dst lane height and the captured hispeed. The adapter must preserve
   // that speed rather than publishing the built-in renderer's pixel rxhs.

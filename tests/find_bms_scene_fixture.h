@@ -1,4 +1,5 @@
-// Real service result types, task, dialog policy, and complete scene methods.
+// Real service result types, task, dialog policy, complete shared modal methods,
+// and Main Menu callback wiring.
 // Service definitions below replace network/filesystem effects with controlled
 // calls. View and indexing doubles check the application-thread handoff.
 #include "scene/FindBmsDialogPolicy.h"
@@ -12,6 +13,8 @@ struct ServiceCalls {
   std::filesystem::path root;
   bool skipUnarchiving = false;
   bool cancellationObserved = false;
+  bool promptForRetry = false;
+  bool retryApproved = false;
   BmsSearchPendingArtifactDecision decision = BmsSearchPendingArtifactDecision::Keep;
   std::optional<BmsSearchPendingArtifact> resolvedArtifact;
   BmsSearchResult result;
@@ -36,6 +39,10 @@ BmsSearchResult BmsSearchService::findAndDownload(
   calls.skipUnarchiving = options.skipUnarchivingForNonSolidArchives;
   progress({"Downloading archive", 20, 100});
   progress({"Downloading archive", 40, 100});
+  if (calls.promptForRetry) {
+    assert(options.requestRetry);
+    calls.retryApproved = options.requestRetry("Connection lost", true);
+  }
   if (calls.gate) { calls.gate->block(); }
   calls.cancellationObserved = cancelled.load();
   return calls.result;
@@ -67,6 +74,7 @@ struct ChartMeta {
 };
 struct ChartMetaRecord { ChartMeta meta; };
 namespace main_menu_library {
+using FindBmsChartIdentity = std::string;
 std::string findBmsChartIdentity(const ChartMeta &meta) { return meta.SHA256; }
 }
 namespace rendering { constexpr int window_width = 1280, window_height = 720; }
@@ -77,13 +85,25 @@ struct FindBmsModal {
   void setSize(int, int) { assert(owner == std::this_thread::get_id()); }
   void setVisible(bool value) { assert(owner == std::this_thread::get_id()); visible = value; }
 };
+struct FindBmsModalCallbacks {
+  std::function<std::filesystem::path()> downloadRoot;
+  std::function<BmsSearchDownloadOptions()> downloadOptions;
+  std::function<void()> downloadStarted;
+  std::function<void(const ChartMetaRecord &, const BmsSearchResult &, bool)> filesReady;
+  std::function<void()> refreshLibrary;
+};
 class MainMenuScene {
 public:
+  MainMenuScene() { buildFindBmsCallbacks(); }
+  FindBmsModalCallbacks callbacks_;
+  void buildFindBmsCallbacks();
+  void startLibraryRefresh() {}
   ~MainMenuScene() { findBmsTask.stopAndWait(); }
   FindBmsTask findBmsTask;
   FindBmsModal modal;
   FindBmsModal *findBmsModalRoot = &modal;
   struct { struct { bool findBmsSkipUnarchivingForNonSolidArchives = true; } settings; } context;
+  bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
@@ -109,7 +129,9 @@ public:
     assert(modal.owner == std::this_thread::get_id());
     indexed.push_back({path, identity, generation, removed});
   }
-  void showFindBmsModal(const ChartMetaRecord &record);
+  void showFindBmsModal(const ChartMetaRecord &record, bool requireConfirmation = false);
+  void startLookup();
+  void cancelAndWait();
   void startFindBmsCandidateDownload(size_t index);
   void startFindBmsPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
@@ -126,6 +148,79 @@ void applyUntilIdle(MainMenuScene &scene) {
     std::this_thread::yield();
   }
   assert(!scene.findBmsTask.running());
+}
+
+// Starting work from show(record, true), or forgetting to consume/clear the
+// confirmation, would violate these transport and callback boundary checks.
+void testConfirmationDefersAllWorkUntilExplicitSearch() {
+  ServiceCalls calls;
+  serviceCalls = &calls;
+  MainMenuScene scene;
+  int roots = 0, options = 0, started = 0;
+  scene.callbacks_.downloadRoot = [&] { ++roots; return std::filesystem::path("confirmed-root"); };
+  scene.callbacks_.downloadOptions = [&] { ++options; return BmsSearchDownloadOptions{}; };
+  scene.callbacks_.downloadStarted = [&] { ++started; };
+  ChartMetaRecord record{{"confirmed-sha", "confirmed-md5", "Confirmed title", "Confirmed artist"}};
+  scene.showFindBmsModal(record, true);
+  assert(!scene.findBmsTask.running());
+  assert(scene.modal.visible && scene.findBmsProgressLog.empty());
+  assert(calls.lookups == 0 && calls.downloads == 0 && calls.resolutions == 0);
+  assert(roots == 0 && options == 0 && started == 0 && scene.indexed.empty());
+  scene.applyFindBmsUpdates();
+  assert(!scene.findBmsTask.running() && calls.lookups == 0);
+
+  record.meta = {"changed-sha", "changed-md5", "Changed title", "Changed artist"};
+  Gate gate;
+  calls.gate = &gate;
+  scene.startLookup();
+  gate.wait();
+  scene.startLookup();
+  assert(roots == 1 && options == 1 && started == 1 && calls.lookups == 1);
+  assert(calls.sha256 == "confirmed-sha" && calls.md5 == "confirmed-md5");
+  assert(calls.title == "Confirmed title" && calls.artist == "Confirmed artist");
+  assert(calls.root == "confirmed-root");
+  scene.showFindBmsModal(record, true);
+  assert(scene.findBmsModalChart.meta.SHA256 == "confirmed-sha");
+  gate.release.set_value();
+  applyUntilIdle(scene);
+  scene.startLookup();
+  assert(!scene.findBmsTask.running() && calls.lookups == 1);
+  assert(roots == 1 && options == 1 && started == 1);
+}
+
+void testDismissedConfirmationCannotStartLookup() {
+  for (int dismissal = 0; dismissal < 3; ++dismissal) {
+    ServiceCalls calls;
+    serviceCalls = &calls;
+    MainMenuScene scene;
+    int callbacks = 0;
+    scene.callbacks_.downloadRoot = [&] { ++callbacks; return std::filesystem::path{}; };
+    scene.callbacks_.downloadOptions = [&] { ++callbacks; return BmsSearchDownloadOptions{}; };
+    scene.callbacks_.downloadStarted = [&] { ++callbacks; };
+    scene.showFindBmsModal({{"sha", "md5", "Title", "Artist"}}, true);
+    assert(!scene.findBmsTask.running());
+    if (dismissal == 0) scene.cancelFindBms();
+    else if (dismissal == 1) scene.hideFindBmsModal();
+    else scene.cancelAndWait();
+    assert(!scene.modal.visible);
+    scene.startLookup();
+    assert(!scene.findBmsTask.running());
+    assert(calls.lookups == 0 && callbacks == 0 && scene.indexed.empty());
+  }
+}
+
+void testConfirmationReopenPreservesPendingArtifact() {
+  ServiceCalls calls;
+  serviceCalls = &calls;
+  MainMenuScene scene;
+  scene.findBmsModalChart = {{"original", "md5", "Original title", "Artist"}};
+  scene.findBmsResult.pendingArtifact = BmsSearchPendingArtifact{.sourcePath = "staged.zip"};
+  scene.showFindBmsModal({{"replacement", "other", "Other title", "Artist"}}, true);
+  scene.startLookup();
+  assert(scene.modal.visible && !scene.findBmsTask.running());
+  assert(scene.findBmsModalChart.meta.SHA256 == "original");
+  assert(scene.findBmsResult.pendingArtifact->sourcePath == "staged.zip");
+  assert(calls.lookups == 0 && calls.resolutions == 0);
 }
 
 void testImmediateArtifactCompletionKeepsActionsGatedUntilHandoff() {
@@ -159,6 +254,9 @@ void testSceneLookupProgressAndIndexHandoff() {
   MainMenuScene scene;
   scene.showFindBmsModal({{"sha256", "md5", "Title", "Artist"}});
   gate.wait();
+  scene.showFindBmsModal({{"different", "other", "Other title", "Other artist"}});
+  assert(scene.findBmsModalChart.meta.SHA256 == "sha256");
+  ++scene.chartSelectionGeneration; // Selection can move while downloading.
   assert(calls.lookups == 1 && calls.sha256 == "sha256" && calls.md5 == "md5");
   assert(calls.title == "Title" && calls.artist == "Artist");
   assert(calls.root == "library-root" && calls.skipUnarchiving);
@@ -179,6 +277,29 @@ void testSceneLookupProgressAndIndexHandoff() {
   assert(scene.indexed.size() == 1);
   scene.hideFindBmsModal();
   assert(!scene.modal.visible);
+}
+
+void testSceneDownloadPromptRetriesExistingWorker() {
+  for (const bool retry : {true, false}) {
+    ServiceCalls calls;
+    serviceCalls = &calls;
+    calls.promptForRetry = true;
+    calls.result = {.status = BmsSearchResult::Status::DownloadFailed};
+    MainMenuScene scene;
+    scene.showFindBmsModal({{"sha256", "md5", "Title", "Artist"}});
+    waitForRetryPrompt(scene.findBmsTask);
+    scene.applyFindBmsUpdates();
+    const auto refreshes = scene.refreshes;
+    scene.hideFindBmsModal();
+    assert(scene.modal.visible);
+    assert(calls.lookups == 1 && scene.indexed.empty());
+    if (retry) assert(scene.findBmsTask.retryDownload());
+    else scene.cancelFindBms();
+    applyUntilIdle(scene);
+    assert(scene.refreshes > refreshes);
+    assert(calls.retryApproved == retry && calls.cancellationObserved != retry);
+    assert(calls.lookups == 1 && scene.indexed.empty());
+  }
 }
 
 void testSceneExtractionProgressPreservesHistoryAcrossLanguages() {
@@ -241,6 +362,10 @@ void testSceneCancellationKeepsPendingArtifactVisible() {
   gate.release.set_value();
   applyUntilIdle(scene);
   assert(calls.cancellationObserved && scene.findBmsResult.pendingArtifact);
+  scene.modal.visible = false;
+  scene.showFindBmsModal({{"different", "other", "Other title", "Other artist"}});
+  assert(scene.modal.visible);
+  assert(calls.lookups == 1 && scene.findBmsModalChart.meta.MD5 == "md5");
   scene.hideFindBmsModal();
   assert(scene.modal.visible && scene.indexed.empty());
 }
@@ -270,7 +395,9 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   scene.findBmsResult.candidates = {{.id = "candidate-1"}};
   scene.startFindBmsCandidateDownload(1);
   assert(calls.downloads == 0);
+  scene.chartSelectionGeneration = 9;
   scene.startFindBmsCandidateDownload(0);
+  assert(scene.findBmsSelectionGenerationAtDownloadStart == 9);
   applyUntilIdle(scene);
   assert(calls.downloads == 1 && calls.candidateId == "candidate-1");
   assert(calls.sha256 == "sha256" && calls.md5 == "md5" && calls.skipUnarchiving);
@@ -281,7 +408,8 @@ void testSceneCandidateAndPendingArtifactDecisions() {
     scene.findBmsResult.pendingArtifact = BmsSearchPendingArtifact{.sourcePath = "staged.zip"};
     const bool keep = decision == BmsSearchPendingArtifactDecision::Keep;
     calls.result = {.status = BmsSearchResult::Status::HashMismatch,
-                    .message = keep ? "Kept" : "Deleted", .outputPath = keep ? "kept.zip" : ""};
+                    .message = keep ? "Kept" : "Deleted", .outputPath = keep ? "kept.zip" : "",
+                    .removedPaths = {"obsolete.bms"}};
     scene.startFindBmsPendingArtifactResolution(decision);
     applyUntilIdle(scene);
     assert(calls.decision == decision && calls.resolvedArtifact->sourcePath == "staged.zip");
@@ -290,5 +418,6 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   assert(calls.resolutions == 2 && scene.indexed.size() == 1);
   assert(scene.indexed[0].path == "kept.zip" && scene.indexed[0].identity.empty());
   assert(scene.indexed[0].generation == 0);
+  assert(scene.indexed[0].removed == std::vector<std::filesystem::path>{"obsolete.bms"});
 }
 } // namespace

@@ -1,4 +1,5 @@
 #include "LuaSkinHostModules.h"
+#include "LuaJValueCoercion.h"
 
 #include "../LuaGameplaySkinFeature.h"
 #include "../../text/Utf8.h"
@@ -12,6 +13,7 @@
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinHttpClient.h"
 #include "Skin2DRenderer.h"
+#include "GameplaySkinBuiltinCatalog.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -26,6 +28,7 @@ extern "C" {
 #include <cmath>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -461,6 +464,28 @@ int expectedFailure(lua_State *state, std::string_view message) {
   return 2;
 }
 
+constexpr std::int64_t kUtilityTimerOff = std::numeric_limits<std::int64_t>::min();
+
+std::optional<double> utilityNumberValue(lua_State *state, int index) {
+  if (lua_type(state, index) == LUA_TSTRING) {
+    std::size_t length = 0;
+    const char *text = lua_tolstring(state, index, &length);
+    return luaJStringNumberValue({text, length});
+  }
+  if (lua_type(state, index) == LUA_TNUMBER) return lua_tonumber(state, index);
+  return std::nullopt;
+}
+
+// LuaJ accepts nonnumeric values as zero, saturates to a Java long, then
+// keeps the low 32 bits when converting that long to an int.
+std::int64_t utilityLong(lua_State *state, int index) {
+  return luaJToLong(utilityNumberValue(state, index).value_or(0));
+}
+
+int utilityInt(lua_State *state, int index) {
+  return luaJToInt(utilityLong(state, index));
+}
+
 std::string audioPathArgument(lua_State *state, int index) {
   return luaToJString(state, index);
 }
@@ -469,9 +494,7 @@ float audioVolumeArgument(lua_State *state, int index) {
   if (lua_isnoneornil(state, index)) {
     return 1.0F;
   }
-  return lua_isnumber(state, index)
-             ? static_cast<float>(lua_tonumber(state, index))
-             : 0.0F;
+  return static_cast<float>(utilityNumberValue(state, index).value_or(0));
 }
 
 int returnAudioResult(lua_State *state, LuaSkinHostModulesImpl *impl,
@@ -489,13 +512,22 @@ int returnAudioResult(lua_State *state, LuaSkinHostModulesImpl *impl,
   return 1;
 }
 
+std::optional<float> audioSystemVolume(lua_State *state) {
+  auto *current = host(state)->frameState;
+  if (current == nullptr) return std::nullopt;
+  const auto volume = current->floatProperty({.value = 17}, SkinFloatPropertyDomain::Rate);
+  return volume.supported ? std::optional<float>(static_cast<float>(volume.value))
+                          : std::nullopt;
+}
+
 int mainStateAudioPlay(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state);
   const std::string path = audioPathArgument(state, 1);
   const float volume = audioVolumeArgument(state, 2);
   return returnAudioResult(
       state, impl,
-      impl->audioHost->play(path, std::clamp(volume, 0.0F, 2.0F), false));
+      impl->audioHost->play(path, std::clamp(volume, 0.0F, 2.0F), false,
+                            audioSystemVolume(state)));
 }
 
 int mainStateAudioLoop(lua_State *state) {
@@ -504,7 +536,8 @@ int mainStateAudioLoop(lua_State *state) {
   const float volume = audioVolumeArgument(state, 2);
   return returnAudioResult(
       state, impl,
-      impl->audioHost->play(path, std::clamp(volume, 0.0F, 2.0F), true));
+      impl->audioHost->play(path, std::clamp(volume, 0.0F, 2.0F), true,
+                            audioSystemVolume(state)));
 }
 
 int mainStateAudioPreload(lua_State *state) {
@@ -535,67 +568,96 @@ ISkinFrameState *frameState(lua_State *state) {
   return host(state)->frameState;
 }
 
+std::optional<SkinBuiltinPropertySelector>
+mainStatePropertyArgument(lua_State *state, int index, SkinBindingType type) {
+  SkinBuiltinPropertySelector selector;
+  if (const auto number = utilityNumberValue(state, index)) {
+    selector.value = luaJToInt(*number);
+  } else if (lua_type(state, index) == LUA_TSTRING) {
+    std::size_t size = 0;
+    const char *name = lua_tolstring(state, index, &size);
+    selector.value = std::string(name, size);
+  } else {
+    return std::nullopt;
+  }
+  // The public factories exclude host-only selectors such as the clock name.
+  return gameplaySkinBuiltinCatalog().contains(type, selector)
+             ? std::optional<SkinBuiltinPropertySelector>(std::move(selector))
+             : std::nullopt;
+}
+
 int mainStateOption(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
-  if (current == nullptr) {
-    return luaL_error(state, "main_state.option has no configured state");
-  }
-  const auto result = current->booleanProperty({.value = id});
-  if (!result.supported) {
-    return luaL_error(state, "unsupported main_state.option id: %d", id);
-  }
-  lua_pushboolean(state, result.value);
+  if (current == nullptr) return luaL_error(state, "main_state.option has no configured state");
+  const auto selector = mainStatePropertyArgument(state, 1, {.kind = SkinBindingKind::BooleanProperty});
+  const auto result = selector ? current->booleanProperty(*selector) : SkinPropertyLookup<bool>{};
+  lua_pushboolean(state, result.supported && result.value);
   return 1;
+}
+
+void pushMainStateNumber(lua_State *state, ISkinFrameState &current, int index) {
+  const auto selector = mainStatePropertyArgument(state, index,
+      {.kind = SkinBindingKind::IntegerProperty,
+       .integerDomain = SkinIntegerPropertyDomain::IntegerValue});
+  const auto result = selector
+      ? current.integerProperty(*selector, SkinIntegerPropertyDomain::IntegerValue)
+      : SkinPropertyLookup<std::int64_t>{};
+  lua_pushnumber(state, result.supported ? static_cast<lua_Number>(result.value) : 0);
 }
 
 int mainStateNumber(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
-  if (current == nullptr) {
-    return luaL_error(state, "main_state.number has no configured state");
-  }
-  const auto result = current->integerProperty(
-      {.value = id}, SkinIntegerPropertyDomain::IntegerValue);
-  if (!result.supported) {
-    return luaL_error(state, "unsupported main_state.number id: %d", id);
-  }
-  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  if (current == nullptr) return luaL_error(state, "main_state.number has no configured state");
+  pushMainStateNumber(state, *current, 1);
   return 1;
+}
+
+int mainStateNumbers(lua_State *state) {
+  auto *current = frameState(state);
+  if (current == nullptr) return luaL_error(state, "main_state.numbers has no configured state");
+  const int count = lua_gettop(state);
+  if (!lua_checkstack(state, count)) return luaL_error(state, "too many number results");
+  for (int index = 1; index <= count; ++index) pushMainStateNumber(state, *current, index);
+  return count;
 }
 
 int mainStateFloatNumber(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
-  if (current == nullptr) {
-    return luaL_error(state, "main_state.float_number has no configured state");
-  }
-  const auto result = current->floatProperty({.value = id},
-                                             SkinFloatPropertyDomain::Rate);
-  if (!result.supported) {
-    return luaL_error(state, "unsupported main_state.float_number id: %d", id);
-  }
-  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  if (current == nullptr) return luaL_error(state, "main_state.float_number has no configured state");
+  const auto selector = mainStatePropertyArgument(state, 1,
+      {.kind = SkinBindingKind::FloatProperty, .floatDomain = SkinFloatPropertyDomain::FloatValue});
+  const auto result = selector
+      ? current->floatProperty(*selector, SkinFloatPropertyDomain::FloatValue)
+      : SkinPropertyLookup<double>{};
+  lua_pushnumber(state, result.supported ? static_cast<lua_Number>(result.value) : 0);
   return 1;
 }
 
 int mainStateText(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
-  if (current == nullptr) {
-    return luaL_error(state, "main_state.text has no configured state");
-  }
-  const auto result = current->stringProperty({.value = id});
-  if (!result.supported) {
-    return luaL_error(state, "unsupported main_state.text id: %d", id);
-  }
-  lua_pushlstring(state, result.value.data(), result.value.size());
+  if (current == nullptr) return luaL_error(state, "main_state.text has no configured state");
+  const auto selector = mainStatePropertyArgument(state, 1, {.kind = SkinBindingKind::StringProperty});
+  const auto result = selector ? current->stringProperty(*selector) : SkinPropertyLookup<std::string_view>{};
+  const auto value = result.supported ? result.value : std::string_view{};
+  lua_pushlstring(state, value.data(), value.size());
+  return 1;
+}
+
+int mainStateScreenWidth(lua_State *state) {
+  const auto *input = host(state)->legacyInputHost;
+  lua_pushinteger(state, input ? input->drawableWidth() : 0);
+  return 1;
+}
+
+int mainStateScreenHeight(lua_State *state) {
+  const auto *input = host(state)->legacyInputHost;
+  lua_pushinteger(state, input ? input->drawableHeight() : 0);
   return 1;
 }
 
 int mainStateOffset(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.offset has no configured state");
   }
@@ -621,7 +683,7 @@ int mainStateOffset(lua_State *state) {
 
 int mainStateTimer(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   const std::int64_t value = current == nullptr
                                  ? std::numeric_limits<std::int64_t>::min()
                                  : current->timerProperty({.value = id});
@@ -629,10 +691,261 @@ int mainStateTimer(lua_State *state) {
   return 1;
 }
 
+std::int64_t utilityNow(lua_State *state) {
+  auto *current = frameState(state);
+  if (current == nullptr) {
+    luaL_error(state, "timer utility has no configured state");
+    return 0;
+  }
+  const auto result = current->integerProperty(
+      {.value = std::string{"time"}}, SkinIntegerPropertyDomain::IntegerValue);
+  if (!result.supported) {
+    luaL_error(state, "timer utility has no current time");
+    return 0;
+  }
+  return result.value;
+}
+
+std::int64_t utilityElapsed(std::int64_t now, std::int64_t start) {
+  // Java long subtraction wraps; do not introduce signed C++ overflow.
+  return std::bit_cast<std::int64_t>(static_cast<std::uint64_t>(now) -
+                                     static_cast<std::uint64_t>(start));
+}
+
+std::int64_t mainStateTimerValue(lua_State *state) {
+  auto *current = frameState(state);
+  return current ? current->timerProperty({.value = utilityInt(state, 1)}) : kUtilityTimerOff;
+}
+
+int mainStateTimerIsOn(lua_State *state) {
+  lua_pushboolean(state, mainStateTimerValue(state) != kUtilityTimerOff);
+  return 1;
+}
+
+int mainStateTimerIsOff(lua_State *state) {
+  lua_pushboolean(state, mainStateTimerValue(state) == kUtilityTimerOff);
+  return 1;
+}
+
+int mainStateTimerElapsed(lua_State *state) {
+  const auto start = mainStateTimerValue(state);
+  const auto elapsed = start == kUtilityTimerOff ? -1 : utilityElapsed(utilityNow(state), start);
+  lua_pushnumber(state, static_cast<lua_Number>(elapsed));
+  return 1;
+}
+
+int mainStateTimerElapsedMillis(lua_State *state) {
+  const auto start = mainStateTimerValue(state);
+  const auto elapsed = start == kUtilityTimerOff ? -1 : utilityElapsed(utilityNow(state), start) / 1'000;
+  lua_pushnumber(state, static_cast<lua_Number>(elapsed));
+  return 1;
+}
+
+int mainStateTimerElapsedSeconds(lua_State *state) {
+  const auto start = mainStateTimerValue(state);
+  const auto elapsed = start == kUtilityTimerOff ? -1.0
+      : static_cast<double>(utilityElapsed(utilityNow(state), start)) / 1'000'000.0;
+  lua_pushnumber(state, elapsed);
+  return 1;
+}
+
+void pushUtilityState(lua_State *state, std::int64_t initial) {
+  new (lua_newuserdata(state, sizeof(std::int64_t))) std::int64_t(initial);
+}
+
+std::int64_t &utilityState(lua_State *state, int upvalue) {
+  return *static_cast<std::int64_t *>(
+      lua_touserdata(state, lua_upvalueindex(upvalue)));
+}
+
+int timerUtilNow(lua_State *state) {
+  const auto value = utilityLong(state, 1);
+  lua_pushnumber(state, static_cast<lua_Number>(
+      value == kUtilityTimerOff ? 0 : utilityElapsed(utilityNow(state), value)));
+  return 1;
+}
+
+int timerUtilIsOn(lua_State *state) {
+  lua_pushboolean(state, utilityLong(state, 1) != kUtilityTimerOff);
+  return 1;
+}
+
+int timerUtilIsOff(lua_State *state) {
+  lua_pushboolean(state, utilityLong(state, 1) == kUtilityTimerOff);
+  return 1;
+}
+
+int timerUtilReadTimer(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = static_cast<int>(lua_tointeger(state, lua_upvalueindex(2)));
+  lua_pushnumber(state, static_cast<lua_Number>(
+      current ? current->timerProperty({.value = id}) : kUtilityTimerOff));
+  return 1;
+}
+
+int timerUtilFunction(lua_State *state) {
+  const int id = utilityInt(state, 1);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushinteger(state, id);
+  lua_pushcclosure(state, timerUtilReadTimer, 2);
+  return 1;
+}
+
+int timerUtilObserve(lua_State *state) {
+  lua_pushvalue(state, lua_upvalueindex(2));
+  lua_call(state, 0, 1);
+  const bool on = lua_toboolean(state, -1) != 0;
+  lua_pop(state, 1);
+  auto &value = utilityState(state, 3);
+  if (on && value == kUtilityTimerOff) value = utilityNow(state);
+  else if (!on) value = kUtilityTimerOff;
+  lua_pushnumber(state, static_cast<lua_Number>(value));
+  return 1;
+}
+
+int timerUtilObserveBoolean(lua_State *state) {
+  luaL_checktype(state, 1, LUA_TFUNCTION);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushvalue(state, 1);
+  pushUtilityState(state, kUtilityTimerOff);
+  lua_pushcclosure(state, timerUtilObserve, 3);
+  return 1;
+}
+
+int passiveTimerRead(lua_State *state) {
+  lua_pushnumber(state, static_cast<lua_Number>(utilityState(state, 2)));
+  return 1;
+}
+
+int passiveTimerOn(lua_State *state) {
+  auto &value = utilityState(state, 2);
+  if (value == kUtilityTimerOff) value = utilityNow(state);
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int passiveTimerReset(lua_State *state) {
+  utilityState(state, 2) = utilityNow(state);
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int passiveTimerOff(lua_State *state) {
+  utilityState(state, 2) = kUtilityTimerOff;
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int timerUtilNewPassive(lua_State *state) {
+  lua_settop(state, 0);
+  pushUtilityState(state, kUtilityTimerOff);
+  lua_createtable(state, 0, 4);
+  const luaL_Reg functions[] = {{"timer", passiveTimerRead},
+                               {"turn_on", passiveTimerOn},
+                               {"turn_on_reset", passiveTimerReset},
+                               {"turn_off", passiveTimerOff}};
+  for (const auto &function : functions) {
+    lua_pushlightuserdata(state, host(state));
+    lua_pushvalue(state, 1);
+    lua_pushcclosure(state, function.func, 2);
+    lua_setfield(state, -2, function.name);
+  }
+  return 1;
+}
+
+enum class UtilityEventObservation { Boolean, TimerChange, TimerOn, TimerOff };
+
+int eventUtilObserve(lua_State *state) {
+  const auto mode = static_cast<UtilityEventObservation>(
+      lua_tointeger(state, lua_upvalueindex(5)));
+  lua_pushvalue(state, lua_upvalueindex(2));
+  lua_call(state, 0, 1);
+  const auto timer = utilityLong(state, -1);
+  const std::int64_t next = mode == UtilityEventObservation::Boolean
+                               ? lua_toboolean(state, -1) != 0
+                           : mode == UtilityEventObservation::TimerOn
+                               ? timer != kUtilityTimerOff
+                           : mode == UtilityEventObservation::TimerOff
+                               ? timer == kUtilityTimerOff
+                               : timer;
+  lua_pop(state, 1);
+  auto &previous = utilityState(state, 4);
+  bool execute = false;
+  if (mode == UtilityEventObservation::TimerChange) {
+    // Upstream remembers the last ON value across OFF observations.
+    execute = next != previous && next != kUtilityTimerOff;
+    if (execute) previous = next;
+  } else if (next != previous) {
+    previous = next;
+    execute = next != 0;
+  }
+  if (execute) {
+    lua_pushvalue(state, lua_upvalueindex(3));
+    lua_call(state, 0, 0);
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int createEventObserver(lua_State *state, UtilityEventObservation mode) {
+  luaL_checktype(state, 1, LUA_TFUNCTION);
+  luaL_checktype(state, 2, LUA_TFUNCTION);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushvalue(state, 1);
+  lua_pushvalue(state, 2);
+  pushUtilityState(state, mode == UtilityEventObservation::TimerChange
+                              ? kUtilityTimerOff : 0);
+  lua_pushinteger(state, static_cast<int>(mode));
+  lua_pushcclosure(state, eventUtilObserve, 5);
+  return 1;
+}
+
+int eventUtilObserveTrue(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::Boolean);
+}
+
+int eventUtilObserveTimer(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::TimerChange);
+}
+
+int eventUtilObserveTimerOn(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::TimerOn);
+}
+
+int eventUtilObserveTimerOff(lua_State *state) {
+  return createEventObserver(state, UtilityEventObservation::TimerOff);
+}
+
+int eventUtilLimited(lua_State *state) {
+  const auto now = utilityNow(state);
+  auto &last = utilityState(state, 4);
+  const auto interval = lua_tointeger(state, lua_upvalueindex(3));
+  if (last == kUtilityTimerOff || utilityElapsed(now, last) / 1000 >= interval) {
+    last = now;
+    lua_pushvalue(state, lua_upvalueindex(2));
+    // Every upstream EventUtility adapter is a ZeroArgFunction, even when
+    // invoked with event arguments. The action's return value is discarded.
+    lua_call(state, 0, 0);
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int eventUtilMinInterval(lua_State *state) {
+  const int interval = utilityInt(state, 1);
+  luaL_checktype(state, 2, LUA_TFUNCTION);
+  lua_pushlightuserdata(state, host(state));
+  lua_pushvalue(state, 2);
+  lua_pushinteger(state, interval);
+  pushUtilityState(state, kUtilityTimerOff);
+  lua_pushcclosure(state, eventUtilLimited, 4);
+  return 1;
+}
+
 int mainStateSetTimer(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
-  const auto value = static_cast<std::int64_t>(lua_tointeger(state, 2));
+  const int id = utilityInt(state, 1);
+  const auto value = utilityLong(state, 2);
   if (current == nullptr || !current->setTimerProperty(id, value)) {
     return luaL_error(state,
                       "the timer cannot be changed by the selected skin");
@@ -649,11 +962,11 @@ int mainStateEventExec(lua_State *state) {
         state,
         "main_state.event_exec expects an event ID and zero to two arguments");
   }
-  const int eventId = boundedIntegerArgument(state, 1, 0, false);
+  const int eventId = utilityInt(state, 1);
   std::array<int, 2> arguments{};
   for (int index = 2; index <= count; ++index) {
     arguments[static_cast<std::size_t>(index - 2)] =
-        boundedIntegerArgument(state, index, 0, false);
+        utilityInt(state, index);
   }
   if (!impl->eventExecutor) {
     impl->storeError("skin_lua_event_executor_unavailable",
@@ -752,7 +1065,7 @@ int pushFloatProperty(lua_State *state, int id,
 
 int mainStateEventIndex(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const int id = utilityInt(state, 1);
   if (current == nullptr) {
     return luaL_error(state, "main_state.event_index has no configured state");
   }
@@ -783,7 +1096,7 @@ int mainStateGaugeType(lua_State *state) {
 }
 
 int mainStateJudge(lua_State *state) {
-  const int judge = boundedIntegerArgument(state, 1, 0, false);
+  const int judge = utilityInt(state, 1);
   return pushNamedInteger(state, "judge:" + std::to_string(judge));
 }
 
@@ -830,7 +1143,7 @@ int mainStateVolumeSys(lua_State *state) {
 int mainStateSetVolume(lua_State *state, int id, std::string_view name) {
   auto *current = frameState(state);
   const double value = static_cast<double>(
-      static_cast<float>(lua_tonumber(state, 1)));
+      static_cast<float>(utilityNumberValue(state, 1).value_or(0)));
   if (current == nullptr || !current->setFloatProperty(id, value)) {
     return luaL_error(state, "main_state.%.*s has no writable audio state",
                       static_cast<int>(name.size()), name.data());
@@ -854,22 +1167,8 @@ int mainStateSetVolumeSys(lua_State *state) {
 int mainStateKeyPressed(lua_State *state) {
   auto *impl = host(state);
   int keyCode = -1;
-  if (lua_type(state, 1) == LUA_TNUMBER) {
-    const double value = static_cast<double>(lua_tonumber(state, 1));
-    std::int64_t asLong = 0;
-    if (std::isnan(value)) {
-      asLong = 0;
-    } else if (value >=
-               static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-      asLong = std::numeric_limits<std::int64_t>::max();
-    } else if (value <=
-               static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
-      asLong = std::numeric_limits<std::int64_t>::min();
-    } else {
-      asLong = static_cast<std::int64_t>(value);
-    }
-    keyCode = static_cast<int>(std::bit_cast<std::int32_t>(
-        static_cast<std::uint32_t>(static_cast<std::uint64_t>(asLong))));
+  if (const auto value = utilityNumberValue(state, 1)) {
+    keyCode = luaJToInt(*value);
   } else {
     keyCode = LuaSkinLegacyInputHost::keyCode(luaToJString(state, 1));
   }
@@ -1063,8 +1362,12 @@ LuaSkinHttpLinesResult mainStateHttpLines(lua_State *state,
   }
   std::size_t urlSize = 0;
   const char *url = luaL_checklstring(state, 1, &urlSize);
-  const int timeout = boundedIntegerArgument(
-      state, 2, LuaSkinHttpClient::defaultTimeoutMilliseconds, true);
+  int timeout = LuaSkinHttpClient::defaultTimeoutMilliseconds;
+  if (!lua_isnoneornil(state, 2)) {
+    const auto value = utilityNumberValue(state, 2);
+    if (!value) luaL_argerror(state, 2, "number expected");
+    timeout = luaJToInt(*value);
+  }
   LuaSkinHttpClient client(impl.httpTransport);
   LuaSkinHttpResult fetched =
       client.get(std::string_view(url, urlSize), timeout);
@@ -1132,6 +1435,12 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "option");
   installClosure(state, impl, mainStateNumber);
   lua_setfield(state, -2, "number");
+  installClosure(state, impl, mainStateNumbers);
+  lua_setfield(state, -2, "numbers");
+  installClosure(state, impl, mainStateScreenWidth);
+  lua_setfield(state, -2, "screen_width");
+  installClosure(state, impl, mainStateScreenHeight);
+  lua_setfield(state, -2, "screen_height");
   installClosure(state, impl, mainStateFloatNumber);
   lua_setfield(state, -2, "float_number");
   installClosure(state, impl, mainStateText);
@@ -1140,6 +1449,16 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "offset");
   installClosure(state, impl, mainStateTimer);
   lua_setfield(state, -2, "timer");
+  installClosure(state, impl, mainStateTimerIsOn);
+  lua_setfield(state, -2, "timer_is_on");
+  installClosure(state, impl, mainStateTimerIsOff);
+  lua_setfield(state, -2, "timer_is_off");
+  installClosure(state, impl, mainStateTimerElapsed);
+  lua_setfield(state, -2, "timer_elapsed");
+  installClosure(state, impl, mainStateTimerElapsedMillis);
+  lua_setfield(state, -2, "timer_elapsed_ms");
+  installClosure(state, impl, mainStateTimerElapsedSeconds);
+  lua_setfield(state, -2, "timer_elapsed_seconds");
   installClosure(state, impl, mainStateSetTimer);
   lua_setfield(state, -2, "set_timer");
   lua_pushnumber(
@@ -2197,9 +2516,10 @@ int legacySetConnectTimeout(lua_State *state) {
     impl->reportLegacyDenial("java.net.URL.connection.member");
     return raiseStoredError(state, impl);
   }
+  const auto value = utilityNumberValue(state, 2);
+  if (!value) luaL_argerror(state, 2, "number expected");
   legacyHttpConnection(state)->timeoutMilliseconds =
-      LuaSkinHttpClient::clampTimeout(
-          boundedIntegerArgument(state, 2, 0, false));
+      LuaSkinHttpClient::clampTimeout(luaJToInt(*value));
   lua_pushnil(state);
   return 1;
 }
@@ -2920,6 +3240,19 @@ void setLoaded(lua_State *state, const char *name) {
   lua_pop(state, 2);
 }
 
+void installUtilityModule(lua_State *state, LuaSkinHostModulesImpl *impl,
+                          const char *name, std::span<const luaL_Reg> functions) {
+  lua_getglobal(state, "package");
+  lua_getfield(state, -1, "loaded");
+  lua_createtable(state, 0, static_cast<int>(functions.size()));
+  for (const auto &function : functions) {
+    installClosure(state, impl, function.func);
+    lua_setfield(state, -2, function.name);
+  }
+  lua_setfield(state, -2, name);
+  lua_pop(state, 2);
+}
+
 void installFileMetatable(lua_State *state) {
   luaL_newmetatable(state, kHandleMetatable);
   lua_pushcfunction(state, fileHandleGc);
@@ -3061,8 +3394,21 @@ int installHost(lua_State *state) {
   lua_pop(state, 3);
 
   setLoaded(state, "main_state");
-  setLoaded(state, "timer_util");
-  setLoaded(state, "event_util");
+  const luaL_Reg timerFunctions[] = {
+      {"now_timer", timerUtilNow},
+      {"is_timer_on", timerUtilIsOn},
+      {"is_timer_off", timerUtilIsOff},
+      {"timer_function", timerUtilFunction},
+      {"timer_observe_boolean", timerUtilObserveBoolean},
+      {"new_passive_timer", timerUtilNewPassive}};
+  const luaL_Reg eventFunctions[] = {
+      {"event_observe_turn_true", eventUtilObserveTrue},
+      {"event_observe_timer", eventUtilObserveTimer},
+      {"event_observe_timer_on", eventUtilObserveTimerOn},
+      {"event_observe_timer_off", eventUtilObserveTimerOff},
+      {"event_min_interval", eventUtilMinInterval}};
+  installUtilityModule(state, impl, "timer_util", timerFunctions);
+  installUtilityModule(state, impl, "event_util", eventFunctions);
   return 0;
 }
 

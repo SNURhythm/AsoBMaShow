@@ -467,6 +467,8 @@ struct SkinDestinationBody {
   SkinStretchMode stretch = SkinStretchMode::Stretch;
   std::vector<SkinDestinationFrame> frames;
   std::uint32_t authoredOrdinal = 0;
+  // SkinObject latches the first nonzero acceleration before sorting frames.
+  int authoredAcceleration = 0;
 };
 
 struct SkinSongListDestinationDefinition {

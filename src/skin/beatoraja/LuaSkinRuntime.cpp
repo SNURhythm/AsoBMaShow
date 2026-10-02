@@ -490,7 +490,7 @@ std::optional<LuaScalar> readScalar(lua_State *state, int index) {
     if (std::isfinite(value) && std::trunc(value) == value &&
         value >=
             static_cast<double>(std::numeric_limits<std::int64_t>::min()) &&
-        value <=
+        value <
             static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
       return LuaScalar{static_cast<std::int64_t>(value)};
     }
@@ -1028,14 +1028,17 @@ struct LuaSkinRuntime::Impl {
     }
   }
 
-  LuaValueResult runEntry() {
+  LuaValueResult runEntry(std::optional<std::string_view> source = {}) {
     lua_settop(state, 0);
     const LuaLoadBudget budget = LuaRuntimePolicy::loadBudget(purpose, safetyPolicy);
     beginLoadBudget(*shared, budget);
 
     int loadStatus = LUA_ERRFILE;
     std::optional<SkinDiagnostic> readFailure;
-    {
+    if (source) {
+      loadStatus = luaL_loadbuffer(state, source->data(), source->size(),
+                                  "@skin-properties");
+    } else {
       auto entry = fileSystem->readEntry(budget.maxAllocatorBytes);
       if (entry.failure) {
         readFailure =
@@ -1373,12 +1376,24 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   }
 }
 
-LuaValueResult LuaSkinRuntime::loadHeader() {
+LuaValueResult LuaSkinRuntime::loadHeader(ISkinFrameState *initialState) {
   if (!impl_ || impl_->phase != LuaRuntimePhase::Created) {
     return {.failure = makeDiagnostic(
                 "skin_lua_phase_invalid",
                 "Lua header execution is invalid in the current phase")};
   }
+  if (initialState != nullptr) {
+    if (auto failure = impl_->hostModules->enableStateAccessors()) {
+      return {.failure = std::move(failure)};
+    }
+  }
+  struct InitialFrameBinding {
+    LuaSkinHostModules *modules;
+    ~InitialFrameBinding() {
+      if (modules != nullptr) modules->setFrameState(nullptr);
+    }
+  } binding{initialState != nullptr ? impl_->hostModules.get() : nullptr};
+  if (initialState != nullptr) impl_->hostModules->setFrameState(initialState);
   lua_pushnil(impl_->state);
   lua_setglobal(impl_->state, "skin_config");
   auto result = impl_->runEntry();
@@ -1405,6 +1420,29 @@ LuaValueResult LuaSkinRuntime::loadConfigured(
   if (result.value) {
     impl_->phase = LuaRuntimePhase::Configured;
   }
+  return result;
+}
+
+LuaValueResult LuaSkinRuntime::loadConfiguredProperties(
+    const BeatorajaSkinConfiguration &configuration) {
+  if (!impl_ || impl_->phase != LuaRuntimePhase::Created) {
+    return {.failure = makeDiagnostic(
+                "skin_lua_phase_invalid",
+                "JSON property configuration requires a fresh runtime")};
+  }
+  if (auto failure = impl_->hostModules->installConfiguration(configuration)) {
+    return {.failure = std::move(failure)};
+  }
+  if (auto failure = impl_->hostModules->enableStateAccessors()) {
+    return {.failure = std::move(failure)};
+  }
+  auto result = impl_->runEntry(R"lua(
+    for _, name in ipairs({'main_state', 'timer_util', 'event_util'}) do
+      for key, value in pairs(require(name)) do _G[key] = value end
+    end
+    return {}
+  )lua");
+  if (result.value) impl_->phase = LuaRuntimePhase::Configured;
   return result;
 }
 

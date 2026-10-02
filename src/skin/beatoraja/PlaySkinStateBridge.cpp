@@ -1,4 +1,5 @@
 #include "PlaySkinStateBridge.h"
+#include "../GameplaySkinTraits.h"
 
 #include "BeatorajaBooleanPropertyNames.h"
 #include "BeatorajaIntegerPropertyNames.h"
@@ -7,6 +8,7 @@
 
 #include "GameplaySkinEndAnimation.h"
 #include "GameplaySkinBuiltinCatalog.h"
+#include "LuaJValueCoercion.h"
 #include "LuaSkinHostModules.h"
 
 #include <algorithm>
@@ -161,18 +163,34 @@ int bestScoreAtPassedNotes(const PlayfieldVisualState &snapshot) {
       target, passedNotes(snapshot, target.totalNotes));
 }
 
-std::int64_t beatorajaKeyJudgeValue(const PlayfieldVisualState &snapshot,
+std::optional<std::size_t> skinInputLaneIndex(
+    const PlayfieldChartVisualModel &chart, const PlayfieldVisualState &snapshot,
+    int skinOffset) {
+  if (chart.keyCount == 4 || chart.keyCount == 6 || chart.keyCount == 8) {
+    // Sparse charts omit channels; their compact state-vector positions must
+    // not become the skin's scratch/key timer numbers.
+    if (skinOffset < 0 || skinOffset > 7) return std::nullopt;
+    const int rawLane = skinOffset == 0 ? 7 : skinOffset - 1;
+    const auto found = std::ranges::find(chart.laneOrder, rawLane);
+    if (found == chart.laneOrder.end()) return std::nullopt;
+    const auto index = static_cast<std::size_t>(found - chart.laneOrder.begin());
+    return index < snapshot.lanes.size() ? std::optional{index} : std::nullopt;
+  }
+  return skinOffset >= 0 && static_cast<std::size_t>(skinOffset) < snapshot.lanes.size()
+             ? std::optional{static_cast<std::size_t>(skinOffset)} : std::nullopt;
+}
+
+std::int64_t beatorajaKeyJudgeValue(const PlayfieldChartVisualModel &chart,
+                                    const PlayfieldVisualState &snapshot,
                                     int selector) {
   // SkinPropertyMapper maps 500-519 as two groups of ten: player then key.
   // Gameplay is currently single-player, so the absent 2P group follows
   // JudgeManager.getJudge() and reports -1.
   const int player = (selector - 500) / 10;
   const int key = (selector - 500) % 10;
-  if (player != 0 || key < 0 ||
-      static_cast<std::size_t>(key) >= snapshot.lanes.size()) {
-    return -1;
-  }
-  return snapshot.lanes[static_cast<std::size_t>(key)].beatorajaJudgeValue;
+  const auto index = skinInputLaneIndex(chart, snapshot, key);
+  if (player != 0 || !index) return -1;
+  return snapshot.lanes[*index].beatorajaJudgeValue;
 }
 
 std::optional<int>
@@ -183,7 +201,7 @@ beatorajaPlayerOneSkinLaneOffset(const PlayfieldChartVisualModel &chart,
   // BMS lane IDs, including scratch at 7 (and 15 for 2P), so preserve that
   // distinction here. 2P has no gameplay authority yet and is intentionally
   // not projected into 1P timer IDs.
-  switch (chart.keyCount) {
+  switch (skin::compatibleGameplaySkinKeyMode(chart.keyCount)) {
   case 5:
     if (lane == 7) {
       return 0;
@@ -939,7 +957,6 @@ void PlaySkinStateBridge::beginFrame(
   staged_ = {.frameSerial = frameSerial_};
   phase_ = FramePhase::Active;
   customObjectsUpdated_ = false;
-  customTimerValues_.clear();
   updatePinnedLaneCoverOffsets();
   updatePinnedPlayTimers();
 
@@ -1138,7 +1155,7 @@ PlaySkinStateBridge::updateCustomTimer(const SkinCustomTimer &timer) {
             .diagnostics = diagnostics_};
   }
   try {
-    customTimerValues_.insert_or_assign(timer.id, INT64_MIN);
+    customTimerValues_.try_emplace(timer.id, INT64_MIN);
   } catch (...) {
     reportDiagnostic({.code = "skin.play_state.custom_timer_cache_failed",
                       .message = "Passive custom timer value could not be cached."});
@@ -1244,6 +1261,9 @@ SkinHostCallResult PlaySkinStateBridge::invokeEventBinding(
             .diagnostics = diagnostics_};
   }
   if (callback.failure) {
+    if (!context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+      return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+    }
     return callbackFailure(std::move(*callback.failure));
   }
   return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
@@ -1296,6 +1316,11 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomCondition(
     return {.status = SkinHostCallStatus::CriticalFailure,
             .callbacksInvoked = 1,
             .diagnostics = diagnostics_};
+  }
+  if (!context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    condition = !callback.failure && callback.value &&
+                luaJToBoolean(*callback.value);
+    return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
   }
   if (callback.failure) {
     return callbackFailure(std::move(*callback.failure));
@@ -1352,6 +1377,11 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
             .callbacksInvoked = 1,
             .diagnostics = diagnostics_};
   }
+  if (!context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    value = !callback.failure && callback.value ? luaJToLong(*callback.value)
+                                               : INT64_MIN;
+    return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+  }
   if (callback.failure) {
     return callbackFailure(std::move(*callback.failure));
   }
@@ -1364,7 +1394,7 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
                                    } else if constexpr (std::is_same_v<Candidate, double>) {
                                      if (std::isfinite(candidate) &&
                                          candidate >= static_cast<double>(INT64_MIN) &&
-                                         candidate <= static_cast<double>(INT64_MAX)) {
+                                         candidate < static_cast<double>(INT64_MAX)) {
                                        return static_cast<std::int64_t>(candidate);
                                      }
                                    }
@@ -1394,6 +1424,39 @@ SkinHostCallResult PlaySkinStateBridge::callbackFailure(SkinDiagnostic failure) 
                                    : SkinHostCallStatus::CriticalFailure,
           .callbacksInvoked = 1,
           .diagnostics = diagnostics_};
+}
+
+std::optional<float> PlaySkinStateBridge::audioVolume(int id) const noexcept {
+  const auto *snapshot = state();
+  if (snapshot == nullptr || id < 17 || id > 19) return std::nullopt;
+  const auto target = static_cast<SkinAudioVolumeWriterTarget>(id - 17);
+  for (auto mutation = staged_.orderedMutations.rbegin();
+       mutation != staged_.orderedMutations.rend(); ++mutation) {
+    if (const auto *write = std::get_if<SetSkinAudioVolume>(&*mutation);
+        write != nullptr && write->target == target) return write->value;
+  }
+  switch (id) {
+  case 17: return snapshot->configuration.masterVolume;
+  case 18: return snapshot->configuration.keysoundVolume;
+  case 19: return snapshot->configuration.bgmVolume;
+  default: return std::nullopt;
+  }
+}
+
+bool PlaySkinStateBridge::setFloatProperty(int id, double value) {
+  if (phase_ != FramePhase::Active || id < 17 || id > 19) return false;
+  if (context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    if (!std::isfinite(value)) return false;
+    value = std::clamp(value, 0.0, 1.0);
+  }
+  try {
+    staged_.orderedMutations.emplace_back(SetSkinAudioVolume{
+        .target = static_cast<SkinAudioVolumeWriterTarget>(id - 17),
+        .value = static_cast<float>(value)});
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 void PlaySkinStateBridge::rollbackFrameWrites() noexcept {
@@ -1648,6 +1711,11 @@ PlaySkinFrameCommit PlaySkinStateBridge::takeFrameCommitForContinuation() {
                                  "active frame."});
     return {};
   }
+  // Deferred callbacks continue after this commit is submitted. Preserve its
+  // audio snapshot while later writes still live in their own savepoint.
+  state_->configuration.masterVolume = *audioVolume(17);
+  state_->configuration.keysoundVolume = *audioVolume(18);
+  state_->configuration.bgmVolume = *audioVolume(19);
   auto result = std::move(staged_);
   staged_ = {.frameSerial = frameSerial_};
   return result;
@@ -1759,8 +1827,9 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1160:
   case 1161: {
     // BooleanPropertyFactory compares SongData's Mode id. Aso's immutable
-    // visual model retains that same canonical key-mode count.
-    const int keyMode = context_.chartModel.keyCount;
+    // visual model retains the actual key count; sparse modes use the
+    // compatible skin mode for authored skin conditions.
+    const int keyMode = skin::compatibleGameplaySkinKeyMode(context_.chartModel.keyCount);
     const int expected = *id == 160   ? 7
                          : *id == 161 ? 5
                          : *id == 162 ? 14
@@ -2079,7 +2148,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // getIntegerProperty.  Keep selectors shared by both factories (for
     // example 90) out of this value-domain switch.
     if (*id >= 500 && *id <= 519) {
-      return {.value = beatorajaKeyJudgeValue(*snapshot, *id),
+      return {.value = beatorajaKeyJudgeValue(context_.chartModel, *snapshot, *id),
               .supported = true};
     }
     if (*id == 308) {
@@ -2399,19 +2468,13 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 171:
     return {.value = snapshot->score, .supported = true};
   case 57:
-    return {.value = javaDoubleToInt(
-                static_cast<double>(snapshot->configuration.masterVolume) *
-                100.0),
+    return {.value = javaDoubleToInt(*audioVolume(17) * 100.0F),
             .supported = true};
   case 58:
-    return {.value = javaDoubleToInt(
-                static_cast<double>(snapshot->configuration.keysoundVolume) *
-                100.0),
+    return {.value = javaDoubleToInt(*audioVolume(18) * 100.0F),
             .supported = true};
   case 59:
-    return {.value = javaDoubleToInt(
-                static_cast<double>(snapshot->configuration.bgmVolume) *
-                100.0),
+    return {.value = javaDoubleToInt(*audioVolume(19) * 100.0F),
             .supported = true};
   case 271:
     // ScoreDataProperty keeps rivalScore at zero without an attached target
@@ -2860,7 +2923,23 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
       scoreRate(snapshot->authority.bestScore, totalNotes);
   const auto targetFullRate = scoreRate(targetScore(*snapshot), totalNotes);
   const auto referenceCurrentRate = [&](int score) {
-    return totalNotes == 0 ? 0.0 : scoreRate(score, totalNotes);
+    if (totalNotes == 0) return 0.0;
+    // ScoreDataProperty projects the integer score with a Java long
+    // intermediate, then computes its rate against the full chart.
+    const int projected = javaLongToInt(
+        static_cast<std::int64_t>(score) * playedNotes / totalNotes);
+    return scoreRate(projected, totalNotes);
+  };
+  const auto currentBestRate = [&] {
+    const auto &target = snapshot->authority.bestScoreTarget;
+    if (totalNotes > 0 && target.enabled && target.usesReplayProgression &&
+        target.totalNotes == totalNotes &&
+        target.scoreAfterNotes.size() ==
+            static_cast<std::size_t>(totalNotes) + 1U) {
+      return scoreRate(pacemaker::targetScoreAtPlayedNotes(target, playedNotes),
+                       totalNotes);
+    }
+    return referenceCurrentRate(snapshot->authority.bestScore);
   };
   if (domain == SkinFloatPropertyDomain::FloatValue) {
     const double floatMinimum =
@@ -2953,12 +3032,9 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   }
   switch (*id) {
   case 17:
-    return {.value = snapshot->configuration.masterVolume, .supported = true};
   case 18:
-    return {.value = snapshot->configuration.keysoundVolume,
-            .supported = true};
   case 19:
-    return {.value = snapshot->configuration.bgmVolume, .supported = true};
+    return {.value = *audioVolume(*id), .supported = true};
   case 20:
     return {.value = snapshot->authority.practiceMenu
                          ? snapshot->authority.practiceMenu->itemScrollPosition
@@ -2989,13 +3065,12 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   case 111:
     return {.value = currentRate, .supported = true};
   case 112:
-    return {.value = referenceCurrentRate(bestScoreAtPassedNotes(*snapshot)),
-            .supported = true};
+    return {.value = currentBestRate(), .supported = true};
   case 113:
     return {.value = bestFullRate, .supported = true};
   case 114:
-    return {.value = referenceCurrentRate(
-                snapshot->authority.pacemakerStatus.targetScore),
+    // BMSPlayer supplies a best ghost but no rival ghost to setTargetScore.
+    return {.value = referenceCurrentRate(targetScore(*snapshot)),
             .supported = true};
   case 115:
     return {.value = targetFullRate, .supported = true};
@@ -3235,6 +3310,21 @@ SkinLaneCoverStateView PlaySkinStateBridge::laneCoverState() const noexcept {
           .hidden = static_cast<double>(snapshot->authority.hiddenRatio)};
 }
 
+bool PlaySkinStateBridge::setTimerProperty(int id, std::int64_t value) {
+  if (phase_ != FramePhase::Active || id < 10'000 || id > 19'999) return false;
+  if (const auto definition = customTimerLastDefinitionIndexes_.find(id);
+      definition != customTimerLastDefinitionIndexes_.end() &&
+      context_.model->model.customTimers[definition->second].timer) {
+    return true;
+  }
+  try {
+    customTimerValues_.insert_or_assign(id, value);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 std::int64_t PlaySkinStateBridge::timerProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto *snapshot = state();
@@ -3252,7 +3342,7 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     return custom->second;
   }
   const auto laneTimer =
-      [snapshot](int firstId, int count,
+      [this, snapshot](int firstId, int count,
                  long long LanePresentationState::*field, int timerId,
                  std::optional<bool> requiredPressed)
           -> std::optional<std::int64_t> {
@@ -3261,11 +3351,10 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     if (wide < first || wide >= first + count) {
       return std::nullopt;
     }
-    const auto index = static_cast<std::size_t>(wide - first);
-    if (index >= snapshot->lanes.size()) {
-      return INT64_MIN;
-    }
-    const auto &lane = snapshot->lanes[index];
+    const auto index = skinInputLaneIndex(context_.chartModel, *snapshot,
+                                         static_cast<int>(wide - first));
+    if (!index) return INT64_MIN;
+    const auto &lane = snapshot->lanes[*index];
     // KeyInputProccessor starts key-off and clears key-on on release, then
     // clears key-off before starting key-on on the following press.  Retaining
     // both timestamps makes skins such as simple-play-simple draw the stale
@@ -3577,7 +3666,6 @@ void PlaySkinStateBridge::closeFrame() noexcept {
   builtInTraversal_.reset();
   projection_ = {};
   staged_ = {};
-  customTimerValues_.clear();
 }
 
 LuaSkinEventExecutionResult PlaySkinStateBridge::executeHostEvent(

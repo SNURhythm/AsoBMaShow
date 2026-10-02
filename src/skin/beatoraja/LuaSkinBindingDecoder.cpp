@@ -77,21 +77,6 @@ void hashCombine(std::size_t &seed, std::size_t value) noexcept {
 
 } // namespace
 
-bool luaSkinBindingFailureIsFatal(std::string_view code) noexcept {
-  return code == "skin_lua_binding_invalid" ||
-         code == "skin_lua_allocator_limit_exceeded" ||
-         code == "skin_lua_binding_work_limit_exceeded" ||
-         code == "skin_lua_binding_limit_exceeded" ||
-         code == "skin_lua_callback_limit_exceeded" ||
-         code == "skin_lua_host_limit_exceeded" ||
-         code == "skin_lua_wall_time_limit_exceeded" ||
-         code == "skin_lua_instruction_limit_exceeded" ||
-         code == "skin_lua_return_limit_exceeded" ||
-         code == "skin_lua_stack_limit_exceeded" ||
-         code == "skin_lua_binding_path_too_deep" ||
-         code == "skin_lua_runtime_create_failed";
-}
-
 bool LuaSkinBindingDecoder::InternKey::operator==(
     const InternKey &other) const noexcept {
   return script == other.script && sameType(type, other.type) &&
@@ -241,9 +226,15 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
     }
   }
 
-  const auto repeated = interned_.find(internKey);
-  if (repeated != interned_.end()) {
-    return {.id = repeated->second};
+  // Timer scripts are factories: every authored property must execute its
+  // trial call, even when another property has identical source text.
+  const bool timerFactory =
+      isScript && request.type.kind == SkinBindingKind::TimerProperty;
+  if (!timerFactory) {
+    const auto repeated = interned_.find(internKey);
+    if (repeated != interned_.end()) {
+      return {.id = repeated->second};
+    }
   }
 
   const auto tooMany = [this](std::size_t size) {
@@ -304,6 +295,10 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
       }
     }
     bindingSource = *compiled.callback;
+    if (timerFactory) {
+      internKey.source = *compiled.callback;
+      internKey.script = false;
+    }
   }
 
   SkinDecodedBindingId decodedId;

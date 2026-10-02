@@ -261,9 +261,14 @@ public:
   LuaSkinRuntime &operator=(const LuaSkinRuntime &) = delete;
   ~LuaSkinRuntime();
 
-  LuaValueResult loadHeader();
+  // A live result can supply state before require() caches header-loaded modules.
+  // Catalog callers leave this null and retain the inert header accessors.
+  LuaValueResult loadHeader(ISkinFrameState *initialState = nullptr);
   LuaValueResult
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
+  // JSON properties have no Lua entry; configure their shared global API.
+  LuaValueResult
+  loadConfiguredProperties(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
   void suspendAudio() noexcept;
   void resumeAudio() noexcept;

@@ -8,6 +8,7 @@ target_sources(main PRIVATE
     CourseGameplaySessionBuilder.cpp
     DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
+    FindBmsModal.cpp
     FindBmsProgressPresentation.cpp
     FindBmsTask.cpp
     IrUploadsController.cpp
@@ -20,6 +21,8 @@ target_sources(main PRIVATE
     MainMenuPlayOptionsModal.cpp
     MainMenuPreviewController.cpp
     MainMenuScene.cpp
+    MainMenuTutorial.cpp
+    NewcomerTutorialView.cpp
     MusicPlayerScene.cpp
     MusicSelectScene.cpp
     MusicSelectToolbarView.cpp

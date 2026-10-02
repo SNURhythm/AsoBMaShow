@@ -297,6 +297,7 @@ private:
   prepareGameplayBgaProgram(const char *vertexShader,
                             const char *fragmentShader) noexcept;
   bgfx::UniformHandle s_texColor;
+  bgfx::UniformHandle skinSampling = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle bgaPlaceholderProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle bgaEmbeddedImageProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle bgaFullscreenImageProgram = BGFX_INVALID_HANDLE;

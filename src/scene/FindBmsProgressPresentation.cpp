@@ -106,3 +106,10 @@ std::string findBmsProgressDisplayText(const std::string &message,
   return findBmsProgressDisplayMessage(message, downloadedBytes, totalBytes,
                                        includeBytes).resolve();
 }
+
+i18n::Text findBmsRunningDetailMessage(const std::string &message) {
+  if (!message.empty()) {
+    return findBmsProgressDisplayMessage(message, 0, 0, false);
+  }
+  return i18n::message("library.find_bms.searching_available_sources.progress");
+}

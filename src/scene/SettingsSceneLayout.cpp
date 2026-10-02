@@ -2450,7 +2450,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
   folderActions->addView(refreshFoldersButton);
 
-  bool showAddFolderButton = false;
+  bool showAddFolderButton = true;
   bool importFolderByCopy = false;
   i18n::Text addFolderButtonLabel = i18n::message("settings.bms_library.add_folder.label");
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

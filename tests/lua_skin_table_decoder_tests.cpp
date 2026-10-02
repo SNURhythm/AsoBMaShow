@@ -115,6 +115,116 @@ return {
   unknown = {ignored = true}
 }
 )lua");
+    writeText(source / "skin/song-list-number-ref.luaskin", R"lua(
+return {type=5,source={{id="atlas",path="atlas.png"}},value={
+{id="with-ref",src="atlas",w=100,h=10,divx=10,digit=3,ref=100,
+ value=function() return 42 end},
+{id="null-ref",src="atlas",w=100,h=10,divx=10,digit=3,
+ value=function() return 42 end}
+},songlist={id="songs",level={
+{id="with-ref",dst={{x=0,y=0,w=30,h=10}}},
+{id="null-ref",dst={{x=0,y=0,w=30,h=10}}}
+}},destination={
+{id="songs"},{id="with-ref",dst={{x=0,y=0,w=30,h=10}}},
+{id="null-ref",dst={{x=0,y=0,w=30,h=10}}}
+}}
+)lua");
+    writeText(source / "skin/property-fallbacks.luaskin", R"lua(
+return {type=0,source={
+{id="atlas",path="atlas.png"}
+},font={
+{id="font",path="font.ttf"}
+},value={
+{id="invalid-number",src="atlas",w=100,h=10,divx=10,digit=3,value=false,ref=100},
+{id="unknown-number",src="atlas",w=100,h=10,divx=10,digit=3,value=999999,ref=100},
+{id="broken-number",src="atlas",w=100,h=10,divx=10,digit=3,value=")",ref=100}
+},floatvalue={
+{id="float-ref",src="atlas",w=120,h=10,divx=12,iketa=2,fketa=2,value=nil,ref=1107},
+{id="float-rate",src="atlas",w=120,h=10,divx=12,iketa=2,fketa=2,value=17,ref=1107},
+{id="float-null",src="atlas",w=120,h=10,divx=12,iketa=2,fketa=2,value=1107,ref=17}
+},text={
+{id="invalid-text",font="font",size=10,ref=10,value={}},
+{id="unknown-text",font="font",size=10,ref=10,value=999999},
+{id="numeric-writer",font="font",size=10,ref=30,event=30},
+{id="invalid-writer",font="font",size=10,ref=30,event=false},
+{id="broken-writer",font="font",size=10,ref=30,event=")"},
+{id="explicit-writer",font="font",size=10,ref=30,event="local value = ..."}
+},slider={
+{id="implicit-slider",src="atlas",w=10,h=10,value=999999,type=17,event=")"},
+{id="integer-slider",src="atlas",w=10,h=10,value=false,type=100,isRefNum=true,min=0,max=1000},
+{id="explicit-slider",src="atlas",w=10,h=10,value=17,event=17,changeable=false}
+},graph={
+{id="implicit-graph",src="atlas",w=10,h=10,value=999999,type=17},
+{id="integer-graph",src="atlas",w=10,h=10,value=false,type=100,isRefNum=true,min=0,max=1000}
+},image={
+{id="tile",src="atlas",w=10,h=10}
+},imageset={
+{id="set-value",images={
+"tile"
+},value=90,ref=90},
+{id="set-ref",images={
+"tile"
+},ref=90},
+{id="set-null",images={
+"tile"
+},value=999999,ref=90}
+},destination={
+{id="set-value",dst={
+{}
+}},{id="set-ref",dst={
+{}
+}},{id="set-null",dst={
+{}
+}},
+{id="implicit-slider",dst={
+{}
+}},{id="integer-slider",dst={
+{}
+}},{id="explicit-slider",dst={
+{}
+}},{id="implicit-graph",dst={
+{}
+}},{id="integer-graph",dst={
+{}
+}},
+{id="invalid-number",dst={
+{}
+}},
+{id="unknown-number",dst={
+{}
+}},
+{id="broken-number",dst={
+{}
+}},
+{id="float-ref",dst={
+{}
+}},
+{id="float-rate",dst={
+{}
+}},
+{id="float-null",dst={
+{}
+}},
+{id="invalid-text",dst={
+{}
+}},
+{id="unknown-text",dst={
+{}
+}},
+{id="numeric-writer",dst={
+{}
+}},
+{id="invalid-writer",dst={
+{}
+}},
+{id="broken-writer",dst={
+{}
+}},
+{id="explicit-writer",dst={
+{}
+}}
+}}
+)lua");
     writeText(source / "skin/numeric-glyphs.luaskin", R"lua(
 return {
   type = 0, w = 1280, h = 720,
@@ -459,7 +569,7 @@ return {
   BeatorajaSkinModelDecodeResult decodeGameplay(
       std::string_view filename,
       SkinSafetyLevel level = SkinSafetyLevel::Standard,
-      bool musicSelect = false) {
+      bool musicSelect = false, SkinBuiltinBindingCatalogView builtins = {}) {
     auto runtimeFileSystem = fileSystem(filename);
     auto reconciliationFileSystem = fileSystem(filename);
     expect(runtimeFileSystem != nullptr && reconciliationFileSystem != nullptr,
@@ -502,10 +612,12 @@ return {
     if (musicSelect) {
       return decoder.decodeMusicSelect(*configured.value,
                                         {.runtime = *created.runtime,
+                                         .builtins = builtins,
                                          .safetyPolicy = SkinSafetyPolicy(level)});
     }
     return decoder.decodeGameplay(*configured.value,
                                   {.runtime = *created.runtime,
+                                   .builtins = builtins,
                                    .safetyPolicy = SkinSafetyPolicy(level)});
   }
 
@@ -1175,6 +1287,144 @@ const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
   return found != model.objects.end() ? &*found : nullptr;
 }
 
+void testSongListNumberKeepsItsNumericConstructorRef() {
+  const SkinBuiltinBindingCatalogEntry entries[] = {
+      {.type = {.kind = SkinBindingKind::IntegerProperty}, .selector = {100}}};
+  const auto decoded = fixture().decodeGameplay(
+      "song-list-number-ref.luaskin", SkinSafetyLevel::BeatorajaCompatibility,
+      true, SkinBuiltinBindingCatalogView(entries));
+  expect(decoded.model.has_value(), "song-list number reference fixture decodes");
+  if (!decoded.model) return;
+  const auto &model = *decoded.model;
+  for (const auto name : {"with-ref", "null-ref"}) {
+    const auto *object = objectNamed(model, name);
+    const auto *number = object ? std::get_if<SkinNumberObject>(&object->payload)
+                                : nullptr;
+    expect(number != nullptr, "nested number constructor is materialized");
+    if (!number) continue;
+    const SkinNumberObject *standalone = nullptr;
+    for (const auto &destination : model.destinations) {
+      const auto ordinaryObject = std::ranges::find_if(model.objects,
+          [&](const auto &candidate) { return candidate.id == destination.object; });
+      if (ordinaryObject != model.objects.end() && ordinaryObject->authoredName == name) {
+        standalone = std::get_if<SkinNumberObject>(&ordinaryObject->payload);
+      }
+    }
+    const auto ordinary = std::ranges::find_if(model.integerProperties,
+        [&](const auto &binding) { return standalone && binding.id == standalone->value; });
+    expect(standalone && ordinary != model.integerProperties.end() &&
+               std::holds_alternative<LuaCallbackId>(ordinary->source),
+           "standalone number retains its explicit value callback");
+    if (std::string_view(name) == "null-ref") {
+      expect(!number->value,
+             "default ref zero remains a null nested number property");
+    } else {
+      const auto nested = std::ranges::find_if(model.integerProperties,
+          [&](const auto &binding) { return binding.id == number->value; });
+      const auto *builtin = nested != model.integerProperties.end()
+          ? std::get_if<SkinBuiltinPropertySelector>(&nested->source) : nullptr;
+      expect(builtin && std::get_if<int>(&builtin->value) &&
+                 std::get<int>(builtin->value) == 100,
+             "nested number constructor uses numeric ref despite explicit value");
+    }
+  }
+}
+
+void testResolvedPropertyFallbacks() {
+  const SkinBuiltinBindingCatalogEntry entries[] = {
+      {.type = {.kind = SkinBindingKind::IntegerProperty}, .selector = {90}},
+      {.type = {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::ImageIndex}, .selector = {90}},
+      {.type = {.kind = SkinBindingKind::FloatWriter}, .selector = {17}},
+      {.type = {.kind = SkinBindingKind::IntegerProperty}, .selector = {100}},
+      {.type = {.kind = SkinBindingKind::FloatProperty,
+                .floatDomain = SkinFloatPropertyDomain::Rate}, .selector = {17}},
+      {.type = {.kind = SkinBindingKind::FloatProperty,
+                .floatDomain = SkinFloatPropertyDomain::FloatValue}, .selector = {17}},
+      {.type = {.kind = SkinBindingKind::FloatProperty,
+                .floatDomain = SkinFloatPropertyDomain::FloatValue}, .selector = {1107}},
+      {.type = {.kind = SkinBindingKind::StringProperty}, .selector = {10}},
+      {.type = {.kind = SkinBindingKind::StringProperty}, .selector = {30}},
+      {.type = {.kind = SkinBindingKind::StringWriter}, .selector = {30}},
+  };
+  const auto decoded = fixture().decodeGameplay(
+      "property-fallbacks.luaskin", SkinSafetyLevel::Standard, false,
+      SkinBuiltinBindingCatalogView(entries));
+  expect(decoded.model.has_value(), "fallback fixture decodes");
+  if (!decoded.model) return;
+  const auto &model = *decoded.model;
+  expect(model.objects.size() == 20, "all fallback destinations produce objects");
+  const auto builtin = [](const auto &bindings, auto id) -> std::optional<int> {
+    for (const auto &binding : bindings) {
+      if (binding.id != id) continue;
+      const auto *selector = std::get_if<SkinBuiltinPropertySelector>(&binding.source);
+      if (selector) {
+        if (const auto *number = std::get_if<int>(&selector->value)) return *number;
+      }
+    }
+    return {};
+  };
+  for (const auto &object : model.objects) {
+    const auto &name = object.authoredName;
+    if (const auto *number = std::get_if<SkinNumberObject>(&object.payload)) {
+      expect(builtin(model.integerProperties, number->value) == 100,
+             name + ": null integer property falls back to ref");
+    } else if (const auto *number = std::get_if<SkinFloatObject>(&object.payload)) {
+      const int expected = name == "float-ref" ? 1107 : 17;
+      expect(builtin(model.floatProperties, number->value) == expected,
+             name + ": float property uses the correct factory before ref fallback");
+      for (const auto &binding : model.floatProperties) {
+        if (binding.id == number->value) {
+          expect(binding.domain == (name == "float-rate" ? SkinFloatPropertyDomain::Rate
+                                                        : SkinFloatPropertyDomain::FloatValue),
+                 name + ": explicit float value and ref retain distinct domains");
+        }
+      }
+    } else if (std::holds_alternative<SkinSliderObject>(object.payload) ||
+               std::holds_alternative<SkinGraphObject>(object.payload)) {
+      const auto *slider = std::get_if<SkinSliderObject>(&object.payload);
+      const auto &value = slider ? slider->value : std::get<SkinGraphObject>(object.payload).value;
+      if (name.starts_with("integer-")) {
+        const auto *range = std::get_if<SkinSliderObject::IntegerRangeSource>(&value);
+        expect(range && builtin(model.integerProperties, range->value) == 100,
+               name + ": null value selects integer type overload");
+      } else {
+        const auto *rate = std::get_if<SkinFloatPropertyId>(&value);
+        expect(rate && builtin(model.floatProperties, *rate) == 17,
+               name + ": null value selects rate type overload");
+      }
+      if (slider && name != "integer-slider") {
+        expect(slider->writer && builtin(model.floatWriters, *slider->writer) == 17 &&
+                   slider->changeable,
+               name + ": selected constructor controls writer and interaction");
+      }
+    } else if (const auto *image = std::get_if<SkinImageObject>(&object.payload)) {
+      expect(image->stateIndex && builtin(model.integerProperties, *image->stateIndex) == 90,
+             name + ": image-set property retains the selected numeric source");
+      for (const auto &binding : model.integerProperties) {
+        if (image->stateIndex && binding.id == *image->stateIndex) {
+          expect(binding.domain == (name == "set-value" ? SkinIntegerPropertyDomain::IntegerValue
+                                                       : SkinIntegerPropertyDomain::ImageIndex),
+                 name + ": image-set value and ref use different factories");
+        }
+      }
+    } else if (const auto *text = std::get_if<SkinTextObject>(&object.payload)) {
+      if (name == "invalid-text" || name == "unknown-text") {
+        expect(text->value && builtin(model.stringProperties, *text->value) == 10,
+               name + ": null string property falls back to ref");
+      } else if (name == "explicit-writer") {
+        expect(text->writer && !text->editable &&
+                   !builtin(model.stringWriters, *text->writer),
+               "valid explicit writer retains precedence and editability");
+      } else {
+        expect(text->writer && builtin(model.stringWriters, *text->writer) == 30 &&
+                   text->editable,
+               name + ": null writer uses ref and implicit editability");
+      }
+    }
+  }
+}
+
 void testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects() {
   const auto decoded = fixture().decodeGameplay("numeric-glyphs.luaskin");
   expect(decoded.model.has_value() && decoded.diagnostics.empty(),
@@ -1412,6 +1662,8 @@ void testRequestedExternalLuaSkinHeaderDecodes() {
 } // namespace
 
 int main() {
+  testResolvedPropertyFallbacks();
+  testSongListNumberKeepsItsNumericConstructorRef();
   testTypedHeaderPreservesAuthoredNumericOrderAndCoercions();
   testHeaderArraysFollowBeatorajaTableKeys();
   testAuthoredDimensionsStayWithinTheDecoderBoundary();

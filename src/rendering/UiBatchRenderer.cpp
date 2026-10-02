@@ -32,6 +32,7 @@ bool sameState(const UiBatchState &left, const UiBatchState &right) noexcept {
       left.texture.idx != right.texture.idx ||
       left.sampler.idx != right.sampler.idx ||
       left.samplerFlags != right.samplerFlags || left.state != right.state ||
+      left.textureOpacity != right.textureOpacity ||
       !sameScissor(left.scissor, right.scissor) ||
       left.transform != right.transform || left.uniformCount != right.uniformCount ||
       left.uniformCount > left.uniforms.size()) {
@@ -50,6 +51,9 @@ public:
   BgfxUiBatchBackend() {
     PosColorVertex::init();
     PosTexCoord0Vertex::init();
+    opacityLayout_.begin()
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+        .end();
   }
 
   ~BgfxUiBatchBackend() override { shutdown(); }
@@ -97,6 +101,32 @@ public:
       bgfx::update(bufferSlot->indexBuffer, 0, indexMemory);
       bgfx::setVertexBuffer(0, vertexBuffer, 0,
                             static_cast<std::uint32_t>(vertexCount));
+      if (!color && submission.state.textureOpacity < 1.0f) {
+        if (bufferSlot->opacityCapacity < vertexCount) {
+          const auto newCapacity = std::max(vertexCount, std::min(
+              bufferSlot->opacityCapacity * 2,
+              UiBatchRenderer::kMaximumVertices));
+          const auto replacement = bgfx::createDynamicVertexBuffer(
+              static_cast<std::uint32_t>(newCapacity), opacityLayout_);
+          if (!bgfx::isValid(replacement)) return false;
+          if (bgfx::isValid(bufferSlot->opacityVertexBuffer)) {
+            bgfx::destroy(bufferSlot->opacityVertexBuffer);
+          }
+          bufferSlot->opacityVertexBuffer = replacement;
+          bufferSlot->opacityCapacity = newCapacity;
+        }
+        opacityVertices_.assign(vertexCount,
+                                {1.0f, 1.0f, 1.0f,
+                                 submission.state.textureOpacity});
+        const auto *opacityMemory = bgfx::copy(
+            opacityVertices_.data(), static_cast<std::uint32_t>(
+                                         opacityVertices_.size() *
+                                         sizeof(opacityVertices_[0])));
+        if (opacityMemory == nullptr) return false;
+        bgfx::update(bufferSlot->opacityVertexBuffer, 0, opacityMemory);
+        bgfx::setVertexBuffer(1, bufferSlot->opacityVertexBuffer, 0,
+                              static_cast<std::uint32_t>(vertexCount));
+      }
       bgfx::setIndexBuffer(bufferSlot->indexBuffer, 0,
                            static_cast<std::uint32_t>(submission.indices.size()));
       if (bgfx::isValid(submission.state.texture)) {
@@ -139,6 +169,9 @@ public:
       if (bgfx::isValid(slot.texturedVertexBuffer)) {
         bgfx::destroy(slot.texturedVertexBuffer);
       }
+      if (bgfx::isValid(slot.opacityVertexBuffer)) {
+        bgfx::destroy(slot.opacityVertexBuffer);
+      }
       if (bgfx::isValid(slot.indexBuffer)) {
         bgfx::destroy(slot.indexBuffer);
       }
@@ -151,9 +184,11 @@ private:
   struct BufferSlot {
     bgfx::DynamicVertexBufferHandle colorVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle texturedVertexBuffer = BGFX_INVALID_HANDLE;
+    bgfx::DynamicVertexBufferHandle opacityVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicIndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
     std::size_t colorCapacity = 0;
     std::size_t texturedCapacity = 0;
+    std::size_t opacityCapacity = 0;
     std::size_t indexCapacity = 0;
   };
 
@@ -205,6 +240,8 @@ private:
   }
 
   std::vector<BufferSlot> bufferSlots_;
+  bgfx::VertexLayout opacityLayout_;
+  std::vector<std::array<float, 4>> opacityVertices_;
   std::size_t nextBufferSlot_ = 0;
 };
 

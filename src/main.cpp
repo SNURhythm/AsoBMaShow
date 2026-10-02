@@ -3,6 +3,7 @@
 #include "AppDatabaseInitializer.h"
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
+#include "DifficultyTableImporter.h"
 #include "input/InputLifecycle.h"
 #include "replay/ReplayFileReconciler.h"
 #include "bgfx_helper.h"
@@ -1595,6 +1596,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 }
 
 static void runReadyApplication(ApplicationContext &context) {
+  // Make defaults visible to the first selector load. Leave the online seed
+  // pending so the normal background refresh replaces these snapshots.
+  if (!context.settings.defaultDifficultyTablesSeeded) {
+    if (auto session = context.chartRepository.OpenSession()) {
+      DifficultyTableImporter importer;
+      importer.SeedBundledDefaults(*session);
+    }
+  }
   application_result_recovery::execute(
       application_result_recovery::Dependencies{
           .recover = [&context] { return context.recoverPendingResults(); },

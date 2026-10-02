@@ -127,13 +127,14 @@ projectBgaTarget(const SkinBgaCommand &command, GameplayBgaRole role) {
 bool Skin2DRenderer::submit(
     const SkinCommandBuffer &buffer, const SkinResourceCatalog &resources,
     RenderContext &context,
-    rendering::SkinQuadBatchRenderer &renderer) const {
+    rendering::SkinQuadBatchRenderer &renderer) {
   renderer.begin(context, resources);
   if (!renderer.submit(buffer.commands)) {
     renderer.flush();
     return false;
   }
   renderer.flush();
+  commitRetainedBlendState(buffer);
   return true;
 }
 
@@ -158,7 +159,7 @@ bool Skin2DRenderer::submit(
     const SkinCommandBuffer &buffer,
     const SkinPreparedResourceView &resources, RenderContext &context,
     rendering::SkinQuadBatchRenderer &renderer, SkinMovieCatalog *movies,
-    const PlaySkinViewport &viewport) const noexcept {
+    const PlaySkinViewport &viewport) noexcept {
   std::vector<std::span<const SkinDrawCommand>> quadSegments;
   std::vector<const SkinMovieCommand *> movieCommands;
   std::vector<SubmissionStep> steps;
@@ -228,6 +229,7 @@ bool Skin2DRenderer::submit(
     }
   }
   if (movies != nullptr) movies->discardFrame();
+  commitRetainedBlendState(buffer);
   return true;
 }
 
@@ -237,7 +239,7 @@ bool Skin2DRenderer::submit(
     rendering::SkinQuadBatchRenderer &renderer,
     SkinMovieCatalog *movies, const PlaySkinViewport &viewport,
     const PreparedGameplayBgaFrame &bgaFrame,
-    IGameplayBgaSubmitter &bgaSubmitter) const noexcept {
+    IGameplayBgaSubmitter &bgaSubmitter) noexcept {
   std::vector<std::span<const SkinDrawCommand>> quadSegments;
   std::vector<const SkinMovieCommand *> movieCommands;
   std::vector<BgaDrawTarget> bgaTargets;
@@ -419,6 +421,7 @@ bool Skin2DRenderer::submit(
   if (movies != nullptr) {
     movies->discardFrame();
   }
+  commitRetainedBlendState(buffer);
   return true;
 }
 

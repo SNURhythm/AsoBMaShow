@@ -42,7 +42,7 @@
 #include "CourseRecordActions.h"
 #include "RecordFileActions.h"
 #include "ReplayRecordTask.h"
-#include "FindBmsTask.h"
+#include "FindBmsModal.h"
 #include "ArchiveUnzipModal.h"
 #include <array>
 #include <atomic>
@@ -61,6 +61,7 @@ class BlockingOverlayView;
 class DecideLoadingOverlay;
 class MainMenuPreviewController;
 class PlayOptionsPanelView;
+class NewcomerTutorialView;
 class ScrollView;
 struct CoursePlaySession;
 struct StartOptions;
@@ -73,7 +74,7 @@ struct MainMenuParseLogRow {
 
 class MainMenuScene : public Scene {
 public:
-  explicit MainMenuScene(ApplicationContext &context);
+  explicit MainMenuScene(ApplicationContext &context, bool showTutorial = false);
   ~MainMenuScene() override;
   void init() override;
   void onPause() override;
@@ -87,6 +88,12 @@ public:
   void cleanupScene() override;
 
 private:
+  bool showTutorial_ = false;
+  bool findBmsAvailableWithoutTutorial_ = false;
+  NewcomerTutorialView *tutorial_ = nullptr;
+  Button *addFolderButton_ = nullptr;
+  ScrollView *tutorialRightScroll_ = nullptr;
+  void buildTutorial();
   std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
   std::unique_ptr<bms_parser::Chart> selectedChart;
@@ -99,7 +106,6 @@ private:
   // never spawns or joins a per-selection thread on the UI thread.
   std::unique_ptr<MainMenuPreviewController> previewWorker_;
   std::mutex previewJukeboxLoadMutex;
-  FindBmsTask findBmsTask;
   ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;
   bool replayResultRecallInProgress = false;
@@ -265,25 +271,7 @@ private:
   TextView *tasksRefreshButtonText = nullptr;
   Button *tasksCloseButton = nullptr;
   TextView *tasksCloseButtonText = nullptr;
-  View *findBmsModalRoot = nullptr;
-  View *findBmsProgressTrack = nullptr;
-  View *findBmsProgressFill = nullptr;
-  TextView *findBmsModalTitleText = nullptr;
-  TextView *findBmsStatusText = nullptr;
-  TextView *findBmsDetailText = nullptr;
-  Button *findBmsCloseButton = nullptr;
-  Button *findBmsKeepFilesButton = nullptr;
-  Button *findBmsDeleteFilesButton = nullptr;
-  Button *findBmsOpenButton = nullptr;
-  Button *findBmsGoogleButton = nullptr;
-  Button *findBmsRefreshButton = nullptr;
-  RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
-  TextView *findBmsCloseButtonText = nullptr;
-  TextView *findBmsKeepFilesButtonText = nullptr;
-  TextView *findBmsDeleteFilesButtonText = nullptr;
-  TextView *findBmsOpenButtonText = nullptr;
-  TextView *findBmsGoogleButtonText = nullptr;
-  TextView *findBmsRefreshButtonText = nullptr;
+  std::unique_ptr<FindBmsModal> findBmsModal_;
   TextView *readyGaugeText = nullptr;
   View *readyTotalRow = nullptr;
   TextView *readyTotalIconText = nullptr;
@@ -305,14 +293,6 @@ private:
   std::optional<PendingFindBmsSelectionHandoff>
       pendingFindBmsSelectionHandoff;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
-  ChartMetaRecord findBmsModalChart;
-  BmsSearchResult findBmsResult;
-  std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
-  std::string findBmsProgressMessage;
-  std::uint64_t findBmsProgressCurrent = 0;
-  std::uint64_t findBmsProgressTotal = 0;
-  double findBmsProgressFraction = 0.0;
-  std::deque<std::string> findBmsProgressLog;
   std::uint64_t chartSelectionGeneration = 0;
   std::uint64_t findBmsSelectionGenerationAtDownloadStart = 0;
 
@@ -530,13 +510,9 @@ private:
   std::string tasksModalTextSnapshot();
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
-  void startFindBmsCandidateDownload(size_t candidateIndex);
-  void startFindBmsPendingArtifactResolution(
-      BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
   void refreshFindBmsModal(bool refreshCandidates = true);
   void applyFindBmsUpdates();
-  void openFindBmsResultUrl(const std::string &url);
   std::filesystem::path preferredBmsDownloadRoot();
   void reselectCurrentChart();
   void refreshReplayAvailability(const ChartMetaRecord *record);

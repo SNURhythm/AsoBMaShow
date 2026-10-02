@@ -143,10 +143,11 @@ public:
     }
     try {
       sampler_ = UniformCache::getInstance().getSampler("s_texColor");
+      sampling_ = UniformCache::getInstance().getVec4("u_skinSampling");
     } catch (...) {
       return false;
     }
-    return bgfx::isValid(sampler_);
+    return bgfx::isValid(sampler_) && bgfx::isValid(sampling_);
   }
 
   bool preflightDistanceFields(
@@ -275,6 +276,12 @@ public:
     if (batch.textured) {
       bgfx::setTexture(0, sampler_, batch.texture, batch.samplerFlags);
     }
+    if (batch.program == SkinBatchProgram::Textured) {
+      const std::array<float, 4> sampling{
+          batch.filter == skin::SkinFilterMode::BeatorajaBilinear ? 1.0F : 0.0F,
+          0.0F, 0.0F, 0.0F};
+      bgfx::setUniform(sampling_, sampling.data());
+    }
     if (batch.program == SkinBatchProgram::DistanceField) {
       if (!batch.distanceField || !bgfx::isValid(distanceFieldProgram_) ||
           !bgfx::isValid(distanceParameters_) ||
@@ -329,6 +336,7 @@ public:
 private:
   BgfxVertexLayoutRegistration layoutRegistration_;
   bgfx::UniformHandle sampler_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle sampling_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle texturedProgram_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle primitiveProgram_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle distanceFieldProgram_ = BGFX_INVALID_HANDLE;
@@ -378,8 +386,8 @@ std::uint64_t skinBgfxState(skin::SkinBlendMode blend) noexcept {
 
 std::uint32_t skinSamplerFlags(skin::SkinFilterMode filter) noexcept {
   const std::uint32_t clamp = BGFX_SAMPLER_UVW_CLAMP;
-  return filter == skin::SkinFilterMode::Nearest ? clamp | BGFX_SAMPLER_POINT
-                                                 : clamp;
+  return filter == skin::SkinFilterMode::Linear ? clamp
+                                                : clamp | BGFX_SAMPLER_POINT;
 }
 
 SkinQuadBatchRenderer::SkinQuadBatchRenderer()
@@ -569,7 +577,7 @@ bool SkinQuadBatchRenderer::preflightSegment(
       if (!prepared.suppressed && glyphCount != 0) {
         addSampler(glyphs->state.filter);
         if (!glyphs->fallbackColorOverlays.empty()) {
-          addSampler(skin::SkinFilterMode::Linear);
+          addSampler(glyphs->fallbackColorFilter);
         }
         addDistanceField(glyphs->state);
       }
@@ -705,7 +713,7 @@ bool SkinQuadBatchRenderer::preflightSegment(
       const BatchKey overlayKey{
           .topology = SkinBatchTopology::Triangles,
           .blend = glyphs->state.blend,
-          .filter = skin::SkinFilterMode::Linear,
+          .filter = glyphs->fallbackColorFilter,
           .scissor = resolved[commandIndex].scissor,
           .textured = true};
       for (std::size_t glyphIndex = 0;
@@ -878,7 +886,7 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
       const BatchKey overlayKey{
           .topology = SkinBatchTopology::Triangles,
           .blend = glyphs->state.blend,
-          .filter = skin::SkinFilterMode::Linear,
+          .filter = glyphs->fallbackColorFilter,
           .scissor = resolved[commandIndex].scissor,
           .textured = true};
       for (std::size_t glyphIndex = 0;

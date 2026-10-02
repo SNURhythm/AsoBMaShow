@@ -12,18 +12,22 @@ namespace asobmshow::bms_search {
 
 std::filesystem::path extractionDownloadFixture;
 std::filesystem::path observedDownloadAttempt;
+std::function<bool(const std::string &, std::string &)> downloadFixtureFailure;
 
-bool downloadUrlToFile(const std::string &, const std::filesystem::path &path,
-                       std::atomic_bool &, std::string &,
-                       BmsSearchDownloadProgressCallback) {
+bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
+                       std::atomic_bool &, std::string &error,
+                       BmsSearchDownloadProgressCallback,
+                       BmsSearchDownloadRetryCallback) {
   observedDownloadAttempt = path.parent_path();
+  if (downloadFixtureFailure && downloadFixtureFailure(url, error)) return false;
   std::filesystem::copy_file(extractionDownloadFixture, path);
   return true;
 }
 
 bool GoogleDriveDriver::resolveWarningDownload(
     const std::string &, const std::string &, const std::filesystem::path &,
-    std::atomic_bool &, std::string &, BmsSearchDownloadProgressCallback) {
+    std::atomic_bool &, std::string &, BmsSearchDownloadProgressCallback,
+    BmsSearchDownloadRetryCallback) {
   return true;
 }
 

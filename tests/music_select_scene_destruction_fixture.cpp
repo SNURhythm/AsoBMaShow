@@ -109,7 +109,7 @@ public:
   void cancelSkinPreparation();
   Evidence &e;
   ReplayRecordTask recordsTask_;
-  std::unique_ptr<Resource> recordFileActions_, archiveUnzipModal_, directoryLoader_, folderStatusLoader_;
+  std::unique_ptr<Resource> recordFileActions_, archiveUnzipModal_, findBmsModal_, directoryLoader_, folderStatusLoader_;
   bool sceneActive_ = false;
   std::uint64_t launchGeneration_ = 0;
   std::atomic_bool launchCancelled_{false};
@@ -168,6 +168,7 @@ static void activeDestruction(bool cleanupFirst, bool initializationFails = fals
   s.directoryLoader_ = resource("directory");
   s.folderStatusLoader_ = resource("folder-status");
   s.archiveUnzipModal_ = resource("archive-modal");
+  s.findBmsModal_ = resource("download-modal");
   s.previewAudio_ = resource("preview-audio");
   s.systemSound_ = resource("system-sound");
   s.irExternalUrlService_ = resource("external-url");
@@ -249,6 +250,7 @@ static void activeDestruction(bool cleanupFirst, bool initializationFails = fals
   assert(std::count(e.events.begin(), e.events.end(), "input:17") == 1);
   assert(std::count(e.events.begin(), e.events.end(), "ranking:19") == 1);
   before(e, "directory:cancel", "directory");
+  before(e, "download-modal", "portal");
   before(e, "chart", "preload:delete");
   before(e, "search:end", "search");
   before(e, "portal:dismiss", "decide");

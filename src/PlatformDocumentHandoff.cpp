@@ -1,4 +1,5 @@
 #include "PlatformDocumentHandoff.h"
+#include "NativeDialogMutex.h"
 #include "skin/package/SkinPathPolicy.h"
 
 #if TARGET_OS_ANDROID
@@ -281,11 +282,7 @@ constexpr std::string_view kErrorPrefix = "__ERROR__:";
 constexpr std::string_view kSuccess = "__OK__";
 
 std::timed_mutex &documentHandoffMutex() {
-  // A native desktop picker cannot be forcibly dismissed. Intentionally keep
-  // serialization alive until process exit so a detached picker worker can
-  // never resume into a destroyed static mutex during shutdown.
-  static auto *mutex = new std::timed_mutex();
-  return *mutex;
+  return platform_native_dialog::operationMutex();
 }
 
 std::atomic_uint64_t &nextDocumentHandoffToken() {
