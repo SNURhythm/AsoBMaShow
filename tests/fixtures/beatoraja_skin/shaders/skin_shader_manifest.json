@@ -16,8 +16,8 @@
   "format": 2,
   "outputs": {
     "shaders/dx11/fs_skin_quad.bin": {
-      "bytes": 423,
-      "sha256": "5cf679e8f27d515107a55bfbcb589866e362b72a29cdfb1ecfd7759db4d09798"
+      "bytes": 2012,
+      "sha256": "151ae3ac62d5b02bf4a8e10db43f7e3f1fabec1c80d1484739932e79e723aa0c"
     },
     "shaders/dx11/fs_skin_yuvrgb.bin": {
       "bytes": 1065,
@@ -32,8 +32,8 @@
       "sha256": "dc1c4943cf793d8271c086a7046a01bb80b362f7ee7b971652cb33f34f48c401"
     },
     "shaders/essl/fs_skin_quad.bin": {
-      "bytes": 1855,
-      "sha256": "8dfaf0b341a0736e089071c2be3904ba321ff8dc34803c6d054e10dda0c1c716"
+      "bytes": 2662,
+      "sha256": "421f549c756281a8dde2831dc12d24973b47f98df894e3d2ad4b2d7d546ad0c6"
     },
     "shaders/essl/fs_skin_yuvrgb.bin": {
       "bytes": 2099,
@@ -48,8 +48,8 @@
       "sha256": "71e87d33c05496600a124e5a5a0c7c5ff4e320a94648032c54d8582fecc43072"
     },
     "shaders/metal/fs_skin_quad.bin": {
-      "bytes": 644,
-      "sha256": "0e24a172ed9fc7d93aee6da610279d38d24d72e65583a8b75772dad5bd46951e"
+      "bytes": 2133,
+      "sha256": "812fce1438e4b122f23941dc47ef4425dd20575b19ca5d0048dd0ac8fcec2659"
     },
     "shaders/metal/fs_skin_yuvrgb.bin": {
       "bytes": 1267,
@@ -64,8 +64,8 @@
       "sha256": "cb0786a33a7ab0cfe9c7818df177e33e427f7bed24ff0ceb07ae086617d10ff6"
     },
     "shaders/spirv/fs_skin_quad.bin": {
-      "bytes": 863,
-      "sha256": "414ffd61c469689872b2cc034d37431907aa142281be144f51a350c38df78f73"
+      "bytes": 2568,
+      "sha256": "85d0dc347f69f9cbfdf9e22ddc2525feae481bda788862727fec428cef3ef9c6"
     },
     "shaders/spirv/fs_skin_yuvrgb.bin": {
       "bytes": 1701,
@@ -86,8 +86,8 @@
   ],
   "sources": {
     "shader_src/fs_skin_quad.sc": {
-      "bytes": 166,
-      "sha256": "e72e4a196b49036d8c9d6946aa1b0a9cc74b62dfb35caea60e56937ad74173ed"
+      "bytes": 1228,
+      "sha256": "150e837979f6c91b97c8360db284b6663a2391ca838e56fac1a538db22fdb06b"
     },
     "shader_src/fs_skin_yuvrgb.sc": {
       "bytes": 451,
