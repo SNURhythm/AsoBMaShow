@@ -130,7 +130,7 @@ notePriorityModeToString(AppSettings::NotePriorityMode notePriorityMode) {
   case AppSettings::NotePriorityMode::Score:
     return "score";
   }
-  return "lowest";
+  return "combo";
 }
 
 AppSettings::JudgementIndicatorRenderMode parseJudgementIndicatorRenderMode(
@@ -490,7 +490,7 @@ void AppSettings::sanitize() {
   case NotePriorityMode::Score:
     break;
   default:
-    notePriorityMode = NotePriorityMode::Lowest;
+    notePriorityMode = NotePriorityMode::Combo;
     break;
   }
   switch (judgementIndicatorRenderMode) {
