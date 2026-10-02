@@ -266,6 +266,9 @@ public:
   LuaValueResult loadHeader(ISkinFrameState *initialState = nullptr);
   LuaValueResult
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
+  // JSON properties have no Lua entry; configure their shared global API.
+  LuaValueResult
+  loadConfiguredProperties(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
   void suspendAudio() noexcept;
   void resumeAudio() noexcept;

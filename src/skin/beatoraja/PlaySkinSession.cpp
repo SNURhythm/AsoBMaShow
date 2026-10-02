@@ -625,7 +625,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     }
 
     std::unique_ptr<LuaSkinFileSystem> luaFiles;
-    if (*sourceFormat == GameplaySkinSourceFormat::Lua) {
+    if (*sourceFormat == GameplaySkinSourceFormat::Lua ||
+        *sourceFormat == GameplaySkinSourceFormat::Json) {
       auto created = LuaSkinFileSystem::create(
           {.revision = revision,
            .entry = activation.entry,

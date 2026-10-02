@@ -60,18 +60,6 @@ bool usesLuaJCompatibilityCoercion(const SkinFrameInputs &inputs) noexcept {
   return !inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit);
 }
 
-std::string coerceLuaJString(const LuaScalar &value) {
-  if (const auto *text = std::get_if<std::string>(&value)) return *text;
-  if (std::holds_alternative<std::nullptr_t>(value)) return "nil";
-  if (const auto *boolean = std::get_if<bool>(&value)) {
-    return *boolean ? "true" : "false";
-  }
-  if (const auto *integer = std::get_if<std::int64_t>(&value)) {
-    return std::to_string(*integer);
-  }
-  return std::to_string(std::get<double>(value));
-}
-
 std::optional<std::int64_t>
 coerceLuaNumericInteger(const LuaScalar &value, std::int64_t minimum,
                         std::int64_t maximum) noexcept {
@@ -686,7 +674,7 @@ ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
                            "String callback returned a non-string value.")};
   }
   if (usesLuaJCompatibilityCoercion(inputs)) {
-    return {.value = coerceLuaJString(*invoked.value)};
+    return {.value = luaJToString(*invoked.value)};
   }
   if (!std::holds_alternative<std::string>(*invoked.value)) {
     return {.failure =

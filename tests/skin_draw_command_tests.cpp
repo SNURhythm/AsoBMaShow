@@ -9,6 +9,7 @@
 #include "FileChecksum.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
+#include "skin/beatoraja/LuaJValueCoercion.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -80,7 +81,7 @@ public:
 
 class RuntimeHarness final {
 public:
-  RuntimeHarness()
+  explicit RuntimeHarness(std::string_view expression = "nil")
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
@@ -105,7 +106,9 @@ public:
               "host_false_callback=hidden,"
               "host_forbidden_timer_callback=forbidden_timer,"
               "host_ordered_timer_callback=ordered_timer,"
-              "host_ordered_rate_callback=ordered_rate}");
+              "host_ordered_rate_callback=ordered_rate,"
+              "host_parity_callback=function() return " +
+                  std::string(expression) + " end}");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
     auto snapshot = snapshotter.snapshot(source, package_, {}, {});
     expect(snapshot.prepared.has_value(), "runtime fixture snapshots");
@@ -131,6 +134,7 @@ public:
     auto header = runtime_->loadHeader();
     expect(header.value.has_value(), "runtime header executes");
     if (header.value) {
+      parityCallback_ = header.value->callbackNamed("host_parity_callback");
       failCallback_ = header.value->callbackNamed("host_fail_callback");
       expect(failCallback_.has_value(), "runtime failure callback is retained");
       numberCallback_ = header.value->callbackNamed("host_number_callback");
@@ -156,6 +160,7 @@ public:
   }
 
   LuaSkinRuntime &runtime() { return *runtime_; }
+  LuaCallbackId parityCallback() const { return *parityCallback_; }
   LuaCallbackId failCallback() const { return *failCallback_; }
   LuaCallbackId numberCallback() const { return *numberCallback_; }
   LuaCallbackId fractionalNumberCallback() const {
@@ -176,6 +181,7 @@ private:
   AcceptFiles aliases_;
   std::optional<PreparedSkinRevision> prepared_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
+  std::optional<LuaCallbackId> parityCallback_;
   std::optional<LuaCallbackId> failCallback_;
   std::optional<LuaCallbackId> numberCallback_;
   std::optional<LuaCallbackId> fractionalNumberCallback_;
@@ -1842,6 +1848,17 @@ void testFalseDestinationSkipsNumericSourceTimerAfterValueLookup() {
          "false destination resolves numeric value but never its source timer");
 }
 
+void testLuaNumericStringsMatchPinnedParser() {
+  const std::pair<std::string_view, int> cases[] = {
+      {"12oops", 0}, {"\t12\t", 0}, {" 12 ", 12}, {"12.5", 12},
+      {"0x-12", -18}, {"-0x12", 0}, {"+0x12", 0}, {"0x1p2", 0},
+      {"1e2", 100}, {"1e2x", 0}, {"4294967297", 1}};
+  for (const auto &[text, expected] : cases) {
+    expect(luaJToInt(LuaScalar{std::string(text)}) == expected,
+           "numeric callback strings use pinned LuaJ grammar and narrowing");
+  }
+}
+
 void testLuaFractionalNumberUsesPinnedIntegerCoercion() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -2357,6 +2374,49 @@ void testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent() {
   const auto ordered = evaluate(renderer, runtime, model, resources, state, 9);
   expect(!ordered.submitReady && hasDiagnostic(ordered, "skin.renderer.text.glyph"),
          "missing glyph before malformed bytes retains scalar diagnostic precedence");
+}
+
+void testLuaNumericTextUsesPinnedFormatting() {
+  const std::pair<std::string_view, std::string_view> cases[] = {
+      {"1.5", "1.5"}, {"1.23456789", "1.2345679"},
+      {"0.0001", "1.0E-4"}, {"0.001", "0.001"},
+      {"9999999.5", "1.0E7"}, {"1e20", "1.0E20"},
+      {"-0.0", "0"}, {"0/0", "nan"}, {"1/0", "inf"},
+      {"-1/0", "-inf"}, {"1.401298464324817e-45", "1.4E-45"},
+      {"1.1754943508222875e-38", "1.17549435E-38"},
+      {"1e-50", "0.0"}, {"1e40", "Infinity"},
+      {"2^83", "9.6714065E24"},
+      {"9223372036854775808.0", "9223372036854775807"}};
+  for (const auto &[expression, expected] : cases) {
+    RuntimeHarness runtime(expression);
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    resources.addTextAtlas(1, practiceAsciiAtlas());
+    FakeState state;
+    ValidatedBeatorajaSkinModel model;
+    model.model.stringProperties.push_back(
+        {.id = SkinStringPropertyId{1}, .source = runtime.parityCallback(),
+         .authoredOrdinal = 1});
+    model.model.objects.push_back(textObject(1, true, SkinStringPropertyId{1}));
+    auto presented = destination(1, 10, 100.0);
+    presented.presentation.frames.front().width = 300.0;
+    presented.presentation.frames.front().height = 20.0;
+    model.model.destinations.push_back(std::move(presented));
+    const auto result = evaluate(
+        renderer, runtime, model, resources, state, 1, 0, nullptr,
+        std::nullopt, nullptr, 1, false, nullptr, nullptr, nullptr,
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    const std::string actual = result.submitReady &&
+                                     result.submitReady->commands.size() == 1
+                                 ? glyphRunText(result.submitReady->commands[0])
+                                 : "<no text>";
+    expect(actual == expected,
+           "numeric text callbacks preserve pinned LuaJ visible formatting");
+    if (actual != expected) {
+      std::cerr << expression << ": expected " << expected
+                << ", got " << actual << '\n';
+    }
+  }
 }
 
 void testTextUsesPreparedMetricsKerningAndAtlasUvs() {
@@ -6910,7 +6970,9 @@ int main(int argc, char **argv) {
   testFloatTruncatesAndUsesPositiveAlignmentShift();
   testZeroCycleNumericSpriteDoesNotConsultItsTimer();
   testFalseDestinationSkipsNumericSourceTimerAfterValueLookup();
+  testLuaNumericStringsMatchPinnedParser();
   testLuaFractionalNumberUsesPinnedIntegerCoercion();
+  testLuaNumericTextUsesPinnedFormatting();
   testRepeatedTextKeepsValuesAtlasChecksAndLineBreaksCurrent();
   testTextUsesPreparedMetricsKerningAndAtlasUvs();
   testBitmapTextUsesPinnedScaleShadowAndDistanceFieldState();

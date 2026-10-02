@@ -29,8 +29,8 @@ struct GameplaySkinDocumentRequest {
   GameplaySkinSourceFormat sourceFormat = GameplaySkinSourceFormat::Lua;
   SkinEntryId entry;
   LuaSkinFileSystem &documentFileSystem;
-  // Required only for Lua. Static formats must leave this null so dispatch
-  // cannot accidentally create a Lua VM for JSON or LR2 documents.
+  // Required for Lua and script-bearing JSON sessions. Static JSON never
+  // creates a VM; LR2 leaves this null. Catalog JSON inspection ignores it.
   std::unique_ptr<LuaSkinFileSystem> luaFileSystem;
   std::unique_ptr<LuaSkinHttpTransport> luaHttpTransport;
   std::shared_ptr<LuaSkinAudioBackend> luaAudioBackend;
@@ -84,8 +84,8 @@ public:
   inspect(GameplaySkinDocumentRequest) const;
 
   // Full session preparation. Callbacks bind the caller's initial authority
-  // during header/configured execution and Lua model decoding; static formats
-  // ignore them.
+  // during header/configured execution and callback factory decoding, including
+  // script-bearing JSON. Static documents ignore them.
   [[nodiscard]] GameplaySkinDocumentLoadResult
   load(GameplaySkinDocumentRequest) const;
 };

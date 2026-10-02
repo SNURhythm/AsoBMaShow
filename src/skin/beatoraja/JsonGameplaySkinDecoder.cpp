@@ -56,6 +56,7 @@ struct DecodeContext {
   JsonGameplaySkinDecodeResult &result;
   std::stop_token stop;
   StaticSkinDecodeCheckpoint decodeCheckpoint;
+  JsonSkinScriptCompiler compileScript;
   const JsonSourceIndex *sources = nullptr;
   bool failed = false;
   StaticSkinDecodePhase phase = StaticSkinDecodePhase::JsonStructure;
@@ -961,7 +962,7 @@ bool validateBudget(const Json &root, DecodeContext &context) {
   return true;
 }
 
-struct StaticBindingRegistry {
+struct JsonBindingRegistry {
   DecodeContext &context;
   std::vector<SkinBooleanPropertyBinding> booleans;
   std::vector<SkinIntegerPropertyBinding> integers;
@@ -982,7 +983,7 @@ struct StaticBindingRegistry {
   std::map<std::variant<int, std::string>, SkinStringWriterId> stringWriterIds;
   std::map<std::variant<int, std::string>, SkinEventBindingId> eventIds;
 
-  std::optional<SkinBuiltinPropertySelector>
+  std::optional<std::variant<SkinBuiltinPropertySelector, LuaCallbackId>>
   selector(const Json *authored, SkinBindingType type,
            std::optional<int> fallback, std::string_view path) {
     std::optional<SkinBuiltinPropertySelector> result;
@@ -1000,16 +1001,31 @@ struct StaticBindingRegistry {
     if (!result) {
       return std::nullopt;
     }
-    if (!context.builtins.contains(type, *result)) {
-      if (std::holds_alternative<std::string>(result->value)) {
-        context.warning("skin_json_callback_unsupported",
-                        "JSON binding '" + std::string(path) +
-                            "' requires Lua and was left static/unbound",
-                        context.source(authored));
-      }
+    // JSON has name factories only for read properties; timer and writer/event
+    // strings are always scripts in the pinned serializer.
+    const bool namedFactory = type.kind == SkinBindingKind::BooleanProperty ||
+                              type.kind == SkinBindingKind::IntegerProperty ||
+                              type.kind == SkinBindingKind::FloatProperty ||
+                              type.kind == SkinBindingKind::StringProperty;
+    const auto *script = std::get_if<std::string>(&result->value);
+    if (context.builtins.contains(type, *result) &&
+        (script == nullptr || namedFactory)) {
+      return *result;
+    }
+    if (script == nullptr) return std::nullopt;
+    context.result.requiresLua = true;
+    if (!context.compileScript) return std::nullopt;
+    auto compiled = context.compileScript(*script, type.kind);
+    if (!compiled.callback) {
+      context.warning(compiled.failure ? compiled.failure->code
+                                       : "skin_json_callback_compile_failed",
+                      "JSON binding '" + std::string(path) + "': " +
+                          (compiled.failure ? compiled.failure->message
+                                            : "Lua script did not compile"),
+                      context.source(authored));
       return std::nullopt;
     }
-    return result;
+    return *compiled.callback;
   }
 
   std::optional<SkinBooleanPropertyId>
@@ -1018,12 +1034,15 @@ struct StaticBindingRegistry {
     const SkinBindingType type{.kind = SkinBindingKind::BooleanProperty};
     auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
-    if (const auto found = booleanIds.find(selected->value);
-        found != booleanIds.end()) return found->second;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
+    if (builtin != nullptr) {
+      if (const auto found = booleanIds.find(builtin->value);
+          found != booleanIds.end()) return found->second;
+    }
     const SkinBooleanPropertyId id{static_cast<std::uint32_t>(booleans.size() + 1)};
     booleans.push_back({.id = id, .source = *selected,
                         .authoredOrdinal = ordinal});
-    booleanIds.emplace(selected->value, id);
+    if (builtin != nullptr) booleanIds.emplace(builtin->value, id);
     return id;
   }
 
@@ -1035,13 +1054,16 @@ struct StaticBindingRegistry {
                                .integerDomain = domain};
     auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
     const std::size_t bucket = static_cast<std::size_t>(domain);
-    if (const auto found = integerIds[bucket].find(selected->value);
-        found != integerIds[bucket].end()) return found->second;
+    if (builtin != nullptr) {
+      if (const auto found = integerIds[bucket].find(builtin->value);
+          found != integerIds[bucket].end()) return found->second;
+    }
     const SkinIntegerPropertyId id{static_cast<std::uint32_t>(integers.size() + 1)};
     integers.push_back({.id = id, .domain = domain, .source = *selected,
                         .authoredOrdinal = ordinal});
-    integerIds[bucket].emplace(selected->value, id);
+    if (builtin != nullptr) integerIds[bucket].emplace(builtin->value, id);
     return id;
   }
 
@@ -1053,13 +1075,16 @@ struct StaticBindingRegistry {
                                .floatDomain = domain};
     auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
     const std::size_t bucket = static_cast<std::size_t>(domain);
-    if (const auto found = floatIds[bucket].find(selected->value);
-        found != floatIds[bucket].end()) return found->second;
+    if (builtin != nullptr) {
+      if (const auto found = floatIds[bucket].find(builtin->value);
+          found != floatIds[bucket].end()) return found->second;
+    }
     const SkinFloatPropertyId id{static_cast<std::uint32_t>(floats.size() + 1)};
     floats.push_back({.id = id, .domain = domain, .source = *selected,
                       .authoredOrdinal = ordinal});
-    floatIds[bucket].emplace(selected->value, id);
+    if (builtin != nullptr) floatIds[bucket].emplace(builtin->value, id);
     return id;
   }
 
@@ -1069,12 +1094,15 @@ struct StaticBindingRegistry {
     const SkinBindingType type{.kind = SkinBindingKind::StringProperty};
     auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
-    if (const auto found = stringIds.find(selected->value);
-        found != stringIds.end()) return found->second;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
+    if (builtin != nullptr) {
+      if (const auto found = stringIds.find(builtin->value);
+          found != stringIds.end()) return found->second;
+    }
     const SkinStringPropertyId id{static_cast<std::uint32_t>(strings.size() + 1)};
     strings.push_back({.id = id, .source = *selected,
                        .authoredOrdinal = ordinal});
-    stringIds.emplace(selected->value, id);
+    if (builtin != nullptr) stringIds.emplace(builtin->value, id);
     return id;
   }
 
@@ -1083,12 +1111,15 @@ struct StaticBindingRegistry {
     const SkinBindingType type{.kind = SkinBindingKind::TimerProperty};
     auto selected = selector(authored, type, std::nullopt, path);
     if (!selected) return std::nullopt;
-    if (const auto found = timerIds.find(selected->value);
-        found != timerIds.end()) return found->second;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
+    if (builtin != nullptr) {
+      if (const auto found = timerIds.find(builtin->value);
+          found != timerIds.end()) return found->second;
+    }
     const SkinTimerPropertyId id{static_cast<std::uint32_t>(timers.size() + 1)};
     timers.push_back({.id = id, .source = *selected,
                       .authoredOrdinal = ordinal});
-    timerIds.emplace(selected->value, id);
+    if (builtin != nullptr) timerIds.emplace(builtin->value, id);
     return id;
   }
 
@@ -1098,12 +1129,15 @@ struct StaticBindingRegistry {
     const SkinBindingType type{.kind = SkinBindingKind::FloatWriter};
     auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
-    if (const auto found = floatWriterIds.find(selected->value);
-        found != floatWriterIds.end()) return found->second;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
+    if (builtin != nullptr) {
+      if (const auto found = floatWriterIds.find(builtin->value);
+          found != floatWriterIds.end()) return found->second;
+    }
     const SkinFloatWriterId id{static_cast<std::uint32_t>(floatWriters.size() + 1)};
     floatWriters.push_back({.id = id, .source = *selected,
                             .authoredOrdinal = ordinal});
-    floatWriterIds.emplace(selected->value, id);
+    if (builtin != nullptr) floatWriterIds.emplace(builtin->value, id);
     return id;
   }
 
@@ -1113,12 +1147,15 @@ struct StaticBindingRegistry {
     const SkinBindingType type{.kind = SkinBindingKind::StringWriter};
     auto selected = selector(authored, type, fallback, path);
     if (!selected) return std::nullopt;
-    if (const auto found = stringWriterIds.find(selected->value);
-        found != stringWriterIds.end()) return found->second;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
+    if (builtin != nullptr) {
+      if (const auto found = stringWriterIds.find(builtin->value);
+          found != stringWriterIds.end()) return found->second;
+    }
     const SkinStringWriterId id{static_cast<std::uint32_t>(stringWriters.size() + 1)};
     stringWriters.push_back({.id = id, .source = *selected,
                              .authoredOrdinal = ordinal});
-    stringWriterIds.emplace(selected->value, id);
+    if (builtin != nullptr) stringWriterIds.emplace(builtin->value, id);
     return id;
   }
 
@@ -1127,12 +1164,15 @@ struct StaticBindingRegistry {
     const SkinBindingType type{.kind = SkinBindingKind::Event};
     auto selected = selector(authored, type, std::nullopt, path);
     if (!selected) return std::nullopt;
-    if (const auto found = eventIds.find(selected->value);
-        found != eventIds.end()) return found->second;
+    const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&*selected);
+    if (builtin != nullptr) {
+      if (const auto found = eventIds.find(builtin->value);
+          found != eventIds.end()) return found->second;
+    }
     const SkinEventBindingId id{static_cast<std::uint32_t>(events.size() + 1)};
     events.push_back({.id = id, .source = *selected,
                       .authoredOrdinal = ordinal});
-    eventIds.emplace(selected->value, id);
+    if (builtin != nullptr) eventIds.emplace(builtin->value, id);
     return id;
   }
 
@@ -1372,7 +1412,7 @@ struct BuildState {
   DecodeContext &context;
   const Json &root;
   BeatorajaSkinModel &model;
-  StaticBindingRegistry bindings;
+  JsonBindingRegistry bindings;
   std::map<std::string, SkinResourceId, std::less<>> sourceIds;
   std::map<std::string, std::string, std::less<>> sourcePaths;
   std::map<std::string, SkinResourceId, std::less<>> fontIds;
@@ -2986,7 +3026,7 @@ void decodeCustomBindings(BuildState &state) {
         bindingPath("customEvents", index, "action"));
     if (!action) {
       state.context.warning("skin_json_binding_missing",
-                            "JSON custom event has no static action binding",
+                            "JSON custom event has no action binding",
                             state.context.source(member(event, "action")));
     }
     state.model.customEvents.push_back(
@@ -3127,14 +3167,16 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
     std::span<const std::byte> bytes, const SkinEntryId &entry,
     const EntryProfileSettings *desired, SkinBuiltinBindingCatalogView builtins,
     SkinSafetyPolicy safetyPolicy, std::stop_token stop,
-    StaticSkinDecodeCheckpoint checkpoint) const {
+    StaticSkinDecodeCheckpoint checkpoint,
+    JsonSkinScriptCompiler compileScript) const {
   JsonGameplaySkinDecodeResult result;
   DecodeContext context{.entry = entry,
                         .builtins = builtins,
                         .safetyPolicy = safetyPolicy,
                         .result = result,
                         .stop = stop,
-                        .decodeCheckpoint = checkpoint};
+                        .decodeCheckpoint = checkpoint,
+                        .compileScript = std::move(compileScript)};
   if (context.checkpoint(StaticSkinDecodePhase::JsonStructure)) return result;
   const std::uint64_t byteLimit = safetyPolicy.documentByteLimit(
       JsonGameplaySkinDecoderPolicy::maxDocumentBytes);

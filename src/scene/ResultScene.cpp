@@ -318,6 +318,8 @@ courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
 
 SkinGameplayGraphState courseGameplayGraphForSession(
     const CoursePlaySession &session, const RhythmState &courseState) {
+  const int gaugeType = gaugeTypeIndex(courseState.gaugeType);
+  bool needsLegacyGaugeHistory = false;
   std::vector<SkinGameplayGraphState> stages;
   stages.reserve(session.entries.size());
   for (const auto &stage : session.completedResults) {
@@ -332,12 +334,35 @@ SkinGameplayGraphState courseGameplayGraphForSession(
     if (graph.dynamic == nullptr) {
       graph.dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
     }
+    if (gaugeType >= 0 &&
+        static_cast<std::size_t>(gaugeType) < graph.dynamic->gaugeHistories.size() &&
+        !graph.dynamic->gaugeHistoryOmitted &&
+        graph.dynamic->gaugeHistories[gaugeType].empty() &&
+        !stage.state.gaugeHistory.empty()) {
+      needsLegacyGaugeHistory = true;
+    }
     stages.push_back(std::move(graph));
   }
   for (std::size_t index = session.completedResults.size();
        index < session.entries.size(); ++index) {
     stages.push_back(
         courseGraphPaddingForEntry(session.entries[index], session.gaugeType));
+  }
+
+  if (needsLegacyGaugeHistory) {
+    // A partial sampled trace is not usable alongside an event-history fallback.
+    // Merge chart/gauge metadata without samples, then use the complete durable
+    // course history below. Retain explicit omission and oversized-trace flags.
+    for (auto &stage : stages) {
+      auto dynamic =
+          std::make_shared<SkinGameplayDynamicGraphState>(*stage.dynamic);
+      for (auto &history : dynamic->gaugeHistories) {
+        dynamic->gaugeHistoryOmitted = dynamic->gaugeHistoryOmitted ||
+                                      history.size() > kSkinMaximumGaugeGraphSamples;
+        history.clear();
+      }
+      stage.dynamic = std::move(dynamic);
+    }
   }
 
   SkinGameplayGraphState combined = combineSkinGameplayGraphStates(stages);
@@ -361,16 +386,18 @@ SkinGameplayGraphState courseGameplayGraphForSession(
 
   auto dynamic =
       std::make_shared<SkinGameplayDynamicGraphState>(*combined.dynamic);
-  const int gaugeType = gaugeTypeIndex(courseState.gaugeType);
   if (gaugeType >= 0 &&
       static_cast<std::size_t>(gaugeType) < dynamic->gaugeHistories.size()) {
     const std::size_t gaugeIndex = static_cast<std::size_t>(gaugeType);
     if (!dynamic->gaugeHistoryOmitted &&
-        dynamic->gaugeHistories[gaugeIndex].empty() &&
+        (needsLegacyGaugeHistory || dynamic->gaugeHistories[gaugeIndex].empty()) &&
         !courseState.gaugeHistory.empty()) {
-      // A legacy/no-graph result has no source-equivalent 500 ms log. Keep
+      // Padding can make the combined log nonempty even when a played stage
+      // has only durable history. Use the complete aggregate fallback, not a
+      // partial sampled log. A legacy result has no exact 500 ms log. Keep
       // the available state history, but do not attach stage offsets whose
       // sample coordinates cannot match it.
+      dynamic->gaugeHistories[gaugeIndex].clear();
       copySkinGameplayGaugeHistoryForDisplay(
           *dynamic, dynamic->gaugeHistories, courseState.gaugeHistory,
           courseState.gaugeType);
@@ -421,6 +448,11 @@ courseResultMetaForSession(const CoursePlaySession &session) {
       totalNotesForCourse(session), totalPlayLengthForCourse(session));
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
+    // CourseResult keeps the current SongData for chart properties.
+    meta.Bpm = currentMeta->Bpm;
+    meta.MinBpm = currentMeta->MinBpm;
+    meta.MaxBpm = currentMeta->MaxBpm;
+    meta.Difficulty = currentMeta->Difficulty;
     meta.Rank = currentMeta->Rank;
     meta.RankType = currentMeta->RankType;
     meta.BmsPath = currentMeta->BmsPath;
@@ -432,6 +464,11 @@ courseResultMetaForSession(const CoursePlaySession &session) {
     meta.TotalBackSpinNotes = currentMeta->TotalBackSpinNotes;
   } else if (!session.completedResults.empty()) {
     const auto &lastMeta = session.completedResults.back().meta;
+    // CourseResult keeps the current SongData for chart properties.
+    meta.Bpm = lastMeta.Bpm;
+    meta.MinBpm = lastMeta.MinBpm;
+    meta.MaxBpm = lastMeta.MaxBpm;
+    meta.Difficulty = lastMeta.Difficulty;
     meta.Rank = lastMeta.Rank;
     meta.RankType = lastMeta.RankType;
     meta.BmsPath = lastMeta.BmsPath;

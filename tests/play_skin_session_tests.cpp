@@ -765,6 +765,7 @@ struct ActivationFixtureOptions {
   bool resultDuplicateEventExec = false;
   bool resultDuplicateTimerExec = false;
   bool staticResultCustomEvent = false;
+  bool scriptedResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool musicSelectInteractionBearing = false;
   bool musicSelectMainStateBearing = false;
@@ -799,7 +800,7 @@ public:
                .profileOverlays = temp_.root() / "overlays"},
         package_(*normalizePackageId("ActivationContract").package),
         entry_(*normalizeEntryPath(
-            package_, options.staticResultCustomEvent ? "skin/main.json"
+            package_, (options.staticResultCustomEvent || options.scriptedResultCustomEvent) ? "skin/main.json"
                                                      : "skin/main.luaskin")
                     .entry),
         profile_(*makeSkinProfileId(
@@ -1472,6 +1473,19 @@ end
 })json");
     }
 
+    if (options.scriptedResultCustomEvent) {
+      writeText(source / "skin/main.json", R"json({
+        "type":7,"w":1280,"h":720,
+        "customTimers":[
+          {"id":10000,"timer":"(function() serial=(serial or 0)+1; local n=serial; return function() return n*1000 end end)()"},
+          {"id":10001,"timer":"(function() serial=(serial or 0)+1; local n=serial; return function() return n*1000 end end)()"}
+        ],
+        "customEvents":[{"id":1000,"action":"event_exec(210)",
+          "condition":"timer(10000) == 1000 and timer(10001) == 2000 and option(50)",
+          "minInterval":1000}]
+      })json");
+    }
+
     // Runtime execution follows the installed, Files-visible package exactly
     // as Beatoraja follows its selected skin directory.  Keep the immutable
     // revision for activation identity, but make this fixture exercise the
@@ -1843,7 +1857,7 @@ ParityCommandOutput parityCommandOutput(const SkinCommandBuffer &commands) {
 
 class FormatParityFixture final {
 public:
-  FormatParityFixture()
+  explicit FormatParityFixture(bool scriptedJson = false)
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
@@ -1933,6 +1947,23 @@ return skin
     {"id":"text","dst":[{"time":0,"x":100,"y":100,"w":200,"h":40}]}
   ]
 })json");
+    if (scriptedJson) {
+      writeText(source / "skin/parity.json", R"json({
+        "type":0,"w":640,"h":480,
+        "source":[{"id":"atlas","path":"resources/fixture.png"}],
+        "font":[{"id":"font","path":"fonts/fixture.fnt","type":0}],
+        "image":[{"id":"image","src":"atlas","w":40,"h":20}],
+        "value":[{"id":"number","src":"atlas","w":40,"h":20,"divx":10,"digit":3,"value":"number(10)"}],
+        "text":[{"id":"text","font":"font","size":10,"value":"text(10)"}],
+        "destination":[
+          {"id":"image","draw":"type(event_min_interval) == 'function' and skin_config ~= nil and number(100) == 0",
+           "timer":"(function() assert(number(10) ~= nil and type(timer_function(0)) == 'function'); return function() return 0 end end)()",
+           "dst":[{"x":10,"y":100,"w":40,"h":20}]},
+          {"id":"number","dst":[{"x":60,"y":100,"w":4,"h":20}]},
+          {"id":"text","dst":[{"x":100,"y":100,"w":200,"h":40}]}
+        ]
+      })json");
+    }
     writeText(source / "skin/commented.json", R"json(/* production comment */
 {
   "type": 0,
@@ -2356,6 +2387,30 @@ void testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold() {
              frame.evaluation.submitReady->commands.size() == 3,
          "following root/included commands and a Java-valid plus-signed "
          "SETOPTION branch all render");
+}
+
+void testScriptedJsonUsesLivePropertiesAndGlobalUtilities() {
+  FormatParityFixture fixture(true);
+  auto lua = fixture.create("skin/parity.luaskin", 114);
+  auto json = fixture.create("skin/parity.json", 115);
+  expect(lua.session && json.session && json.session->hasLuaRuntimeForTesting(),
+         "script-bearing JSON creates a session-owned Lua property runtime");
+  if (!lua.session || !json.session) return;
+  const auto luaFrame = lua.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  const auto jsonFrame = json.session->prepareFrame(stateAt(2), projectionAt(2), {});
+  expect(luaFrame.ready() && jsonFrame.ready() &&
+             luaFrame.evaluation.submitReady && jsonFrame.evaluation.submitReady &&
+             parityCommandOutput(*luaFrame.evaluation.submitReady) ==
+                 parityCommandOutput(*jsonFrame.evaluation.submitReady),
+         "JSON expressions and timer factories use live state and global utilities");
+  auto changedState = stateAt(3);
+  changedState.score = 123;
+  const auto changed = json.session->prepareFrame(changedState, projectionAt(3), {});
+  expect(changed.ready() && changed.evaluation.submitReady &&
+             std::ranges::none_of(
+                 parityCommandOutput(*changed.evaluation.submitReady).quads,
+                 [](const auto &quad) { return quad.object == 1; }),
+         "JSON property callbacks observe updated frame state after configuration");
 }
 
 void testCommentedJsonCreatesProductionSession() {
@@ -7530,6 +7585,23 @@ void testStaticResultSessionRunsCustomBuiltinEvent() {
          "static result custom events evaluate built-in conditions and actions");
 }
 
+void testScriptedJsonResultEventsKeepIndependentTimerFactories() {
+  ActivationFixture fixture({.skinType = 7, .scriptedResultCustomEvent = true});
+  if (!fixture.ready()) return;
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session && created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+         "JSON timer factories remain independent and drive scripted result events");
+  if (!created.session) return;
+  expect(created.session->render(context, {}, 2, 500) &&
+             created.session->takeQueuedBuiltinEventIds().empty() &&
+             created.session->render(context, {}, 3, 1000) &&
+             created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+         "JSON event callbacks retain their runtime and automatic interval state");
+}
+
 void testResultPhotoFramePreservesLiveEvents() {
   {
     ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
@@ -9236,6 +9308,7 @@ int main(int argc, char **argv) {
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
   testLr2DeclaredFalseOptionActivatesNegatedInclude();
   testMalformedLr2SetOptionDoesNotDivergeFromIncludeFold();
+  testScriptedJsonUsesLivePropertiesAndGlobalUtilities();
   testCommentedJsonCreatesProductionSession();
   testSessionOwnsDeduplicatedMoviesAndRollsBackBeforePublication();
   testSessionOwnsLuaAudioAndRollsBackBeforePublication();
@@ -9346,6 +9419,7 @@ int main(int argc, char **argv) {
   testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
   testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
+  testScriptedJsonResultEventsKeepIndependentTimerFactories();
   testResultPhotoFramePreservesLiveEvents();
   testResultVideoFramesAdvanceLocalEventsOnly();
   testResultSkinInputAvailabilityMatchesResultTimer();

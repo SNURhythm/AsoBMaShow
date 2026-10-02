@@ -684,14 +684,14 @@ void testMalformedUnboundedAndCallbackJsonFailAtDecoderBoundary() {
   const auto scripted = decodeText(R"({
     "type": 0,
     "source": [{"id":"atlas","path":"atlas.png"}],
-    "text": [{"id":"scripted","font":"missing","value":"return 1"}],
+    "text": [{"id":"scripted","font":"missing","value":"1 + 2"}],
     "destination": [{"id":"scripted","dst":[{}]}]
   })");
   expect(scripted.model &&
-             hasDiagnostic(scripted, "skin_json_callback_unsupported") &&
+             scripted.requiresLua &&
              std::ranges::all_of(scripted.model->stringProperties,
                                  isStaticBinding<SkinStringPropertyBinding>),
-         "a JSON Lua-script binding is diagnosed without creating a callback");
+         "catalog decoding defers JSON scripts without creating a callback");
 }
 
 void testNegativeGenericGraphsKeepTheSelectOnlyGameplayBoundary() {
@@ -777,7 +777,7 @@ void testTextRefWriterFallbackAndExplicitEventPrecedence() {
              writerSelector(nullEvent) == 30 && nullEvent->editable &&
              writerSelector(explicitEvent) == 30 && !explicitEvent->editable &&
              !script->writer && !script->editable &&
-             hasDiagnostic(decoded, "skin_json_callback_unsupported"),
+             decoded.requiresLua,
          "Text uses ref writer only for absent/null event and marks only the "
          "implicit writer editable");
 }

@@ -1427,6 +1427,10 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
       playLength);
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;
+    meta.Bpm = lastMeta.Bpm;
+    meta.MinBpm = lastMeta.MinBpm;
+    meta.MaxBpm = lastMeta.MaxBpm;
+    meta.Difficulty = lastMeta.Difficulty;
     meta.Rank = lastMeta.Rank;
     meta.RankType = lastMeta.RankType;
     meta.LnMode = lastMeta.LnMode;

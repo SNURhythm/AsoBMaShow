@@ -278,7 +278,8 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
       return result;
     }
     std::unique_ptr<LuaSkinFileSystem> luaFiles;
-    if (*format == GameplaySkinSourceFormat::Lua) {
+    if (*format == GameplaySkinSourceFormat::Lua ||
+        *format == GameplaySkinSourceFormat::Json) {
       auto created = LuaSkinFileSystem::create(
           {.revision = revision, .entry = activation.entry,
            .storageRoots = context.storageRoots, .profileId = context.profileId,

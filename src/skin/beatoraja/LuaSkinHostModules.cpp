@@ -1,4 +1,5 @@
 #include "LuaSkinHostModules.h"
+#include "LuaJValueCoercion.h"
 
 #include "../LuaGameplaySkinFeature.h"
 #include "../../text/Utf8.h"
@@ -632,62 +633,6 @@ int mainStateTimer(lua_State *state) {
 
 constexpr std::int64_t kUtilityTimerOff = std::numeric_limits<std::int64_t>::min();
 
-double utilityStringNumber(std::string_view text) {
-  // LuaString.scannumber trims ASCII spaces only. Its integer scan allows
-  // a minus after the optional hex prefix and falls back to decimal parsing
-  // only for base ten. Keep this separate from binding-source safe subsets.
-  while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
-  while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
-  if (text.empty()) return 0;
-  const bool hex = text.size() >= 2 && text[0] == '0' &&
-                   (text[1] == 'x' || text[1] == 'X');
-  const int base = hex ? 16 : 10;
-  std::string_view digits = hex ? text.substr(2) : text;
-  const bool negative = !digits.empty() && digits.front() == '-';
-  if (negative) digits.remove_prefix(1);
-  std::uint64_t accumulated = 0;
-  bool integer = true;
-  for (const unsigned char character : digits) {
-    const int digit = character >= '0' && character <= '9' ? character - '0'
-                      : character >= 'A' && character <= 'Z' ? character - 'A' + 10
-                      : character >= 'a' && character <= 'z' ? character - 'a' + 10
-                      : -1;
-    if (digit < 0 || digit >= base) {
-      integer = false;
-      break;
-    }
-    // The pinned Java scanner wraps long arithmetic and rejects negative
-    // intermediate results, rather than checking unsigned multiplication.
-    accumulated = accumulated * static_cast<unsigned>(base) + digit;
-    if (accumulated > static_cast<std::uint64_t>(
-                          std::numeric_limits<std::int64_t>::max())) {
-      integer = false;
-      break;
-    }
-  }
-  if (integer) {
-    const double value = static_cast<double>(accumulated);
-    return negative ? -value : value;
-  }
-  if (hex) return 0;
-
-  // LuaString.scandouble examines at most 64 bytes, including its syntax
-  // check; trailing bytes beyond that prefix are intentionally ignored.
-  text = text.substr(0, 64);
-  for (const char character : text) {
-    if (!((character >= '0' && character <= '9') || character == '+' ||
-          character == '-' || character == '.' || character == 'e' ||
-          character == 'E')) {
-      return 0;
-    }
-  }
-  char decimal[65]{};
-  std::memcpy(decimal, text.data(), text.size());
-  char *end = nullptr;
-  const double value = std::strtod(decimal, &end);
-  return end == decimal + text.size() ? value : 0;
-}
-
 // LuaJ's tolong accepts nonnumeric values as zero and applies Java's
 // saturating floating-point conversion (including NaN -> 0).
 std::int64_t utilityLong(lua_State *state, int index) {
@@ -695,7 +640,7 @@ std::int64_t utilityLong(lua_State *state, int index) {
   if (lua_type(state, index) == LUA_TSTRING) {
     std::size_t length = 0;
     const char *text = lua_tolstring(state, index, &length);
-    value = utilityStringNumber({text, length});
+    value = luaJStringNumber({text, length});
   } else {
     value = lua_tonumber(state, index);
   }

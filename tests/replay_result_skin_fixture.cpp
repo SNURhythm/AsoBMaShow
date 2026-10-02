@@ -115,6 +115,8 @@ struct ChartMeta {
   int TotalLongNotes = 0, TotalBackSpinNotes = 0;
   long long PlayLength = 0;
   double PlayLevel = 0;
+  double Bpm = 0, MinBpm = 0, MaxBpm = 0;
+  int Difficulty = 0;
   std::string BmsPath, Folder, StageFile, BackBmp, Banner;
 };
 struct Chart { ChartMeta Meta; };
@@ -152,6 +154,10 @@ int main() {
                 .TotalLongNotes = 5, .TotalBackSpinNotes = 1, .PlayLength = 123,
                 .BmsPath = "/charts/test.bms", .Folder = "/charts",
                 .StageFile = "stage.png", .BackBmp = "back.png", .Banner = "banner.png"};
+  chart->Meta.Bpm = 180;
+  chart->Meta.MinBpm = 150;
+  chart->Meta.MaxBpm = 210;
+  chart->Meta.Difficulty = 4;
   const auto courseMeta = courseResultMetaForReplayVideo({}, {{chart}, {chart}});
   check(courseMeta.TotalNotes == 200 && courseMeta.PlayLength == 246 &&
             courseMeta.StageFile == "stage.png" && courseMeta.BackBmp == "back.png" &&
@@ -168,6 +174,11 @@ int main() {
   partial.entryFacts = {{110, 124}, {120, 125}, {300, 456}};
   const auto partialVideo = courseResultMetaForReplayVideo(partial, {{chart}, {chart}});
   const auto partialImage = courseResultMetaForReplay(partial, imageCharts);
+  for (const auto &meta : {partialVideo, partialImage}) {
+    check(meta.Bpm == 180 && meta.MinBpm == 150 && meta.MaxBpm == 210 &&
+              meta.Difficulty == 4,
+          "course exports retain last-chart BPM and difficulty");
+  }
   check(partialVideo.TotalNotes == 530 && partialVideo.PlayLength == 705 && partialVideo.PlayLevel == 3,
         "partial course video includes saved notes and duration of unplayed entries");
   check(partialImage.TotalNotes == 530 && partialImage.PlayLength == 705 && partialImage.PlayLevel == 3,
