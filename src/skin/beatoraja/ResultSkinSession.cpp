@@ -4,6 +4,7 @@
 
 #include "BgfxSkinTextureDevice.h"
 #include "GameplaySkinSourceFormat.h"
+#include "LuaJValueCoercion.h"
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinHostModules.h"
 #include "PlaySkinViewport.h"
@@ -451,8 +452,13 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   skinData.stageFileAvailable = resources_->builtinImageResource(100).has_value();
   skinData.bannerAvailable = resources_->builtinImageResource(102).has_value();
   skinData.backBmpAvailable = resources_->builtinImageResource(101).has_value();
+  // Photo evaluation may initialize active timers, but must not advance the
+  // live session's timer-gated events. Video export owns a separate session.
+  std::unordered_map<int, std::int64_t> exportTimerValues;
+  if (suppressFrameActions_) exportTimerValues = customTimerValues_;
+  auto &timerValues = suppressFrameActions_ ? exportTimerValues : customTimerValues_;
   ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
-                               &configuration_, &model_.model);
+                               &configuration_, &model_.model, &timerValues);
   LuaFrameStateBinding frameState(
       runtime_.get(), &bridge,
       {.context = this, .execute = &ResultSkinSession::executeHostEvent});
@@ -519,7 +525,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         lastDefinition->second != timerIndex) {
       continue;
     }
-    std::int64_t value = std::numeric_limits<std::int64_t>::min();
+    std::int64_t value = bridge.timerProperty({.value = timer.id});
     if (timer.timer) {
       const auto binding = std::ranges::find_if(
           model_.model.timerProperties, [&](const SkinTimerPropertyBinding &candidate) {
@@ -537,13 +543,20 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         const auto callback = runtime_->invoke(
             std::get<LuaCallbackId>(binding->source), {});
         if (callback.failure || !callback.value ||
-            !std::holds_alternative<std::int64_t>(*callback.value)) {
+            (safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit) &&
+             !std::holds_alternative<std::int64_t>(*callback.value))) {
+          if (!safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+            bridge.setCustomTimer(timer.id, std::numeric_limits<std::int64_t>::min());
+            continue;
+          }
           lastDiagnostics_.push_back(callback.failure.value_or(failure(
               "skin.result_session.custom_timer_type",
               "Result custom timer did not return an integer timestamp.")));
           return false;
         }
-        value = std::get<std::int64_t>(*callback.value);
+        value = !safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)
+                    ? luaJToLong(*callback.value)
+                    : std::get<std::int64_t>(*callback.value);
       } else {
         lastDiagnostics_.push_back(failure(
             "skin.result_session.custom_timer_runtime_missing",
@@ -589,15 +602,18 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         }
         const auto callback = runtime_->invoke(
             std::get<LuaCallbackId>(condition->source), {});
-        active = callback.value && std::holds_alternative<bool>(*callback.value) &&
-                 std::get<bool>(*callback.value);
         if (callback.failure || !callback.value ||
-            !std::holds_alternative<bool>(*callback.value)) {
+            (safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit) &&
+             !std::holds_alternative<bool>(*callback.value))) {
+          if (!safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)) continue;
           lastDiagnostics_.push_back(callback.failure.value_or(failure(
               "skin.result_session.custom_event_condition_type",
               "Result custom event condition did not return a boolean.")));
           return false;
         }
+        active = !safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)
+                     ? luaJToBoolean(*callback.value)
+                     : std::get<bool>(*callback.value);
       }
     }
     if (!active) continue;
@@ -644,6 +660,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         std::get<LuaCallbackId>(binding->source),
         std::span<const LuaScalar>{arguments.data(), invocation.argumentCount});
     if (callback.failure) {
+      if (!safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)) continue;
       lastDiagnostics_.push_back(std::move(*callback.failure));
       queuedEventInvocations_.clear();
       return false;

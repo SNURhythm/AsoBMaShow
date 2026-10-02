@@ -766,6 +766,7 @@ struct ActivationFixtureOptions {
   bool resultDuplicateTimerExec = false;
   bool staticResultCustomEvent = false;
   bool scriptedResultCustomEvent = false;
+  std::string customObjectCallbacks;
   bool legacyInputBearing = false;
   bool musicSelectInteractionBearing = false;
   bool musicSelectMainStateBearing = false;
@@ -1347,6 +1348,11 @@ end
     }
   }
 )lua";
+    } else if (!options.customObjectCallbacks.empty()) {
+      script += "\n  local frames, hits = 0, 0\n  return { type = " +
+                std::to_string(options.skinType) +
+                ", w = 1280, h = 720, destination = {}, " +
+                options.customObjectCallbacks + "\n  }\n";
     } else if (options.resultVideoEventAnimation) {
       script += "\n  local ticks, nested, frames = 0, 0, 0\n  return { type = " +
                 std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
@@ -7477,6 +7483,197 @@ void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
          "application audio backend");
 }
 
+bool renderCustomObjectFrames(ActivationFixture &fixture, int skinType,
+                              SkinSafetyLevel level, int frameCount = 2) {
+  const auto runFrames = [frameCount](auto render) {
+    for (int frame = 1; frame <= frameCount; ++frame) {
+      if (!render(static_cast<std::uint64_t>(frame + 1))) return false;
+    }
+    return true;
+  };
+  RenderContext renderContext;
+  if (skinType == 0) {
+    auto context = fixture.context();
+    context.safetyPolicy = SkinSafetyPolicy(level);
+    auto result = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+    expect(result.session != nullptr, "custom-object gameplay session creates");
+    return result.session && runFrames([&](std::uint64_t serial) {
+      return result.session->prepareFrame(stateAt(serial), projectionAt(serial), {}).ready();
+    });
+  }
+  if (skinType == 5) {
+    auto result = MusicSelectSkinSession::create(
+        {.profileId = fixture.profile(), .activation = fixture.takeActivation(),
+         .sessionSerial = 109}, fixture.musicSelectContext());
+    expect(result.session != nullptr, "custom-object selection session creates");
+    return result.session && runFrames([&](std::uint64_t serial) {
+      return result.session->render(renderContext,
+          {.serial = serial, .elapsedMillis = static_cast<std::int64_t>(serial * 10)});
+    });
+  }
+  auto context = fixture.resultContext();
+  context.safetyPolicy = SkinSafetyPolicy(level);
+  auto result = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+  expect(result.session != nullptr, "custom-object result session creates");
+  return result.session && runFrames([&](std::uint64_t serial) {
+    return result.session->render(renderContext, {}, serial,
+                                  static_cast<std::int64_t>(serial * 10));
+  });
+}
+
+void testCustomObjectCallbacksUseLuaJConversionsInCompatibilityMode() {
+  struct Case {
+    const char *timer;
+    const char *expectedTimer;
+    const char *condition;
+    bool fires;
+    bool strictPlay;
+    bool strictOther;
+    bool actionError = false;
+  };
+  const Case cases[] = {
+      {"'1234.75'", "1234", "0", true, false, false},
+      {"-1.9", "-1", "''", true, false, false},
+      {"nil", "0", "true", true, false, false},
+      {"false", "0", "true", true, false, false},
+      {"1e30", "9223372036854775807", "true", true, false, false},
+      {"9223372036854775808.0", "9223372036854775807", "true", true, false, false},
+      {"-1e30", "-9223372036854775808", "true", true, false, false},
+      {"0/0", "0", "true", true, false, false},
+      {"1234", "1234", "nil", false, false, false},
+      {"1234", "1234", "false", false, true, true},
+      {"1234", "1234", "true", true, true, true},
+      {"-1.9", "-1", "true", true, true, false},
+      {"error('timer failure')", "main_state.timer_off_value", "true", true, false, false},
+      {"1234", "1234", "error('condition failure')", false, false, false},
+      {"1234", "1234", "true", true, false, false, true},
+  };
+  for (const auto &test : cases) {
+    const std::string callbacks =
+        "customTimers = {{id = 10000, timer = function() "
+        "assert(hits == frames * " + std::to_string(test.fires ? 1 : 0) +
+        ", 'event condition used the wrong truth value'); "
+        "frames = frames + 1; return " + test.timer + " end}}, "
+        "customEvents = {{id = 1000, condition = function() "
+        "assert(main_state.timer(10000) == " + test.expectedTimer +
+        ", 'custom timer used the wrong long conversion'); "
+        "local marker = assert(io.open('configured-phase-marker.txt', 'w')); "
+        "marker:write(frames .. ':' .. hits); marker:close(); return " +
+        test.condition + " end, action = function() hits = hits + 1; " +
+        (test.actionError ? "error('action failure')" : "") + " end}}";
+    for (const int skinType : {0, 5, 7, 15}) {
+      for (const auto level : {SkinSafetyLevel::Standard,
+                              SkinSafetyLevel::BeatorajaCompatibility}) {
+        if (skinType == 5 && level == SkinSafetyLevel::Standard) continue;
+        ActivationFixture fixture({.skinType = skinType,
+                                    .customObjectCallbacks = callbacks});
+        if (!fixture.ready()) return;
+        const bool rendered = renderCustomObjectFrames(fixture, skinType, level);
+        const bool expected = level == SkinSafetyLevel::BeatorajaCompatibility ||
+                              (skinType == 0 ? test.strictPlay : test.strictOther);
+        std::ifstream marker(fixture.configuredMarkerPath());
+        std::string observed;
+        marker >> observed;
+        expect(rendered == expected &&
+                   (!expected || observed == (test.fires ? "2:1" : "2:0")),
+               "custom callback conversion for type " + std::to_string(skinType) +
+                   ", timer " + test.timer + ", condition " + test.condition +
+                   (level == SkinSafetyLevel::Standard ? " (strict)" : " (compatible)"));
+      }
+    }
+  }
+}
+
+void testCustomTimersRetainSessionStateAndWritablePassiveValues() {
+  const std::string activeHistory = R"lua(
+    customTimers = {{id = 10000, timer = function()
+      local previous = main_state.timer(10000)
+      assert(previous == (frames == 0 and main_state.timer_off_value or frames * 1000))
+      frames = frames + 1
+      return frames * 1000
+    end}},
+    customEvents = {{id = 1000, condition = function() return true end,
+      action = function()
+        assert(main_state.timer(10000) == frames * 1000)
+        local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+        marker:write(frames .. ':active'); marker:close()
+      end}}
+  )lua";
+  const std::string passiveWrites = R"lua(
+    customTimers = {
+      {id = 10000, timer = function() frames = frames + 1; return frames * 1000 end},
+      {id = 10001},
+      {id = 10002, timer = function() return 5 end}, {id = 10002},
+      {id = 10003}, {id = 10003, timer = function() return 7 end}
+    },
+    customEvents = {{id = 1000, condition = function() return true end,
+      action = function()
+        assert(not pcall(function() main_state.set_timer(9999, 1) end))
+        assert(not pcall(function() main_state.set_timer(20000, 1) end))
+        assert(not pcall(function() main_state.set_timer(41, 1) end))
+        assert(main_state.set_timer(10000, 99))
+        assert(main_state.timer(10000) == frames * 1000)
+        assert(main_state.set_timer(10003, 99))
+        assert(main_state.timer(10003) == 7)
+        if frames == 1 then
+          assert(main_state.set_timer(10001, 1234))
+          assert(main_state.set_timer(10002, 0))
+          assert(main_state.set_timer(19999, -5))
+        elseif frames == 2 then
+          assert(main_state.timer(10001) == 1234)
+          assert(main_state.timer(10002) == 0)
+          assert(main_state.timer(19999) == -5)
+          assert(main_state.set_timer(10001, main_state.timer_off_value))
+          assert(main_state.set_timer(19999, -33))
+        else
+          assert(main_state.timer(10001) == main_state.timer_off_value)
+          assert(main_state.timer(10002) == 0)
+          assert(main_state.timer(19999) == -33)
+        end
+        local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+        marker:write(frames .. ':passive'); marker:close()
+      end}}
+  )lua";
+  const std::string writeCoercions = R"lua(
+    customEvents = {{id = 1000, condition = function() return true end,
+      action = function()
+        frames = frames + 1
+        assert(main_state.set_timer(4294977297, '1234.75'))
+        assert(main_state.timer(10001) == 1234)
+        for _, pair in ipairs({
+          {1e30, 9223372036854775807}, {-1e30, -9223372036854775808},
+          {0/0, 0}, {'12oops', 0}, {'\t12', 0}, {'0x-10', -16},
+          {false, 0}, {nil, 0}
+        }) do
+          assert(main_state.set_timer(10001, pair[1]))
+          assert(main_state.timer(10001) == pair[2])
+        end
+        local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+        marker:write(frames .. ':coerced'); marker:close()
+      end}}
+  )lua";
+  for (const auto &[callbacks, expected] :
+       {std::pair{activeHistory, "3:active"}, std::pair{passiveWrites, "3:passive"},
+        std::pair{writeCoercions, "3:coerced"}}) {
+    for (const int skinType : {0, 5, 7, 15}) {
+      for (const auto level : {SkinSafetyLevel::Standard,
+                              SkinSafetyLevel::BeatorajaCompatibility}) {
+        if (skinType == 5 && level == SkinSafetyLevel::Standard) continue;
+        ActivationFixture fixture({.skinType = skinType,
+                                    .customObjectCallbacks = callbacks});
+        if (!fixture.ready()) return;
+        const bool rendered = renderCustomObjectFrames(fixture, skinType, level, 3);
+        std::ifstream marker(fixture.configuredMarkerPath());
+        std::string observed;
+        marker >> observed;
+        expect(rendered && observed == expected,
+               "custom timer state for type " + std::to_string(skinType) + ", " + expected +
+                   (level == SkinSafetyLevel::Standard ? " (strict)" : " (compatible)"));
+      }
+    }
+  }
+}
+
 void testResultLuaSessionRoutesOpenIrEvent() {
   ActivationFixture fixture({.skinType = 7, .resultEventExec = true});
   if (!fixture.ready()) {
@@ -7600,6 +7797,41 @@ void testScriptedJsonResultEventsKeepIndependentTimerFactories() {
              created.session->render(context, {}, 3, 1000) &&
              created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
          "JSON event callbacks retain their runtime and automatic interval state");
+}
+
+void testResultPhotoFramePreservesLiveCustomTimerState() {
+  const std::string callbacks = R"lua(
+    customTimers = {{id = 10000, timer = function()
+      local previous = main_state.timer(10000)
+      return previous == main_state.timer_off_value and main_state.time() or previous
+    end}},
+    customEvents = {{id = 1000, action = 210, condition = function()
+      return main_state.time() - main_state.timer(10000) >= 1000000
+    end}}
+  )lua";
+  for (const int skinType : {7, 15}) {
+    for (const bool photo : {true, false}) {
+      ActivationFixture fixture({.skinType = skinType,
+                                  .customObjectCallbacks = callbacks});
+      if (!fixture.ready()) return;
+      auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                               fixture.resultContext());
+      expect(created.session != nullptr, "timer export fixture creates a result session");
+      if (!created.session) return;
+      RenderContext context;
+      expect(photo ? created.session->renderForExport(context, {}, 1, 0)
+                   : created.session->renderForVideoExport(context, {}, 1, 0),
+             "export frame evaluates its timer state");
+      expect(created.session->render(context, {}, 2, 1000) &&
+                 created.session->takeQueuedBuiltinEventIds() ==
+                     (photo ? std::vector<int>{} : std::vector<int>{210}),
+             photo ? "photo timer initialization cannot advance live event eligibility"
+                   : "video timer initialization persists across video-session frames");
+      expect(created.session->render(context, {}, 3, 2000) &&
+                 created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+             "the live result timer retains its own initialization timestamp");
+    }
+  }
 }
 
 void testResultPhotoFramePreservesLiveEvents() {
@@ -9412,6 +9644,8 @@ int main(int argc, char **argv) {
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   testCourseResultLuaLogsAchievementAndGaugeDuringLoad();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testCustomObjectCallbacksUseLuaJConversionsInCompatibilityMode();
+  testCustomTimersRetainSessionStateAndWritablePassiveValues();
   testResultLuaSessionRoutesOpenIrEvent();
   testResultLuaSessionDefersNestedCustomEventsToTheNextFrame();
   testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat();
@@ -9420,6 +9654,7 @@ int main(int argc, char **argv) {
   testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
   testScriptedJsonResultEventsKeepIndependentTimerFactories();
+  testResultPhotoFramePreservesLiveCustomTimerState();
   testResultPhotoFramePreservesLiveEvents();
   testResultVideoFramesAdvanceLocalEventsOnly();
   testResultSkinInputAvailabilityMatchesResultTimer();

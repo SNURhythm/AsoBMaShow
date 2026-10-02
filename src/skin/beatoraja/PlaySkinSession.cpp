@@ -281,7 +281,8 @@ struct PlaySkinSession::OwnedActivation final {
             .configuration = configuration,
             .runtime = runtime.get(),
             .mutationTable = mutationTable,
-            .pomyuMotionCyclesMillis = pomyuMotionCyclesMillis})) {}
+            .pomyuMotionCyclesMillis = pomyuMotionCyclesMillis,
+            .safetyPolicy = safetyPolicy})) {}
 
   // The master revision is declared first and therefore released only after
   // the runtime/filesystem, resource catalog clone, and every borrowed frame

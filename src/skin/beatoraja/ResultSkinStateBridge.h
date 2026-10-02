@@ -19,7 +19,8 @@ public:
   ResultSkinStateBridge(ResultSkinData data, std::uint64_t frameSerial,
                         std::int64_t elapsedMillis,
                         const BeatorajaSkinConfiguration *configuration = nullptr,
-                        const BeatorajaSkinModel *model = nullptr);
+                        const BeatorajaSkinModel *model = nullptr,
+                        std::unordered_map<int, std::int64_t> *persistentCustomTimers = nullptr);
 
   std::uint64_t frameSerial() const noexcept override;
   SkinPropertyLookup<bool>
@@ -34,6 +35,7 @@ public:
   stringProperty(const SkinBuiltinPropertySelector &) override;
   SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
+  bool setTimerProperty(int, std::int64_t) override;
   std::span<const SkinProjectedNoteView> projectedNotes() const noexcept override;
   std::span<const SkinProjectedLongNoteView>
   projectedLongNotes() const noexcept override;
@@ -66,6 +68,7 @@ private:
   const BeatorajaSkinConfiguration *configuration_ = nullptr;
   const BeatorajaSkinModel *model_ = nullptr;
   std::unordered_map<int, std::int64_t> customTimerValues_;
+  std::unordered_map<int, std::int64_t> *persistentCustomTimers_ = nullptr;
 };
 
 } // namespace skin

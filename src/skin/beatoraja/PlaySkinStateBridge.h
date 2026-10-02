@@ -149,6 +149,7 @@ struct PlaySkinStateBridgeContext {
   // entries with its authored #Frame/#Anime cycle.
   std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1,
                                                  1, 1, 1, 1};
+  SkinSafetyPolicy safetyPolicy{};
 };
 
 class PlaySkinStateBridge final : public ISkinFrameState {
@@ -189,6 +190,7 @@ public:
   [[nodiscard]] SkinLaneCoverStateView
   laneCoverState() const noexcept override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
+  bool setTimerProperty(int, std::int64_t) override;
   [[nodiscard]] std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
   [[nodiscard]] std::span<const SkinProjectedLongNoteView>

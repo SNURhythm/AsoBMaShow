@@ -155,6 +155,7 @@ private:
   std::vector<ResultSkinAudioVolumeWrite> queuedAudioVolumeWrites_;
   std::unordered_map<int, std::size_t> customEventLastDefinitionIndexes_;
   std::unordered_map<int, std::size_t> customTimerLastDefinitionIndexes_;
+  std::unordered_map<int, std::int64_t> customTimerValues_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
   std::unordered_set<int> reportedUnsupportedEventIds_;
   std::vector<std::string> preparedRuntimeStrings_;

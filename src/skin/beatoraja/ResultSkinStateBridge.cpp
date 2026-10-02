@@ -268,10 +268,12 @@ ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
                                              std::uint64_t frameSerial,
                                              std::int64_t elapsedMillis,
                                              const BeatorajaSkinConfiguration *configuration,
-                                             const BeatorajaSkinModel *model)
+                                             const BeatorajaSkinModel *model,
+                                             std::unordered_map<int, std::int64_t> *persistentCustomTimers)
     : data_(std::move(data)), frameSerial_(frameSerial),
       elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)),
-      configuration_(configuration), model_(model) {
+      configuration_(configuration), model_(model),
+      persistentCustomTimers_(persistentCustomTimers) {
   const bool gaugeOmitted = data_.gameplayGraph.dynamic != nullptr &&
                             data_.gameplayGraph.dynamic->gaugeHistoryOmitted;
   if (!gaugeOmitted && data_.state != nullptr) {
@@ -1900,8 +1902,9 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   const auto id = integerSelector(selector);
   constexpr auto kTimerOff = std::numeric_limits<std::int64_t>::min();
   if (!id) return kTimerOff;
-  if (const auto custom = customTimerValues_.find(*id);
-      custom != customTimerValues_.end()) {
+  const auto &timers = persistentCustomTimers_ != nullptr
+                           ? *persistentCustomTimers_ : customTimerValues_;
+  if (const auto custom = timers.find(*id); custom != timers.end()) {
     return custom->second;
   }
   // Result timers are timestamps, not elapsed values. MusicResult and
@@ -1915,8 +1918,24 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   return kTimerOff;
 }
 
+bool ResultSkinStateBridge::setTimerProperty(int id, std::int64_t value) {
+  if (id < 10'000 || id > 19'999) return false;
+  if (model_ != nullptr) {
+    for (auto timer = model_->customTimers.rbegin();
+         timer != model_->customTimers.rend(); ++timer) {
+      if (timer->id != id) continue;
+      if (timer->timer) return true;
+      break;
+    }
+  }
+  setCustomTimer(id, value);
+  return true;
+}
+
 void ResultSkinStateBridge::setCustomTimer(int id, std::int64_t value) {
-  customTimerValues_.insert_or_assign(id, value);
+  auto &timers = persistentCustomTimers_ != nullptr
+                     ? *persistentCustomTimers_ : customTimerValues_;
+  timers.insert_or_assign(id, value);
 }
 
 std::span<const SkinProjectedNoteView>

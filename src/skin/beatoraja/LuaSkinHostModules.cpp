@@ -873,8 +873,8 @@ int eventUtilMinInterval(lua_State *state) {
 
 int mainStateSetTimer(lua_State *state) {
   auto *current = frameState(state);
-  const int id = boundedIntegerArgument(state, 1, 0, false);
-  const auto value = static_cast<std::int64_t>(lua_tointeger(state, 2));
+  const int id = utilityInt(state, 1);
+  const auto value = utilityLong(state, 2);
   if (current == nullptr || !current->setTimerProperty(id, value)) {
     return luaL_error(state,
                       "the timer cannot be changed by the selected skin");

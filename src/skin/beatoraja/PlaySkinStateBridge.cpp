@@ -8,6 +8,7 @@
 
 #include "GameplaySkinEndAnimation.h"
 #include "GameplaySkinBuiltinCatalog.h"
+#include "LuaJValueCoercion.h"
 #include "LuaSkinHostModules.h"
 
 #include <algorithm>
@@ -956,7 +957,6 @@ void PlaySkinStateBridge::beginFrame(
   staged_ = {.frameSerial = frameSerial_};
   phase_ = FramePhase::Active;
   customObjectsUpdated_ = false;
-  customTimerValues_.clear();
   updatePinnedLaneCoverOffsets();
   updatePinnedPlayTimers();
 
@@ -1155,7 +1155,7 @@ PlaySkinStateBridge::updateCustomTimer(const SkinCustomTimer &timer) {
             .diagnostics = diagnostics_};
   }
   try {
-    customTimerValues_.insert_or_assign(timer.id, INT64_MIN);
+    customTimerValues_.try_emplace(timer.id, INT64_MIN);
   } catch (...) {
     reportDiagnostic({.code = "skin.play_state.custom_timer_cache_failed",
                       .message = "Passive custom timer value could not be cached."});
@@ -1261,6 +1261,9 @@ SkinHostCallResult PlaySkinStateBridge::invokeEventBinding(
             .diagnostics = diagnostics_};
   }
   if (callback.failure) {
+    if (!context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+      return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+    }
     return callbackFailure(std::move(*callback.failure));
   }
   return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
@@ -1313,6 +1316,11 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomCondition(
     return {.status = SkinHostCallStatus::CriticalFailure,
             .callbacksInvoked = 1,
             .diagnostics = diagnostics_};
+  }
+  if (!context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    condition = !callback.failure && callback.value &&
+                luaJToBoolean(*callback.value);
+    return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
   }
   if (callback.failure) {
     return callbackFailure(std::move(*callback.failure));
@@ -1369,6 +1377,11 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
             .callbacksInvoked = 1,
             .diagnostics = diagnostics_};
   }
+  if (!context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    value = !callback.failure && callback.value ? luaJToLong(*callback.value)
+                                               : INT64_MIN;
+    return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+  }
   if (callback.failure) {
     return callbackFailure(std::move(*callback.failure));
   }
@@ -1381,7 +1394,7 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
                                    } else if constexpr (std::is_same_v<Candidate, double>) {
                                      if (std::isfinite(candidate) &&
                                          candidate >= static_cast<double>(INT64_MIN) &&
-                                         candidate <= static_cast<double>(INT64_MAX)) {
+                                         candidate < static_cast<double>(INT64_MAX)) {
                                        return static_cast<std::int64_t>(candidate);
                                      }
                                    }
@@ -3253,6 +3266,21 @@ SkinLaneCoverStateView PlaySkinStateBridge::laneCoverState() const noexcept {
           .hidden = static_cast<double>(snapshot->authority.hiddenRatio)};
 }
 
+bool PlaySkinStateBridge::setTimerProperty(int id, std::int64_t value) {
+  if (phase_ != FramePhase::Active || id < 10'000 || id > 19'999) return false;
+  if (const auto definition = customTimerLastDefinitionIndexes_.find(id);
+      definition != customTimerLastDefinitionIndexes_.end() &&
+      context_.model->model.customTimers[definition->second].timer) {
+    return true;
+  }
+  try {
+    customTimerValues_.insert_or_assign(id, value);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 std::int64_t PlaySkinStateBridge::timerProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto *snapshot = state();
@@ -3594,7 +3622,6 @@ void PlaySkinStateBridge::closeFrame() noexcept {
   builtInTraversal_.reset();
   projection_ = {};
   staged_ = {};
-  customTimerValues_.clear();
 }
 
 LuaSkinEventExecutionResult PlaySkinStateBridge::executeHostEvent(
