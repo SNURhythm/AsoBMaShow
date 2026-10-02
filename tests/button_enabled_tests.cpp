@@ -465,10 +465,63 @@ void testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck() {
 }
 } // namespace
 
+static void testNavigationMayDestroyDispatchingViews() {
+  for (const bool touch : {false, true}) {
+    for (const bool throughButtonContent : {false, true}) {
+      auto root = std::make_unique<View>();
+      auto *navigation = new Button(0, 0, 100, 50);
+      if (throughButtonContent) {
+        auto *owner = new Button(0, 0, 100, 50);
+        owner->setContentView(navigation);
+        root->addView(owner);
+      } else {
+        root->addView(navigation);
+      }
+      int clicks = 0;
+      navigation->setOnClickListener([&] {
+        ++clicks;
+        root.reset(); // Scene navigation synchronously destroys its views.
+      });
+      auto down = touch ? fingerEvent(SDL_FINGERDOWN, 10, 10)
+                        : mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+      auto up = touch ? fingerEvent(SDL_FINGERUP, 10, 10)
+                      : mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+      REQUIRE(!root->handleEvents(down));
+      REQUIRE(!root->handleEvents(up));
+      REQUIRE(!root && clicks == 1);
+    }
+
+    auto root = std::make_unique<View>();
+    auto *navigation = new Button(0, 0, 100, 50);
+    root->addView(navigation);
+    auto down = touch ? fingerEvent(SDL_FINGERDOWN, 10, 10)
+                      : mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+    auto up = touch ? fingerEvent(SDL_FINGERUP, 10, 10)
+                    : mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+    int clicks = 0;
+    navigation->setOnClickListener([&] {
+      if (++clicks == 1) {
+        REQUIRE(!root->handleEvents(down));
+        REQUIRE(!root->handleEvents(up));
+      } else {
+        root.reset(); // Invalidate both nested event dispatch frames.
+      }
+    });
+    REQUIRE(!root->handleEvents(down));
+    REQUIRE(!root->handleEvents(up));
+    REQUIRE(!root && clicks == 2);
+  }
+}
+
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--navigation-only") {
+    testNavigationMayDestroyDispatchingViews();
+    return 0;
+  }
   const bool renderOnly = argc == 2 && std::string(argv[1]) == "--render-only";
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
+    testNavigationMayDestroyDispatchingViews();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
     testDisabledButtonBlocksUnderlyingPointerActions();
     testDisablingCancelsHoverAndActivePointerGestures();

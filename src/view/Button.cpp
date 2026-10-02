@@ -310,6 +310,7 @@ void Button::onPointerEventConsumed(const SDL_Event &event) {
 }
 
 bool Button::handleEventsImpl(SDL_Event &event) {
+  EventDispatchLifetime lifetime(*this);
   if (!enabled) {
     mousePressedInside = false;
     isHovered = false;
@@ -343,9 +344,10 @@ bool Button::handleEventsImpl(SDL_Event &event) {
   }
   if (contentView) {
     if (!contentView->handleEvents(event)) {
-      onPointerEventConsumed(event);
+      if (lifetime.alive()) onPointerEventConsumed(event);
       return false;
     }
+    if (!lifetime.alive()) return false;
   }
 
   switch (event.type) {

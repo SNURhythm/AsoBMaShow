@@ -385,6 +385,30 @@ private:
 };
 
 class View {
+protected:
+  // Navigation can synchronously destroy the dispatching view. Keep the
+  // lifetime check on the caller's stack, without allocating per event/view.
+  class EventDispatchLifetime {
+    friend class View;
+  public:
+    explicit EventDispatchLifetime(View &view)
+        : view_(&view), previous_(view.activeEventDispatch_) {
+      view.activeEventDispatch_ = this;
+    }
+    ~EventDispatchLifetime() {
+      if (view_ != nullptr) view_->activeEventDispatch_ = previous_;
+    }
+    EventDispatchLifetime(const EventDispatchLifetime &) = delete;
+    EventDispatchLifetime &operator=(const EventDispatchLifetime &) = delete;
+    bool alive() const { return view_ != nullptr; }
+  private:
+    View *view_;
+    EventDispatchLifetime *previous_;
+  };
+
+private:
+  EventDispatchLifetime *activeEventDispatch_ = nullptr;
+
 public:
   using ThemeColorProvider = std::function<Color()>;
 
@@ -431,6 +455,10 @@ public:
   View &operator=(View &&) = delete;
 
   virtual ~View() {
+    for (auto *dispatch = activeEventDispatch_; dispatch != nullptr;
+         dispatch = dispatch->previous_) {
+      dispatch->view_ = nullptr;
+    }
     dirtyRoots.erase(this);
     for (auto *view : children) {
       dirtyRoots.erase(view);
@@ -504,6 +532,7 @@ public:
     if (!isVisible) {
       return true;
     }
+    EventDispatchLifetime lifetime(*this);
     sortChildrenIfNeeded();
     if (!shouldHandleChildEvents()) {
       return handleEventsImpl(event);
@@ -511,7 +540,9 @@ public:
     // Let top-most children handle first.
     for (auto it = children.rbegin(); it != children.rend(); ++it) {
       View *handled = *it;
-      if (!handled->handleEvents(event)) {
+      const bool propagate = handled->handleEvents(event);
+      if (!lifetime.alive()) return false;
+      if (!propagate) {
         // Covered siblings still need to finish pointer state, without
         // receiving the event as an actionable click or touch release.
         // A click listener can append views, invalidating the old iterator.
