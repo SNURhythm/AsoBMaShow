@@ -75,7 +75,8 @@ struct SkinProfileSettings {
   SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
   // Legacy gameplay-only view retained for older settings readers.
   std::map<int, SkinEntryId> selectedGameplayEntries;
-  // Screen-target selection, keyed by the Beatoraja SkinType value. New
+  // Screen-target selection, keyed by Beatoraja SkinType or an additional
+  // gameplay target (-4, -6, -8). New
   // settings writes use this map; selectedGameplayEntries remains readable
   // while profiles migrate from gameplay-only selection.
   std::map<int, SkinEntryId> selectedSkinEntries;
@@ -85,6 +86,13 @@ struct SkinProfileSettings {
   bool gameplayCompatibilityEnabled = false;
   std::optional<SkinEntryId> selected7KeyEntry;
   std::map<SkinEntryId, EntryProfileSettings> entries;
+
+  // Additional gameplay modes may use the same source entry, but own their
+  // options, files, offsets and viewport independently of its native mode.
+  std::map<int, std::map<SkinEntryId, EntryProfileSettings>> modeEntries;
+
+  const std::map<SkinEntryId, EntryProfileSettings> &entriesForTarget(int target) const;
+  std::map<SkinEntryId, EntryProfileSettings> &entriesForTarget(int target);
 
   void sanitize();
   bool operator==(const SkinProfileSettings &) const = default;

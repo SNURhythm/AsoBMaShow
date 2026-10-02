@@ -162,18 +162,34 @@ int bestScoreAtPassedNotes(const PlayfieldVisualState &snapshot) {
       target, passedNotes(snapshot, target.totalNotes));
 }
 
-std::int64_t beatorajaKeyJudgeValue(const PlayfieldVisualState &snapshot,
+std::optional<std::size_t> skinInputLaneIndex(
+    const PlayfieldChartVisualModel &chart, const PlayfieldVisualState &snapshot,
+    int skinOffset) {
+  if (chart.keyCount == 4 || chart.keyCount == 6 || chart.keyCount == 8) {
+    // Sparse charts omit channels; their compact state-vector positions must
+    // not become the skin's scratch/key timer numbers.
+    if (skinOffset < 0 || skinOffset > 7) return std::nullopt;
+    const int rawLane = skinOffset == 0 ? 7 : skinOffset - 1;
+    const auto found = std::ranges::find(chart.laneOrder, rawLane);
+    if (found == chart.laneOrder.end()) return std::nullopt;
+    const auto index = static_cast<std::size_t>(found - chart.laneOrder.begin());
+    return index < snapshot.lanes.size() ? std::optional{index} : std::nullopt;
+  }
+  return skinOffset >= 0 && static_cast<std::size_t>(skinOffset) < snapshot.lanes.size()
+             ? std::optional{static_cast<std::size_t>(skinOffset)} : std::nullopt;
+}
+
+std::int64_t beatorajaKeyJudgeValue(const PlayfieldChartVisualModel &chart,
+                                    const PlayfieldVisualState &snapshot,
                                     int selector) {
   // SkinPropertyMapper maps 500-519 as two groups of ten: player then key.
   // Gameplay is currently single-player, so the absent 2P group follows
   // JudgeManager.getJudge() and reports -1.
   const int player = (selector - 500) / 10;
   const int key = (selector - 500) % 10;
-  if (player != 0 || key < 0 ||
-      static_cast<std::size_t>(key) >= snapshot.lanes.size()) {
-    return -1;
-  }
-  return snapshot.lanes[static_cast<std::size_t>(key)].beatorajaJudgeValue;
+  const auto index = skinInputLaneIndex(chart, snapshot, key);
+  if (player != 0 || !index) return -1;
+  return snapshot.lanes[*index].beatorajaJudgeValue;
 }
 
 std::optional<int>
@@ -2081,7 +2097,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // getIntegerProperty.  Keep selectors shared by both factories (for
     // example 90) out of this value-domain switch.
     if (*id >= 500 && *id <= 519) {
-      return {.value = beatorajaKeyJudgeValue(*snapshot, *id),
+      return {.value = beatorajaKeyJudgeValue(context_.chartModel, *snapshot, *id),
               .supported = true};
     }
     if (*id == 308) {
@@ -3254,7 +3270,7 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     return custom->second;
   }
   const auto laneTimer =
-      [snapshot](int firstId, int count,
+      [this, snapshot](int firstId, int count,
                  long long LanePresentationState::*field, int timerId,
                  std::optional<bool> requiredPressed)
           -> std::optional<std::int64_t> {
@@ -3263,11 +3279,10 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     if (wide < first || wide >= first + count) {
       return std::nullopt;
     }
-    const auto index = static_cast<std::size_t>(wide - first);
-    if (index >= snapshot->lanes.size()) {
-      return INT64_MIN;
-    }
-    const auto &lane = snapshot->lanes[index];
+    const auto index = skinInputLaneIndex(context_.chartModel, *snapshot,
+                                         static_cast<int>(wide - first));
+    if (!index) return INT64_MIN;
+    const auto &lane = snapshot->lanes[*index];
     // KeyInputProccessor starts key-off and clears key-on on release, then
     // clears key-off before starting key-on on the following press.  Retaining
     // both timestamps makes skins such as simple-play-simple draw the stale

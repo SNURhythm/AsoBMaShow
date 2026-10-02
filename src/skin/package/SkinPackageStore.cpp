@@ -171,7 +171,7 @@ bool validatesGameplayTrait(const SkinValidationResult &validation,
                             int skinType) {
   return validation.disposition ==
              SkinValidationDisposition::SelectableGameplay &&
-         validation.metadata && validation.metadata->skinType == skinType &&
+         validation.metadata && validation.metadata->skinType == skinSourceTypeForTarget(skinType) &&
          skinTargetTraitForType(skinType).has_value();
 }
 
@@ -3137,9 +3137,10 @@ PublishPackageResult SkinPackageStore::publish(
             "a selected skin entry is absent from the replacement package"));
         return result;
       }
-      const auto settings = profile.settings.entries.find(selected);
+      const auto &targetEntries = profile.settings.entriesForTarget(skinType);
+      const auto settings = targetEntries.find(selected);
       const EntryProfileSettings *desired =
-          settings == profile.settings.entries.end() ? nullptr
+          settings == targetEntries.end() ? nullptr
                                                      : &settings->second;
       auto validation = validator.validate(
           prepared.readView(), selected, desired, stop,
@@ -3809,10 +3810,11 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
               "a selected skin entry is absent from the visible package"));
           continue;
         }
-        const auto desired = profile.settings.entries.find(selected);
+        const auto &targetEntries = profile.settings.entriesForTarget(skinType);
+        const auto desired = targetEntries.find(selected);
         auto validation = validator.validate(
             snapshot.prepared->readView(), selected,
-            desired == profile.settings.entries.end() ? nullptr
+            desired == targetEntries.end() ? nullptr
                                                       : &desired->second,
             stop, beatorajaSourceCompatibilityPolicy());
         (void)failClosedMismatchedConfigurationDigest(selected, validation);
@@ -4007,7 +4009,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
 PrepareActivationResult SkinPackageStore::prepareActivation(
     const VersionedSkinProfileSettings &base, const SkinEntryId &entry,
     SkinProfileSettings candidateProfileSettings, SkinEntryValidator &validator,
-    std::stop_token stop) {
+    std::stop_token stop, std::optional<int> targetSkinType) {
   PrepareActivationResult result;
   if (poisoned_.load()) {
     result.diagnostics.push_back(storeDiagnostic(
@@ -4062,15 +4064,23 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
     return result;
   }
   candidateProfileSettings.sanitize();
-  const auto desired = candidateProfileSettings.entries.find(entry);
+  const int target = targetSkinType.value_or(
+      catalogEntry->metadata ? catalogEntry->metadata->skinType : -1);
+  if (!skinTargetTraitForType(target) || !catalogEntry->metadata ||
+      skinSourceTypeForTarget(target) != catalogEntry->metadata->skinType) {
+    result.diagnostics.push_back(storeDiagnostic(
+        "skin_activation_target_incompatible", "the skin does not support this gameplay mode"));
+    return result;
+  }
+  auto &targetEntries = candidateProfileSettings.entriesForTarget(target);
+  const auto desired = targetEntries.find(entry);
   const SkinSafetyPolicy validationPolicy =
       catalogEntry->metadata && catalogEntry->metadata->skinType == 5
           ? beatorajaSourceCompatibilityPolicy()
           : SkinSafetyPolicy(candidateProfileSettings.safetyLevel);
   auto validation = validator.validate(
       lease->readView(), entry,
-      desired == candidateProfileSettings.entries.end() ? nullptr
-                                                        : &desired->second,
+      desired == targetEntries.end() ? nullptr : &desired->second,
       stop, validationPolicy);
   (void)failClosedMismatchedConfigurationDigest(entry, validation);
   result.diagnostics.insert(
@@ -4084,6 +4094,7 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
   if (validation.disposition != SkinValidationDisposition::SelectableGameplay ||
       !validation.reconciledSettings || !validation.metadata ||
       !skinTargetTraitForType(validation.metadata->skinType) ||
+      skinSourceTypeForTarget(target) != validation.metadata->skinType ||
       !lowercaseSha256(validation.configurationDigest)) {
     result.diagnostics.push_back(
         storeDiagnostic("skin_activation_configuration_invalid",
@@ -4091,12 +4102,13 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
     return result;
   }
   candidateProfileSettings.selectedSkinEntries.insert_or_assign(
-      validation.metadata->skinType, entry);
-  candidateProfileSettings.entries.insert_or_assign(
+      target, entry);
+  targetEntries.insert_or_assign(
       entry, *validation.reconciledSettings);
   candidateProfileSettings.sanitize();
-  const auto durableSettings = candidateProfileSettings.entries.find(entry);
-  if (durableSettings == candidateProfileSettings.entries.end() ||
+  const auto &durableEntries = candidateProfileSettings.entriesForTarget(target);
+  const auto durableSettings = durableEntries.find(entry);
+  if (durableSettings == durableEntries.end() ||
       durableSettings->second != *validation.reconciledSettings ||
       skinConfigurationDigest(durableSettings->second) !=
           validation.configurationDigest) {
@@ -4173,6 +4185,15 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
   }
   ValidatedSkinActivation terminalActivation =
       cloneActivation(prepared.activation);
+  std::vector<std::string> retainedActivationKeys;
+  for (const auto &[target, entry] : ownerCandidate.selectedSkinEntries) {
+    if (entry != prepared.activation.entry) continue;
+    const auto &entries = ownerCandidate.entriesForTarget(target);
+    if (const auto settings = entries.find(entry); settings != entries.end()) {
+      retainedActivationKeys.push_back(
+          activationKey(profile, entry, skinConfigurationDigest(settings->second)));
+    }
+  }
   ActivationMap reservedActivation;
   const std::string key =
       activationKey(profile, prepared.activation.entry,
@@ -4193,6 +4214,7 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
                     .sourceGeneration = sourceGeneration,
                     .catalogGeneration = catalogGeneration,
                     .profileId = profile,
+                    .retainedActivationKeys = std::move(retainedActivationKeys),
                     .activationNode = std::move(activationNode),
                     .terminalActivation = std::move(terminalActivation),
                     .catalogUpdate = std::move(catalogUpdate),
@@ -4333,14 +4355,16 @@ CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
       }
     }
     if (!sourceChanged) {
-      // A profile can keep one activation for each gameplay trait. Replacing
-      // the whole profile's activation set here made sequential startup
-      // revalidation leave only the final trait ready for acquisition.
+      // Modes can select the same entry with independent configurations.
+      // Retain configurations still selected elsewhere in this profile.
       const std::string entryPrefix =
           commit.profileId.opaque + std::string(1, '\0') +
           commit.terminalActivation.entry.collisionKey + std::string(1, '\0');
       std::erase_if(activations_, [&](const auto &item) {
-        return item.first.starts_with(entryPrefix);
+        return item.first.starts_with(entryPrefix) &&
+               (item.first == commit.activationNode.key() ||
+                std::ranges::find(commit.retainedActivationKeys, item.first) ==
+                    commit.retainedActivationKeys.end());
       });
       activations_.insert(std::move(commit.activationNode));
       result.activation = std::move(commit.terminalActivation);

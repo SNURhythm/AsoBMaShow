@@ -1559,6 +1559,63 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   bridge.discardFrame();
 }
 
+void testSparseModeInputTimersUseOriginalChannels() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) return;
+  for (int keys : {4, 6, 8}) {
+    PlayfieldChartVisualModel chart;
+    chart.keyCount = keys;
+    chart.laneOrder = keys == 4 ? std::vector<int>{0, 1, 3, 4}
+                    : keys == 6 ? std::vector<int>{0, 1, 2, 4, 5, 6}
+                                : std::vector<int>{7, 0, 1, 2, 3, 4, 5, 6};
+    ValidatedBeatorajaSkinModel model;
+    BeatorajaSkinConfiguration configuration;
+    const auto mutations = makePinnedSkinEventMutationTableV1();
+    PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+                               .configuration = configuration, .runtime = &runtime.runtime(),
+                               .mutationTable = mutations});
+    auto state = stateAt(400 + keys);
+    state.sceneStartMicros = 0;
+    state.lanes.resize(chart.laneOrder.size());
+    for (std::size_t index = 0; index < state.lanes.size(); ++index) {
+      auto &lane = state.lanes[index];
+      lane.pressed = true;
+      lane.pressMicros = 1'000 * (index + 1);
+      lane.bombMicros = 2'000 * (index + 1);
+      lane.beatorajaJudgeValue = static_cast<int>(index + 1);
+    }
+    bridge.beginFrame(state, projectionAt(400 + keys));
+    for (std::size_t index = 0; index < chart.laneOrder.size(); ++index) {
+      const int rawLane = chart.laneOrder[index];
+      const int offset = rawLane == 7 ? 0 : rawLane + 1;
+      expect(bridge.timerProperty({100 + offset}) == 1'000 * (index + 1) &&
+                 bridge.timerProperty({50 + offset}) == 2'000 * (index + 1) &&
+                 bridge.integerProperty({500 + offset}, SkinIntegerPropertyDomain::ImageIndex).value == static_cast<int>(index + 1),
+             "key-on, bomb and judge indicators stay on the authored channel");
+    }
+    if (keys != 8) {
+      expect(bridge.timerProperty({100}) == kPlayfieldTimestampOff &&
+                 bridge.timerProperty({keys == 4 ? 103 : 104}) == kPlayfieldTimestampOff,
+             "scratch and the omitted middle key stay inactive for 4K and 6K");
+    }
+    bridge.discardFrame();
+    ++state.clock.serial;
+    for (auto &lane : state.lanes) {
+      lane.pressed = false;
+      lane.releaseMicros = lane.pressMicros + 10'000;
+    }
+    bridge.beginFrame(state, projectionAt(state.clock.serial));
+    for (std::size_t index = 0; index < chart.laneOrder.size(); ++index) {
+      const int rawLane = chart.laneOrder[index];
+      const int offset = rawLane == 7 ? 0 : rawLane + 1;
+      expect(bridge.timerProperty({100 + offset}) == kPlayfieldTimestampOff &&
+                 bridge.timerProperty({120 + offset}) == 11'000 + 1'000 * index,
+             "key-off returns to the same authored lane without shifting input");
+    }
+    bridge.discardFrame();
+  }
+}
+
 void testLongNoteHoldTimersUseCapturedLaneState(int keyMode = 7, int lane = 0) {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3890,6 +3947,7 @@ int main() {
   for (const auto [keyMode, lane] : {std::pair{4, 4}, {5, 0}, {6, 6}, {7, 0}, {8, 7}}) {
     testLongNoteHoldTimersUseCapturedLaneState(keyMode, lane);
   }
+  testSparseModeInputTimersUseOriginalChannels();
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();

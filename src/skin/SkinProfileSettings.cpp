@@ -203,6 +203,19 @@ makeSkinProfileId(std::string_view existingPlayerProfileId) {
   return SkinProfileId{.opaque = std::string(existingPlayerProfileId)};
 }
 
+const std::map<SkinEntryId, EntryProfileSettings> &
+SkinProfileSettings::entriesForTarget(int target) const {
+  if (!isAdditionalGameplaySkinTarget(target)) return entries;
+  static const std::map<SkinEntryId, EntryProfileSettings> empty;
+  const auto found = modeEntries.find(target);
+  return found == modeEntries.end() ? empty : found->second;
+}
+
+std::map<SkinEntryId, EntryProfileSettings> &
+SkinProfileSettings::entriesForTarget(int target) {
+  return isAdditionalGameplaySkinTarget(target) ? modeEntries[target] : entries;
+}
+
 void SkinProfileSettings::sanitize() {
   if (safetyLevel != SkinSafetyLevel::Standard &&
       safetyLevel != SkinSafetyLevel::BeatorajaCompatibility &&
@@ -262,9 +275,21 @@ void SkinProfileSettings::sanitize() {
   }
   entries = std::move(sanitized);
 
+  for (auto it = modeEntries.begin(); it != modeEntries.end();) {
+    if (!isAdditionalGameplaySkinTarget(it->first)) {
+      it = modeEntries.erase(it);
+      continue;
+    }
+    SkinProfileSettings scoped;
+    scoped.entries = std::move(it->second);
+    scoped.sanitize();
+    it->second = std::move(scoped.entries);
+    ++it;
+  }
+
   selectedSkinEntries.clear();
   for (const auto &[skinType, selectedCollisionKey] : selectedCollisionKeys) {
-    for (const auto &[entry, settings] : entries) {
+    for (const auto &[entry, settings] : entriesForTarget(skinType)) {
       (void)settings;
       if (entry.collisionKey == selectedCollisionKey) {
         selectedSkinEntries.try_emplace(skinType, entry);

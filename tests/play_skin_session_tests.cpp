@@ -4929,6 +4929,7 @@ return {
   LuaSkinRuntime &runtime() { return *runtime_; }
   Skin2DRenderer &renderer() { return renderer_; }
   ValidatedBeatorajaSkinModel &model() { return model_; }
+  PlayfieldChartVisualModel &chart() { return chart_; }
   const BeatorajaSkinConfiguration &configuration() const {
     return configuration_;
   }
@@ -5982,6 +5983,42 @@ void testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout() {
              fixture.quadBackend().submitCalls == 1 &&
              fixture.configurationWrites().drain().empty(),
          "repeat render cannot resubmit the consumed frame or enqueue writes");
+}
+
+void testSparseModeTouchLayoutKeepsOriginalChannels() {
+  for (int keys : {4, 6}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.chart().keyCount = keys;
+    fixture.chart().laneOrder = keys == 4 ? std::vector<int>{0, 1, 3, 4}
+                                        : std::vector<int>{0, 1, 2, 4, 5, 6};
+    for (auto &object : fixture.model().model.objects) {
+      auto *notes = std::get_if<SkinNoteObject>(&object.payload);
+      if (!notes) continue;
+      notes->lanes.clear();
+      for (int lane = 0; lane < 8; ++lane) {
+        notes->lanes.push_back({.authoredLane = lane,
+                               .laneDestination = {.x = 100.0 * lane, .y = 20.0,
+                                                   .width = 80.0, .height = 500.0}});
+      }
+    }
+    expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) == PresentationFrameOutcome::Ready,
+           "sparse mode skin frame prepares");
+    RenderContext context;
+    SessionBgaSubmitter bga;
+    const auto rendered = fixture.session().render(context, bgaFrame(44), bga);
+    const auto layout = fixture.session().touchLayout();
+    expect(rendered.outcome == PresentationFrameOutcome::Ready &&
+               layout.lanes == fixture.chart().laneOrder && layout.laneRegions.size() == keys,
+           "touch regions preserve 4K and 6K channel identities");
+    for (std::size_t index = 0; index < layout.laneRegions.size(); ++index) {
+      const auto &region = layout.laneRegions[index];
+      expect(!region.scratch && region.lane == fixture.chart().laneOrder[index] &&
+                 std::abs(region.bottomLeft.x - region.lane * 100.0F / 1920.0F) < 0.0001F,
+             "touch hits the corresponding authored key, skipping scratch and the omitted center");
+    }
+  }
 }
 
 void testSkinLaneTouchLayoutUsesDrawableScreenCoordinates() {
@@ -8930,6 +8967,7 @@ int main(int argc, char **argv) {
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();
   testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout();
+  testSparseModeTouchLayoutKeepsOriginalChannels();
   testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
   testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();

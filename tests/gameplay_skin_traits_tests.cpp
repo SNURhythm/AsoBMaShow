@@ -18,8 +18,9 @@ void testPinnedBeatorajaGameplayTraitMapping() {
   for (const auto [keys, type] : {std::pair{4, 1}, {6, 0}, {8, 0}}) {
     const auto gameplay = skin::gameplaySkinTraitForKeyMode(keys);
     const auto target = skin::gameplaySkinTargetForKeyMode(keys);
-    require(gameplay && gameplay->skinType == type && target && target->skinType == type,
-            "4K shares 5K skins; 6K and 8K share 7K skins");
+    require(gameplay && gameplay->skinType == -keys && target && target->skinType == -keys &&
+                skin::skinSourceTypeForTarget(target->skinType) == type,
+            "additional modes own separate targets with one-way source compatibility");
   }
   const auto ten = skin::gameplaySkinTraitForSkinType(3);
   require(ten.has_value() && ten->keyMode == 10 && ten->label == "5K DP",

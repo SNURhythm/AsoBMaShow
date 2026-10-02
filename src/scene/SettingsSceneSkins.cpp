@@ -429,7 +429,7 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
   }
   if (gameplaySkinConfigurationDigestText != nullptr) {
     const auto selected = snapshot.selectedSkinEntries.find(
-        skin::gameplaySkinSettingsSelectionType(gameplaySkinActiveTraitSkinType));
+        gameplaySkinActiveTraitSkinType);
     const auto row = selected == snapshot.selectedSkinEntries.end()
                          ? snapshot.entries.end()
                          : std::ranges::find_if(
@@ -884,6 +884,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     return column;
   }
 
+  gameplaySkinSettingsController->setActiveTarget(gameplaySkinActiveTraitSkinType);
   const auto &snapshot = gameplaySkinSettingsController->snapshot();
   const auto actionAvailability =
       skin::gameplaySkinSettingsActionAvailability(snapshot);
@@ -1167,6 +1168,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         return;
       }
       gameplaySkinActiveTraitSkinType = skinType;
+      gameplaySkinSettingsController->setActiveTarget(skinType);
       gameplaySkinTraitDropdownOpen = false;
       gameplaySkinConfigurationDropdownOpenKey.clear();
       lastLayoutWidth = -1;
@@ -1196,7 +1198,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     }
   }
   const auto selected = snapshot.selectedSkinEntries.find(
-      skin::gameplaySkinSettingsSelectionType(gameplaySkinActiveTraitSkinType));
+      gameplaySkinActiveTraitSkinType);
   const skin::GameplaySkinEntryRow *selectedRow = nullptr;
   if (selected != snapshot.selectedSkinEntries.end()) {
     const auto selectedCandidate = std::ranges::find_if(
@@ -1229,7 +1231,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
              gameplaySkinTraitDropdownOpen = open;
            },
        .onOptionSelectedResult =
-           [this, skinType = skin::gameplaySkinSettingsSelectionType(gameplaySkinActiveTraitSkinType),
+           [this, skinType = gameplaySkinActiveTraitSkinType,
             entries = std::move(dropdownEntries)](const std::string &id) {
              gameplaySkinTraitDropdownOpen = false;
              gameplaySkinConfigurationDropdownOpenKey.clear();

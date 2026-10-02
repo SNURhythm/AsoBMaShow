@@ -110,6 +110,7 @@ suggestSkinPackageName(std::string originalSourceName,
 }
 
 struct GameplaySkinSettingsController::Impl {
+  std::optional<int> activeTarget;
   enum class Phase : std::uint8_t {
     Idle,
     PickingArchive,
@@ -171,7 +172,9 @@ struct GameplaySkinSettingsController::Impl {
     const auto number = [&append](auto value) {
       append(std::to_string(value));
     };
-    append("v2");
+    append("v3");
+    number(activeTarget.has_value());
+    number(activeTarget.value_or(0));
     number(projectedCatalog ? projectedCatalog->catalogGeneration : 0);
     number(projectedCatalog ? projectedCatalog->sourceGeneration : 0);
     append(projectedProfileId);
@@ -242,6 +245,11 @@ struct GameplaySkinSettingsController::Impl {
     return found == snapshot->entries.end() ? nullptr : &*found;
   }
 
+  int configurationTarget(int declaredType) const {
+    return activeTarget && skinSourceTypeForTarget(*activeTarget) == declaredType
+               ? *activeTarget : declaredType;
+  }
+
   void refreshProjection() {
     if (closed) {
       return;
@@ -275,8 +283,10 @@ struct GameplaySkinSettingsController::Impl {
           if (source.metadata) {
             row.metadata = *source.metadata;
           }
-          if (const auto settings = profile.settings.entries.find(source.entry);
-              settings != profile.settings.entries.end()) {
+          const auto &targetEntries = profile.settings.entriesForTarget(
+              configurationTarget(row.metadata.skinType));
+          if (const auto settings = targetEntries.find(source.entry);
+              settings != targetEntries.end()) {
             row.settings = settings->second;
           }
           row.configurationDigest = skinConfigurationDigest(row.settings);
@@ -928,14 +938,15 @@ struct GameplaySkinSettingsController::Impl {
 
   ControllerActionResult prepareActivation(SkinEntryId entry,
                                            SkinProfileSettings candidate,
-                                           i18n::Text message) {
+                                           i18n::Text message,
+                                           std::optional<int> target = std::nullopt) {
     if (closed || hasControllerOperation()) {
       return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
     }
     auto base = dependencies.profileOwner.snapshot(dependencies.profileId);
     candidate.sanitize();
     auto handle = dependencies.operations.submitPrepareActivation(
-        std::move(base), std::move(entry), std::move(candidate));
+        std::move(base), std::move(entry), std::move(candidate), target);
     if (handle.ticket == 0) {
       return rejected(i18n::message("settings.skins.activation_preparation_failed_queued.message"));
     }
@@ -1061,6 +1072,13 @@ GameplaySkinSettingsController::snapshot() const noexcept {
   return impl_->projected;
 }
 
+void GameplaySkinSettingsController::setActiveTarget(int skinType) {
+  if (!skinTargetTraitForType(skinType) || impl_->activeTarget == skinType) return;
+  impl_->activeTarget = skinType;
+  impl_->projectionInputsReady = false;
+  impl_->refreshProjection();
+}
+
 void GameplaySkinSettingsController::poll() { impl_->poll(); }
 
 void GameplaySkinSettingsController::profileChanged(
@@ -1156,16 +1174,18 @@ GameplaySkinSettingsController::selectGameplayTrait(int skinType,
   const auto catalogValue = impl_->catalog();
   const auto *catalogEntry = impl_->findCatalogEntry(entry, catalogValue);
   const auto entrySkinType = selectableGameplaySkinType(catalogEntry);
-  if (!entrySkinType || *entrySkinType != skinType) {
+  if (!entrySkinType || *entrySkinType != skinSourceTypeForTarget(skinType)) {
     return rejected(i18n::message("settings.skins.skin_trait_unsupported.message"));
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
   candidate.selectedSkinEntries.insert_or_assign(skinType, entry);
-  candidate.entries.try_emplace(entry);
-  return impl_->prepareActivation(entry, std::move(candidate),
-                                  i18n::message("settings.skins.validating_selected_skin.progress"));
+  candidate.entriesForTarget(skinType).try_emplace(entry);
+  auto selectedEntry = entry;
+  setActiveTarget(skinType);
+  return impl_->prepareActivation(std::move(selectedEntry), std::move(candidate),
+                                  i18n::message("settings.skins.validating_selected_skin.progress"), skinType);
 }
 
 ControllerActionResult
@@ -1203,11 +1223,12 @@ GameplaySkinSettingsController::setCompatibilityEnabled(bool enabled) {
     for (const auto &[skinType, entry] : candidate.selectedSkinEntries) {
       const auto *catalogEntry = impl_->findCatalogEntry(entry, catalogValue);
       const auto entrySkinType = selectableGameplaySkinType(catalogEntry);
-      const auto settings = candidate.entries.find(entry);
+      const auto &targetEntries = candidate.entriesForTarget(skinType);
+      const auto settings = targetEntries.find(entry);
       const EntryProfileSettings defaults;
       const auto &configured =
-          settings == candidate.entries.end() ? defaults : settings->second;
-      if (!entrySkinType || *entrySkinType != skinType ||
+          settings == targetEntries.end() ? defaults : settings->second;
+      if (!entrySkinType || *entrySkinType != skinSourceTypeForTarget(skinType) ||
           !containsConfiguration(*catalogEntry, configured)) {
         return rejected(i18n::message("settings.skins.selected_configuration_not_validated.message"));
       }
@@ -1280,10 +1301,11 @@ GameplaySkinSettingsController::setOption(const SkinEntryId &entry,
   if (!skinType) {
     return rejected(i18n::message("settings.skins.validated_skin_required_configuration.message"));
   }
-  candidate.entries[entry].options[std::move(name)] = value;
-  candidate.selectedSkinEntries.insert_or_assign(*skinType, entry);
+  const int target = impl_->configurationTarget(*skinType);
+  candidate.entriesForTarget(target)[entry].options[std::move(name)] = value;
+  candidate.selectedSkinEntries.insert_or_assign(target, entry);
   return impl_->prepareActivation(entry, std::move(candidate),
-                                  i18n::message("settings.skins.validating_option.progress"));
+                                  i18n::message("settings.skins.validating_option.progress"), target);
 }
 
 ControllerActionResult GameplaySkinSettingsController::setFileChoice(
@@ -1299,10 +1321,11 @@ ControllerActionResult GameplaySkinSettingsController::setFileChoice(
   if (!skinType) {
     return rejected(i18n::message("settings.skins.validated_skin_required_configuration.message"));
   }
-  candidate.entries[entry].filePaths[std::move(name)] = std::move(value);
-  candidate.selectedSkinEntries.insert_or_assign(*skinType, entry);
+  const int target = impl_->configurationTarget(*skinType);
+  candidate.entriesForTarget(target)[entry].filePaths[std::move(name)] = std::move(value);
+  candidate.selectedSkinEntries.insert_or_assign(target, entry);
   return impl_->prepareActivation(entry, std::move(candidate),
-                                  i18n::message("settings.skins.validating_file_choice.progress"));
+                                  i18n::message("settings.skins.validating_file_choice.progress"), target);
 }
 
 ControllerActionResult GameplaySkinSettingsController::setOffset(
@@ -1318,10 +1341,11 @@ ControllerActionResult GameplaySkinSettingsController::setOffset(
   if (!skinType) {
     return rejected(i18n::message("settings.skins.validated_skin_required_configuration.message"));
   }
-  candidate.entries[entry].offsets[std::move(name)] = value;
-  candidate.selectedSkinEntries.insert_or_assign(*skinType, entry);
+  const int target = impl_->configurationTarget(*skinType);
+  candidate.entriesForTarget(target)[entry].offsets[std::move(name)] = value;
+  candidate.selectedSkinEntries.insert_or_assign(target, entry);
   return impl_->prepareActivation(entry, std::move(candidate),
-                                  i18n::message("settings.skins.validating_offset.progress"));
+                                  i18n::message("settings.skins.validating_offset.progress"), target);
 }
 
 ControllerActionResult
@@ -1333,7 +1357,10 @@ GameplaySkinSettingsController::setViewport(const SkinEntryId &entry,
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
-  candidate.entries[entry].viewport = viewport;
+  const auto declared = selectableGameplaySkinType(
+      impl_->findCatalogEntry(entry, impl_->catalog()));
+  const int target = impl_->configurationTarget(declared.value_or(0));
+  candidate.entriesForTarget(target)[entry].viewport = viewport;
   return impl_->submitProfileOnly(std::move(candidate));
 }
 

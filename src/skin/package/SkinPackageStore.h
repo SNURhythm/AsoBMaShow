@@ -146,7 +146,8 @@ public:
   prepareActivation(const VersionedSkinProfileSettings &base,
                     const SkinEntryId &entry,
                     SkinProfileSettings candidateProfileSettings,
-                    SkinEntryValidator &validator, std::stop_token stop);
+                    SkinEntryValidator &validator, std::stop_token stop,
+                    std::optional<int> targetSkinType = std::nullopt);
   // Strong admission boundary: before returning PendingProfileSave, any
   // exception or typed rejection must retain no owner ticket or prepared
   // activation. After PendingProfileSave is returned, Store owns both and
@@ -200,6 +201,7 @@ private:
     std::uint64_t sourceGeneration = 0;
     std::uint64_t catalogGeneration = 0;
     SkinProfileId profileId;
+    std::vector<std::string> retainedActivationKeys;
     ActivationMap::node_type activationNode;
     ValidatedSkinActivation terminalActivation;
     SkinPackageCatalogSnapshot catalogUpdate;

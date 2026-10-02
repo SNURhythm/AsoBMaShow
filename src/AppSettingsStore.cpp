@@ -231,7 +231,14 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
   for (const auto &[skinType, entry] : skinSettings.selectedSkinEntries) {
     selectedSkinEntries[std::to_string(skinType)] = skinEntryIdToJson(entry);
   }
+  json modeEntries = json::object();
+  for (const auto &[target, entries] : skinSettings.modeEntries) {
+    skin::SkinProfileSettings scoped;
+    scoped.entries = entries;
+    modeEntries[std::to_string(target)] = skinProfileSettingsToJson(scoped)["entries"];
+  }
   return {{"safetyLevel", static_cast<int>(skinSettings.safetyLevel)},
+          {"modeEntries", std::move(modeEntries)},
           {"selectedSkinEntries", std::move(selectedSkinEntries)},
           {"entries", std::move(entries)}};
 }
@@ -362,6 +369,24 @@ void readSkinProfileSettings(const json &document,
         if (entry) {
           destination.selectedSkinEntries.insert_or_assign(skinType, *entry);
         }
+      }
+    }
+  }
+  if (const auto modes = found->find("modeEntries"); modes != found->end()) {
+    if (!modes->is_object()) {
+      invalidValue("skin.modeEntries", "expected object", diagnostics);
+    } else {
+      for (const auto &[rawTarget, records] : modes->items()) {
+        int target = 0;
+        const auto parsed = std::from_chars(rawTarget.data(), rawTarget.data() + rawTarget.size(), target);
+        if (parsed.ec != std::errc{} || parsed.ptr != rawTarget.data() + rawTarget.size() ||
+            !skin::isAdditionalGameplaySkinTarget(target)) {
+          invalidValue("skin.modeEntries", "unsupported gameplay target", diagnostics);
+          continue;
+        }
+        skin::SkinProfileSettings scoped;
+        readSkinProfileSettings(json{{"skin", {{"entries", records}}}}, scoped, diagnostics);
+        destination.modeEntries.emplace(target, std::move(scoped.entries));
       }
     }
   }

@@ -111,6 +111,7 @@ public:
 
   [[nodiscard]] const GameplaySkinSettingsSnapshot &snapshot() const noexcept;
   void poll();
+  void setActiveTarget(int skinType);
   void profileChanged(SkinProfileId profileId, SkinActivationClientId clientId);
 
   [[nodiscard]] ControllerActionResult beginArchiveImport();

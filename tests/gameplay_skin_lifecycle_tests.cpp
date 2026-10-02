@@ -67,6 +67,7 @@ struct PendingPrepare {
   VersionedSkinProfileSettings base;
   SkinEntryId entry;
   SkinProfileSettings candidate;
+  std::optional<int> targetSkinType;
 };
 
 class LifecycleFake {
@@ -163,13 +164,13 @@ public:
             },
         .submitPrepareActivation =
             [this](VersionedSkinProfileSettings base, SkinEntryId selected,
-                   SkinProfileSettings candidate) {
+                   SkinProfileSettings candidate, std::optional<int> target) {
               const auto ticket = ++nextOperationTicket;
               prepares.push_back(
                   PendingPrepare{.ticket = ticket,
                                  .base = std::move(base),
                                  .entry = std::move(selected),
-                                 .candidate = std::move(candidate)});
+                                 .candidate = std::move(candidate), .targetSkinType = target});
               return GameplaySkinLifecycleOperationSubmission{.ticket = ticket};
             },
         .submitReconcileProfileActivations =
@@ -308,7 +309,7 @@ public:
     require(index < prepares.size(), "prepare completion exists");
     PendingPrepare pending = std::move(prepares[index]);
     prepares.erase(prepares.begin() + static_cast<std::ptrdiff_t>(index));
-    const auto &settings = pending.candidate.entries.at(pending.entry);
+    const auto &settings = pending.candidate.entriesForTarget(pending.targetSkinType.value_or(0)).at(pending.entry);
     PrepareActivationResult result;
     result.prepared.emplace(PreparedSkinActivation{
         .sourceGeneration = 10,
@@ -948,18 +949,22 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
   fake.setSelectedSkinEntries({{1, fake.entry}});
   GameplaySkinLifecycle lifecycle(fake.dependencies());
   lifecycle.startAfterProfileInitialization(fake.profile);
-
-  require(!lifecycle.acquireForNextChart(7).has_value() &&
-              lifecycle.acquireForNextChart(5).has_value() &&
-              lifecycle.acquireForNextChart(4).has_value() &&
-              !lifecycle.acquireForNextChart(10).has_value(),
-          "next-chart acquisition selects only the skin trait matching the "
-          "chart keymode");
-  fake.setSelectedSkinEntries({{0, fake.entry}});
-  require(lifecycle.acquireForNextChart(6).has_value() &&
-              lifecycle.acquireForNextChart(8).has_value() &&
+  require(lifecycle.acquireForNextChart(5).has_value() &&
               !lifecycle.acquireForNextChart(4).has_value(),
-          "6K and 8K acquire the selected 7K skin while 4K uses the 5K selection");
+          "a 5K selection must not implicitly select a skin for 4K");
+  for (int mode : {4, 6, 8}) {
+    fake.owner.settings.modeEntries[-mode][fake.entry] = fake.owner.settings.entries.at(fake.entry);
+    fake.owner.settings.modeEntries[-mode][fake.entry].viewport.scaleX = 1.0F + mode / 10.0F;
+  }
+  fake.setSelectedSkinEntries({{-4, fake.entry}, {-6, fake.entry}, {-8, fake.entry}});
+  for (int mode : {4, 6, 8}) {
+    const auto acquired = lifecycle.acquireForNextChart(mode);
+    require(acquired.has_value() && acquired->viewport.scaleX == 1.0F + mode / 10.0F,
+            "each additional mode acquires its own saved configuration");
+  }
+  require(!lifecycle.acquireForNextChart(5).has_value() &&
+              !lifecycle.acquireForNextChart(7).has_value(),
+          "additional mode selections must not select skins for their source modes");
 }
 
 void testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure() {
@@ -1012,6 +1017,38 @@ void testSwitchingSkinRevisionEvictsTheDecodeCache() {
           "switching to a different skin revision resolves");
   require(fake.decodeCacheDropCalls == 2,
           "switching to a different skin revision evicts the decode cache");
+}
+
+void testAdditionalModeWriterAndViewportStayScoped() {
+  LifecycleFake fake;
+  fake.owner.settings.modeEntries[-6][fake.entry] = fake.owner.settings.entries.at(fake.entry);
+  fake.setSelectedSkinEntries({{0, fake.entry}, {-6, fake.entry}});
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  auto chart = lifecycle.acquireForNextChart(6);
+  require(chart.has_value(), "6K acquires its own selection");
+  fake.writes.push_back(fake.request(*chart, 10, {SetSkinOption{.key = "choice", .value = 6}}));
+  lifecycle.poll();
+  require(fake.prepares.size() == 1 && fake.prepares.front().targetSkinType == -6 &&
+              fake.prepares.front().candidate.entries.at(fake.entry).options.at("choice") == 0 &&
+              fake.prepares.front().candidate.modeEntries.at(-6).at(fake.entry).options.at("choice") == 6,
+          "runtime writes prepare only the active mode's configuration");
+  fake.completePrepare();
+  lifecycle.poll();
+  fake.completeActivation(fake.pendingCommits.begin()->first);
+  lifecycle.poll();
+  PlaySkinSessionIdentity identity{
+      .sessionSerial = chart->sessionSerial, .profileId = chart->profileId,
+      .entry = chart->activation.entry,
+      .revisionDigest = chart->activation.revision.revision().lowercaseSha256,
+      .configurationDigest = chart->activation.configurationDigest};
+  require(lifecycle.requestViewportReset(identity, {.mode = ViewportMode::Stretch}).disposition ==
+              GameplayViewportPersistenceDisposition::Queued,
+          "the active mode can save its viewport after an option write");
+  require(fake.owner.settings.modeEntries.at(-6).at(fake.entry).viewport.mode == ViewportMode::Stretch &&
+              fake.owner.settings.entries.at(fake.entry).viewport.mode == ViewportMode::Fit &&
+              fake.owner.settings.entries.at(fake.entry).options.at("choice") == 0,
+          "runtime layout and option writes leave the native mode untouched");
 }
 
 void testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest() {
@@ -1330,6 +1367,7 @@ int main() {
   testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure();
   testSwitchingSkinRevisionEvictsTheDecodeCache();
   testWriterWaitsForViewportCommitAndRebasesOntoItsSuccessor();
+  testAdditionalModeWriterAndViewportStayScoped();
   testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest();
   testViewportResetRejectsEachStaleIdentityField();
   testRevalidationWaitsForViewportCommit();

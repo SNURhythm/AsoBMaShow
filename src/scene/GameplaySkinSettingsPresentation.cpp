@@ -228,19 +228,11 @@ std::vector<SkinTargetTrait> gameplaySkinSettingsTargets() {
   return targets;
 }
 
-int gameplaySkinSettingsSelectionType(int tabSkinType) noexcept {
-  if (tabSkinType < 0) {
-    const auto target = gameplaySkinTargetForKeyMode(-tabSkinType);
-    if (target) return target->skinType;
-  }
-  return tabSkinType;
-}
-
 bool gameplaySkinEntrySelectableForTarget(
     const GameplaySkinEntryRow &entry,
     const SkinTargetTrait &target) noexcept {
   if (entry.validation != SkinValidationDisposition::SelectableGameplay ||
-      entry.metadata.skinType != gameplaySkinSettingsSelectionType(target.skinType)) {
+      entry.metadata.skinType != skinSourceTypeForTarget(target.skinType)) {
     return false;
   }
   if (target.kind != SkinTargetKind::MusicSelect) {

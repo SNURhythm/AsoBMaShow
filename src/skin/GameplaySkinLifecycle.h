@@ -49,7 +49,7 @@ struct GameplaySkinLifecycleDependencies {
                                         const SkinEntryId &, std::string_view)>
       acquireActivation;
   std::function<GameplaySkinLifecycleOperationSubmission(
-      VersionedSkinProfileSettings, SkinEntryId, SkinProfileSettings)>
+      VersionedSkinProfileSettings, SkinEntryId, SkinProfileSettings, std::optional<int>)>
       submitPrepareActivation;
   std::function<GameplaySkinLifecycleOperationSubmission(
       std::vector<SkinProfileId>)>

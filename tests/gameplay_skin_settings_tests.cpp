@@ -796,6 +796,54 @@ void testActivationPreparationDoesNotExposeCancellation() {
          "activation preparation remains blocking until its result commits");
 }
 
+void testCompatibleModesSaveIndependentSettings() {
+  Fixture fixture;
+  const auto folder = fixture.temp.root() / "IndependentModes";
+  writeText(folder / "play/play7.luaskin", "return { type = 0 }");
+  fixture.folderResults.push_back(picked(folder, "IndependentModes", PlatformTemporaryPathKind::Directory));
+  auto controller = fixture.makeController();
+  installQueuedImport(fixture, *controller, false);
+  const auto entry = controller->snapshot().entries.front().entry;
+  const auto ready = [&] {
+    return pumpUntil(fixture, *controller, [&] {
+      return controller->snapshot().state == GameplaySkinSettingsState::Ready;
+    });
+  };
+  for (int target : {0, -6, -8}) {
+    expect(controller->selectGameplayTrait(target, entry).accepted && ready(),
+           "compatible skin selection commits to the chosen mode");
+    expect(controller->setOption(entry, "Play Side", target == -6 ? 921 : 920).accepted && ready(),
+           "custom options save for the active mode");
+    ViewportSettings viewport;
+    viewport.scaleX = target == -8 ? 2.0F : 1.0F;
+    expect(controller->setViewport(entry, viewport).accepted && ready(),
+           "viewport saves for the active mode");
+  }
+  const auto saved = fixture.owner.snapshot(fixture.profileA).settings;
+  expect(saved.selectedSkinEntries.size() == 3 &&
+             saved.entries.at(entry).options.at("Play Side") == 920 &&
+             saved.modeEntries.at(-6).at(entry).options.at("Play Side") == 921 &&
+             saved.modeEntries.at(-8).at(entry).options.at("Play Side") == 920 &&
+             saved.modeEntries.at(-8).at(entry).viewport.scaleX == 2.0F &&
+             saved.entries.at(entry).viewport.scaleX == 1.0F,
+         "same source skin keeps independent selections, options and layouts");
+  for (int target : {0, -6, -8}) {
+    const auto &settings = saved.entriesForTarget(target).at(entry);
+    const auto activation = fixture.operations->acquireValidatedActivation(
+        fixture.profileA, entry, skinConfigurationDigest(settings));
+    expect(activation.activation &&
+               activation.activation->reconciledSettings.options == settings.options,
+           "all mode configurations remain separately available for gameplay");
+  }
+  controller->setActiveTarget(-6);
+  expect(controller->snapshot().entries.front().settings.options.at("Play Side") == 921,
+         "switching tabs displays that mode's saved configuration");
+  expect(controller->clearGameplayTrait(-6).accepted && ready(), "6K can return to built-in independently");
+  const auto cleared = fixture.owner.snapshot(fixture.profileA).settings;
+  expect(!cleared.selectedSkinEntries.contains(-6) && cleared.selectedSkinEntries.contains(0) &&
+             cleared.selectedSkinEntries.contains(-8), "clearing 6K preserves 7K and 8K selections");
+}
+
 void testSelectionIsScopedToTheSkinDeclaredGameplayTrait() {
   Fixture fixture;
   fixture.validator.skinType = 1;
@@ -1714,6 +1762,7 @@ int main() {
   testArchiveFolderSelectionAndDurableLayoutFlow();
   testActivationPreparationDoesNotExposeCancellation();
   testPickedArchiveAndFolderInstallWithoutPackageNameConfirmation();
+  testCompatibleModesSaveIndependentSettings();
   testSelectionIsScopedToTheSkinDeclaredGameplayTrait();
   testRejectedPublishTransfersReservedStagingOffControllerThread();
   testRejectedPrepareTransfersExactTemporaryCleanupOffControllerThread();
