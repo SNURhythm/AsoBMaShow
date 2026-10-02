@@ -172,6 +172,7 @@ public:
   static MusicSelectSkinSessionCreateResult
   create(GameplaySkinActivationRequest, MusicSelectSkinSessionContext);
   ~MusicSelectSkinSession();
+  void setPointerPosition(UiLogicalPoint) noexcept;
 
   MusicSelectSkinSession(const MusicSelectSkinSession &) = delete;
   MusicSelectSkinSession &operator=(const MusicSelectSkinSession &) = delete;
@@ -193,6 +194,7 @@ public:
   [[nodiscard]] int inputDelayMillis() const noexcept;
 
 private:
+  std::optional<UiLogicalPoint> pointerUiPosition_;
   struct QueuedEventBinding {
     SkinEventBindingId binding{};
     std::array<int, 2> arguments{};

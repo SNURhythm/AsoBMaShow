@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1779,9 +1780,71 @@ void testGyroscopeControlFanoutDispatchesWithoutBackendPump() {
              events.back().normalizedValue == 0.0F,
          "synchronous release preserves gyroscope semantic identity");
 }
+void testPointerSnapshotSurvivesSceneSubscriptionChangesAndRelease() {
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  expect(!registry.pointerPosition(), "pointer is absent before any real pointing event");
+  SDL_Event event{};
+  event.type = SDL_MOUSEMOTION;
+  event.motion.which = 0;
+  event.motion.x = 120;
+  event.motion.y = 70;
+  registry.handleSdlEventAndDispatch(event);
+  const auto firstScene = registry.subscribeInput([](const auto &) {});
+  registry.unsubscribe(firstScene);
+  const auto secondScene = registry.subscribeInput([](const auto &) {});
+  const auto check = [&](float x, float y, bool normalized, std::string_view message) {
+    const auto point = registry.pointerPosition();
+    expect(point && point->x == x && point->y == y &&
+               point->normalized == normalized, message);
+  };
+  check(120, 70, false,
+        "new scene reads a stationary pointer without another SDL event");
+  event = {};
+  event.type = SDL_MOUSEBUTTONDOWN;
+  event.button.which = 0;
+  event.button.x = 130;
+  event.button.y = 80;
+  registry.handleSdlEvent(event);
+  check(130, 80, false, "mouse down updates the retained pointer");
+  event.type = SDL_MOUSEBUTTONUP;
+  event.button.x = 150;
+  event.button.y = 90;
+  registry.handleSdlEvent(event);
+  check(130, 80, false, "mouse release retains the last down or motion position");
+  event.type = SDL_MOUSEBUTTONDOWN;
+  event.button.which = SDL_TOUCH_MOUSEID;
+  event.button.x = 999;
+  registry.handleSdlEvent(event);
+  check(130, 80, false, "synthesized touch-mouse duplicate does not replace the real pointer");
+  for (const auto type : {SDL_FINGERDOWN, SDL_FINGERMOTION}) {
+    event = {};
+    event.type = type;
+    event.tfinger.touchId = 1;
+    event.tfinger.x = type == SDL_FINGERMOTION ? 0.75F : 0.25F;
+    event.tfinger.y = 0.5F;
+    registry.handleSdlEvent(event);
+    check(event.tfinger.x, 0.5F, true,
+          "touch down and motion retain normalized coordinates for the next scene");
+  }
+  event.type = SDL_FINGERUP;
+  event.tfinger.x = 0.9F;
+  registry.handleSdlEvent(event);
+  check(0.75F, 0.5F, true, "touch release retains the last down or motion position");
+  event.type = SDL_FINGERMOTION;
+  event.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  event.tfinger.x = 0.1F;
+  registry.handleSdlEvent(event);
+  check(0.75F, 0.5F, true, "synthesized mouse-touch duplicate is ignored");
+  event.tfinger.touchId = 1;
+  event.tfinger.x = std::numeric_limits<float>::quiet_NaN();
+  registry.handleSdlEvent(event);
+  check(0.75F, 0.5F, true, "nonfinite touch coordinates cannot corrupt the retained pointer");
+  registry.unsubscribe(secondScene);
+}
 } // namespace
 
 int main() {
+  testPointerSnapshotSurvivesSceneSubscriptionChangesAndRelease();
   testIdentityPrecedenceAndNameOrdinals();
   testIdentityDisambiguatesActiveDuplicateSerials();
   testRegistryQueuesCallbacksAndKeepsKeyboard();

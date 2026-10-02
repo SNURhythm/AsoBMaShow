@@ -13,6 +13,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from scripts.pinned_git_snapshot import pinned_git_snapshot
+except ModuleNotFoundError:
+    from pinned_git_snapshot import pinned_git_snapshot
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
@@ -143,10 +148,7 @@ def run(*arguments: str, cwd: Path, timeout: int = 90) -> str:
 
 
 def validate_reference(root: Path) -> list[Path]:
-    if run("git", "rev-parse", "HEAD", cwd=root, timeout=10).strip() != PINNED_COMMIT:
-        raise RuntimeError(f"Beatoraja reference must be exactly {PINNED_COMMIT}")
-    if run("git", "status", "--porcelain", cwd=root, timeout=10).strip():
-        raise RuntimeError("Beatoraja reference must be clean")
+    # The caller materializes only tracked files from the exact pinned commit.
     for relative, markers in REQUIRED_SOURCE_MARKERS.items():
         text = (root / relative).read_text(encoding="utf-8")
         for marker in markers:
@@ -155,9 +157,6 @@ def validate_reference(root: Path) -> list[Path]:
     jars = sorted((root / "lib").glob("*.jar"), key=lambda path: path.name)
     if not jars:
         raise RuntimeError("pinned Beatoraja lib/*.jar classpath is empty")
-    tracked = set(run("git", "ls-files", "lib/*.jar", cwd=root, timeout=10).splitlines())
-    if {f"lib/{path.name}" for path in jars} != tracked:
-        raise RuntimeError("pinned Beatoraja jar classpath must be fully tracked")
     return jars
 
 
@@ -357,6 +356,11 @@ def long_note_oracle(reference: Path, constants: object) -> dict:
 
 
 def build_trace(reference: Path) -> dict:
+    with pinned_git_snapshot(reference, PINNED_COMMIT, ("src", "lib")) as snapshot:
+        return _build_trace(snapshot)
+
+
+def _build_trace(reference: Path) -> dict:
     jars = validate_reference(reference)
     harness = run_harness(reference, jars)
     if set(harness) != {"execution", "cases"}:

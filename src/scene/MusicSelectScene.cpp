@@ -1404,6 +1404,29 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
 #endif
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::optional<UiLogicalPoint> observedPointer;
+  UiLogicalPoint point;
+  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+             event.button.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
+             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
+    observedPointer = point;
+  }
+  if (observedPointer) {
+    skinPointerUiPosition_ = observedPointer;
+    if (skinSession_) skinSession_->setPointerPosition(*observedPointer);
+  }
+#endif
+
   if (failed_) {
     if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
       switch (event.key.keysym.sym) {
@@ -3387,6 +3410,17 @@ void MusicSelectScene::renderScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   finalizeSkinPreparationIfReady();
   if (failed_ || !skinSession_) return;
+  if (const auto pointer = context.inputDeviceRegistry.pointerPosition()) {
+    UiLogicalPoint point;
+    if (pointer->normalized) {
+      rendering::normalizedToUi(pointer->x, pointer->y, point.x, point.y);
+    } else {
+      rendering::screenToUi(pointer->x * rendering::widthScale,
+                            pointer->y * rendering::heightScale, point.x, point.y);
+    }
+    skinPointerUiPosition_ = point;
+  }
+  if (skinPointerUiPosition_) skinSession_->setPointerPosition(*skinPointerUiPosition_);
   ++frameSerial_;
   auto frame = makeFrame();
   RenderContext renderContext(context.uiBatchRenderer);

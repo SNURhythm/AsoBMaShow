@@ -873,6 +873,7 @@ struct RawSkinNumber {
   std::uint32_t retainedBindingValue = 0;
   RawSkinImage image;
   SkinIntegerPropertyId value{};
+  SkinIntegerPropertyId songListValue{};
   int digitCount = 0;
   int alignment = 0;
   int padding = 0;
@@ -4098,7 +4099,7 @@ bool materializeMusicSelectNestedDefinitions(
     }
     SkinNumberObject object;
     object.digits = std::move(atlas.digits);
-    object.value = definition->second.value;
+    object.value = definition->second.songListValue;
     object.digitCount = atlas.format.integerDigits;
     object.spacing = definition->second.spacing;
     object.alignment = definition->second.alignment;
@@ -5017,6 +5018,26 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
   }
 
   for (auto &number : request.rawNumbers) {
+    // SkinBar level objects use the numeric-ref constructor, even when the
+    // same Value has an explicit property for its ordinary destinations.
+    if (!request.enforceGameplayLimits && request.rawSongList &&
+        std::ranges::any_of(request.rawSongList->level, [&](const auto &level) {
+          return level.id == number.image.id;
+        })) {
+      std::optional<SkinIntegerPropertyId> constructorValue;
+      if (!decodeOptionalBinding(
+              request, decoder, value,
+              {.kind = SkinBindingKind::IntegerProperty,
+               .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+              bindingPath("value", number.image.authoredIndex,
+                          number.image.retainedBindingValue, "ref"),
+              bindingPathText("value", number.image.authoredIndex, "ref"),
+              number.image.authoredIndex - 1, constructorValue,
+              number.image.stateSelector, true)) {
+        return false;
+      }
+      number.songListValue = constructorValue.value_or(SkinIntegerPropertyId{});
+    }
     if (!bindImageTimer(request, decoder, value, "value", number.image) ||
         !decodeRequiredBinding(
             request, decoder, value,

@@ -793,6 +793,65 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
          "discard is an idempotent frame closure");
 }
 
+void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 3;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(73);
+  state.authority.stagePassedNotes = 1;
+  state.authority.judgementCounters = {{PGreat, 0}};
+  state.authority.bestScore = 5;
+  state.authority.bestScoreTarget = {.enabled = true,
+                                     .finalScore = 5,
+                                     .totalNotes = 3};
+  state.authority.pacemakerTarget = {.enabled = true,
+                                     .finalScore = 4,
+                                     .totalNotes = 3,
+                                     .usesReplayProgression = true,
+                                     .scoreAfterNotes = {0, 2, 2, 4}};
+  state.authority.pacemakerStatus = {.enabled = true, .targetScore = 2};
+  const auto expectRate = [&](int id, float expected, const char *message) {
+    const auto value = bridge.floatProperty({id}, SkinFloatPropertyDomain::Rate);
+    expect(value.supported && std::abs(value.value - expected) < 0.0000001,
+           message);
+  };
+  bridge.beginFrame(state, projectionAt(73));
+  expectRate(112, 1.0F / 6.0F,
+             "best rate without a ghost uses the projected integer score at stage progress");
+  expectRate(114, 1.0F / 6.0F,
+             "rival rate uses linear stage progress even for a replay target");
+  bridge.discardFrame();
+
+  state.clock.serial = 74;
+  state.authority.bestScoreTarget.usesReplayProgression = true;
+  state.authority.bestScoreTarget.scoreAfterNotes = {0, 2, 3, 5};
+  bridge.beginFrame(state, projectionAt(74));
+  expectRate(112, 1.0F / 3.0F,
+             "best ghost rate uses the ghost score at the stage passed-note count");
+  bridge.discardFrame();
+
+  state.clock.serial = 75;
+  state.authority.bestScoreTarget.scoreAfterNotes.pop_back();
+  bridge.beginFrame(state, projectionAt(75));
+  expectRate(112, 1.0F / 6.0F,
+             "a best ghost with different note count falls back to linear progress");
+  bridge.discardFrame();
+
+  chart.staticMetadata.totalNotes = 0;
+  state.clock.serial = 76;
+  state.authority.stagePassedNotes = 0;
+  bridge.beginFrame(state, projectionAt(76));
+  expectRate(112, 0.0F, "empty charts expose zero current-best rate");
+  expectRate(114, 0.0F, "empty charts expose zero current-rival rate");
+  bridge.discardFrame();
+}
+
 void testMainStateConvenienceAccessorsUseCanonicalSourceProperties() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3220,9 +3279,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   const auto currentBestRate =
       bridge.floatProperty({112}, SkinFloatPropertyDomain::Rate);
   expect(currentBestRate.supported &&
-             std::abs(currentBestRate.value - 28.0 / 834.0) < 0.000001,
-         "current-best rate uses the same passed-note projection as "
-         "ScoreDataProperty.getNowBestScore");
+             std::abs(currentBestRate.value - 143.0F / 834.0F) < 0.000001,
+         "current-best rate projects its score at the authoritative "
+         "stage passed-note count");
   for (const auto [id, expected] :
        std::array{std::pair{500, 2LL}, std::pair{501, 3LL},
                   std::pair{507, 9LL}, std::pair{510, -1LL}}) {
@@ -3243,9 +3302,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{102, 1.0},
            std::pair{110, 456.0 / 834.0},
            std::pair{111, 456.0 / 400.0},
-           std::pair{112, 28.0 / 834.0},
+           std::pair{112, 143.0 / 834.0},
            std::pair{113, 300.0 / 834.0},
-           std::pair{114, 240.0 / 834.0},
+           std::pair{114, 239.0 / 834.0},
            std::pair{115, 500.0 / 834.0}}) {
     const auto value = bridge.floatProperty({id});
     expect(value.supported && std::abs(value.value - expected) < 0.000001,
@@ -3937,6 +3996,7 @@ int main() {
   testMarkProcessedNoteImageIndexTracksPlayerConfiguration();
   testUndefinedLongNoteImageIndexMatchesBeatorajaPlayerConfig();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
+  testCurrentReferenceRatesUseStageProgressAndBestGhost();
   testMainStateConvenienceAccessorsUseCanonicalSourceProperties();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();

@@ -764,6 +764,10 @@ bool ResultScene::startSelectedResultSkin() {
              return context.settings.audioVideo.audio.masterVolume;
            }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,
+       .captureLegacyInputGeneration = [this] {
+         return context.inputDeviceRegistry.legacyInputGeneration(
+             rendering::render_width, rendering::render_height);
+       },
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
   for (auto &diagnostic : created.diagnostics) {
     appendDiagnostic(entry, revisionDigest, configurationDigest,
@@ -4330,6 +4334,29 @@ void ResultScene::consumeResultSkinBuiltinEvents() {
 
 EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::optional<UiLogicalPoint> observedPointer;
+  UiLogicalPoint point;
+  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+             event.button.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
+             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
+    observedPointer = point;
+  }
+  if (observedPointer) {
+    resultSkinPointerUiPosition = observedPointer;
+    if (resultSkinSession) resultSkinSession->setPointerPosition(*observedPointer);
+  }
+#endif
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (resultSkinFadeoutStartedMillis) {
     return {};
   }
@@ -4368,6 +4395,19 @@ bool ResultScene::renderViewBeforeScene(const View *view) const {
 void ResultScene::renderScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (resultSkinSession) {
+    if (const auto pointer = context.inputDeviceRegistry.pointerPosition()) {
+      UiLogicalPoint point;
+      if (pointer->normalized) {
+        rendering::normalizedToUi(pointer->x, pointer->y, point.x, point.y);
+      } else {
+        rendering::screenToUi(pointer->x * rendering::widthScale,
+                              pointer->y * rendering::heightScale, point.x, point.y);
+      }
+      resultSkinPointerUiPosition = point;
+    }
+    if (resultSkinPointerUiPosition) {
+      resultSkinSession->setPointerPosition(*resultSkinPointerUiPosition);
+    }
     RenderContext renderContext(context.uiBatchRenderer);
     RenderContext::UiBatchScope uiBatchScope(renderContext);
     ResultSkinData skinData = makeResultSkinData();

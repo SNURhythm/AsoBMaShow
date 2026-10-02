@@ -209,6 +209,11 @@ public:
          .audioBackend = skin::createLuaSkinNoOutputAudioBackend(
              context.skinLiveResourceCounters),
          .liveResourceCounters = context.skinLiveResourceCounters,
+         .captureLegacyInputGeneration = [] {
+           return skin::LuaSkinLegacyInputGeneration{
+               .drawableWidth = rendering::render_width,
+               .drawableHeight = rendering::render_height};
+         },
          .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel),
          .stop = stop});
     for (const auto &diagnostic : created.diagnostics)

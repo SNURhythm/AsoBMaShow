@@ -51,6 +51,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace session_test_allocation_fault {
@@ -331,6 +332,7 @@ public:
 
   void submit(const rendering::SkinQuadBackendBatch &batch) override {
     ++submitCalls;
+    lastSubmittedBlend = batch.blend;
     if (captureVertices) {
       submittedVertices.insert(submittedVertices.end(), batch.vertices.begin(),
                                batch.vertices.end());
@@ -340,6 +342,7 @@ public:
     }
   }
 
+  SkinBlendMode lastSubmittedBlend = SkinBlendMode::Normal;
   bool preflightReady = true;
   bool failNextAllocationAfterSubmit = false;
   bool captureVertices = false;
@@ -790,6 +793,7 @@ struct ActivationFixtureOptions {
   bool pomyuSecondPlayerTextures = false;
   bool pomyuSecondPlayerTextureFallback = false;
   MalformedPomyuNumeric malformedPomyuNumeric = MalformedPomyuNumeric::None;
+  std::string configuredCode;
 };
 
 class ActivationFixture final {
@@ -1028,6 +1032,7 @@ end
   assert(main_state.audio_loop("session-audio.ogg", 0.5) == true)
 )lua";
     }
+    script += options.configuredCode;
     if (options.musicSelectMainStateBearing) {
       script += R"lua(
   assert(main_state.key_pressed(29))
@@ -1298,7 +1303,7 @@ end
     }
   }
 )lua";
-    } else if (options.resourceBearing) {
+    } else if (options.resourceBearing && options.customObjectCallbacks.empty()) {
       script += "\n  return {\n    type = " +
                 std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
     source = {{id = "fixture-image", path = "resources/fixture.png"}},
@@ -4900,7 +4905,8 @@ public:
   explicit SessionFixture(
       std::uint64_t sessionSerial = 37,
       UiLogicalRect safeUiBounds =
-          {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0})
+          {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0},
+      SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{})
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
@@ -5116,6 +5122,7 @@ return {
                      .entry = entry_,
                      .revisionDigest = "session-revision",
                      .configurationDigest = "session-configuration"},
+        .safetyPolicy = safetyPolicy,
         .chartModel = chart_,
         .model = model_,
         .configuration = configuration_,
@@ -7405,6 +7412,26 @@ void testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState() {
          "without submission or enqueue");
 }
 
+void testPassivePointerPositionControlsMouseRectAcrossFrames() {
+  SessionFixture fixture;
+  if (!fixture.ready()) return;
+  fixture.addClickableImage();
+  fixture.model().model.destinations.back().presentation.mouseRect =
+      SkinAuthoredRect{.x = 0, .y = 0, .width = 40, .height = 20};
+  const auto visible = [&](std::uint64_t serial) {
+    const auto result = fixture.session().prepareFrame(stateAt(serial), projectionAt(serial), {});
+    expect(result.ready(), "pointer visibility frame completes without an interaction capture");
+    return result.evaluation.submitReady && std::ranges::any_of(
+        result.evaluation.submitReady->commands,
+        [](const auto &command) { return command.sourceObject == 82; });
+  };
+  expect(!visible(1), "unsampled pointer defaults to authored zero outside mouseRect");
+  fixture.session().setPointerPosition({.x = 110, .y = 610});
+  expect(visible(2) && visible(3), "passive pointer position is retained across frames");
+  fixture.session().setPointerPosition({.x = 150, .y = 610});
+  expect(!visible(4), "passive pointer leaving mouseRect hides the object next frame");
+}
+
 void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -7519,6 +7546,458 @@ bool renderCustomObjectFrames(ActivationFixture &fixture, int skinType,
     return result.session->render(renderContext, {}, serial,
                                   static_cast<std::int64_t>(serial * 10));
   });
+}
+
+void testResultScreenAndInputSnapshotDuringConfiguredLoad() {
+  for (const int skinType : {7, 15}) {
+    ActivationFixture fixture({.skinType = skinType,
+        .configuredCode = R"lua(
+assert(main_state.screen_width() == 1920)
+assert(main_state.screen_height() == 1080)
+assert(main_state.key_pressed('A'))
+)lua"});
+    if (!fixture.ready()) return;
+    auto context = fixture.resultContext();
+    context.captureLegacyInputGeneration = [] {
+      LuaSkinLegacyInputGeneration input{.drawableWidth = 1920, .drawableHeight = 1080};
+      input.pressedGdxKeys.set(29);
+      return input;
+    };
+    auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+    expect(created.session != nullptr,
+           "result type " + std::to_string(skinType) +
+               " exposes captured screen dimensions and keys during configured loading");
+  }
+}
+
+void testResultInputSnapshotsRefreshAndIsolateVideoFrames() {
+  const std::string callbacks = R"lua(
+customEvents = {{id = 1000, condition = function() return true end,
+  action = function()
+    local value = main_state.screen_width() .. ':' .. main_state.screen_height()
+      .. ':' .. tostring(main_state.key_pressed('A'))
+    assert(main_state.file_write('configured-phase-marker.txt', value))
+  end}}
+)lua";
+  for (const int skinType : {7, 15}) {
+    for (const bool video : {false, true}) {
+      ActivationFixture fixture({.skinType = skinType,
+                                  .customObjectCallbacks = callbacks});
+      if (!fixture.ready()) return;
+      LuaSkinLegacyInputGeneration liveInput{.drawableWidth = 1920, .drawableHeight = 1080};
+      liveInput.pressedGdxKeys.set(29);
+      auto context = fixture.resultContext();
+      context.captureLegacyInputGeneration = [&liveInput, video] {
+        // The isolated replay caller supplies dimensions without live keys.
+        return video ? LuaSkinLegacyInputGeneration{
+                           .drawableWidth = liveInput.drawableWidth,
+                           .drawableHeight = liveInput.drawableHeight}
+                     : liveInput;
+      };
+      auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+      expect(created.session != nullptr, "result input refresh fixture creates");
+      if (!created.session) return;
+      RenderContext renderContext;
+      const auto render = [&](std::uint64_t serial, std::string expected) {
+        const bool rendered = video
+            ? created.session->renderForVideoExport(renderContext, {}, serial, serial * 10)
+            : created.session->render(renderContext, {}, serial, serial * 10);
+        std::ifstream marker(fixture.configuredMarkerPath());
+        std::string observed;
+        marker >> observed;
+        expect(rendered && observed == expected,
+               "result type " + std::to_string(skinType) +
+                   (video ? " video" : " live") +
+                   " frame reads refreshed dimensions and its own input snapshot");
+      };
+      render(2, video ? "1920:1080:false" : "1920:1080:true");
+      liveInput.drawableWidth = 1600;
+      liveInput.drawableHeight = 900;
+      ++liveInput.sequence;
+      render(3, video ? "1600:900:false" : "1600:900:true");
+    }
+  }
+}
+
+void testNamedMusicSelectVolumeWritersAreVisibleBeforePublishingActions() {
+  for (const auto &[name, getter, id] : std::array{
+           std::tuple{"mastervolume", "volume_sys", 17},
+           std::tuple{"keyvolume", "volume_key", 18},
+           std::tuple{"bgmvolume", "volume_bg", 19}}) {
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectInteractionBearing = true});
+    if (!fixture.ready()) return;
+    auto context = fixture.musicSelectContext();
+    context.initialFrame.properties.rates[id] = 0.125;
+    context.initialFrame.properties.integers[id + 40] = 12;
+    auto preparation = MusicSelectSkinSession::prepare(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = 118},
+        {.storageRoots = context.storageRoots,
+         .resourcePreparation = context.resourcePreparation,
+         .initialFrame = context.initialFrame});
+    expect(preparation.prepared.has_value(), "named volume writer fixture prepares");
+    if (!preparation.prepared) return;
+    auto &prepared = *preparation.prepared;
+    auto &model = prepared.document.model.model;
+    expect(model.floatWriters.size() == 1 && model.floatProperties.size() == 1,
+           "volume regression retains one real slider and its value callback");
+    if (model.floatWriters.size() != 1 || model.floatProperties.size() != 1) return;
+    model.floatWriters.front().source = SkinBuiltinPropertySelector{std::string{name}};
+    const auto callback = prepared.document.luaRuntime->compileCallbackScript(
+        std::string{"(function() local m = require('main_state'); local v = m."} +
+            getter + "(); m.file_write('configured-phase-marker.txt', "
+            "tostring(v) .. ':' .. tostring(m.number(" + std::to_string(id + 40) +
+            "))); return v end)()",
+        LuaCallbackScriptKind::ReturnExpression);
+    expect(callback.callback.has_value(), "named volume observer callback compiles");
+    if (!callback.callback) return;
+    model.floatProperties.front().source = *callback.callback;
+    SessionQuadBackend backend;
+    auto created = MusicSelectSkinSession::finalize(
+        std::move(prepared),
+        {.resourcePreparation = context.resourcePreparation,
+         .textureDevice = context.textureDevice,
+         .movieDevice = context.movieDevice,
+         .liveResourceCounters = context.liveResourceCounters,
+         .quadBackend = &backend});
+    expect(created.session != nullptr, "named volume writer session finalizes");
+    if (!created.session) return;
+    RenderContext renderContext;
+    MusicSelectSkinFrame frame = context.initialFrame;
+    frame.serial = 1;
+    expect(created.session->render(renderContext, frame),
+           "named volume writer publishes its slider layout");
+    expect(created.session->queuePointerDown(
+               {.x = 225.0F, .y = 915.0F}, 0, 1).consumed,
+           "named volume writer queues a real slider click at half volume");
+    frame.serial = 2;
+    const bool rendered = created.session->render(renderContext, frame);
+    const auto actions = created.session->takePublishedActions();
+    std::ifstream marker(fixture.configuredMarkerPath());
+    std::string observed;
+    marker >> observed;
+    expect(rendered && observed == "0.5:50" && actions.size() == 1 &&
+               actions.front().kind == MusicSelectSkinActionKind::FloatWriter &&
+               std::get<std::string>(actions.front().selector.value) == name &&
+               actions.front().floatValue == 0.5,
+           std::string{name} +
+               " is visible to Lua volume and percent getters before its action is published");
+  }
+}
+
+void testMainStateVolumeSettersAcrossActualSessions() {
+  const std::string configured = R"lua(
+assert(main_state.set_volume_sys(0.25))
+assert(main_state.set_volume_key(0.375))
+assert(main_state.set_volume_bg(0.5))
+assert(main_state.volume_sys() == 0.25 and main_state.number(57) == 25)
+assert(main_state.volume_key() == 0.375 and main_state.number(58) == 37)
+assert(main_state.volume_bg() == 0.5 and main_state.number(59) == 50)
+)lua";
+  const std::string callbacks = R"lua(
+customEvents = {{id = 1000, condition = function() return true end,
+  action = function()
+    assert(main_state.volume_sys() == 0.25)
+    assert(main_state.volume_key() == 0.375)
+    assert(main_state.volume_bg() == 0.5)
+    assert(main_state.set_volume_sys(0.625))
+    assert(main_state.set_volume_key(0.75))
+    assert(main_state.set_volume_bg(0.875))
+    assert(main_state.volume_sys() == 0.625 and main_state.number(57) == 62)
+    assert(main_state.volume_key() == 0.75 and main_state.number(58) == 75)
+    assert(main_state.volume_bg() == 0.875 and main_state.number(59) == 87)
+    local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+    marker:write('volumes'); marker:close()
+  end}}
+)lua";
+  for (const int skinType : {0, 5, 7, 15}) {
+    ActivationFixture fixture({.skinType = skinType,
+                                .customObjectCallbacks = callbacks,
+                                .configuredCode = configured});
+    if (!fixture.ready()) return;
+    std::vector<std::pair<int, float>> writes;
+    bool rendered = false;
+    RenderContext renderContext;
+    if (skinType == 0) {
+      auto context = fixture.context();
+      context.safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility);
+      auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+      if (created.session) {
+        auto frame = created.session->prepareFrame(stateAt(2), projectionAt(2), {});
+        rendered = frame.ready();
+        for (const auto &mutation : frame.committed.orderedMutations) {
+          if (const auto *volume = std::get_if<SetSkinAudioVolume>(&mutation)) {
+            writes.emplace_back(17 + static_cast<int>(volume->target), volume->value);
+          }
+        }
+      }
+    } else if (skinType == 5) {
+      auto created = MusicSelectSkinSession::create(
+          {.profileId = fixture.profile(), .activation = fixture.takeActivation(),
+           .sessionSerial = 117}, fixture.musicSelectContext());
+      if (created.session) {
+        rendered = created.session->render(renderContext, {.serial = 2});
+        for (const auto &action : created.session->takePublishedActions()) {
+          if (action.kind == MusicSelectSkinActionKind::FloatWriter) {
+            if (const auto *id = std::get_if<int>(&action.selector.value)) {
+              writes.emplace_back(*id, static_cast<float>(action.floatValue));
+            }
+          }
+        }
+      }
+    } else {
+      auto context = fixture.resultContext();
+      context.safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility);
+      auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+      if (created.session) {
+        rendered = created.session->render(renderContext, {}, 2, 0);
+        for (const auto &volume : created.session->takeQueuedAudioVolumeWrites()) {
+          writes.emplace_back(volume.selector, volume.value);
+        }
+      }
+    }
+    std::ifstream marker(fixture.configuredMarkerPath());
+    std::string observed;
+    marker >> observed;
+    expect(rendered && observed == "volumes" &&
+               writes == std::vector<std::pair<int, float>>{
+                   {17, 0.25F}, {18, 0.375F}, {19, 0.5F},
+                   {17, 0.625F}, {18, 0.75F}, {19, 0.875F}},
+           "type " + std::to_string(skinType) +
+               " retains configured volume writes and reads frame writes before publishing in order");
+  }
+}
+
+void testCompatibilityVolumeSettersRetainJavaFloatValues() {
+  const std::string callbacks = R"lua(
+customEvents = {{id = 1000, condition = function() return true end,
+  action = function()
+    for _, pair in ipairs({{-0.5, -50}, {1.5, 150}, {0/0, 0},
+                           {math.huge, 2147483647}, {-math.huge, -2147483648}}) do
+      for _, property in ipairs({{main_state.set_volume_sys, main_state.volume_sys, 57},
+                                 {main_state.set_volume_key, main_state.volume_key, 58},
+                                 {main_state.set_volume_bg, main_state.volume_bg, 59}}) do
+        assert(property[1](pair[1]))
+        local value = property[2]()
+        assert(value == pair[1] or (value ~= value and pair[1] ~= pair[1]))
+        assert(main_state.number(property[3]) == pair[2])
+      end
+    end
+    local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+    marker:write('float-values'); marker:close()
+  end}}
+)lua";
+  for (const int skinType : {0, 5, 7, 15}) {
+    ActivationFixture fixture({.skinType = skinType, .customObjectCallbacks = callbacks});
+    if (!fixture.ready()) return;
+    const bool rendered = renderCustomObjectFrames(
+        fixture, skinType, SkinSafetyLevel::BeatorajaCompatibility, 1);
+    std::ifstream marker(fixture.configuredMarkerPath());
+    std::string observed;
+    marker >> observed;
+    expect(rendered && observed == "float-values",
+           "type " + std::to_string(skinType) +
+               " preserves compatibility volume floats and saturates integer percentage reads");
+  }
+}
+
+void testConfiguredPlayVolumeWritesPublishOnceAfterSubmission() {
+  ActivationFixture fixture({.customObjectCallbacks = "customTimers = {}",
+      .configuredCode = "assert(main_state.set_volume_sys(0.25))\n"});
+  if (!fixture.ready()) return;
+  auto context = fixture.context();
+  std::vector<std::pair<SkinAudioVolumeWriterTarget, float>> writes;
+  context.applyAudioVolume = [&](SkinAudioVolumeWriterTarget target, float value) {
+    writes.emplace_back(target, value);
+  };
+  auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+  expect(created.session != nullptr && writes.empty(),
+         "configured play volume writes wait for the first submitted frame");
+  if (!created.session) return;
+  RenderContext renderContext;
+  SessionBgaSubmitter bga;
+  for (std::uint64_t serial : {2, 3}) {
+    auto state = stateAt(serial);
+    state.configuration.masterVolume = 0.25F;
+    expect(created.session->prepareFrame(state, projectionAt(serial)) ==
+               PresentationFrameOutcome::Ready,
+           "configured volume frame prepares");
+    const auto rendered = created.session->render(renderContext, bgaFrame(82), bga);
+    expect(rendered.outcome == PresentationFrameOutcome::Ready &&
+               writes == std::vector<std::pair<SkinAudioVolumeWriterTarget, float>>{
+                   {SkinAudioVolumeWriterTarget::Master, 0.25F}},
+           "initial audio write is applied after submission exactly once across frames");
+  }
+}
+
+void testRetainedBlendPublishesOnlySubmittedLiveFrames() {
+  for (const int mode : {0, 1, 2}) {
+    SessionFixture fixture(37,
+        {.x = 0, .y = 0, .width = 1280, .height = 720},
+        SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility});
+    if (!fixture.ready()) return;
+    fixture.addClickableImage();
+    fixture.model().model.destinations.back().presentation.blend = SkinBlendMode::Additive;
+    fixture.addEditableText(91, "A", {}, 200, false);
+    expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+               PresentationFrameOutcome::Ready,
+           "retained blend transaction prepares its additive image");
+    RenderContext context;
+    SessionBgaSubmitter bga;
+    if (mode == 0) {
+      fixture.session().updateViewportGeometry(
+          {.x = 0, .y = 0, .width = 1280, .height = 720});
+    } else {
+      fixture.quadBackend().preflightReady = mode == 2;
+      const auto first = fixture.session().render(context, bgaFrame(1), bga);
+      expect(first.outcome == (mode == 2 ? PresentationFrameOutcome::Ready
+                                       : PresentationFrameOutcome::CriticalFailure),
+             "retained blend transaction reaches the requested submit boundary");
+    }
+    fixture.model().model.destinations.erase(fixture.model().model.destinations.begin());
+    fixture.quadBackend().preflightReady = true;
+    expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+               PresentationFrameOutcome::Ready &&
+               fixture.session().render(context, bgaFrame(2), bga).outcome ==
+                   PresentationFrameOutcome::Ready &&
+               fixture.quadBackend().lastSubmittedBlend ==
+                   (mode == 2 ? SkinBlendMode::Additive : SkinBlendMode::Normal),
+           "cancelled prepare and rejected preflight do not publish blend; successful submit does");
+  }
+
+  const std::string callbacks = R"lua(
+source = {{id = "image", path = "resources/fixture.png"}},
+image = {{id = "image-object", src = "image", x = 0, y = 0, w = 40, h = 20}},
+font = {{id = "font", path = "resources/fixture.ttf", type = 0}},
+text = {{id = "text", font = "font", size = 16, value = function() return "A" end}},
+destination = {
+  {id = "image-object", blend = 2,
+   draw = function() return main_state.time() == 0 end,
+   dst = {{x = 0, y = 0, w = 40, h = 20}}},
+  {id = "text", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+}
+)lua";
+  for (const int skinType : {7, 15}) {
+    for (const int mode : {0, 1, 2}) {
+      ActivationFixture fixture({.skinType = skinType, .resourceBearing = true,
+                                 .customObjectCallbacks = callbacks});
+      if (!fixture.ready()) return;
+      SessionQuadBackend backend;
+      bms_parser::ChartMeta meta{.Title = "A"};
+      const ResultSkinData data{.meta = &meta};
+      auto sessionContext = fixture.resultContext(data);
+      sessionContext.safetyPolicy = SkinSafetyPolicy{SkinSafetyLevel::BeatorajaCompatibility};
+      sessionContext.quadBackend = &backend;
+      auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(sessionContext));
+      expect(created.session != nullptr, "result blend isolation fixture creates");
+      if (!created.session) return;
+      RenderContext context;
+      backend.preflightReady = mode != 1;
+      const bool first = mode == 0
+          ? created.session->renderForExport(context, data, 1, 0)
+          : created.session->render(context, data, 1, 0);
+      expect(first == (mode != 1) &&
+                 (mode == 1 || backend.lastSubmittedBlend == SkinBlendMode::Additive),
+             "result blend fixture submits additive image and text before its boundary");
+      backend.preflightReady = true;
+      const auto submitsBeforeText = backend.submitCalls;
+      expect(created.session->render(context, data, 2, 1) &&
+                 backend.submitCalls > submitsBeforeText &&
+                 backend.lastSubmittedBlend ==
+                     (mode == 2 ? SkinBlendMode::Additive : SkinBlendMode::Normal),
+             "result and course photos or rejected frames preserve live font blend (mode " +
+                 std::to_string(mode) + ")");
+    }
+  }
+}
+
+void testVolumeWritesRespectFailedFramesAndResultExports() {
+  const std::string configured = "assert(main_state.set_volume_sys(0.25))\n";
+  const std::string failedCallbacks = R"lua(
+customTimers = {{id = 10000, timer = function()
+  assert(main_state.set_volume_sys(0.5))
+  local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+  marker:write('staged'); marker:close()
+  error('reject this frame after its audio write')
+end}}
+)lua";
+  for (const int skinType : {0, 7, 15}) {
+    ActivationFixture fixture({.skinType = skinType,
+        .customObjectCallbacks = failedCallbacks, .configuredCode = configured});
+    if (!fixture.ready()) return;
+    if (skinType == 0) {
+      auto context = fixture.context();
+      int writes = 0;
+      context.applyAudioVolume = [&](SkinAudioVolumeWriterTarget, float) { ++writes; };
+      auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+      const auto frame = created.session
+          ? created.session->prepareFrame(stateAt(2), projectionAt(2), {})
+          : PlaySkinFrameTransactionResult{};
+      expect(created.session && !frame.ready() &&
+                 frame.committed.orderedMutations.empty() && writes == 0,
+             "failed gameplay frame does not publish initial or callback volume writes");
+    } else {
+      auto created = ResultSkinSession::create(fixture.takeActivation(), fixture.resultContext());
+      RenderContext renderContext;
+      expect(created.session && !created.session->render(renderContext, {}, 2, 0),
+             "strict result frame rejects the explicit callback failure");
+      const auto writes = created.session ? created.session->takeQueuedAudioVolumeWrites()
+                                         : std::vector<ResultSkinAudioVolumeWrite>{};
+      expect(writes.size() == 1 && writes[0].selector == 17 && writes[0].value == 0.25F,
+             "failed result frame preserves its initial write without publishing callback writes");
+    }
+    std::ifstream marker(fixture.configuredMarkerPath());
+    std::string observed;
+    marker >> observed;
+    expect(observed == "staged", "failure occurs after the direct audio setter succeeds");
+  }
+
+  for (const int skinType : {7, 15}) {
+    for (const bool video : {false, true}) {
+      const std::string callbacks = video ? R"lua(
+customTimers = {{id = 10000, timer = function()
+  frames = frames + 1
+  assert(main_state.volume_sys() == (frames == 1 and 0.25 or 0.5))
+  assert(main_state.set_volume_sys(frames == 1 and 0.5 or 0.75))
+  local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+  marker:write('video:' .. frames); marker:close()
+  return 0
+end}}
+)lua" : R"lua(
+customTimers = {{id = 10000, timer = function()
+  frames = frames + 1
+  assert(main_state.volume_sys() == 0.25)
+  assert(main_state.set_volume_sys(frames == 1 and 0.875 or 0.5))
+  local marker = assert(io.open('configured-phase-marker.txt', 'w'))
+  marker:write('photo:' .. frames); marker:close()
+  return 0
+end}}
+)lua";
+      ActivationFixture fixture({.skinType = skinType,
+          .customObjectCallbacks = callbacks, .configuredCode = configured});
+      if (!fixture.ready()) return;
+      auto context = fixture.resultContext();
+      context.safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility);
+      auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+      RenderContext renderContext;
+      const bool rendered = created.session &&
+          (video ? created.session->renderForVideoExport(renderContext, {}, 2, 1) &&
+                   created.session->renderForVideoExport(renderContext, {}, 3, 2)
+                 : created.session->renderForExport(renderContext, {}, 2, 1) &&
+                   created.session->render(renderContext, {}, 3, 2));
+      const auto writes = created.session ? created.session->takeQueuedAudioVolumeWrites()
+                                         : std::vector<ResultSkinAudioVolumeWrite>{};
+      std::ifstream marker(fixture.configuredMarkerPath());
+      std::string observed;
+      marker >> observed;
+      expect(rendered && observed == (video ? "video:2" : "photo:2") &&
+                 (video ? writes.empty()
+                        : writes.size() == 2 && writes[0].value == 0.25F &&
+                          writes[1].value == 0.5F),
+             "result volume state is isolated for photos and retained privately across video frames");
+    }
+  }
 }
 
 void testCustomObjectCallbacksUseLuaJConversionsInCompatibilityMode() {
@@ -9642,8 +10121,17 @@ int main(int argc, char **argv) {
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
+  testPassivePointerPositionControlsMouseRectAcrossFrames();
   testCourseResultLuaLogsAchievementAndGaugeDuringLoad();
   testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testConfiguredPlayVolumeWritesPublishOnceAfterSubmission();
+  testRetainedBlendPublishesOnlySubmittedLiveFrames();
+  testVolumeWritesRespectFailedFramesAndResultExports();
+  testCompatibilityVolumeSettersRetainJavaFloatValues();
+  testResultScreenAndInputSnapshotDuringConfiguredLoad();
+  testResultInputSnapshotsRefreshAndIsolateVideoFrames();
+  testNamedMusicSelectVolumeWritersAreVisibleBeforePublishingActions();
+  testMainStateVolumeSettersAcrossActualSessions();
   testCustomObjectCallbacksUseLuaJConversionsInCompatibilityMode();
   testCustomTimersRetainSessionStateAndWritablePassiveValues();
   testResultLuaSessionRoutesOpenIrEvent();

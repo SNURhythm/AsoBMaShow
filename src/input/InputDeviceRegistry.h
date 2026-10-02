@@ -30,6 +30,15 @@ public:
   using InterruptionListener =
       std::function<void(const input::InputInterruption &interruption)>;
 
+  struct PointerPosition {
+    float x = 0.0F;
+    float y = 0.0F;
+    // Touch uses normalized screen coordinates; mouse uses SDL window pixels.
+    bool normalized = false;
+  };
+  // Shared across scene subscriptions, including after the pointer is released.
+  [[nodiscard]] std::optional<PointerPosition> pointerPosition() const noexcept;
+
   InputDeviceRegistry();
   explicit InputDeviceRegistry(std::vector<BackendFactory> backendFactories);
   ~InputDeviceRegistry();
@@ -98,6 +107,7 @@ private:
   std::vector<std::unique_ptr<IInputBackend>> backends_;
   class SDLInputBackend *sdlInputBackend_ = nullptr;
   mutable std::mutex legacyInputMutex_;
+  std::optional<PointerPosition> pointerPosition_;
   std::bitset<SDL_NUM_SCANCODES> pressedSdlScancodes_;
   std::bitset<input::kLegacyInputMaximumGdxKeyCode + 1> pressedGdxKeys_;
   std::array<std::uint16_t, input::kLegacyInputMaximumGdxKeyCode + 1>

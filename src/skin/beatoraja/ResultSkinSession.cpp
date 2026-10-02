@@ -246,6 +246,12 @@ ResultSkinSession::ResultSkinSession(
   }
 }
 
+void ResultSkinSession::setPointerPosition(UiLogicalPoint point) noexcept {
+  if (std::isfinite(point.x) && std::isfinite(point.y)) {
+    pointerUiPosition_ = point;
+  }
+}
+
 ResultSkinSession::~ResultSkinSession() = default;
 
 ResultSkinSessionCreateResult ResultSkinSession::create(
@@ -293,6 +299,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
       }
       luaFiles = std::move(created.fileSystem);
     }
+    std::vector<ResultSkinAudioVolumeWrite> initialAudioVolumeWrites;
     GameplaySkinDocumentLoader loader;
     auto loaded = loader.load(
         {.sourceFormat = *format, .entry = activation.entry,
@@ -303,16 +310,26 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::Gameplay,
          .loadHeaderLua = [&context](LuaSkinRuntime &runtime) {
+           if (context.captureLegacyInputGeneration) {
+             runtime.setLegacyInputGeneration(context.captureLegacyInputGeneration());
+           }
            ResultSkinStateBridge bridge(context.initialData, 1, 0);
            return runtime.loadHeader(&bridge);
          },
-         .loadConfiguredLua = [&context](
+         .loadConfiguredLua = [&context, &initialAudioVolumeWrites](
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &configuration,
                                   std::vector<SkinDiagnostic> &,
                                   const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
+           if (context.captureLegacyInputGeneration) {
+             runtime.setLegacyInputGeneration(context.captureLegacyInputGeneration());
+           }
            ResultSkinStateBridge bridge(context.initialData, 1, 0,
-                                        &configuration);
+               &configuration, nullptr, nullptr,
+               {.write = [&initialAudioVolumeWrites](int id, float value) {
+                  initialAudioVolumeWrites.push_back({.selector = id, .value = value});
+                  return true;
+                }, .safetyPolicy = context.safetyPolicy});
            LuaFrameStateBinding frameState(&runtime, &bridge);
            return loadAndDecode();
          },
@@ -397,6 +414,13 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         std::move(context.liveResourceCounters),
         context.safetyPolicy, activation.reconciledSettings.viewport,
         std::move(runtimeStrings)));
+    if (context.quadBackend) {
+      result.session->quadRenderer_ =
+          std::make_unique<rendering::SkinQuadBatchRenderer>(*context.quadBackend);
+    }
+    result.session->queuedAudioVolumeWrites_ = std::move(initialAudioVolumeWrites);
+    result.session->captureLegacyInputGeneration_ =
+        std::move(context.captureLegacyInputGeneration);
   } catch (...) {
     result.session.reset();
     result.diagnostics.push_back(failure("skin.result_session.create_failed",
@@ -412,8 +436,14 @@ bool ResultSkinSession::renderForExport(RenderContext &renderContext,
   struct RestoreActions {
     bool &suppressed;
     bool previous;
-    ~RestoreActions() { suppressed = previous; }
-  } restore{suppressFrameActions_, std::exchange(suppressFrameActions_, true)};
+    Skin2DRenderer &renderer;
+    SkinRetainedBlendState previousBlend;
+    ~RestoreActions() {
+      suppressed = previous;
+      renderer.restoreRetainedBlendState(previousBlend);
+    }
+  } restore{suppressFrameActions_, std::exchange(suppressFrameActions_, true),
+            renderer_, renderer_.captureRetainedBlendState()};
   return render(renderContext, data, frameSerial, elapsedMillis);
 }
 
@@ -426,6 +456,13 @@ bool ResultSkinSession::renderForVideoExport(RenderContext &renderContext,
     bool previous;
     ~RestoreActions() { suppressed = previous; }
   } restore{suppressExternalActions_, std::exchange(suppressExternalActions_, true)};
+  if (!videoAudioInitialized_) {
+    for (const auto &write : queuedAudioVolumeWrites_) {
+      videoAudioVolumes_[static_cast<std::size_t>(write.selector - 17)] = write.value;
+    }
+    queuedAudioVolumeWrites_.clear();
+    videoAudioInitialized_ = true;
+  }
   return render(renderContext, data, frameSerial, elapsedMillis);
 }
 
@@ -446,6 +483,16 @@ bool ResultSkinSession::render(RenderContext &renderContext,
         "Result skin frame has no prepared resources or valid frame serial."));
     return false;
   }
+  if (runtime_ && captureLegacyInputGeneration_) {
+    try {
+      runtime_->setLegacyInputGeneration(captureLegacyInputGeneration_());
+    } catch (...) {
+      lastDiagnostics_.push_back(failure(
+          "skin.result_session.legacy_input_capture_failed",
+          "Result skin input could not be captured for the frame."));
+      return false;
+    }
+  }
   ResultSkinData skinData = data;
   skinData.skinName = model_.model.header.name;
   skinData.skinAuthor = model_.model.header.author;
@@ -457,8 +504,25 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   std::unordered_map<int, std::int64_t> exportTimerValues;
   if (suppressFrameActions_) exportTimerValues = customTimerValues_;
   auto &timerValues = suppressFrameActions_ ? exportTimerValues : customTimerValues_;
+  std::vector<ResultSkinAudioVolumeWrite> frameAudioVolumeWrites;
+  auto audioVolumes = suppressExternalActions_
+                          ? videoAudioVolumes_
+                          : std::array<std::optional<float>, 3>{};
+  for (const auto &write : queuedAudioVolumeWrites_) {
+    audioVolumes[static_cast<std::size_t>(write.selector - 17)] = write.value;
+  }
   ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
-                               &configuration_, &model_.model, &timerValues);
+      &configuration_, &model_.model, &timerValues,
+      {.volumes = audioVolumes,
+       .write = [this, &frameAudioVolumeWrites](int id, float value) {
+         if (suppressFrameActions_) return true;
+         if (safetyPolicy_.enforces(SkinSafetyGuard::LuaResourceBudget) &&
+             queuedAudioVolumeWrites_.size() + frameAudioVolumeWrites.size() >= 64) {
+           return false;
+         }
+         frameAudioVolumeWrites.push_back({.selector = id, .value = value});
+         return true;
+       }, .safetyPolicy = safetyPolicy_});
   LuaFrameStateBinding frameState(
       runtime_.get(), &bridge,
       {.context = this, .execute = &ResultSkinSession::executeHostEvent});
@@ -673,7 +737,8 @@ bool ResultSkinSession::render(RenderContext &renderContext,
        .configuration = configuration_, .resources = *resources_, .movies = movies_.get(),
        .viewport = viewport,
        .runtime = runtime_.get(), .state = bridge, .safetyPolicy = safetyPolicy_,
-       .gaugeRandomSource = gaugeRandom_.get()},
+       .gaugeRandomSource = gaugeRandom_.get(),
+       .pointerUiPosition = pointerUiPosition_},
       std::move(ownership));
   if (!evaluated.submitReady) {
     lastDiagnostics_.insert(lastDiagnostics_.end(),
@@ -701,6 +766,14 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                           std::make_move_iterator(evaluated.diagnostics.end()));
   if (!suppressFrameActions_) {
     publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
+    if (suppressExternalActions_) {
+      for (const auto &write : frameAudioVolumeWrites) {
+        videoAudioVolumes_[static_cast<std::size_t>(write.selector - 17)] = write.value;
+      }
+    } else {
+      queuedAudioVolumeWrites_.insert(queuedAudioVolumeWrites_.end(),
+          frameAudioVolumeWrites.begin(), frameAudioVolumeWrites.end());
+    }
   }
   return true;
 }
@@ -987,6 +1060,7 @@ bool ResultSkinSession::refreshRuntimeStrings(const ResultSkinData &data) {
 bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
                                          long long eventMicros,
                                          PresentationUiHit *capturedHit) {
+  setPointerPosition(point);
   if (!resultSkinInputAvailable(model_.model.timing.inputMillis, eventMicros) ||
       !publishedInteractionLayout_ ||
       queuedEventInvocations_.size() + queuedBuiltinEventIds_.size() +
@@ -1024,6 +1098,7 @@ bool ResultSkinSession::queuePointerDown(UiLogicalPoint point,
 bool ResultSkinSession::queuePointerMove(const PresentationUiHit &capturedHit,
                                          UiLogicalPoint point,
                                          long long eventMicros) {
+  setPointerPosition(point);
   if (!publishedInteractionLayout_) {
     return false;
   }

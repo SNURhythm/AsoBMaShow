@@ -3,7 +3,6 @@
 
 import json
 import os
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -52,13 +51,7 @@ class MusicSelectSkinLedgerTests(unittest.TestCase):
     def test_type5_surface_contains_songlist_and_selector_runtime(self):
         if not (BEATORAJA_ROOT / ".git").exists():
             self.skipTest("optional sibling Beatoraja checkout is unavailable")
-        actual = subprocess.run(
-            ["git", "-C", str(BEATORAJA_ROOT), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        self.assertEqual(actual, PINNED_COMMIT)
+        self.extractor.verify_commit(BEATORAJA_ROOT)
 
         surface = self.extractor.extract(BEATORAJA_ROOT)
         identifiers = {row["id"] for row in surface["features"]}

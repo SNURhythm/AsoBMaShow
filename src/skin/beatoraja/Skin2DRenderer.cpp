@@ -274,6 +274,8 @@ bool batchCompatible(const SkinDrawCommand &left,
                  sameState(leftPayload.state, rightPayload->state);
         } else if constexpr (std::is_same_v<Payload, SkinGlyphRunCommand>) {
           return leftPayload.atlas == rightPayload->atlas &&
+                 leftPayload.fallbackColorFilter ==
+                     rightPayload->fallbackColorFilter &&
                  sameState(leftPayload.state, rightPayload->state);
         } else if constexpr (std::is_same_v<Payload, SkinPrimitiveCommand>) {
           return leftPayload.kind == rightPayload->kind &&
@@ -1518,8 +1520,20 @@ breakTextLines(const PreparedSkinTextAtlas &atlas,
 
 struct TextLoweringResult {
   std::optional<SkinDrawCommand> command;
+  std::vector<SkinDrawCommand> subsequentCommands;
   std::optional<SkinDiagnostic> failure;
   std::size_t glyphCount = 0;
+
+  std::size_t commandCount() const noexcept {
+    return (command ? 1U : 0U) + subsequentCommands.size();
+  }
+
+  void appendTo(std::vector<SkinDrawCommand> &commands) {
+    if (command) commands.push_back(std::move(*command));
+    commands.insert(commands.end(),
+                    std::make_move_iterator(subsequentCommands.begin()),
+                    std::make_move_iterator(subsequentCommands.end()));
+  }
 };
 
 TextLoweringResult lowerText(const SkinFrameInputs &inputs,
@@ -1560,9 +1574,40 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
     const double startX = text.alignment == 2   ? base.rect.x - drawnWidth
                           : text.alignment == 1 ? base.rect.x - drawnWidth * 0.5
                                                 : base.rect.x;
+    bool emptyClip = false;
+    const auto projectedClip = projectSkinDestinationToUi(
+        base,
+        {.textureWidth = atlas.width,
+         .textureHeight = atlas.height,
+         .region = {.x = 0, .y = 0, .w = atlas.width, .h = atlas.height}},
+        inputs.viewport);
+    const auto clip = intersectClip(projectedClip.clip,
+                                    projectedSkinScissorBounds(inputs.viewport),
+                                    emptyClip);
+    if (emptyClip) {
+      return result;
+    }
     SkinGlyphRunCommand run;
     run.atlas = atlas.id;
     run.glyphs.reserve(glyphs.size());
+    run.state = {.blend = base.blend,
+                 .filter = SkinFilterMode::Linear,
+                 .scissor = clip};
+    const auto finishRun = [&] {
+      if (run.glyphs.empty()) return;
+      result.glyphCount += run.glyphs.size();
+      SkinDrawCommand command{
+          .authoredOrdinal = destination.presentation.authoredOrdinal,
+          .sourceObject = object.id,
+          .payload = std::move(run)};
+      if (!result.command) result.command = std::move(command);
+      else result.subsequentCommands.push_back(std::move(command));
+      run = {};
+      run.atlas = atlas.id;
+      run.state = {.blend = base.blend,
+                   .filter = SkinFilterMode::Linear,
+                   .scissor = clip};
+    };
     double dx = 0.0;
     for (const char32_t codepoint : glyphs) {
       const auto &metrics = atlas.glyphs.at(codepoint);
@@ -1584,6 +1629,10 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
            .textureHeight = page->height,
            .region = metrics.region},
           inputs.viewport);
+      const auto filter = usesLuaJCompatibilityCoercion(inputs)
+                              ? projected.filter : SkinFilterMode::Linear;
+      if (!run.glyphs.empty() && run.state.filter != filter) finishRun();
+      run.state.filter = filter;
       SkinGlyphInstance glyph{.codepoint = codepoint};
       const std::uint32_t color = packAbgr(projected.rgba);
       for (std::size_t vertex = 0; vertex < glyph.vertices.size(); ++vertex) {
@@ -1597,27 +1646,7 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
       run.glyphs.push_back(std::move(glyph));
       dx += width + atlas.margin * shrink;
     }
-    bool emptyClip = false;
-    const auto projectedClip = projectSkinDestinationToUi(
-        base,
-        {.textureWidth = atlas.width,
-         .textureHeight = atlas.height,
-         .region = {.x = 0, .y = 0, .w = atlas.width, .h = atlas.height}},
-        inputs.viewport);
-    const auto clip = intersectClip(projectedClip.clip,
-                                    projectedSkinScissorBounds(inputs.viewport),
-                                    emptyClip);
-    if (emptyClip) {
-      return result;
-    }
-    run.state = {.blend = base.blend,
-                 .filter = SkinFilterMode::Linear,
-                 .scissor = clip};
-    result.glyphCount = run.glyphs.size();
-    result.command = SkinDrawCommand{
-        .authoredOrdinal = destination.presentation.authoredOrdinal,
-        .sourceObject = object.id,
-        .payload = std::move(run)};
+    finishRun();
     return result;
   }
   const double scaleY = atlas.bitmapFont
@@ -1788,9 +1817,20 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
   if (emptyClip) {
     return result;
   }
+  auto fontFilter = atlas.bitmapFont ? SkinFilterMode::Linear : base.filter;
+  if (usesLuaJCompatibilityCoercion(inputs)) {
+    // Font drawers choose their own shader type without SkinObject's
+    // image-size shortcut. LR2 image fonts use the per-glyph path above.
+    fontFilter = atlas.bitmapFont
+                     ? (atlas.bitmapFontType == 0
+                            ? SkinFilterMode::BeatorajaBilinear
+                            : SkinFilterMode::Linear)
+                     : (base.filter == SkinFilterMode::Nearest
+                            ? SkinFilterMode::Nearest : SkinFilterMode::Linear);
+    run.fallbackColorFilter = SkinFilterMode::BeatorajaBilinear;
+  }
   run.state = {.blend = base.blend,
-               .filter = atlas.bitmapFont ? SkinFilterMode::Linear
-                                          : base.filter,
+               .filter = fontFilter,
                .scissor = clip};
   if (atlas.bitmapFont &&
       (atlas.bitmapFontType == 1 || atlas.bitmapFontType == 2)) {
@@ -1897,7 +1937,7 @@ PracticeLoweringResult lowerPracticeLegacy(
     }
     if (lowered.command) {
       result.glyphCount += lowered.glyphCount;
-      result.commands.push_back(std::move(*lowered.command));
+      lowered.appendTo(result.commands);
     }
     return true;
   };
@@ -2019,10 +2059,34 @@ struct DestinationResolution {
   std::vector<SkinDiagnostic> failures;
 };
 
+bool destinationContainsPointer(const SkinFrameInputs &inputs,
+                                const SkinDestinationBody &presentation,
+                                const AuthoredDestinationGeometry &geometry) {
+  if (!presentation.mouseRect) return true;
+  double x = 0.0;
+  double y = 0.0;
+  if (inputs.pointerUiPosition) {
+    const auto &point = *inputs.pointerUiPosition;
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) return false;
+    const auto &inverse = inputs.viewport.uiToAuthored;
+    x = inverse.m00 * point.x + inverse.m01 * point.y + inverse.tx;
+    y = inverse.m10 * point.x + inverse.m11 * point.y + inverse.ty;
+  }
+  // SkinObject tests the pointer against the prepared origin, before rotation
+  // or stretch. libGDX Rectangle.contains includes all four boundary edges.
+  x -= geometry.rect.x;
+  y -= geometry.rect.y;
+  const auto &rect = *presentation.mouseRect;
+  return x >= rect.x && x <= rect.x + rect.width &&
+         y >= rect.y && y <= rect.y + rect.height;
+}
+
 DestinationResolution
 resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                    const SkinDestinationBody &presentation,
-                   bool relativeOffsets = false) {
+                   bool relativeOffsets = false,
+                   double prepareOffsetX = 0.0,
+                   double prepareOffsetY = 0.0) {
   DestinationResolution result;
   // Beatoraja's Skin.prepare removes objects with no destination frames.
   // Suppress them before their conditions or timers can observe state.
@@ -2145,12 +2209,29 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                      .orderedOffsets = offsets});
   result.geometry = std::move(evaluated.geometry);
   result.failures = std::move(evaluated.diagnostics);
+  if (result.geometry && usesLuaJCompatibilityCoercion(inputs)) {
+    result.geometry->useDestinationResolution = true;
+    if (result.geometry->filter == SkinFilterMode::Linear) {
+      result.geometry->filter = SkinFilterMode::BeatorajaBilinear;
+    }
+  }
   if (relativeOffsets && result.geometry) {
     result.geometry->rect.x -= relativeTranslationX;
     result.geometry->rect.y -= relativeTranslationY;
     if (result.geometry->clip) {
       result.geometry->clip->x -= relativeTranslationX;
       result.geometry->clip->y -= relativeTranslationY;
+    }
+  }
+  if (result.geometry) {
+    result.geometry->rect.x += prepareOffsetX;
+    result.geometry->rect.y += prepareOffsetY;
+    if (result.geometry->clip) {
+      result.geometry->clip->x += prepareOffsetX;
+      result.geometry->clip->y += prepareOffsetY;
+    }
+    if (!destinationContainsPointer(inputs, presentation, *result.geometry)) {
+      result.geometry.reset();
     }
   }
   return result;
@@ -3102,14 +3183,13 @@ lowerJudge(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
     }
     if (!layout.suppressed) {
       auto detailDestination = resolveDestination(
-          inputs, index, detailPresentation->destination, true);
+          inputs, index, detailPresentation->destination, true,
+          imageDestination.geometry->rect.x, imageDestination.geometry->rect.y);
       if (!detailDestination.failures.empty()) {
         result.failure = std::move(detailDestination.failures.front());
         return result;
       }
       if (detailDestination.geometry) {
-        detailDestination.geometry->rect.x += imageDestination.geometry->rect.x;
-        detailDestination.geometry->rect.y += imageDestination.geometry->rect.y;
         // Nested Judge children are prepared directly and are never passed
         // through Skin.drawObject. The outer Judge owns the only active clip.
         detailDestination.geometry->clip =
@@ -3204,7 +3284,8 @@ PreparedMusicSelectPresentation prepareMusicSelectPresentation(
     const SkinSongListPresentation &presentation,
     std::size_t maximumCodepoints,
     std::optional<int> forcedImageState = std::nullopt,
-    std::optional<std::int64_t> forcedNumberValue = std::nullopt) {
+    std::optional<std::int64_t> forcedNumberValue = std::nullopt,
+    double prepareOffsetX = 0.0, double prepareOffsetY = 0.0) {
   PreparedMusicSelectPresentation result;
   if (presentation.object == 0) {
     return result;
@@ -3216,11 +3297,53 @@ PreparedMusicSelectPresentation prepareMusicSelectPresentation(
         "Song-list presentation references an absent skin object."));
     return result;
   }
-  auto destination =
-      resolveDestination(inputs, index, presentation.destination);
+  const bool compatibility =
+      !inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit);
+  const auto *number = std::get_if<SkinNumberObject>(&result.object->payload);
+  if (compatibility && number) {
+    // SkinNumber resolves its constructor property before super.prepare.
+    // Selector levels use numeric ref, not the ordinary Value.value callback.
+    const auto resolved = forcedNumberValue
+        ? ResolvedValue<std::int64_t>{.value = *forcedNumberValue}
+        : resolveInteger(inputs, index, number->value);
+    if (resolved.failure) {
+      result.failures.push_back(*resolved.failure);
+      return result;
+    }
+    result.number = prepareNumberLayoutForValue(*number, *resolved.value);
+    if (result.number->failure) {
+      result.failures.push_back(*result.number->failure);
+      return result;
+    }
+    if (result.number->suppressed) return result;
+  }
+  auto destination = resolveDestination(inputs, index, presentation.destination,
+                                        false, prepareOffsetX, prepareOffsetY);
   result.failures = std::move(destination.failures);
   result.geometry = std::move(destination.geometry);
-  if (!result.failures.empty() || !result.geometry) {
+  if (!result.failures.empty()) return result;
+  if (!result.geometry) {
+    // SkinText and SkinImage continue preparing after super.prepare hides
+    // their destination. This does not require loading glyphs or textures.
+    if (compatibility) {
+      if (const auto *text = std::get_if<SkinTextObject>(&result.object->payload);
+          text && text->value) {
+        const auto resolved = resolveString(inputs, index, *text->value);
+        if (resolved.failure) result.failures.push_back(*resolved.failure);
+      } else if (const auto *image =
+                     std::get_if<SkinImageObject>(&result.object->payload);
+                 image && !image->orderedStates.empty()) {
+        const int state = forcedImageState.value_or(0);
+        if (state >= 0) {
+          const auto selected = selectSpriteFrame(
+              inputs, index,
+              image->orderedStates[static_cast<std::size_t>(state) <
+                                           image->orderedStates.size()
+                                       ? static_cast<std::size_t>(state) : 0]);
+          if (selected.failure) result.failures.push_back(*selected.failure);
+        }
+      }
+    }
     return result;
   }
 
@@ -3263,12 +3386,13 @@ PreparedMusicSelectPresentation prepareMusicSelectPresentation(
     return result;
   }
 
-  if (const auto *number =
-          std::get_if<SkinNumberObject>(&result.object->payload)) {
-    result.number = forcedNumberValue
-                        ? prepareNumberLayoutForValue(*number,
-                                                      *forcedNumberValue)
-                        : prepareNumberLayout(inputs, index, *number);
+  if (number) {
+    if (!result.number) {
+      result.number = forcedNumberValue
+                          ? prepareNumberLayoutForValue(*number,
+                                                        *forcedNumberValue)
+                          : prepareNumberLayout(inputs, index, *number);
+    }
     if (result.number->failure) {
       result.failures.push_back(*result.number->failure);
       return result;
@@ -3540,21 +3664,15 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
               : std::nullopt,
           command.family == MusicSelectBarDrawFamily::Level
               ? std::optional<std::int64_t>{command.value}
-              : std::nullopt);
+              : std::nullopt,
+          command.family == MusicSelectBarDrawFamily::BarImage
+              ? row.x - row.preparedX : row.x,
+          command.family == MusicSelectBarDrawFamily::BarImage
+              ? row.y - row.preparedY -
+                    (songList.position == 1 ? row.barHeight : 0.0)
+              : row.y);
       if (!dynamic.geometry) {
         continue;
-      }
-      if (command.family == MusicSelectBarDrawFamily::BarImage) {
-        translateMusicSelectGeometry(*dynamic.geometry,
-                                     row.x - row.preparedX,
-                                     row.y - row.preparedY -
-                                         (songList.position == 1
-                                              ? row.barHeight
-                                              : 0.0));
-      } else {
-        // BarRenderer supplies the current bar origin when it draws a level.
-        // Level destinations are authored relative to that origin.
-        translateMusicSelectGeometry(*dynamic.geometry, row.x, row.y);
       }
       if (image && dynamic.sprite && dynamic.spriteFrame) {
         auto lowered = lowerSpriteQuad(
@@ -3621,7 +3739,8 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
       auto lowered = lowerText(inputs, *initial.object, destination, geometry,
                                *text, layout);
       if (!lowered.failure && lowered.command &&
-                 (result.commands.size() >= maximumCommands ||
+                 (lowered.commandCount() >
+                      maximumCommands - result.commands.size() ||
                   lowered.glyphCount > maximumGlyphs - result.glyphCount)) {
         result.failures.push_back(diagnostic(
             "skin.renderer.command.limit",
@@ -3629,7 +3748,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
         return result;
       } else if (lowered.command) {
         result.glyphCount += lowered.glyphCount;
-        appendCommand(std::move(*lowered.command));
+        lowered.appendTo(result.commands);
       }
       continue;
     }
@@ -4278,6 +4397,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     };
     std::vector<DeferredNoteLowering> deferredNotes;
     deferredNotes.reserve(inputs.model.model.destinations.size());
+    std::map<const SkinDestination *, SkinBlendMode> blendAfterDestination;
 
     for (const auto &destination : inputs.model.model.destinations) {
       const auto *object = findObject(objects, destination.object);
@@ -4378,6 +4498,19 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *number = std::get_if<SkinNumberObject>(&object->payload);
       const auto *floating = std::get_if<SkinFloatObject>(&object->payload);
       const auto *text = std::get_if<SkinTextObject>(&object->payload);
+      const auto prepareHiddenText = [&]() {
+        // SkinText.prepare reads its property after super.prepare even when
+        // runtime conditions or destination timing hide it. Font preparation
+        // belongs to draw, so hidden text needs no atlas or glyph budget.
+        if (text && text->value &&
+            !inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+          const auto resolved = resolveString(inputs, lookupIndex, *text->value);
+          if (resolved.failure) {
+            return reportObjectFailure(result, *object, *resolved.failure);
+          }
+        }
+        return false;
+      };
       const auto *slider = std::get_if<SkinSliderObject>(&object->payload);
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
       const auto *selectDistribution =
@@ -4584,6 +4717,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       if (!destinationVisible && !image && !gauge && !note && !cover &&
           !judge && !pmChara) {
+        if (prepareHiddenText()) return result;
         continue;
       }
 
@@ -4628,6 +4762,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
       if (!destinationVisible && !image && !gauge && !note && !cover &&
           !judge && !pmChara) {
+        if (prepareHiddenText()) return result;
         continue;
       }
 
@@ -4701,8 +4836,21 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         }
         continue;
       }
+      if (evaluated.geometry && usesLuaJCompatibilityCoercion(inputs)) {
+        evaluated.geometry->useDestinationResolution = true;
+        if (evaluated.geometry->filter == SkinFilterMode::Linear) {
+          evaluated.geometry->filter = SkinFilterMode::BeatorajaBilinear;
+        }
+      }
+      if (evaluated.geometry &&
+          !destinationContainsPointer(inputs, destination.presentation,
+                                      *evaluated.geometry)) {
+        evaluated.geometry.reset();
+        destinationVisible = false;
+      }
       if (!evaluated.geometry && !image && !gauge && !note && !cover &&
           !judge && !pmChara) {
+        if (prepareHiddenText()) return result;
         continue;
       }
 
@@ -5391,6 +5539,11 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         gaugeAnimationStates_.insert_or_assign(object->id, animationState);
+        // SkinGauge sets the renderer blend directly even when all nodes
+        // have zero alpha. A rejected outer scissor never calls draw.
+        if (noteOuterClipDrawable(inputs, *evaluated.geometry)) {
+          blendAfterDestination[&destination] = evaluated.geometry->blend;
+        }
         buffer.commands.insert(buffer.commands.end(),
                                std::make_move_iterator(gaugeCommands.begin()),
                                std::make_move_iterator(gaugeCommands.end()));
@@ -5535,6 +5688,13 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             return result;
           }
           continue;
+        }
+        // SkinGraph still calls the ordinary image draw for a zero value.
+        // Its collapsed quad contributes no pixels but does set blend.
+        if (graph && objectRate == 0.0F &&
+            evaluated.geometry->rgba[3] > 0.0F &&
+            noteOuterClipDrawable(inputs, *evaluated.geometry)) {
+          blendAfterDestination[&destination] = evaluated.geometry->blend;
         }
         if (lowered.command) {
           if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
@@ -5839,7 +5999,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         if (lowered.command &&
-            (buffer.commands.size() >= skinFrameMaximumCommands(inputs) ||
+            (lowered.commandCount() >
+                 skinFrameMaximumCommands(inputs) - buffer.commands.size() ||
             lowered.glyphCount >
                 skinFrameMaximumGlyphInstances(inputs) - glyphInstances)) {
           if (reportObjectFailure(
@@ -5859,7 +6020,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         }
         if (lowered.command) {
           glyphInstances += lowered.glyphCount;
-          buffer.commands.push_back(std::move(*lowered.command));
+          lowered.appendTo(buffer.commands);
         }
         continue;
       }
@@ -5963,6 +6124,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       buffer.commands.insert(insertion,
                              std::make_move_iterator(lowered.commands.begin()),
                              std::make_move_iterator(lowered.commands.end()));
+      // LaneRenderer resets blend after its timeline lines, including frames
+      // with no visible notes. Do not let a prior additive object leak through
+      // an empty but drawn lane into following font text.
+      blendAfterDestination[deferred.destination] = SkinBlendMode::Normal;
     }
 
     // The final loaded SkinNote owns Beatoraja's lane geometry. Publish only
@@ -6048,13 +6213,61 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
     }
 
+    SkinBlendMode nextRetainedBlend =
+        retainedBlendSessionSerial_ == inputs.sessionSerial &&
+                retainedBlendModelIdentity_ == &inputs.model
+            ? retainedBlend_
+            : SkinBlendMode::Normal;
+    if (!inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+      // Font draw methods only set type/color; unlike SkinObject's image
+      // overloads they retain the renderer blend from preceding actual draws.
+      // Resolve this after deferred notes so it follows draw, not prepare,
+      // order. LR2 image fonts still use the ordinary image draw overload.
+      std::size_t commandIndex = 0;
+      for (const auto &destination : inputs.model.model.destinations) {
+        while (commandIndex < buffer.commands.size() &&
+               buffer.commands[commandIndex].authoredOrdinal ==
+                   destination.presentation.authoredOrdinal) {
+          auto &command = buffer.commands[commandIndex++];
+          std::visit(
+              [&](auto &payload) {
+                using Payload = std::decay_t<decltype(payload)>;
+                if constexpr (std::is_same_v<Payload, SkinGlyphRunCommand>) {
+                  const auto *atlas =
+                      inputs.resources.findTextAtlasForObject(command.sourceObject);
+                  if (atlas && atlas->layoutKind == SkinTextLayoutKind::Lr2Image) {
+                    nextRetainedBlend = payload.state.blend;
+                  } else {
+                    payload.state.blend = nextRetainedBlend;
+                  }
+                } else if constexpr (std::is_same_v<Payload, SkinBgaCommand>) {
+                  nextRetainedBlend = payload.authoredGeometry.blend;
+                } else {
+                  nextRetainedBlend = payload.state.blend;
+                }
+              },
+              command.payload);
+        }
+        if (const auto found = blendAfterDestination.find(&destination);
+            found != blendAfterDestination.end()) {
+          nextRetainedBlend = found->second;
+        }
+      }
+    }
     buildAdjacentBatches(buffer);
     std::ranges::reverse(interactionLayout.slidersTopmostFirst);
     std::ranges::reverse(interactionLayout.imagesTopmostFirst);
     std::ranges::reverse(interactionLayout.textsTopmostFirst);
     std::ranges::reverse(interactionLayout.controlsTopmostFirst);
+    const SkinRetainedBlendState nextBlendState{
+        inputs.sessionSerial, &inputs.model, nextRetainedBlend};
+    if (!beginRuntimeFrame) buffer.retainedBlendAfterSubmit = nextBlendState;
     result.submitReady = std::move(buffer);
     result.interactionLayout = std::move(interactionLayout);
+    // Standalone evaluation retains its legacy stateful behavior. Sessions
+    // publish only after successful submission, so canceled preparation and
+    // backend rejection cannot affect the next live font draw.
+    if (beginRuntimeFrame) restoreRetainedBlendState(nextBlendState);
     return result;
   } catch (...) {
     result.submitReady.reset();

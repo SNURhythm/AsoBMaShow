@@ -2,7 +2,9 @@
 // without opening a GPU or encoder. Real Lua capture behavior is covered by
 // play_skin_session_tests.
 #include <algorithm>
+#include <bitset>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -15,6 +17,10 @@
 
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 struct RenderContext {};
+namespace rendering {
+int render_width = 1920;
+int render_height = 1080;
+}
 struct ResultSkinData {
   bool showControls = true;
   void **outGraphPlaceholder = nullptr;
@@ -49,6 +55,12 @@ std::optional<int> makeSkinProfileId(int id) {
 struct BgfxSkinTextureDevice {};
 struct SkinSafetyPolicy { explicit SkinSafetyPolicy(int) {} };
 int createLuaSkinNoOutputAudioBackend(int *) { return 42; }
+struct LuaSkinLegacyInputGeneration {
+  int drawableWidth = 0;
+  int drawableHeight = 0;
+  std::bitset<256> pressedGdxKeys;
+  int controllerCount = 0;
+};
 struct SessionContext {
   int expectedSkinType;
   int profileId;
@@ -59,6 +71,7 @@ struct SessionContext {
   void (*builtinImageReader)();
   int audioBackend;
   int *liveResourceCounters;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   SkinSafetyPolicy safetyPolicy;
   std::stop_token stop;
 };
@@ -75,6 +88,7 @@ struct ResultSkinSession {
   static inline int skinType = 0, audio = 0, alive = 0;
   static inline bool failCreate = false, failRender = false;
   static inline std::stop_token stop;
+  static inline std::function<LuaSkinLegacyInputGeneration()> captureInput;
   ResultSkinSession() { ++alive; }
   ~ResultSkinSession() { --alive; }
   static Created create(int, SessionContext context) {
@@ -82,6 +96,7 @@ struct ResultSkinSession {
     skinType = context.expectedSkinType;
     audio = context.audioBackend;
     stop = context.stop;
+    captureInput = std::move(context.captureLegacyInputGeneration);
     if (failCreate) return {nullptr, {{"decode failed"}}};
     return {std::make_unique<ResultSkinSession>(), {}};
   }
@@ -243,12 +258,24 @@ int main() {
   app.gameplaySkinLifecycle->next = {skin::GameplaySkinAcquisitionDisposition::Ready, skin::Request{}};
   using Session = skin::ResultSkinSession;
   for (int type : {7, 7, 15}) {
+    rendering::render_width = 1920;
+    rendering::render_height = 1080;
     check(presentation.prepare(app, data, type, stop.get_token(), error, nullptr) &&
               presentation.active(), "selected result skin activates for chart/stage/course");
     check(app.gameplaySkinLifecycle->target == type && !app.gameplaySkinLifecycle->boundary &&
               Session::skinType == type, "acquisition uses exact target without a chart boundary");
     check(!Session::initial.showControls && Session::initial.outGraphPlaceholder == nullptr &&
               Session::audio == 42, "capture hides native controls and uses silent skin audio");
+    check(Session::captureInput && Session::captureInput().drawableWidth == 1920 &&
+              Session::captureInput().drawableHeight == 1080 &&
+              Session::captureInput().pressedGdxKeys.none() &&
+              Session::captureInput().controllerCount == 0,
+          "replay result caller supplies export dimensions without live keys or controllers");
+    rendering::render_width = 1600;
+    rendering::render_height = 900;
+    check(Session::captureInput && Session::captureInput().drawableWidth == 1600 &&
+              Session::captureInput().drawableHeight == 900,
+          "replay result input callback reads current render dimensions");
     const auto index = Session::times.size();
     check(presentation.render(render, 0, error, nullptr) &&
               presentation.render(render, 1'234'567, error, nullptr), "video frames render");

@@ -4,12 +4,20 @@
 
 #include "../../scene/ResultScene.h"
 
+#include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace skin {
+
+struct ResultSkinAudioState {
+  std::array<std::optional<float>, 3> volumes{};
+  std::function<bool(int, float)> write;
+  SkinSafetyPolicy safetyPolicy{};
+};
 
 // Result scenes have no playfield projection. This bridge deliberately
 // supplies Beatoraja's result properties from the immutable result snapshot
@@ -20,7 +28,8 @@ public:
                         std::int64_t elapsedMillis,
                         const BeatorajaSkinConfiguration *configuration = nullptr,
                         const BeatorajaSkinModel *model = nullptr,
-                        std::unordered_map<int, std::int64_t> *persistentCustomTimers = nullptr);
+                        std::unordered_map<int, std::int64_t> *persistentCustomTimers = nullptr,
+                        ResultSkinAudioState audioState = {});
 
   std::uint64_t frameSerial() const noexcept override;
   SkinPropertyLookup<bool>
@@ -36,6 +45,7 @@ public:
   SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
   bool setTimerProperty(int, std::int64_t) override;
+  bool setFloatProperty(int, double) override;
   std::span<const SkinProjectedNoteView> projectedNotes() const noexcept override;
   std::span<const SkinProjectedLongNoteView>
   projectedLongNotes() const noexcept override;
@@ -59,7 +69,10 @@ private:
   [[nodiscard]] std::optional<int>
   timing(Judgement judgement, bool early) const noexcept;
 
+  [[nodiscard]] std::optional<float> audioVolume(int) const noexcept;
+
   ResultSkinData data_;
+  ResultSkinAudioState audioState_;
   std::uint64_t frameSerial_ = 0;
   std::int64_t elapsedMillis_ = 0;
   std::string stringValue_;

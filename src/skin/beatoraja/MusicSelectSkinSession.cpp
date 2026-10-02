@@ -13,6 +13,7 @@
 #include "../../view/ImageFileDecoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <chrono>
 #include <future>
@@ -368,6 +369,12 @@ MusicSelectSkinSession::MusicSelectSkinSession(
   }
 }
 
+void MusicSelectSkinSession::setPointerPosition(UiLogicalPoint point) noexcept {
+  if (std::isfinite(point.x) && std::isfinite(point.y)) {
+    pointerUiPosition_ = point;
+  }
+}
+
 MusicSelectSkinSession::~MusicSelectSkinSession() {
   builtinImagePatchStop_.request_stop();
   textAtlasPatchStop_.request_stop();
@@ -464,7 +471,7 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::MusicSelect,
-         .loadConfiguredLua = [&context, &initialActions](
+         .loadConfiguredLua = [&context, &initialActions, &safetyPolicy](
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &,
                                   std::vector<SkinDiagnostic> &,
@@ -480,7 +487,7 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
                       {.kind = MusicSelectSkinActionKind::FloatWriter,
                        .selector = SkinBuiltinPropertySelector{.value = id},
                        .floatValue = value});
-                }});
+                }}, safetyPolicy);
            LuaFrameStateBinding frameState(&runtime, &bridge);
            return loadAndDecode();
          },
@@ -726,6 +733,22 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
   if (captureLegacyInputGeneration_) {
     runtime_->setLegacyInputGeneration(captureLegacyInputGeneration_());
   }
+  std::map<int, double> initialAudioValues;
+  for (const auto &action : frameActions_) {
+    if (action.kind != MusicSelectSkinActionKind::FloatWriter) continue;
+    int id = 0;
+    if (const auto *numeric = std::get_if<int>(&action.selector.value)) {
+      id = *numeric;
+    } else {
+      const auto &name = std::get<std::string>(action.selector.value);
+      if (name == "mastervolume") id = 17;
+      else if (name == "keyvolume") id = 18;
+      else if (name == "bgmvolume") id = 19;
+    }
+    if (id >= 17 && id <= 19) {
+      initialAudioValues.insert_or_assign(id, action.floatValue);
+    }
+  }
   MusicSelectSkinStateBridge bridge(
       frame, customTimerValues_, activeCustomTimerIds_,
       {.floatWriter = [this](int id, double value) {
@@ -733,7 +756,7 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
              {.kind = MusicSelectSkinActionKind::FloatWriter,
               .selector = SkinBuiltinPropertySelector{.value = id},
               .floatValue = value});
-       }});
+       }}, safetyPolicy_, std::move(initialAudioValues));
   bridge.setPublishedSongResources(
       {.stageFile = resources_->builtinImageResource(100).has_value(),
        .banner = resources_->builtinImageResource(102).has_value(),
@@ -878,7 +901,8 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
        .observedTextValue = [&observedText](SkinObjectId object,
                                              std::string_view value) {
          appendRuntimeString(observedText, object, value);
-       }},
+       },
+       .pointerUiPosition = pointerUiPosition_},
       std::move(ownership));
   observedRuntimeStringsByObject_ = std::move(observedText);
   if (!evaluated.submitReady) {
@@ -1116,6 +1140,7 @@ MusicSelectSkinSession::pointerTargetAt(UiLogicalPoint point) const noexcept {
 
 MusicSelectSkinPointerResult MusicSelectSkinSession::queuePointerDown(
     UiLogicalPoint point, int button, long long eventMicros) {
+  setPointerPosition(point);
   MusicSelectSkinPointerResult result;
   const auto target = pointerTargetAt(point);
   if (target.kind == MusicSelectSkinPointerTargetKind::Bar) {
@@ -1175,6 +1200,7 @@ MusicSelectSkinPointerResult MusicSelectSkinSession::queuePointerDown(
 
 bool MusicSelectSkinSession::queuePointerDrag(UiLogicalPoint point,
                                               long long eventMicros) {
+  setPointerPosition(point);
   if (!publishedInteractionLayout_) return false;
   const auto invocation = publishedInteractionLayout_->sliderWriterInvocationAt(
       point, eventMicros);

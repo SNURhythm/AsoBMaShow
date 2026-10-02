@@ -42,6 +42,9 @@ struct PlaySkinViewport {
   UiLogicalRect safeUiBounds;
   std::optional<UiLogicalRect> projectedUiBounds;
   bool valid = false;
+  // Selected logical destination canvas, before the optional custom transform.
+  double destinationScaleX = 1.0;
+  double destinationScaleY = 1.0;
 };
 
 PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,

@@ -1,4 +1,5 @@
 #include "REPOSITORY_ROOT/src/scene/SceneReturnTarget.h"
+#include "REPOSITORY_ROOT/src/skin/SkinPresentationTypes.h"
 
 #include <cassert>
 #include <memory>
@@ -11,13 +12,27 @@ enum {
   SDL_KEYDOWN, SDL_KEYUP, SDL_CONTROLLERBUTTONDOWN, SDL_CONTROLLERBUTTONUP,
   SDL_MOUSEBUTTONUP, SDLK_RETURN, SDLK_KP_ENTER, SDLK_6, SDLK_ESCAPE, SDLK_DOWN,
   SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_START,
-  SDL_CONTROLLER_BUTTON_BACK, SDL_CONTROLLER_BUTTON_DPAD_DOWN
+  SDL_CONTROLLER_BUTTON_BACK, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+  SDL_MOUSEMOTION, SDL_MOUSEBUTTONDOWN, SDL_FINGERDOWN, SDL_FINGERMOTION,
+  SDL_TOUCH_MOUSEID, SDL_MOUSE_TOUCHID
 };
 struct SDL_Event {
   int type = SDL_KEYDOWN;
   struct { int repeat = 0; struct { int sym = 0; } keysym; } key;
   struct { int button = 0; } cbutton;
+  struct { int which = 0, x = 0, y = 0; } motion, button;
+  struct { int touchId = 0; float x = 0, y = 0; } tfinger;
 };
+namespace rendering {
+constexpr float widthScale = 1.0F, heightScale = 1.0F;
+void screenToUi(float x, float y, float &outX, float &outY) {
+  outX = x;
+  outY = y;
+}
+void normalizedToUi(float x, float y, float &outX, float &outY) {
+  screenToUi(x * 1920.0F, y * 1080.0F, outX, outY);
+}
+}
 struct EventHandleResult { bool quit = false; };
 struct View {
   bool visible = true;
@@ -92,7 +107,12 @@ struct MusicSelectScene : Scene {
   View *skinTextInput_ = &skinTextInput;
   View *skinLoadingView_ = &skinLoading;
   struct { void cancel() {} } skinTouchGesture_;
-  std::unique_ptr<int> skinSession_ = std::make_unique<int>(1);
+  struct SkinSession {
+    std::optional<UiLogicalPoint> pointer;
+    void setPointerPosition(UiLogicalPoint point) { pointer = point; }
+  };
+  std::unique_ptr<SkinSession> skinSession_ = std::make_unique<SkinSession>();
+  std::optional<UiLogicalPoint> skinPointerUiPosition_;
   std::unique_ptr<int> previewController_ = std::make_unique<int>(1);
   std::unique_ptr<PreviewAudio> previewAudio_ = std::make_unique<PreviewAudio>();
   std::vector<skin::SkinDiagnostic> diagnostics_;

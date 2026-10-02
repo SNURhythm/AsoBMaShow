@@ -89,7 +89,7 @@ LuaSkinAudioHost::load(std::string_view authored,
 
 LuaSkinAudioOperationResult
 LuaSkinAudioHost::play(std::string_view path, float volume,
-                       bool loop) noexcept {
+                       bool loop, std::optional<float> systemVolume) noexcept {
   std::filesystem::path resolved;
   LuaSkinAudioOperationResult result;
   result = resolve(path, resolved);
@@ -103,7 +103,8 @@ LuaSkinAudioHost::play(std::string_view path, float volume,
       active_.erase(resolved);
     }
     if (backend_ && !suspended_) {
-      backend_->play(**identity, backend_->systemVolume() * volume, loop);
+      backend_->play(**identity,
+                     systemVolume.value_or(backend_->systemVolume()) * volume, loop);
     }
   }
   return result;

@@ -1426,6 +1426,39 @@ SkinHostCallResult PlaySkinStateBridge::callbackFailure(SkinDiagnostic failure) 
           .diagnostics = diagnostics_};
 }
 
+std::optional<float> PlaySkinStateBridge::audioVolume(int id) const noexcept {
+  const auto *snapshot = state();
+  if (snapshot == nullptr || id < 17 || id > 19) return std::nullopt;
+  const auto target = static_cast<SkinAudioVolumeWriterTarget>(id - 17);
+  for (auto mutation = staged_.orderedMutations.rbegin();
+       mutation != staged_.orderedMutations.rend(); ++mutation) {
+    if (const auto *write = std::get_if<SetSkinAudioVolume>(&*mutation);
+        write != nullptr && write->target == target) return write->value;
+  }
+  switch (id) {
+  case 17: return snapshot->configuration.masterVolume;
+  case 18: return snapshot->configuration.keysoundVolume;
+  case 19: return snapshot->configuration.bgmVolume;
+  default: return std::nullopt;
+  }
+}
+
+bool PlaySkinStateBridge::setFloatProperty(int id, double value) {
+  if (phase_ != FramePhase::Active || id < 17 || id > 19) return false;
+  if (context_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    if (!std::isfinite(value)) return false;
+    value = std::clamp(value, 0.0, 1.0);
+  }
+  try {
+    staged_.orderedMutations.emplace_back(SetSkinAudioVolume{
+        .target = static_cast<SkinAudioVolumeWriterTarget>(id - 17),
+        .value = static_cast<float>(value)});
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 void PlaySkinStateBridge::rollbackFrameWrites() noexcept {
   staged_.orderedMutations.clear();
 }
@@ -1678,6 +1711,11 @@ PlaySkinFrameCommit PlaySkinStateBridge::takeFrameCommitForContinuation() {
                                  "active frame."});
     return {};
   }
+  // Deferred callbacks continue after this commit is submitted. Preserve its
+  // audio snapshot while later writes still live in their own savepoint.
+  state_->configuration.masterVolume = *audioVolume(17);
+  state_->configuration.keysoundVolume = *audioVolume(18);
+  state_->configuration.bgmVolume = *audioVolume(19);
   auto result = std::move(staged_);
   staged_ = {.frameSerial = frameSerial_};
   return result;
@@ -2430,19 +2468,13 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 171:
     return {.value = snapshot->score, .supported = true};
   case 57:
-    return {.value = javaDoubleToInt(
-                static_cast<double>(snapshot->configuration.masterVolume) *
-                100.0),
+    return {.value = javaDoubleToInt(*audioVolume(17) * 100.0F),
             .supported = true};
   case 58:
-    return {.value = javaDoubleToInt(
-                static_cast<double>(snapshot->configuration.keysoundVolume) *
-                100.0),
+    return {.value = javaDoubleToInt(*audioVolume(18) * 100.0F),
             .supported = true};
   case 59:
-    return {.value = javaDoubleToInt(
-                static_cast<double>(snapshot->configuration.bgmVolume) *
-                100.0),
+    return {.value = javaDoubleToInt(*audioVolume(19) * 100.0F),
             .supported = true};
   case 271:
     // ScoreDataProperty keeps rivalScore at zero without an attached target
@@ -2891,7 +2923,23 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
       scoreRate(snapshot->authority.bestScore, totalNotes);
   const auto targetFullRate = scoreRate(targetScore(*snapshot), totalNotes);
   const auto referenceCurrentRate = [&](int score) {
-    return totalNotes == 0 ? 0.0 : scoreRate(score, totalNotes);
+    if (totalNotes == 0) return 0.0;
+    // ScoreDataProperty projects the integer score with a Java long
+    // intermediate, then computes its rate against the full chart.
+    const int projected = javaLongToInt(
+        static_cast<std::int64_t>(score) * playedNotes / totalNotes);
+    return scoreRate(projected, totalNotes);
+  };
+  const auto currentBestRate = [&] {
+    const auto &target = snapshot->authority.bestScoreTarget;
+    if (totalNotes > 0 && target.enabled && target.usesReplayProgression &&
+        target.totalNotes == totalNotes &&
+        target.scoreAfterNotes.size() ==
+            static_cast<std::size_t>(totalNotes) + 1U) {
+      return scoreRate(pacemaker::targetScoreAtPlayedNotes(target, playedNotes),
+                       totalNotes);
+    }
+    return referenceCurrentRate(snapshot->authority.bestScore);
   };
   if (domain == SkinFloatPropertyDomain::FloatValue) {
     const double floatMinimum =
@@ -2984,12 +3032,9 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   }
   switch (*id) {
   case 17:
-    return {.value = snapshot->configuration.masterVolume, .supported = true};
   case 18:
-    return {.value = snapshot->configuration.keysoundVolume,
-            .supported = true};
   case 19:
-    return {.value = snapshot->configuration.bgmVolume, .supported = true};
+    return {.value = *audioVolume(*id), .supported = true};
   case 20:
     return {.value = snapshot->authority.practiceMenu
                          ? snapshot->authority.practiceMenu->itemScrollPosition
@@ -3020,13 +3065,12 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   case 111:
     return {.value = currentRate, .supported = true};
   case 112:
-    return {.value = referenceCurrentRate(bestScoreAtPassedNotes(*snapshot)),
-            .supported = true};
+    return {.value = currentBestRate(), .supported = true};
   case 113:
     return {.value = bestFullRate, .supported = true};
   case 114:
-    return {.value = referenceCurrentRate(
-                snapshot->authority.pacemakerStatus.targetScore),
+    // BMSPlayer supplies a best ghost but no rival ghost to setTargetScore.
+    return {.value = referenceCurrentRate(targetScore(*snapshot)),
             .supported = true};
   case 115:
     return {.value = targetFullRate, .supported = true};

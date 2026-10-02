@@ -9,6 +9,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -106,6 +107,43 @@ class GameplaySkinOracleTests(unittest.TestCase):
     def require_trace(self) -> dict:
         self.assertIsNotNone(self.trace, "pinned gameplay oracle trace must be committed")
         return self.trace
+
+    def test_historical_snapshot_preserves_latest_and_dirty_checkout(self):
+        sys.path.insert(0, str(ROOT))
+        from scripts.pinned_git_snapshot import pinned_git_snapshot
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-C", str(repository), "-c", "user.name=Fixture",
+                     "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+                     *arguments], check=True, capture_output=True, text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            source = repository / "src" / "source.txt"
+            source.parent.mkdir()
+            source.write_text("pinned source\n")
+            (repository / "outside.txt").write_text("not requested\n")
+            git("add", ".")
+            git("commit", "-qm", "pinned")
+            pinned = git("rev-parse", "HEAD")
+            source.write_text("updated source\n")
+            git("commit", "-qam", "updated")
+            latest = git("rev-parse", "HEAD")
+            source.write_text("local uncommitted edit\n")
+            with pinned_git_snapshot(repository, pinned, ("src",)) as snapshot:
+                self.assertEqual((snapshot / "src/source.txt").read_text(), "pinned source\n")
+                self.assertFalse((snapshot / "outside.txt").exists())
+                self.assertFalse((snapshot / ".git").exists())
+            self.assertFalse(snapshot.exists())
+            self.assertEqual(git("rev-parse", "HEAD"), latest)
+            self.assertEqual(source.read_text(), "local uncommitted edit\n")
+            with self.assertRaisesRegex(RuntimeError, "does not contain pinned commit"):
+                with pinned_git_snapshot(repository, "0" * 40, ("src",)):
+                    self.fail("missing reference commit must not produce a snapshot")
 
     def test_trace_envelope_pins_source_classpath_fixtures_and_frame(self):
         trace = self.require_trace()

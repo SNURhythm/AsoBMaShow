@@ -269,8 +269,9 @@ ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
                                              std::int64_t elapsedMillis,
                                              const BeatorajaSkinConfiguration *configuration,
                                              const BeatorajaSkinModel *model,
-                                             std::unordered_map<int, std::int64_t> *persistentCustomTimers)
-    : data_(std::move(data)), frameSerial_(frameSerial),
+                                             std::unordered_map<int, std::int64_t> *persistentCustomTimers,
+                                             ResultSkinAudioState audioState)
+    : data_(std::move(data)), audioState_(std::move(audioState)), frameSerial_(frameSerial),
       elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)),
       configuration_(configuration), model_(model),
       persistentCustomTimers_(persistentCustomTimers) {
@@ -1116,23 +1117,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
              data_.playerHistory->judgementCounts[2] +
              data_.playerHistory->judgementCounts[3];
     case 57:
-      return data_.context != nullptr
-                 ? std::optional<int>(static_cast<int>(
-                       data_.context->settings.audioVideo.audio.masterVolume *
-                       100.0F))
-                 : std::nullopt;
     case 58:
-      return data_.context != nullptr
-                 ? std::optional<int>(static_cast<int>(
-                       data_.context->settings.audioVideo.audio.keysoundVolume *
-                       100.0F))
-                 : std::nullopt;
     case 59:
-      return data_.context != nullptr
-                 ? std::optional<int>(static_cast<int>(
-                       data_.context->settings.audioVideo.audio.bgmVolume *
-                       100.0F))
-                 : std::nullopt;
+      if (const auto volume = audioVolume(*id - 40)) {
+        return javaDoubleToInt(*volume * 100.0F);
+      }
+      return std::nullopt;
     case 165:
       // MusicResult is entered only after BMSResource preparation, so the
       // source's combined BGA/audio load progress is complete.
@@ -1589,21 +1579,7 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
                                ? std::optional<int>(data_.pacemaker->targetScore)
                                : data_.state != nullptr ? std::optional<int>(0)
                                                         : std::nullopt;
-  if (data_.context != nullptr) {
-    switch (*id) {
-    case 17:
-      return supported(
-          static_cast<double>(data_.context->settings.audioVideo.audio.masterVolume));
-    case 18:
-      return supported(static_cast<double>(
-          data_.context->settings.audioVideo.audio.keysoundVolume));
-    case 19:
-      return supported(
-          static_cast<double>(data_.context->settings.audioVideo.audio.bgmVolume));
-    default:
-      break;
-    }
-  }
+  if (const auto volume = audioVolume(*id)) return supported<double>(*volume);
   if (*id == 310) {
     return data_.configuration
                ? supported(static_cast<double>(data_.configuration->gameplayHispeed))
@@ -1916,6 +1892,37 @@ std::int64_t ResultSkinStateBridge::timerProperty(
     return elapsedMillis_ * 1'000 >= start ? start : kTimerOff;
   }
   return kTimerOff;
+}
+
+std::optional<float> ResultSkinStateBridge::audioVolume(int id) const noexcept {
+  if (id < 17 || id > 19) return std::nullopt;
+  if (const auto &value = audioState_.volumes[static_cast<std::size_t>(id - 17)]) {
+    return value;
+  }
+  if (data_.context == nullptr) return std::nullopt;
+  const auto &audio = data_.context->settings.audioVideo.audio;
+  switch (id) {
+  case 17: return audio.masterVolume;
+  case 18: return audio.keysoundVolume;
+  case 19: return audio.bgmVolume;
+  default: return std::nullopt;
+  }
+}
+
+bool ResultSkinStateBridge::setFloatProperty(int id, double value) {
+  if (id < 17 || id > 19 || !audioState_.write) return false;
+  if (audioState_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    if (!std::isfinite(value)) return false;
+    value = std::clamp(value, 0.0, 1.0);
+  }
+  const float written = static_cast<float>(value);
+  try {
+    if (!audioState_.write(id, written)) return false;
+    audioState_.volumes[static_cast<std::size_t>(id - 17)] = written;
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 bool ResultSkinStateBridge::setTimerProperty(int id, std::int64_t value) {

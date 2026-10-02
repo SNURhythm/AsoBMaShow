@@ -191,6 +191,7 @@ public:
   laneCoverState() const noexcept override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
   bool setTimerProperty(int, std::int64_t) override;
+  bool setFloatProperty(int, double) override;
   [[nodiscard]] std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
   [[nodiscard]] std::span<const SkinProjectedLongNoteView>
@@ -228,6 +229,7 @@ private:
       SkinTimerPropertyId, std::int64_t &value);
   [[nodiscard]] SkinHostCallResult callbackFailure(SkinDiagnostic);
   void rollbackFrameWrites() noexcept;
+  [[nodiscard]] std::optional<float> audioVolume(int) const noexcept;
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;

@@ -6539,6 +6539,16 @@ void GamePlayScene::renderScene() {
   capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,
                               startLaneIndicatorsVisible, practiceCountIn,
                               selectedSkinActive);
+  if (const auto pointer = context.inputDeviceRegistry.pointerPosition()) {
+    UiLogicalPoint point;
+    if (pointer->normalized) {
+      rendering::normalizedToUi(pointer->x, pointer->y, point.x, point.y);
+    } else {
+      rendering::screenToUi(pointer->x * rendering::widthScale,
+                            pointer->y * rendering::heightScale, point.x, point.y);
+    }
+    presentation->setPointerPosition(point);
+  }
   (void)presentation->prepareFrame(capturedPlayfieldVisualState,
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
@@ -8088,6 +8098,26 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 }
 
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
+  std::optional<UiLogicalPoint> observedPointer;
+  UiLogicalPoint point;
+  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+             event.button.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale, point.x, point.y);
+    observedPointer = point;
+  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
+             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
+    observedPointer = point;
+  }
+  if (observedPointer) {
+    if (presentation) presentation->setPointerPosition(*observedPointer);
+  }
+
   if (guidedAccessReminderPending) {
     if (event.type == SDL_WINDOWEVENT &&
         event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {

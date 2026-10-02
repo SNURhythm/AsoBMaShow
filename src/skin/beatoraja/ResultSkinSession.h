@@ -13,6 +13,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <span>
 #include <stop_token>
@@ -22,7 +23,7 @@
 
 struct RenderContext;
 
-namespace rendering { class SkinQuadBatchRenderer; }
+namespace rendering { class SkinQuadBatchRenderer; class SkinQuadBatchBackend; }
 
 namespace skin {
 
@@ -44,8 +45,10 @@ struct ResultSkinSessionContext {
   SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
+  rendering::SkinQuadBatchBackend *quadBackend = nullptr;
 };
 
 struct ResultSkinSessionCreateResult {
@@ -63,6 +66,7 @@ public:
   static ResultSkinSessionCreateResult create(ValidatedSkinActivation,
                                               ResultSkinSessionContext);
   ~ResultSkinSession();
+  void setPointerPosition(UiLogicalPoint) noexcept;
 
   ResultSkinSession(const ResultSkinSession &) = delete;
   ResultSkinSession &operator=(const ResultSkinSession &) = delete;
@@ -95,6 +99,7 @@ public:
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
 
 private:
+  std::optional<UiLogicalPoint> pointerUiPosition_;
   struct QueuedEventInvocation {
     SkinEventBindingId eventBinding{};
     std::array<int, 2> arguments{};
@@ -133,6 +138,7 @@ private:
   ValidatedBeatorajaSkinModel model_;
   BeatorajaSkinConfiguration configuration_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration_;
   std::unique_ptr<SkinResourceCatalog> resources_;
   std::unique_ptr<SkinMovieCatalog> movies_;
   SkinProfileId profileId_;
@@ -153,6 +159,8 @@ private:
   std::vector<int> queuedBuiltinEventIds_;
   std::vector<QueuedWriterInvocation> queuedWriterInvocations_;
   std::vector<ResultSkinAudioVolumeWrite> queuedAudioVolumeWrites_;
+  std::array<std::optional<float>, 3> videoAudioVolumes_{};
+  bool videoAudioInitialized_ = false;
   std::unordered_map<int, std::size_t> customEventLastDefinitionIndexes_;
   std::unordered_map<int, std::size_t> customTimerLastDefinitionIndexes_;
   std::unordered_map<int, std::int64_t> customTimerValues_;

@@ -423,6 +423,8 @@ void testWholeBufferPreflightUsesExactCatalogIds() {
 }
 
 void testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms() {
+  for (const auto fallbackFilter : {skin::SkinFilterMode::Linear,
+                                     skin::SkinFilterMode::BeatorajaBilinear}) {
   auto prepared = resources();
   auto &atlas = prepared.atlases.at(21);
   atlas.bitmapFont = true;
@@ -438,6 +440,7 @@ void testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms() {
 
   skin::SkinGlyphRunCommand glyphs;
   glyphs.atlas = 21;
+  glyphs.fallbackColorFilter = fallbackFilter;
   glyphs.state = {
       .blend = skin::SkinBlendMode::Normal,
       .filter = skin::SkinFilterMode::Linear,
@@ -488,12 +491,13 @@ void testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms() {
              backend.batches.back().program ==
                  rendering::SkinBatchProgram::Textured &&
              !backend.batches.back().distanceField &&
-             backend.batches.back().filter == skin::SkinFilterMode::Linear &&
+             backend.batches.back().filter == fallbackFilter &&
              backend.batches.back().vertices.size() == 4 &&
              backend.batches.back().vertices.front().abgr == 0x80ffffffU,
          "submission selects the distance-field program and forwards every "
          "uploaded uniform value before the standard fallback's white "
          "bilinear overlay");
+  }
 }
 
 void testGlyphSubmissionSplitsAdjacentBitmapPages() {

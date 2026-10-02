@@ -330,6 +330,7 @@ private:
   };
   std::optional<SkinActivationIdentity> activeSkinIdentity_;
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
+  std::optional<UiLogicalPoint> skinPointerUiPosition_;
   std::future<skin::MusicSelectSkinSessionPreparationResult>
       skinPreparation_;
   std::stop_source skinPreparationStop_;

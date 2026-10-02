@@ -460,6 +460,12 @@ PlaySkinSession::PlaySkinSession(
   queuedInteractions_.reserve(maximumQueuedInteractions);
 }
 
+void PlaySkinSession::setPointerPosition(UiLogicalPoint point) noexcept {
+  if (std::isfinite(point.x) && std::isfinite(point.y)) {
+    pointerUiPosition_ = point;
+  }
+}
+
 PlaySkinSession::~PlaySkinSession() {
   discardPendingFrame();
   cancelTextInput();
@@ -648,6 +654,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     }
 
     GameplaySkinDocumentLoader documentLoader;
+    std::vector<SetSkinAudioVolume> initialAudioVolumeWrites;
     const auto audioActivity = context.audioBackend;
     const auto documentStarted = LoadingClock::now();
     auto loaded = documentLoader.load(
@@ -665,7 +672,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .expectedConfigurationDigest = activation.configurationDigest,
          .luaPurpose = LuaRuntimePurpose::Gameplay,
          .loadConfiguredLua =
-             [&context](LuaSkinRuntime &runtime,
+             [&context, &initialAudioVolumeWrites](LuaSkinRuntime &runtime,
                         const BeatorajaSkinConfiguration &configuration,
                         std::vector<SkinDiagnostic> &diagnostics,
                         const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
@@ -689,6 +696,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                    .configuration = configuration,
                    .runtime = &runtime,
                    .mutationTable = mutationTable,
+                   .safetyPolicy = context.safetyPolicy,
                });
                bridge.beginFrame(*context.initialState,
                                  *context.initialProjection);
@@ -704,7 +712,16 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                }
                auto value = loadAndDecode();
                appendDiagnostics(diagnostics, bridge.diagnostics());
-               bridge.discardFrame();
+               if (!value.failure) {
+                 auto committed = bridge.commitFrame();
+                 for (const auto &mutation : committed.orderedMutations) {
+                   if (const auto *volume = std::get_if<SetSkinAudioVolume>(&mutation)) {
+                     initialAudioVolumeWrites.push_back(*volume);
+                   }
+                 }
+               } else {
+                 bridge.discardFrame();
+               }
                return value;
              },
          .safetyPolicy = context.safetyPolicy,
@@ -895,6 +912,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     owned->renderer.setGeneratedTextureLiveCounters(
         context.liveResourceCounters);
     result.session.reset(new PlaySkinSession(std::move(owned)));
+    result.session->initialAudioVolumeWrites_ = std::move(initialAudioVolumeWrites);
     return finish();
   } catch (...) {
     result.session.reset();
@@ -986,6 +1004,16 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
+  for (const auto &write : initialAudioVolumeWrites_) {
+    if (!context_.bridge.setFloatProperty(17 + static_cast<int>(write.target),
+                                          write.value)) {
+      result.diagnostics.push_back(transactionDiagnostic(
+          "skin.session.initial_audio_write_failed",
+          "Configured audio volume could not be staged for the first frame."));
+      return result;
+    }
+  }
+
   if (context_.runtime != nullptr) {
     const auto begun = context_.runtime->beginFrame(state.clock.serial);
     if (!begun.ok) {
@@ -1028,7 +1056,8 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .state = context_.bridge,
        .markProcessedNotes = state.configuration.markProcessedNotes,
        .safetyPolicy = context_.safetyPolicy,
-       .gaugeRandomSource = context_.gaugeRandomSource},
+       .gaugeRandomSource = context_.gaugeRandomSource,
+       .pointerUiPosition = pointerUiPosition_},
       std::move(ownership));
   appendDiagnostics(result.diagnostics, context_.bridge.diagnostics());
   if (!result.evaluation.submitReady) {
@@ -1368,6 +1397,7 @@ PresentationFrameResult PlaySkinSession::render(
   result.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
 
   applyFrameMutations(transaction.committed.orderedMutations);
+  initialAudioVolumeWrites_.clear();
 
   std::optional<SkinDiagnostic> deferredInteractionFailure;
   if (pending.hasDeferredInteractions()) {
@@ -1715,6 +1745,7 @@ void PlaySkinSession::discardPendingFrame() noexcept {
 
 PresentationTouchResult PlaySkinSession::beginPresentationTouch(
     const PresentationTouchEvent &event) {
+  setPointerPosition(event.uiPoint);
   if (!publishedLayout_ ||
       std::ranges::any_of(captures_, [&](const TouchCapture &capture) {
         return capture.active && capture.pointerId == event.pointerId;
@@ -1761,6 +1792,7 @@ PresentationTouchResult PlaySkinSession::beginPresentationTouch(
 
 PresentationTouchResult PlaySkinSession::updatePresentationTouch(
     const PresentationTouchEvent &event) {
+  setPointerPosition(event.uiPoint);
   if (!std::isfinite(event.uiPoint.x) || !std::isfinite(event.uiPoint.y)) {
     return {};
   }

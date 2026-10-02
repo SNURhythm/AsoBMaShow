@@ -384,6 +384,7 @@ private:
   bool resultSkinActivationFailed = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
+  std::optional<UiLogicalPoint> resultSkinPointerUiPosition;
   std::uint64_t resultSkinFrameSerial = 0;
   long long resultSkinStartedMicros = 0;
   std::optional<long long> resultSkinFadeoutStartedMillis;

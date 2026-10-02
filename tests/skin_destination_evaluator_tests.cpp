@@ -378,9 +378,148 @@ void testSourceRegionStretchAndProjection() {
       "projection never resurrects a negative clip with absolute dimensions");
 }
 
+void testBilinearFilterUsesStretchedAuthoredSize() {
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100, .height = 100}, {.x = 0, .y = 0, .width = 200, .height = 200}, {});
+  AuthoredDestinationGeometry geometry{
+      .rect = {.x = 0, .y = 0, .width = 4, .height = 2},
+      .angleDegrees = 45, .filter = SkinFilterMode::BeatorajaBilinear};
+  const SkinSourceRegionGeometry source{
+      .textureWidth = 8, .textureHeight = 8, .region = {.x = 0, .y = 0, .w = 4, .h = 2}};
+  expect(projectSkinDestinationToUi(geometry, source, viewport).filter == SkinFilterMode::Nearest,
+         "Standard projection retains its authored-size filtering rule");
+  geometry.rect.width = 8;
+  expect(projectSkinDestinationToUi(geometry, source, viewport).filter == SkinFilterMode::BeatorajaBilinear,
+         "resized image retains Beatoraja bilinear sampling");
+  geometry.stretch = SkinStretchMode::NoResize;
+  expect(projectSkinDestinationToUi(geometry, source, viewport).filter == SkinFilterMode::Nearest,
+         "no-resize stretch bypasses bilinear after restoring source dimensions");
+  for (const auto region : {SkinSourceRect{.x = 4, .y = 0, .w = -4, .h = 2},
+                            SkinSourceRect{.x = 0, .y = 2, .w = 4, .h = -2}}) {
+    auto flipped = source;
+    flipped.region = region;
+    expect(projectSkinDestinationToUi(geometry, flipped, viewport).filter == SkinFilterMode::Nearest,
+           "flipped no-resize images compare intrinsic positive dimensions for sampling");
+  }
+}
+
+void testCompatibilityUsesDestinationResolutionBeforeStretchAndRotation() {
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100, .height = 100},
+      {.x = 10, .y = 20, .width = 300, .height = 200},
+      {.mode = ViewportMode::Stretch});
+  AuthoredDestinationGeometry geometry{
+      .rect = {.x = 10, .y = 20, .width = 4, .height = 2},
+      .centerX = 0.5, .centerY = 0.5,
+      .filter = SkinFilterMode::BeatorajaBilinear,
+      .stretch = SkinStretchMode::NoResize,
+      .useDestinationResolution = true};
+  const SkinSourceRegionGeometry source{
+      .textureWidth = 64, .textureHeight = 64,
+      .region = {.x = 10, .y = 20, .w = 8, .h = 6}};
+  const auto checkCorners = [](const UiDestinationGeometry &projected,
+                               double x0, double y0, double x2, double y2,
+                               std::string_view message) {
+    expect(near(projected.vertices[0][0], x0) &&
+               near(projected.vertices[0][1], y0) &&
+               near(projected.vertices[2][0], x2) &&
+               near(projected.vertices[2][1], y2), message);
+  };
+  const auto noResize = projectSkinDestinationToUi(geometry, source, viewport);
+  checkCorners(noResize, 42, 181, 50, 175,
+               "compatibility no-resize preserves source dimensions in the logical destination canvas");
+  expect(noResize.filter == SkinFilterMode::Nearest,
+         "no-resize suppresses bilinear after destination-resolution stretch");
+  geometry.useDestinationResolution = false;
+  checkCorners(projectSkinDestinationToUi(geometry, source, viewport),
+               34, 184, 58, 172,
+               "Standard no-resize continues to stretch in authored units");
+  geometry.useDestinationResolution = true;
+  geometry.stretch = SkinStretchMode::Stretch;
+  geometry.angleDegrees = 90;
+  geometry.filter = SkinFilterMode::Nearest;
+  checkCorners(projectSkinDestinationToUi(geometry, source, viewport),
+               48, 184, 44, 172,
+               "unfiltered compatibility rotation follows nonuniform destination scaling");
+
+  geometry.angleDegrees = 0;
+  geometry.filter = SkinFilterMode::BeatorajaBilinear;
+  geometry.stretch = SkinStretchMode::NoResizeTrimmed;
+  geometry.rect.width = 2;
+  geometry.rect.height = 1;
+  const auto trimmed = projectSkinDestinationToUi(geometry, source, viewport);
+  checkCorners(trimmed, 40, 180, 46, 178,
+               "trimmed compatibility dimensions use the scaled destination on both axes");
+  expect(near(trimmed.normalizedUvs[0][0], 11.0 / 64) &&
+             near(trimmed.normalizedUvs[0][1], 24.0 / 64) &&
+             near(trimmed.normalizedUvs[2][0], 17.0 / 64) &&
+             near(trimmed.normalizedUvs[2][1], 22.0 / 64) &&
+             trimmed.filter == SkinFilterMode::Nearest,
+         "two-axis source trimming and sampling use destination-resolution dimensions");
+
+  geometry.rect.width = 4;
+  geometry.rect.height = 2;
+  geometry.stretch = SkinStretchMode::NoResize;
+  auto flipped = source;
+  flipped.region = {.x = 18, .y = 26, .w = -8, .h = -6};
+  const auto flippedResult = projectSkinDestinationToUi(geometry, flipped, viewport);
+  checkCorners(flippedResult, 42, 181, 50, 175,
+               "flipped compatibility sources keep positive intrinsic no-resize dimensions");
+  expect(flippedResult.filter == SkinFilterMode::Nearest &&
+             near(flippedResult.normalizedUvs[0][0], 18.0 / 64) &&
+             near(flippedResult.normalizedUvs[0][1], 20.0 / 64) &&
+             near(flippedResult.normalizedUvs[2][0], 10.0 / 64) &&
+             near(flippedResult.normalizedUvs[2][1], 26.0 / 64),
+         "flips retain their UV direction when unity filtering is suppressed");
+
+  geometry.clip = AuthoredRect{.x = 1, .y = 2, .width = 3, .height = 4};
+  const auto custom = evaluatePlaySkinViewport(
+      {.width = 100, .height = 100},
+      {.x = 10, .y = 20, .width = 300, .height = 200},
+      {.mode = ViewportMode::Custom, .customBase = CustomViewportBase::Stretch,
+       .scaleX = 2, .scaleY = 0.5, .translateX = 7, .translateY = -9});
+  const auto customized = projectSkinDestinationToUi(geometry, source, custom);
+  checkCorners(customized, -69, 141.5, -53, 138.5,
+               "custom scaling remains after logical destination no-resize stretch");
+  expect(customized.filter == SkinFilterMode::Nearest && customized.clip &&
+             near(customized.clip->x, -127) && near(customized.clip->y, 155) &&
+             near(customized.clip->width, 18) && near(customized.clip->height, 4),
+         "custom scale does not select bilinear and clips retain the complete authored transform");
+  const auto fit = evaluatePlaySkinViewport(
+      {.width = 100, .height = 100},
+      {.x = 10, .y = 20, .width = 300, .height = 200}, {});
+  checkCorners(projectSkinDestinationToUi(geometry, source, fit),
+               80, 181, 88, 175,
+               "Fit selects a centered logical destination canvas before no-resize stretch");
+}
+
+void testCompatibilityFilterComparesLogicalDestinationSize() {
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100, .height = 100},
+      {.x = 0, .y = 0, .width = 200, .height = 200}, {});
+  AuthoredDestinationGeometry geometry{
+      .rect = {.x = 0, .y = 0, .width = 4, .height = 2},
+      .filter = SkinFilterMode::BeatorajaBilinear,
+      .useDestinationResolution = true};
+  const SkinSourceRegionGeometry source{
+      .textureWidth = 8, .textureHeight = 8,
+      .region = {.x = 0, .y = 0, .w = 4, .h = 2}};
+  expect(projectSkinDestinationToUi(geometry, source, viewport).filter ==
+             SkinFilterMode::BeatorajaBilinear,
+         "destination-resolution enlargement selects bilinear even at authored unity size");
+  geometry.rect.width = 2;
+  geometry.rect.height = 1;
+  expect(projectSkinDestinationToUi(geometry, source, viewport).filter ==
+             SkinFilterMode::Nearest,
+         "destination-resolution scaling to exact source size suppresses bilinear");
+}
+
 } // namespace
 
 int main() {
+  testBilinearFilterUsesStretchedAuthoredSize();
+  testCompatibilityUsesDestinationResolutionBeforeStretchAndRotation();
+  testCompatibilityFilterComparesLogicalDestinationSize();
   testTimerConditionAndFrameSelection();
   testLoopRateAndIndependentMicrosecondTruncation();
   testOmittedLoopUsesPinnedZeroDefaultAndWrapsExactEnd();

@@ -811,6 +811,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -866,6 +867,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1142,6 +1144,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1191,6 +1194,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1244,6 +1248,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1628,6 +1633,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1692,6 +1698,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1757,6 +1764,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1865,6 +1873,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1929,6 +1938,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -8688,6 +8698,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_score_state_tests)
     asobmashow_register_test(playfield_visual_state_tests)
     asobmashow_register_test(gameplay_bga_target_tests)
+    if(APPLE)
+        add_test(NAME gameplay_bga_sampling_metal_tests
+            COMMAND gameplay_bga_target_tests --metal-sampling)
+        set_tests_properties(gameplay_bga_sampling_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device)
+    endif()
     asobmashow_register_test(bgfx_skin_texture_device_tests)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(gameplay_terminal_scene_tests)

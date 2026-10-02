@@ -77,6 +77,7 @@ public:
   touchHitRegions() const = 0;
   [[nodiscard]] virtual PresentationUiHit
   hitTestUiControl(UiLogicalPoint point) const = 0;
+  virtual void setPointerPosition(UiLogicalPoint) noexcept {}
   virtual PresentationTouchResult
   beginPresentationTouch(const PresentationTouchEvent &event) = 0;
   virtual PresentationTouchResult

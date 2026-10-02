@@ -44,6 +44,7 @@ enum class SkinBlendMode : std::uint8_t {
 enum class SkinFilterMode : std::uint8_t {
   Nearest,
   Linear,
+  BeatorajaBilinear,
 };
 
 enum class SkinStretchMode : std::uint8_t {

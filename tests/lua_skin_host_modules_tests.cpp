@@ -379,12 +379,12 @@ local settings = dofile(path)
 assert(settings.marker == "parent-selected")
 return {}
 )lua");
-    writeText(source / "skin/main_state_lookup_errors.luaskin", R"lua(
+    writeText(source / "skin/main_state_lookup_defaults.luaskin", R"lua(
 if not skin_config then return {type = 0} end
-for _, name in ipairs({"option", "number", "float_number", "text"}) do
-  local ok = pcall(function() return main_state[name](2147483647) end)
-  assert(not ok, "unsupported main_state." .. name .. " lookup must raise")
-end
+assert(main_state.option(2147483647) == false)
+assert(main_state.number(2147483647) == 0)
+assert(main_state.float_number(2147483647) == 0)
+assert(main_state.text(2147483647) == '')
 return {}
 )lua");
     writeText(source / "skin/main_state_selected_surface.luaskin", R"lua(
@@ -949,13 +949,17 @@ public:
   std::uint64_t frameSerial() const noexcept override { return 1; }
   SkinPropertyLookup<bool>
   booleanProperty(const SkinBuiltinPropertySelector &selector) override {
-    return selector.value == decltype(selector.value){170}
+    return (selector.value == decltype(selector.value){170} ||
+            selector.value == decltype(selector.value){std::string{"autoplay_on"}})
                ? SkinPropertyLookup<bool>{.value = true, .supported = true}
                : SkinPropertyLookup<bool>{};
   }
   SkinPropertyLookup<std::int64_t>
   integerProperty(const SkinBuiltinPropertySelector &selector,
                   SkinIntegerPropertyDomain domain) override {
+    if (selector.value == decltype(selector.value){std::string{"score_rate"}}) {
+      return {.value = 1023, .supported = true};
+    }
     if (selector.value == decltype(selector.value){12}) {
       return {.value = 9, .supported = true};
     }
@@ -982,6 +986,8 @@ public:
   SkinPropertyLookup<double>
   floatProperty(const SkinBuiltinPropertySelector &selector,
                 SkinFloatPropertyDomain domain) override {
+    if (selector.value == decltype(selector.value){std::string{"score_rate"}} &&
+        domain == SkinFloatPropertyDomain::FloatValue) return {.value = 91.25, .supported = true};
     if (selector.value == decltype(selector.value){1102} &&
         domain == SkinFloatPropertyDomain::FloatValue) {
       return {.value = 91.25, .supported = true};
@@ -989,23 +995,21 @@ public:
     if (selector.value == decltype(selector.value){std::string{"lua_gauge"}}) {
       return {.value = 62.5, .supported = true};
     }
-    if (selector.value == decltype(selector.value){19} &&
-        domain == SkinFloatPropertyDomain::Rate) {
+    if (selector.value == decltype(selector.value){19}) {
       return {.value = bgVolume_, .supported = true};
     }
-    if (selector.value == decltype(selector.value){18} &&
-        domain == SkinFloatPropertyDomain::Rate) {
+    if (selector.value == decltype(selector.value){18}) {
       return {.value = keyVolume_, .supported = true};
     }
-    if (selector.value == decltype(selector.value){17} &&
-        domain == SkinFloatPropertyDomain::Rate) {
+    if (selector.value == decltype(selector.value){17}) {
       return {.value = systemVolume_, .supported = true};
     }
     return {};
   }
   SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &selector) override {
-    return selector.value == decltype(selector.value){10}
+    return (selector.value == decltype(selector.value){10} ||
+            selector.value == decltype(selector.value){std::string{"title"}})
                ? SkinPropertyLookup<std::string_view>{.value = "title", .supported = true}
                : SkinPropertyLookup<std::string_view>{};
   }
@@ -1210,18 +1214,20 @@ void testGetPathCanLoadAnEntryParentSibling() {
          "get_path preserves Beatoraja's selected-package sibling path for dofile");
 }
 
-void testUnsupportedDirectMainStateLookupsRaise() {
-  auto harness = fixture().create("main_state_lookup_errors.luaskin",
+void testUnknownDirectMainStateLookupsReturnDefaults() {
+  auto harness = fixture().create("main_state_lookup_defaults.luaskin",
                                   LuaRuntimePurpose::Validation);
   if (!harness) {
     return;
   }
   expect(harness->runtime->loadHeader().value.has_value(),
          "main-state lookup fixture loads with an empty header module");
+  SelectedMainState frame;
+  harness->runtime->setFrameState(&frame);
   const auto configured =
       harness->runtime->loadConfigured(happyConfiguration());
   expect(configured.value.has_value() && !configured.failure,
-         "unsupported direct property-factory lookups raise protected Lua errors");
+         "unknown direct property-factory lookups return current upstream typed defaults");
 }
 
 void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
@@ -1854,7 +1860,8 @@ void testMainStateArgumentsUsePinnedLuaJConversions() {
   }
   luaL_openlibs(state);
   {
-    LuaSkinLegacyInputHost input({.pressedKeys = {0, 4, 29}});
+    LuaSkinLegacyInputHost input({.drawableWidth = 1920, .drawableHeight = 1080,
+                                  .pressedKeys = {0, 4, 29}});
     auto modules = LuaSkinHostModules::create(
         state, {.fileSystem = fileSystem.get(), .legacyInputHost = &input});
     expect(modules.modules != nullptr, "argument fixture installs host modules");
@@ -1872,6 +1879,41 @@ void testMainStateArgumentsUsePinnedLuaJConversions() {
       };
       run("m = require('main_state'); assert(m.option(4294967466))",
           "option wraps its LuaJ integer ID");
+      run(R"lua(
+assert(m.option('autoplay_on'))
+assert(m.number('score_rate') == 1023)
+assert(m.float_number('score_rate') == 91.25)
+assert(m.float_number(1102) == 91.25)
+assert(m.text('title') == 'title')
+)lua", "updated main-state selectors use named factories and the full float property domain");
+      run(R"lua(
+for _, value in ipairs({2147483647, 'unknown', 'time', 'lua_gauge', '\t90', false, {}}) do
+  assert(m.option(value) == false)
+  assert(m.number(value) == 0)
+  assert(m.float_number(value) == 0)
+  assert(m.text(value) == '')
+end
+assert(m.number(nil) == 0 and m.text() == '')
+)lua", "updated main-state null factories return typed defaults without exposing internal bridge names");
+      run(R"lua(
+assert(select('#', m.numbers()) == 0)
+local a,b,c,d,e = m.numbers(90, 'score_rate', nil, 71, {})
+assert(a == 900 and b == 1023 and c == 0 and d == 456 and e == 0)
+assert(select('#', m.numbers(nil, nil)) == 2)
+assert(m.screen_width() == 1920 and m.screen_height() == 1080)
+)lua", "updated variadic number and screen helpers preserve result shape and input snapshot dimensions");
+      run(R"lua(
+assert(m.timer_is_off(10000) and not m.timer_is_on(10000))
+assert(m.timer_elapsed(10000) == -1 and m.timer_elapsed_ms(10000) == -1)
+assert(m.timer_elapsed_seconds(10000) == -1)
+assert(m.timer_is_on('4294977298') and not m.timer_is_off(10002))
+assert(m.timer_elapsed(10002) == 69135 and m.timer_elapsed_ms(10002) == 69)
+assert(math.abs(m.timer_elapsed_seconds(10002) - 0.069135) < 1e-12)
+)lua", "updated timer helpers resolve IDs, preserve off sentinels, and convert elapsed units");
+      frame.nowMicros = 53000;
+      run("assert(m.timer_elapsed(10002) == -1321 and m.timer_elapsed_ms(10002) == -1)",
+          "updated elapsed milliseconds truncate future timer deltas toward zero");
+      frame.nowMicros = 123456;
       run("assert(m.number('4294967386') == 900)",
           "number wraps its numeric-string ID");
       run("assert(m.float_number(4294967313) == 0.5)",
@@ -1931,6 +1973,94 @@ assert(m.set_volume_sys('0x-1') and m.volume_sys() == -1)
 assert(m.set_volume_bg(' 0.125 ') and m.volume_bg() == 0.125)
 assert(m.set_volume_key(false) and m.volume_key() == 0)
 )lua", "volume setters use LuaJ string conversion before float narrowing");
+    }
+  }
+  lua_close(state);
+}
+
+void testAudioAndHttpArgumentsUsePinnedLuaJConversions() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin");
+  lua_State *state = luaL_newstate();
+  if (!fileSystem || !state) {
+    expect(false, "audio/HTTP argument fixture creates filesystem and Lua state");
+    if (state) lua_close(state);
+    return;
+  }
+  luaL_openlibs(state);
+  {
+    auto audioCalls = std::make_shared<FakeAudioState>();
+    LuaSkinAudioHost audio(*fileSystem, std::make_shared<FakeAudioBackend>(audioCalls));
+    auto httpCalls = std::make_shared<FakeHttpState>();
+    FakeHttpTransport http(httpCalls);
+    auto modules = LuaSkinHostModules::create(
+        state, {.fileSystem = fileSystem.get(), .httpTransport = &http,
+                .audioHost = &audio});
+    expect(modules.modules != nullptr, "audio/HTTP argument fixture installs modules");
+    if (modules.modules) {
+      expect(!modules.modules->enableStateAccessors(), "audio/HTTP fixture enables state");
+      const auto run = [&](const char *source, std::string_view message) {
+        const int status = luaL_dostring(state, source);
+        if (status != 0) {
+          std::cerr << lua_tostring(state, -1) << '\n';
+          lua_pop(state, 1);
+        }
+        expect(status == 0, message);
+      };
+      run(R"lua(
+local m = require('main_state')
+assert(m.audio_play('coerce.ogg', '\t0.5'))
+assert(m.audio_loop('coerce.ogg', '0.5\n'))
+assert(m.audio_play('coerce.ogg', '0x['))
+assert(m.audio_loop('coerce.ogg', ' 0.5 '))
+assert(m.audio_play('coerce.ogg'))
+assert(m.audio_loop('coerce.ogg', false))
+)lua", "audio volume calls accept the pinned argument surface");
+      expect(audioCalls->plays == std::vector<FakeAudioPlayCall>{
+                 {{1}, 0.0F, false}, {{1}, 0.0F, true}, {{1}, 0.5F, false},
+                 {{1}, 0.125F, true}, {{1}, 0.25F, false}, {{1}, 0.0F, true}},
+             "audio volume uses LuaJ conversion, then clamps and scales by system volume");
+      SelectedMainState frame;
+      modules.modules->setFrameState(&frame);
+      run(R"lua(
+local m = require('main_state')
+assert(m.set_volume_sys(0.75))
+assert(m.audio_play('coerce.ogg', 0.5))
+assert(m.audio_loop('coerce.ogg', 1))
+)lua", "audio calls can follow a volume setter in the same callback");
+      expect(audioCalls->plays.size() == 8 &&
+                 audioCalls->plays[6].volume == 0.375F &&
+                 audioCalls->plays[7].volume == 0.75F,
+             "audio playback reads current frame volume before the backend settings commit");
+      run(R"lua(
+local m = require('main_state')
+for _, value in ipairs({4294968796, '4294968796', '0x[', 0/0, math.huge}) do
+  assert(select(2, m.http_get('https://fixture/arguments', value)))
+end
+assert(select(2, m.http_get('https://fixture/arguments', nil)))
+for _, value in ipairs({'\t1500', '1500\n', 'malformed', false, {}}) do
+  assert(not pcall(m.http_get, 'https://fixture/invalid-argument', value))
+end
+)lua", "HTTP optint accepts LuaJ numeric values and rejects nonnumeric arguments");
+      std::vector<int> timeouts;
+      for (const auto &call : httpCalls->calls) timeouts.push_back(call.timeoutMilliseconds);
+      expect(timeouts == std::vector<int>{1500, 1500, 4, 1, 1, 1000},
+             "HTTP wraps optint before clamping and invalid arguments never reach transport");
+      httpCalls->calls.clear();
+      run(R"lua(
+for _, value in ipairs({4294968796, '4294968796', '0x[', 0/0, math.huge}) do
+  local connection = luajava.newInstance('java.net.URL', 'https://fixture/legacy-arguments'):openConnection()
+  connection:setConnectTimeout(value)
+  connection:connect()
+end
+for _, value in ipairs({'\t1500', '1500\n', 'malformed', false, {}}) do
+  local connection = luajava.newInstance('java.net.URL', 'https://fixture/legacy-invalid'):openConnection()
+  assert(not pcall(connection.setConnectTimeout, connection, value))
+end
+)lua", "legacy timeout checkint uses LuaJ numeric parsing and rejects nonnumeric values");
+      timeouts.clear();
+      for (const auto &call : httpCalls->calls) timeouts.push_back(call.timeoutMilliseconds);
+      expect(timeouts == std::vector<int>{1500, 1500, 4, 1, 1},
+             "legacy HTTP wraps checkint before clamping and invalid arguments never reach transport");
     }
   }
   lua_close(state);
@@ -2169,6 +2299,7 @@ int main(int argc, char **argv) {
     benchmarkFileHelpers();
     return failures == 0 ? 0 : 1;
   }
+  testAudioAndHttpArgumentsUsePinnedLuaJConversions();
   testMainStateArgumentsUsePinnedLuaJConversions();
   testTimerAndEventUtilityClosures();
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
@@ -2176,7 +2307,7 @@ int main(int argc, char **argv) {
   testGetPathUsesBeatorajaSourceSemantics();
   testCapturedGetPathRemainsAvailableAtRenderTransition();
   testGetPathCanLoadAnEntryParentSibling();
-  testUnsupportedDirectMainStateLookupsRaise();
+  testUnknownDirectMainStateLookupsReturnDefaults();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
   testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
   testPinnedBoundedHttpAndClosedLegacyReaderFacade();

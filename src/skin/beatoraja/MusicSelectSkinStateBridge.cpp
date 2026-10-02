@@ -112,18 +112,22 @@ std::optional<Value> namedValue(
 } // namespace
 
 MusicSelectSkinStateBridge::MusicSelectSkinStateBridge(
-    const MusicSelectSkinFrame &frame, MusicSelectSkinActionSink actionSink)
-    : frame_(&frame), actionSink_(std::move(actionSink)) {}
+    const MusicSelectSkinFrame &frame, MusicSelectSkinActionSink actionSink,
+    SkinSafetyPolicy safetyPolicy, std::map<int, double> initialFloatValues)
+    : frame_(&frame), actionSink_(std::move(actionSink)),
+      safetyPolicy_(safetyPolicy), floatOverrides_(std::move(initialFloatValues)) {}
 
 MusicSelectSkinStateBridge::MusicSelectSkinStateBridge(
     const MusicSelectSkinFrame &frame,
     std::map<int, std::int64_t> &persistentCustomTimerValues,
     const std::set<int> &activeCustomTimerIds,
-    MusicSelectSkinActionSink actionSink)
+    MusicSelectSkinActionSink actionSink, SkinSafetyPolicy safetyPolicy,
+    std::map<int, double> initialFloatValues)
     : frame_(&frame),
       persistentCustomTimerValues_(&persistentCustomTimerValues),
       activeCustomTimerIds_(&activeCustomTimerIds),
-      actionSink_(std::move(actionSink)) {}
+      actionSink_(std::move(actionSink)), safetyPolicy_(safetyPolicy),
+      floatOverrides_(std::move(initialFloatValues)) {}
 
 std::uint64_t MusicSelectSkinStateBridge::frameSerial() const noexcept {
   return frame_->serial;
@@ -187,6 +191,22 @@ SkinPropertyLookup<std::int64_t> MusicSelectSkinStateBridge::integerProperty(
           std::max<std::int64_t>(0, frame_->elapsedMillis) * 1'000);
     }
   }
+  if (domain == SkinIntegerPropertyDomain::IntegerValue) {
+    const auto *numericId = std::get_if<int>(&selector.value);
+    const auto id = numericId ? std::optional<int>(*numericId)
+                             : integerName(std::get<std::string>(selector.value), domain);
+    if (id && *id >= 57 && *id <= 59) {
+      if (const auto volume = floatOverrides_.find(*id - 40);
+          volume != floatOverrides_.end()) {
+        const double percent = static_cast<float>(volume->second) * 100.0F;
+        const int result = std::isnan(percent) ? 0
+            : percent >= std::numeric_limits<int>::max() ? std::numeric_limits<int>::max()
+            : percent <= std::numeric_limits<int>::min() ? std::numeric_limits<int>::min()
+            : static_cast<int>(percent);
+        return supported<std::int64_t>(result);
+      }
+    }
+  }
   const auto &numeric = domain == SkinIntegerPropertyDomain::IntegerValue
                             ? frame_->properties.integers
                             : frame_->properties.imageIndexes;
@@ -225,13 +245,12 @@ SkinPropertyLookup<double> MusicSelectSkinStateBridge::floatProperty(
   const auto &named = domain == SkinFloatPropertyDomain::Rate
                           ? frame_->properties.namedRates
                           : frame_->properties.namedFloats;
-  if (domain == SkinFloatPropertyDomain::Rate) {
-    if (const auto *id = std::get_if<int>(&selector.value)) {
-      if (const auto override = floatOverrides_.find(*id);
-          override != floatOverrides_.end()) {
-        return supported(override->second);
-      }
-    }
+  const auto *numericId = std::get_if<int>(&selector.value);
+  const auto id = numericId ? std::optional<int>(*numericId)
+                           : namedFloatPropertySelector(std::get<std::string>(selector.value));
+  if (id) {
+    if (const auto override = floatOverrides_.find(*id);
+        override != floatOverrides_.end()) return supported(override->second);
   }
   if (const auto value = numericValue(selector, numeric)) {
     return supported(*value);
@@ -338,12 +357,15 @@ bool MusicSelectSkinStateBridge::setTimerProperty(int id,
 }
 
 bool MusicSelectSkinStateBridge::setFloatProperty(int id, double value) {
-  if ((id < 17 || id > 19) || !actionSink_.floatWriter ||
-      !std::isfinite(value)) return false;
-  value = std::clamp(value, 0.0, 1.0);
+  if ((id < 17 || id > 19) || !actionSink_.floatWriter) return false;
+  if (safetyPolicy_.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+    if (!std::isfinite(value)) return false;
+    value = std::clamp(value, 0.0, 1.0);
+  }
+  value = static_cast<float>(value);
   try {
-    floatOverrides_.insert_or_assign(id, value);
     actionSink_.floatWriter(id, value);
+    floatOverrides_.insert_or_assign(id, value);
     return true;
   } catch (...) {
     return false;

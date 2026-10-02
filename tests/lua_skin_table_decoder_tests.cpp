@@ -115,6 +115,20 @@ return {
   unknown = {ignored = true}
 }
 )lua");
+    writeText(source / "skin/song-list-number-ref.luaskin", R"lua(
+return {type=5,source={{id="atlas",path="atlas.png"}},value={
+{id="with-ref",src="atlas",w=100,h=10,divx=10,digit=3,ref=100,
+ value=function() return 42 end},
+{id="null-ref",src="atlas",w=100,h=10,divx=10,digit=3,
+ value=function() return 42 end}
+},songlist={id="songs",level={
+{id="with-ref",dst={{x=0,y=0,w=30,h=10}}},
+{id="null-ref",dst={{x=0,y=0,w=30,h=10}}}
+}},destination={
+{id="songs"},{id="with-ref",dst={{x=0,y=0,w=30,h=10}}},
+{id="null-ref",dst={{x=0,y=0,w=30,h=10}}}
+}}
+)lua");
     writeText(source / "skin/property-fallbacks.luaskin", R"lua(
 return {type=0,source={
 {id="atlas",path="atlas.png"}
@@ -598,6 +612,7 @@ return {
     if (musicSelect) {
       return decoder.decodeMusicSelect(*configured.value,
                                         {.runtime = *created.runtime,
+                                         .builtins = builtins,
                                          .safetyPolicy = SkinSafetyPolicy(level)});
     }
     return decoder.decodeGameplay(*configured.value,
@@ -1272,6 +1287,49 @@ const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
   return found != model.objects.end() ? &*found : nullptr;
 }
 
+void testSongListNumberKeepsItsNumericConstructorRef() {
+  const SkinBuiltinBindingCatalogEntry entries[] = {
+      {.type = {.kind = SkinBindingKind::IntegerProperty}, .selector = {100}}};
+  const auto decoded = fixture().decodeGameplay(
+      "song-list-number-ref.luaskin", SkinSafetyLevel::BeatorajaCompatibility,
+      true, SkinBuiltinBindingCatalogView(entries));
+  expect(decoded.model.has_value(), "song-list number reference fixture decodes");
+  if (!decoded.model) return;
+  const auto &model = *decoded.model;
+  for (const auto name : {"with-ref", "null-ref"}) {
+    const auto *object = objectNamed(model, name);
+    const auto *number = object ? std::get_if<SkinNumberObject>(&object->payload)
+                                : nullptr;
+    expect(number != nullptr, "nested number constructor is materialized");
+    if (!number) continue;
+    const SkinNumberObject *standalone = nullptr;
+    for (const auto &destination : model.destinations) {
+      const auto ordinaryObject = std::ranges::find_if(model.objects,
+          [&](const auto &candidate) { return candidate.id == destination.object; });
+      if (ordinaryObject != model.objects.end() && ordinaryObject->authoredName == name) {
+        standalone = std::get_if<SkinNumberObject>(&ordinaryObject->payload);
+      }
+    }
+    const auto ordinary = std::ranges::find_if(model.integerProperties,
+        [&](const auto &binding) { return standalone && binding.id == standalone->value; });
+    expect(standalone && ordinary != model.integerProperties.end() &&
+               std::holds_alternative<LuaCallbackId>(ordinary->source),
+           "standalone number retains its explicit value callback");
+    if (std::string_view(name) == "null-ref") {
+      expect(!number->value,
+             "default ref zero remains a null nested number property");
+    } else {
+      const auto nested = std::ranges::find_if(model.integerProperties,
+          [&](const auto &binding) { return binding.id == number->value; });
+      const auto *builtin = nested != model.integerProperties.end()
+          ? std::get_if<SkinBuiltinPropertySelector>(&nested->source) : nullptr;
+      expect(builtin && std::get_if<int>(&builtin->value) &&
+                 std::get<int>(builtin->value) == 100,
+             "nested number constructor uses numeric ref despite explicit value");
+    }
+  }
+}
+
 void testResolvedPropertyFallbacks() {
   const SkinBuiltinBindingCatalogEntry entries[] = {
       {.type = {.kind = SkinBindingKind::IntegerProperty}, .selector = {90}},
@@ -1605,6 +1663,7 @@ void testRequestedExternalLuaSkinHeaderDecodes() {
 
 int main() {
   testResolvedPropertyFallbacks();
+  testSongListNumberKeepsItsNumericConstructorRef();
   testTypedHeaderPreservesAuthoredNumericOrderAndCoercions();
   testHeaderArraysFollowBeatorajaTableKeys();
   testAuthoredDimensionsStayWithinTheDecoderBoundary();
