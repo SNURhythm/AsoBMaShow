@@ -37,6 +37,7 @@
 #include "../replay/ReplayFileActionSelection.h"
 #include "../replay/ReplayFileActionService.h"
 #include "../view/ChartListItemView.h"
+#include "../view/ChartDetailsView.h"
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
@@ -121,7 +122,11 @@ using modal_view::styleThemedActionButton;
 
 
 constexpr int kRootPadding = 28;
-constexpr int kLibraryPanelWidth = 360;
+constexpr int kLibraryPanelWidth = 320;
+constexpr int kDetailsPanelWidth = 500;
+constexpr int kDetailsContentWidth = 460;
+// 84 design units give a 44.8-point target at 1024-point iPad width.
+constexpr int kMenuActionHeight = 84;
 constexpr int kLibraryPanelPadding = 14;
 constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
@@ -133,8 +138,6 @@ constexpr int kParseLogRowHeight = 48;
 constexpr uint32_t kIconXmark = 0xf00d;
 constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr uint32_t kIconSort = 0xf0dc;
-constexpr uint32_t kIconFileLines = 0xf15c;
-constexpr uint32_t kIconCalculator = 0xf1ec;
 constexpr uint32_t kIconShare = 0xf1e0;
 constexpr uint32_t kIconTrash = 0xf1f8;
 
@@ -924,6 +927,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealButton = nullptr;
   temporaryChartFolder.reset();
   jacketView = nullptr;
+  chartDetailsView_ = nullptr;
   searchBox = nullptr;
   chartFilterPanel = nullptr;
   chartSortPanel = nullptr;
@@ -1003,9 +1007,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tasksCloseButton = nullptr;
   tasksCloseButtonText = nullptr;
   readyGaugeText = nullptr;
-  readyTotalRow = nullptr;
-  readyTotalIconText = nullptr;
-  readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
@@ -1225,7 +1226,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
   };
 
-  static constexpr int kFolderListItemHeight = 50;
+  static constexpr int kFolderListItemHeight = kMenuActionHeight;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
     return new LibraryFolderItemView(0, 0, kLibraryControlWidth,
                                      kFolderListItemHeight);
@@ -1396,7 +1397,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       androidFullFileAccessBuild ? i18n::message("menu.add_folder.label") : i18n::message("menu.import_folder.label");
 #endif
   if (showAddFolderButton) {
-    auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, 50);
+    auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
     addFolderButton_ = addFolderButton;
     auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     addFolderText->setLocalizedText(addFolderButtonLabel);
@@ -1418,7 +1419,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     nav->addView(addFolderButton);
   }
 #if TARGET_OS_ANDROID
-  auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, 50);
+  auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
   auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   importArchiveText->setLocalizedText(i18n::message("menu.import_archive.label"));
   importArchiveText->setAlign(TextView::CENTER);
@@ -1462,7 +1463,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->setFlexDirection(FlexDirection::Row);
   libraryHeader->setAlignItems(YGAlignCenter);
   libraryHeader->setGap(12);
-  libraryHeader->setHeight(58);
+  libraryHeader->setHeight(kMenuActionHeight);
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
   libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
@@ -1473,7 +1474,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   parseLogButton = makeModalButton(i18n::message("menu.log.label"), 20, &parseLogButtonText);
   parseLogButton->setWidth(112);
-  parseLogButton->setHeight(50);
+  parseLogButton->setHeight(kMenuActionHeight);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
   styleThemedActionButton(parseLogButton, parseLogButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
@@ -1482,7 +1483,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   musicButton = makeModalButton(i18n::message("menu.music.label"), 20, &musicButtonText);
   musicButton->setWidth(122);
-  musicButton->setHeight(50);
+  musicButton->setHeight(kMenuActionHeight);
   musicButton->setOnClickListener([this, &context]() {
     if (context.sceneManager != nullptr) {
       if (previewWorker_ != nullptr) {
@@ -1503,7 +1504,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   irUploadsButton =
       makeModalButton(i18n::message("menu.ir_uploads.label"), 20, &irUploadsButtonText);
   irUploadsButton->setWidth(154);
-  irUploadsButton->setHeight(50);
+  irUploadsButton->setHeight(kMenuActionHeight);
   irUploadsButton->setOnClickListener([this, &context]() {
     if (context.sceneManager != nullptr) {
       if (previewWorker_ != nullptr) {
@@ -1524,7 +1525,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   tasksButton = makeModalButton(i18n::message("menu.task_count.empty"), 20, &tasksButtonText);
   tasksButton->setWidth(142);
-  tasksButton->setHeight(50);
+  tasksButton->setHeight(kMenuActionHeight);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
   styleThemedActionButton(tasksButton, tasksButtonText, true, ui_theme::control,
                           ui_theme::controlHover, ui_theme::controlPressed,
@@ -1540,7 +1541,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
   searchBox->setEditingText(searchText);
   searchBox->setClearable(true);
-  searchBox->setHeight(56);
+  searchBox->setHeight(kMenuActionHeight);
   searchBox->setFlex(1);
   searchBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
   searchBox->setCornerRadius(ui_theme::controlRadius());
@@ -1558,8 +1559,8 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   chartFilterButton =
       makeModalIconButton(kIconFilter, 20, &chartFilterButtonText);
-  chartFilterButton->setWidth(56);
-  chartFilterButton->setHeight(56);
+  chartFilterButton->setWidth(kMenuActionHeight);
+  chartFilterButton->setHeight(kMenuActionHeight);
   chartFilterButton->setFlexShrink(0.0f);
   chartFilterButton->setOnClickListener([this]() {
     setChartFilterPanelVisible(!chartFilterPanelVisible);
@@ -1568,8 +1569,8 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   chartSortButton =
       makeModalIconButton(kIconSort, 20, &chartSortButtonText);
-  chartSortButton->setWidth(56);
-  chartSortButton->setHeight(56);
+  chartSortButton->setWidth(kMenuActionHeight);
+  chartSortButton->setHeight(kMenuActionHeight);
   chartSortButton->setFlexShrink(0.0f);
   chartSortButton->setOnClickListener([this]() {
     setChartSortPanelVisible(!chartSortPanelVisible);
@@ -1635,7 +1636,8 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   auto right = new View();
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
-  right->setWidth(300);
+  right->setWidth(kDetailsPanelWidth);
+  right->setFlexShrink(0);
   right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   right->setCornerRadius(ui_theme::panelRadius());
   right->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
@@ -1646,19 +1648,23 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   auto *rightScroll = new ScrollView();
   tutorialRightScroll_ = rightScroll;
-  rightScroll->setWidth(280);
+  rightScroll->setWidth(kDetailsPanelWidth - 20);
   rightScroll->setFlex(1);
   rightScroll->setFlexShrink(1);
   rightScroll->clearBackgroundColor();
   auto *rightContent = new View();
-  rightContent->setWidth(278);
+  rightContent->setWidth(kDetailsPanelWidth - 22);
   rightContent->setFlexDirection(FlexDirection::Column);
   rightContent->setAlignItems(YGAlignCenter);
   rightContent->setPadding(Edge::Top, 16);
   rightContent->setPadding(Edge::Bottom, 16);
   rightContent->setPadding(Edge::Left, 9);
   rightContent->setPadding(Edge::Right, 9);
-  rightContent->setGap(12);
+  rightContent->setGap(10);
+
+  chartDetailsView_ = new ChartDetailsView(jacketView);
+  chartDetailsView_->setWidth(kDetailsContentWidth);
+  rightContent->addView(chartDetailsView_);
 
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Column);
@@ -1673,6 +1679,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
     text->setHeight(28);
     text->setThemedColor(ui_theme::textPrimary);
+    text->setOverflow(TextView::TextOverflow::Marquee);
     return text;
   };
   auto *readyGaugeRow = new View();
@@ -1689,41 +1696,27 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readyGaugeRow->addView(readyGaugeLabelText);
   readyGaugeRow->addView(readyGaugeText);
   readyPlayOptionText = makeReadyStatusText();
-  readyTotalRow = new View();
-  readyTotalRow->setFlexDirection(FlexDirection::Row);
-  readyTotalRow->setAlignItems(YGAlignCenter);
-  readyTotalRow->setGap(8);
-  readyTotalRow->setWidth(260);
-  readyTotalRow->setHeight(28);
-  readyTotalRow->setPadding(Edge::Left, 12);
-  readyTotalRow->setPadding(Edge::Right, 12);
-  readyTotalIconText =
-      new TextView(ui_icons::kFontAwesomeSolidPath, 15);
-  readyTotalIconText->setWidth(18);
-  readyTotalIconText->setHeight(28);
-  readyTotalIconText->setAlign(TextView::CENTER);
-  readyTotalIconText->setVAlign(TextView::MIDDLE);
-  readyTotalIconText->setOverflow(TextView::TextOverflow::Hidden);
-  readyTotalIconText->setThemedColor(ui_theme::cyan);
-  readyTotalText = makeReadyStatusText();
-  readyTotalText->setFlex(1);
-  readyTotalText->setThemedColor(ui_theme::cyan);
-  readyTotalRow->addView(readyTotalIconText);
-  readyTotalRow->addView(readyTotalText);
   readyAssistOptionText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   readyAssistOptionText->setHeight(28);
   readyAssistOptionText->setThemedColor(ui_theme::textPrimary);
   readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
   readyPacemakerText = makeReadyStatusText();
-  readySettings->addView(readyGaugeRow);
+  auto *readyStatusRow = new View();
+  readyStatusRow->setFlexDirection(FlexDirection::Row)->setGap(12);
+  readyStatusRow->setHeight(28);
+  readyGaugeRow->setFlex(1)->setMinWidth(0);
+  readyPacemakerText->setFlex(1)->setMinWidth(0);
+  readyPacemakerText->setAlign(TextView::RIGHT);
+  readyStatusRow->addView(readyGaugeRow);
+  readyStatusRow->addView(readyPacemakerText);
+  readySettings->addView(readyStatusRow);
   readySettings->addView(readyPlayOptionText);
   readySettings->addView(readyAssistOptionText);
-  readySettings->addView(readyPacemakerText);
 
-  readyPlayOptionsButton = new Button(0, 0, 260, 150);
-  readyPlayOptionsButton->setWidth(260);
-  readyPlayOptionsButton->setHeight(150);
+  readyPlayOptionsButton = new Button(0, 0, kDetailsContentWidth, 122);
+  readyPlayOptionsButton->setWidth(kDetailsContentWidth);
+  readyPlayOptionsButton->setHeight(122);
   readyPlayOptionsButton->setFlexShrink(0);
   readyPlayOptionsButton->setCornerRadius(ui_theme::controlRadius());
   readyPlayOptionsButton->setStyledBorderWidth(1);
@@ -1735,11 +1728,12 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readyPlayOptionsButton->setContentView(readySettings);
   readyPlayOptionsButton->setOnClickListener(
       [this]() { showPlayOptionsModal(); });
-  rightContent->addView(readyTotalRow);
   rightContent->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
-  startButton = new Button(0, 0, 220, 86);
+  startButton = new Button(0, 0, kDetailsContentWidth, 88);
+  startButton->setName("mainMenuStart");
+  startButton->setFlexShrink(0);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   startButtonText = buttonText;
   buttonText->setLocalizedText(i18n::message("menu.start.label"));
@@ -1767,11 +1761,12 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     startSelectedChart();
   });
   replayButtonSlot = new View();
-  replayButtonSlot->setWidth(220)->setHeight(0);
+  replayButtonSlot->setFlex(1)->setMinWidth(0)->setHeight(0);
   replayButtonSlot->setVisible(false);
   replayButtonSlot->setAlignItems(YGAlignStretch);
 
-  replayButton = new Button(0, 0, 220, 58);
+  replayButton = new Button(0, 0, 224, kMenuActionHeight);
+  replayButton->setWidthPercent(100);
   replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   replayButtonText->setLocalizedText(i18n::message("menu.records.label"));
   replayButtonText->setAlign(TextView::CENTER);
@@ -1803,11 +1798,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   replayButtonSlot->addView(replayButton);
 
   findBmsButtonSlot = new View();
-  findBmsButtonSlot->setWidth(220)->setHeight(0);
+  findBmsButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0);
   findBmsButtonSlot->setVisible(false);
   findBmsButtonSlot->setAlignItems(YGAlignStretch);
 
-  findBmsButton = new Button(0, 0, 220, 58);
+  findBmsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
   findBmsButtonText->setAlign(TextView::CENTER);
@@ -1821,11 +1816,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   findBmsButtonSlot->addView(findBmsButton);
 
   unzipButtonSlot = new View();
-  unzipButtonSlot->setWidth(220)->setHeight(0);
+  unzipButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0);
   unzipButtonSlot->setVisible(false);
   unzipButtonSlot->setAlignItems(YGAlignStretch);
 
-  unzipButton = new Button(0, 0, 220, 58);
+  unzipButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   unzipButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
   unzipButtonText->setAlign(TextView::CENTER);
@@ -1845,24 +1840,8 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   replayStatusText->setAlign(TextView::CENTER);
   replayStatusText->setHeight(20);
 
-  auto *jacketCard = new View();
-  jacketCard->setWidth(200);
-  jacketCard->setHeight(200);
-  jacketCard->setAlignItems(YGAlignCenter);
-  jacketCard->setJustifyContent(YGJustifyCenter);
-  jacketCard->setThemedBackgroundColor(ui_theme::mainMenuSurface);
-  jacketCard->setCornerRadius(ui_theme::panelRadius());
-  jacketCard->setThemedBorderColor(ui_theme::hairlineSubtle);
-  jacketCard->setBorderWidth(1);
-  jacketView->setWidth(198)->setHeight(198);
-  jacketView->setCornerRadius(
-      ui_theme::childRadiusForInset(ui_theme::panelRadius(), 1.0f, 0.0f));
-  jacketCard->addView(jacketView);
-  startButton->setHeight(86);
-  rightContent->addView(jacketCard);
-  rightContent->addView(startButton);
-
-  rankingsButton = new Button(0, 0, 220, 58);
+  rankingsButton = new Button(0, 0, 224, kMenuActionHeight);
+  rankingsButton->setFlex(1)->setMinWidth(0);
   rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   rankingsButtonText->setLocalizedText(i18n::message("menu.rankings.label"));
   rankingsButtonText->setAlign(TextView::CENTER);
@@ -1875,16 +1854,21 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rankingsButton->setOnClickListener(
       [this]() { openRankingsForSelection(); });
   rankingsButton->setEnabled(false);
-  rightContent->addView(rankingsButton);
+  auto *recordActions = new View();
+  recordActions->setName("mainMenuRecordActions");
+  recordActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
+  recordActions->setFlexDirection(FlexDirection::Row)->setGap(12);
+  recordActions->addView(replayButtonSlot);
+  recordActions->addView(rankingsButton);
 
   chartActionsRow = new View();
   chartActionsRow->setFlexDirection(FlexDirection::Row);
   chartActionsRow->setAlignItems(YGAlignStretch);
-  chartActionsRow->setWidth(220);
-  chartActionsRow->setHeight(58);
+  chartActionsRow->setWidth(kDetailsContentWidth);
+  chartActionsRow->setHeight(kMenuActionHeight);
   chartActionsRow->setGap(10);
 
-  auto *viewerButton = new Button(0, 0, 105, 58);
+  auto *viewerButton = new Button(0, 0, 224, kMenuActionHeight);
   viewerButton->setFlex(1);
   auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   viewerButtonText->setLocalizedText(i18n::message("menu.viewer.label"));
@@ -1897,7 +1881,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   viewerButton->setOnClickListener([this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
 
-  revealButton = new Button(0, 0, 105, 58);
+  revealButton = new Button(0, 0, 224, kMenuActionHeight);
   revealButton->setFlex(1);
   auto *revealButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   revealButtonText->setLocalizedText(i18n::message("menu.reveal.label"));
@@ -1922,12 +1906,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   revealContextMenu = std::make_unique<ContextMenuView>(
       overlayPortal, std::move(revealMenuCallbacks));
 
-  rightContent->addView(replayButtonSlot);
   rightContent->addView(unzipButtonSlot);
   rightContent->addView(findBmsButtonSlot);
   rightContent->addView(replayStatusText);
 
-  auto *settingsButton = new Button(0, 0, 220, 64);
+  auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   settingsText->setLocalizedText(i18n::message("menu.settings.label"));
   settingsText->setAlign(TextView::CENTER);
@@ -1953,6 +1936,9 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   });
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
+  // Primary actions stay reachable while chart details and tools scroll.
+  right->addView(startButton);
+  right->addView(recordActions);
   right->addView(settingsButton);
   rootLayout->addView(right);
   buildPlayOptionsModal();
@@ -2892,6 +2878,7 @@ std::optional<std::string> MainMenuScene::refreshScoreClearRankViews() {
 }
 
 void MainMenuScene::refreshLongNoteModeClearRankViews() {
+  refreshSelectedChartDetails();
   if (folderRecyclerView != nullptr) {
     reloadFolderItems(true);
   }
@@ -3222,6 +3209,7 @@ std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const {
 }
 
 void MainMenuScene::refreshSelectedChartActionState() {
+  refreshSelectedChartDetails();
   refreshRankingsButton();
   const auto record = selectedRecordSnapshot();
   if (!record.has_value()) {
@@ -3601,12 +3589,24 @@ bool MainMenuScene::playbackSelectionLockedForCourse() const {
          activeFolder.courseId > 0;
 }
 
+void MainMenuScene::refreshSelectedChartDetails() {
+  if (chartDetailsView_ == nullptr) return;
+  // onSelected retains metadata by value. Never fetch a page, query score
+  // history, or wait for preview parsing to populate this presentation.
+  const auto *record = selectedChartRecord ? &*selectedChartRecord : nullptr;
+  const bool chart = record && !record->courseStart && !record->solidArchive &&
+                     !record->unavailable && !record->meta.BmsPath.empty();
+  const auto best = chart ? scoreBestScores.bestFor(
+      record->meta, long_note_mode::valueFromId(profileSelections.longNoteMode))
+      : std::nullopt;
+  chartDetailsView_->setChart(record, best,
+      chart ? clearRankForChart(*record) : kNoClearTypeRank,
+      chart ? formatGaugeTotal(record->meta, profileSelections.ruleset) : "");
+}
+
 void MainMenuScene::refreshReadySettingsSummary() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
-  const auto record = selectedRecordSnapshot();
-  const bool showTotal = record.has_value() && !record->courseStart &&
-                         !record->solidArchive && !record->unavailable;
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(gaugeButtonLabel(profileSelections.gaugeType,
                                              profileSelections.gaugeAutoShift));
@@ -3618,28 +3618,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
         std::string(gameplayRulesetLabel(profileSelections.ruleset)) + " · " +
         effective.playOption + " · " + effective.longNoteMode);
   }
-  if (readyTotalText != nullptr) {
-    if (showTotal) {
-      const bool chartAuthored =
-          record->meta.HasTotal && record->meta.Total > 0.0;
-      if (readyTotalIconText != nullptr) {
-        readyTotalIconText->setText(ui_icons::textForCodepoint(
-            chartAuthored ? kIconFileLines : kIconCalculator));
-      }
-      readyTotalText->setText(
-          "TOTAL: " +
-          formatGaugeTotal(record->meta, profileSelections.ruleset));
-      readyTotalRow->setDisplay(YGDisplayFlex);
-      readyTotalRow->setVisible(true);
-    } else {
-      readyTotalText->setText("");
-      if (readyTotalIconText != nullptr) {
-        readyTotalIconText->setText("");
-      }
-      readyTotalRow->setDisplay(YGDisplayNone);
-      readyTotalRow->setVisible(false);
-    }
-  }
+  refreshSelectedChartDetails();
   if (readyAssistOptionText != nullptr) {
     const int percent =
         playbackSelectionLockedForCourse()
@@ -4376,7 +4355,8 @@ void MainMenuScene::setReplayButtonVisible(bool visible) {
   }
 
   replayButtonSlot->setVisible(visible);
-  replayButtonSlot->setHeight(visible ? 58.0f : 0.0f);
+  replayButtonSlot->setHeight(visible ? kMenuActionHeight : 0.0f);
+  replayButtonSlot->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -4390,12 +4370,12 @@ void MainMenuScene::setPlayableChartActionsVisible(bool visible,
                                                    bool chartActionsVisible) {
   if (startButton != nullptr) {
     startButton->setVisible(visible);
-    startButton->setHeight(visible ? 86.0f : 0.0f);
+    startButton->setHeight(visible ? 88.0f : 0.0f);
   }
   if (chartActionsRow != nullptr) {
     const bool showChartActions = visible && chartActionsVisible;
     chartActionsRow->setVisible(showChartActions);
-    chartActionsRow->setHeight(showChartActions ? 58.0f : 0.0f);
+    chartActionsRow->setHeight(showChartActions ? kMenuActionHeight : 0.0f);
     if (!showChartActions && revealContextMenu != nullptr) {
       revealContextMenu->dismiss();
     }
@@ -4412,7 +4392,7 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
 
   const bool show = visible || archiveUnzipInProgress();
   unzipButtonSlot->setVisible(show);
-  unzipButtonSlot->setHeight(show ? 58.0f : 0.0f);
+  unzipButtonSlot->setHeight(show ? kMenuActionHeight : 0.0f);
   if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
     unzipButtonText->setLocalizedText(i18n::message("library.archive.unzipping.progress"));
   }
@@ -4534,7 +4514,7 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   }
 
   findBmsButtonSlot->setVisible(visible);
-  findBmsButtonSlot->setHeight(visible ? 58.0f : 0.0f);
+  findBmsButtonSlot->setHeight(visible ? kMenuActionHeight : 0.0f);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -7078,6 +7058,7 @@ void MainMenuScene::cleanupScene() {
   previewWorker_.reset();
   overlayPortal = nullptr;
   jacketView = nullptr;
+  chartDetailsView_ = nullptr;
   searchBox = nullptr;
   startButton = nullptr;
   rankingsButton = nullptr;
@@ -7151,9 +7132,6 @@ void MainMenuScene::cleanupScene() {
   tasksCloseButton = nullptr;
   tasksCloseButtonText = nullptr;
   readyGaugeText = nullptr;
-  readyTotalRow = nullptr;
-  readyTotalIconText = nullptr;
-  readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;

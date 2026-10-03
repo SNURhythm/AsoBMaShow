@@ -4996,6 +4996,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(APPLE)
         target_link_libraries(chart_list_item_view_tests PRIVATE iconv)
     endif()
+    get_target_property(CHART_DETAILS_TEST_SOURCES chart_list_item_view_tests SOURCES)
+    list(REMOVE_ITEM CHART_DETAILS_TEST_SOURCES
+        tests/chart_list_item_view_tests.cpp src/view/ChartListItemView.cpp)
+    add_executable(chart_details_view_tests
+        tests/chart_details_view_tests.cpp
+        src/view/ChartDetailsView.cpp
+        src/view/ScrollView.cpp
+        ${CHART_DETAILS_TEST_SOURCES}
+    )
+    target_include_directories(chart_details_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_details_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(chart_details_view_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+    if(APPLE)
+        target_link_libraries(chart_details_view_tests PRIVATE iconv)
+    endif()
+
     add_executable(decide_loading_overlay_tests
         tests/decide_loading_overlay_tests.cpp
         src/scene/DecideLoadingOverlay.cpp
@@ -8013,6 +8029,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         visual_catch_up_tests
         image_view_fade_tests
         chart_list_item_view_tests
+        chart_details_view_tests
         decide_loading_overlay_tests
         ir_upload_candidate_list_view_tests
         find_bms_download_tests
@@ -8030,6 +8047,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_modal_tests
         image_view_fade_tests
         chart_list_item_view_tests
+        chart_details_view_tests
         decide_loading_overlay_tests
         context_menu_view_tests
         view_layout_tests
@@ -8324,6 +8342,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         decide_loading_overlay_tests
         chart_preload_worker_tests
         chart_list_item_view_tests
+        chart_details_view_tests
         dropdown_view_tests
         context_menu_view_tests
         view_layout_tests

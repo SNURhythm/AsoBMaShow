@@ -55,7 +55,7 @@ int main() {
     record.meta.Title = "Banner Song";
     record.meta.Artist = "Banner Artist";
 
-    ChartListItemView row(0, 0, 1200, 108, record);
+    ChartListItemView row(0, 0, 964, 108, record);
     row.setMeta(record);
     row.applyYogaLayout();
 
@@ -100,10 +100,35 @@ int main() {
                 card->getChildren().front() == banner,
             "chart banner renders behind row content");
 
+    row.setBestScoreRank(2451, 2700);
+    row.applyYogaLayout();
+    auto *bestScore = dynamic_cast<TextView *>(
+        row.findViewByName("chartListBestScore"));
+    require(bestScore != nullptr && bestScore->getText() == "EX 2451",
+            "played rows display the numeric best EX score inside the rank badge");
+    auto *rankBadge = row.findViewByName("chartListScoreRank");
+    require(rankBadge != nullptr && rankBadge->getVisible() &&
+                bestScore->getX() >= rankBadge->getX() &&
+                bestScore->getY() >= rankBadge->getY() &&
+                bestScore->getY() + bestScore->getHeight() <=
+                    rankBadge->getY() + rankBadge->getHeight(),
+            "best score fits within the existing rank badge");
+    row.setBestScoreRank(12345, 15000);
+    require(bestScore->getText() == "EX 12345",
+            "rebinding updates the score as well as the grade");
+    require(bestScore->measureTextWidth(bestScore->getText()) <= bestScore->getWidth(),
+            "five-digit EX scores fit without clipping in the rank badge");
+    row.setBestScoreRank(0, 0);
+    require(!rankBadge->getVisible() && bestScore->getText().empty(),
+            "unplayed rows hide the badge and clear the previous score");
+    row.setBestScoreRank(2451, 2700);
+
     record.meta.Banner.clear();
     row.setMeta(record);
     require(banner->imagePath().empty(),
             "rebind without a banner clears recycled image identity");
+    require(!rankBadge->getVisible() && bestScore->getText().empty(),
+            "recycling a row clears the score before a new best is bound");
 
     record.meta.Banner = "banner.png";
     record.unavailable = true;

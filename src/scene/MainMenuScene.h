@@ -55,6 +55,7 @@
 #include <unordered_map>
 
 class Button;
+class ChartDetailsView;
 class DropdownView;
 class OverlayPortal;
 class BlockingOverlayView;
@@ -190,6 +191,7 @@ private:
   std::unique_ptr<ContextMenuView> revealContextMenu;
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
   ImageView *jacketView = nullptr;
+  ChartDetailsView *chartDetailsView_ = nullptr;
   TextInputBox *searchBox = nullptr;
   ChartFilterPanelView *chartFilterPanel = nullptr;
   ChartSortPanelView *chartSortPanel = nullptr;
@@ -273,9 +275,6 @@ private:
   TextView *tasksCloseButtonText = nullptr;
   std::unique_ptr<FindBmsModal> findBmsModal_;
   TextView *readyGaugeText = nullptr;
-  View *readyTotalRow = nullptr;
-  TextView *readyTotalIconText = nullptr;
-  TextView *readyTotalText = nullptr;
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;
   TextView *readyPacemakerText = nullptr;
@@ -435,6 +434,7 @@ private:
   bool currentPlayOptionSelectionAllowed(const std::string &option) const;
   bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;
   void refreshReadySettingsSummary();
+  void refreshSelectedChartDetails();
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
                                       bool mediaReady,
                                       bool reusableForStart = true);

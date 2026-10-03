@@ -50,6 +50,7 @@ private:
   TextView *scoreRankShadowView;
   TextView *scoreRankWeightView;
   TextView *scoreRankView;
+  TextView *bestScoreView;
   std::string scoreRank;
   Button *favoriteButton;
   TextView *favoriteIconView;

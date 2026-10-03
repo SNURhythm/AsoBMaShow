@@ -209,6 +209,7 @@ asobmashow_share_test_sources(dependencies
         chart_library_operations_tests
         chart_library_scanner_tests
         chart_list_item_view_tests
+        chart_details_view_tests
         chart_meta_index_order_tests
         chart_practice_range_tests
         chart_preload_worker_tests
