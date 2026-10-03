@@ -323,6 +323,7 @@ private:
   void refreshRankingsButton();
   void requestSelectedResultSkinRankings();
   void updateSelectedResultSkinRankings();
+  void setResultSkinRankingPosition(double position);
   [[nodiscard]] bool rankingsAvailable() const;
   [[nodiscard]] ir::IrResultPresentation makeIrResultPresentation() const;
   void refreshResultSummary();
@@ -422,6 +423,7 @@ private:
   result_skin_ir::RankingData resultSkinRanking;
   int resultSkinRankingOffset = 0;
   bool resultSkinRankingOffsetManuallyChosen = false;
+  std::optional<double> resultSkinPendingRankingPosition;
   bool resultSkinRankingRefreshPending = false;
   std::optional<int> resultSkinPreviousIrRank;
   result_skin_ir::SubmissionTimers resultSkinSubmissionTimers;

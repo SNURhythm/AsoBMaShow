@@ -178,6 +178,8 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept;
 [[nodiscard]] IrRankingJudgementColumnGeometry
 layoutIrRankingJudgementColumns(float availableWidth) noexcept;
 void configureIrRankingDetailLampBadge(View &badge);
+void refreshIrRankingModalLanguage(View &root, View &scoreDetail,
+                                   std::uint64_t &languageRevision);
 [[nodiscard]] bool useCompactIrRankingColumns(int width) noexcept;
 [[nodiscard]] bool shouldLoadNextIrRankingPage(
     int entryCount, float scrollOffset,

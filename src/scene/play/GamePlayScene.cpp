@@ -4830,6 +4830,7 @@ void GamePlayScene::configurePacemakerTarget() {
 }
 
 void GamePlayScene::configureSkinIrTarget() {
+  if (state != nullptr && state->isEnding) return;
   if (skinIrRankingGeneration != 0 && context.irRankingService) {
     context.irRankingService->close(skinIrRankingGeneration);
   }
@@ -4841,6 +4842,8 @@ void GamePlayScene::configureSkinIrTarget() {
   skinIrPreviousUserRank.reset();
   skinIrAccountRevision =
       context.irAccountEvidenceRevision.load(std::memory_order_acquire);
+  skinIrRankingEvidenceRevision =
+      context.irRankingEvidenceRevision.load(std::memory_order_acquire);
   if (chart == nullptr || options.practiceMode || options.practiceSession ||
       isCoursePlayback()) {
     return;
@@ -4879,9 +4882,15 @@ void GamePlayScene::configureSkinIrTarget() {
 }
 
 void GamePlayScene::updateSkinIrTarget() {
+  // Finalization can submit this attempt before the result scene is built.
+  // Freeze the pre-upload authority once ending starts; a late response may
+  // already include the newly submitted score.
+  if (state != nullptr && state->isEnding) return;
   if (guidedAccessReminderBackground) return;
   if (skinIrAccountRevision !=
-      context.irAccountEvidenceRevision.load(std::memory_order_acquire)) {
+          context.irAccountEvidenceRevision.load(std::memory_order_acquire) ||
+      skinIrRankingEvidenceRevision !=
+          context.irRankingEvidenceRevision.load(std::memory_order_acquire)) {
     configureSkinIrTarget();
     return;
   }
@@ -4897,10 +4906,6 @@ void GamePlayScene::updateSkinIrTarget() {
     configureSkinIrTarget();
     return;
   }
-  // Finalization can submit this attempt before the result scene is built.
-  // Freeze the pre-upload authority once ending starts; a late response may
-  // already include the newly submitted score.
-  if (state != nullptr && state->isEnding) return;
   auto snapshot = context.irRankingService->snapshot();
   if (snapshot.generation != skinIrRankingGeneration) return;
   if (!gameplaySkinRankingMatches(snapshot, *skinIrRankingRequest)) {

@@ -78,6 +78,21 @@ inline RankingData projectRanking(const ir::IrRankingSnapshot &source) {
   return result;
 }
 
+inline int automaticRankingOffset(const RankingData &ranking) {
+  for (std::size_t index = 0; index < ranking.entries.size(); ++index) {
+    if (ranking.entries[index].currentUser) {
+      return index < 10 ? 0 : static_cast<int>(index) - 4;
+    }
+  }
+  for (std::size_t index = 0; index < ranking.nearbyEntries.size(); ++index) {
+    if (ranking.nearbyEntries[index].currentUser) {
+      const int position = ranking.nearbyOffset + static_cast<int>(index);
+      return position < 10 ? 0 : position - 4;
+    }
+  }
+  return 0;
+}
+
 inline int aggregateCount(int id, const std::array<int, 11> &counts) {
   constexpr std::array<int, 11> countIds{202, 210, 204, 206, 212, 214,
                                          216, 208, 218, 222, 224};

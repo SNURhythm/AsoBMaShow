@@ -571,21 +571,22 @@ parseNearbyRankingResponse(std::string_view body, const IrChartQuery &query,
                             *users, page.outOf);
     if (!ownEntry) return {.diagnostic = "Tachi nearby player is invalid"};
     const int ownRank = ownEntry->rank;
-    page.entries.push_back(std::move(*ownEntry));
     std::set<std::string> identities{std::to_string(authenticatedUserId)};
     const auto append = [&](const Json &rows, bool preceding) {
       for (const auto &pb : rows) {
         auto entry = parsePb(pb, query, expectedChartId, authenticatedUserId,
                              *users, page.outOf);
         if (!entry || !identities.insert(entry->providerEntryId).second ||
-            (preceding ? entry->rank >= ownRank : entry->rank <= ownRank)) {
+            (preceding ? entry->rank > ownRank : entry->rank < ownRank)) {
           return false;
         }
         page.entries.push_back(std::move(*entry));
       }
       return true;
     };
-    if (!append(above, true) || !append(below, false)) {
+    const bool validAbove = append(above, true);
+    page.entries.push_back(std::move(*ownEntry));
+    if (!validAbove || !append(below, false)) {
       return {.diagnostic = "Tachi nearby ranking row is invalid"};
     }
     std::stable_sort(page.entries.begin(), page.entries.end(),

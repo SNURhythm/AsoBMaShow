@@ -2721,9 +2721,11 @@ void ResultScene::updateSelectedResultSkinRankings() {
   if (snapshot.revision == resultSkinRankingRevision) return;
   resultSkinRankingRevision = snapshot.revision;
   resultSkinRanking = result_skin_ir::projectRanking(snapshot);
-  if (!resultSkinRankingOffsetManuallyChosen && resultSkinRanking.currentUserRank) {
-    resultSkinRankingOffset = *resultSkinRanking.currentUserRank > 10
-                                  ? *resultSkinRanking.currentUserRank - 5 : 0;
+  if (resultSkinPendingRankingPosition && resultSkinRanking.totalPlayers &&
+      *resultSkinRanking.totalPlayers > 0) {
+    setResultSkinRankingPosition(*resultSkinPendingRankingPosition);
+  } else if (!resultSkinRankingOffsetManuallyChosen && resultSkinRanking.currentUserRank) {
+    resultSkinRankingOffset = result_skin_ir::automaticRankingOffset(resultSkinRanking);
   }
 #endif
 }
@@ -4344,13 +4346,23 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
 #endif
 }
 
+void ResultScene::setResultSkinRankingPosition(double position) {
+  if (!std::isfinite(position)) return;
+  position = std::clamp(position, 0.0, 1.0);
+  resultSkinRankingOffsetManuallyChosen = true;
+  if (!resultSkinRanking.totalPlayers || *resultSkinRanking.totalPlayers <= 0) {
+    resultSkinPendingRankingPosition = position;
+    return;
+  }
+  resultSkinRankingOffset = static_cast<int>(*resultSkinRanking.totalPlayers * position);
+  resultSkinPendingRankingPosition.reset();
+}
+
 void ResultScene::consumeResultSkinBuiltinEvents() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!resultSkinSession) return;
   if (const auto position = resultSkinSession->takeQueuedRankingPosition()) {
-    resultSkinRankingOffset = static_cast<int>(
-        std::max(1, resultSkinRanking.totalPlayers.value_or(0)) * *position);
-    resultSkinRankingOffsetManuallyChosen = true;
+    setResultSkinRankingPosition(*position);
   }
   bool audioSettingsChanged = false;
   for (const auto &write : resultSkinSession->takeQueuedAudioVolumeWrites()) {
@@ -4548,6 +4560,7 @@ void ResultScene::cleanupScene() {
   resultSkinRanking = {};
   resultSkinRankingOffset = 0;
   resultSkinRankingOffsetManuallyChosen = false;
+  resultSkinPendingRankingPosition.reset();
   resultSkinRankingRefreshPending = false;
   resultSkinSubmissionTimers = {};
   rootLayout = nullptr;

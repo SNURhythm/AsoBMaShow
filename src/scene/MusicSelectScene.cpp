@@ -3309,8 +3309,10 @@ void MusicSelectScene::refreshRepositoryRevisions() {
       context.scoreRepository.GetRevision() != scoreRevision_) {
     reloadLibrary();
     selectedBarMoved();
-  } else if (rankingChanged) {
-    selectedBarMoved();
+  } else if (rankingChanged && rankingRequest_) {
+    // Reopen only ranking data. The service reuses unaffected chart caches;
+    // updateRanking defers this while the native modal owns the request.
+    rankingLoadAtMicros_ = elapsedMicros() - 1;
   }
 }
 

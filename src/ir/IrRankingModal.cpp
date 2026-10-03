@@ -28,11 +28,12 @@ std::string rankText(int rank) {
 }
 
 std::string playerText(const IrChartRankingEntry &entry) {
-  if (entry.currentUser && entry.playerName.empty()) return "You";
+  if (entry.currentUser && entry.playerName.empty()) return i18n::tr("ir.ranking.you.label");
   std::string value =
       entry.playerName.empty() ? std::string(kMissing) : entry.playerName;
   if (entry.currentUser) {
-    value += "  \xC2\xB7  You";
+    value += "  \xC2\xB7  ";
+    value += i18n::tr("ir.ranking.you.label");
   }
   return value;
 }
@@ -201,6 +202,17 @@ layoutIrRankingJudgementColumns(float availableWidth) noexcept {
 
 void configureIrRankingDetailLampBadge(View &badge) {
   badge.setWidthPercent(100.0f)->setMinWidth(0)->setFlexShrink(1.0f);
+}
+
+void refreshIrRankingModalLanguage(View &root, View &scoreDetail,
+                                   std::uint64_t &languageRevision) {
+  const auto current = i18n::revision();
+  if (languageRevision == current) return;
+  // Closed modal roots are not registered with the scene's overlay portal.
+  // Refresh both trees, including the currently hidden score-detail view.
+  root.propagateLanguageChange();
+  scoreDetail.propagateLanguageChange();
+  languageRevision = current;
 }
 
 bool useCompactIrRankingColumns(int width) noexcept {

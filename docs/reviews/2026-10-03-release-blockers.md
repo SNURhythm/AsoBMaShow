@@ -3,6 +3,37 @@
 Base: `484a2d69` (`develop`, PR #115 merged).
 Fix branch: `fix/release-blockers-2026-10-03`.
 
+## Localization and PR review follow-up
+
+Retained ranking and score-detail roots are refreshed against the current
+language revision on open and while active, even if a root missed the scene's
+language notification while closed. Native own-player labels now translate;
+custom-skin Select, Gameplay, and Result projections continue to emit the exact
+`YOU` marker expected by ModernChic and LITONE12.
+
+Reviewed all eight open PR comments, including the older threads:
+
+- Freeze gameplay IR state before account, provider, or foreground resets once
+  ending begins. Tests now execute the real configure and update methods.
+- Observe ranking-evidence revisions in gameplay so an older queued upload can
+  refresh an idle request before capturing this play's previous rank.
+- Handle selector ranking-evidence changes through ranking reload scheduling,
+  preserving the current modal, preview, analysis, and selection. Unaffected
+  requests reuse the service cache; modal ownership still defers skin loading.
+- Preserve normalized result ranking-position writes until a positive population
+  is known. The latest explicit write wins and suppresses automatic centering.
+- Center results by the own row's index, including large competition-rank tie
+  groups, while exposing the provider's rank unchanged.
+- Accept equal-ranked nearby players while retaining identity, chart, population,
+  size, and wrong-side validation. Preserve above/own/below order within ties.
+- Confirm the earlier fixes retaining an observed rank after pagination failure
+  and recentering after upload refresh remain present and tested.
+
+Desktop build and 13 targeted suites passed: modal, ranking service, parser,
+Tachi driver, gameplay IR scene, result IR scene/projection, skin state bridge,
+selector ranking/lifecycle/export, and localization/catalog checks. This
+follow-up did not run the full suite or a live authenticated/mobile UI smoke test.
+
 ## Native ranking tabs follow-up
 
 The merged list still made scrolling above a distant nearby rank jump to top

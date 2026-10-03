@@ -1,6 +1,7 @@
 #include "skin/ResultSkinIr.h"
 
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <memory>
 
@@ -89,15 +90,56 @@ struct ResultScene {
   result_skin_ir::RankingData resultSkinRanking;
   int resultSkinRankingOffset = 0;
   bool resultSkinRankingOffsetManuallyChosen = false;
+  std::optional<double> resultSkinPendingRankingPosition;
   bool resultSkinRankingRefreshPending = false;
   std::optional<int> resultSkinPreviousIrRank;
   result_skin_ir::SubmissionTimers resultSkinSubmissionTimers;
   void updateSelectedResultSkinRankings();
+  void setResultSkinRankingPosition(double position);
 };
 
 PRODUCTION_RESULT_IR_UPDATE
 
 int main() {
+  ResultScene positioned;
+  auto &positionService = *positioned.context.irRankingService;
+  positioned.resultSkinRankingGeneration = positionService.open(*positioned.resultSkinRankingRequest);
+  positioned.setResultSkinRankingPosition(0.25);
+  positioned.setResultSkinRankingPosition(0.75);
+  positioned.updateSelectedResultSkinRankings();
+  require(positioned.resultSkinPendingRankingPosition == 0.75,
+          "last explicit ranking position survives loading without a known total");
+  auto population = std::make_shared<ir::IrChartRanking>();
+  population->totalPlayers = 100;
+  population->entries = {{.rank = 1, .currentUser = true}};
+  positionService.finish(population);
+  positioned.updateSelectedResultSkinRankings();
+  require(positioned.resultSkinRankingOffset == 75 &&
+              positioned.resultSkinRankingOffsetManuallyChosen &&
+              !positioned.resultSkinPendingRankingPosition,
+          "population arrival applies the pending position without automatic recentering");
+  positioned.setResultSkinRankingPosition(0.5);
+  require(positioned.resultSkinRankingOffset == 50,
+          "position writes apply immediately when population is known");
+
+  ResultScene tied;
+  auto &tiedService = *tied.context.irRankingService;
+  tied.resultSkinRankingGeneration = tiedService.open(*tied.resultSkinRankingRequest);
+  auto tiedRanking = std::make_shared<ir::IrChartRanking>();
+  tiedRanking->totalPlayers = 30;
+  for (int index = 0; index < 30; ++index) {
+    tiedRanking->entries.push_back({.rank = 1, .currentUser = index == 24});
+  }
+  tiedService.finish(tiedRanking);
+  tied.updateSelectedResultSkinRankings();
+  require(tied.resultSkinRankingOffset == 20 && tied.resultSkinRanking.currentUserRank == 1,
+          "automatic centering follows own row index while preserving competition rank");
+  const auto tiedRows = ir::rankingWindow(tied.resultSkinRanking.entries,
+      tied.resultSkinRanking.nearbyEntries, tied.resultSkinRanking.nearbyOffset,
+      tied.resultSkinRankingOffset);
+  require(tiedRows.size() == 10 && tiedRows[4].currentUser,
+          "the tied own row remains inside the visible result window");
+
   ResultScene nearby;
   auto &nearbyService = *nearby.context.irRankingService;
   nearby.resultSkinRankingGeneration = nearbyService.open(*nearby.resultSkinRankingRequest);

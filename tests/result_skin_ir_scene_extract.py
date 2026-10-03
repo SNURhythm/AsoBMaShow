@@ -13,7 +13,8 @@ def main():
     source = (args.root / "src/scene/ResultScene.cpp").read_text()
     fixture = (args.root / "tests/result_skin_ir_scene_fixture.cpp").read_text()
     fixture = fixture.replace("PRODUCTION_RESULT_IR_UPDATE", extract(
-        source, "void ResultScene::updateSelectedResultSkinRankings()"))
+        source, "void ResultScene::updateSelectedResultSkinRankings()") + "\n" + extract(
+        source, "void ResultScene::setResultSkinRankingPosition(double position)"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)
 

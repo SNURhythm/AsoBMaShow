@@ -13,6 +13,7 @@ def main():
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     fixture = (args.root / "tests/gameplay_skin_ir_scene_fixture.cpp").read_text()
     fixture = fixture.replace("PRODUCTION_GAMEPLAY_IR_UPDATE", extract(
+        source, "void GamePlayScene::configureSkinIrTarget()") + "\n" + extract(
         source, "void GamePlayScene::updateSkinIrTarget()"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)

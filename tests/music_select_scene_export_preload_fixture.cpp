@@ -430,6 +430,8 @@ struct MusicSelectScene {
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
   std::uint64_t irRankingEvidenceRevision_ = 0;
+  std::optional<int> rankingRequest_;
+  std::int64_t rankingLoadAtMicros_ = -1;
   std::map<int, int> rankingCache_;
   void reloadLibrary() {
     libraryRevision_ = context.chartRepository.GetLibraryRevision();

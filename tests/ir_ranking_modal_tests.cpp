@@ -111,6 +111,52 @@ ir::IrRankingSnapshot snapshot(ir::IrRankingSnapshotState state,
           .diagnostic = "safe detail"};
 }
 
+void testRetainedModalTreesRefreshLanguageWhileHidden() {
+  struct Caption : View {
+    std::string key;
+    std::string text;
+    int changes = 0;
+    explicit Caption(std::string value) : key(std::move(value)), text(i18n::tr(key)) {}
+    void onLanguageChanged() override {
+      text = i18n::tr(key);
+      ++changes;
+    }
+  };
+  i18n::setLanguage(i18n::Language::English);
+  View root;
+  View scoreDetail;
+  auto *tab = new Caption("ir.ranking.nearby_tab.label");
+  auto *detail = new Caption("ir.ranking.score_detail.ex_score.label");
+  root.addView(tab);
+  scoreDetail.addView(detail);
+  root.setVisible(false);
+  scoreDetail.setVisible(false);
+  std::uint64_t revision = 0;
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->text == "Near me");
+  const int changes = tab->changes;
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->changes == changes);
+  ir::IrRankingModalModel model;
+  model.open(request(), "Raw title");
+  const auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  REQUIRE(model.apply(source));
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(model.apply(source));
+  REQUIRE(model.row(1, 1200).playerText == "PLAYER  ·  나");
+  REQUIRE(model.scoreDetail(1)->playerText == "PLAYER  ·  나");
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->text == "내 주변");
+  REQUIRE(detail->text == "EX 점수");
+  REQUIRE(tab->changes == changes + 1);
+  root.setVisible(true);
+  i18n::setLanguage(i18n::Language::Japanese);
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->text == "自分の周辺");
+  REQUIRE(detail->text == "EX スコア");
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testLocalComparisonRetainsLocalizedLabelsAndRawMetrics() {
   i18n::setLanguage(i18n::Language::English);
   auto comparison = *request().localComparison;
@@ -694,6 +740,7 @@ void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
 } // namespace
 
 int main() {
+  testRetainedModalTreesRefreshLanguageWhileHidden();
   testLocalComparisonRetainsLocalizedLabelsAndRawMetrics();
   testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest();
   testRecyclerLanguageRefreshKeepsBoundRowsAndSelection();

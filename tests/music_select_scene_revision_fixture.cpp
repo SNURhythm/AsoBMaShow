@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <optional>
 
 struct Repository {
   std::uint64_t revision = 0;
@@ -24,6 +25,10 @@ struct MusicSelectScene {
   std::uint64_t scoreRevision_ = 0;
   std::uint64_t irRankingEvidenceRevision_ = 0;
   std::map<int, int> rankingCache_;
+  std::optional<int> rankingRequest_ = 1;
+  std::int64_t rankingLoadAtMicros_ = -1;
+  std::int64_t elapsedMicros() const { return 1000; }
+  bool rankingModalOpen = true;
   int reloads = 0;
   int selectionRefreshes = 0;
   void reloadLibrary() {
@@ -31,7 +36,7 @@ struct MusicSelectScene {
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();
   }
-  void selectedBarMoved() { ++selectionRefreshes; }
+  void selectedBarMoved() { ++selectionRefreshes; rankingModalOpen = false; }
   void refreshRepositoryRevisions();
 };
 
@@ -63,12 +68,14 @@ int main() {
   scene.refreshRepositoryRevisions();
   assert(scene.reloads == 3 && scene.selectionRefreshes == 3);
   scene.rankingCache_[1] = 123;
+  scene.rankingModalOpen = true;
   ++scene.context.irRankingEvidenceRevision;
   scene.refreshRepositoryRevisions();
-  assert(scene.rankingCache_.empty() && scene.selectionRefreshes == 4 &&
+  assert(scene.rankingCache_.empty() && scene.selectionRefreshes == 3 &&
          scene.reloads == 3 &&
-         "a completed upload invalidates the selector's ten-minute ranking cache");
+         "a completed upload invalidates only ranking data without resetting selection");
+  assert(scene.rankingModalOpen && scene.rankingLoadAtMicros_ == 999);
   scene.rankingCache_[1] = 456;
   scene.refreshRepositoryRevisions();
-  assert(scene.rankingCache_.at(1) == 456 && scene.selectionRefreshes == 4);
+  assert(scene.rankingCache_.at(1) == 456 && scene.selectionRefreshes == 3);
 }

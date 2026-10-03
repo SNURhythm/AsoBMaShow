@@ -157,6 +157,7 @@
 {"ir.ranking.table.player.label", "Player", "플레이어", "プレイヤー"},
 {"ir.ranking.table.rank.label", "Rank", "순위", "順位"},
 {"ir.ranking.top_tab.label", "Top rankings", "상위 랭킹", "上位ランキング"},
+{"ir.ranking.you.label", "You", "나", "自分"},
 {"ir.result.add_replace_api_key_in_settings_ir_then_retry.message", "Add or replace the API key in Settings > IR, then retry.", "설정 > IR에서 API 키를 추가하거나 교체한 후 다시 시도하세요.", "設定 > IR で API キーを追加または変更してから再試行してください。"},
 {"ir.result.authentication_required.label", "Authentication required", "인증 필요", "認証が必要です"},
 {"ir.result.import_queued_remotely_being_polled.message", "The import was queued remotely and is being polled.", "서버에 등록되었으며 처리 결과를 확인하는 중입니다.", "サーバーで取り込み待ちになっています。処理結果を確認中です。"},

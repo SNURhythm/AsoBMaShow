@@ -316,6 +316,7 @@ private:
   std::uint64_t skinIrRankingGeneration = 0;
   std::uint64_t skinIrRankingRevision = 0;
   std::uint64_t skinIrAccountRevision = 0;
+  std::uint64_t skinIrRankingEvidenceRevision = 0;
   int skinIrLocalBestScore = 0;
   std::optional<int> skinIrPreviousUserRank;
   std::optional<ScoreBestSnapshot> activePacemakerBest;

@@ -376,6 +376,7 @@ struct IrRankingModal::Impl {
   int layoutWidth = 0;
   int layoutHeight = 0;
   SafeInsets layoutSafe;
+  std::uint64_t languageRevision = 0;
 
   Impl(OverlayPortal &portalValue, IrRankingService &serviceValue)
       : portal(portalValue), service(serviceValue) {
@@ -975,6 +976,7 @@ struct IrRankingModal::Impl {
 
   void openRequest(IrRankingRequest request, std::string title) {
     closeNow();
+    refreshIrRankingModalLanguage(*root, *scoreDetailRoot, languageRevision);
     tabScrollOffsets = {};
     tabVisited = {};
     const std::uint64_t generation = service.open(request);
@@ -1012,10 +1014,13 @@ struct IrRankingModal::Impl {
       closeNow();
       return;
     }
+    const bool languageChanged = languageRevision != i18n::revision();
+    refreshIrRankingModalLanguage(*root, *scoreDetailRoot, languageRevision);
     updateLayout();
     if (model.apply(service.snapshot())) {
       refreshPresentation();
     }
+    if (languageChanged && scoreDetailOpen) showScoreDetails(list->selectedIndex);
     const auto &presentation = model.presentation();
     if (presentation.canLoadNextPage && presentation.ranking &&
         shouldLoadNextIrRankingPage(

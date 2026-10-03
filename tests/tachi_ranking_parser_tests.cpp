@@ -413,6 +413,20 @@ void testNearbyRankingValidation() {
   REQUIRE(parsed.page->entries[2].playerName.empty());
   REQUIRE(parsed.page->outOf == 6000);
   auto changed = response;
+  changed["body"]["adjacentAbove"][0]["rankingData"]["rank"] = 5000;
+  changed["body"]["adjacentBelow"][0]["rankingData"]["rank"] = 5000;
+  const auto tied = parse(changed);
+  REQUIRE(tied.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(tied.page && tied.page->entries.size() == 4);
+  REQUIRE(tied.page->entries[1].providerEntryId == "1");
+  REQUIRE(tied.page->entries[2].currentUser);
+  REQUIRE(tied.page->entries[3].providerEntryId == "3");
+  REQUIRE(std::ranges::count_if(tied.page->entries,
+      [](const auto &entry) { return entry.currentUser; }) == 1);
+  changed = response;
+  changed["body"]["adjacentAbove"][0]["rankingData"]["rank"] = 5001;
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
   changed["body"]["pb"]["userID"] = 1;
   REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
   changed = response;
