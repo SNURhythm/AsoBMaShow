@@ -4,6 +4,7 @@
 #include <yoga/Yoga.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -928,10 +929,13 @@ private:
   bool childrenOrderDirty = false;
   int zIndex = 0;
   uint64_t insertionOrder = 0;
-  inline static uint64_t nextInsertionOrder = 1;
-  inline static int layoutBatchDepth = 0;
-  inline static int layoutApplyDepth = 0;
-  inline static std::unordered_set<View *> dirtyRoots;
+  inline static std::atomic<uint64_t> nextInsertionOrder{1};
+  // Export workers own separate view trees while the main thread updates UI.
+  // A batch, layout callback, or destructor must only touch its thread's roots.
+  // Finish batches before handing a tree exclusively to another thread.
+  static thread_local int layoutBatchDepth;
+  static thread_local int layoutApplyDepth;
+  static thread_local std::unordered_set<View *> dirtyRoots;
   inline static std::vector<TemporaryEventListenerEntry>
       temporaryEventListeners;
   inline static std::vector<std::function<void()>> deferredEventCallbacks;

@@ -5087,6 +5087,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(view_layout_threading_tests
+        tests/view_layout_threading_tests.cpp
+        src/rendering/Color.cpp
+        src/view/View.cpp
+        src/rendering/UniformCache.cpp
+    )
+    target_include_directories(view_layout_threading_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(view_layout_threading_tests PRIVATE cxx_std_23)
+    target_link_libraries(view_layout_threading_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(settings_button_layout_tests
         tests/settings_button_layout_tests.cpp
         src/rendering/Color.cpp
@@ -8023,6 +8033,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         decide_loading_overlay_tests
         context_menu_view_tests
         view_layout_tests
+        view_layout_threading_tests
         button_enabled_tests
         text_input_box_tests
         text_view_font_lifetime_tests
@@ -8316,6 +8327,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         dropdown_view_tests
         context_menu_view_tests
         view_layout_tests
+        view_layout_threading_tests
         button_enabled_tests
         text_input_box_tests
         difficulty_table_url_completion_tests

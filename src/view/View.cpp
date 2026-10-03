@@ -6,6 +6,10 @@
 #include <cmath>
 #include <utility>
 
+thread_local int View::layoutBatchDepth = 0;
+thread_local int View::layoutApplyDepth = 0;
+thread_local std::unordered_set<View *> View::dirtyRoots;
+
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
@@ -601,7 +605,8 @@ void View::refreshInsertionOrderFromLayout() {
     auto *child = static_cast<View *>(
         YGNodeGetContext(YGNodeGetChild(node, index)));
     if (child != nullptr) {
-      child->insertionOrder = nextInsertionOrder++;
+      child->insertionOrder =
+          nextInsertionOrder.fetch_add(1, std::memory_order_relaxed);
     }
   }
 }
