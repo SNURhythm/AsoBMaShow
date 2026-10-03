@@ -207,6 +207,8 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  void closeRankings() {}
+
   struct RevealMenu { void dismiss() {} };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 

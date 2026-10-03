@@ -18,6 +18,7 @@ enum class MusicSelectToolbarControl {
   MoreMenu,
   ChartViewer,
   ChartRecords,
+  Rankings,
   RevealChart,
   MusicPlayer,
   Tasks,
@@ -33,6 +34,7 @@ struct MusicSelectToolbarCallbacks {
   std::function<void()> openMoreMenu;
   std::function<void()> openChartViewer;
   std::function<void()> openChartRecords;
+  std::function<void()> openRankings;
   std::function<void()> revealChart;
   std::function<void()> openMusicPlayer;
   std::function<void()> openTasks;

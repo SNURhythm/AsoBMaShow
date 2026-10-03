@@ -46,6 +46,7 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
       .openMoreMenu = [&] { actions.emplace_back("more-menu"); },
       .openChartViewer = [&] { actions.emplace_back("viewer"); },
       .openChartRecords = [&] { actions.emplace_back("records"); },
+      .openRankings = [&] { actions.emplace_back("rankings"); },
       .revealChart = [&] { actions.emplace_back("reveal"); },
       .openMusicPlayer = [&] { actions.emplace_back("music"); },
       .openTasks = [&] { actions.emplace_back("tasks"); },
@@ -62,8 +63,8 @@ void testExpandedShowsLabeledMenuEntrypoints() {
   auto toolbar = MusicSelectToolbarView::Create(
       {}, callbacks(actions, saved), 800, 300);
   toolbar->applyYogaLayout();
-  expect(toolbar->controls().size() == 5,
-         "expanded toolbar has only drag, two menus, play options, and collapse");
+  expect(toolbar->controls().size() == 6,
+         "expanded toolbar includes a direct rankings action");
   int labels = 0;
   for (const auto &control : toolbar->controls()) {
     if (control.label) {
@@ -78,9 +79,9 @@ void testExpandedShowsLabeledMenuEntrypoints() {
              "drag and collapse retain recognizable icons");
     }
   }
-  expect(labels == 3 && actions == std::vector<std::string>{
-             "chart-menu", "play-options", "more-menu"},
-         "labeled controls expose chart menu, play options, and more menu in order");
+  expect(labels == 4 && actions == std::vector<std::string>{
+             "chart-menu", "play-options", "rankings", "more-menu"},
+         "labeled controls expose chart menu, play options, rankings, and more menu in order");
 }
 
 void testUnavailableCallbacksDisableButtons() {
@@ -99,20 +100,20 @@ void testDisabledActionsStayDisabledAcrossRebuilds() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved), 800, 300);
-  toolbar->setControlEnabled(MusicSelectToolbarControl::ChartViewer, false);
-  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Rankings, false);
+  toolbar->activateControl(MusicSelectToolbarControl::Rankings);
   expect(actions.empty(), "disabled toolbar actions cannot dispatch callbacks");
   toolbar->applyState({.mode = MusicSelectToolbarMode::Collapsed});
   toolbar->applyState({.mode = MusicSelectToolbarMode::Expanded});
   toolbar->setViewportSize(300, 600);
-  expect(!toolbar->isControlEnabled(MusicSelectToolbarControl::ChartViewer),
+  expect(!toolbar->isControlEnabled(MusicSelectToolbarControl::Rankings),
          "disabled menu action state survives expand and viewport rebuilds");
-  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
+  toolbar->activateControl(MusicSelectToolbarControl::Rankings);
   expect(actions.empty(), "rebuilding cannot re-enable an ineligible menu action");
-  toolbar->setControlEnabled(MusicSelectToolbarControl::ChartViewer, true);
-  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
-  expect(actions == std::vector<std::string>{"viewer"},
-         "a newly eligible selection re-enables the chart viewer action");
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Rankings, true);
+  toolbar->activateControl(MusicSelectToolbarControl::Rankings);
+  expect(actions == std::vector<std::string>{"rankings"},
+         "a newly eligible selection re-enables the rankings action");
 }
 
 void testCollapsedAndHiddenShapes() {
@@ -140,10 +141,10 @@ void testExpandedToolbarWrapsWithinANarrowViewport() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved),
-                                                 500, 300);
+                                                 800, 300);
   toolbar->applyYogaLayout();
-  expect(toolbar->getWidth() < 500 && toolbar->getHeight() == 66,
-         "compact expanded controls fit on one row in a medium viewport");
+  expect(toolbar->getWidth() < 800 && toolbar->getHeight() == 66,
+         "expanded controls fit on one row in a wide viewport");
 
   toolbar->setViewportSize(260, 300);
   toolbar->applyYogaLayout();
@@ -200,7 +201,7 @@ void testActionsModesAndDragPersist() {
          "toolbar exposes chart and application actions");
 
   toolbar->activateControl(MusicSelectToolbarControl::Collapse);
-  expect(toolbar->controls().size() == 5,
+  expect(toolbar->controls().size() == 6,
          "collapse keeps event targets alive until deferred callbacks run");
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Collapsed &&
@@ -211,7 +212,7 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::Expand);
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Expanded &&
-             toolbar->controls().size() == 5,
+             toolbar->controls().size() == 6,
          "expand persists and rebuilds the toolbar");
 
   toolbar->applyYogaLayout();
@@ -259,7 +260,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
                        .x = 80.0F,
                        .y = 60.0F,
                        .hasPosition = true});
-  expect(toolbar->getVisible() && toolbar->controls().size() == 5 &&
+  expect(toolbar->getVisible() && toolbar->controls().size() == 6 &&
              toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");

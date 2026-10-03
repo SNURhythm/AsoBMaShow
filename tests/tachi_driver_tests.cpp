@@ -189,7 +189,8 @@ void testAuthenticatedAccountUsesTachiUserName() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
   http.responses.push_back(
-      {.statusCode = 200, .body = R"({"id":42,"username":"source-account"})"});
+      {.statusCode = 200,
+       .body = R"({"success":true,"description":"Found user.","body":{"id":42,"username":"source-account"}})"});
 
   const auto result =
       driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
@@ -215,8 +216,9 @@ void testAuthenticatedAccountUsesTachiUserName() {
         std::string("한글사용자")}) {
     http.responses.push_back(
         {.statusCode = 200,
-         .body = nlohmann::json{{"id", 42},
-                                {"username", invalidUsername}}
+         .body = nlohmann::json{{"success", true},
+                               {"body", {{"id", 42},
+                                         {"username", invalidUsername}}}}
                      .dump()});
     const auto malformed =
         driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
@@ -225,6 +227,20 @@ void testAuthenticatedAccountUsesTachiUserName() {
                !malformed.account,
            "authenticated account rejects usernames outside Tachi's display "
            "contract");
+  }
+
+  for (const std::string_view body : {
+           R"({"success":false,"body":{"username":"source-account"}})",
+           R"({"success":true,"body":null})",
+           R"({"success":true,"body":{}})",
+           R"({"id":42,"username":"source-account"})"}) {
+    http.responses.push_back({.statusCode = 200, .body = std::string(body)});
+    const auto malformed =
+        driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
+    expect(malformed.status ==
+                   ir::IrAuthenticatedAccountStatus::MalformedResponse &&
+               !malformed.account,
+           "account lookup requires a successful Tachi response envelope");
   }
 
   http.responses.push_back({.statusCode = 401, .body = R"({"success":false})"});
@@ -1320,6 +1336,87 @@ void testRankingRequestAndStatusClassification() {
          "cancelled ranking fetch maps separately");
 }
 
+void testNearbyRankDoesNotWaitForSequentialPages() {
+  const ir::tachi::TachiDriver driver;
+  for (const int ownRank : {110, 5000}) {
+    const std::string chartId = ownRank == 110 ? "chart/id#reserved" : "chart-id";
+    auto resolved = nlohmann::json::parse(rankingResolveBody());
+    resolved["body"]["chart"]["chartID"] = chartId;
+    auto top = rankingPb(1, 6000, 1);
+    top["chartID"] = chartId;
+    FakeHttpClient http;
+    http.responses.push_back({.statusCode = 200, .body = resolved.dump()});
+    http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody(42)});
+    http.responses.push_back({.statusCode = 200, .body = rankingPageBody(
+        nlohmann::json::array({top}),
+        nlohmann::json::array({{{"id", 1}, {"username", "Top"}}}))});
+    auto adjacent = resolved;
+    auto &body = adjacent["body"];
+    body["pb"] = rankingPb(ownRank, 6000, 42);
+    body["adjacentAbove"] = nlohmann::json::array({rankingPb(ownRank - 1, 6000, 3)});
+    body["adjacentBelow"] = nlohmann::json::array({rankingPb(ownRank + 1, 6000, 4)});
+    body["users"] = nlohmann::json::array({{{"id", 3}, {"username", "Above"}},
+                                            {{"id", 4}, {"username", "Below"}}});
+    body["pb"]["chartID"] = chartId;
+    body["adjacentAbove"][0]["chartID"] = chartId;
+    body["adjacentBelow"][0]["chartID"] = chartId;
+    http.responses.push_back({.statusCode = 200, .body = adjacent.dump()});
+    const auto result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+    expect(result.ranking && result.ranking->entries.size() == 1 &&
+               result.ranking->nearbyEntries.size() == 3 &&
+               result.ranking->nearbyEntries[1].currentUser &&
+               result.ranking->nearbyEntries[1].rank == ownRank &&
+               result.ranking->nextPageToken.has_value(),
+           "first result includes own distant rank without filling the intervening pages");
+    expect(http.requests.size() == 4 && http.requests.back().url ==
+               std::string("https://boku.tachi.ac/api/v1/users/42/games/bms-7k/pbs/") +
+                   (ownRank == 110 ? "chart%2Fid%23reserved" : "chart-id") + "/leaderboard-adjacent" &&
+               http.requests.back().headers.empty(),
+           "own nearby rank takes one public request regardless of distance from the top");
+  }
+}
+
+void testNearbyFailureFallsBackAndCancellationStillCancels() {
+  const ir::tachi::TachiDriver driver;
+  for (const auto &response : std::vector<ir::IrHttpResponse>{
+           {.statusCode = 404}, {.statusCode = 503},
+           {.statusCode = 200, .body = "invalid"},
+           {.transportError = ir::IrTransportError::Timeout},
+           {.transportError = ir::IrTransportError::Cancelled}}) {
+    FakeHttpClient http;
+    http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+    http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody()});
+    http.responses.push_back({.statusCode = 200, .body = rankingPageBody(
+        nlohmann::json::array({rankingPb(1, 6000, 1)}),
+        nlohmann::json::array({{{"id", 1}, {"username", "Top"}}}))});
+    http.responses.push_back(response);
+    const auto result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+    if (response.transportError == ir::IrTransportError::Cancelled) {
+      expect(result.status == ir::ChartRankingStatus::Cancelled && !result.ranking,
+             "cancelled nearby request does not publish a late successful top page");
+    } else {
+      expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+                 result.ranking->entries.size() == 1 && result.ranking->nearbyEntries.empty() &&
+                 result.ranking->nextPageToken.has_value(),
+             "unavailable nearby endpoint preserves usable top page and sequential fallback");
+    }
+    expect(http.requests.size() == 4 && http.requests.back().totalTimeout <= std::chrono::seconds(5),
+           "optional nearby lookup has a bounded fallback wait and no retry loop");
+  }
+  FakeHttpClient http;
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingPageBody(
+      nlohmann::json::array({rankingPb(1, 6000, 1)}),
+      nlohmann::json::array({{{"id", 1}, {"username", "Top"}}}))});
+  http.responses.push_back({.statusCode = 404});
+  std::stop_source stop;
+  http.afterResponse = [&](std::size_t count) { if (count == 4) stop.request_stop(); };
+  expect(driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, stop.get_token()).status ==
+             ir::ChartRankingStatus::Cancelled,
+         "stop requested while optional nearby lookup completes is respected");
+}
+
 void testNativeRankingPagesWithoutRepeatingPreflight() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -1738,6 +1835,8 @@ int main() {
   testHttpAndTransportClassification();
   testInvalidRuntimeConfigurationNeverSends();
   testRankingRequestAndStatusClassification();
+  testNearbyRankDoesNotWaitForSequentialPages();
+  testNearbyFailureFallsBackAndCancellationStillCancels();
   testNativeRankingPagesWithoutRepeatingPreflight();
   testRankingPrerequisitesPersistAcrossFetches();
   testStaleCachedChartIsResolvedOnce();

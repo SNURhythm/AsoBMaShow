@@ -530,6 +530,8 @@ int main() {
     def test_scene_ranking_cache_evicts_oldest_updates_at_capacity(self):
         self.run_scene_fixture("music_select_scene_ranking_cache_fixture.cpp", [
             "void MusicSelectScene::updateRanking()",
+            "void MusicSelectScene::updateRankingsModal()",
+            "void MusicSelectScene::closeRankings()",
         ])
 
     def test_launch_completion_uses_ui_owned_deferred_queue(self):

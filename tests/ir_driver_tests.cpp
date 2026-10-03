@@ -1,6 +1,7 @@
 #include "ir/IrDriver.h"
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingModels.h"
+#include "ir/IrSkinProvider.h"
 #include "ir/IrSubmission.h"
 #include "ModernResult.h"
 
@@ -547,6 +548,31 @@ void testBaseBuildDraftIsUnsupported() {
          "base build draft returns unsupported");
 }
 
+void testSkinRankingsUseAnEnabledCapableProvider() {
+  ir::IrDriverRegistry registry;
+  std::string diagnostic;
+  expect(registry.registerDriver(std::make_shared<FakeDriver>(
+             "disabled", ir::IrDriverCapabilities{.chartRankings = true}),
+             diagnostic), "disabled ranking fixture registers");
+  expect(registry.registerDriver(std::make_shared<FakeDriver>(
+             "submit", ir::IrDriverCapabilities{.scoreSubmission = true}),
+             diagnostic), "submission-only fixture registers");
+  expect(registry.registerDriver(std::make_shared<FakeDriver>(
+             "tachi", ir::IrDriverCapabilities{.chartRankings = true}),
+             diagnostic), "enabled ranking fixture registers");
+  std::map<std::string, ir::IrProviderSettings> providers{
+      {"disabled", {.enabled = false}},
+      {"missing", {.enabled = true}},
+      {"submit", {.enabled = true}},
+      {"tachi", {.enabled = true}},
+  };
+  expect(ir::firstEnabledRankingProvider(providers, registry) == "tachi",
+         "skin rankings skip disabled, missing, and submission-only drivers");
+  providers.at("tachi").enabled = false;
+  expect(!ir::firstEnabledRankingProvider(providers, registry),
+         "skin rankings remain unavailable without an enabled ranking driver");
+}
+
 } // namespace
 
 int main() {
@@ -565,6 +591,7 @@ int main() {
   testRegistryRejectsInvalidAndDuplicateDrivers();
   testReadOnlyDriverCannotBuildSubmissionDraft();
   testBaseBuildDraftIsUnsupported();
+  testSkinRankingsUseAnEnabledCapableProvider();
   if (failures != 0) {
     std::cerr << failures << " IR driver test(s) failed\n";
     return 1;

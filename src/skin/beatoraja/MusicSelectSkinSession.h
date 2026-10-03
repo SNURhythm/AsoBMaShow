@@ -193,6 +193,12 @@ public:
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
   [[nodiscard]] int inputDelayMillis() const noexcept;
 
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  void waitForBuiltinImagePatchForTesting() {
+    if (pendingBuiltinImagePatch_.valid()) pendingBuiltinImagePatch_.wait();
+  }
+#endif
+
 private:
   std::optional<UiLogicalPoint> pointerUiPosition_;
   struct QueuedEventBinding {

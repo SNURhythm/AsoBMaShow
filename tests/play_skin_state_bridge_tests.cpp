@@ -2566,10 +2566,13 @@ void testTargetScoreStringsFollowPinnedTargetSource() {
   state = stateAt(238);
   state.authority.gameplayMode = PlayfieldGameplayMode::Play;
   state.authority.skinTargetId = "IR_NEXT_1";
+  state.authority.pacemakerTarget = {.enabled = true, .finalScore = 999};
   bridge.beginFrame(state, projectionAt(238));
   expect(bridge.stringProperty({1}).value == "NO DATA" &&
              bridge.stringProperty({3}).value == "NO DATA",
          "IR targets retain TargetProperty's no-RankingData player label");
+  expect(bridge.integerProperty({151}).value == 0,
+         "unavailable IR target never borrows the unrelated built-in pacemaker");
   bridge.discardFrame();
 
   state = stateAt(239);
@@ -2579,6 +2582,117 @@ void testTargetScoreStringsFollowPinnedTargetSource() {
   expect(bridge.stringProperty({1}).value.empty() &&
              bridge.stringProperty({3}).value.empty(),
          "practice keeps BMSPlayer's absent target-score strings empty");
+}
+
+void testIrTargetsUseCompleteRankingAndPinnedSelection() {
+  auto ranking = std::make_shared<ir::IrChartRanking>();
+  ranking->providerId = "tachi";
+  ranking->totalPlayers = 4;
+  ranking->chart = {.keyMode = 7, .chartSha256 = std::string(64, 'a'),
+                    .totalNotes = 100};
+  ranking->entries = {
+      {.playerName = "Low", .score = 110},
+      {.rank = 3, .playerName = "Self account", .score = 160, .currentUser = true},
+      {.playerName = "Top", .score = 190},
+      {.playerName = "Rival", .score = 171}};
+  ir::IrRankingRequest request{.profileId = "profile", .providerId = "tachi",
+      .serverOrigin = "https://example.com", .chart = ranking->chart};
+  ir::IrRankingSnapshot snapshot{.state = ir::IrRankingSnapshotState::Succeeded,
+                                 .request = request, .ranking = ranking};
+  const auto next = projectGameplaySkinIrTarget("IR_NEXT_1", snapshot, 160);
+  expect(gameplaySkinIrCurrentUserRank(snapshot) == 3,
+         "result handoff retains the actual current-user rank observed in gameplay");
+  expect(next.playerName == "Rival" && next.score == 171,
+         "IR NEXT chooses the entry above the persisted local best");
+  expect(projectGameplaySkinIrTarget("IR_NEXT_1", snapshot, 0).score == 190,
+         "IR NEXT below every remote score preserves pinned top fallback");
+  expect(projectGameplaySkinIrTarget("IR_RANK_50", snapshot, 160).score == 110,
+         "IR rank beyond the population clamps to its final entry");
+  const auto percentile = projectGameplaySkinIrTarget("IR_RANKRATE_50", snapshot, 0);
+  expect(percentile.score == 160 && percentile.playerName == "YOU",
+         "IR percentile uses zero-based population index and identifies self");
+  expect(!isGameplaySkinIrTarget("IR_RANKRATE_100") &&
+             !isGameplaySkinIrTarget("IR_NEXT_0"),
+         "invalid IR target ids keep the source default target path");
+  expect(gameplaySkinRankingMatches(snapshot, request),
+         "matching chart profile provider and origin are accepted");
+  for (int field = 0; field < 6; ++field) {
+    auto different = request;
+    switch (field) {
+    case 0: different.profileId = "other"; break;
+    case 1: different.providerId = "other"; break;
+    case 2: different.serverOrigin = "https://other.example"; break;
+    case 3: different.chart.chartSha256 = std::string(64, 'b'); break;
+    case 4: different.chart.keyMode = 14; break;
+    case 5: different.chart.totalNotes = 200; break;
+    }
+    expect(!gameplaySkinRankingMatches(snapshot, different),
+           "IR target rejects data belonging to another account or chart identity");
+  }
+  ranking->nextPageToken = "page-2";
+  expect(projectGameplaySkinIrTarget("IR_RANK_1", snapshot, 160).score == 0,
+         "partial pagination never exposes a misleading target");
+  ranking->nextPageToken.reset();
+  snapshot.paginationBlocked = true;
+  expect(projectGameplaySkinIrTarget("IR_RANK_1", snapshot, 160).playerName == "NO DATA",
+         "failed pagination clears the target");
+  snapshot.paginationBlocked = false;
+  ranking->totalPlayers = 5;
+  expect(projectGameplaySkinIrTarget("IR_RANKRATE_50", snapshot, 160).score == 0,
+         "IR percentile rejects a ranking whose rows do not cover its population");
+  ranking->totalPlayers = 4;
+  const auto userEntry = ranking->entries[1];
+  ranking->entries[1].currentUser = false;
+  expect(!gameplaySkinIrCurrentUserRank(snapshot),
+         "a ranking without the user does not invent their previous rank");
+  ranking->nearbyEntries = {{.rank = 5000, .currentUser = true}};
+  snapshot.paginationBlocked = true;
+  expect(gameplaySkinIrCurrentUserRank(snapshot) == 5000,
+         "nearby own rank remains available when unrelated sequential pagination fails");
+  ranking->nearbyEntries.clear();
+  snapshot.paginationBlocked = false;
+  ranking->entries[1] = userEntry;
+
+  RuntimeHarness runtime;
+  if (!runtime.ready()) return;
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 100;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+      .configuration = configuration, .runtime = &runtime.runtime(),
+      .mutationTable = mutations});
+  auto state = stateAt(240);
+  state.score = 40;
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.stagePassedNotes = 25;
+  state.authority.skinTargetId = "IR_NEXT_1";
+  state.authority.skinIrTarget = next;
+  state.authority.pacemakerTarget = {.enabled = true, .finalScore = 999};
+  state.authority.pacemakerStatus.targetScore = 999;
+  bridge.beginFrame(state, projectionAt(240));
+  expect(bridge.stringProperty({"target"}).value == "Rival" &&
+             bridge.stringProperty({1}).value == "Rival" &&
+             bridge.integerProperty({151}).value == 171 &&
+             bridge.integerProperty({271}).value == 171,
+         "IR target name and both target-score surfaces share one captured entry");
+  expect(bridge.integerProperty({108}).value == -2 &&
+             bridge.integerProperty({153}).value == -2,
+         "IR score differences project the target to the passed note count");
+  expect(bridge.integerProperty({280}).value == 85 &&
+             bridge.integerProperty({281}).value == 1,
+         "IR target ScoreData synthesizes PGREAT and GREAT from its EX score");
+  expect(std::abs(bridge.floatProperty({115}).value - 0.855) < 0.0001 &&
+             std::abs(bridge.floatProperty({114}).value - 0.21) < 0.0001,
+         "IR full and current target graph rates use the selected remote score");
+  bridge.discardFrame();
+  state.authority.skinTargetId = "IR_RANK_1";
+  state.clock.serial = 241;
+  bridge.beginFrame(state, projectionAt(241));
+  expect(bridge.integerProperty({151}).value == 0 &&
+             bridge.stringProperty({"target"}).value == "NO DATA",
+         "changing target selection never reuses the old target authority");
 }
 
 void testChartDocumentBooleansUseCapturedLibraryMetadata() {
@@ -3834,7 +3948,10 @@ void testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites() {
          "budgeted custom-object update begins the owner frame once");
   const auto update = bridge.updateCustomObjects();
   expect(update.status == SkinHostCallStatus::BudgetExceeded &&
-             update.callbacksInvoked == 2,
+             update.callbacksInvoked == 2 &&
+             std::ranges::any_of(update.diagnostics, [](const auto &diagnostic) {
+               return diagnostic.code == "skin_lua_instruction_limit_exceeded";
+             }),
          "budget exhaustion stops automatic custom events deterministically");
   expect(bridge.commitFrame().orderedMutations.empty(),
          "budget exhaustion rolls back writes staged by earlier callbacks");
@@ -3934,8 +4051,17 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
          "frozen read-only events accept zero through two arguments as no-ops");
   for (const auto writer : {SkinFloatWriterId{4}, SkinFloatWriterId{5},
                             SkinFloatWriterId{6}, SkinFloatWriterId{7}}) {
-    expect(bridge.invokeWriter(writer, 0.5).status ==
-               SkinHostCallStatus::CriticalFailure,
+    const auto result = bridge.invokeWriter(writer, 0.5);
+    if (result.status != SkinHostCallStatus::CriticalFailure) {
+      std::cerr << "writer " << writer.value << " returned status "
+                << static_cast<int>(result.status) << " instead of "
+                << static_cast<int>(SkinHostCallStatus::CriticalFailure);
+      for (const auto &diagnostic : result.diagnostics) {
+        std::cerr << " [" << diagnostic.code << ": " << diagnostic.message << ']';
+      }
+      std::cerr << '\n';
+    }
+    expect(result.status == SkinHostCallStatus::CriticalFailure,
            "unsupported event, excess arity, and callback failure reject the writer");
   }
 
@@ -3985,6 +4111,10 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
 } // namespace
 
 int main() {
+  // These assertions distinguish semantic failures from instruction limits.
+  // Host scheduling must not replace them with a wall-clock budget failure;
+  // lua_skin_runtime_tests separately exercises the real deadline policy.
+  LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testStaticBridgeFrameDoesNotRequireLuaRuntime();
   testGraphViewBorrowsTheCapturedImmutableStorage();
@@ -4027,6 +4157,7 @@ int main() {
   testPlayerConfigurationStringsUseCapturedSourceValues();
   testConfiguredTargetNameNeighborsFollowPinnedTargetRing();
   testTargetScoreStringsFollowPinnedTargetSource();
+  testIrTargetsUseCompleteRankingAndPinnedSelection();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

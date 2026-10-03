@@ -962,7 +962,9 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     }
     case 380: case 381: case 382: case 383: case 384:
     case 385: case 386: case 387: case 388: case 389: {
-      const std::size_t index = static_cast<std::size_t>(*imageId - 380);
+      const std::size_t index = static_cast<std::size_t>(*imageId - 380) +
+                                static_cast<std::size_t>(std::max(0,
+                                    data_.irRankingOffset - data_.irRankingEntryStart));
       // RankingData distinguishes only You, Rival, and None. The application
       // ranking snapshot retains current-user identity but no rival roster,
       // so preserve the two source states it can represent exactly.
@@ -973,7 +975,9 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     }
     case 390: case 391: case 392: case 393: case 394:
     case 395: case 396: case 397: case 398: case 399: {
-      const std::size_t index = static_cast<std::size_t>(*imageId - 390);
+      const std::size_t index = static_cast<std::size_t>(*imageId - 390) +
+                                static_cast<std::size_t>(std::max(0,
+                                    data_.irRankingOffset - data_.irRankingEntryStart));
       return index < data_.irRankingEntries.size()
                  ? supported<std::int64_t>(beatorajaClearTypeImageIndex(
                        data_.irRankingEntries[index].clearType))
@@ -1304,15 +1308,13 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
         if (entry.currentUser) return entry.rank;
       }
       return std::numeric_limits<int>::min();
+    case 180:
     case 200:
+      return data_.irTotalPlayers.value_or(std::numeric_limits<int>::min());
     case 220:
       return std::numeric_limits<int>::min();
-    case 180:
     case 182:
-      // The compact IR snapshot has no retained old rank.  Match
-      // AbstractResult's unavailable-ranking sentinel rather than
-      // substituting the current rank from visible rows.
-      return std::numeric_limits<int>::min();
+      return data_.irPreviousUserRank.value_or(std::numeric_limits<int>::min());
     case 202: case 204: case 206: case 208: case 210: case 212:
     case 214: case 216: case 218: case 222: case 224:
     case 203: case 205: case 207: case 209: case 211: case 213:
@@ -1320,10 +1322,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 226: case 227: case 228: case 229:
     case 230: case 231: case 232: case 233: case 234: case 235:
     case 236: case 237: case 238: case 239: case 240: case 241: case 242:
-      // A result ranking needs the source RankingData clear-count histogram.
-      // The app's compact IR row snapshot intentionally does not fabricate
-      // it from visible rows, so retain Integer.MIN_VALUE exactly as source.
-      return std::numeric_limits<int>::min();
+      return result_skin_ir::integerAggregate(
+          *id, data_.irClearCounts, data_.irTotalPlayers);
     case 183:
       if (const auto rate = previousRate()) return scoreRateParts(*rate).first;
       return std::numeric_limits<int>::min();
@@ -1381,14 +1381,18 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return 0;
     case 380: case 381: case 382: case 383: case 384:
     case 385: case 386: case 387: case 388: case 389: {
-      const std::size_t index = static_cast<std::size_t>(*id - 380);
+      const std::size_t index = static_cast<std::size_t>(*id - 380) +
+                                static_cast<std::size_t>(std::max(0,
+                                    data_.irRankingOffset - data_.irRankingEntryStart));
       return index < data_.irRankingEntries.size()
                  ? std::optional<int>(data_.irRankingEntries[index].score)
                  : std::optional<int>(std::numeric_limits<int>::min());
     }
     case 390: case 391: case 392: case 393: case 394:
     case 395: case 396: case 397: case 398: case 399: {
-      const std::size_t index = static_cast<std::size_t>(*id - 390);
+      const std::size_t index = static_cast<std::size_t>(*id - 390) +
+                                static_cast<std::size_t>(std::max(0,
+                                    data_.irRankingOffset - data_.irRankingEntryStart));
       return index < data_.irRankingEntries.size()
                  ? std::optional<int>(data_.irRankingEntries[index].rank)
                  : std::optional<int>(std::numeric_limits<int>::min());
@@ -1596,11 +1600,15 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
     return supported(1.0);
   }
   if (*id == 1 || *id == 4 || *id == 5 || *id == 6 || *id == 7 ||
-      *id == 8 || *id == 20 || *id == 101 || *id == 103 ||
+      *id == 20 || *id == 101 || *id == 103 ||
       (*id >= 105 && *id <= 109)) {
     // These RateType values are MusicSelector, BMSPlayer, or
     // SkinConfiguration-only. AbstractResult returns their source zero.
     return supported(0.0);
+  }
+  if (*id == 8) {
+    return supported(static_cast<double>(data_.irRankingOffset) /
+                     std::max(1, data_.irTotalPlayers.value_or(0)));
   }
   if (*id >= 285 && *id <= 289) {
     // AsoBMaShow has no independent rival ScoreData cache for a completed
@@ -1611,9 +1619,8 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
       *id == 211 || *id == 213 || *id == 215 || *id == 217 ||
       *id == 219 || *id == 223 || *id == 225 || *id == 227 ||
       *id == 229) {
-    // The ranking snapshot retains visible rows only, not the clear-count
-    // histogram required by the source IR aggregate-rate properties.
-    return supported(static_cast<double>(std::numeric_limits<float>::min()));
+    return supported(result_skin_ir::floatAggregate(
+        *id, data_.irClearCounts, data_.irTotalPlayers));
   }
   if (*id == 1102 || *id == 1115 || *id == 155) {
     const auto value = rate();
@@ -1820,7 +1827,9 @@ SkinPropertyLookup<std::string_view> ResultSkinStateBridge::stringProperty(
     break;
   case 120: case 121: case 122: case 123: case 124:
   case 125: case 126: case 127: case 128: case 129: {
-    const std::size_t index = static_cast<std::size_t>(*id - 120);
+    const std::size_t index = static_cast<std::size_t>(*id - 120) +
+                                static_cast<std::size_t>(std::max(0,
+                                    data_.irRankingOffset - data_.irRankingEntryStart));
     stringValue_ = index < data_.irRankingEntries.size()
                        ? data_.irRankingEntries[index].playerName
                        : "";
@@ -1883,6 +1892,10 @@ std::int64_t ResultSkinStateBridge::timerProperty(
   if (const auto custom = timers.find(*id); custom != timers.end()) {
     return custom->second;
   }
+  if (*id >= 172 && *id <= 174) {
+    return data_.irSubmissionTimerMicros[static_cast<std::size_t>(*id - 172)]
+        .value_or(kTimerOff);
+  }
   // Result timers are timestamps, not elapsed values. MusicResult and
   // CourseResult start their graph/update timers at result-scene origin.
   if (*id == 150 || *id == 151 || *id == 152) return 0;
@@ -1910,6 +1923,17 @@ std::optional<float> ResultSkinStateBridge::audioVolume(int id) const noexcept {
 }
 
 bool ResultSkinStateBridge::setFloatProperty(int id, double value) {
+  if (id == 8) {
+    if (!std::isfinite(value) || !audioState_.write) return false;
+    // AbstractResult accepts [0, 1); endpoint 1 would skip every ranking row.
+    const float position = static_cast<float>(value);
+    if (position < 0.0F || position >= 1.0F) return true;
+    try {
+      return audioState_.write(id, position);
+    } catch (...) {
+      return false;
+    }
+  }
   if (id < 17 || id > 19 || !audioState_.write) return false;
   if (audioState_.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
     if (!std::isfinite(value)) return false;

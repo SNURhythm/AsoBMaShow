@@ -41,7 +41,16 @@ bool isLivePurpose(LuaRuntimePurpose purpose) noexcept {
          purpose == LuaRuntimePurpose::MusicSelect;
 }
 
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+thread_local std::optional<std::chrono::steady_clock::time_point> gTestWallTime;
+struct Clock : std::chrono::steady_clock {
+  static time_point now() noexcept {
+    return gTestWallTime.value_or(std::chrono::steady_clock::now());
+  }
+};
+#else
 using Clock = std::chrono::steady_clock;
+#endif
 constexpr std::uint64_t kHookInstructionInterval = 1'000;
 constexpr std::size_t kMaximumReturnedTableDepth = 64;
 constexpr std::uint64_t kMaximumReturnedTableEntries = 200'000;
@@ -1720,6 +1729,11 @@ LuaCallbackLivenessView LuaSkinRuntime::callbackLiveness() const noexcept {
 void LuaRuntimeTestHooks::failNextAllocationAt(
     LuaRuntimeTestAllocationPoint point) noexcept {
   gTestAllocationPoint.store(static_cast<int>(point));
+}
+
+void LuaRuntimeTestHooks::setWallTime(
+    std::optional<std::chrono::steady_clock::time_point> time) noexcept {
+  gTestWallTime = time;
 }
 #endif
 

@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "ResultScene.h"
+#include "../ir/IrSkinProvider.h"
 #include "../BeatorajaScoreMetrics.h"
 #include "../CourseConstraintUtils.h"
 #include "../ArchiveFile.h"
@@ -130,40 +131,6 @@ std::optional<int> rankingBadPoints(const RhythmState &state, int totalNotes) {
                               totalNotes - state.stagePassedNotes;
   return result >= 0 && result <= std::numeric_limits<int>::max()
              ? std::optional<int>(static_cast<int>(result)) : std::nullopt;
-}
-
-void projectResultIrRanking(
-    ResultSkinData &data, const ApplicationContext &context,
-    std::string_view providerId, std::string_view serverOrigin,
-    const std::optional<ir::IrChartQuery> &chart) {
-  if (context.irRankingService == nullptr || !chart) return;
-  const ir::IrRankingSnapshot snapshot = context.irRankingService->snapshot();
-  if (snapshot.state != ir::IrRankingSnapshotState::Succeeded ||
-      !snapshot.request || !snapshot.ranking ||
-      snapshot.request->profileId != context.profileManager.activeProfile().id ||
-      snapshot.request->providerId != providerId ||
-      snapshot.request->serverOrigin != serverOrigin ||
-      snapshot.request->chart != *chart) {
-    return;
-  }
-  constexpr std::size_t visibleRows = 10;
-  const auto &entries = snapshot.ranking->entries;
-  data.irRankingEntries.reserve(std::min(entries.size(), visibleRows));
-  for (std::size_t index = 0; index < entries.size() && index < visibleRows;
-       ++index) {
-    const auto &entry = entries[index];
-    data.irRankingEntries.push_back({.rank = entry.rank,
-                                     .playerName = entry.playerName,
-                                     .score = entry.score,
-                                     .clearType = entry.clearType,
-                                     .currentUser = entry.currentUser});
-  }
-  for (const auto &entry : entries) {
-    if (entry.currentUser) {
-      data.irCurrentUserRank = entry.rank;
-      break;
-    }
-  }
 }
 
 void drawResultGaugeGraphPrimitive(
@@ -571,7 +538,9 @@ ResultScene::ResultScene(
     std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
     ResultTableContext tableContext, SkinGameplayGraphState gameplayGraph,
     std::optional<std::int64_t> currentScorePlayedAtUnixMillis,
-    bool guidedAccessReminderSkipped)
+    bool guidedAccessReminderSkipped,
+    std::optional<ResultPacemakerData> customSkinTargetOverride,
+    std::optional<int> previousIrRank)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -598,6 +567,7 @@ ResultScene::ResultScene(
               pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                   : pacemakerTarget),
           .pacemakerOverride = std::move(pacemakerOverride),
+          .customSkinTargetOverride = std::move(customSkinTargetOverride),
           .modernReplayAttemptId = modernReplayAttemptId,
           .currentScoreDateUnixSeconds =
               currentScorePlayedAtUnixMillis &&
@@ -618,7 +588,7 @@ ResultScene::ResultScene(
           .autoPlayResult = autoPlayResult ||
               (retrySource != nullptr && retrySource->autoPlay),
           .guidedAccessReminderSkipped = guidedAccessReminderSkipped,
-      }) {
+      }), resultSkinPreviousIrRank(previousIrRank) {
   auto &local = *localSource();
   local.replayResult = local.replayResult && !local.practiceOptions.enabled &&
                        local.courseOptions.mode == ResultCourseMode::None;
@@ -845,6 +815,17 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.configuration->irAccountName = context.irAccountNameSnapshot();
   data.playerName = context.profileManager.activeProfile().displayName;
   data.irOnline = !context.irAccountNameSnapshot().empty();
+  const auto rows = ir::rankingWindow(resultSkinRanking.entries,
+      resultSkinRanking.nearbyEntries, resultSkinRanking.nearbyOffset,
+      resultSkinRankingOffset, 10, !resultSkinRankingOffsetManuallyChosen);
+  data.irRankingEntries.assign(rows.begin(), rows.end());
+  data.irRankingEntryStart = resultSkinRankingOffset;
+  data.irCurrentUserRank = resultSkinRanking.currentUserRank;
+  data.irPreviousUserRank = resultSkinPreviousIrRank;
+  data.irTotalPlayers = resultSkinRanking.totalPlayers;
+  data.irClearCounts = resultSkinRanking.clearCounts;
+  data.irRankingOffset = resultSkinRankingOffset;
+  data.irSubmissionTimerMicros = resultSkinSubmissionTimers.startedMicros;
   if (remote != nullptr) {
     data.presentation = &remote->presentation;
     data.playModeLabel = remote->presentation.playtype.value_or("");
@@ -891,8 +872,6 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     }
     data.chartMd5 = remote->score.chartMd5;
     data.chartSha256 = remote->score.chartSha256;
-    projectResultIrRanking(data, context, remote->providerId,
-                           remote->serverOrigin, remote->rankingQuery);
     return data;
   }
   if (local == nullptr) {
@@ -924,20 +903,14 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   }
   data.previousBest = local->previousBest;
   data.previousLampBest = local->previousLampBest;
-  data.pacemaker = pacemakerDataForCurrentResult();
+  data.pacemaker = local->customSkinTargetOverride
+                       ? local->customSkinTargetOverride
+                       : pacemakerDataForCurrentResult();
   data.playerHistory = local->playerHistory;
   data.presentation = &local->presentation;
   data.gameplayGraph = local->gameplayGraph;
   data.chartHasDocument = local->chartHasDocument;
   data.songReviewFavorite = local->songReviewFavorite;
-  const auto localRankingQuery = ir::makeBokutachiRankingQuery(local->meta);
-  const auto provider = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
-  if (localRankingQuery.value && provider != context.settings.irProviders.end()) {
-    projectResultIrRanking(data, context, ir::kTachiProviderId,
-                           provider->second.serverOrigin,
-                           localRankingQuery.value);
-  }
   if (local->skinTimingStatisticsPrepared) {
     data.timingAverageMillis = local->skinTimingAverageMillis;
     data.timingStandardDeviationMillis =
@@ -2631,8 +2604,9 @@ bool ResultScene::rankingsAvailable() const {
     return false;
   }
   const std::string providerId = remote == nullptr
-                                     ? std::string(ir::kTachiProviderId)
-                        : remote->providerId;
+      ? ir::firstEnabledRankingProvider(context.settings.irProviders,
+                                         context.irDrivers).value_or("")
+      : remote->providerId;
   const auto driver = context.irDrivers.find(providerId);
   const auto settings = context.settings.irProviders.find(providerId);
   if (driver == nullptr || !driver->capabilities().chartRankings ||
@@ -2661,23 +2635,99 @@ void ResultScene::requestSelectedResultSkinRankings() {
   const auto *remote = remoteSource();
   const auto *local = localSource();
   if (remote != nullptr && remote->rankingQuery) {
-    (void)context.irRankingService->open(
-        {.profileId = context.profileManager.activeProfile().id,
-         .providerId = remote->providerId,
-         .serverOrigin = remote->serverOrigin,
-         .chart = *remote->rankingQuery});
+    resultSkinRankingRequest = ir::IrRankingRequest{
+        .profileId = context.profileManager.activeProfile().id,
+        .providerId = remote->providerId,
+        .serverOrigin = remote->serverOrigin,
+        .chart = *remote->rankingQuery};
+  } else if (local != nullptr) {
+    const auto query = ir::makeBokutachiRankingQuery(local->meta);
+    const auto providerId = ir::firstEnabledRankingProvider(
+        context.settings.irProviders, context.irDrivers);
+    if (!query.value || !providerId) return;
+    const auto &settings = context.settings.irProviders.at(*providerId);
+    resultSkinRankingRequest = ir::IrRankingRequest{
+        .profileId = context.profileManager.activeProfile().id,
+        .providerId = *providerId,
+        .serverOrigin = settings.serverOrigin,
+        .chart = *query.value};
+  }
+  if (resultSkinRankingRequest) {
+    const auto key = ir::makeIrRankingCacheKey(*resultSkinRankingRequest);
+    if (!key.value) {
+      resultSkinRankingRequest.reset();
+      return;
+    }
+    resultSkinRankingRequest->serverOrigin = key.value->serverOrigin;
+    resultSkinRankingRequest->chart.chartSha256 = key.value->chartSha256;
+    resultSkinRankingGeneration =
+        context.irRankingService->open(*resultSkinRankingRequest);
+    resultSkinRankingRevision = 0;
+  }
+}
+
+void ResultScene::updateSelectedResultSkinRankings() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (!resultSkinSession || !context.irRankingService ||
+      !resultSkinRankingRequest) return;
+  const auto *local = localSource();
+  if (local != nullptr && local->persistenceOptions.irSubmission &&
+      context.irSubmissionService) {
+    const auto status = context.irSubmissionService->status(
+        ir::kTachiProviderId, local->persistenceOptions.irSubmission->attemptId);
+    if (resultSkinSubmissionTimers.observe(
+            status, std::max(0LL, nowMicros() - resultSkinStartedMicros))) {
+      resultSkinRankingRefreshPending = true;
+    }
+  }
+  const bool modalOpen = rankingsModal && rankingsModal->isOpen();
+  if (resultSkinRankingRefreshPending && !modalOpen) {
+    resultSkinRankingGeneration =
+        context.irRankingService->refresh(*resultSkinRankingRequest);
+    resultSkinRankingRevision = 0;
+    resultSkinRankingRefreshPending = false;
+  }
+  auto snapshot = context.irRankingService->snapshot();
+  const auto &expected = *resultSkinRankingRequest;
+  const bool matches = snapshot.request &&
+      snapshot.request->profileId == expected.profileId &&
+      snapshot.request->providerId == expected.providerId &&
+      snapshot.request->serverOrigin == expected.serverOrigin &&
+      snapshot.request->chart == expected.chart;
+  // The native rankings modal owns pagination while open. Observe its matching
+  // request without starting background page loads or replacing it.
+  if (!matches || snapshot.state == ir::IrRankingSnapshotState::Closed ||
+      snapshot.state == ir::IrRankingSnapshotState::Cancelled) {
+    if (!modalOpen) {
+      resultSkinRankingGeneration =
+          context.irRankingService->open(expected);
+      resultSkinRankingRevision = 0;
+    }
     return;
   }
-  if (local == nullptr) return;
-  const auto query = ir::makeBokutachiRankingQuery(local->meta);
-  const auto settings = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
-  if (!query.value || settings == context.settings.irProviders.end()) return;
-  (void)context.irRankingService->open(
-      {.profileId = context.profileManager.activeProfile().id,
-       .providerId = std::string(ir::kTachiProviderId),
-       .serverOrigin = settings->second.serverOrigin,
-       .chart = *query.value});
+  if (snapshot.generation != resultSkinRankingGeneration) {
+    if (!modalOpen) return;
+    resultSkinRankingGeneration = snapshot.generation;
+    resultSkinRankingRevision = 0;
+  }
+  // A completed page can arrive during the re-read below, or an older
+  // request can stop blocking pagination without publishing a revision.
+  if (!modalOpen && snapshot.state == ir::IrRankingSnapshotState::Succeeded &&
+      snapshot.ranking && snapshot.ranking->nextPageToken &&
+      !snapshot.loadingNextPage && !snapshot.paginationBlocked &&
+      context.irRankingService->loadNextPage(snapshot.generation)) {
+    snapshot = context.irRankingService->snapshot();
+  }
+  if (snapshot.revision == resultSkinRankingRevision) return;
+  resultSkinRankingRevision = snapshot.revision;
+  resultSkinRanking = result_skin_ir::projectRanking(snapshot);
+  if (resultSkinPendingRankingPosition && resultSkinRanking.totalPlayers &&
+      *resultSkinRanking.totalPlayers > 0) {
+    setResultSkinRankingPosition(*resultSkinPendingRankingPosition);
+  } else if (!resultSkinRankingOffsetManuallyChosen && resultSkinRanking.currentUserRank) {
+    resultSkinRankingOffset = result_skin_ir::automaticRankingOffset(resultSkinRanking);
+  }
+#endif
 }
 
 void ResultScene::openRankings() {
@@ -2689,8 +2739,9 @@ void ResultScene::openRankings() {
   const auto *remote = remoteSource();
   const auto *local = localSource();
   const std::string providerId = remote == nullptr
-                                     ? std::string(ir::kTachiProviderId)
-                        : remote->providerId;
+      ? ir::firstEnabledRankingProvider(context.settings.irProviders,
+                                         context.irDrivers).value_or("")
+      : remote->providerId;
   std::optional<ir::IrChartQuery> chartQuery;
   std::string serverOrigin;
   std::string title;
@@ -3294,6 +3345,7 @@ void ResultScene::continueCourse() {
     nextOptions.longNoteMode = session->longNoteMode;
     nextOptions.assistOption = session->assistOption;
     nextOptions.playback = course_rules::kRequiredPlaybackRate;
+    nextOptions.clubMode = local->attemptProvenance.clubMode;
     nextOptions.courseSession = session;
     nextOptions.courseConstraints = session->constraints;
     nextOptions.ruleset = session->ruleset;
@@ -4212,6 +4264,7 @@ void ResultScene::update(float dt) {
   if (rankingsModal) {
     rankingsModal->update();
   }
+  updateSelectedResultSkinRankings();
 }
 
 bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
@@ -4293,9 +4346,24 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
 #endif
 }
 
+void ResultScene::setResultSkinRankingPosition(double position) {
+  if (!std::isfinite(position)) return;
+  position = std::clamp(position, 0.0, 1.0);
+  resultSkinRankingOffsetManuallyChosen = true;
+  if (!resultSkinRanking.totalPlayers || *resultSkinRanking.totalPlayers <= 0) {
+    resultSkinPendingRankingPosition = position;
+    return;
+  }
+  resultSkinRankingOffset = static_cast<int>(*resultSkinRanking.totalPlayers * position);
+  resultSkinPendingRankingPosition.reset();
+}
+
 void ResultScene::consumeResultSkinBuiltinEvents() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!resultSkinSession) return;
+  if (const auto position = resultSkinSession->takeQueuedRankingPosition()) {
+    setResultSkinRankingPosition(*position);
+  }
   bool audioSettingsChanged = false;
   for (const auto &write : resultSkinSession->takeQueuedAudioVolumeWrites()) {
     switch (write.selector) {
@@ -4434,11 +4502,16 @@ void ResultScene::renderScene() {
         resultSkinFadeoutStartedMillis = elapsedMillis;
       } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >
                  resultSkinSession->fadeoutMillis()) {
-        if (isCourseStageResult()) {
-          continueCourse();
-        } else {
-          exitResult();
-        }
+        // Scene::render still draws overlays after this method returns.
+        // Keep the scene alive until that render pass has unwound.
+        defer([this]() {
+          if (isCourseStageResult()) {
+            continueCourse();
+          } else {
+            exitResult();
+          }
+          return false;
+        }, 0, true);
         return;
       }
     }
@@ -4478,6 +4551,18 @@ void ResultScene::cleanupScene() {
   resultSkinTouchCaptures.clear();
 #endif
   rankingsModal.reset();
+  if (resultSkinRankingGeneration != 0 && context.irRankingService) {
+    context.irRankingService->close(resultSkinRankingGeneration);
+  }
+  resultSkinRankingRequest.reset();
+  resultSkinRankingGeneration = 0;
+  resultSkinRankingRevision = 0;
+  resultSkinRanking = {};
+  resultSkinRankingOffset = 0;
+  resultSkinRankingOffsetManuallyChosen = false;
+  resultSkinPendingRankingPosition.reset();
+  resultSkinRankingRefreshPending = false;
+  resultSkinSubmissionTimers = {};
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
   resultTouchControlsOverlay = nullptr;

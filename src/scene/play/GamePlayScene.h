@@ -310,6 +310,15 @@ private:
   RhythmState *state = nullptr;
   pacemaker::Target activePacemakerTarget;
   pacemaker::Target activeBestScoreTarget;
+  std::optional<PlayfieldIrTargetState> activeSkinIrTarget;
+  std::string skinIrTargetSelection;
+  std::optional<ir::IrRankingRequest> skinIrRankingRequest;
+  std::uint64_t skinIrRankingGeneration = 0;
+  std::uint64_t skinIrRankingRevision = 0;
+  std::uint64_t skinIrAccountRevision = 0;
+  std::uint64_t skinIrRankingEvidenceRevision = 0;
+  int skinIrLocalBestScore = 0;
+  std::optional<int> skinIrPreviousUserRank;
   std::optional<ScoreBestSnapshot> activePacemakerBest;
   std::optional<ChartScoreHistorySnapshot> activePersistedScore;
   std::optional<PlayfieldRivalScoreState> activeRivalScore;
@@ -406,6 +415,8 @@ private:
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void configurePacemakerTarget();
+  void configureSkinIrTarget();
+  void updateSkinIrTarget();
   void startBestReplayLoad(std::string attemptId,
                            std::filesystem::path chartPath);
   void applyPendingBestReplay();

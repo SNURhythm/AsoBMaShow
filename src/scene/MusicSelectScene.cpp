@@ -27,6 +27,8 @@
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
 #include "../audio/Jukebox.h"
+#include "../ir/IrSkinProvider.h"
+#include "../ir/IrRankingModal.h"
 #include "play/Pacemaker.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
 #include "../music_select/MusicSelectReplaySlots.h"
@@ -80,7 +82,8 @@
 namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 constexpr const char *kSkinSoundAssetRoot = "assets";
-constexpr std::int64_t kRankingDurationMillis = 5'000;
+// Coalesce quick wheel movement without adding seconds to every uncached song.
+constexpr std::int64_t kRankingDurationMillis = 250;
 constexpr std::int64_t kRankingReloadDurationMillis = 10 * 60 * 1'000;
 
 // Default playback for the select system-SE service: lazily loads each sound
@@ -650,6 +653,7 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  closeRankings();
   if (revealContextMenu_) revealContextMenu_->dismiss();
   recordsResumeAudioPending_ = false;
   recordsTask_.cancelAndWait();
@@ -897,6 +901,7 @@ void MusicSelectScene::requestFolderStatus(
 }
 
 void MusicSelectScene::selectedBarMoved() {
+  closeRankings();
   if (revealContextMenu_) revealContextMenu_->dismiss();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   cancelSelectedChartAnalysis();
@@ -954,17 +959,16 @@ void MusicSelectScene::selectedBarMoved() {
     return;
   }
 
-  const auto provider = std::ranges::find_if(
-      context.settings.irProviders, [&](const auto &entry) {
-        return entry.second.enabled && context.irDrivers.find(entry.first);
-      });
-  if (provider == context.settings.irProviders.end()) return;
+  const auto providerId = ir::firstEnabledRankingProvider(
+      context.settings.irProviders, context.irDrivers);
+  if (!providerId) return;
+  const auto &provider = context.settings.irProviders.at(*providerId);
 
   const auto &meta = selected.chart->meta;
   rankingRequest_ = ir::IrRankingRequest{
       .profileId = context.profileManager.activeProfile().id,
-      .providerId = provider->first,
-      .serverOrigin = provider->second.serverOrigin,
+      .providerId = *providerId,
+      .serverOrigin = provider.serverOrigin,
       .chart = {.keyMode = meta.KeyMode,
                 .chartMd5 = meta.MD5,
                 .chartSha256 = meta.SHA256,
@@ -1004,6 +1008,7 @@ void MusicSelectScene::setRanking(MusicSelectRankingSnapshot next) {
 }
 
 void MusicSelectScene::updateRanking() {
+  if (rankingsModal_ && rankingsModal_->isOpen()) return;
   if (!context.irRankingService || !rankingRequest_) return;
   const auto now = elapsedMicros();
   if (rankingLoadAtMicros_ != -1 && now > rankingLoadAtMicros_) {
@@ -1014,24 +1019,25 @@ void MusicSelectScene::updateRanking() {
   if (rankingGeneration_ == 0) return;
 
   auto service = context.irRankingService->snapshot();
-  if (service.generation != rankingGeneration_ ||
-      service.revision == rankingRevision_) {
+  if (service.generation != rankingGeneration_) {
     return;
   }
-  rankingRevision_ = service.revision;
+  // Page readiness can change without a visible revision when an older
+  // request exits. Check it before skipping an unchanged projection.
   if (service.state == ir::IrRankingSnapshotState::Succeeded &&
       service.ranking && service.ranking->nextPageToken &&
       !service.loadingNextPage && !service.paginationBlocked) {
     if (context.irRankingService->loadNextPage(rankingGeneration_)) {
       service = context.irRankingService->snapshot();
-      rankingRevision_ = service.revision;
     }
   }
+  if (service.revision == rankingRevision_) return;
+  rankingRevision_ = service.revision;
 
   auto projected = projectMusicSelectRanking(service, rankingOffset_);
   projected.pendingDurationMillis = -1;
   setRanking(std::move(projected));
-  if (ranking_.state == MusicSelectRankingState::Finish ||
+  if ((ranking_.state == MusicSelectRankingState::Finish && ranking_.complete) ||
       ranking_.state == MusicSelectRankingState::Fail) {
     constexpr std::size_t maxRankingCacheEntries = 64;
     if (!rankingCache_.contains(rankingCacheKey_) &&
@@ -1464,6 +1470,10 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   }
   refreshToolbarAvailability();
   if (selectorInputBlocked()) resetLogicalInput();
+  if (rankingsModal_ && rankingsModal_->isOpen()) {
+    if (modalOverlayPortal_) (void)modalOverlayPortal_->handleEvents(event);
+    return {};
+  }
   if (findBmsModal_ && findBmsModal_->isVisible()) {
     (void)findBmsModal_->handleEvents(event);
     return {};
@@ -2883,6 +2893,7 @@ bool MusicSelectScene::selectorInputBlocked() const {
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (findBmsModal_ && findBmsModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
+         (rankingsModal_ && rankingsModal_->isOpen()) ||
          (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
          (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
           playOptionsModal_->root()->getVisible()) ||
@@ -3287,10 +3298,21 @@ void MusicSelectScene::executeEvent(
 
 void MusicSelectScene::refreshRepositoryRevisions() {
   if (archiveUnzipModal_ && archiveUnzipModal_->inProgress()) return;
+  const auto rankingRevision =
+      context.irRankingEvidenceRevision.load(std::memory_order_acquire);
+  const bool rankingChanged = rankingRevision != irRankingEvidenceRevision_;
+  if (rankingChanged) {
+    irRankingEvidenceRevision_ = rankingRevision;
+    rankingCache_.clear();
+  }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
       context.scoreRepository.GetRevision() != scoreRevision_) {
     reloadLibrary();
     selectedBarMoved();
+  } else if (rankingChanged && rankingRequest_) {
+    // Reopen only ranking data. The service reuses unaffected chart caches;
+    // updateRanking defers this while the native modal owns the request.
+    rankingLoadAtMicros_ = elapsedMicros() - 1;
   }
 }
 
@@ -3353,6 +3375,7 @@ void MusicSelectScene::update(float) {
                           rendering::window_height);
     recordsModal_->update();
   }
+  updateRankingsModal();
   applyRecordsExportProgress();
   applyRecordsExportResult();
   updateRecordServices();
@@ -3453,6 +3476,7 @@ void MusicSelectScene::enterError(
     std::vector<skin::SkinDiagnostic> diagnostics) {
   if (failed_) return;
   failed_ = true;
+  closeRankings();
   if (findBmsModal_) findBmsModal_->cancelAndWait();
   if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
@@ -3698,6 +3722,65 @@ void MusicSelectScene::revealSelectedChartInFileManager() {
   }
 }
 
+std::optional<ir::IrRankingRequest> MusicSelectScene::selectedRankingRequest() const {
+  if (!context.irRankingService) return std::nullopt;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return std::nullopt;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->courseStart) return std::nullopt;
+  const auto query = ir::makeBokutachiRankingQuery(selected.chart->meta);
+  const auto provider = ir::firstEnabledRankingProvider(
+      context.settings.irProviders, context.irDrivers);
+  if (!query.value || !provider) return std::nullopt;
+  return ir::IrRankingRequest{
+      .profileId = context.profileManager.activeProfile().id,
+      .providerId = *provider,
+      .serverOrigin = context.settings.irProviders.at(*provider).serverOrigin,
+      .chart = *query.value};
+}
+
+void MusicSelectScene::openRankings() {
+  if (!toolbarControlAvailable(MusicSelectToolbarControl::Rankings)) return;
+  auto request = selectedRankingRequest();
+  if (!request) return;
+  const auto snapshot = bars_.readView();
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (selected.score) {
+    const auto &best = *selected.score;
+    request->localComparison = ir::IrLocalComparison{
+        .label = i18n::message("menu.local_pb.label"),
+        .score = best.score,
+        .maxScore = best.maxScore > 0 ? best.maxScore : request->chart.totalNotes * 2,
+        .clearType = best.clearType,
+        .badPoints = best.badPoints,
+        .maxCombo = best.maxCombo};
+  }
+  if (!rankingsModal_) {
+    rankingsModal_ = std::make_unique<ir::IrRankingModal>(
+        *modalOverlayPortal_, *context.irRankingService);
+  }
+  resetLogicalInput();
+  rankingsModal_->open(std::move(*request), selected.title.empty()
+      ? i18n::tr("menu.selected_chart.label") : selected.title);
+}
+
+void MusicSelectScene::closeRankings() {
+  if (rankingsModal_) rankingsModal_->close();
+}
+
+void MusicSelectScene::updateRankingsModal() {
+  if (!rankingsModal_ || !rankingsModal_->isOpen()) return;
+  rankingsModal_->update();
+  if (!rankingsModal_->isOpen() && rankingRequest_) {
+    // Closing the modal closes its service generation. Resume the skin's
+    // request from the shared cache, including any pages fetched by the modal.
+    rankingLoadAtMicros_ = elapsedMicros() - 1;
+    rankingGeneration_ = 0;
+    rankingRevision_ = 0;
+  }
+}
+
 bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control) const {
   if (!sceneActive_ || failed_ || selectorInputBlocked() ||
       context.appInBackground.load(std::memory_order_acquire)) return false;
@@ -3719,6 +3802,8 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
     return present && !chart->solidArchive;
   case MusicSelectToolbarControl::ChartRecords:
     return modalLayer_ && selected && musicSelectRecordsTarget(*selected).has_value();
+  case MusicSelectToolbarControl::Rankings:
+    return modalOverlayPortal_ && selectedRankingRequest().has_value();
   case MusicSelectToolbarControl::RevealChart:
     return present && modalOverlayPortal_;
   case MusicSelectToolbarControl::Tasks:
@@ -3738,7 +3823,7 @@ void MusicSelectScene::refreshToolbarAvailability() {
   if (!toolbar_) return;
   using Control = MusicSelectToolbarControl;
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
-       Control::ChartViewer, Control::ChartRecords, Control::RevealChart,
+       Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
        Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
        Control::IrUploads, Control::Settings}) {
     toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
@@ -4149,6 +4234,7 @@ void MusicSelectScene::syncToolbar() {
        .openMoreMenu = [this] { openToolbarMenu(MusicSelectToolbarControl::MoreMenu); },
        .openChartViewer = [this] { openChartViewer(); },
        .openChartRecords = [this] { openChartRecords(); },
+       .openRankings = [this] { openRankings(); },
        .revealChart = [this] { revealChart(); },
        .openMusicPlayer = [this] { openMusicPlayer(); },
        .openTasks = [this] { openTasks(); },
@@ -4403,6 +4489,7 @@ void MusicSelectScene::cleanupScene() {
   toolbar_ = nullptr;
   searchOverlay_ = nullptr;
   searchInput_ = nullptr;
+  rankingsModal_.reset();
   modalOverlayPortal_ = nullptr;
   modalLayer_ = nullptr;
   if (recordsExportJob_.hasWorker()) {

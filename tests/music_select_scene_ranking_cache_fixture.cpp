@@ -10,6 +10,7 @@ enum class MusicSelectRankingState { Finish, Fail };
 struct MusicSelectRankingSnapshot {
   MusicSelectRankingState state = MusicSelectRankingState::Finish;
   int pendingDurationMillis = 0;
+  bool complete = true;
 };
 namespace ir {
 enum class IrRankingSnapshotState { Succeeded };
@@ -24,12 +25,28 @@ struct Snapshot {
 };
 struct Service {
   Snapshot value;
-  int open(int) { return 1; }
+  int immediatePages = 0;
+  int pageRequests = 0;
+  int pageAttempts = 0;
+  bool acceptPages = true;
+  int opens = 0;
+  int open(int) { ++opens; return 1; }
   Snapshot snapshot() { return value; }
-  bool loadNextPage(int) { return false; }
+  bool loadNextPage(int) {
+    ++pageAttempts;
+    if (!acceptPages || immediatePages == 0) return false;
+    ++pageRequests;
+    --immediatePages;
+    ++value.revision;
+    value.ranking->nextPageToken = immediatePages != 0;
+    return true;
+  }
 };
 }
-MusicSelectRankingSnapshot projectMusicSelectRanking(const ir::Snapshot &, int) { return {}; }
+bool completeRanking = true;
+MusicSelectRankingSnapshot projectMusicSelectRanking(const ir::Snapshot &, int) {
+  return {.complete = completeRanking};
+}
 std::int64_t nowMillis = 0;
 std::int64_t unixMillis() { return nowMillis; }
 struct MusicSelectScene {
@@ -38,6 +55,14 @@ struct MusicSelectScene {
     MusicSelectRankingSnapshot snapshot;
     std::int64_t updatedUnixMillis = 0;
   };
+  struct RankingModal {
+    bool visible = true;
+    bool closing = false;
+    bool isOpen() const { return visible; }
+    void update() { if (closing) visible = false; }
+    void close() { visible = false; }
+  };
+  RankingModal *rankingsModal_ = nullptr;
   MusicSelectRankingSnapshot ranking_;
   std::optional<int> rankingRequest_ = 1;
   std::map<std::string, CachedRanking, std::less<>> rankingCache_;
@@ -49,9 +74,26 @@ struct MusicSelectScene {
   int elapsedMicros() { return 1; }
   void setRanking(MusicSelectRankingSnapshot snapshot) { ranking_ = snapshot; }
   void updateRanking();
+  void updateRankingsModal();
+  void closeRankings();
 };
 SCENE_METHODS
 int main() {
+  ir::Service modalService;
+  MusicSelectScene modalScene{{&modalService}};
+  MusicSelectScene::RankingModal modal;
+  modalScene.rankingsModal_ = &modal;
+  modalScene.rankingLoadAtMicros_ = 0;
+  modalScene.updateRanking();
+  assert(modalService.opens == 0 && "skin debounce cannot replace an open modal request");
+  modal.closing = true;
+  modalScene.updateRankingsModal();
+  modalScene.updateRanking();
+  assert(modalService.opens == 1 && "closing modal resumes the skin request from shared cache");
+  modal.visible = true;
+  modalScene.closeRankings();
+  assert(!modal.isOpen());
+
   ir::Service service;
   MusicSelectScene scene{{&service}};
   auto finish = [&](const std::string &key) {
@@ -71,4 +113,44 @@ int main() {
   for (int index = 65; index < 200; ++index) finish(std::to_string(index));
   assert(scene.rankingCache_.size() == 64);
   assert(!scene.rankingCache_.contains("0") && scene.rankingCache_.contains("199"));
+
+  completeRanking = false;
+  finish("partial");
+  assert(!scene.rankingCache_.contains("partial") &&
+         "partial visible pages must not enter the ten-minute completed cache");
+  completeRanking = true;
+  finish("partial");
+  assert(scene.rankingCache_.contains("partial"));
+
+  ir::Service immediate;
+  immediate.value.ranking = ir::Snapshot::Ranking{.nextPageToken = true};
+  immediate.immediatePages = 2;
+  MusicSelectScene paginated{{&immediate}};
+  paginated.updateRanking();
+  assert(immediate.pageRequests == 1);
+  paginated.updateRanking();
+  assert(immediate.pageRequests == 2 && !immediate.value.ranking->nextPageToken &&
+         "immediate page completion must not prevent requesting the third page");
+  paginated.updateRanking();
+  assert(immediate.pageRequests == 2 &&
+         "completed pagination must not issue duplicate page requests");
+
+  ir::Service busy;
+  busy.value.ranking = ir::Snapshot::Ranking{.nextPageToken = true};
+  busy.immediatePages = 1;
+  busy.acceptPages = false;
+  MusicSelectScene queued{{&busy}};
+  queued.updateRanking();
+  assert(busy.pageAttempts == 1 && busy.pageRequests == 0);
+  busy.acceptPages = true;
+  queued.updateRanking();
+  assert(busy.pageRequests == 1 &&
+         "unchanged snapshot must retry pagination after the old worker exits");
+  busy.value.ranking->nextPageToken = true;
+  busy.value.paginationBlocked = true;
+  ++busy.value.revision;
+  const int blockedAttempts = busy.pageAttempts;
+  for (int frame = 0; frame < 5; ++frame) queued.updateRanking();
+  assert(busy.pageAttempts == blockedAttempts &&
+         "blocked pagination must not retry each frame");
 }

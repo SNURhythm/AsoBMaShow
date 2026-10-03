@@ -28,10 +28,12 @@ std::string rankText(int rank) {
 }
 
 std::string playerText(const IrChartRankingEntry &entry) {
+  if (entry.currentUser && entry.playerName.empty()) return i18n::tr("ir.ranking.you.label");
   std::string value =
       entry.playerName.empty() ? std::string(kMissing) : entry.playerName;
   if (entry.currentUser) {
-    value += "  \xC2\xB7  You";
+    value += "  \xC2\xB7  ";
+    value += i18n::tr("ir.ranking.you.label");
   }
   return value;
 }
@@ -41,6 +43,26 @@ std::string scoreText(int score, int maximum) {
     return std::string(kMissing);
   }
   return std::to_string(score) + " / " + std::to_string(maximum);
+}
+
+std::shared_ptr<const IrChartRanking> rankingForPresentation(
+    const std::shared_ptr<const IrChartRanking> &source, IrRankingTab tab) {
+  if (!source || tab == IrRankingTab::Top) return source;
+  auto displayed = std::make_shared<IrChartRanking>(*source);
+  if (!source->nearbyEntries.empty()) {
+    displayed->entries = source->nearbyEntries;
+  } else {
+    const auto own = std::ranges::find_if(source->entries,
+        [](const auto &entry) { return entry.currentUser; });
+    if (own == source->entries.end()) return {};
+    const auto index = own - source->entries.begin();
+    const auto begin = std::max<decltype(index)>(0, index - 5);
+    const auto end = std::min<std::size_t>(source->entries.size(), index + 6);
+    displayed->entries.assign(source->entries.begin() + begin,
+                               source->entries.begin() + end);
+  }
+  displayed->nextPageToken.reset();
+  return displayed;
 }
 
 void setFailure(IrRankingModalPresentation &presentation,
@@ -53,6 +75,7 @@ void setFailure(IrRankingModalPresentation &presentation,
   presentation.canRetry = retry;
   presentation.ranking.reset();
   presentation.entryCount = 0;
+  presentation.hasNearbyRanking = false;
   presentation.fetchedAtText.clear();
 }
 
@@ -181,6 +204,17 @@ void configureIrRankingDetailLampBadge(View &badge) {
   badge.setWidthPercent(100.0f)->setMinWidth(0)->setFlexShrink(1.0f);
 }
 
+void refreshIrRankingModalLanguage(View &root, View &scoreDetail,
+                                   std::uint64_t &languageRevision) {
+  const auto current = i18n::revision();
+  if (languageRevision == current) return;
+  // Closed modal roots are not registered with the scene's overlay portal.
+  // Refresh both trees, including the currently hidden score-detail view.
+  root.propagateLanguageChange();
+  scoreDetail.propagateLanguageChange();
+  languageRevision = current;
+}
+
 bool useCompactIrRankingColumns(int width) noexcept {
   return width <= kCompactRowMaximumWidth;
 }
@@ -201,6 +235,8 @@ bool shouldLoadNextIrRankingPage(int entryCount, float scrollOffset,
 void IrRankingModalModel::open(IrRankingRequest request,
                                std::string chartTitle) {
   expectedRequest_ = std::move(request);
+  lastSnapshot_.reset();
+  selectedTab_.reset();
   presentation_ = {
       .state = IrRankingModalState::Loading,
       .chartTitle = std::move(chartTitle),
@@ -215,6 +251,7 @@ void IrRankingModalModel::refresh(std::uint64_t generation) {
     return;
   }
   expectedRequest_->generation = generation;
+  lastSnapshot_.reset();
   presentation_.state = IrRankingModalState::Loading;
   presentation_.statusText = i18n::tr("ir.ranking.loading_rankings.progress");
   presentation_.detailText.clear();
@@ -222,6 +259,7 @@ void IrRankingModalModel::refresh(std::uint64_t generation) {
   presentation_.canRefresh = false;
   presentation_.canRetry = false;
   presentation_.entryCount = 0;
+  presentation_.hasNearbyRanking = false;
   presentation_.revision = 0;
   presentation_.generation = generation;
   presentation_.ranking.reset();
@@ -242,6 +280,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     return false;
   }
 
+  lastSnapshot_ = snapshot;
   languageRevision_ = i18n::revision();
   presentation_.revision = snapshot.revision;
   presentation_.generation = snapshot.generation;
@@ -260,6 +299,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     presentation_.canRetry = false;
     presentation_.ranking.reset();
     presentation_.entryCount = 0;
+    presentation_.hasNearbyRanking = false;
     presentation_.fetchedAtText.clear();
     presentation_.canLoadNextPage = false;
     break;
@@ -271,6 +311,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
       presentation_.canRetry = true;
       presentation_.ranking = snapshot.ranking;
       presentation_.entryCount = 0;
+      presentation_.hasNearbyRanking = false;
       presentation_.fetchedAtText =
           snapshot.ranking
               ? formatIrRankingTimestamp(snapshot.ranking->fetchedAtUnixMillis)
@@ -283,15 +324,29 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     presentation_.detailText.clear();
     presentation_.canRefresh = true;
     presentation_.canRetry = false;
-    presentation_.ranking = snapshot.ranking;
+    presentation_.hasNearbyRanking = !snapshot.ranking->nearbyEntries.empty() ||
+        std::ranges::any_of(snapshot.ranking->entries,
+                            [](const auto &entry) { return entry.currentUser; });
+    if (!selectedTab_) {
+      selectedTab_ = snapshot.ranking->nearbyEntries.empty()
+                         ? IrRankingTab::Top : IrRankingTab::Nearby;
+    }
+    presentation_.activeTab = *selectedTab_ == IrRankingTab::Nearby &&
+                                      presentation_.hasNearbyRanking
+                                  ? IrRankingTab::Nearby : IrRankingTab::Top;
+    presentation_.ranking = rankingForPresentation(snapshot.ranking,
+                                                    presentation_.activeTab);
     presentation_.entryCount =
-        static_cast<int>(snapshot.ranking->entries.size());
+        static_cast<int>(presentation_.ranking->entries.size());
     presentation_.fetchedAtText =
         formatIrRankingTimestamp(snapshot.ranking->fetchedAtUnixMillis);
     presentation_.canLoadNextPage =
+        presentation_.activeTab == IrRankingTab::Top &&
         snapshot.ranking->nextPageToken.has_value() &&
         !snapshot.loadingNextPage && !snapshot.paginationBlocked;
-    if (snapshot.loadingNextPage) {
+    if (presentation_.activeTab == IrRankingTab::Nearby) {
+      presentation_.paginationStatusText = i18n::tr("ir.ranking.nearby_window.message");
+    } else if (snapshot.loadingNextPage) {
       presentation_.paginationStatusText = i18n::tr("ir.ranking.loading_more_rankings.progress");
     } else if (snapshot.paginationBlocked) {
       presentation_.paginationStatusText = snapshot.diagnostic.empty()
@@ -342,6 +397,18 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     return false;
   }
   return true;
+}
+
+bool IrRankingModalModel::selectTab(IrRankingTab tab) {
+  if (!lastSnapshot_ || presentation_.state != IrRankingModalState::Success ||
+      presentation_.activeTab == tab ||
+      (tab == IrRankingTab::Nearby && !presentation_.hasNearbyRanking)) {
+    return false;
+  }
+  selectedTab_ = tab;
+  const auto snapshot = *lastSnapshot_;
+  presentation_.revision = 0;
+  return apply(snapshot);
 }
 
 IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {

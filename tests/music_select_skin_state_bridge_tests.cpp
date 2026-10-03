@@ -87,6 +87,36 @@ void testExactPropertyNamespacesAndAbsentValues() {
           "known absent Timer uses Long.MIN_VALUE");
 }
 
+void testNumericSkinConfigurationIndexesShadowRankingPlayers() {
+  MusicSelectSkinFrame frame;
+  for (int id = 385; id <= 389; ++id) {
+    frame.properties.imageIndexes.emplace(id, 1);
+    frame.properties.integers.emplace(id, 100 + id);
+  }
+  MusicSelectSkinStateBridge bridge(frame);
+  for (int id = 386; id <= 388; ++id) {
+    const auto numeric = bridge.integerProperty(
+        {.value = id}, SkinIntegerPropertyDomain::ImageIndex);
+    const auto named = bridge.integerProperty(
+        {.value = "playertype_ranking" + std::to_string(id - 379)},
+        SkinIntegerPropertyDomain::ImageIndex);
+    require(numeric.supported &&
+                numeric.value == std::numeric_limits<int>::min(),
+            "numeric 24-key skin indexes remain unavailable in the selector");
+    require(named.supported && named.value == 1,
+            "named ranking player types bypass numeric skin configuration indexes");
+    require(bridge.integerProperty({.value = id},
+                                   SkinIntegerPropertyDomain::IntegerValue)
+                    .value == 100 + id,
+            "skin configuration collision does not change ranking score values");
+  }
+  require(bridge.integerProperty({.value = 385},
+                                 SkinIntegerPropertyDomain::ImageIndex).value == 1 &&
+              bridge.integerProperty({.value = 389},
+                                     SkinIntegerPropertyDomain::ImageIndex).value == 1,
+          "neighboring numeric ranking player indexes remain available");
+}
+
 void testFactoryFloatNamesResolveNumericFrameProperties() {
   MusicSelectSkinFrame frame;
   frame.properties.rates = {{1, 0.25}, {17, 0.5}, {147, 0.75}};
@@ -288,6 +318,7 @@ void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
 
 int main(int argc, char **argv) {
   testExactPropertyNamespacesAndAbsentValues();
+  testNumericSkinConfigurationIndexesShadowRankingPlayers();
   testFactoryFloatNamesResolveNumericFrameProperties();
   testVolumeWritesClampFiniteValuesAndRejectNonFiniteValues();
   testUnknownPropertiesRemainUnsupported();

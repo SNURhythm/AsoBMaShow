@@ -65,6 +65,7 @@ struct MusicSelectScene {
   int resets = 0;
   bool selectorInputBlocked() const { return blocked || (findBmsModal_ && findBmsModal_->isVisible()); }
   void resetLogicalInput() { ++resets; }
+  std::optional<int> selectedRankingRequest() const { return std::nullopt; }
   bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
   void refreshToolbarAvailability();
   bool canDownloadSelectedChart() const;

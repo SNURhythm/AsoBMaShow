@@ -74,6 +74,8 @@ struct IrRankingScoreDetailPresentation {
   bool highlighted = false;
 };
 
+enum class IrRankingTab { Top, Nearby };
+
 struct IrRankingModalPresentation {
   IrRankingModalState state = IrRankingModalState::Loading;
   std::string chartTitle;
@@ -88,6 +90,8 @@ struct IrRankingModalPresentation {
   bool paginationBlocked = false;
   std::string paginationStatusText;
   int entryCount = 0;
+  IrRankingTab activeTab = IrRankingTab::Top;
+  bool hasNearbyRanking = false;
   std::uint64_t revision = 0;
   std::uint64_t generation = 0;
   std::optional<IrLocalComparison> comparison;
@@ -124,6 +128,7 @@ public:
   void open(IrRankingRequest request, std::string chartTitle);
   void refresh(std::uint64_t generation);
   [[nodiscard]] bool apply(const IrRankingSnapshot &snapshot);
+  [[nodiscard]] bool selectTab(IrRankingTab tab);
 
   [[nodiscard]] const IrRankingModalPresentation &presentation() const {
     return presentation_;
@@ -138,6 +143,8 @@ public:
 private:
   std::optional<IrRankingRequest> expectedRequest_;
   IrRankingModalPresentation presentation_;
+  std::optional<IrRankingSnapshot> lastSnapshot_;
+  std::optional<IrRankingTab> selectedTab_;
   std::uint64_t languageRevision_ = 0;
 };
 
@@ -171,9 +178,11 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept;
 [[nodiscard]] IrRankingJudgementColumnGeometry
 layoutIrRankingJudgementColumns(float availableWidth) noexcept;
 void configureIrRankingDetailLampBadge(View &badge);
+void refreshIrRankingModalLanguage(View &root, View &scoreDetail,
+                                   std::uint64_t &languageRevision);
 [[nodiscard]] bool useCompactIrRankingColumns(int width) noexcept;
 [[nodiscard]] bool shouldLoadNextIrRankingPage(
-    int entryCount, float scrollOffset, float viewportHeight, int itemHeight,
-    int preloadRows = 10) noexcept;
+    int entryCount, float scrollOffset,
+    float viewportHeight, int itemHeight, int preloadRows = 10) noexcept;
 
 } // namespace ir

@@ -682,6 +682,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_temporary_storage_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_temporary_storage_tests.py -v)
+    set_tests_properties(android_temporary_storage_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     if (NOT IOS)
         add_executable(curl_redirect_policy_tests
             tests/curl_redirect_policy_tests.cpp
@@ -1581,6 +1590,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(music_select_ranking_tests
             tests/music_select_ranking_tests.cpp
             src/music_select/MusicSelectRanking.cpp
+            src/music_select/MusicSelectPropertyProjection.cpp
+            src/settings/AudioVideoSettings.cpp
         )
         target_include_directories(music_select_ranking_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -1864,6 +1875,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             set_tests_properties(lua_skin_coroutine_${_lua_coroutine_phase}
                 PROPERTIES TIMEOUT 120)
         endforeach()
+        # These semantic callbacks retain the production 4 ms wall-clock guard.
+        set_tests_properties(lua_skin_coroutine_callback PROPERTIES RUN_SERIAL TRUE)
 
         add_executable(lua_skin_note_live_integration_tests
             tests/lua_skin_note_live_integration_tests.cpp
@@ -6194,6 +6207,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(play_skin_state_bridge_tests PRIVATE cxx_std_23)
         target_compile_definitions(play_skin_state_bridge_tests PRIVATE
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
             ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )
@@ -6310,6 +6324,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_definitions(play_skin_session_tests PRIVATE
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_PLAY_SKIN_SESSION_TESTING=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
             ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )
@@ -8356,6 +8371,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_runtime_tests)
         asobmashow_register_test(lua_skin_runtime_tests)
+        # Preserve production callback deadlines without sibling-test preemption.
+        set_tests_properties(lua_skin_runtime_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if (TARGET lua_skin_binding_decoder_tests)
         asobmashow_register_test(lua_skin_binding_decoder_tests)
@@ -8625,6 +8642,68 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_skin_export_tests ${CMAKE_CURRENT_BINARY_DIR}/result_skin_export_fixture.cpp)
     target_compile_features(result_skin_export_tests PRIVATE cxx_std_23)
     asobmashow_register_test(result_skin_export_tests)
+    add_executable(result_skin_ir_tests tests/result_skin_ir_tests.cpp)
+    target_include_directories(result_skin_ir_tests PRIVATE src)
+    target_compile_features(result_skin_ir_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(result_skin_ir_tests)
+    set(result_skin_ir_scene_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/result_skin_ir_scene_tests.cpp)
+    add_custom_command(
+        OUTPUT ${result_skin_ir_scene_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/result_skin_ir_scene_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${result_skin_ir_scene_source}
+        DEPENDS tests/result_skin_ir_scene_extract.py tests/result_skin_ir_scene_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/scene/ResultScene.cpp
+        VERBATIM
+    )
+    add_executable(result_skin_ir_scene_tests ${result_skin_ir_scene_source})
+    target_include_directories(result_skin_ir_scene_tests PRIVATE src)
+    target_compile_features(result_skin_ir_scene_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(result_skin_ir_scene_tests)
+    set(gameplay_skin_ir_scene_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/gameplay_skin_ir_scene_tests.cpp)
+    add_custom_command(
+        OUTPUT ${gameplay_skin_ir_scene_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/gameplay_skin_ir_scene_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${gameplay_skin_ir_scene_source}
+        DEPENDS tests/gameplay_skin_ir_scene_extract.py tests/gameplay_skin_ir_scene_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
+    add_executable(gameplay_skin_ir_scene_tests ${gameplay_skin_ir_scene_source}
+        src/ir/IrProfileSettings.cpp)
+    target_include_directories(gameplay_skin_ir_scene_tests PRIVATE src)
+    target_compile_features(gameplay_skin_ir_scene_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(gameplay_skin_ir_scene_tests)
+    set(result_skin_timeout_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/result_skin_timeout_tests.cpp)
+    add_custom_command(
+        OUTPUT ${result_skin_timeout_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/result_skin_timeout_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${result_skin_timeout_source}
+        DEPENDS tests/result_skin_timeout_extract.py tests/result_skin_timeout_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/scene/ResultScene.cpp
+                src/scene/Scene.h src/scene/SceneManager.h src/scene/SceneManager.cpp
+        VERBATIM
+    )
+    add_executable(result_skin_timeout_tests ${result_skin_timeout_source})
+    target_compile_features(result_skin_timeout_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(result_skin_timeout_tests)
+    set(settings_event_lifetime_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_event_lifetime_tests.cpp)
+    add_custom_command(
+        OUTPUT ${settings_event_lifetime_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_event_lifetime_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${settings_event_lifetime_source}
+        DEPENDS tests/settings_event_lifetime_extract.py tests/settings_event_lifetime_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py tests/result_skin_timeout_extract.py
+                src/scene/SettingsScene.cpp src/scene/Scene.h
+                src/scene/SceneManager.h src/scene/SceneManager.cpp
+        VERBATIM
+    )
+    add_executable(settings_event_lifetime_tests ${settings_event_lifetime_source})
+    target_compile_features(settings_event_lifetime_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(settings_event_lifetime_tests)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/replay_result_skin_extract.py
@@ -8641,14 +8720,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)
-        set_tests_properties(play_skin_state_bridge_tests PROPERTIES RUN_SERIAL TRUE)
+        set_tests_properties(play_skin_state_bridge_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
     endif()
     if(TARGET gameplay_skin_session_factory_tests)
         asobmashow_register_test(gameplay_skin_session_factory_tests)
     endif()
     if(TARGET play_skin_session_tests)
         asobmashow_register_test(play_skin_session_tests)
-        set_tests_properties(play_skin_session_tests PROPERTIES RUN_SERIAL TRUE)
+        set_tests_properties(play_skin_session_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
     endif()
     if(TARGET gameplay_skin_loading_benchmark_tests)
         asobmashow_register_test(gameplay_skin_loading_benchmark_tests)

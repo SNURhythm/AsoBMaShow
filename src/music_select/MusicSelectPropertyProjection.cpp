@@ -1,3 +1,4 @@
+#include "../ir/IrRankingWindow.h"
 #include "MusicSelectPropertyProjection.h"
 #include "../BeatorajaClearType.h"
 
@@ -322,44 +323,43 @@ void projectRanking(Properties &out,
   out.integers[179] = ranking.rank;
   out.integers[180] = ranking.totalPlayers;
   out.integers[200] = ranking.totalPlayers;
-  for (std::size_t clear = 0; clear < ranking.clearCounts.size(); ++clear) {
-    const int count = ranking.clearCounts[clear];
-    out.integers[kIrClearCountIds[clear]] = count;
-    if (ranking.totalPlayers > 0) {
-      out.integers[kIrClearRateIds[clear]] =
-          count * 100 / ranking.totalPlayers;
-      out.integers[kIrClearRateAfterDotIds[clear]] =
-          (count * 1'000 / ranking.totalPlayers) % 10;
-      out.rates[static_cast<int>(std::array<int, 11>{
-          203, 211, 205, 207, 213, 215, 217, 209, 219, 223, 225}[clear])] =
-          static_cast<double>(count) / ranking.totalPlayers;
+  if (ranking.complete) {
+    for (std::size_t clear = 0; clear < ranking.clearCounts.size(); ++clear) {
+      const int count = ranking.clearCounts[clear];
+      out.integers[kIrClearCountIds[clear]] = count;
+      if (ranking.totalPlayers > 0) {
+        out.integers[kIrClearRateIds[clear]] =
+            count * 100 / ranking.totalPlayers;
+        out.integers[kIrClearRateAfterDotIds[clear]] =
+            (count * 1'000 / ranking.totalPlayers) % 10;
+        out.rates[static_cast<int>(std::array<int, 11>{
+            203, 211, 205, 207, 213, 215, 217, 209, 219, 223, 225}[clear])] =
+            static_cast<double>(count) / ranking.totalPlayers;
+      }
     }
-  }
-  const int totalClear = std::accumulate(ranking.clearCounts.begin() + 2,
-                                         ranking.clearCounts.end(), 0);
-  const int totalFullCombo = std::accumulate(ranking.clearCounts.begin() + 8,
-                                             ranking.clearCounts.end(), 0);
-  out.integers[226] = totalClear;
-  out.integers[228] = totalFullCombo;
-  if (ranking.totalPlayers > 0) {
-    out.integers[227] = totalClear * 100 / ranking.totalPlayers;
-    out.integers[241] =
-        (totalClear * 1'000 / ranking.totalPlayers) % 10;
-    out.integers[229] = totalFullCombo * 100 / ranking.totalPlayers;
-    out.integers[242] =
-        (totalFullCombo * 1'000 / ranking.totalPlayers) % 10;
-    out.floats[227] = static_cast<double>(totalClear) / ranking.totalPlayers;
-    out.floats[229] =
-        static_cast<double>(totalFullCombo) / ranking.totalPlayers;
+    const int totalClear = std::accumulate(ranking.clearCounts.begin() + 2,
+                                           ranking.clearCounts.end(), 0);
+    const int totalFullCombo = std::accumulate(ranking.clearCounts.begin() + 8,
+                                               ranking.clearCounts.end(), 0);
+    out.integers[226] = totalClear;
+    out.integers[228] = totalFullCombo;
+    if (ranking.totalPlayers > 0) {
+      out.integers[227] = totalClear * 100 / ranking.totalPlayers;
+      out.integers[241] =
+          (totalClear * 1'000 / ranking.totalPlayers) % 10;
+      out.integers[229] = totalFullCombo * 100 / ranking.totalPlayers;
+      out.integers[242] =
+          (totalFullCombo * 1'000 / ranking.totalPlayers) % 10;
+      out.floats[227] = static_cast<double>(totalClear) / ranking.totalPlayers;
+      out.floats[229] =
+          static_cast<double>(totalFullCombo) / ranking.totalPlayers;
+    }
   }
 
-  for (int visible = 0; visible < 10; ++visible) {
-    const int sourceIndex = visible + ranking.offset;
-    if (sourceIndex < 0 ||
-        sourceIndex >= static_cast<int>(ranking.entries.size())) {
-      continue;
-    }
-    const auto &entry = ranking.entries[static_cast<std::size_t>(sourceIndex)];
+  const auto rows = ir::rankingWindow(ranking.entries, ranking.nearbyEntries,
+                                       ranking.nearbyOffset, ranking.offset);
+  for (int visible = 0; visible < static_cast<int>(rows.size()); ++visible) {
+    const auto &entry = rows[static_cast<std::size_t>(visible)];
     out.strings[120 + visible] = entry.name;
     out.integers[380 + visible] = entry.score;
     out.integers[390 + visible] = entry.rank;

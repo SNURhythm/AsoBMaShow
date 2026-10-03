@@ -111,6 +111,52 @@ ir::IrRankingSnapshot snapshot(ir::IrRankingSnapshotState state,
           .diagnostic = "safe detail"};
 }
 
+void testRetainedModalTreesRefreshLanguageWhileHidden() {
+  struct Caption : View {
+    std::string key;
+    std::string text;
+    int changes = 0;
+    explicit Caption(std::string value) : key(std::move(value)), text(i18n::tr(key)) {}
+    void onLanguageChanged() override {
+      text = i18n::tr(key);
+      ++changes;
+    }
+  };
+  i18n::setLanguage(i18n::Language::English);
+  View root;
+  View scoreDetail;
+  auto *tab = new Caption("ir.ranking.nearby_tab.label");
+  auto *detail = new Caption("ir.ranking.score_detail.ex_score.label");
+  root.addView(tab);
+  scoreDetail.addView(detail);
+  root.setVisible(false);
+  scoreDetail.setVisible(false);
+  std::uint64_t revision = 0;
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->text == "Near me");
+  const int changes = tab->changes;
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->changes == changes);
+  ir::IrRankingModalModel model;
+  model.open(request(), "Raw title");
+  const auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  REQUIRE(model.apply(source));
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(model.apply(source));
+  REQUIRE(model.row(1, 1200).playerText == "PLAYER  ·  나");
+  REQUIRE(model.scoreDetail(1)->playerText == "PLAYER  ·  나");
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->text == "내 주변");
+  REQUIRE(detail->text == "EX 점수");
+  REQUIRE(tab->changes == changes + 1);
+  root.setVisible(true);
+  i18n::setLanguage(i18n::Language::Japanese);
+  ir::refreshIrRankingModalLanguage(root, scoreDetail, revision);
+  REQUIRE(tab->text == "自分の周辺");
+  REQUIRE(detail->text == "EX スコア");
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testLocalComparisonRetainsLocalizedLabelsAndRawMetrics() {
   i18n::setLanguage(i18n::Language::English);
   auto comparison = *request().localComparison;
@@ -236,6 +282,119 @@ void testComparisonStaysSeparateAndYouEntryIsHighlighted() {
   REQUIRE(you.playerText.find("You") != std::string::npos);
   REQUIRE(you.badPointsText == "\xE2\x80\x94");
   REQUIRE(you.maxComboText == "\xE2\x80\x94");
+}
+
+void testRankingTabsSeparateTopAndNearbyRows() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  auto value = std::make_shared<ir::IrChartRanking>();
+  value->totalPlayers = 6000;
+  value->nextPageToken = "page-2";
+  for (int rank = 1; rank <= 100; ++rank) {
+    value->entries.push_back({.rank = rank, .providerEntryId = std::to_string(rank)});
+  }
+  for (int rank = 4995; rank <= 5005; ++rank) {
+    value->nearbyEntries.push_back({.rank = rank,
+        .providerEntryId = std::to_string(rank), .currentUser = rank == 5000});
+  }
+  auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  source.ranking = value;
+  REQUIRE(model.apply(source));
+  const auto &presentation = model.presentation();
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Nearby);
+  REQUIRE(presentation.hasNearbyRanking);
+  REQUIRE(presentation.entryCount == 11);
+  REQUIRE(model.row(0, 1200).rankText == "#4995");
+  REQUIRE(model.row(5, 1200).rankText == "#5000");
+  REQUIRE(model.row(5, 1200).highlighted);
+  REQUIRE(model.row(5, 1200).playerText == "You");
+  REQUIRE(model.scoreDetail(5)->highlighted);
+  REQUIRE(!presentation.canLoadNextPage);
+  REQUIRE(!presentation.ranking->nextPageToken);
+  REQUIRE(presentation.paginationStatusText.find("Top rankings") != std::string::npos);
+
+  REQUIRE(model.selectTab(ir::IrRankingTab::Top));
+  REQUIRE(presentation.entryCount == 100);
+  REQUIRE(model.row(0, 1200).rankText == "#1");
+  REQUIRE(model.row(99, 1200).rankText == "#100");
+  REQUIRE(presentation.canLoadNextPage);
+  REQUIRE(presentation.paginationStatusText.empty());
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(presentation.entryCount, 0, 600, 60));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(presentation.entryCount, 4900, 600, 60));
+  REQUIRE(!model.selectTab(ir::IrRankingTab::Top));
+  REQUIRE(model.selectTab(ir::IrRankingTab::Nearby));
+
+  // A previously started top-page request can finish while Near me is selected.
+  auto nextPage = std::make_shared<ir::IrChartRanking>(*value);
+  for (int rank = 101; rank <= 200; ++rank) {
+    nextPage->entries.push_back({.rank = rank, .providerEntryId = std::to_string(rank)});
+  }
+  source.ranking = nextPage;
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Nearby);
+  REQUIRE(presentation.entryCount == 11);
+  REQUIRE(model.row(0, 1200).rankText == "#4995");
+  REQUIRE(!presentation.canLoadNextPage);
+  REQUIRE(model.selectTab(ir::IrRankingTab::Top));
+  REQUIRE(presentation.entryCount == 200);
+  REQUIRE(model.row(199, 1200).rankText == "#200");
+  REQUIRE(value->entries.size() == 100);
+  REQUIRE(value->nearbyEntries.size() == 11);
+
+  // Refresh keeps an explicit tab choice, and opening another chart resets it.
+  model.refresh(8);
+  source.generation = 8;
+  source.request = request(8);
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Top);
+  REQUIRE(model.selectTab(ir::IrRankingTab::Nearby));
+  model.refresh(9);
+  source.generation = 9;
+  source.request = request(9);
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Nearby);
+  model.open(request(), "Another chart");
+  REQUIRE(model.apply(snapshot(ir::IrRankingSnapshotState::Succeeded)));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Top);
+}
+
+void testNearbyTabUsesOwnRowFromLoadedTopPages() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().hasNearbyRanking);
+  REQUIRE(model.selectTab(ir::IrRankingTab::Nearby));
+  REQUIRE(model.row(1, 1200).highlighted);
+  REQUIRE(!model.presentation().canLoadNextPage);
+
+  auto completed = std::make_shared<ir::IrChartRanking>();
+  completed->totalPlayers = 200;
+  for (int rank = 1; rank <= 200; ++rank) {
+    completed->entries.push_back({.rank = rank,
+        .providerEntryId = std::to_string(rank), .currentUser = rank == 105});
+  }
+  source.ranking = completed;
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().activeTab == ir::IrRankingTab::Nearby);
+  REQUIRE(model.presentation().entryCount == 11);
+  REQUIRE(model.row(0, 1200).rankText == "#100");
+  REQUIRE(model.row(5, 1200).rankText == "#105");
+  REQUIRE(model.row(10, 1200).rankText == "#110");
+  REQUIRE(!model.presentation().canLoadNextPage);
+
+  auto anonymous = std::make_shared<ir::IrChartRanking>(*source.ranking);
+  for (auto &entry : anonymous->entries) entry.currentUser = false;
+  source.ranking = anonymous;
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().activeTab == ir::IrRankingTab::Top);
+  REQUIRE(!model.presentation().hasNearbyRanking);
+  REQUIRE(!model.selectTab(ir::IrRankingTab::Nearby));
 }
 
 void testResponsiveRowsKeepFixedHeightCoreFields() {
@@ -581,12 +740,15 @@ void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
 } // namespace
 
 int main() {
+  testRetainedModalTreesRefreshLanguageWhileHidden();
   testLocalComparisonRetainsLocalizedLabelsAndRawMetrics();
   testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest();
   testRecyclerLanguageRefreshKeepsBoundRowsAndSelection();
   testModalStateMappingAndActions();
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
+  testRankingTabsSeparateTopAndNearbyRows();
+  testNearbyTabUsesOwnRowFromLoadedTopPages();
   testResponsiveRowsKeepFixedHeightCoreFields();
   testScoreDetailFormatsCompleteAndMissingData();
   testPaginationPresentationKeepsSuccessfulListVisible();

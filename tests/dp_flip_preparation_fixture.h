@@ -42,6 +42,7 @@ public:
     } courseOptions;
     bool courseTransitionStarted = false;
     bool guidedAccessReminderSkipped = false;
+    ScoreProvenance attemptProvenance;
     RhythmState resultState{nullptr, false};
     struct { std::nullptr_t returnScene = nullptr; } practiceOptions;
   } local;
@@ -64,6 +65,39 @@ public:
   void startModernCourseRetrySame();
   void continueCourse();
 };
+
+void testCourseContinuationPreservesClubMode() {
+  AbortTemporaryDirectory temporary;
+  const auto path = temporary.path / "club-course.bms";
+  {
+    std::ofstream file(path);
+    file << "#PLAYER 1\n#TITLE Club course\n#BPM 120\n#00011:01\n";
+  }
+  ReplayRepository repository(temporary.path / "replay.db");
+  for (const bool savedStage : {false, true}) {
+    for (const bool clubMode : {true, false}) {
+      RetrySameResultFixture result(repository);
+      auto session = std::make_shared<CoursePlaySession>();
+      session->entries.resize(2);
+      session->entries[1].meta.BmsPath = path;
+      session->preparedCourseCharts.resize(2);
+      session->preparedCourseCharts[1] = parsePreparationFixture(path);
+      if (savedStage) {
+        session->courseRetrySameData = std::make_shared<CourseReplayData>();
+        session->courseRetrySameData->stages.resize(2);
+        session->courseRetrySameData->stages[1].replay.provenance.clubMode = !clubMode;
+      }
+      result.local.courseOptions.session = session;
+      result.local.resultState.currentGauge = 80.0f;
+      result.local.attemptProvenance.clubMode = clubMode;
+      result.continueCourse();
+      require(result.launchedChart && session->currentIndex == 1,
+              "Club Beat course fixture advances to the second stage");
+      require(result.launchedOptions.clubMode == (savedStage ? !clubMode : clubMode),
+              "course continuation retains live Club Beat or the saved stage's retry setting");
+    }
+  }
+}
 
 std::vector<PreparedLaneFact> preparedLaneFacts(const bms_parser::Chart &chart) {
   std::vector<PreparedLaneFact> facts;

@@ -680,12 +680,14 @@ public:
         value = found == credentials.end() ? std::string{} : found->second;
       }
       std::unique_lock lock(credentialLookupMutex);
-      if (credentialLookupBlocked) {
+      if (credentialLookupBlocked && credentialLookupsBeforeBlock > 0) {
+        --credentialLookupsBeforeBlock;
+      } else if (credentialLookupBlocked) {
+        credentialLookupBlocked = false;
         credentialLookupEntered = true;
         credentialLookupChanged.notify_all();
         credentialLookupChanged.wait(
             lock, [&] { return credentialLookupReleased; });
-        credentialLookupBlocked = false;
       }
       return value;
     };
@@ -793,11 +795,12 @@ public:
     return repository.EnqueueReadyIrOutboxDraft(value, userIntent);
   }
 
-  void blockNextCredentialLookup() {
+  void blockNextCredentialLookup(std::size_t skip = 0) {
     std::lock_guard lock(credentialLookupMutex);
     credentialLookupBlocked = true;
     credentialLookupEntered = false;
     credentialLookupReleased = false;
+    credentialLookupsBeforeBlock = skip;
   }
 
   bool waitForCredentialLookup() {
@@ -872,6 +875,7 @@ public:
   bool credentialLookupBlocked = false;
   bool credentialLookupEntered = false;
   bool credentialLookupReleased = false;
+  std::size_t credentialLookupsBeforeBlock = 0;
   mutable std::mutex successMutex;
   std::vector<std::string> successes;
   std::vector<std::string> credentialChanges;
@@ -1825,6 +1829,58 @@ void testProfileReactivationPreservesCredentialReplacementUnblock() {
          "profile reactivation unblocks a newly credentialed row");
   expect(harness.waitForState(attemptId(36), ir::IrOutboxState::Succeeded),
          "new credential completes the row after profile reactivation");
+}
+
+void testProfileActivationPublishesSnapshotBeforeResumingDelivery() {
+  Harness harness;
+  harness.enqueueReady(draft(37, harness.now.load()), true);
+  harness.service->start(profile(true));
+  expect(harness.waitForState(attemptId(37),
+                             ir::IrOutboxState::BlockedConfiguration),
+         "activation snapshot fixture first blocks without a credential");
+  harness.service->pauseAndCancel();
+  harness.setCredential("replacement-key");
+  // Skip activateProfile's credential-change probe, then stop the snapshot
+  // loader after it has read outbox rows but before it publishes them.
+  harness.blockNextCredentialLookup(1);
+  std::jthread activation([&] { harness.service->activateProfile(profile(true)); });
+  expect(harness.waitForCredentialLookup(),
+         "activation snapshot waits after reading pending rows");
+  const auto waits = harness.waiter.entryCount();
+  harness.service->notifyOutboxChanged();
+  expect(harness.waiter.waitForEntries(waits + 1),
+         "worker processes the wake while activation snapshot is held");
+  expect(harness.driver->calls().empty(),
+         "activation keeps delivery paused until its initial snapshot is published");
+  harness.releaseCredentialLookup();
+  activation.join();
+  expect(harness.driver->waitForCalls(1) &&
+             harness.waitForState(attemptId(37), ir::IrOutboxState::Succeeded),
+         "activation cannot overwrite a newer delivery completion snapshot");
+}
+
+void testRetryAllSnapshotCannotOverwriteConcurrentDeliveryCompletion() {
+  Harness harness;
+  harness.setCredential("key");
+  harness.enqueueReady(draft(38, harness.now.load()), true);
+  harness.driver->blockRequestsUntilReleased();
+  harness.service->start(profile(true));
+  expect(harness.driver->waitForCalls(1),
+         "retry-all snapshot fixture holds an uploading request");
+  harness.blockNextCredentialLookup();
+  std::jthread retry([&] { (void)harness.service->retryAll("fake"); });
+  expect(harness.waitForCredentialLookup(),
+         "retry-all snapshot waits after reading uploading rows");
+  harness.driver->releaseBlockedRequests();
+  expect(harness.waitForState(attemptId(38), ir::IrOutboxState::Succeeded),
+         "delivery completes while retry-all holds an older snapshot");
+  harness.releaseCredentialLookup();
+  retry.join();
+  expect(harness.service->status("fake", attemptId(38)).state ==
+             ir::IrOutboxState::Succeeded,
+         "retry-all does not publish uploading over a completed delivery");
+  expect(harness.service->counts("fake").uploading == 0,
+         "retry-all refreshes counts together with the current snapshot");
 }
 
 void testProviderRuntimeChangeUnblocksRows() {
@@ -3784,6 +3840,8 @@ int main() {
   testFutureWakeIgnoresBoundedSkippedProviderRows();
   testMissingKeyPreservesManualIntentAndReplacementWakes();
   testProfileReactivationPreservesCredentialReplacementUnblock();
+  testProfileActivationPublishesSnapshotBeforeResumingDelivery();
+  testRetryAllSnapshotCannotOverwriteConcurrentDeliveryCompletion();
   testProviderRuntimeChangeUnblocksRows();
   testManualEnqueueRequiresFreshRulesetProof();
   testManualBatchPublishesAndWakesOnceWithSingularCompatibility();

@@ -17,6 +17,7 @@
 #include "../../ReplayGhostUtils.h"
 #include "../../ReplayResultStateBuilder.h"
 #include "../../GBattleMode.h"
+#include "../../ir/IrSkinProvider.h"
 #include "../../CourseConstraintUtils.h"
 #include "../../PlayOptionUtils.h"
 #include "../../PrepMetronome.h"
@@ -2929,6 +2930,9 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 }
 
 GamePlayScene::~GamePlayScene() {
+  if (skinIrRankingGeneration != 0 && context.irRankingService) {
+    context.irRankingService->close(skinIrRankingGeneration);
+  }
   cancelGameplaySkinPreparation();
   if (auto *coordinator =
           dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
@@ -3679,6 +3683,7 @@ bool GamePlayScene::reset() {
   resetSkinGameplayGraph();
   initializeStartPositionState();
   configurePacemakerTarget();
+  configureSkinIrTarget();
   updatePacemakerStatus();
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
@@ -3739,6 +3744,11 @@ bool GamePlayScene::isGuidedAccessEnabled() const {
 
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
   guidedAccessReminderBackground = background;
+  if (!background && skinIrRankingRequest) {
+    // Application backgrounding closes the service's active generation.
+    // Reopen through its cache/worker when this scene becomes active again.
+    configureSkinIrTarget();
+  }
   if (guidedAccessReminderPending) {
     guidedAccessReminder.interrupt();
     if (background) stopGuidedAccessChime();
@@ -4819,6 +4829,122 @@ void GamePlayScene::configurePacemakerTarget() {
       *chart, selected, activePacemakerBest, nullptr);
 }
 
+void GamePlayScene::configureSkinIrTarget() {
+  if (state != nullptr && state->isEnding) return;
+  if (skinIrRankingGeneration != 0 && context.irRankingService) {
+    context.irRankingService->close(skinIrRankingGeneration);
+  }
+  skinIrRankingGeneration = 0;
+  skinIrRankingRevision = 0;
+  skinIrRankingRequest.reset();
+  activeSkinIrTarget.reset();
+  skinIrTargetSelection = context.settings.skinTargetId;
+  skinIrPreviousUserRank.reset();
+  skinIrAccountRevision =
+      context.irAccountEvidenceRevision.load(std::memory_order_acquire);
+  skinIrRankingEvidenceRevision =
+      context.irRankingEvidenceRevision.load(std::memory_order_acquire);
+  if (chart == nullptr || options.practiceMode || options.practiceSession ||
+      isCoursePlayback()) {
+    return;
+  }
+  if (isGameplaySkinIrTarget(skinIrTargetSelection)) {
+    activeSkinIrTarget = PlayfieldIrTargetState{
+        .targetId = skinIrTargetSelection};
+    const auto best = context.scoreRepository.LoadBestScore(chart->Meta);
+    skinIrLocalBestScore = best ? best->score : 0;
+  }
+  if (!context.irRankingService || context.irAccountNameSnapshot().empty()) {
+    return;
+  }
+  const auto providerId = ir::firstEnabledRankingProvider(
+      context.settings.irProviders, context.irDrivers);
+  if (!providerId) return;
+  const auto &provider = context.settings.irProviders.at(*providerId);
+  const auto query = ir::makeIrChartQuery(chart->Meta);
+  if (!query.value) return;
+  skinIrRankingRequest = ir::IrRankingRequest{
+      .profileId = context.profileManager.activeProfile().id,
+      .providerId = *providerId,
+      .serverOrigin = provider.serverOrigin,
+      .chart = *query.value};
+  if (const auto key = ir::makeIrRankingCacheKey(*skinIrRankingRequest);
+      key.value) {
+    skinIrRankingRequest->serverOrigin = key.value->serverOrigin;
+  } else {
+    skinIrRankingRequest.reset();
+    return;
+  }
+  // open() reuses the selector's completed cache and queues missing data on
+  // the ranking worker. Neither skin evaluation nor audio performs HTTP.
+  skinIrRankingGeneration = context.irRankingService->open(*skinIrRankingRequest);
+  updateSkinIrTarget();
+}
+
+void GamePlayScene::updateSkinIrTarget() {
+  // Finalization can submit this attempt before the result scene is built.
+  // Freeze the pre-upload authority once ending starts; a late response may
+  // already include the newly submitted score.
+  if (state != nullptr && state->isEnding) return;
+  if (guidedAccessReminderBackground) return;
+  if (skinIrAccountRevision !=
+          context.irAccountEvidenceRevision.load(std::memory_order_acquire) ||
+      skinIrRankingEvidenceRevision !=
+          context.irRankingEvidenceRevision.load(std::memory_order_acquire)) {
+    configureSkinIrTarget();
+    return;
+  }
+  if (!context.irRankingService || !skinIrRankingRequest ||
+      skinIrRankingGeneration == 0) return;
+  const auto provider = context.settings.irProviders.find(
+      skinIrRankingRequest->providerId);
+  if (skinIrRankingRequest->profileId != context.profileManager.activeProfile().id ||
+      provider == context.settings.irProviders.end() || !provider->second.enabled ||
+      ir::normalizeServerOrigin(provider->second.serverOrigin) !=
+          std::optional<std::string>{skinIrRankingRequest->serverOrigin} ||
+      skinIrTargetSelection != context.settings.skinTargetId) {
+    configureSkinIrTarget();
+    return;
+  }
+  auto snapshot = context.irRankingService->snapshot();
+  if (snapshot.generation != skinIrRankingGeneration) return;
+  if (!gameplaySkinRankingMatches(snapshot, *skinIrRankingRequest)) {
+    if (activeSkinIrTarget) {
+      activeSkinIrTarget = PlayfieldIrTargetState{
+          .targetId = skinIrTargetSelection};
+    }
+    skinIrPreviousUserRank.reset();
+    return;
+  }
+  if (snapshot.state == ir::IrRankingSnapshotState::Cancelled) {
+    // An older attempt can invalidate this chart while it is being played.
+    // Closed/authentication failures wait for lifecycle/account changes;
+    // retrying those on every frame would loop while the service is paused.
+    configureSkinIrTarget();
+    return;
+  }
+  // Ordinary targets only need the observed pre-submission rank. IR targets
+  // still require the complete population to resolve their target score.
+  if (snapshot.state == ir::IrRankingSnapshotState::Succeeded &&
+      snapshot.ranking && snapshot.ranking->nextPageToken &&
+      (activeSkinIrTarget || !gameplaySkinIrCurrentUserRank(snapshot)) &&
+      !snapshot.loadingNextPage && !snapshot.paginationBlocked) {
+    if (context.irRankingService->loadNextPage(skinIrRankingGeneration)) {
+      snapshot = context.irRankingService->snapshot();
+    }
+  }
+  // A page can complete before the re-read, or queueing can temporarily fail
+  // while an older worker retires. Check continuation before revision dedup
+  // so neither case strands a ready page with an unrequested next token.
+  if (snapshot.revision == skinIrRankingRevision) return;
+  skinIrRankingRevision = snapshot.revision;
+  if (activeSkinIrTarget) {
+    activeSkinIrTarget = projectGameplaySkinIrTarget(
+        skinIrTargetSelection, snapshot, skinIrLocalBestScore);
+  }
+  skinIrPreviousUserRank = gameplaySkinIrCurrentUserRank(snapshot);
+}
+
 void GamePlayScene::startBestReplayLoad(
     std::string attemptId, std::filesystem::path chartPath) {
   replay::startBestReplayLoad(
@@ -5757,6 +5883,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .pacemakerTarget = activePacemakerTarget,
       .pacemakerStatus =
           pacemaker::snapshotForState(activePacemakerTarget, *state),
+      .skinIrTarget = activeSkinIrTarget,
       .player1RandomOption = gameplayRandomOptionIndex(playOptions.option),
       .player2RandomOption = gameplayRandomOptionIndex(playOptions.option2),
       .doublePlayOption = options.doublePlayFlip ? 1 : 0,
@@ -6234,7 +6361,14 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 ResultTableContext{.tableName = options.tableName,
                                    .tableLevel = options.tableLevel},
                 resultGameplayGraph, std::nullopt,
-                options.guidedAccessReminderSkipped),
+                options.guidedAccessReminderSkipped,
+                activeSkinIrTarget
+                    ? std::optional<ResultPacemakerData>{ResultPacemakerData{
+                          .label = activeSkinIrTarget->playerName,
+                          .targetScore = activeSkinIrTarget->score,
+                          .delta = state->getScore() - activeSkinIrTarget->score}}
+                    : std::nullopt,
+                skinIrPreviousUserRank),
             false);
         return false;
       },
@@ -6285,6 +6419,7 @@ bool GamePlayScene::finishIfGaugeFailed() {
 }
 
 void GamePlayScene::update(float dt) {
+  updateSkinIrTarget();
   if (guidedAccessReminderPending) {
     if (guidedAccessReminderExiting) return;
     discardGuidedAccessReminderTouches();

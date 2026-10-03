@@ -68,6 +68,9 @@ struct IrChartRanking {
   std::vector<IrChartRankingEntry> entries;
   std::optional<std::string> nextPageToken;
   std::int64_t fetchedAtUnixMillis = 0;
+  // Supplemental rows around the authenticated player, separate from the
+  // contiguous top pages used for pagination and population statistics.
+  std::vector<IrChartRankingEntry> nearbyEntries;
 
   bool operator==(const IrChartRanking &) const = default;
 };

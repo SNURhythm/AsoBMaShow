@@ -393,9 +393,69 @@ void testNamesAndPageOrdering() {
               .status == ir::ChartRankingStatus::MalformedResponse);
 }
 
+void testNearbyRankingValidation() {
+  Json response{{"success", true}, {"body", {
+      {"chart", {{"chartID", "chart-id"}, {"game", "bms-7k"},
+                 {"data", {{"hashSHA256", query().chartSha256}, {"notecount", 826}}}}},
+      {"pb", pb(42, 5000, 6000)},
+      {"adjacentAbove", Json::array({pb(1, 4999, 6000), pb(2, 4998, 6000)})},
+      {"adjacentBelow", Json::array({pb(3, 5001, 6000)})},
+      {"users", Json::array({user(1, "Above"), user(2, "Further"), user(3, "Below")})}}}};
+  const auto parse = [&](const Json &value) {
+    return ir::tachi::parseNearbyRankingResponse(value.dump(), query(), "chart-id", 42);
+  };
+  const auto parsed = parse(response);
+  REQUIRE(parsed.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(parsed.page && parsed.page->entries.size() == 4);
+  REQUIRE(parsed.page->entries[0].rank == 4998);
+  REQUIRE(parsed.page->entries[2].rank == 5000);
+  REQUIRE(parsed.page->entries[2].currentUser);
+  REQUIRE(parsed.page->entries[2].playerName.empty());
+  REQUIRE(parsed.page->outOf == 6000);
+  auto changed = response;
+  changed["body"]["adjacentAbove"][0]["rankingData"]["rank"] = 5000;
+  changed["body"]["adjacentBelow"][0]["rankingData"]["rank"] = 5000;
+  const auto tied = parse(changed);
+  REQUIRE(tied.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(tied.page && tied.page->entries.size() == 4);
+  REQUIRE(tied.page->entries[1].providerEntryId == "1");
+  REQUIRE(tied.page->entries[2].currentUser);
+  REQUIRE(tied.page->entries[3].providerEntryId == "3");
+  REQUIRE(std::ranges::count_if(tied.page->entries,
+      [](const auto &entry) { return entry.currentUser; }) == 1);
+  changed = response;
+  changed["body"]["adjacentAbove"][0]["rankingData"]["rank"] = 5001;
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["pb"]["userID"] = 1;
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["adjacentBelow"][0]["chartID"] = "different";
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["adjacentBelow"][0]["rankingData"]["rank"] = 4999;
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["adjacentAbove"][1]["userID"] = 1;
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["adjacentBelow"][0]["rankingData"]["outOf"] = 6001;
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["chart"]["data"]["hashSHA256"] = std::string(64, 'c');
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  changed["body"]["users"].erase(0);
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+  changed = response;
+  for (int i = 0; i < 5; ++i) changed["body"]["adjacentBelow"].push_back(pb(10 + i, 5002 + i, 6000));
+  REQUIRE(parse(changed).status == ir::ChartRankingStatus::MalformedResponse);
+}
+
 } // namespace
 
 int main() {
+  testNearbyRankingValidation();
   testIdentityAndChartResolution();
   testNativePbRetainsAuthenticJudgements();
   testAnonymousPageNeverMarksCurrentUser();

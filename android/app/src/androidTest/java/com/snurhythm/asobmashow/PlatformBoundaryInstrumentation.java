@@ -48,10 +48,13 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
             File cacheDirectory = getTargetContext().getCacheDir();
+            require(cacheDirectory.getAbsolutePath().equals(Os.getenv("TMPDIR")),
+                    "Target application did not configure native private temporary storage");
             require(cacheDirectory.getAbsolutePath().equals(Os.getenv("SQLITE_TMPDIR")),
                     "Target application did not configure SQLite private temporary storage");
-            File temporary = File.createTempFile("sqlite-boundary-", ".tmp", cacheDirectory);
-            require(temporary.delete(), "Could not remove owned SQLite storage probe");
+            File temporary = File.createTempFile("storage-boundary-", ".tmp",
+                    new File(Os.getenv("TMPDIR")));
+            require(temporary.delete(), "Could not remove owned temporary storage probe");
             if ("seed-saf".equals(arguments.getString("mode"))) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, "smoke.bms");

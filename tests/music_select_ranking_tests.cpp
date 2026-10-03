@@ -24,7 +24,7 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
          "loading service state is RankingData.ACCESS");
 
   auto ranking = std::make_shared<ir::IrChartRanking>();
-  ranking->totalPlayers = 12;
+  ranking->totalPlayers = 3;
   ranking->entries = {
       {.rank = 99,
        .playerName = "Top",
@@ -42,18 +42,6 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
   };
   service.state = ir::IrRankingSnapshotState::Succeeded;
   service.ranking = ranking;
-  service.loadingNextPage = true;
-  projected = projectMusicSelectRanking(service, 1);
-  expect(projected.state == MusicSelectRankingState::Access,
-         "ranking remains ACCESS while continuation pages are loading");
-
-  service.loadingNextPage = false;
-  service.paginationBlocked = true;
-  projected = projectMusicSelectRanking(service, 1);
-  expect(projected.state == MusicSelectRankingState::Fail,
-         "a failed continuation leaves selector RankingData in FAIL");
-
-  service.paginationBlocked = false;
   projected = projectMusicSelectRanking(service, 1);
   expect(projected.state == MusicSelectRankingState::Finish &&
              projected.totalPlayers == 3 && projected.rank == 3 &&
@@ -70,6 +58,13 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
              projected.entries[1].rank == 1 &&
              projected.entries[2].rank == 3,
          "ranking rows preserve Beatoraja player and clear indexes");
+  expect(projected.entries[2].name == "YOU" &&
+             projected.entries[0].name == "Top" &&
+             projected.entries[1].name == "Failed",
+         "skin ranking names identify the current user as YOU and preserve other players");
+  expect(ranking->entries[1].playerName == "Player" &&
+             ranking->entries[1].currentUser,
+         "skin name projection preserves the native provider account name");
 
   service.state = ir::IrRankingSnapshotState::TransientFailure;
   service.ranking.reset();
@@ -81,6 +76,77 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
   projected = projectMusicSelectRanking(service, 0);
   expect(projected.state == MusicSelectRankingState::None,
          "a closed service is RankingData.NONE");
+}
+
+void testShowsFirstPageWithoutWaitingForTheLeaderboard() {
+  auto ranking = std::make_shared<ir::IrChartRanking>();
+  ranking->totalPlayers = 200;
+  ranking->nextPageToken = "second-page";
+  ranking->entries = {
+      {.rank = 1, .playerName = "Top", .score = 1900,
+       .clearType = kClearTypeHardClearRank},
+      {.rank = 2, .playerName = "Account", .score = 1800,
+       .clearType = kClearTypeNormalClearRank, .currentUser = true},
+  };
+  ir::IrRankingSnapshot service{
+      .state = ir::IrRankingSnapshotState::Succeeded, .ranking = ranking};
+  const auto checkVisible = [&](bool loading, bool blocked) {
+    service.loadingNextPage = loading;
+    service.paginationBlocked = blocked;
+    MusicSelectPropertyRuntimeSnapshot runtime;
+    runtime.irOnline = true;
+    runtime.ranking = projectMusicSelectRanking(service, 0);
+    expect(runtime.ranking.state == MusicSelectRankingState::Finish &&
+               runtime.ranking.entries.size() == 2 &&
+               runtime.ranking.totalPlayers == 200 && runtime.ranking.rank == 2,
+           "received rows and authoritative totals remain visible during pagination");
+    const auto values = projectMusicSelectProperties(AppSettings{}, MusicSelectBarManagerSnapshot{}, runtime);
+    const auto integer = [&](int id, int value) {
+      const auto found = values.integers.find(id);
+      return found != values.integers.end() && found->second == value;
+    };
+    expect(integer(380, 1900) && integer(390, 1) && integer(179, 2) &&
+               integer(180, 200) && values.strings.contains(121) &&
+               values.strings.at(121) == "YOU",
+           "first-page scores and own row reach the skin before later pages");
+    expect(!values.integers.contains(216) && !values.integers.contains(226) &&
+               !values.rates.contains(217) && !values.floats.contains(227),
+           "partial pages do not publish incomplete clear counts or percentages");
+  };
+  checkVisible(false, false);
+  checkVisible(true, false);
+  checkVisible(false, true);
+
+  service.loadingNextPage = false;
+  service.paginationBlocked = false;
+  ranking->nextPageToken.reset();
+  ranking->totalPlayers = 2;
+  MusicSelectPropertyRuntimeSnapshot runtime;
+  runtime.ranking = projectMusicSelectRanking(service, 0);
+  const auto values = projectMusicSelectProperties(AppSettings{}, MusicSelectBarManagerSnapshot{}, runtime);
+  expect(values.integers.at(216) == 1 && values.integers.at(226) == 2 &&
+             values.rates.at(217) == 0.5 && values.floats.at(227) == 1.0,
+         "complete leaderboard publishes exact clear counts and percentages");
+}
+
+void testNearbyOwnRankIsAvailableWhilePagesArePending() {
+  auto ranking = std::make_shared<ir::IrChartRanking>();
+  ranking->totalPlayers = 6000;
+  ranking->nextPageToken = "more";
+  ranking->entries = {{.rank = 1, .playerName = "Top", .score = 1900}};
+  ranking->nearbyEntries = {
+      {.rank = 4999, .playerName = "Above", .score = 1002},
+      {.rank = 5000, .score = 1000, .currentUser = true},
+      {.rank = 5001, .playerName = "Below", .score = 998}};
+  ir::IrRankingSnapshot source{.state = ir::IrRankingSnapshotState::Succeeded,
+                              .ranking = ranking, .paginationBlocked = true};
+  MusicSelectPropertyRuntimeSnapshot runtime;
+  runtime.ranking = projectMusicSelectRanking(source, 4998);
+  const auto values = projectMusicSelectProperties(AppSettings{}, MusicSelectBarManagerSnapshot{}, runtime);
+  expect(runtime.ranking.rank == 5000 && !runtime.ranking.complete &&
+             values.strings.contains(121) && values.strings.at(121) == "YOU" &&
+             values.integers.at(391) == 5000 && values.integers.at(381) == 1000,
+         "nearby rows keep server ranks and reach select skin even after continuation failure");
 }
 
 void testCacheIdentityIncludesIrAccountEvidence() {
@@ -103,6 +169,8 @@ void testCacheIdentityIncludesIrAccountEvidence() {
 
 int main(int argc, char **argv) {
   testProjectsServiceStateIntoBeatorajaRankingData();
+  testShowsFirstPageWithoutWaitingForTheLeaderboard();
+  testNearbyOwnRankIsAvailableWhilePagesArePending();
   testCacheIdentityIncludesIrAccountEvidence();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_ranking_tests", failures,

@@ -47,6 +47,8 @@
 #include <stop_token>
 #include <vector>
 
+namespace ir { class IrRankingModal; }
+
 class BlockingOverlayView;
 class ContextMenuView;
 struct OverlayAnchor;
@@ -133,6 +135,10 @@ private:
   void buildErrorView();
   void openChartViewer();
   void openChartRecords();
+  void openRankings();
+  void closeRankings();
+  void updateRankingsModal();
+  [[nodiscard]] std::optional<ir::IrRankingRequest> selectedRankingRequest() const;
   void revealChart();
   void ensureToolbarContextMenu();
   void openToolbarMenu(MusicSelectToolbarControl control);
@@ -274,6 +280,7 @@ private:
   std::uint64_t irExternalUrlGeneration_ = 0;
   std::uint64_t rankingRevision_ = 0;
   std::uint64_t irAccountEvidenceRevision_ = 0;
+  std::uint64_t irRankingEvidenceRevision_ = 0;
   std::int64_t rankingLoadAtMicros_ = -1;
   int rankingOffset_ = 0;
   std::array<std::optional<std::int64_t>, 3> rankingTimerMicros_{};
@@ -290,6 +297,7 @@ private:
   OverlayPortal *modalOverlayPortal_ = nullptr;
   std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal_;
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
+  std::unique_ptr<ir::IrRankingModal> rankingsModal_;
   std::optional<MusicSelectBar> recordsCourse_;
   ReplayRecordTask recordsTask_;
   std::unique_ptr<RecordFileActions> recordFileActions_;

@@ -1126,6 +1126,68 @@ void testCoroutineLoopsShareCallbackAndFrameHooks() {
   }
 }
 
+void testControlledCallbackAndFrameDeadlines() {
+  struct ResetClock {
+    ~ResetClock() { LuaRuntimeTestHooks::setWallTime(std::nullopt); }
+  } resetClock;
+  struct Context {
+    std::chrono::steady_clock::time_point now{};
+    std::chrono::milliseconds elapsed{3};
+  } context;
+  LuaRuntimeTestHooks::setWallTime(context.now);
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Gameplay, "writer_transaction.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  if (!header.value) {
+    expect(false, "controlled deadline fixture header succeeds");
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "reentrant_writer");
+  expect(harness->runtime->loadConfigured({}).value.has_value() &&
+             harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "controlled deadline fixture enters render");
+  harness->runtime->setEventExecutor(
+      {.context = &context,
+       .execute = [](void *opaque, int,
+                     std::span<const int>) noexcept -> LuaSkinEventExecutionResult {
+         auto &clock = *static_cast<Context *>(opaque);
+         clock.now += clock.elapsed;
+         LuaRuntimeTestHooks::setWallTime(clock.now);
+         return {};
+       }});
+  const std::array<LuaScalar, 1> arguments{LuaScalar{0.5}};
+  expect(!harness->runtime->invoke(callback, arguments).failure &&
+             !harness->runtime->invoke(callback, arguments).failure,
+         "two 3 ms callbacks fit exactly within the 6 ms frame budget");
+  context.elapsed = std::chrono::milliseconds{1};
+  const auto frameOverrun = harness->runtime->invoke(callback, arguments);
+  expect(frameOverrun.failure &&
+             frameOverrun.failure->code == "skin_lua_wall_time_limit_exceeded",
+         "cumulative callback time beyond 6 ms exhausts the frame");
+  const auto exhausted = harness->runtime->invoke(callback, arguments);
+  expect(exhausted.failure &&
+             exhausted.failure->code == "skin_lua_frame_budget_exceeded",
+         "an exhausted frame rejects subsequent callbacks");
+  expect(!harness->runtime->beginFrame(1).ok &&
+             harness->runtime->beginFrame(2).ok,
+         "only a new visual-state sequence resets the frame budget");
+  context.elapsed = std::chrono::milliseconds{5};
+  const auto callbackOverrun = harness->runtime->invoke(callback, arguments);
+  expect(callbackOverrun.failure &&
+             callbackOverrun.failure->code == "skin_lua_wall_time_limit_exceeded",
+         "a single callback beyond 4 ms fails before exhausting the frame");
+  expect(harness->runtime->beginFrame(3).ok,
+         "next frame resets the callback deadline");
+  context.elapsed = std::chrono::milliseconds{4};
+  expect(!harness->runtime->invoke(callback, arguments).failure,
+         "a callback at the exact 4 ms deadline succeeds");
+}
+
 void testCallbackWallTimeIncludesHostCalls() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Gameplay, "callback_wall_time.luaskin");
@@ -1351,6 +1413,8 @@ int main(int argc, char **argv) {
   testFreshPurposesDoNotShareLuaState();
   testLanguageSurfaceBit32AndTextOnlyLoading();
   testLoadfileUsesBeatorajaRestrictedIoRoot();
+  testControlledCallbackAndFrameDeadlines();
+  testCallbackWallTimeIncludesHostCalls();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "lua_skin_runtime_tests", failures,
       "lua skin runtime test(s) failed", "lua skin runtime tests passed");

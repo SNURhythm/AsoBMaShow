@@ -909,21 +909,54 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   auto page =
       fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId, userId,
                              1, 0, std::nullopt, config, http, stopToken);
-  if (page.status != ChartRankingStatus::ChartNotFound || !usedCachedChartId) {
+  if (page.status == ChartRankingStatus::ChartNotFound && usedCachedChartId) {
+    if (cacheStore_) {
+      std::string ignoredDiagnostic;
+      (void)cacheStore_->eraseChartId(*origin, game, *sha256, ignoredDiagnostic);
+    }
+    chartId.reset();
+    if (const auto failure = resolveChart()) return *failure;
+    page = fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId,
+                                   userId, 1, 0, std::nullopt, config, http,
+                                   stopToken);
+  }
+  if (page.status != ChartRankingStatus::Succeeded || !page.ranking ||
+      !userId || !page.ranking->nextPageToken ||
+      std::ranges::any_of(page.ranking->entries,
+                          [](const auto &entry) { return entry.currentUser; })) {
     return page;
   }
-
-  if (cacheStore_) {
-    std::string ignoredDiagnostic;
-    (void)cacheStore_->eraseChartId(*origin, game, *sha256, ignoredDiagnostic);
+  if (stopToken.stop_requested()) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
   }
-  chartId.reset();
-  if (const auto failure = resolveChart()) {
-    return *failure;
+  const IrHttpRequest nearbyRequest{
+      .method = IrHttpMethod::Get,
+      .url = *origin + "/api/v1/users/" + std::to_string(*userId) +
+             "/games/" + game + "/pbs/" + encodePathSegment(*chartId) + "/leaderboard-adjacent",
+      .maximumResponseBytes = kMaximumTachiResponseBytes,
+      .connectTimeout = std::chrono::seconds(3),
+      .totalTimeout = std::chrono::seconds(5),
+      .followRedirects = false,
+  };
+  const auto nearbyResponse = http.perform(nearbyRequest, stopToken);
+  if (stopToken.stop_requested() ||
+      nearbyResponse.transportError == IrTransportError::Cancelled) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
   }
-  return fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId,
-                                userId, 1, 0, std::nullopt, config, http,
-                                stopToken);
+  // Missing PBs, older servers and transient failures still leave the top
+  // page usable. Its ordinary continuation remains available as a fallback.
+  if (nearbyResponse.transportError == IrTransportError::None &&
+      isHttpSuccess(nearbyResponse.statusCode)) {
+    auto nearby = parseNearbyRankingResponse(
+        nearbyResponse.body, normalizedQuery, *chartId, *userId);
+    if (nearby.status == ChartRankingStatus::Succeeded && nearby.page &&
+        nearby.page->outOf == page.ranking->totalPlayers) {
+      page.ranking->nearbyEntries = std::move(nearby.page->entries);
+    }
+  }
+  return page;
 }
 
 ChartRankingOutcome TachiDriver::fetchChartRankingPage(
@@ -1014,8 +1047,16 @@ IrAuthenticatedAccountOutcome TachiDriver::fetchAuthenticatedAccount(
                             "Tachi authenticated account response is malformed",
                             config.apiKey);
     }
-    const auto username = document.find("username");
-    if (username == document.end() || !username->is_string()) {
+    const auto success = document.find("success");
+    const auto body = document.find("body");
+    if (success == document.end() || !success->is_boolean() ||
+        !success->get<bool>() || body == document.end() || !body->is_object()) {
+      return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                            "Tachi authenticated account response envelope is invalid",
+                            config.apiKey);
+    }
+    const auto username = body->find("username");
+    if (username == body->end() || !username->is_string()) {
       return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
                             "Tachi authenticated account response is malformed",
                             config.apiKey);

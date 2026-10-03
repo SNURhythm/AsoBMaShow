@@ -52,4 +52,9 @@ parseRankingPageResponse(std::string_view body, const IrChartQuery &query,
                          std::optional<std::int64_t>
                              authenticatedUserId) noexcept;
 
+[[nodiscard]] TachiRankingPageOutcome
+parseNearbyRankingResponse(std::string_view body, const IrChartQuery &query,
+                           std::string_view expectedChartId,
+                           std::int64_t authenticatedUserId) noexcept;
+
 } // namespace ir::tachi

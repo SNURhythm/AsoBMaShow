@@ -10,6 +10,7 @@
 #include <functional>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -154,6 +155,7 @@ struct Repository {
   std::uint64_t GetLibraryRevision() const { return revision; }
 };
 struct Context {
+  std::atomic<std::uint64_t> irRankingEvidenceRevision{0};
   struct {
     std::atomic_int stops = 0, loads = 0;
     void stop() { ++stops; }
@@ -324,6 +326,10 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  void updateRankingsModal() {}
+
+  void closeRankings() {}
+
   struct RevealMenu {
     void dismiss() {}
     void setViewportSize(int, int) {}
@@ -423,6 +429,10 @@ struct MusicSelectScene {
   bool beginRecordsExport(const std::string &);
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
+  std::uint64_t irRankingEvidenceRevision_ = 0;
+  std::optional<int> rankingRequest_;
+  std::int64_t rankingLoadAtMicros_ = -1;
+  std::map<int, int> rankingCache_;
   void reloadLibrary() {
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();

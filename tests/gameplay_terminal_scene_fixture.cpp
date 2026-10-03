@@ -291,6 +291,11 @@ public:
   }
 
   void update(float dt);
+  void updateSkinIrTarget() {}
+  void configureSkinIrTarget() {}
+  std::optional<PlayfieldIrTargetState> activeSkinIrTarget;
+  std::optional<ir::IrRankingRequest> skinIrRankingRequest;
+  std::optional<int> skinIrPreviousUserRank;
   void showPauseMenu(bool pausePlayback);
   bool inputInterruptionPause = false;
   void closePauseMenu();
@@ -1789,6 +1794,10 @@ void testReminderSkipSession() {
 }
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "course-club-mode") {
+    testCourseContinuationPreservesClubMode();
+    return 0;
+  }
   if (argc > 2 && std::string_view(argv[1]) == "guided-access") {
     testGuidedAccessReminderStartup(argv[2]);
     return 0;
@@ -1903,6 +1912,7 @@ int main(int argc, char **argv) {
   testAbortCaptureRejectsLateEvidence();
   testEffectiveCourseFactsPersistThroughResultScene();
   testPartialCourseRetrySameRestoresSavedOptions();
+  testCourseContinuationPreservesClubMode();
   testPausePenaltyAndFreshAttemptBoundary();
   testPauseAfterEarlyJudgmentDisqualifiesIr();
   testPauseOnlyPenalizesUnfinishedNotePlay();
