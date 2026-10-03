@@ -10,6 +10,7 @@ enum class MusicSelectRankingState { Finish, Fail };
 struct MusicSelectRankingSnapshot {
   MusicSelectRankingState state = MusicSelectRankingState::Finish;
   int pendingDurationMillis = 0;
+  bool complete = true;
 };
 namespace ir {
 enum class IrRankingSnapshotState { Succeeded };
@@ -41,7 +42,10 @@ struct Service {
   }
 };
 }
-MusicSelectRankingSnapshot projectMusicSelectRanking(const ir::Snapshot &, int) { return {}; }
+bool completeRanking = true;
+MusicSelectRankingSnapshot projectMusicSelectRanking(const ir::Snapshot &, int) {
+  return {.complete = completeRanking};
+}
 std::int64_t nowMillis = 0;
 std::int64_t unixMillis() { return nowMillis; }
 struct MusicSelectScene {
@@ -83,6 +87,14 @@ int main() {
   for (int index = 65; index < 200; ++index) finish(std::to_string(index));
   assert(scene.rankingCache_.size() == 64);
   assert(!scene.rankingCache_.contains("0") && scene.rankingCache_.contains("199"));
+
+  completeRanking = false;
+  finish("partial");
+  assert(!scene.rankingCache_.contains("partial") &&
+         "partial visible pages must not enter the ten-minute completed cache");
+  completeRanking = true;
+  finish("partial");
+  assert(scene.rankingCache_.contains("partial"));
 
   ir::Service immediate;
   immediate.value.ranking = ir::Snapshot::Ranking{.nextPageToken = true};

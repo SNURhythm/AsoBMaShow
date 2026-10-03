@@ -50,13 +50,6 @@ MusicSelectRankingSnapshot
 projectMusicSelectRanking(const ir::IrRankingSnapshot &source, int offset) {
   MusicSelectRankingSnapshot result;
   result.state = stateFor(source.state);
-  if (source.state == ir::IrRankingSnapshotState::Succeeded) {
-    if (source.paginationBlocked) {
-      result.state = MusicSelectRankingState::Fail;
-    } else if (source.loadingNextPage) {
-      result.state = MusicSelectRankingState::Access;
-    }
-  }
   result.offset = offset;
   if (result.state != MusicSelectRankingState::Finish || !source.ranking) {
     return result;
@@ -67,7 +60,12 @@ projectMusicSelectRanking(const ir::IrRankingSnapshot &source, int offset) {
                                                        const auto &right) {
     return left.score > right.score;
   });
-  result.totalPlayers = static_cast<int>(entries.size());
+  // A successful page is useful immediately, even while the rest loads or
+  // a continuation fails. Only complete data can supply clear statistics.
+  result.totalPlayers = source.ranking->totalPlayers;
+  result.complete = !source.loadingNextPage && !source.paginationBlocked &&
+                    !source.ranking->nextPageToken && result.totalPlayers >= 0 &&
+                    entries.size() == static_cast<std::size_t>(result.totalPlayers);
   result.entries.reserve(entries.size());
   int previousScore = 0;
   int previousRank = 0;
@@ -77,7 +75,7 @@ projectMusicSelectRanking(const ir::IrRankingSnapshot &source, int offset) {
                          ? previousRank
                          : static_cast<int>(index) + 1;
     const int clearType = beatorajaClearType(entry.clearType);
-    ++result.clearCounts[static_cast<std::size_t>(clearType)];
+    if (result.complete) ++result.clearCounts[static_cast<std::size_t>(clearType)];
     if (entry.currentUser) result.rank = rank;
     // Legacy skins such as ModernChic identify their own row by the YOU label.
     result.entries.push_back({.name = entry.currentUser ? "YOU" : entry.playerName,

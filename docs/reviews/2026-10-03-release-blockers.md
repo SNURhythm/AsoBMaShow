@@ -40,6 +40,32 @@ actionable issues. The final full rebuild and parallel CTest run passed all
 417 tests in 134.44 seconds. Device upload state and live iOS rendering remain
 unverified.
 
+## IR fetch latency follow-up
+
+Music select imposed a five-second delay before starting an uncached ranking
+request, then discarded received rows from the skin projection while later
+pages loaded. The debounce is now 250 ms, removing 4.75 seconds of fixed waiting
+while still coalescing fast song-wheel movement. Successful pages stay visible
+during subsequent downloads or a continuation failure. Totals come from the
+server; clear counts and percentages remain unavailable until the leaderboard
+is complete. Partial snapshots do not enter the scene's ten-minute completed
+cache, so returning to a song can resume the service's cached continuation.
+
+The regression failed seven projection assertions before the fix, and the
+production-method cache fixture caught partial data entering the completed
+cache. Both pass after the change, along with the selector property tests.
+Independent review checked both supplied skins' timer and unavailable-statistic
+handling and found no blocking issue. Scrolling beyond downloaded rows still
+waits for those pages. This change does not claim to reduce server latency or
+to have measured live iOS network performance.
+
+The first full run passed 416/417 tests; `lua_skin_coroutine_callback` rejected
+its yield fixture with `skin_lua_wall_time_limit_exceeded` during parallel
+execution. It passed immediately in isolation. Like the existing Lua host test,
+this callback test now runs serially so sibling tests do not compete with its
+production wall-clock budget. No Lua execution limit changed.
+The final full build and parallel CTest run passed 417/417 tests in 301.22 seconds.
+
 ## Confirmed runtime blockers
 
 The follow-up program-code review found two release-blocking defects:

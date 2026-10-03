@@ -33,6 +33,7 @@ struct MusicSelectRankingSnapshot {
   std::vector<MusicSelectRankingEntry> entries;
   int offset = 0;
   std::int64_t pendingDurationMillis = -1;
+  bool complete = false;
 };
 
 struct MusicSelectClockFields {

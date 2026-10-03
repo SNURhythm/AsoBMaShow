@@ -81,7 +81,8 @@
 namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 constexpr const char *kSkinSoundAssetRoot = "assets";
-constexpr std::int64_t kRankingDurationMillis = 5'000;
+// Coalesce quick wheel movement without adding seconds to every uncached song.
+constexpr std::int64_t kRankingDurationMillis = 250;
 constexpr std::int64_t kRankingReloadDurationMillis = 10 * 60 * 1'000;
 
 // Default playback for the select system-SE service: lazily loads each sound
@@ -1032,7 +1033,7 @@ void MusicSelectScene::updateRanking() {
   auto projected = projectMusicSelectRanking(service, rankingOffset_);
   projected.pendingDurationMillis = -1;
   setRanking(std::move(projected));
-  if (ranking_.state == MusicSelectRankingState::Finish ||
+  if ((ranking_.state == MusicSelectRankingState::Finish && ranking_.complete) ||
       ranking_.state == MusicSelectRankingState::Fail) {
     constexpr std::size_t maxRankingCacheEntries = 64;
     if (!rankingCache_.contains(rankingCacheKey_) &&

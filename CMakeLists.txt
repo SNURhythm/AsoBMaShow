@@ -1590,6 +1590,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(music_select_ranking_tests
             tests/music_select_ranking_tests.cpp
             src/music_select/MusicSelectRanking.cpp
+            src/music_select/MusicSelectPropertyProjection.cpp
+            src/settings/AudioVideoSettings.cpp
         )
         target_include_directories(music_select_ranking_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -1873,6 +1875,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             set_tests_properties(lua_skin_coroutine_${_lua_coroutine_phase}
                 PROPERTIES TIMEOUT 120)
         endforeach()
+        # These semantic callbacks retain the production 4 ms wall-clock guard.
+        set_tests_properties(lua_skin_coroutine_callback PROPERTIES RUN_SERIAL TRUE)
 
         add_executable(lua_skin_note_live_integration_tests
             tests/lua_skin_note_live_integration_tests.cpp

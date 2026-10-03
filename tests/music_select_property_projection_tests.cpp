@@ -596,6 +596,7 @@ void testProjectsDirectoryAndFinishedRanking() {
   MusicSelectPropertyRuntimeSnapshot runtime;
   runtime.irOnline = true;
   runtime.ranking.state = MusicSelectRankingState::Finish;
+  runtime.ranking.complete = true;
   runtime.ranking.rank = 12;
   runtime.ranking.totalPlayers = 34;
   runtime.ranking.offset = 1;
