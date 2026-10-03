@@ -238,28 +238,7 @@ void testComparisonStaysSeparateAndYouEntryIsHighlighted() {
   REQUIRE(you.maxComboText == "\xE2\x80\x94");
 }
 
-void testNearbyRowsAppearWithoutDuplicatingTopRows() {
-  ir::IrRankingModalModel model;
-  model.open(request(), "Test Chart");
-  auto value = std::make_shared<ir::IrChartRanking>();
-  value->totalPlayers = 6000;
-  value->nextPageToken = "page-2";
-  value->entries = {{.rank = 1, .providerEntryId = "top", .playerName = "Top"}};
-  value->nearbyEntries = {value->entries.front(),
-      {.rank = 5000, .providerEntryId = "own", .currentUser = true}};
-  auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
-  source.ranking = value;
-  REQUIRE(model.apply(source));
-  REQUIRE(model.presentation().entryCount == 2);
-  REQUIRE(model.presentation().paginatedEntryCount == 1);
-  REQUIRE(model.row(1, 1200).rankText == "#5000");
-  REQUIRE(model.row(1, 1200).highlighted);
-  REQUIRE(model.row(1, 1200).playerText == "You");
-  REQUIRE(value->entries.size() == 1);
-  REQUIRE(model.presentation().canLoadNextPage);
-}
-
-void testNearbyWindowDoesNotTriggerSequentialPagination() {
+void testRankingTabsSeparateTopAndNearbyRows() {
   ir::IrRankingModalModel model;
   model.open(request(), "Test Chart");
   auto value = std::make_shared<ir::IrChartRanking>();
@@ -276,23 +255,30 @@ void testNearbyWindowDoesNotTriggerSequentialPagination() {
   source.ranking = value;
   REQUIRE(model.apply(source));
   const auto &presentation = model.presentation();
-  REQUIRE(presentation.entryCount == 111);
-  REQUIRE(presentation.paginatedEntryCount == 100);
-  auto shouldLoad = [&](float offset, float height) {
-    return ir::shouldLoadNextIrRankingPage(presentation.entryCount,
-        presentation.paginatedEntryCount, offset, height, 60);
-  };
-  // Centering rank 5000 places the viewport at the supplementary rows.
-  // Repeated updates and a tall viewport must not drain every top page.
-  for (int frame = 0; frame < 30; ++frame) {
-    REQUIRE(!shouldLoad(101 * 60.0f, 600.0f));
-    REQUIRE(!shouldLoad(91 * 60.0f, 1200.0f));
-  }
-  REQUIRE(!shouldLoad(0.0f, 600.0f));
-  REQUIRE(shouldLoad(80 * 60.0f, 600.0f));
-  REQUIRE(shouldLoad(90 * 60.0f, 600.0f));
-  REQUIRE(!shouldLoad(90 * 60.0f + 1.0f, 600.0f));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Nearby);
+  REQUIRE(presentation.hasNearbyRanking);
+  REQUIRE(presentation.entryCount == 11);
+  REQUIRE(model.row(0, 1200).rankText == "#4995");
+  REQUIRE(model.row(5, 1200).rankText == "#5000");
+  REQUIRE(model.row(5, 1200).highlighted);
+  REQUIRE(model.row(5, 1200).playerText == "You");
+  REQUIRE(model.scoreDetail(5)->highlighted);
+  REQUIRE(!presentation.canLoadNextPage);
+  REQUIRE(!presentation.ranking->nextPageToken);
+  REQUIRE(presentation.paginationStatusText.find("Top rankings") != std::string::npos);
 
+  REQUIRE(model.selectTab(ir::IrRankingTab::Top));
+  REQUIRE(presentation.entryCount == 100);
+  REQUIRE(model.row(0, 1200).rankText == "#1");
+  REQUIRE(model.row(99, 1200).rankText == "#100");
+  REQUIRE(presentation.canLoadNextPage);
+  REQUIRE(presentation.paginationStatusText.empty());
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(presentation.entryCount, 0, 600, 60));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(presentation.entryCount, 4900, 600, 60));
+  REQUIRE(!model.selectTab(ir::IrRankingTab::Top));
+  REQUIRE(model.selectTab(ir::IrRankingTab::Nearby));
+
+  // A previously started top-page request can finish while Near me is selected.
   auto nextPage = std::make_shared<ir::IrChartRanking>(*value);
   for (int rank = 101; rank <= 200; ++rank) {
     nextPage->entries.push_back({.rank = rank, .providerEntryId = std::to_string(rank)});
@@ -300,15 +286,69 @@ void testNearbyWindowDoesNotTriggerSequentialPagination() {
   source.ranking = nextPage;
   ++source.revision;
   REQUIRE(model.apply(source));
-  REQUIRE(presentation.entryCount == 211);
-  REQUIRE(presentation.paginatedEntryCount == 200);
-  REQUIRE(!shouldLoad(201 * 60.0f, 600.0f));
-  REQUIRE(!shouldLoad(191 * 60.0f, 1200.0f));
-  REQUIRE(!shouldLoad(80 * 60.0f, 600.0f));
-  REQUIRE(shouldLoad(180 * 60.0f, 600.0f));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Nearby);
+  REQUIRE(presentation.entryCount == 11);
+  REQUIRE(model.row(0, 1200).rankText == "#4995");
+  REQUIRE(!presentation.canLoadNextPage);
+  REQUIRE(model.selectTab(ir::IrRankingTab::Top));
+  REQUIRE(presentation.entryCount == 200);
+  REQUIRE(model.row(199, 1200).rankText == "#200");
+  REQUIRE(value->entries.size() == 100);
+  REQUIRE(value->nearbyEntries.size() == 11);
 
-  // Once top-page traversal reaches the nearby window, normal paging resumes.
-  REQUIRE(ir::shouldLoadNextIrRankingPage(111, 111, 101 * 60.0f, 600.0f, 60));
+  // Refresh keeps an explicit tab choice, and opening another chart resets it.
+  model.refresh(8);
+  source.generation = 8;
+  source.request = request(8);
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Top);
+  REQUIRE(model.selectTab(ir::IrRankingTab::Nearby));
+  model.refresh(9);
+  source.generation = 9;
+  source.request = request(9);
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Nearby);
+  model.open(request(), "Another chart");
+  REQUIRE(model.apply(snapshot(ir::IrRankingSnapshotState::Succeeded)));
+  REQUIRE(presentation.activeTab == ir::IrRankingTab::Top);
+}
+
+void testNearbyTabUsesOwnRowFromLoadedTopPages() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().hasNearbyRanking);
+  REQUIRE(model.selectTab(ir::IrRankingTab::Nearby));
+  REQUIRE(model.row(1, 1200).highlighted);
+  REQUIRE(!model.presentation().canLoadNextPage);
+
+  auto completed = std::make_shared<ir::IrChartRanking>();
+  completed->totalPlayers = 200;
+  for (int rank = 1; rank <= 200; ++rank) {
+    completed->entries.push_back({.rank = rank,
+        .providerEntryId = std::to_string(rank), .currentUser = rank == 105});
+  }
+  source.ranking = completed;
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().activeTab == ir::IrRankingTab::Nearby);
+  REQUIRE(model.presentation().entryCount == 11);
+  REQUIRE(model.row(0, 1200).rankText == "#100");
+  REQUIRE(model.row(5, 1200).rankText == "#105");
+  REQUIRE(model.row(10, 1200).rankText == "#110");
+  REQUIRE(!model.presentation().canLoadNextPage);
+
+  auto anonymous = std::make_shared<ir::IrChartRanking>(*source.ranking);
+  for (auto &entry : anonymous->entries) entry.currentUser = false;
+  source.ranking = anonymous;
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().activeTab == ir::IrRankingTab::Top);
+  REQUIRE(!model.presentation().hasNearbyRanking);
+  REQUIRE(!model.selectTab(ir::IrRankingTab::Nearby));
 }
 
 void testResponsiveRowsKeepFixedHeightCoreFields() {
@@ -430,7 +470,6 @@ void testPaginationPresentationKeepsSuccessfulListVisible() {
   REQUIRE(model.apply(loading));
   REQUIRE(model.presentation().state == ir::IrRankingModalState::Success);
   REQUIRE(model.presentation().entryCount == 2);
-  REQUIRE(model.presentation().paginatedEntryCount == 2);
   REQUIRE(model.presentation().loadingNextPage);
   REQUIRE(!model.presentation().canLoadNextPage);
   REQUIRE(model.presentation().paginationStatusText ==
@@ -444,7 +483,6 @@ void testPaginationPresentationKeepsSuccessfulListVisible() {
   REQUIRE(model.apply(blocked));
   REQUIRE(model.presentation().state == ir::IrRankingModalState::Success);
   REQUIRE(model.presentation().entryCount == 2);
-  REQUIRE(model.presentation().paginatedEntryCount == 2);
   REQUIRE(model.presentation().paginationBlocked);
   REQUIRE(!model.presentation().canLoadNextPage);
   REQUIRE(model.presentation().detailText == "offline");
@@ -486,11 +524,11 @@ void testTwentyThousandEntriesCreateOnlyVisibleRows() {
 }
 
 void testVirtualizedPaginationThresholdAndScrollRetention() {
-  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 100, 0.0f, 600.0f, 60, 10));
-  REQUIRE(ir::shouldLoadNextIrRankingPage(100, 100, 4'900.0f, 600.0f, 60, 10));
-  REQUIRE(ir::shouldLoadNextIrRankingPage(5, 5, 0.0f, 600.0f, 60, 10));
-  REQUIRE(!ir::shouldLoadNextIrRankingPage(0, 0, 0.0f, 600.0f, 60, 10));
-  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 100, -1.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 0.0f, 600.0f, 60, 10));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(100, 4'900.0f, 600.0f, 60, 10));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(5, 0.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(0, 0.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, -1.0f, 600.0f, 60, 10));
 
   std::vector<int> entries(100);
   RecyclerView<int> recycler(
@@ -662,8 +700,8 @@ int main() {
   testModalStateMappingAndActions();
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
-  testNearbyRowsAppearWithoutDuplicatingTopRows();
-  testNearbyWindowDoesNotTriggerSequentialPagination();
+  testRankingTabsSeparateTopAndNearbyRows();
+  testNearbyTabUsesOwnRowFromLoadedTopPages();
   testResponsiveRowsKeepFixedHeightCoreFields();
   testScoreDetailFormatsCompleteAndMissingData();
   testPaginationPresentationKeepsSuccessfulListVisible();

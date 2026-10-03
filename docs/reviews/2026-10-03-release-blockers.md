@@ -3,6 +3,33 @@
 Base: `484a2d69` (`develop`, PR #115 merged).
 Fix branch: `fix/release-blockers-2026-10-03`.
 
+## Native ranking tabs follow-up
+
+The merged list still made scrolling above a distant nearby rank jump to top
+rows. Tachi's chart endpoint accepts `startRanking` and returns up to 100 rows
+in ascending rank order. Its nearby endpoint returns five rows strictly above
+and below a player's rank. Neither exposes a backwards cursor or a tie-breaking
+row cursor, so a rank-only previous-page calculation cannot guarantee adjacent
+players across ties. These contracts were checked against the upstream
+[chart route](https://github.com/zkldi/Tachi/blob/main/typescript/server/src/server/router/api/v1/games/router.ts)
+and [ranking queries](https://github.com/zkldi/Tachi/blob/main/typescript/server/src/lib/db-formats/pb.ts).
+
+Following the requested fallback, the native modal now has **Top rankings** and
+**Near me** tabs. Top rankings contains only sequential top pages and retains
+normal prefetch. Near me contains only the nearby window and never paginates.
+A distant known own rank opens Near me initially; a chosen tab survives refresh,
+and tab switches retain separate scroll offsets. When own rank is already in
+the loaded top pages, Near me derives up to five neighboring rows on either side.
+The tab is disabled when no own row is known. Labels and the nearby-window
+explanation are localized in English, Korean, and Japanese. This supersedes the
+merged-list viewport guard described below.
+
+The desktop build and five targeted modal, service, result-scene, and
+localization suites passed. Tests cover tab isolation, rank 5,000, own-row score
+details, page completion while Near me is active, refresh and new-chart state,
+known/unknown own ranks, and the bounded window derived from completed pages.
+No live authenticated or mobile UI smoke test was performed for this follow-up.
+
 ## Native nearby-rank pagination follow-up
 
 Opening native rankings at a distant own rank treated the supplementary nearby

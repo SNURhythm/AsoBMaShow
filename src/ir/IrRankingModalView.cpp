@@ -343,6 +343,11 @@ struct IrRankingModal::Impl {
   TextView *status = nullptr;
   TextView *detail = nullptr;
   Button *retryButton = nullptr;
+  View *rankingTabs = nullptr;
+  Button *topTab = nullptr;
+  Button *nearbyTab = nullptr;
+  std::array<float, 2> tabScrollOffsets{};
+  std::array<bool, 2> tabVisited{};
   View *rankingTable = nullptr;
   RankingTableHeaderView *tableHeader = nullptr;
   RecyclerView<IrChartRankingEntry> *list = nullptr;
@@ -465,6 +470,20 @@ struct IrRankingModal::Impl {
     retryButton = makeActionButton(i18n::message("ir.ranking.retry.label"), 140, [this]() { refresh(); });
     retryButton->setAlignSelf(YGAlignCenter);
     panel->addView(retryButton);
+
+    rankingTabs = new View();
+    rankingTabs->setFlexDirection(FlexDirection::Row);
+    rankingTabs->setGap(8);
+    rankingTabs->setFlexShrink(0);
+    topTab = makeActionButton(i18n::message("ir.ranking.top_tab.label"), 160,
+                              [this]() { selectTab(IrRankingTab::Top); });
+    nearbyTab = makeActionButton(i18n::message("ir.ranking.nearby_tab.label"), 160,
+                                 [this]() { selectTab(IrRankingTab::Nearby); });
+    for (auto *tab : {topTab, nearbyTab}) {
+      tab->setFlex(1)->setMinWidth(0);
+      rankingTabs->addView(tab);
+    }
+    panel->addView(rankingTabs);
 
     rankingTable = new View();
     rankingTable->setFlexDirection(FlexDirection::Column);
@@ -839,6 +858,20 @@ struct IrRankingModal::Impl {
     }
 
     const bool showList = presentation.state == IrRankingModalState::Success;
+    rankingTabs->setVisible(showList);
+    rankingTabs->setDisplay(showList ? YGDisplayFlex : YGDisplayNone);
+    topTab->setSelected(presentation.activeTab == IrRankingTab::Top);
+    nearbyTab->setSelected(presentation.activeTab == IrRankingTab::Nearby);
+    nearbyTab->setEnabled(presentation.hasNearbyRanking);
+    for (auto *tab : {topTab, nearbyTab}) {
+      tab->setThemedBackgroundColors(
+          tab->isSelected() ? ui_theme::controlPressed : ui_theme::control,
+          ui_theme::controlHover, ui_theme::controlPressed);
+      tab->setThemedBorderColors(
+          tab->isSelected() ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
+          ui_theme::accentBorderStrong, ui_theme::accentBorderStrong);
+      tab->setStyledBorderWidth(tab->isSelected() ? 2 : 1);
+    }
     status->setVisible(!showList);
     status->setDisplay(showList ? YGDisplayNone : YGDisplayFlex);
     status->setText(presentation.statusText);
@@ -866,8 +899,7 @@ struct IrRankingModal::Impl {
       const auto previous = visibleRanking;
       visibleRanking = presentation.ranking;
       const auto retained = visibleRanking;
-      // New top pages insert rows before the distant nearby window. Keep
-      // the same player at the viewport's top instead of jumping backward.
+      // Keep the same player at the viewport's top when rows update.
       if (previous && list->itemHeight > 0 && !previous->entries.empty()) {
         const auto anchor = std::min(previous->entries.size() - 1,
             static_cast<std::size_t>(std::max(0.0f, list->scrollOffset) / list->itemHeight));
@@ -900,7 +932,7 @@ struct IrRankingModal::Impl {
       } else {
         list->setItemProvider(static_cast<int>(retained->entries.size()),
                               std::move(provider));
-        if (!retained->nearbyEntries.empty()) {
+        if (presentation.activeTab == IrRankingTab::Nearby) {
           const auto own = std::ranges::find_if(retained->entries,
               [](const auto &entry) { return entry.currentUser; });
           if (own != retained->entries.end()) {
@@ -923,8 +955,28 @@ struct IrRankingModal::Impl {
     }
   }
 
+  void selectTab(IrRankingTab tab) {
+    const auto previousTab = static_cast<std::size_t>(model.presentation().activeTab);
+    const float previousOffset = list->scrollOffset;
+    if (!model.selectTab(tab)) return;
+    tabScrollOffsets[previousTab] = previousOffset;
+    tabVisited[previousTab] = true;
+    hideScoreDetails();
+    visibleRanking.reset();
+    refreshPresentation();
+    const auto selected = static_cast<std::size_t>(tab);
+    if (tabVisited[selected]) {
+      const float maximum = std::max(0.0f,
+          static_cast<float>(list->size()) * list->itemHeight - list->getContentHeight());
+      list->scrollOffset = std::clamp(tabScrollOffsets[selected], 0.0f, maximum);
+      list->rebindVisibleItems();
+    }
+  }
+
   void openRequest(IrRankingRequest request, std::string title) {
     closeNow();
+    tabScrollOffsets = {};
+    tabVisited = {};
     const std::uint64_t generation = service.open(request);
     const IrRankingSnapshot opened = service.snapshot();
     if (opened.generation == generation && opened.request) {
@@ -967,8 +1019,8 @@ struct IrRankingModal::Impl {
     const auto &presentation = model.presentation();
     if (presentation.canLoadNextPage && presentation.ranking &&
         shouldLoadNextIrRankingPage(
-            presentation.entryCount, presentation.paginatedEntryCount,
-            list->scrollOffset, static_cast<float>(list->getContentHeight()),
+            presentation.entryCount, list->scrollOffset,
+            static_cast<float>(list->getContentHeight()),
             list->itemHeight)) {
       (void)service.loadNextPage(presentation.generation);
     }
