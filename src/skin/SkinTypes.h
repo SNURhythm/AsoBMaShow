@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../bms_parser.hpp"
+#include "ResultSkinIr.h"
 #include "../scene/play/SkinGameplayGraphState.h"
 #include "../scene/play/RhythmState.h"
 #include "../context.h"
@@ -38,14 +39,6 @@ struct ResultPlayerHistoryData {
   int clearCount = 0;
   std::array<int, 5> judgementCounts{};
   std::int64_t playDurationSeconds = 0;
-};
-
-struct ResultIrRankingEntryData {
-  int rank = 0;
-  std::string playerName;
-  int score = 0;
-  int clearType = kClearTypeFailedRank;
-  bool currentUser = false;
 };
 
 // Result property factories retain access to PlayerConfig and PlayConfig even
@@ -135,6 +128,14 @@ struct ResultSkinData {
   std::optional<std::vector<int>> replayLaneShufflePattern2P;
   std::vector<ResultIrRankingEntryData> irRankingEntries;
   std::optional<int> irCurrentUserRank;
+  std::optional<int> irPreviousUserRank;
+  std::optional<int> irTotalPlayers;
+  std::optional<std::array<int, 11>> irClearCounts;
+  int irRankingOffset = 0;
+  // Live scenes publish only the ten visible rows; standalone snapshots may
+  // retain a full ranking with a zero base.
+  int irRankingEntryStart = 0;
+  std::array<std::optional<std::int64_t>, 3> irSubmissionTimerMicros{};
   std::string chartMd5;
   std::string chartSha256;
   bool autoPlayResult = false;

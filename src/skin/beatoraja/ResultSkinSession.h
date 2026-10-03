@@ -90,6 +90,7 @@ public:
   [[nodiscard]] std::vector<int> takeQueuedBuiltinEventIds();
   [[nodiscard]] std::vector<ResultSkinAudioVolumeWrite>
   takeQueuedAudioVolumeWrites();
+  [[nodiscard]] std::optional<float> takeQueuedRankingPosition();
   [[nodiscard]] bool queuePointerDown(UiLogicalPoint, long long eventMicros,
                                       PresentationUiHit *capturedHit = nullptr);
   [[nodiscard]] bool queuePointerMove(const PresentationUiHit &, UiLogicalPoint,
@@ -159,6 +160,7 @@ private:
   std::vector<int> queuedBuiltinEventIds_;
   std::vector<QueuedWriterInvocation> queuedWriterInvocations_;
   std::vector<ResultSkinAudioVolumeWrite> queuedAudioVolumeWrites_;
+  std::optional<float> queuedRankingPosition_;
   std::array<std::optional<float>, 3> videoAudioVolumes_{};
   bool videoAudioInitialized_ = false;
   std::unordered_map<int, std::size_t> customEventLastDefinitionIndexes_;

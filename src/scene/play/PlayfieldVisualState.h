@@ -6,6 +6,7 @@
 #include "../../audio/GameplayBgaMissStateTracker.h"
 #include "GameplayGaugeRules.h"
 #include "GameplayScoreState.h"
+#include "GameplaySkinIrTarget.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
@@ -240,6 +241,7 @@ struct PlayfieldAuthorityUpdate {
   std::optional<GaugeStateSnapshot> graphGaugeState;
   pacemaker::Target pacemakerTarget;
   pacemaker::Snapshot pacemakerStatus;
+  std::optional<PlayfieldIrTargetState> skinIrTarget;
   // IndexType.option_1p/option_2p/option_dp values. These retain the raw
   // canonical option identity; display text is deliberately separate.
   int player1RandomOption = 0;

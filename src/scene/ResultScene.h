@@ -197,6 +197,7 @@ struct LocalResultSource {
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
+  std::optional<ResultPacemakerData> customSkinTargetOverride;
   std::optional<ResultPlayerHistoryData> playerHistory;
   std::optional<std::string> modernReplayAttemptId;
   std::string playModeLabel;
@@ -291,7 +292,9 @@ public:
       SkinGameplayGraphState gameplayGraph = {},
       std::optional<std::int64_t> currentScorePlayedAtUnixMillis =
           std::nullopt,
-      bool guidedAccessReminderSkipped = false);
+      bool guidedAccessReminderSkipped = false,
+      std::optional<ResultPacemakerData> customSkinTargetOverride = std::nullopt,
+      std::optional<int> previousIrRank = std::nullopt);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override;
 
@@ -319,6 +322,7 @@ private:
   void openRankings();
   void refreshRankingsButton();
   void requestSelectedResultSkinRankings();
+  void updateSelectedResultSkinRankings();
   [[nodiscard]] bool rankingsAvailable() const;
   [[nodiscard]] ir::IrResultPresentation makeIrResultPresentation() const;
   void refreshResultSummary();
@@ -412,6 +416,15 @@ private:
   OverlayPortal *rankingOverlayPortal = nullptr;
   Button *rankingsButton = nullptr;
   std::unique_ptr<ir::IrRankingModal> rankingsModal;
+  std::optional<ir::IrRankingRequest> resultSkinRankingRequest;
+  std::uint64_t resultSkinRankingGeneration = 0;
+  std::uint64_t resultSkinRankingRevision = 0;
+  result_skin_ir::RankingData resultSkinRanking;
+  int resultSkinRankingOffset = 0;
+  bool resultSkinRankingOffsetChosen = false;
+  bool resultSkinRankingRefreshPending = false;
+  std::optional<int> resultSkinPreviousIrRank;
+  result_skin_ir::SubmissionTimers resultSkinSubmissionTimers;
   PracticeAnalyticsView *timingAnalyticsView = nullptr;
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;

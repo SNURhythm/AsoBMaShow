@@ -1,5 +1,7 @@
 #include <cassert>
+#include <atomic>
 #include <cstdint>
+#include <map>
 
 struct Repository {
   std::uint64_t revision = 0;
@@ -16,9 +18,12 @@ struct MusicSelectScene {
   struct Context {
     Repository chartRepository;
     Repository scoreRepository;
+    std::atomic<std::uint64_t> irRankingEvidenceRevision{0};
   } context;
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
+  std::uint64_t irRankingEvidenceRevision_ = 0;
+  std::map<int, int> rankingCache_;
   int reloads = 0;
   int selectionRefreshes = 0;
   void reloadLibrary() {
@@ -57,4 +62,13 @@ int main() {
   scene.refreshRepositoryRevisions();
   scene.refreshRepositoryRevisions();
   assert(scene.reloads == 3 && scene.selectionRefreshes == 3);
+  scene.rankingCache_[1] = 123;
+  ++scene.context.irRankingEvidenceRevision;
+  scene.refreshRepositoryRevisions();
+  assert(scene.rankingCache_.empty() && scene.selectionRefreshes == 4 &&
+         scene.reloads == 3 &&
+         "a completed upload invalidates the selector's ten-minute ranking cache");
+  scene.rankingCache_[1] = 456;
+  scene.refreshRepositoryRevisions();
+  assert(scene.rankingCache_.at(1) == 456 && scene.selectionRefreshes == 4);
 }

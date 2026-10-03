@@ -24,9 +24,21 @@ struct Snapshot {
 };
 struct Service {
   Snapshot value;
+  int immediatePages = 0;
+  int pageRequests = 0;
+  int pageAttempts = 0;
+  bool acceptPages = true;
   int open(int) { return 1; }
   Snapshot snapshot() { return value; }
-  bool loadNextPage(int) { return false; }
+  bool loadNextPage(int) {
+    ++pageAttempts;
+    if (!acceptPages || immediatePages == 0) return false;
+    ++pageRequests;
+    --immediatePages;
+    ++value.revision;
+    value.ranking->nextPageToken = immediatePages != 0;
+    return true;
+  }
 };
 }
 MusicSelectRankingSnapshot projectMusicSelectRanking(const ir::Snapshot &, int) { return {}; }
@@ -71,4 +83,36 @@ int main() {
   for (int index = 65; index < 200; ++index) finish(std::to_string(index));
   assert(scene.rankingCache_.size() == 64);
   assert(!scene.rankingCache_.contains("0") && scene.rankingCache_.contains("199"));
+
+  ir::Service immediate;
+  immediate.value.ranking = ir::Snapshot::Ranking{.nextPageToken = true};
+  immediate.immediatePages = 2;
+  MusicSelectScene paginated{{&immediate}};
+  paginated.updateRanking();
+  assert(immediate.pageRequests == 1);
+  paginated.updateRanking();
+  assert(immediate.pageRequests == 2 && !immediate.value.ranking->nextPageToken &&
+         "immediate page completion must not prevent requesting the third page");
+  paginated.updateRanking();
+  assert(immediate.pageRequests == 2 &&
+         "completed pagination must not issue duplicate page requests");
+
+  ir::Service busy;
+  busy.value.ranking = ir::Snapshot::Ranking{.nextPageToken = true};
+  busy.immediatePages = 1;
+  busy.acceptPages = false;
+  MusicSelectScene queued{{&busy}};
+  queued.updateRanking();
+  assert(busy.pageAttempts == 1 && busy.pageRequests == 0);
+  busy.acceptPages = true;
+  queued.updateRanking();
+  assert(busy.pageRequests == 1 &&
+         "unchanged snapshot must retry pagination after the old worker exits");
+  busy.value.ranking->nextPageToken = true;
+  busy.value.paginationBlocked = true;
+  ++busy.value.revision;
+  const int blockedAttempts = busy.pageAttempts;
+  for (int frame = 0; frame < 5; ++frame) queued.updateRanking();
+  assert(busy.pageAttempts == blockedAttempts &&
+         "blocked pagination must not retry each frame");
 }

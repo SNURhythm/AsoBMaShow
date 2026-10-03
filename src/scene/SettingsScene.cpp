@@ -298,14 +298,13 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
                      {255, 209, 128, 255});
     updateDisplayPreviewUi();
   }
-  bool handledByView = false;
   for (auto *view : views) {
     if (!view->handleEvents(event)) {
-      handledByView = true;
-      break;
+      // Navigation callbacks can destroy this scene while consuming the event.
+      return {};
     }
   }
-  if (previewActive && !handledByView) {
+  if (previewActive) {
     forwardPreviewInputEvent(event);
   }
   return {};

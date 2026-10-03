@@ -1014,8 +1014,16 @@ IrAuthenticatedAccountOutcome TachiDriver::fetchAuthenticatedAccount(
                             "Tachi authenticated account response is malformed",
                             config.apiKey);
     }
-    const auto username = document.find("username");
-    if (username == document.end() || !username->is_string()) {
+    const auto success = document.find("success");
+    const auto body = document.find("body");
+    if (success == document.end() || !success->is_boolean() ||
+        !success->get<bool>() || body == document.end() || !body->is_object()) {
+      return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
+                            "Tachi authenticated account response envelope is invalid",
+                            config.apiKey);
+    }
+    const auto username = body->find("username");
+    if (username == body->end() || !username->is_string()) {
       return accountFailure(IrAuthenticatedAccountStatus::MalformedResponse,
                             "Tachi authenticated account response is malformed",
                             config.apiKey);

@@ -274,6 +274,7 @@ private:
   std::uint64_t irExternalUrlGeneration_ = 0;
   std::uint64_t rankingRevision_ = 0;
   std::uint64_t irAccountEvidenceRevision_ = 0;
+  std::uint64_t irRankingEvidenceRevision_ = 0;
   std::int64_t rankingLoadAtMicros_ = -1;
   int rankingOffset_ = 0;
   std::array<std::optional<std::int64_t>, 3> rankingTimerMicros_{};

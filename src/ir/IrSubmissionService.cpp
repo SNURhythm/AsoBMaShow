@@ -324,61 +324,89 @@ struct IrSubmissionService::Impl {
 
   void refreshCount(std::string_view providerId,
                     std::uint64_t expectedGeneration) {
-    IrOutboxCounts loaded = repository.CountIrOutbox(providerId);
-    std::lock_guard lock(mutex);
-    if (generation == expectedGeneration) {
+    for (;;) {
+      std::uint64_t observedRevision;
+      {
+        std::lock_guard lock(mutex);
+        if (generation != expectedGeneration) return;
+        observedRevision = statusRevision;
+      }
+      IrOutboxCounts loaded = repository.CountIrOutbox(providerId);
+      std::lock_guard lock(mutex);
+      if (generation != expectedGeneration) return;
+      if (statusRevision != observedRevision) continue;
       countSnapshots[std::string(providerId)] = std::move(loaded);
+      ++statusRevision;
+      return;
     }
   }
 
   void refreshEntry(const StatusKey &key, std::uint64_t expectedGeneration) {
-    IrOutboxReadOutcome loaded = repository.LoadIrOutbox(key.first, key.second);
-    std::lock_guard lock(mutex);
-    if (generation != expectedGeneration) {
-      return;
-    }
-    if (loaded.status == IrOutboxReadStatus::Found && loaded.entry) {
-      publishLocked(*loaded.entry);
-    } else if (loaded.status == IrOutboxReadStatus::NotFound) {
-      const auto found = statusSnapshots.find(key);
-      if (found != statusSnapshots.end()) {
-        eraseLocked(key, found->second.rowId);
+    for (;;) {
+      std::uint64_t observedRevision;
+      {
+        std::lock_guard lock(mutex);
+        if (generation != expectedGeneration) return;
+        observedRevision = statusRevision;
       }
+      IrOutboxReadOutcome loaded = repository.LoadIrOutbox(key.first, key.second);
+      std::lock_guard lock(mutex);
+      if (generation != expectedGeneration) return;
+      if (statusRevision != observedRevision) continue;
+      if (loaded.status == IrOutboxReadStatus::Found && loaded.entry) {
+        publishLocked(*loaded.entry);
+      } else if (loaded.status == IrOutboxReadStatus::NotFound) {
+        const auto found = statusSnapshots.find(key);
+        if (found != statusSnapshots.end()) {
+          eraseLocked(key, found->second.rowId);
+        }
+      }
+      return;
     }
   }
 
   void loadProfileSnapshots(const IrActiveProfileConfig &config,
                             std::uint64_t expectedGeneration,
                             bool refreshCredentials = true) {
-    IrOutboxBatchOutcome entries =
-        repository.ListIrOutbox(kMaximumAttemptStatusSnapshots);
-    std::map<std::string, IrOutboxCounts, std::less<>> counts;
-    std::map<std::string, CredentialFingerprint, std::less<>> fingerprints;
-    for (const auto &[providerId, settings] : config.providers) {
-      (void)settings;
-      counts.emplace(providerId, repository.CountIrOutbox(providerId));
+    for (;;) {
+      std::uint64_t observedRevision;
+      {
+        std::lock_guard lock(mutex);
+        if (generation != expectedGeneration) return;
+        observedRevision = statusRevision;
+      }
+      IrOutboxBatchOutcome entries =
+          repository.ListIrOutbox(kMaximumAttemptStatusSnapshots);
+      std::map<std::string, IrOutboxCounts, std::less<>> counts;
+      std::map<std::string, CredentialFingerprint, std::less<>> fingerprints;
+      for (const auto &[providerId, settings] : config.providers) {
+        (void)settings;
+        counts.emplace(providerId, repository.CountIrOutbox(providerId));
+        if (refreshCredentials) {
+          const std::string credential =
+              lookupCredential(options, config.profileId, providerId);
+          fingerprints.emplace(providerId, fingerprint(credential));
+        }
+      }
+      std::lock_guard lock(mutex);
+      if (generation != expectedGeneration) return;
+      // Delivery and foreground retry operations can publish while the DB
+      // snapshot is loading. Re-read instead of replacing their newer state.
+      if (statusRevision != observedRevision) continue;
+      statusSnapshots.clear();
+      rowKeys.clear();
+      countSnapshots = std::move(counts);
       if (refreshCredentials) {
-        const std::string credential =
-            lookupCredential(options, config.profileId, providerId);
-        fingerprints.emplace(providerId, fingerprint(credential));
+        credentials = std::move(fingerprints);
       }
-    }
-    std::lock_guard lock(mutex);
-    if (generation != expectedGeneration) {
+      ++statusRevision;
+      if (entries.status == IrOutboxBatchStatus::Loaded) {
+        for (auto iterator = entries.entries.rbegin();
+             iterator != entries.entries.rend(); ++iterator) {
+          publishLocked(*iterator);
+        }
+      }
       return;
-    }
-    statusSnapshots.clear();
-    rowKeys.clear();
-    countSnapshots = std::move(counts);
-    if (refreshCredentials) {
-      credentials = std::move(fingerprints);
-    }
-    ++statusRevision;
-    if (entries.status == IrOutboxBatchStatus::Loaded) {
-      for (auto iterator = entries.entries.rbegin();
-           iterator != entries.entries.rend(); ++iterator) {
-        publishLocked(*iterator);
-      }
     }
   }
 
@@ -393,7 +421,7 @@ struct IrSubmissionService::Impl {
       profile = std::move(config);
       ++generation;
       currentGeneration = generation;
-      profilePaused = false;
+      profilePaused = true;
       configurationDirty = false;
       pendingReconciliation.reset();
       activeReconciliation.reset();
@@ -401,6 +429,10 @@ struct IrSubmissionService::Impl {
       ++reconciliationRevision;
     }
     loadProfileSnapshots(profile, currentGeneration);
+    {
+      std::lock_guard lock(mutex);
+      if (generation == currentGeneration && !stopped) profilePaused = false;
+    }
     signal();
   }
 
@@ -1550,14 +1582,12 @@ IrManualBatchEnqueueOutcome IrSubmissionService::enqueueManualBatch(
   }
   auto result = impl_->repository.EnqueueReadyIrOutboxDrafts(
       drafts, requestOrigin, true, safeNow(impl_->options));
-  {
-    std::lock_guard lock(impl_->mutex);
-    if (impl_->generation == currentGeneration) {
-      for (const auto &item : result.items) {
-        if (item.entry) {
-          impl_->publishLocked(*item.entry);
-        }
-      }
+  for (const auto &item : result.items) {
+    if (item.entry) {
+      // Delivery can finish after enqueue commits but before publication.
+      // Reload through the revision guard instead of publishing that old row.
+      impl_->refreshEntry({item.entry->providerId, item.entry->attemptId},
+                          currentGeneration);
     }
   }
   impl_->refreshCount(providerId, currentGeneration);

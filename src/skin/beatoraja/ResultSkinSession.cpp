@@ -75,6 +75,7 @@ resultFloatWriterSelector(const SkinBuiltinPropertySelector &selector) {
   if (name == nullptr) {
     return std::nullopt;
   }
+  if (*name == "ranking_position") return 8;
   if (*name == "mastervolume") return 17;
   if (*name == "keyvolume") return 18;
   if (*name == "bgmvolume") return 19;
@@ -156,8 +157,11 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
     }
   }
   for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);
-  for (const auto &entry : data.irRankingEntries) {
-    appendRuntimeString(strings, entry.playerName);
+  const auto rankingBegin = static_cast<std::size_t>(std::max(
+      0, data.irRankingOffset - data.irRankingEntryStart));
+  for (std::size_t index = rankingBegin;
+       index < data.irRankingEntries.size() && index - rankingBegin < 10; ++index) {
+    appendRuntimeString(strings, data.irRankingEntries[index].playerName);
   }
   return strings;
 }
@@ -505,6 +509,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   if (suppressFrameActions_) exportTimerValues = customTimerValues_;
   auto &timerValues = suppressFrameActions_ ? exportTimerValues : customTimerValues_;
   std::vector<ResultSkinAudioVolumeWrite> frameAudioVolumeWrites;
+  std::optional<float> frameRankingPosition;
   auto audioVolumes = suppressExternalActions_
                           ? videoAudioVolumes_
                           : std::array<std::optional<float>, 3>{};
@@ -514,8 +519,12 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   ResultSkinStateBridge bridge(std::move(skinData), frameSerial, elapsedMillis,
       &configuration_, &model_.model, &timerValues,
       {.volumes = audioVolumes,
-       .write = [this, &frameAudioVolumeWrites](int id, float value) {
+       .write = [this, &frameAudioVolumeWrites, &frameRankingPosition](int id, float value) {
          if (suppressFrameActions_) return true;
+         if (id == 8) {
+           if (!suppressExternalActions_) frameRankingPosition = value;
+           return true;
+         }
          if (safetyPolicy_.enforces(SkinSafetyGuard::LuaResourceBudget) &&
              queuedAudioVolumeWrites_.size() + frameAudioVolumeWrites.size() >= 64) {
            return false;
@@ -766,6 +775,7 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                           std::make_move_iterator(evaluated.diagnostics.end()));
   if (!suppressFrameActions_) {
     publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
+    if (frameRankingPosition) queuedRankingPosition_ = frameRankingPosition;
     if (suppressExternalActions_) {
       for (const auto &write : frameAudioVolumeWrites) {
         videoAudioVolumes_[static_cast<std::size_t>(write.selector - 17)] = write.value;
@@ -789,6 +799,10 @@ std::vector<int> ResultSkinSession::takeQueuedBuiltinEventIds() {
 std::vector<ResultSkinAudioVolumeWrite>
 ResultSkinSession::takeQueuedAudioVolumeWrites() {
   return std::exchange(queuedAudioVolumeWrites_, {});
+}
+
+std::optional<float> ResultSkinSession::takeQueuedRankingPosition() {
+  return std::exchange(queuedRankingPosition_, std::nullopt);
 }
 
 bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
@@ -917,6 +931,15 @@ bool ResultSkinSession::queueWriterInvocation(
           "skin.result_session.writer_builtin_unsupported",
           "Result skin built-in writer has no result-context equivalent."));
       return false;
+    }
+    if (*selector == 8) {
+      if (!std::isfinite(invocation.normalizedValue)) return false;
+      if (invocation.normalizedValue < 0.0F ||
+          invocation.normalizedValue >= 1.0F) return true;
+      if (!suppressExternalActions_) {
+        queuedRankingPosition_ = invocation.normalizedValue;
+      }
+      return true;
     }
     if (*selector == 20) {
       // FloatPropertyFactory only mutates practice-position on BMSPlayer.

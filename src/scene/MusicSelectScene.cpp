@@ -27,6 +27,7 @@
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
 #include "../audio/Jukebox.h"
+#include "../ir/IrSkinProvider.h"
 #include "play/Pacemaker.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
 #include "../music_select/MusicSelectReplaySlots.h"
@@ -954,17 +955,16 @@ void MusicSelectScene::selectedBarMoved() {
     return;
   }
 
-  const auto provider = std::ranges::find_if(
-      context.settings.irProviders, [&](const auto &entry) {
-        return entry.second.enabled && context.irDrivers.find(entry.first);
-      });
-  if (provider == context.settings.irProviders.end()) return;
+  const auto providerId = ir::firstEnabledRankingProvider(
+      context.settings.irProviders, context.irDrivers);
+  if (!providerId) return;
+  const auto &provider = context.settings.irProviders.at(*providerId);
 
   const auto &meta = selected.chart->meta;
   rankingRequest_ = ir::IrRankingRequest{
       .profileId = context.profileManager.activeProfile().id,
-      .providerId = provider->first,
-      .serverOrigin = provider->second.serverOrigin,
+      .providerId = *providerId,
+      .serverOrigin = provider.serverOrigin,
       .chart = {.keyMode = meta.KeyMode,
                 .chartMd5 = meta.MD5,
                 .chartSha256 = meta.SHA256,
@@ -1014,19 +1014,20 @@ void MusicSelectScene::updateRanking() {
   if (rankingGeneration_ == 0) return;
 
   auto service = context.irRankingService->snapshot();
-  if (service.generation != rankingGeneration_ ||
-      service.revision == rankingRevision_) {
+  if (service.generation != rankingGeneration_) {
     return;
   }
-  rankingRevision_ = service.revision;
+  // Page readiness can change without a visible revision when an older
+  // request exits. Check it before skipping an unchanged projection.
   if (service.state == ir::IrRankingSnapshotState::Succeeded &&
       service.ranking && service.ranking->nextPageToken &&
       !service.loadingNextPage && !service.paginationBlocked) {
     if (context.irRankingService->loadNextPage(rankingGeneration_)) {
       service = context.irRankingService->snapshot();
-      rankingRevision_ = service.revision;
     }
   }
+  if (service.revision == rankingRevision_) return;
+  rankingRevision_ = service.revision;
 
   auto projected = projectMusicSelectRanking(service, rankingOffset_);
   projected.pendingDurationMillis = -1;
@@ -3287,9 +3288,18 @@ void MusicSelectScene::executeEvent(
 
 void MusicSelectScene::refreshRepositoryRevisions() {
   if (archiveUnzipModal_ && archiveUnzipModal_->inProgress()) return;
+  const auto rankingRevision =
+      context.irRankingEvidenceRevision.load(std::memory_order_acquire);
+  const bool rankingChanged = rankingRevision != irRankingEvidenceRevision_;
+  if (rankingChanged) {
+    irRankingEvidenceRevision_ = rankingRevision;
+    rankingCache_.clear();
+  }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
       context.scoreRepository.GetRevision() != scoreRevision_) {
     reloadLibrary();
+    selectedBarMoved();
+  } else if (rankingChanged) {
     selectedBarMoved();
   }
 }

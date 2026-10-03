@@ -223,6 +223,7 @@ public:
   std::string irAccountName;
   mutable std::mutex irAccountNameMutex;
   std::atomic<std::uint64_t> irAccountEvidenceRevision{0};
+  std::atomic<std::uint64_t> irRankingEvidenceRevision{0};
   std::mutex irCredentialMutex;
   std::set<std::string> irCredentialReadyProfiles;
   std::set<std::string> irCredentialBlockedProfiles;
@@ -1339,6 +1340,7 @@ public:
                     .clearVisible = false,
                 });
               }
+              irRankingEvidenceRevision.fetch_add(1, std::memory_order_release);
             };
         options.credentialChanged = [this](std::string_view profileId,
                                            std::string_view providerId) {

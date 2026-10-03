@@ -4164,17 +4164,26 @@ void testMusicSelectAcceptsOversizedSelectedArtwork() {
     MusicSelectSkinFrame frame;
     frame.stageFile = "stage.ppm";
     frame.banner = "banner.ppm";
-    bool rendered = true;
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::seconds(2);
-    while (fixture.device()->createCalls < uploads + 2 &&
-           std::chrono::steady_clock::now() < deadline) {
-      ++frame.serial;
-      rendered = created.session->render(renderContext, frame) && rendered;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    frame.serial = 1;
+    bool rendered = created.session->render(renderContext, frame);
+    // This checks admission and publication, not asynchronous decode latency.
+    // Wait on the actual job so scheduler load cannot expire an arbitrary poll.
+    created.session->waitForBuiltinImagePatchForTesting();
+    ++frame.serial;
+    rendered = created.session->render(renderContext, frame) && rendered;
+    const bool published = rendered &&
+        fixture.device()->createCalls == uploads + 2 && quadBackend.submitCalls > 0;
+    if (!published) {
+      std::cerr << "selected artwork policy " << static_cast<int>(safetyLevel)
+                << ": rendered=" << rendered << ", uploads="
+                << fixture.device()->createCalls << ", expected=" << uploads + 2
+                << ", submits=" << quadBackend.submitCalls;
+      for (const auto &diagnostic : created.session->takeLastDiagnostics()) {
+        std::cerr << " [" << diagnostic.code << ": " << diagnostic.message << ']';
+      }
+      std::cerr << '\n';
     }
-    expect(rendered && fixture.device()->createCalls == uploads + 2 &&
-               quadBackend.submitCalls > 0,
+    expect(published,
            "selected stage and banner above 32 MiB render under both skin policies");
     const auto &images = fixture.device()->createdImages;
     if (images.size() >= uploads + 2) {
@@ -9584,8 +9593,110 @@ void testResultBridgeMapsNamedResultAndRankingProperties() {
          "ranking properties");
 }
 
+void testResultRankingWriterIgnoresUpperEndpoint() {
+  // AbstractResult.setRankingPosition at c2ed5db1 accepts [0, 1),
+  // so reaching a slider's endpoint must retain the last valid position.
+  for (const int skinType : {7, 15}) {
+    for (const bool named : {false, true}) {
+      const std::string controls = std::string{R"lua(
+source = {{id = "fixture-image", path = "resources/fixture.png"}},
+slider = {{id = "ranking", src = "fixture-image", x = 0, y = 0,
+  w = 10, h = 10, angle = 1, range = 100, value = 8, event = )lua"} +
+          (named ? "\"ranking_position\"" : "8") + R"lua(}},
+destination = {{id = "ranking", dst = {{x = 100, y = 100, w = 20, h = 20}}}}
+)lua";
+      ActivationFixture fixture({.skinType = skinType, .resourceBearing = true,
+                                  .customObjectCallbacks = controls});
+      if (!fixture.ready()) return;
+      auto context = fixture.resultContext();
+      SessionQuadBackend backend;
+      context.quadBackend = &backend;
+      auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+      expect(created.session != nullptr, "result ranking slider creates a real session");
+      if (!created.session) return;
+      RenderContext renderContext;
+      ResultSkinData data{};
+      data.irTotalPlayers = 20;
+      expect(created.session->render(renderContext, data, 1, 0),
+             "result ranking slider publishes pointer geometry");
+      PresentationUiHit hit;
+      expect(created.session->queuePointerDown({.x = 225.0F, .y = 915.0F}, 0, &hit),
+             "ranking slider captures its interior position");
+      expect(created.session->queuePointerMove(hit, {.x = 300.0F, .y = 915.0F}, 1),
+             "ranking slider consumes the upper endpoint without dropping capture");
+      expect(created.session->takeQueuedRankingPosition() == 0.5F,
+             "upper endpoint preserves the last queued valid ranking position");
+      expect(created.session->queuePointerMove(hit, {.x = 300.0F, .y = 915.0F}, 2) &&
+                 !created.session->takeQueuedRankingPosition(),
+             "upper endpoint never queues an out-of-range ranking offset");
+      expect(created.session->queuePointerMove(hit, {.x = 150.0F, .y = 915.0F}, 3) &&
+                 created.session->takeQueuedRankingPosition() == 0.0F,
+             "ranking slider still accepts its lower endpoint");
+    }
+  }
+}
+
+void testResultBridgeProjectsCompleteIrData() {
+  ResultSkinData data{};
+  data.irTotalPlayers = 12;
+  data.irCurrentUserRank = 11;
+  data.irPreviousUserRank = 12;
+  data.irClearCounts = std::array<int, 11>{0, 1, 0, 0, 0, 0, 10, 0, 1, 0, 0};
+  data.irRankingOffset = 10;
+  data.irSubmissionTimerMicros = {100, 400, std::nullopt};
+  for (int rank = 1; rank <= 12; ++rank) {
+    data.irRankingEntries.push_back({.rank = rank,
+        .playerName = "Rank " + std::to_string(rank), .score = 200 - rank,
+        .clearType = kClearTypeHardClearRank, .currentUser = rank == 11});
+  }
+  int writeId = 0;
+  float writeValue = 0;
+  ResultSkinStateBridge bridge(data, 1, 1, nullptr, nullptr, nullptr,
+      {.write = [&](int id, float value) {
+        writeId = id; writeValue = value; return true;
+      }});
+  const auto number = [&](int id) {
+    return bridge.integerProperty({id}, SkinIntegerPropertyDomain::IntegerValue).value;
+  };
+  expect(number(179) == 11 && number(180) == 12 && number(200) == 12 &&
+             number(182) == 12 && number(216) == 10 && number(217) == 83 &&
+             number(237) == 3 && number(226) == 11 && number(228) == 1,
+         "result IR exposes rank, total, previous rank and complete clear counts/rates");
+  expect(number(380) == 189 && number(390) == 11 &&
+             bridge.stringProperty({120}).value == "Rank 11" &&
+             bridge.integerProperty({380}, SkinIntegerPropertyDomain::ImageIndex).value == 1 &&
+             std::abs(bridge.floatProperty({8}, {}).value - 10.0 / 12) < 0.00001 &&
+             std::abs(bridge.floatProperty({217}, {}).value - 10.0 / 12) < 0.00001,
+         "result ranking rows and scroll position use the selected offset");
+  expect(bridge.timerProperty({172}) == 100 && bridge.timerProperty({173}) == 400 &&
+             bridge.timerProperty({174}) == std::numeric_limits<std::int64_t>::min(),
+         "result IR timers retain real submission timestamps and absent failure");
+  expect(bridge.setFloatProperty(8, 0.5) && writeId == 8 && writeValue == 0.5F &&
+             !bridge.setFloatProperty(8, std::numeric_limits<double>::quiet_NaN()),
+         "result ranking writer forwards finite positions to the scene");
+  expect(bridge.setFloatProperty(8, 0.0) && writeValue == 0.0F &&
+             bridge.setFloatProperty(8, 0.5) &&
+             bridge.setFloatProperty(8, -0.25) && writeValue == 0.5F &&
+             bridge.setFloatProperty(8, 1.0) && writeValue == 0.5F &&
+             bridge.setFloatProperty(8, 0.999999999) && writeValue == 0.5F &&
+             bridge.setFloatProperty(8, 1.25) && writeValue == 0.5F,
+         "result ranking setter accepts [0, 1) and ignores values outside it");
+  data.irRankingEntries.erase(data.irRankingEntries.begin(), data.irRankingEntries.begin() + 10);
+  data.irRankingEntryStart = 10;
+  ResultSkinStateBridge window(data, 2, 2);
+  expect(window.integerProperty({380}, {}).value == 189 &&
+             window.stringProperty({120}).value == "Rank 11",
+         "compact result snapshots keep global ranking offsets without copying every row");
+  data.irClearCounts.reset();
+  ResultSkinStateBridge partial(data, 2, 2);
+  expect(partial.integerProperty({200}, {}).value == 12 &&
+             partial.integerProperty({216}, {}).value == std::numeric_limits<int>::min() &&
+             partial.floatProperty({217}, {}).value == std::numeric_limits<float>::min(),
+         "partial result ranking retains real total while aggregate properties stay unavailable");
+}
+
 void testResultBridgeKeepsNamedLateIrRankingPlayerTypes() {
-  ResultSkinData data;
+  ResultSkinData data{};
   for (int rank = 1; rank <= 9; ++rank) {
     data.irRankingEntries.push_back({.rank = rank, .currentUser = rank == 7});
   }
@@ -10037,6 +10148,11 @@ int main(int argc, char **argv) {
   // These tests verify session state and instruction limits, not host scheduling.
   // Real callback/frame deadlines remain covered by lua_skin_runtime_tests.
   LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
+  if (argc == 2 && std::string_view(argv[1]) == "--result-ranking-endpoint") {
+    testResultRankingWriterIgnoresUpperEndpoint();
+    testResultBridgeProjectsCompleteIrData();
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--result-bp-properties") {
     testResultBridgeCountsUnplayedPmsNotesInBadPoints();
     testResultBridgeComparesExactBadPointsForRecordFlags();
@@ -10222,6 +10338,8 @@ int main(int argc, char **argv) {
   testResultBridgeRetainsPreparedChartResultProperties();
   testResultBridgeProjectsIrRankingRows();
   testResultBridgeMapsNamedResultAndRankingProperties();
+  testResultRankingWriterIgnoresUpperEndpoint();
+  testResultBridgeProjectsCompleteIrData();
   testResultBridgeKeepsNamedLateIrRankingPlayerTypes();
   testResultBridgeMapsNamedIntegerScoreProperties();
   testResultBridgeProjectsReplayLaneAssignments();

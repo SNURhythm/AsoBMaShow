@@ -138,9 +138,29 @@ std::int64_t beatorajaNextRank(const PlayfieldVisualState &snapshot,
 }
 
 int targetScore(const PlayfieldVisualState &snapshot) {
+  const auto &authority = snapshot.authority;
+  if (isGameplaySkinIrTarget(authority.skinTargetId)) {
+    return authority.gameplayMode != PlayfieldGameplayMode::Practice &&
+                   authority.skinIrTarget &&
+                   authority.skinIrTarget->targetId == authority.skinTargetId
+               ? authority.skinIrTarget->score : 0;
+  }
   return snapshot.authority.pacemakerTarget.enabled
              ? snapshot.authority.pacemakerTarget.finalScore
              : 0;
+}
+
+std::optional<PlayfieldRivalScoreState>
+targetRivalScore(const PlayfieldVisualState &snapshot) {
+  if (isGameplaySkinIrTarget(snapshot.authority.skinTargetId) &&
+      snapshot.authority.gameplayMode != PlayfieldGameplayMode::Practice) {
+    const int score = targetScore(snapshot);
+    // TargetProperty synthesizes only PGREAT/GREAT from EX score. It does
+    // not copy the IR record's judgement breakdown or note count.
+    return PlayfieldRivalScoreState{
+        .score = score, .judgementCounts = {score / 2, score % 2, 0, 0, 0}};
+  }
+  return snapshot.authority.rivalScore;
 }
 
 int passedNotes(const PlayfieldVisualState &snapshot, int totalNotes) {
@@ -290,9 +310,8 @@ beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
   if (skin::beatoraja_target_property_detail::positiveSuffix(id, "IR_NEXT_") ||
       skin::beatoraja_target_property_detail::positiveSuffix(id, "IR_RANK_") ||
       (irRankRate && *irRankRate < 100)) {
-    // Aso does not create a gameplay RankingData instance. This exactly maps
-    // InternetRankingTargetProperty's ranking == null branch.
-    return "NO DATA";
+    return authority.skinIrTarget && authority.skinIrTarget->targetId == id
+               ? authority.skinIrTarget->playerName : "NO DATA";
   }
   return "MAX";
 }
@@ -2244,7 +2263,9 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     case 61:
     case 62:
     case 63: {
-      const auto option = snapshot->authority.targetPlayOption;
+      const auto option = isGameplaySkinIrTarget(snapshot->authority.skinTargetId)
+                              ? std::optional<int>{0}
+                              : snapshot->authority.targetPlayOption;
       if (!option || *option < 0) {
         return {.value = std::numeric_limits<int>::min(), .supported = true};
       }
@@ -2479,16 +2500,15 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 271:
     // ScoreDataProperty keeps rivalScore at zero without an attached target
     // ScoreData, unlike the per-judge selectors below.
-    return {.value = snapshot->authority.rivalScore
-                         ? snapshot->authority.rivalScore->score
-                         : 0,
+    return {.value = targetRivalScore(*snapshot)
+                         ? targetRivalScore(*snapshot)->score : 0,
             .supported = true};
   case 280:
   case 281:
   case 282:
   case 283:
   case 284: {
-    const auto &rival = snapshot->authority.rivalScore;
+    const auto rival = targetRivalScore(*snapshot);
     if (!rival) {
       return {.value = std::numeric_limits<int>::min(), .supported = true};
     }
@@ -2500,7 +2520,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 287:
   case 288:
   case 289: {
-    const auto &rival = snapshot->authority.rivalScore;
+    const auto rival = targetRivalScore(*snapshot);
     if (!rival || rival->totalNotes <= 0) {
       return {.value = std::numeric_limits<int>::min(), .supported = true};
     }
@@ -2698,7 +2718,13 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // current EX score minus ScoreDataProperty's live rival score. LITONE12
     // uses 108 for Ghost and 153 for its graph difference.
     return {.value = static_cast<std::int64_t>(snapshot->score) -
-                    snapshot->authority.pacemakerStatus.targetScore,
+                    (isGameplaySkinIrTarget(snapshot->authority.skinTargetId)
+                         ? (context_.chartModel.staticMetadata.totalNotes > 0
+                                ? static_cast<std::int64_t>(targetScore(*snapshot)) *
+                                      snapshot->authority.stagePassedNotes /
+                                      context_.chartModel.staticMetadata.totalNotes
+                                : 0)
+                         : snapshot->authority.pacemakerStatus.targetScore),
             .supported = true};
   case 150:
     // NUMBER_HIGHSCORE delegates to createHighScoreProperty(), which reads
@@ -3045,7 +3071,7 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   case 287:
   case 288:
   case 289: {
-    const auto &rival = snapshot->authority.rivalScore;
+    const auto rival = targetRivalScore(*snapshot);
     if (!rival || rival->totalNotes <= 0) {
       return {.value = std::numeric_limits<float>::min(), .supported = true};
     }

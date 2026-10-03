@@ -189,7 +189,8 @@ void testAuthenticatedAccountUsesTachiUserName() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
   http.responses.push_back(
-      {.statusCode = 200, .body = R"({"id":42,"username":"source-account"})"});
+      {.statusCode = 200,
+       .body = R"({"success":true,"description":"Found user.","body":{"id":42,"username":"source-account"}})"});
 
   const auto result =
       driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
@@ -215,8 +216,9 @@ void testAuthenticatedAccountUsesTachiUserName() {
         std::string("한글사용자")}) {
     http.responses.push_back(
         {.statusCode = 200,
-         .body = nlohmann::json{{"id", 42},
-                                {"username", invalidUsername}}
+         .body = nlohmann::json{{"success", true},
+                               {"body", {{"id", 42},
+                                         {"username", invalidUsername}}}}
                      .dump()});
     const auto malformed =
         driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
@@ -225,6 +227,20 @@ void testAuthenticatedAccountUsesTachiUserName() {
                !malformed.account,
            "authenticated account rejects usernames outside Tachi's display "
            "contract");
+  }
+
+  for (const std::string_view body : {
+           R"({"success":false,"body":{"username":"source-account"}})",
+           R"({"success":true,"body":null})",
+           R"({"success":true,"body":{}})",
+           R"({"id":42,"username":"source-account"})"}) {
+    http.responses.push_back({.statusCode = 200, .body = std::string(body)});
+    const auto malformed =
+        driver.fetchAuthenticatedAccount(runtimeConfig(), http, {});
+    expect(malformed.status ==
+                   ir::IrAuthenticatedAccountStatus::MalformedResponse &&
+               !malformed.account,
+           "account lookup requires a successful Tachi response envelope");
   }
 
   http.responses.push_back({.statusCode = 401, .body = R"({"success":false})"});

@@ -34,6 +34,80 @@ Separate Astra reviewers approved each runtime fix and its regression coverage.
 The Android host tests substitute the Android environment API; they do not
 directly execute libc++ in an Android app process.
 
+## Continued program review
+
+A subsequent course-transition review found a smaller gameplay defect:
+continuing from a stage result defaulted Club Beat to off. Normal continuation
+now carries the completed attempt's setting; saved same-pattern retry stages
+retain their own recorded setting. The existing production-method fixture
+checks live on/off and both opposing saved-stage settings. It failed before the
+fix and passes afterward. The full desktop build and 413-test CTest suite also
+passed after this change.
+
+The next review found a separate lifetime blocker in Settings: its Back button
+can synchronously destroy a dynamically owned SettingsScene, after which
+`handleEvents()` reads `previewActive`. Consumed events now return immediately.
+The new regression embeds the production event handler and scene ownership
+methods: AddressSanitizer reports a heap-use-after-free before the fix and passes
+afterward. It also checks unconsumed preview input, consumed preview input,
+preview on/off, and display-preview restoration after focus loss.
+
+The following full run exposed an intermittent IR credential-reactivation
+failure. Initial profile activation could resume delivery before publishing its
+initial status snapshot; Retry All could also replace a newly completed upload
+with an older database snapshot. Activation now stays paused until publication,
+and snapshot refreshes validate both profile generation and status revision.
+Manual enqueue reloads through the same guard. Deterministic regressions force
+the formerly failing ordering without increasing timeouts.
+
+## Custom-skin IR integration
+
+The user identified missing IR data across selection, gameplay, and result
+skins. The account lookup expected a top-level username, but Tachi's documented
+[user endpoint](https://docs.tachi.ac/api/routes/users/) returns an API envelope
+with `success` and `body.username`.
+The parser now validates that envelope and reads the actual account identity.
+Tests cover successful, malformed, unsuccessful, and invalid-name responses.
+The public endpoint shape was checked without using a user credential.
+
+Selection now chooses an enabled provider that supports chart rankings and
+invalidates its local ranking cache after a successful score submission.
+Gameplay fetches rankings asynchronously, validates chart/profile/provider
+identity, and projects the selected IR target independently of the native
+pacemaker. Incomplete rankings remain unavailable for percentile/next-rank
+targets. Normal play also retains the current user's pre-submission rank for
+the result skin when the ranking arrives in time.
+
+Result skins now receive ranking rows, current and previous rank, player totals,
+complete-ranking clear counts/rates, ranking-position scrolling, and submission
+timers. The scene owns request generations, continues pagination, and refreshes
+after successful submission. Aggregate rates are exposed only with complete
+ranking evidence. Offline rendering does not initiate network requests.
+The mapping was checked against the pinned beatoraja reference revision
+`c2ed5db1a46145ed10790c3872f717e95b59db9d`.
+
+Focused tests cover provider selection, cache invalidation, target projection,
+ranking completeness, scene request lifecycle, result property mappings,
+scrolling, upload timers, and previous-rank handoff.
+
+A subsequent review found a pagination liveness race in all three scenes. A
+page could finish before the immediate snapshot re-read, leaving a further
+page token on an already-consumed revision. A cancelled older request could
+also temporarily reject page scheduling without later changing that revision.
+The scenes now check continuation eligibility before skipping an unchanged
+projection. Regressions force immediate three-page completion and a rejected
+then successful request with no intervening revision, and verify completed or
+blocked pagination does not repeat.
+
+The next compatibility review found a smaller result-slider defect: accepting
+position `1` made the row offset equal the population and displayed an empty
+window. Both pointer and Lua ranking writers now follow the pinned source's
+`[0, 1)` float range, including double values that round to `1` when narrowed.
+Tests cover numeric/named writers in ordinary/course result sessions, ignored
+endpoints preserving a queued valid position, and bridge range/rounding cases.
+The regression failed before the fix; the complete skin-session executable
+passes afterward.
+
 ## Confirmed release-gate blocker
 
 The macOS workflow's required cross-platform release check fails before
@@ -90,19 +164,52 @@ Rebuilding all targets and repeating CTest exposed additional timing assumptions
   defined but absent from the test runner; it is now explicitly invoked.
   Both Lua suites passed five consecutive focused runs after these changes.
 
+A later full run also exposed two timing-sensitive semantic checks. The
+oversized selected-artwork test imposed a two-second limit on asynchronous
+processing of two images over 32 MiB; it now uses a test-only future wait between
+the render that queues decoding and the render that publishes its result. The
+bridge writer suite expected semantic callback errors while retaining the real
+Lua frame deadline; it now uses the existing test clock and explicitly verifies
+that instruction exhaustion remains active. Both failures passed on an isolated
+rerun, but the original logs did not record enough detail to establish their
+exact timing trigger. New failure diagnostics include upload/render counts and
+actual callback status/codes. Both test executables have a 120-second CTest
+process bound. Production loading behavior and callback deadlines are unchanged.
+
 The failed Lua test also prevented its dependent
 `beatoraja_music_select_skin_ledger_evidence_contract` from running. These
 failures were observed during concurrent Android CI work on this machine.
 Serial CTest scheduling cannot isolate tests from external processes, and no
 production deadline was relaxed to accommodate machine contention.
 
+## Consecutive final reviews
+
+After the final result-slider correction, two sequential independent Astra
+reviews checked the same production changes and found no actionable issues,
+including minor compatibility defects:
+
+1. Cumulative review of IR snapshot races, pagination, account invalidation,
+   gameplay targets and result handoff, aggregate/timer mappings, float writer
+   boundaries, scene lifetimes, and native temporary storage.
+2. A different reviewer checked the complete production diff and earlier task
+   commits, including ranking ownership, pre-submission rank capture, upload
+   refresh, Settings and result lifetimes, Club Beat propagation, and
+   profile/download/replay recovery paths.
+
+The subsequent test-only timing stabilization was independently approved for
+production isolation, preserved deadline/instruction coverage, bounded waits,
+and unchanged rendering assertions. No production execution logic changed
+between the two clean reviews and that test stabilization.
+
 ## Review scope and limits
 
-Review covered recent first-launch navigation, scene/view callback lifetimes,
-download recovery, and release workflow checks. The desktop app and all test
-targets build successfully. After the final changes and full rebuild, the
-complete parallel CTest run passed 413/413 tests in 96.48 seconds, including
-the native iOS transfer and dependent evidence checks.
+Review covered first-launch/navigation and scene/view callback lifetimes,
+gameplay/audio/input shutdown, course/replay transitions, profile and database
+changes, download/import/recovery, IR delivery and custom-skin integration, and
+release workflow checks. The desktop app and all test targets build successfully.
+After the final program/test changes and full rebuild, the complete parallel CTest
+run passed 417/417 tests in 184.34 seconds, including native iOS transfer,
+production-method skin lifecycle regressions, and dependent evidence checks.
 
 Additional verification:
 
@@ -110,13 +217,14 @@ Additional verification:
 - iOS build setup: 49/49 passed.
 - iOS artifact-auditor tests: 16/16 passed.
 - macOS artifact-auditor tests: 7/7 passed.
-- Result timeout regression: passed with AddressSanitizer.
+- Result timeout and Settings event-lifetime regressions: passed with AddressSanitizer.
 - Android startup: 3/3 Java regression tests passed; the application class also
   compiles against the real Android 36 SDK with Java 17.
-- Independent code review: findings addressed; final review approved with no
-  remaining actionable findings.
+- Independent Astra review: two consecutive final program reviews found no
+  actionable issues; the subsequent test-only stabilization was also approved.
 
 This review does not establish signed release readiness. Local validation did
-not include a full iOS/Android build, physical-device smoke test, Windows build,
+not include a live authenticated Tachi session, full iOS/Android build,
+physical-device smoke test, Windows build,
 signing/notarization, store validation, or deployment. Artifact-audit tests validate the
 auditors; they do not substitute for auditing a signed release artifact.
