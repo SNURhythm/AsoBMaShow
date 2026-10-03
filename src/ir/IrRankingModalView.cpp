@@ -967,8 +967,9 @@ struct IrRankingModal::Impl {
     const auto &presentation = model.presentation();
     if (presentation.canLoadNextPage && presentation.ranking &&
         shouldLoadNextIrRankingPage(
-            presentation.entryCount, list->scrollOffset,
-            static_cast<float>(list->getContentHeight()), list->itemHeight)) {
+            presentation.entryCount, presentation.paginatedEntryCount,
+            list->scrollOffset, static_cast<float>(list->getContentHeight()),
+            list->itemHeight)) {
       (void)service.loadNextPage(presentation.generation);
     }
   }

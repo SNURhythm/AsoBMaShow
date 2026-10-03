@@ -69,6 +69,7 @@ void setFailure(IrRankingModalPresentation &presentation,
   presentation.canRetry = retry;
   presentation.ranking.reset();
   presentation.entryCount = 0;
+  presentation.paginatedEntryCount = 0;
   presentation.fetchedAtText.clear();
 }
 
@@ -201,17 +202,26 @@ bool useCompactIrRankingColumns(int width) noexcept {
   return width <= kCompactRowMaximumWidth;
 }
 
-bool shouldLoadNextIrRankingPage(int entryCount, float scrollOffset,
-                                 float viewportHeight, int itemHeight,
+bool shouldLoadNextIrRankingPage(int entryCount, int paginatedEntryCount,
+                                 float scrollOffset, float viewportHeight,
+                                 int itemHeight,
                                  int preloadRows) noexcept {
-  if (entryCount <= 0 || scrollOffset < 0.0f || viewportHeight <= 0.0f ||
+  if (paginatedEntryCount <= 0 || paginatedEntryCount > entryCount ||
+      scrollOffset < 0.0f || viewportHeight <= 0.0f ||
       itemHeight <= 0 || preloadRows < 0) {
     return false;
   }
   const float visibleBottom = scrollOffset + viewportHeight;
+  // Nearby rows are a separate window, not the end of sequential pagination.
+  // Only prefetch while viewing the top pages; centering the nearby window
+  // must not pull every missing page between it and the top.
+  if (paginatedEntryCount < entryCount &&
+      visibleBottom > static_cast<float>(paginatedEntryCount) * itemHeight) {
+    return false;
+  }
   const int visibleEnd =
       static_cast<int>(visibleBottom / static_cast<float>(itemHeight));
-  return visibleEnd >= std::max(0, entryCount - preloadRows);
+  return visibleEnd >= std::max(0, paginatedEntryCount - preloadRows);
 }
 
 void IrRankingModalModel::open(IrRankingRequest request,
@@ -238,6 +248,7 @@ void IrRankingModalModel::refresh(std::uint64_t generation) {
   presentation_.canRefresh = false;
   presentation_.canRetry = false;
   presentation_.entryCount = 0;
+  presentation_.paginatedEntryCount = 0;
   presentation_.revision = 0;
   presentation_.generation = generation;
   presentation_.ranking.reset();
@@ -276,6 +287,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     presentation_.canRetry = false;
     presentation_.ranking.reset();
     presentation_.entryCount = 0;
+    presentation_.paginatedEntryCount = 0;
     presentation_.fetchedAtText.clear();
     presentation_.canLoadNextPage = false;
     break;
@@ -287,6 +299,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
       presentation_.canRetry = true;
       presentation_.ranking = snapshot.ranking;
       presentation_.entryCount = 0;
+      presentation_.paginatedEntryCount = 0;
       presentation_.fetchedAtText =
           snapshot.ranking
               ? formatIrRankingTimestamp(snapshot.ranking->fetchedAtUnixMillis)
@@ -300,6 +313,8 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     presentation_.canRefresh = true;
     presentation_.canRetry = false;
     presentation_.ranking = rankingForPresentation(snapshot.ranking);
+    presentation_.paginatedEntryCount =
+        static_cast<int>(snapshot.ranking->entries.size());
     presentation_.entryCount =
         static_cast<int>(presentation_.ranking->entries.size());
     presentation_.fetchedAtText =

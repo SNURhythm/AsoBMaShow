@@ -3,6 +3,23 @@
 Base: `484a2d69` (`develop`, PR #115 merged).
 Fix branch: `fix/release-blockers-2026-10-03`.
 
+## Native nearby-rank pagination follow-up
+
+Opening native rankings at a distant own rank treated the supplementary nearby
+rows as the end of the sequential leaderboard. Each fetched page preserved the
+own-row viewport, triggering another page. The modal now retains the top-page
+row count separately and prefetches only while the viewport stays within those
+rows. Scrolling near the top-page boundary still fetches the next page; viewing
+the nearby window does not. Result-skin background pagination also pauses while
+the native modal owns the shared request.
+
+Both regression tests failed before the guards were applied. The desktop app
+build and four targeted modal, ranking-service, result-projection, and production
+result-scene suites passed afterward. Coverage includes rank 5,000, tall
+viewports, page insertion with retained scroll position, normal top-page
+prefetch, and repeated result updates while the modal is open. This follow-up
+was not tested in a live authenticated session or on a mobile device.
+
 ## Authored-skin IR follow-up
 
 The subsequent iOS report identified a gap missed by the earlier bridge tests

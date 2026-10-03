@@ -188,6 +188,15 @@ int main() {
   require(service.opened == opened && scene.resultSkinRankingGeneration == modalGeneration &&
               scene.resultSkinRanking.currentUserRank == 11,
           "native modal keeps ownership while matching data remains visible to skin");
+  auto partialModalRanking = std::make_shared<ir::IrChartRanking>(*complete);
+  partialModalRanking->nextPageToken = "more";
+  service.finish(partialModalRanking);
+  const int attemptsBeforeModalUpdates = service.pageAttempts;
+  for (int frame = 0; frame < 30; ++frame) {
+    scene.updateSelectedResultSkinRankings();
+  }
+  require(service.pageAttempts == attemptsBeforeModalUpdates,
+          "result skin leaves pagination to the open native modal");
   scene.rankingsModal->visible = false;
   scene.updateSelectedResultSkinRankings();
   require(service.refreshed == 2, "deferred refresh resumes when the modal closes");

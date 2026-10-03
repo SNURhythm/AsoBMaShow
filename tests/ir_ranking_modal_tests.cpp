@@ -251,11 +251,64 @@ void testNearbyRowsAppearWithoutDuplicatingTopRows() {
   source.ranking = value;
   REQUIRE(model.apply(source));
   REQUIRE(model.presentation().entryCount == 2);
+  REQUIRE(model.presentation().paginatedEntryCount == 1);
   REQUIRE(model.row(1, 1200).rankText == "#5000");
   REQUIRE(model.row(1, 1200).highlighted);
   REQUIRE(model.row(1, 1200).playerText == "You");
   REQUIRE(value->entries.size() == 1);
   REQUIRE(model.presentation().canLoadNextPage);
+}
+
+void testNearbyWindowDoesNotTriggerSequentialPagination() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  auto value = std::make_shared<ir::IrChartRanking>();
+  value->totalPlayers = 6000;
+  value->nextPageToken = "page-2";
+  for (int rank = 1; rank <= 100; ++rank) {
+    value->entries.push_back({.rank = rank, .providerEntryId = std::to_string(rank)});
+  }
+  for (int rank = 4995; rank <= 5005; ++rank) {
+    value->nearbyEntries.push_back({.rank = rank,
+        .providerEntryId = std::to_string(rank), .currentUser = rank == 5000});
+  }
+  auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  source.ranking = value;
+  REQUIRE(model.apply(source));
+  const auto &presentation = model.presentation();
+  REQUIRE(presentation.entryCount == 111);
+  REQUIRE(presentation.paginatedEntryCount == 100);
+  auto shouldLoad = [&](float offset, float height) {
+    return ir::shouldLoadNextIrRankingPage(presentation.entryCount,
+        presentation.paginatedEntryCount, offset, height, 60);
+  };
+  // Centering rank 5000 places the viewport at the supplementary rows.
+  // Repeated updates and a tall viewport must not drain every top page.
+  for (int frame = 0; frame < 30; ++frame) {
+    REQUIRE(!shouldLoad(101 * 60.0f, 600.0f));
+    REQUIRE(!shouldLoad(91 * 60.0f, 1200.0f));
+  }
+  REQUIRE(!shouldLoad(0.0f, 600.0f));
+  REQUIRE(shouldLoad(80 * 60.0f, 600.0f));
+  REQUIRE(shouldLoad(90 * 60.0f, 600.0f));
+  REQUIRE(!shouldLoad(90 * 60.0f + 1.0f, 600.0f));
+
+  auto nextPage = std::make_shared<ir::IrChartRanking>(*value);
+  for (int rank = 101; rank <= 200; ++rank) {
+    nextPage->entries.push_back({.rank = rank, .providerEntryId = std::to_string(rank)});
+  }
+  source.ranking = nextPage;
+  ++source.revision;
+  REQUIRE(model.apply(source));
+  REQUIRE(presentation.entryCount == 211);
+  REQUIRE(presentation.paginatedEntryCount == 200);
+  REQUIRE(!shouldLoad(201 * 60.0f, 600.0f));
+  REQUIRE(!shouldLoad(191 * 60.0f, 1200.0f));
+  REQUIRE(!shouldLoad(80 * 60.0f, 600.0f));
+  REQUIRE(shouldLoad(180 * 60.0f, 600.0f));
+
+  // Once top-page traversal reaches the nearby window, normal paging resumes.
+  REQUIRE(ir::shouldLoadNextIrRankingPage(111, 111, 101 * 60.0f, 600.0f, 60));
 }
 
 void testResponsiveRowsKeepFixedHeightCoreFields() {
@@ -377,6 +430,7 @@ void testPaginationPresentationKeepsSuccessfulListVisible() {
   REQUIRE(model.apply(loading));
   REQUIRE(model.presentation().state == ir::IrRankingModalState::Success);
   REQUIRE(model.presentation().entryCount == 2);
+  REQUIRE(model.presentation().paginatedEntryCount == 2);
   REQUIRE(model.presentation().loadingNextPage);
   REQUIRE(!model.presentation().canLoadNextPage);
   REQUIRE(model.presentation().paginationStatusText ==
@@ -390,6 +444,7 @@ void testPaginationPresentationKeepsSuccessfulListVisible() {
   REQUIRE(model.apply(blocked));
   REQUIRE(model.presentation().state == ir::IrRankingModalState::Success);
   REQUIRE(model.presentation().entryCount == 2);
+  REQUIRE(model.presentation().paginatedEntryCount == 2);
   REQUIRE(model.presentation().paginationBlocked);
   REQUIRE(!model.presentation().canLoadNextPage);
   REQUIRE(model.presentation().detailText == "offline");
@@ -431,11 +486,11 @@ void testTwentyThousandEntriesCreateOnlyVisibleRows() {
 }
 
 void testVirtualizedPaginationThresholdAndScrollRetention() {
-  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 0.0f, 600.0f, 60, 10));
-  REQUIRE(ir::shouldLoadNextIrRankingPage(100, 4'900.0f, 600.0f, 60, 10));
-  REQUIRE(ir::shouldLoadNextIrRankingPage(5, 0.0f, 600.0f, 60, 10));
-  REQUIRE(!ir::shouldLoadNextIrRankingPage(0, 0.0f, 600.0f, 60, 10));
-  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, -1.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 100, 0.0f, 600.0f, 60, 10));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(100, 100, 4'900.0f, 600.0f, 60, 10));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(5, 5, 0.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(0, 0, 0.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 100, -1.0f, 600.0f, 60, 10));
 
   std::vector<int> entries(100);
   RecyclerView<int> recycler(
@@ -608,6 +663,7 @@ int main() {
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
   testNearbyRowsAppearWithoutDuplicatingTopRows();
+  testNearbyWindowDoesNotTriggerSequentialPagination();
   testResponsiveRowsKeepFixedHeightCoreFields();
   testScoreDetailFormatsCompleteAndMissingData();
   testPaginationPresentationKeepsSuccessfulListVisible();

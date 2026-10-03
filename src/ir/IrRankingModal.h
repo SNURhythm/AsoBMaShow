@@ -88,6 +88,7 @@ struct IrRankingModalPresentation {
   bool paginationBlocked = false;
   std::string paginationStatusText;
   int entryCount = 0;
+  int paginatedEntryCount = 0; // Top-page rows, excluding the nearby window.
   std::uint64_t revision = 0;
   std::uint64_t generation = 0;
   std::optional<IrLocalComparison> comparison;
@@ -173,7 +174,7 @@ layoutIrRankingJudgementColumns(float availableWidth) noexcept;
 void configureIrRankingDetailLampBadge(View &badge);
 [[nodiscard]] bool useCompactIrRankingColumns(int width) noexcept;
 [[nodiscard]] bool shouldLoadNextIrRankingPage(
-    int entryCount, float scrollOffset, float viewportHeight, int itemHeight,
-    int preloadRows = 10) noexcept;
+    int entryCount, int paginatedEntryCount, float scrollOffset,
+    float viewportHeight, int itemHeight, int preloadRows = 10) noexcept;
 
 } // namespace ir

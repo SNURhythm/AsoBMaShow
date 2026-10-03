@@ -2694,8 +2694,8 @@ void ResultScene::updateSelectedResultSkinRankings() {
       snapshot.request->providerId == expected.providerId &&
       snapshot.request->serverOrigin == expected.serverOrigin &&
       snapshot.request->chart == expected.chart;
-  // The native rankings modal uses the same service. Observe and paginate its
-  // matching request, but never replace it while the modal is open.
+  // The native rankings modal owns pagination while open. Observe its matching
+  // request without starting background page loads or replacing it.
   if (!matches || snapshot.state == ir::IrRankingSnapshotState::Closed ||
       snapshot.state == ir::IrRankingSnapshotState::Cancelled) {
     if (!modalOpen) {
@@ -2712,7 +2712,7 @@ void ResultScene::updateSelectedResultSkinRankings() {
   }
   // A completed page can arrive during the re-read below, or an older
   // request can stop blocking pagination without publishing a revision.
-  if (snapshot.state == ir::IrRankingSnapshotState::Succeeded &&
+  if (!modalOpen && snapshot.state == ir::IrRankingSnapshotState::Succeeded &&
       snapshot.ranking && snapshot.ranking->nextPageToken &&
       !snapshot.loadingNextPage && !snapshot.paginationBlocked &&
       context.irRankingService->loadNextPage(snapshot.generation)) {
