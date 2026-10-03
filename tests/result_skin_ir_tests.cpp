@@ -23,7 +23,7 @@ int main() {
   check(projected.totalPlayers == 12 && projected.entries.size() == 10 &&
             !projected.currentUserRank && !projected.clearCounts,
         "partial ranking retains authoritative total without inventing aggregates or own rank");
-  ranking->entries.push_back({.rank = 11, .playerName = "You", .score = 70,
+  ranking->entries.push_back({.rank = 11, .playerName = "AccountName", .score = 70,
       .clearType = kClearTypeFullComboRank, .currentUser = true});
   ranking->entries.push_back({.rank = 12, .playerName = "Last", .score = 60,
       .clearType = kClearTypeFailedRank});
@@ -33,6 +33,13 @@ int main() {
             projected.clearCounts && (*projected.clearCounts)[6] == 10 &&
             (*projected.clearCounts)[8] == 1 && (*projected.clearCounts)[1] == 1,
         "completed pages supply own rank beyond top ten and full clear histogram");
+  check(projected.entries[10].playerName == "YOU" &&
+            projected.entries[10].currentUser &&
+            projected.entries[11].playerName == "Last",
+        "result skin identifies the current user as YOU and preserves other players");
+  check(ranking->entries[10].playerName == "AccountName" &&
+            ranking->entries[10].currentUser,
+        "result skin projection preserves the native provider account name");
   source.paginationBlocked = true;
   check(!result_skin_ir::projectRanking(source).clearCounts,
         "blocked pagination never claims complete histogram");

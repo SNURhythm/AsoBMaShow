@@ -184,6 +184,14 @@ void MusicSelectSkinStateBridge::setPublishedSongResources(
 SkinPropertyLookup<std::int64_t> MusicSelectSkinStateBridge::integerProperty(
     const SkinBuiltinPropertySelector &selector,
     SkinIntegerPropertyDomain domain) {
+  if (domain == SkinIntegerPropertyDomain::ImageIndex) {
+    if (const auto *id = std::get_if<int>(&selector.value);
+        id && *id >= 386 && *id <= 388) {
+      // Numeric skin-selection controls precede ranking player patterns in
+      // the source factory. Named ranking selectors retain their own rows.
+      return supported<std::int64_t>(std::numeric_limits<int>::min());
+    }
+  }
   if (domain == SkinIntegerPropertyDomain::IntegerValue) {
     if (const auto *name = std::get_if<std::string>(&selector.value);
         name && *name == "time") {

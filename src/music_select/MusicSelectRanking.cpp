@@ -79,7 +79,8 @@ projectMusicSelectRanking(const ir::IrRankingSnapshot &source, int offset) {
     const int clearType = beatorajaClearType(entry.clearType);
     ++result.clearCounts[static_cast<std::size_t>(clearType)];
     if (entry.currentUser) result.rank = rank;
-    result.entries.push_back({.name = entry.playerName,
+    // Legacy skins such as ModernChic identify their own row by the YOU label.
+    result.entries.push_back({.name = entry.currentUser ? "YOU" : entry.playerName,
                               .score = entry.score,
                               .rank = rank,
                               .playerType = entry.currentUser ? 1 : 0,

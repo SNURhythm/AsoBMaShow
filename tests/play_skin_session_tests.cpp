@@ -1698,7 +1698,8 @@ public:
   }
 
   GameplaySkinDocumentLoadResult configure(
-      bool courseMode = false, std::optional<ResultSkinData> initialData = std::nullopt) {
+      bool courseMode = false, std::optional<ResultSkinData> initialData = std::nullopt,
+      const MusicSelectSkinFrame *selectFrame = nullptr) {
     if (!lease_ || !validation_.reconciledSettings ||
         validation_.configurationDigest.empty()) {
       return {};
@@ -1733,16 +1734,27 @@ public:
          .luaFileSystem = std::move(lua.fileSystem),
          .desiredSettings = &*validation_.reconciledSettings,
          .expectedConfigurationDigest = validation_.configurationDigest,
-         .luaPurpose = LuaRuntimePurpose::Gameplay,
-         .loadHeaderLua = [&data](LuaSkinRuntime &runtime) {
+         .luaPurpose = selectFrame ? LuaRuntimePurpose::MusicSelect : LuaRuntimePurpose::Gameplay,
+         .loadHeaderLua = [&data, selectFrame](LuaSkinRuntime &runtime) {
+           if (selectFrame) {
+             MusicSelectSkinStateBridge bridge(*selectFrame);
+             return runtime.loadHeader(&bridge);
+           }
            ResultSkinStateBridge bridge(data, 1, 0);
            return runtime.loadHeader(&bridge);
          },
-         .loadConfiguredLua = [&data](
+         .loadConfiguredLua = [&data, selectFrame](
                                   LuaSkinRuntime &runtime,
                                   const BeatorajaSkinConfiguration &,
                                   std::vector<SkinDiagnostic> &,
                                   const LuaConfiguredGameplayDocumentContinuation &loadAndDecode) {
+           if (selectFrame) {
+             MusicSelectSkinStateBridge bridge(*selectFrame);
+             runtime.setFrameState(&bridge);
+             auto loaded = loadAndDecode();
+             runtime.setFrameState(nullptr);
+             return loaded;
+           }
            ResultSkinStateBridge bridge(data, 1, 0);
            runtime.setFrameState(&bridge);
            auto loaded = loadAndDecode();
@@ -10142,12 +10154,255 @@ void testRequestedExternalResultSkinCreatesSession() {
   }
 }
 
+void testResultIrNumericFactoriesReachLiveLua() {
+  // These authored numeric selectors must survive catalog admission before
+  // the result bridge can supply the nonzero ranking values.
+  const std::string callbacks = R"lua(
+customTimers = {{id = 10000, timer = function()
+  local m = require('main_state')
+  local function check(fn, id, expected)
+    local actual = fn(id)
+    assert(actual == expected, tostring(id) .. ': expected ' .. expected .. ', got ' .. actual)
+  end
+  check(m.number, 179, 7); check(m.number, 180, 12); check(m.number, 182, 9)
+  check(m.number, 380, 199); check(m.number, 389, 190)
+  check(m.number, 390, 1); check(m.number, 399, 10)
+  check(m.number, 216, 10); check(m.number, 217, 83); check(m.number, 237, 3)
+  check(m.number, 'ranking_exscore1', 199)
+  check(m.number, 'ir_player_hard', 10)
+  check(m.event_index, 380, 0); check(m.event_index, 390, 6)
+  -- Numeric 386 is a skin-configuration index in the source factory.
+  check(m.event_index, 386, -2147483648)
+  return 0
+end}}
+)lua";
+  ActivationFixture fixture({.skinType = 7, .customObjectCallbacks = callbacks});
+  if (!fixture.ready()) return;
+  auto created = ResultSkinSession::create(fixture.takeActivation(), fixture.resultContext());
+  expect(created.session != nullptr, "numeric IR factory fixture creates a result session");
+  if (!created.session) return;
+  ResultSkinData data{};
+  data.irTotalPlayers = 12;
+  data.irCurrentUserRank = 7;
+  data.irPreviousUserRank = 9;
+  data.irClearCounts = std::array<int, 11>{0, 1, 0, 0, 0, 0, 10, 0, 1, 0, 0};
+  for (int rank = 1; rank <= 10; ++rank) {
+    data.irRankingEntries.push_back({.rank = rank, .score = 200 - rank,
+        .clearType = kClearTypeHardClearRank, .currentUser = rank == 7});
+  }
+  RenderContext renderContext;
+  expect(created.session->render(renderContext, data, 1, 1000),
+         "live result Lua receives numeric ranker scores, ranks, lamps and clear aggregates");
+  for (const auto &diagnostic : created.session->takeLastDiagnostics()) {
+    std::cerr << "numeric IR factory diagnostic: " << diagnostic.code << ": "
+              << diagnostic.message << '\n';
+  }
+  const auto catalog = gameplaySkinBuiltinCatalog();
+  const SkinBindingType integer{.kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::IntegerValue};
+  for (const int absent : {201, 221, 378, 379}) {
+    expect(!catalog.contains(integer, {absent}),
+           "IR factory registration does not admit unrelated numeric gaps");
+  }
+}
+
+void testAuthoredResultIrFactories(const fs::path &source) {
+  const bool modernChic = source.filename() == "ModernChic";
+  ExternalResultSkinFixture fixture(source,
+      modernChic ? "result.luaskin" : "Result/result.luaskin");
+  bms_parser::ChartMeta meta{.Bpm = 120.0, .TotalNotes = 100};
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 80;
+  state.judgeCount[Great] = 20;
+  state.judgementFastSlowCount[PGreat].fast = 1;
+  ResultSkinData data{.state = &state, .meta = &meta};
+  data.irOnline = true;
+  data.irTotalPlayers = 12;
+  data.irCurrentUserRank = 3;
+  data.irPreviousUserRank = 8;
+  data.irClearCounts = std::array<int, 11>{0, 1, 0, 0, 0, 0, 10, 0, 1, 0, 0};
+  data.irSubmissionTimerMicros = {100, 400, std::nullopt};
+  for (int rank = 1; rank <= 10; ++rank) {
+    data.irRankingEntries.push_back({.rank = rank,
+        .playerName = rank == 3 ? "YOU" : "Rank " + std::to_string(rank),
+        .score = 200 - rank, .clearType = kClearTypeHardClearRank,
+        .currentUser = rank == 3});
+  }
+  auto loaded = fixture.configure(false, data);
+  expect(loaded.document.has_value(), "authored online result skin configures");
+  if (!loaded.document || !loaded.document->luaRuntime) return;
+  auto &runtime = *loaded.document->luaRuntime;
+  const auto rankDiff = modernChic
+      ? runtime.compileCallbackScript("CUSTOM.NUM.irRankDiff()", LuaCallbackScriptKind::ReturnExpression)
+      : LuaCallbackCompileResult{};
+  const auto ownRow = modernChic
+      ? runtime.compileCallbackScript("CUSTOM.OP.isMyFrame(3)", LuaCallbackScriptKind::ReturnExpression)
+      : LuaCallbackCompileResult{};
+  expect(runtime.enterRenderPhase().ok && runtime.beginFrame(1).ok,
+         "authored online result callbacks enter a live frame");
+  ResultSkinStateBridge bridge(data, 1, 1000);
+  runtime.setFrameState(&bridge);
+  const auto &model = loaded.document->model.model;
+  const auto scalarNumber = [](const LuaCallbackResult &value) -> std::optional<double> {
+    if (!value.value || value.failure) return std::nullopt;
+    if (const auto *integer = std::get_if<std::int64_t>(&*value.value)) return *integer;
+    if (const auto *number = std::get_if<double>(&*value.value)) return *number;
+    return std::nullopt;
+  };
+  const auto number = [&](std::string name, int expected) {
+    const auto object = std::ranges::find_if(model.objects, [&](const auto &candidate) {
+      return candidate.authoredName == name;
+    });
+    const auto *value = object == model.objects.end() ? nullptr
+        : std::get_if<SkinNumberObject>(&object->payload);
+    expect(value != nullptr, "authored IR number exists: " + name);
+    if (!value) return;
+    const auto property = std::ranges::find_if(model.integerProperties, [&](const auto &candidate) {
+      return candidate.id == value->value;
+    });
+    expect(property != model.integerProperties.end(),
+           "authored IR number retains its decoded ref/callback: " + name);
+    if (property == model.integerProperties.end()) return;
+    std::optional<double> actual;
+    if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&property->source)) {
+      const auto found = bridge.integerProperty(*builtin, property->domain);
+      if (found.supported) actual = found.value;
+    } else {
+      actual = scalarNumber(runtime.invoke(std::get<LuaCallbackId>(property->source), {}));
+    }
+    expect(actual == expected, "authored IR number reads the live ranking: " + name);
+  };
+  for (int rank = 1; rank <= (modernChic ? 10 : 7); ++rank) {
+    number((modernChic ? "indexIr" : "ir_ranking_") + std::to_string(rank), rank);
+    number((modernChic ? "exscoreIr" : "ir_exscore") + std::to_string(rank), 200 - rank);
+    if (modernChic) number("exscoreIrDiff" + std::to_string(rank), 20 - rank);
+  }
+  number(modernChic ? "irMyRank" : "ir_my_ranking_now", 3);
+  number(modernChic ? "irPrevMyRank" : "ir_my_ranking_prev", 8);
+  number(modernChic ? "irTotalPlayer" : "ir_my_ranking_total", 12);
+  if (modernChic) {
+    expect(rankDiff.callback && scalarNumber(runtime.invoke(*rankDiff.callback, {})) == -5,
+           "authored ModernChic rank change reads live previous/current ranks and submission timers");
+    const auto own = ownRow.callback ? runtime.invoke(*ownRow.callback, {}) : LuaCallbackResult{};
+    expect(own.value && std::holds_alternative<bool>(*own.value) && std::get<bool>(*own.value),
+           "authored ModernChic recognizes its YOU ranking row");
+  }
+  runtime.setFrameState(nullptr);
+}
+
+void testAuthoredSelectIrFactories(const fs::path &source) {
+  const bool modernChic = source.filename() == "ModernChic";
+  ExternalResultSkinFixture fixture(source,
+      modernChic ? "musicselect.luaskin" : "Select/select.luaskin");
+  MusicSelectSkinFrame frame{.serial = 1, .elapsedMillis = 1000};
+  frame.properties.booleans = {{5, true}, {51, true}};
+  frame.properties.integers = {{74, 100}, {106, 200}, {179, 3}, {180, 12}};
+  frame.properties.timers = {{172, 100}, {173, 400}};
+  for (int rank = 1; rank <= 10; ++rank) {
+    frame.properties.integers[379 + rank] = 200 - rank;
+    frame.properties.integers[389 + rank] = rank;
+    frame.properties.imageIndexes[389 + rank] = 6;
+    frame.properties.strings[119 + rank] = rank == 3 ? "YOU" : "Other player";
+  }
+  auto loaded = fixture.configure(false, std::nullopt, &frame);
+  expect(loaded.document.has_value(), "authored online select skin configures");
+  if (!loaded.document || !loaded.document->luaRuntime) return;
+  auto &runtime = *loaded.document->luaRuntime;
+  expect(runtime.enterRenderPhase().ok && runtime.beginFrame(1).ok,
+         "authored online select callbacks enter a live frame");
+  MusicSelectSkinStateBridge bridge(frame);
+  runtime.setFrameState(&bridge);
+  const auto &model = loaded.document->model.model;
+  const auto scalarNumber = [](const LuaCallbackResult &value) -> std::optional<double> {
+    if (!value.value || value.failure) return std::nullopt;
+    if (const auto *integer = std::get_if<std::int64_t>(&*value.value)) return *integer;
+    if (const auto *number = std::get_if<double>(&*value.value)) return *number;
+    return std::nullopt;
+  };
+  const auto number = [&](std::string name, int expected) {
+    const auto object = std::ranges::find_if(model.objects, [&](const auto &candidate) {
+      return candidate.authoredName == name;
+    });
+    const auto *value = object == model.objects.end() ? nullptr
+        : std::get_if<SkinNumberObject>(&object->payload);
+    expect(value != nullptr, "authored select IR number exists: " + name);
+    if (!value) return;
+    const auto property = std::ranges::find_if(model.integerProperties, [&](const auto &candidate) {
+      return candidate.id == value->value;
+    });
+    expect(property != model.integerProperties.end(),
+           "authored select IR number retains its decoded ref/callback: " + name);
+    if (property == model.integerProperties.end()) return;
+    std::optional<double> actual;
+    if (const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&property->source)) {
+      const auto found = bridge.integerProperty(*builtin, property->domain);
+      if (found.supported) actual = found.value;
+    } else {
+      actual = scalarNumber(runtime.invoke(std::get<LuaCallbackId>(property->source), {}));
+    }
+    expect(actual == expected, "authored select IR number reads the live ranking: " + name);
+  };
+  for (int rank = 1; rank <= (modernChic ? 10 : 7); ++rank) {
+    if (modernChic) number("s_ranking" + std::to_string(rank), rank);
+    number((modernChic ? "s_exscore" : "ir_exscore") + std::to_string(rank), 200 - rank);
+  }
+  // These skins also declare rank/total numbers without always placing them
+  // in destination. Verify their decoded numeric refs regardless of visibility.
+  for (const auto &[selector, expected] : {std::pair{179, 3}, std::pair{180, 12}}) {
+    const auto property = std::ranges::find_if(model.integerProperties, [&](const auto &candidate) {
+      const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&candidate.source);
+      return builtin && builtin->value == SkinBuiltinPropertySelector{selector}.value;
+    });
+    expect(property != model.integerProperties.end(),
+           "authored select rank/total declaration retains its numeric ref");
+    if (property != model.integerProperties.end()) {
+      const auto value = bridge.integerProperty(
+          std::get<SkinBuiltinPropertySelector>(property->source), property->domain);
+      expect(value.supported && value.value == expected,
+             "authored select rank/total numeric ref reads the live ranking");
+    }
+  }
+  if (modernChic) {
+    number("ir_rank2", 3);
+    number("ir_totalplayer2", 12);
+  }
+  if (modernChic) {
+    const auto object = std::ranges::find_if(model.objects, [](const auto &candidate) {
+      return candidate.authoredName == "s_rankingGraphAAA1";
+    });
+    const auto *graph = object == model.objects.end() ? nullptr
+        : std::get_if<SkinGraphObject>(&object->payload);
+    const auto *propertyId = graph ? std::get_if<SkinFloatPropertyId>(&graph->value) : nullptr;
+    expect(propertyId != nullptr, "authored select IR score graph retains its value binding");
+    if (propertyId) {
+      const auto property = std::ranges::find_if(model.floatProperties, [&](const auto &candidate) {
+        return candidate.id == *propertyId;
+      });
+      const auto *callback = property == model.floatProperties.end() ? nullptr
+          : std::get_if<LuaCallbackId>(&property->source);
+      const auto value = callback ? scalarNumber(runtime.invoke(*callback, {})) : std::nullopt;
+      expect(value && std::abs(*value - 0.995) < 0.000001,
+             "authored ModernChic select graph reads the live numeric ranker score");
+    }
+  }
+  runtime.setFrameState(nullptr);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   // These tests verify session state and instruction limits, not host scheduling.
   // Real callback/frame deadlines remain covered by lua_skin_runtime_tests.
   LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
+  if (argc == 3 && std::string_view(argv[1]) == "--authored-result-ir") {
+    testResultIrNumericFactoriesReachLiveLua();
+    testAuthoredResultIrFactories(fs::path(argv[2]) / "ModernChic");
+    testAuthoredResultIrFactories(fs::path(argv[2]) / "LITONE12");
+    testAuthoredSelectIrFactories(fs::path(argv[2]) / "ModernChic");
+    testAuthoredSelectIrFactories(fs::path(argv[2]) / "LITONE12");
+    std::cout << "authored result IR: " << failures << " failure(s)\n";
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--result-ranking-endpoint") {
     testResultRankingWriterIgnoresUpperEndpoint();
     testResultBridgeProjectsCompleteIrData();
@@ -10169,6 +10424,7 @@ int main(int argc, char **argv) {
     return failures == 0 ? 0 : 1;
   }
   testTempDirectoryRemovesReadOnlySnapshots();
+  testResultIrNumericFactoriesReachLiveLua();
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();

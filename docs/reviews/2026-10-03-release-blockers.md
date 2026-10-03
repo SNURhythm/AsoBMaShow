@@ -3,6 +3,43 @@
 Base: `484a2d69` (`develop`, PR #115 merged).
 Fix branch: `fix/release-blockers-2026-10-03`.
 
+## Authored-skin IR follow-up
+
+The subsequent iOS report identified a gap missed by the earlier bridge tests
+and reviews: native rankings worked, but ModernChic and LITONE12 displayed zero
+ranking values. Testing the supplied skins from `~/Downloads/Skins` through the
+real Lua loader reproduced 46 failures before this correction.
+
+`GameplaySkinBuiltinCatalog` admitted generated IR property names but omitted
+their numeric selectors. Consequently, numeric `ref` bindings were dropped at
+decode time and `main_state.number()` returned zero before reaching the live
+ranking bridge. Register the exact numeric ranking and clear-statistic families
+in their integer/image domains, preserving source skin-configuration precedence
+for numeric image selectors 386–388 and leaving unrelated gaps unsupported.
+
+Both supplied skins also identify the current player's row by comparing its
+text with `YOU`. Selector and result projections now provide that label for
+`currentUser` rows while preserving native provider entries and account names.
+This follows the supplied skins' compatibility requirement.
+
+ModernChic's rank-change callback is a separate path: it already reads selectors
+179/182 and requires successful-upload timers 172/173. The authored regression
+checks a change from rank 8 to rank 3 produces -5; the catalog fix alone does not
+establish the cause of every reported zero rank change on a device.
+
+The supplied ModernChic and LITONE12 Select/Result scripts now pass the authored
+acceptance run with nonzero ranking fixtures:
+`cmake-build-debug/play_skin_session_tests --authored-result-ir ~/Downloads/Skins`.
+This checks retained decoded numeric references, real score/rank callbacks,
+ModernChic's ranking graph, and its own-row/rank-change predicates. External skin
+assets remain outside the repository; the regular suite includes a portable live
+Lua numeric-selector regression and separate current-user projection tests.
+Numeric SELECT image collisions failed three paired assertions before their
+guard and pass afterward. Independent review of this follow-up found no further
+actionable issues. The final full rebuild and parallel CTest run passed all
+417 tests in 134.44 seconds. Device upload state and live iOS rendering remain
+unverified.
+
 ## Confirmed runtime blockers
 
 The follow-up program-code review found two release-blocking defects:
@@ -208,7 +245,7 @@ gameplay/audio/input shutdown, course/replay transitions, profile and database
 changes, download/import/recovery, IR delivery and custom-skin integration, and
 release workflow checks. The desktop app and all test targets build successfully.
 After the final program/test changes and full rebuild, the complete parallel CTest
-run passed 417/417 tests in 184.34 seconds, including native iOS transfer,
+run passed 417/417 tests in 134.44 seconds, including native iOS transfer,
 production-method skin lifecycle regressions, and dependent evidence checks.
 
 Additional verification:

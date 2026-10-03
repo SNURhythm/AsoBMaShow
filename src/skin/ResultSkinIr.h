@@ -54,7 +54,7 @@ inline RankingData projectRanking(const ir::IrRankingSnapshot &source) {
   result.entries.reserve(ranking.entries.size());
   for (const auto &entry : ranking.entries) {
     result.entries.push_back({.rank = entry.rank,
-                              .playerName = entry.playerName,
+                              .playerName = entry.currentUser ? "YOU" : entry.playerName,
                               .score = entry.score,
                               .clearType = entry.clearType,
                               .currentUser = entry.currentUser});

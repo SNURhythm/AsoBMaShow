@@ -152,6 +152,18 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, integerValue, std::string(name));
     add(entries, integerValue, id);
   }
+  // These source factory patterns have generated names, so they are absent
+  // from the static alias table above. Numeric refs and main_state.number
+  // must admit the same ranking and clear-statistic properties as their names.
+  for (int selector = 380; selector <= 399; ++selector) {
+    add(entries, integerValue, selector);
+  }
+  for (const int selector : {202, 203, 204, 205, 206, 207, 208, 209, 210,
+                             211, 212, 213, 214, 215, 216, 217, 218, 219,
+                             222, 223, 224, 225, 230, 231, 232, 233, 234,
+                             235, 236, 237, 238, 239, 240}) {
+    add(entries, integerValue, selector);
+  }
   add(entries, integerValue, "nowbpm");
   // Pinned IntegerPropertyFactory exposes the lane-cover family through
   // ValueType, not through getImageIndexProperty.
@@ -193,6 +205,8 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, imageIndex, id);
   }
   for (int index = 1; index <= 10; ++index) {
+    add(entries, imageIndex, 379 + index);
+    add(entries, imageIndex, 389 + index);
     add(entries, imageIndex, "playertype_ranking" + std::to_string(index));
     add(entries, imageIndex, "cleartype_ranking" + std::to_string(index));
   }

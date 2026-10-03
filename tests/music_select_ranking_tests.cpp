@@ -70,6 +70,13 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
              projected.entries[1].rank == 1 &&
              projected.entries[2].rank == 3,
          "ranking rows preserve Beatoraja player and clear indexes");
+  expect(projected.entries[2].name == "YOU" &&
+             projected.entries[0].name == "Top" &&
+             projected.entries[1].name == "Failed",
+         "skin ranking names identify the current user as YOU and preserve other players");
+  expect(ranking->entries[1].playerName == "Player" &&
+             ranking->entries[1].currentUser,
+         "skin name projection preserves the native provider account name");
 
   service.state = ir::IrRankingSnapshotState::TransientFailure;
   service.ranking.reset();
