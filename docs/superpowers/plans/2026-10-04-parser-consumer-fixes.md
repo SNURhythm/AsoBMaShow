@@ -16,7 +16,7 @@
 - Do not edit generated parser files directly or disturb concurrent upstream changes.
 - Preserve dates, favorites, scores, and replay evidence; never change mine damage.
 - One build at a time in `cmake-build-debug`; no whole-file formatting.
-- Keep changes local until the upstream parser patch arrives (user instruction); do not push this slice beforehand.
+- Keep the application local under the user's explicit push hold, including after upstream arrival. Upstream-only parser commits/pushes follow AGENTS.md.
 
 ## Review focus
 
@@ -53,10 +53,10 @@
 
 **Interface dependency:** Upstream agent supplies verified commit, artifacts, byte-format API and LN/mine/numeric contracts. Finalize exact API call edits only after that handoff.
 
-- [ ] Record commit and artifact hashes; reproduce old PMS and exact malformed-LN cases before copying artifacts.
-- [ ] Propagate actual inner/document filename format through buffered Parse/Scan callers.
-- [ ] Test PMS path/bytes/archive parity including uppercase extension, lanes, links and metadata; preserve ordinary BMS behavior.
-- [ ] Apply consistent malformed-LN policy matching the upstream contract to visual model, judging/counting and export paths; exercise orphan endpoints and null timelines under ASan/UBSan.
+- [x] Record commit and artifact hashes; reproduce old PMS and exact malformed-LN cases before copying artifacts.
+- [x] Propagate actual inner/document filename format through buffered Parse/Scan callers.
+- [x] Test PMS path/bytes/archive parity including uppercase extension, lanes, links and metadata; preserve ordinary BMS behavior.
+- [x] Apply consistent malformed-LN policy matching the upstream contract to visual model, judging/counting and export paths; exercise orphan endpoints and null timelines under ASan/UBSan.
 
 ## Task 4: Persistent metadata revision
 
@@ -72,10 +72,10 @@
 
 **Files:** replay setup/consumer/materializer and tests as required by the historical comparison; audit handoff.
 
-- [ ] Capture fixtures produced with the prior parser, then compare with the pinned parser: legacy/modern, PMS, timing/STOP, LN/LNOBJ, RANDOM and course stages.
-- [ ] Trace Watch/Retry Same/G-Battle/practice/course/export diagnostics; document and test compatibility decisions without claiming equivalence from hashes.
-- [ ] Run `cmake --build cmake-build-debug -j 6`, then `ctest --test-dir cmake-build-debug --output-on-failure -j 6` plus focused sanitizer probes.
-- [ ] Review changes, update audit with exact revisions, evidence and remaining limitations, commit locally and push only after the upstream parser patch arrives.
+- [x] Capture fixtures produced with the prior parser, then compare with the pinned parser: legacy/modern, PMS, timing/STOP, LN/LNOBJ, RANDOM and course stages.
+- [x] Trace Watch/Retry Same/G-Battle/practice/course/export diagnostics; document and test compatibility decisions without claiming equivalence from hashes.
+- [x] Run `cmake --build cmake-build-debug -j 6`, then `ctest --test-dir cmake-build-debug --output-on-failure -j 6` plus focused sanitizer probes.
+- [x] Review changes, update audit with exact revisions, evidence and remaining limitations, commit locally; the user's application push hold remains in force.
 
 ## Execution record
 
@@ -96,3 +96,50 @@
 - Latest user instruction: do not push before the upstream parser patch arrives. Local verification/commits may proceed; the push is on hold.
 
 - Local implementation commit: `b64bf3d4`. Code and regressions are verified; no push performed. The remaining adoption/replay tasks are open.
+
+## Continuation after verified upstream handoff
+
+User supplied `bb8658a3d68f06c11b4ce4ff0d6c9b91055f2961` and explicitly retained
+**the app push hold**. Base app revision is `e51d50d2`; completed fixes stay intact.
+The upstream checkout is clean and its two generated artifact hashes match the
+handoff. PMS support still requires an upstream API addition before final copy.
+
+- [x] PMS/API worker: add compatible byte Parse/Scan source-filename overloads upstream, reproduce/test path-buffer parity, run required clean/modular/amalgamation tests, commit/push upstream only, copy both generated artifacts, propagate inner/SAF logical filenames through ArchiveFile, scanner and PlayOptionUtils.
+- [x] LN/numeric worker: preserve raw parser ownership/identity; add `ChartPlayability.h` validation, follow local beatoraja LN behavior, including direct traversal of detached partners, harden integer STOP/interpolation arithmetic via `ChartTiming.h`, and bound prep-metronome work. Prove exact tiny-scale LN and extreme numeric behavior with native tests and sanitizers.
+- [x] Replay worker: capture actual historical inputs and judged results against immutable old parser source; compare identical bytes with adopted parser across legacy/modern, PMS, STOP/fractional timing, LN/LNOBJ, RANDOM and course stages. Saved-result consumers reject result mismatches; lower-level materialization retains diagnostic evidence.
+- [x] Integrator: validate file/buffer preparation and direct audio-export admission, preserve useful failure diagnostics, run all requested app builds serially, integrate tests and review all changes.
+- [x] Complete the required full app/native build and parallel CTest suite, focused ASan/UBSan probes, final review, updated evidence/limitations and local commits. **Do not push the app.**
+
+Implementation rulings:
+
+- User steering: follow `/Users/xf/workspace/SNURhythm/beatoraja` for LN behavior.
+  Detached partners are followed directly and their identities remain intact.
+  Reference null-partner dereferences throw; report an invalid-graph diagnostic
+  safely for that case, with no invented tap normalization or changed counts.
+- Numeric policy uses representability checks and bounded work, without an
+  arbitrary chart-duration ceiling. Direct numeric helpers must remain safe
+  when given saturated parser values.
+- Saved replay actions fail on materialized result disagreement. Original
+  saved evidence stays immutable. Passing result checks establishes result
+  reproduction, not unqualified parser/audio equivalence; historical fixtures
+  separately measure note lookup and keysound behavior.
+- Parallel workers own separate domains; only the integrator invokes the
+  shared CMake/Ninja build directory.
+
+Final continuation record:
+
+- Adopted generated artifacts from upstream `5c3bb2f`, the tested buffered
+  source-filename API addition on verified `bb8658a3`. Upstream committed/pushed
+  separately; exact artifact hashes are in the audit.
+- Full desktop/native build passed; a `main` no-op check performed no compilation
+  or linking. Final parallel CTest passed **420/420**, zero failures, **116.51 s**.
+- Focused ASan/UBSan, historical corpus/manifest checks and eleven actual Java
+  decoder/SongInformation probes passed. These do not establish full Java
+  JudgeManager parity or device/provider behavior.
+- Historical buffered PMS and detached-LN results can disagree; saved playback
+  rejects incompatible materialization while preserving original evidence.
+  Detached live graphs remain supported. Lane/time-only replay adapters still
+  cannot represent emitted detached identities; this limitation is explicit.
+- Implementation and fixtures committed locally as `d5dd5177`. Documentation
+  records the actual evidence and remaining limits. **Application push remains
+  on hold; no deployment performed.**

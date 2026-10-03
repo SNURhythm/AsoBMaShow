@@ -1,6 +1,170 @@
 # BMS parser consumer contract handoff — 2026-10-04
 
-## Final upstream handoff
+## Application adoption and final compatibility policy
+
+This section supersedes the historical status below. The application adopts
+upstream `5c3bb2faf5d08aa19cc689273e5b107487bf8a5b`, based on the verified
+`bb8658a3d68f06c11b4ce4ff0d6c9b91055f2961` handoff. The new upstream commit
+adds source-filename overloads for buffered Parse/Scan; the old signatures
+remain compatible. Upstream was tested, committed and pushed separately.
+Both generated artifacts were copied together without local edits:
+
+- `src/bms_parser.hpp`: `04e16303be71dbb5e6111346d2f43e8413132132070d8937a0d63115ffb90c8a`
+- `src/bms_parser.cpp`: `3ef896b5debec37a826d9a577b44c801fc77e06dd8e13ef12dcb60f439751a1a`
+
+The application continuation starts at `e51d50d2`, preserving the completed
+consumer changes at `b64bf3d4` and `9a92823f`. The user's application push hold
+remains in force. No deployment is part of this work.
+
+### PMS discovery and metadata
+
+Buffered Parse/Scan calls retain the actual archive entry or logical document
+filename. The hint recognizes case-insensitive `.pms`, performs no I/O, and
+does not assign metadata paths. Ordinary BMS retains its previous format.
+Shared desktop/archive discovery and Android folder discovery now accept PMS;
+the old discovery allowlists omitted it altogether.
+
+Scanner tests exercise path, buffered, archive, uppercase-extension and SAF
+logical-name parsing, including lane mapping, reciprocal LN pairs, counts and
+timing. SAF coverage does not exercise a real Android document provider.
+`tests/fixtures/parser/pms_scan_baseline.h` captures genuine metadata from the
+immutable application parser at `68382de1`: path Scan is 9-key while the same
+PMS bytes scanned without a filename are 10-key. The schema-12 migration test
+seeds these old-parser facts, then verifies schema-13 ordinary/archive cache
+rebuilding, retained dates, unchanged sources and idempotence. It is not a
+captured old scanner database: that scanner did not discover PMS by default.
+The broader interrupted/offline/scoped rebuild tests remain intact. Schema 13
+must ship with this adoption; this branch has not been deployed separately.
+
+### Long-note graph policy
+
+At the user's request, the behavior reference is local beatoraja
+`ad42f56c4658e968f93b24bf23440fe51cb9878e`. LaneRenderer and SongInformation
+follow non-null pair pointers even when the partner was displaced from its
+lane slot. Null pairs cause reference exceptions; the application reports an
+invalid-chart diagnostic safely before playback/view/export instead.
+
+The raw parser graph and its ownership remain unchanged. Shared preparation
+and direct audio export reject missing pairs, missing endpoint timelines and
+nonreciprocal links. Detached reciprocal partners remain supported. Gameplay
+and visual models retain stable partner identities outside active lane scans,
+without inventing playable notes or adding distribution counts. Classic held
+LN tails remain reachable directly; charge-note autoplay still follows active
+lane endpoints. Explicit MIRROR/RANDOM and DP-flip preparation also moves a
+detached partner's lane to follow its active endpoint, retaining identity and
+timing. These application behavior checks are derived from reference source;
+they are not a runtime Java JudgeManager comparison. Reference locations are
+`src/bms/player/beatoraja/song/SongInformation.java:119`,
+`src/bms/player/beatoraja/play/LaneRenderer.java:552,563`, and
+`src/bms/player/beatoraja/play/JudgeManager.java:270,273-285,431,445,572-573`. The exact tiny-scale
+null-head reproducer, orphan/null-timeline constructed graphs, detached
+head/tail cases and ordinary pairs have regression coverage. Mine recount and raw mine damage remain unchanged.
+
+### Numeric consumers
+
+`ChartTiming.h` reads integer `ParsedStopDuration` without a double round trip
+and provides guarded rounding and saturating arithmetic. STOP/interpolation
+consumers in the visual model, viewer, renderer, projection and prep metronome
+use it. Judgment deadlines, candidate windows, visual offsets and near-limit
+clock transitions use checked arithmetic too. Shared chart admission rejects
+nonfinite/negative parsed STOP values, invalid scale/tempo values and unrepresentable timestamps/STOP ends, including parser
+saturation. This does not impose an arbitrary maximum chart duration.
+
+Prep count-in work is bounded to 1,000,000 grid steps and 1,024 requested beats;
+invalid or excessive plans return no partial output. Existing club planning
+bounds, cancellation, output preservation and selected exports above 100,000
+beats remain covered. Arithmetic helper safety is tested separately from
+admission: accepting raw parser output does not mean it is playable.
+
+### Saved replay policy and evidence
+
+Saved chart and course replay consumers reject rejudged result disagreement
+and return a diagnostic. This applies to Watch, Retry Same, G-Battle, practice
+ghosts, course playback and video export through their shared consumer layer.
+The lower-level materializer retains mismatching tracks for diagnosis; saved
+evidence is never overwritten or relabelled as equivalent. Viewer ghost
+failures now retain the consumer's diagnostic.
+
+A detached endpoint can be simulated by identity, but an emitted event for
+that identity cannot be represented safely by the current legacy lane/time
+playback adapter. Such saved playback is rejected explicitly. Merely having a
+detached partner does not itself reject a replay; the guard checks emitted
+events. Live chart parsing, judging and audio export retain detached support.
+The same runtime-only compatibility flag protects newly recorded practice
+ghosts and synthetic autoplay video export. It is not serialized as a new
+parser-version claim. When live result reconstruction lacks a representable
+identity, its judgement distribution uses the existing omitted state; authored
+chart data, authoritative scores and gauge history remain available.
+
+The historical matrix and exact reproduction commands are recorded in
+`tests/fixtures/historical_replays/README.md`. Matching chart hashes or results
+alone are not proof of complete parser/audio equivalence. The matrix separately
+compares setup, lookup coverage, judged facts, ghost events and keysound
+scheduling. Legacy storage remains history-only under its existing capability
+policy. See the matrix's limitations for fixture and device coverage.
+
+### Verification record
+
+- Executed the eleven-fixture Java probe added in upstream test-only commit
+  `a4adbdff27c1b55dcbdb78e954e87b989973d20d` against the pinned local
+  beatoraja decoder and actual `SongInformation` class. Valid/detached graphs
+  passed the renderer visibility predicate; the exact null sentinel threw
+  `NullPointerException` in both that predicate and `SongInformation`.
+  This is not a GPU app launch or Java JudgeManager runtime comparison.
+  The probe and reproduction are in
+  `../bms-parser-cpp/docs/audits/2026-10-04-beatoraja-long-note-consumers.md`
+  relative to the application checkout. That later upstream commit changes
+  tests/documentation only; adopted parser artifacts remain the verified
+  `5c3bb2f` pair above.
+- Upstream: `make clean && make test && make test_amalgamation` passed;
+  amalgamated ASan/UBSan tests passed before copying artifacts.
+- Focused native integration: scanner, audio admission/export, gameplay,
+  metronome, visual model/projection/scroll and saved replay consumers passed.
+  Android extracted-method/JVM discovery checks passed 11/11.
+- The finalized historical corpus passes
+  `python3 tests/capture_historical_replays.py --check`, including the immutable
+  manifest. The native CTest target runs the same fixture checks.
+- Focused visual, metronome, projection and gameplay suites passed with
+  `-fsanitize=address,undefined,float-cast-overflow,signed-integer-overflow`
+  and `-fno-sanitize-recover=all`. The durable reproduction command is:
+
+  ```sh
+  python3 tests/run_parser_consumer_sanitizers.py visual metronome projection gameplay
+  ```
+
+  The runner uses include/define flags from the existing desktop configure and
+  compiles scratch executables directly. Synthetic autoplay summary tests also
+  passed those sanitizers, including six parsed LN/CN/HCN head/tail overwrite
+  cases.
+- Independent review reproduced and verified fixes for near-limit judgment
+  deadline overflow, the saturated empty-queue sentinel collision, negative
+  pre-roll arithmetic, visual offsets, detached lanes after modifiers, and
+  replay graph-key collisions. Source-derived HCN work was confirmed bounded
+  by existing terminal capacity checks. Practice analytics retains actual
+  judgement/timing samples and maps collisions to the same section; it does
+  not require the ambiguous note identity used by result distributions.
+- Result-action integration fixtures now persist genuinely judged chart and
+  carried-course replays. Separate mismatch cases verify that optional replay
+  rejection preserves saved scores, fingerprints and chart graphs. The
+  preparation-plan fixture supplies coherent timeline BPM/beat positions.
+- Full iOS/Android builds and device/provider smoke tests were not run in this
+  continuation. Desktop native/JVM checks do not establish device rendering,
+  document-provider behavior or full Java JudgeManager parity.
+
+- Final integrated `cmake --build cmake-build-debug -j 6` passed. The separate
+  `main` no-op check performed only shader-copy/build-identity maintenance,
+  with no compilation or linking.
+- Final `ctest --test-dir cmake-build-debug --output-on-failure -j 6` passed
+  **420/420 tests, zero failures**, in **116.51 seconds**. The first full run
+  exposed three stale synthetic fixture assumptions; these were corrected
+  with actual judged replay facts and coherent timeline metadata, then both
+  targeted tests and the complete suite passed. Production admission and
+  replay mismatch checks were retained.
+- Application implementation and fixtures are committed locally as
+  `d5dd5177`. The preceding consumer fixes remain intact. The application
+  branch has not been pushed and no deployment was performed.
+
+## Historical upstream handoff before application adoption
 
 The parser performance/Java-parity follow-up is committed and pushed as
 `bb8658a3d68f06c11b4ce4ff0d6c9b91055f2961` on `bms-parser-cpp/main`.
@@ -44,7 +208,7 @@ against the adopted artifacts. This document update does not adopt artifacts,
 change app code, push the app branch, or override the user's existing push hold.
 The implementer should resolve that hold under the user's current instructions.
 
-## Implementation progress — app consumer slice
+## Historical implementation progress — first consumer slice
 
 Work started from app commit `68382de1627f321aa8a56c7a961d75b4f7b974b7`.
 The user confirmed that a separate agent owns the in-progress upstream parser
@@ -487,7 +651,7 @@ parser metadata revision versus schema bump; replay revision/provenance and
 user-facing incompatibility handling. Do not infer product policy solely from
 a null guard, successful compilation, or a green preexisting test suite.
 
-## Start prompt for the implementation agent
+## Historical implementation prompt
 
 ```text
 Work in /Users/xf/workspace/SNURhythm/AsoBMaShow. Read AGENTS.md and
