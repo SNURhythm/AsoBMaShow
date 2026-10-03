@@ -199,6 +199,50 @@ int main() {
   require(changed.skinIrPreviousUserRank == 3,
           "fresh evidence replaces the old pre-submission rank before ending");
 
+  for (bool nearby : {false, true}) {
+    GamePlayScene ordinary;
+    auto &ordinaryService = *ordinary.context.irRankingService;
+    auto known = std::make_shared<ir::IrChartRanking>();
+    known->providerId = "tachi";
+    known->chart = ordinary.skinIrRankingRequest->chart;
+    known->totalPlayers = 6000;
+    known->entries = {{.rank = 1, .score = 190, .currentUser = !nearby}};
+    if (nearby) known->nearbyEntries = {{.rank = 5000, .currentUser = true}};
+    known->nextPageToken = "page-2";
+    ordinaryService.current = {.revision = 1, .generation = 1,
+        .state = ir::IrRankingSnapshotState::Succeeded,
+        .request = ordinary.skinIrRankingRequest, .ranking = known};
+    ordinaryService.completePagesImmediately = true;
+    for (int frame = 0; frame < 5; ++frame) ordinary.updateSkinIrTarget();
+    require(ordinaryService.pagesRequested == 0 &&
+                ordinary.skinIrPreviousUserRank == (nearby ? 5000 : 1),
+            "ordinary target captures known prefix/nearby rank without fetching more pages");
+  }
+
+  GamePlayScene searching;
+  auto &searchService = *searching.context.irRankingService;
+  auto unknown = std::make_shared<ir::IrChartRanking>();
+  unknown->providerId = "tachi";
+  unknown->chart = searching.skinIrRankingRequest->chart;
+  unknown->totalPlayers = 6000;
+  unknown->entries = {{.rank = 1, .score = 190}};
+  unknown->nextPageToken = "page-2";
+  searchService.current = {.revision = 1, .generation = 1,
+      .state = ir::IrRankingSnapshotState::Succeeded,
+      .request = searching.skinIrRankingRequest, .ranking = unknown};
+  searchService.completePagesImmediately = true;
+  searching.updateSkinIrTarget();
+  require(searchService.pagesRequested == 1 && !searching.skinIrPreviousUserRank,
+          "ordinary target still searches later pages while own rank is unknown");
+  auto found = std::make_shared<ir::IrChartRanking>(*searchService.current.ranking);
+  found->entries.back().currentUser = true;
+  searchService.current.ranking = found;
+  ++searchService.current.revision;
+  searching.updateSkinIrTarget();
+  searching.updateSkinIrTarget();
+  require(searchService.pagesRequested == 1 && searching.skinIrPreviousUserRank == 2,
+          "ordinary target stops searching as soon as a later page supplies own rank");
+
   GamePlayScene paged;
   paged.context.settings.skinTargetId = "IR_RANK_1";
   paged.skinIrTargetSelection = "IR_RANK_1";
@@ -208,7 +252,7 @@ int main() {
   first->providerId = "tachi";
   first->chart = paged.skinIrRankingRequest->chart;
   first->totalPlayers = 3;
-  first->entries = {{.rank = 1, .playerName = "Top", .score = 190}};
+  first->entries = {{.rank = 1, .playerName = "Top", .score = 190, .currentUser = true}};
   first->nextPageToken = "page-2";
   pagedService.current = {.revision = 1, .generation = 1,
       .state = ir::IrRankingSnapshotState::Succeeded,
@@ -218,7 +262,7 @@ int main() {
   paged.updateSkinIrTarget();
   require(pagedService.pagesRequested == 2 &&
               paged.activeSkinIrTarget->score == 190,
-          "immediately completed pages keep pagination advancing to the final target");
+          "IR target completes every page even when own rank was already known");
   pagedService.current.ranking = first;
   ++pagedService.current.revision;
   pagedService.pagesRequested = 0;

@@ -3,6 +3,21 @@
 Base: `484a2d69` (`develop`, PR #115 merged).
 Fix branch: `fix/release-blockers-2026-10-03`.
 
+## Gameplay rank-only pagination review follow-up
+
+[The subsequent review](https://github.com/SNURhythm/AsoBMaShow/pull/116#discussion_r4172154887)
+identified unnecessary continuation during ordinary gameplay: non-IR targets
+only need the pre-submission own rank, but kept fetching after it was known.
+Gameplay now stops pagination when that rank is present in either the sequential
+pages or the nearby window. Missing own ranks continue searching; active IR
+targets still fetch the complete population required by target projection.
+
+The production-method regression failed before the guard was added. It now
+covers known prefix/nearby ranks, repeated updates, finding the player on a later
+page, and completing IR-target pagination even when own rank was known initially.
+The desktop build and four targeted gameplay, skin-bridge, ranking-service, and
+result-scene suites passed. No deployment or live authenticated test was run.
+
 ## Localization and PR review follow-up
 
 Retained ranking and score-detail roots are refreshed against the current

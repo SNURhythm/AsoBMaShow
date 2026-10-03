@@ -4923,8 +4923,11 @@ void GamePlayScene::updateSkinIrTarget() {
     configureSkinIrTarget();
     return;
   }
+  // Ordinary targets only need the observed pre-submission rank. IR targets
+  // still require the complete population to resolve their target score.
   if (snapshot.state == ir::IrRankingSnapshotState::Succeeded &&
       snapshot.ranking && snapshot.ranking->nextPageToken &&
+      (activeSkinIrTarget || !gameplaySkinIrCurrentUserRank(snapshot)) &&
       !snapshot.loadingNextPage && !snapshot.paginationBlocked) {
     if (context.irRankingService->loadNextPage(skinIrRankingGeneration)) {
       snapshot = context.irRankingService->snapshot();
