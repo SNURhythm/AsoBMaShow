@@ -50,16 +50,16 @@ int main() {
                "non-table clear mark disables difficulty range");
 
   filters.sort = chart_record_filters::nextSortState(
-      filters.sort, ChartRecordSortCriterion::Score);
-  ASSERT_ENUM_EQ(ChartRecordSortCriterion::Score, filters.sort.criterion,
-                 "score sort criterion");
+      filters.sort, ChartRecordSortCriterion::Rate);
+  ASSERT_ENUM_EQ(ChartRecordSortCriterion::Rate, filters.sort.criterion,
+                 "rate sort criterion");
   ASSERT_ENUM_EQ(ChartRecordSortDirection::Descending, filters.sort.direction,
-                 "score default direction");
+                 "rate default direction");
 
   filters.sort = chart_record_filters::nextSortState(
-      filters.sort, ChartRecordSortCriterion::Score);
+      filters.sort, ChartRecordSortCriterion::Rate);
   ASSERT_ENUM_EQ(ChartRecordSortDirection::Ascending, filters.sort.direction,
-                 "score toggled direction");
+                 "rate toggled direction");
 
   filters.sort = chart_record_filters::nextSortState(
       filters.sort, ChartRecordSortCriterion::Title);

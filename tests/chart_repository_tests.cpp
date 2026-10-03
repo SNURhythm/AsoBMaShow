@@ -24,6 +24,7 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <tuple>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -95,7 +96,7 @@ std::string queryString(sqlite3 *database, const char *sql) {
 void seedChartScore(const std::filesystem::path &path,
                     std::string_view chartPath, std::string_view chartMd5,
                     std::string_view chartSha256, int longNoteMode,
-                    int clearRank, int score) {
+                    int clearRank, int score, int maxScore = 1000) {
   Database database = openDatabase(path);
   assert(database);
   assert(execute(
@@ -107,7 +108,7 @@ void seedChartScore(const std::filesystem::path &path,
           std::string(chartPath) + "','" + std::string(chartMd5) + "','" +
           std::string(chartSha256) + "'," + std::to_string(longNoteMode) +
           ",'Chart','Artist'," + std::to_string(score) +
-          ",1000,50,1,10,9,8,7,6,5,4,3,0.75," +
+          "," + std::to_string(maxScore) + ",50,1,10,9,8,7,6,5,4,3,0.75," +
           std::to_string(clearRank) + ")"));
 }
 
@@ -872,9 +873,9 @@ void testChartQueryBehaviorMatrix() {
   constexpr std::string_view shaD =
       "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
-  seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 1, 100);
+  seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 1, 100, 0);
   seedChartScore(scorePath, "beta.bms", md5B, shaB, 1, 3, 300);
-  seedChartScore(scorePath, "gamma.bms", md5C, shaC, 1, 2, 200);
+  seedChartScore(scorePath, "gamma.bms", md5C, shaC, 1, 2, 200, 0);
   {
     Database database = openDatabase(chartPath);
     assert(database);
@@ -899,6 +900,8 @@ void testChartQueryBehaviorMatrix() {
             "INSERT INTO chart_favorites(chart_path,chart_md5,"
             "chart_sha256) VALUES('gamma.bms','" +
             std::string(md5C) + "','" + std::string(shaC) + "')"));
+    assert(execute(database.get(),
+        "UPDATE chart_meta SET total_notes = 125 WHERE path = 'gamma.bms'"));
   }
 
   const ir::IrRemoteScore remoteOnly{
@@ -978,11 +981,11 @@ void testChartQueryBehaviorMatrix() {
   checkQuery(query, {"beta.bms"}, 1, 0);
 
   query = {};
-  query.sortCriterion = ChartRecordSortCriterion::Score;
+  query.sortCriterion = ChartRecordSortCriterion::Rate;
   query.sortDirection = ChartRecordSortDirection::Descending;
   query.selectedLongNoteMode = 1;
   checkQuery(query,
-             {"beta.bms", "gamma.bms", "delta.bms", "alpha.bms"}, 4,
+             {"delta.bms", "gamma.bms", "beta.bms", "alpha.bms"}, 4,
              0);
 
   chart_library::FolderClearDataByLongNoteMode folderData;
@@ -1005,6 +1008,67 @@ void testChartQueryBehaviorMatrix() {
       folderData.clearMarkCounts[long_note_mode::kLnValue].at("all");
   const auto hardCount = allCounts.find(kClearTypeHardClearRank);
   assert(hardCount != allCounts.end() && hardCount->second == 1);
+
+  // Rate ordering must differ from raw EX-score ordering, retain unknown
+  // rates at the end in either direction, and use chart notes for legacy bests.
+  session.reset();
+  {
+    Database database = openDatabase(chartPath);
+    assert(execute(database.get(),
+        "INSERT INTO chart_meta(path,md5,sha256,title,total_notes,source_priority,"
+        "source_archive_size) VALUES ('epsilon.bms',"
+        "'55555555555555555555555555555555',"
+        "'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',"
+        "'Epsilon',100,0,0)"));
+  }
+  session = charts.OpenSession(&scores);
+  assert(session.has_value());
+  const std::vector<std::string> descending = {
+      "delta.bms", "gamma.bms", "beta.bms", "alpha.bms", "epsilon.bms"};
+  const std::vector<std::string> ascending = {
+      "beta.bms", "gamma.bms", "delta.bms", "alpha.bms", "epsilon.bms"};
+  checkQuery(query, descending, 5, 0);
+  query.sortDirection = ChartRecordSortDirection::Ascending;
+  checkQuery(query, ascending, 5, 0);
+  query.limit = 1;
+  query.offset = 1;
+  checkQuery(query, {"gamma.bms"}, 5, 1);
+  query.limit = 0;
+  query.offset = 0;
+
+  difficulty_table::Document table;
+  table.name = "Rate sorting";
+  table.symbol = "R";
+  table.sourceUrl = "https://table.example/rate.json";
+  table.dataUrl = "https://table.example/rate-data.json";
+  table.levelOrder = {"1"};
+  for (const auto &[md5, sha, title] : {
+           std::tuple{md5A, shaA, "Alpha"}, std::tuple{md5B, shaB, "Beta"},
+           std::tuple{md5C, shaC, "Gamma"}, std::tuple{md5D, shaD, "Delta"},
+           std::tuple{std::string_view("55555555555555555555555555555555"),
+                      std::string_view("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+                      "Epsilon"}}) {
+    table.charts.push_back({.level = "1", .md5 = std::string(md5),
+                            .sha256 = std::string(sha), .title = title});
+  }
+  table.courses = {{.name = "Rate course", .groupName = "Courses",
+                     .level = "1", .charts = table.charts}};
+  assert(session->ReplaceDifficultyTable(table));
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  query.tableId = tables.front().id;
+  query.tableLevel = "1";
+  checkQuery(query, ascending, 5, 0);
+  query.sortDirection = ChartRecordSortDirection::Descending;
+  checkQuery(query, descending, 5, 0);
+  const auto courses = session->SelectDifficultyCourses(tables.front().id, "Courses");
+  assert(courses.size() == 1);
+  query.tableId = 0;
+  query.tableLevel.clear();
+  query.courseId = courses.front().id;
+  checkQuery(query, descending, 5, 0);
+  query.sortDirection = ChartRecordSortDirection::Ascending;
+  checkQuery(query, ascending, 5, 0);
 }
 
 void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {

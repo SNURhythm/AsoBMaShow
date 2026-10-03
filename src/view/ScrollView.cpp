@@ -108,6 +108,13 @@ void ScrollView::refreshContentLayout() {
   updateContentPosition();
 }
 
+void ScrollView::propagateThemeChange() {
+  View::propagateThemeChange();
+  if (contentView != nullptr) {
+    contentView->propagateThemeChange();
+  }
+}
+
 void ScrollView::propagateLanguageChange() {
   View::propagateLanguageChange();
   if (contentView != nullptr) {

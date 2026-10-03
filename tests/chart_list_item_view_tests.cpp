@@ -55,7 +55,7 @@ int main() {
     record.meta.Title = "Banner Song";
     record.meta.Artist = "Banner Artist";
 
-    ChartListItemView row(0, 0, 1200, 108, record);
+    ChartListItemView row(0, 0, 964, 108, record);
     row.setMeta(record);
     row.applyYogaLayout();
 
@@ -100,10 +100,48 @@ int main() {
                 card->getChildren().front() == banner,
             "chart banner renders behind row content");
 
+    row.setBestScoreRank(2451, 2700);
+    row.applyYogaLayout();
+    auto *bestScore = dynamic_cast<TextView *>(
+        row.findViewByName("chartListBestScore"));
+    require(bestScore != nullptr && bestScore->getText() == "90.78%",
+            "played rows display the best EX rate inside the rank badge");
+    auto *rankBadge = row.findViewByName("chartListScoreRank");
+    require(rankBadge != nullptr && rankBadge->getVisible() &&
+                bestScore->getX() >= rankBadge->getX() &&
+                bestScore->getY() >= rankBadge->getY() &&
+                bestScore->getY() + bestScore->getHeight() <=
+                    rankBadge->getY() + rankBadge->getHeight(),
+            "best score fits within the existing rank badge");
+    row.setBestScoreRank(12345, 15000);
+    require(bestScore->getText() == "82.30%",
+            "rebinding updates the EX rate as well as the grade");
+    row.setBestScoreRank(15000, 15000);
+    require(bestScore->getText() == "100.00%",
+            "a perfect score displays a full EX rate");
+    require(bestScore->measureTextWidth(bestScore->getText()) <= bestScore->getWidth(),
+            "100.00% fits without clipping in the rank badge");
+    row.setBestScoreRank(0, 2700);
+    require(rankBadge->getVisible() && bestScore->getText() == "0.00%",
+            "a recorded zero EX score remains visible as a zero rate");
+    bool hasFailingGrade = false;
+    for (auto *child : rankBadge->getChildren()) {
+      if (auto *text = dynamic_cast<TextView *>(child)) {
+        hasFailingGrade = hasFailingGrade || text->getText() == "F";
+      }
+    }
+    require(hasFailingGrade, "a recorded zero EX score displays grade F");
+    row.setBestScoreRank(0, 0);
+    require(!rankBadge->getVisible() && bestScore->getText().empty(),
+            "unplayed rows hide the badge and clear the previous score");
+    row.setBestScoreRank(2451, 2700);
+
     record.meta.Banner.clear();
     row.setMeta(record);
     require(banner->imagePath().empty(),
             "rebind without a banner clears recycled image identity");
+    require(!rankBadge->getVisible() && bestScore->getText().empty(),
+            "recycling a row clears the score before a new best is bound");
 
     record.meta.Banner = "banner.png";
     record.unavailable = true;

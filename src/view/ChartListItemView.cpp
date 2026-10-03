@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <locale>
 #include <sstream>
 
 namespace {
@@ -62,9 +63,10 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artistView = new TextView(kUiFont, 17);
   levelView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
   keyModeView = new TextView(kUiFont, 14, TextView::FontWeight::Bold);
-  scoreRankShadowView = new TextView(kUiFont, 40);
-  scoreRankWeightView = new TextView(kUiFont, 40);
-  scoreRankView = new TextView(kUiFont, 40);
+  scoreRankShadowView = new TextView(kUiFont, 34);
+  scoreRankWeightView = new TextView(kUiFont, 34);
+  scoreRankView = new TextView(kUiFont, 34);
+  bestScoreView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
   favoriteButton = new Button();
   favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
 
@@ -172,6 +174,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   keyModeView->setWidth(112)->setHeight(24);
   detailsLayout->addView(keyModeView);
 
+  scoreRankColumn->setName("chartListScoreRank");
   scoreRankColumn->setWidth(96)
       ->setHeight(72)
       ->setFlexShrink(0)
@@ -187,26 +190,33 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankShadowView->setAlign(TextView::TextAlign::CENTER);
   scoreRankShadowView->setVAlign(TextView::TextVAlign::MIDDLE);
   scoreRankShadowView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankShadowView->setWidth(96)->setHeight(72);
+  scoreRankShadowView->setWidth(96)->setHeight(44);
   scoreRankWeightView->setPositionType(YGPositionTypeAbsolute);
   scoreRankWeightView->setPosition(Edge::Left, 1);
   scoreRankWeightView->setPosition(Edge::Top, 0);
   scoreRankWeightView->setAlign(TextView::TextAlign::CENTER);
   scoreRankWeightView->setVAlign(TextView::TextVAlign::MIDDLE);
   scoreRankWeightView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankWeightView->setWidth(96)->setHeight(72);
+  scoreRankWeightView->setWidth(96)->setHeight(44);
   scoreRankView->setAlign(TextView::TextAlign::CENTER);
   scoreRankView->setVAlign(TextView::TextVAlign::MIDDLE);
   scoreRankView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankView->setWidth(96)->setHeight(72);
+  scoreRankView->setWidth(96)->setHeight(44);
+  bestScoreView->setName("chartListBestScore");
+  bestScoreView->setHeight(24)->setFlexShrink(0);
+  bestScoreView->setAlign(TextView::CENTER);
+  bestScoreView->setVAlign(TextView::MIDDLE);
+  bestScoreView->setOverflow(TextView::TextOverflow::Hidden);
+  bestScoreView->setThemedColor(ui_theme::textPrimary);
   scoreRankColumn->addView(scoreRankShadowView);
   scoreRankColumn->addView(scoreRankWeightView);
   scoreRankColumn->addView(scoreRankView);
+  scoreRankColumn->addView(bestScoreView);
   contentCard->addView(scoreRankColumn);
   contentCard->addView(detailsLayout);
 
-  favoriteButton->setWidth(52)
-      ->setHeight(52)
+  favoriteButton->setWidth(84)
+      ->setHeight(84)
       ->setFlexShrink(0)
       ->setCornerRadius(ui_theme::controlRadius());
   favoriteButton
@@ -259,6 +269,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   scoreRankShadowView->setText("");
   scoreRankWeightView->setText("");
   scoreRankView->setText("");
+  bestScoreView->setText("");
   scoreRankColumn->setDisplay(YGDisplayNone);
   scoreRankColumn->setVisible(false);
   if (record.courseStart) {
@@ -307,10 +318,11 @@ void ChartListItemView::setClearRank(int clearRank) {
 
 void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   if (currentRecord.courseStart || solidArchive || unavailable ||
-      maxScore <= 0 || score <= 0) {
+      maxScore <= 0 || score < 0) {
     scoreRankShadowView->setText("");
     scoreRankWeightView->setText("");
     scoreRankView->setText("");
+    bestScoreView->setText("");
     scoreRank.clear();
     scoreRankColumn->setDisplay(YGDisplayNone);
     scoreRankColumn->setVisible(false);
@@ -322,6 +334,11 @@ void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   scoreRankShadowView->setText(displayRank);
   scoreRankWeightView->setText(displayRank);
   scoreRankView->setText(displayRank);
+  std::ostringstream rate;
+  rate.imbue(std::locale::classic());
+  rate << std::fixed << std::setprecision(2)
+       << 100.0 * static_cast<double>(score) / maxScore << '%';
+  bestScoreView->setText(rate.str());
   const bool visible = !scoreRank.empty();
   scoreRankColumn->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
   scoreRankColumn->setVisible(visible);

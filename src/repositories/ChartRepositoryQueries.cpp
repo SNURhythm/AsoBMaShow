@@ -527,6 +527,14 @@ std::string difficultyEntryBestScoreExpr(const std::string &entryAlias,
          ")";
 }
 
+// Use the same maximum as the displayed EX rate, including legacy records.
+std::string scoreRateExpr(const std::string &score, const std::string &maxScore,
+                          const std::string &chartAlias) {
+  return "(1.0 * " + score + " / COALESCE(NULLIF(MAX(" + maxScore +
+         ", 0), 0), CASE WHEN " + chartAlias + ".total_notes > 0 THEN " +
+         chartAlias + ".total_notes * 2.0 END))";
+}
+
 std::string effectiveMinBpmExpr(const std::string &alias) {
   return "(CASE WHEN COALESCE(" + alias +
          ".min_bpm, 0) > 0 THEN " + alias +
@@ -572,13 +580,13 @@ bool chartMetaQueryHasScoreFilter(const ChartMetaQuery &chartQuery) {
 
 bool chartMetaQueryNeedsBestScore(const ChartMetaQuery &chartQuery) {
   return chartMetaQueryHasScoreFilter(chartQuery) ||
-         chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
+         chartQuery.sortCriterion == ChartRecordSortCriterion::Rate;
 }
 
 bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
   return chartQuery.clearMarkFilter || chartMetaQueryHasScoreFilter(chartQuery) ||
          chartQuery.sortCriterion == ChartRecordSortCriterion::ClearMark ||
-         chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
+         chartQuery.sortCriterion == ChartRecordSortCriterion::Rate;
 }
 
 bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
@@ -835,11 +843,13 @@ void appendChartMetaOrderBy(std::string &query,
         ChartRecordSortDirection::Descending);
     query += ", ";
     break;
-  case ChartRecordSortCriterion::Score:
+  case ChartRecordSortCriterion::Rate:
     appendNullableOrderExpr(
         query,
-        chartBestScoreExpr(chartAlias, "score",
-                           chartQuery.selectedLongNoteMode),
+        scoreRateExpr(
+            chartBestScoreExpr(chartAlias, "score", chartQuery.selectedLongNoteMode),
+            chartBestScoreExpr(chartAlias, "max_score", chartQuery.selectedLongNoteMode),
+            chartAlias),
         direction);
     query += ", ";
     query += chartClearMarkRankExpr(chartAlias, chartQuery.selectedLongNoteMode);
@@ -903,11 +913,15 @@ void appendDifficultyEntryOrderBy(std::string &query,
         ChartRecordSortDirection::Descending);
     query += ", ";
     break;
-  case ChartRecordSortCriterion::Score:
+  case ChartRecordSortCriterion::Rate:
     appendNullableOrderExpr(
         query,
-        difficultyEntryBestScoreExpr("dte", "cm", "score",
-                                     chartQuery.selectedLongNoteMode),
+        scoreRateExpr(
+            difficultyEntryBestScoreExpr("dte", "cm", "score",
+                                         chartQuery.selectedLongNoteMode),
+            difficultyEntryBestScoreExpr("dte", "cm", "max_score",
+                                         chartQuery.selectedLongNoteMode),
+            "cm"),
         direction);
     query += ", ";
     query += difficultyEntryClearMarkRankExpr(
@@ -971,11 +985,15 @@ void appendDifficultyCourseEntryOrderBy(std::string &query,
         ChartRecordSortDirection::Descending);
     query += ", ";
     break;
-  case ChartRecordSortCriterion::Score:
+  case ChartRecordSortCriterion::Rate:
     appendNullableOrderExpr(
         query,
-        difficultyEntryBestScoreExpr("dce", "cm", "score",
-                                     chartQuery.selectedLongNoteMode),
+        scoreRateExpr(
+            difficultyEntryBestScoreExpr("dce", "cm", "score",
+                                         chartQuery.selectedLongNoteMode),
+            difficultyEntryBestScoreExpr("dce", "cm", "max_score",
+                                         chartQuery.selectedLongNoteMode),
+            "cm"),
         direction);
     query += ", ";
     query += difficultyEntryClearMarkRankExpr(

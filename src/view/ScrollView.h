@@ -13,6 +13,7 @@ public:
   void setContentView(View *view);
   ScrollView *setContentPadding(Edge edge, float padding);
   void refreshContentLayout();
+  void propagateThemeChange() override;
   void propagateLanguageChange() override;
   void scrollToBottom();
   float getScrollOffset() const { return scrollOffset; }
