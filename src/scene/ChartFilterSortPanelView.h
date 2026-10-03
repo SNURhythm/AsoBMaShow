@@ -107,7 +107,7 @@ private:
   inline static constexpr std::array<SortOptionDefinition, 8> kSortOptions = {{
       {.labelKey = "library.sort.default.label", .criterion = ChartRecordSortCriterion::Default},
       {.labelKey = "library.sort.clear_mark.label", .criterion = ChartRecordSortCriterion::ClearMark},
-      {.labelKey = "library.sort.score.label", .criterion = ChartRecordSortCriterion::Score},
+      {.labelKey = "library.sort.rate.label", .criterion = ChartRecordSortCriterion::Rate},
       {.labelKey = "library.sort.title.label", .criterion = ChartRecordSortCriterion::Title},
       {.labelKey = "library.sort.min_bpm.label", .criterion = ChartRecordSortCriterion::MinBpm},
       {.labelKey = "library.sort.max_bpm.label", .criterion = ChartRecordSortCriterion::MaxBpm},

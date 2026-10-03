@@ -104,8 +104,8 @@ int main() {
     row.applyYogaLayout();
     auto *bestScore = dynamic_cast<TextView *>(
         row.findViewByName("chartListBestScore"));
-    require(bestScore != nullptr && bestScore->getText() == "EX 2451",
-            "played rows display the numeric best EX score inside the rank badge");
+    require(bestScore != nullptr && bestScore->getText() == "90.78%",
+            "played rows display the best EX rate inside the rank badge");
     auto *rankBadge = row.findViewByName("chartListScoreRank");
     require(rankBadge != nullptr && rankBadge->getVisible() &&
                 bestScore->getX() >= rankBadge->getX() &&
@@ -114,10 +114,13 @@ int main() {
                     rankBadge->getY() + rankBadge->getHeight(),
             "best score fits within the existing rank badge");
     row.setBestScoreRank(12345, 15000);
-    require(bestScore->getText() == "EX 12345",
-            "rebinding updates the score as well as the grade");
+    require(bestScore->getText() == "82.30%",
+            "rebinding updates the EX rate as well as the grade");
+    row.setBestScoreRank(15000, 15000);
+    require(bestScore->getText() == "100.00%",
+            "a perfect score displays a full EX rate");
     require(bestScore->measureTextWidth(bestScore->getText()) <= bestScore->getWidth(),
-            "five-digit EX scores fit without clipping in the rank badge");
+            "100.00% fits without clipping in the rank badge");
     row.setBestScoreRank(0, 0);
     require(!rankBadge->getVisible() && bestScore->getText().empty(),
             "unplayed rows hide the badge and clear the previous score");

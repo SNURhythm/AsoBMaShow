@@ -1761,8 +1761,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     startSelectedChart();
   });
   replayButtonSlot = new View();
-  replayButtonSlot->setFlex(1)->setMinWidth(0)->setHeight(0);
-  replayButtonSlot->setVisible(false);
+  replayButtonSlot->setFlex(1)->setMinWidth(0)->setHeight(kMenuActionHeight);
   replayButtonSlot->setAlignItems(YGAlignStretch);
 
   replayButton = new Button(0, 0, 224, kMenuActionHeight);
@@ -2888,7 +2887,7 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
         chartRecordFilters.clearMarkRank.has_value() ||
         chartRecordFilters.scoreRank.has_value() ||
         chartRecordFilters.sort.criterion == ChartRecordSortCriterion::ClearMark ||
-        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Score;
+        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Rate;
     if (chartListDependsOnScores) {
       reloadChartList(true);
     } else {
@@ -4354,9 +4353,7 @@ void MainMenuScene::setReplayButtonVisible(bool visible) {
     return;
   }
 
-  replayButtonSlot->setVisible(visible);
-  replayButtonSlot->setHeight(visible ? kMenuActionHeight : 0.0f);
-  replayButtonSlot->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+  replayButton->setEnabled(visible);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -4369,13 +4366,15 @@ void MainMenuScene::setPlayableChartActionsVisible(bool visible) {
 void MainMenuScene::setPlayableChartActionsVisible(bool visible,
                                                    bool chartActionsVisible) {
   if (startButton != nullptr) {
-    startButton->setVisible(visible);
-    startButton->setHeight(visible ? 88.0f : 0.0f);
+    startButton->setEnabled(visible);
   }
   if (chartActionsRow != nullptr) {
     const bool showChartActions = visible && chartActionsVisible;
-    chartActionsRow->setVisible(showChartActions);
-    chartActionsRow->setHeight(showChartActions ? kMenuActionHeight : 0.0f);
+    for (auto *child : chartActionsRow->getChildren()) {
+      if (auto *button = dynamic_cast<Button *>(child)) {
+        button->setEnabled(showChartActions);
+      }
+    }
     if (!showChartActions && revealContextMenu != nullptr) {
       revealContextMenu->dismiss();
     }

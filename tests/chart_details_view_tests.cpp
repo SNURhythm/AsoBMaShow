@@ -72,6 +72,7 @@ int main() {
     best.maxScore = 2700;
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
+    const int selectedHeight = view.getHeight();
     require(text(view, "chartDetailsBpm") == "75.5–180",
             "variable BPM preserves both ends and fractional values");
     require(text(view, "chartDetailsJudge") == "NORMAL",
@@ -106,19 +107,31 @@ int main() {
 
     record.courseStart = true;
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
-    require(!view.findViewByName("chartDetailsFacts")->getVisible() &&
-                text(view, "chartDetailsScore").empty(),
-            "course headers never inherit chart facts or chart best scores");
+    require(view.findViewByName("chartDetailsFacts")->getVisible() &&
+                text(view, "chartDetailsScore") == "—",
+            "course headers display placeholders instead of stale chart values");
     record.courseStart = false;
     record.solidArchive = true;
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
-    require(!view.findViewByName("chartDetailsFacts")->getVisible(),
-            "archive selections do not display synthetic chart metadata");
+    require(text(view, "chartDetailsBpm") == "—",
+            "archive selections display placeholders instead of synthetic metadata");
 
     view.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
-    require(text(view, "chartDetailsScore").empty() &&
-                text(view, "chartDetailsBpm").empty(),
-            "clearing the selection removes stale chart and score values");
+    view.applyYogaLayout();
+    require(text(view, "chartDetailsScore") == "—" &&
+                text(view, "chartDetailsBpm") == "—",
+            "clearing the selection replaces stale chart and score values with placeholders");
+    require(view.getHeight() == selectedHeight,
+            "empty selection reserves the same detail height as a played chart");
+    record.solidArchive = false;
+    view.setChart(&record, std::nullopt, kNoClearTypeRank, "320");
+    view.applyYogaLayout();
+    require(view.getHeight() == selectedHeight,
+            "unplayed charts keep actions at the same position as played charts");
+    view.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
+    view.applyYogaLayout();
+    require(view.getHeight() == selectedHeight,
+            "clearing an unplayed chart also preserves the detail height");
 
     record.solidArchive = false;
     record.meta.PlayLength = 0;

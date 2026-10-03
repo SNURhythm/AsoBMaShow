@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <locale>
 #include <sstream>
 
 namespace {
@@ -333,7 +334,11 @@ void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   scoreRankShadowView->setText(displayRank);
   scoreRankWeightView->setText(displayRank);
   scoreRankView->setText(displayRank);
-  bestScoreView->setText("EX " + std::to_string(score));
+  std::ostringstream rate;
+  rate.imbue(std::locale::classic());
+  rate << std::fixed << std::setprecision(2)
+       << 100.0 * static_cast<double>(score) / maxScore << '%';
+  bestScoreView->setText(rate.str());
   const bool visible = !scoreRank.empty();
   scoreRankColumn->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
   scoreRankColumn->setVisible(visible);

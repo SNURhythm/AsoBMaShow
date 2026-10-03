@@ -434,7 +434,7 @@
 {"library.sort.main_bpm.label", "Main BPM", "주요 BPM", "メイン BPM"},
 {"library.sort.max_bpm.label", "Max BPM", "최대 BPM", "最大 BPM"},
 {"library.sort.min_bpm.label", "Min BPM", "최소 BPM", "最小 BPM"},
-{"library.sort.score.label", "Score", "점수", "スコア"},
+{"library.sort.rate.label", "EX Rate", "EX 비율", "EXレート"},
 {"library.sort.title.label", "Title", "제목", "タイトル"},
 {"library.tasks.add_folder.message", "Add Folder: {name}", "폴더 추가: {name}", "フォルダーを追加: {name}"},
 {"library.tasks.add_folder_failed", "Failed to add folder", "폴더를 추가하지 못했습니다", "フォルダーを追加できませんでした"},

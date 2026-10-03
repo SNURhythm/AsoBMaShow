@@ -204,8 +204,6 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                int clearRank, const std::string &total) {
   const bool chart = record && !record->courseStart && !record->solidArchive &&
                      !record->unavailable && !record->meta.BmsPath.empty();
-  visible(facts_, chart);
-  visible(personalBest_, chart);
   visible(artworkFrame_, chart && !record->meta.StageFile.empty());
   title_->setLocalizedText(record ? i18n::Text(record->meta.Title +
       (record->meta.SubTitle.empty() ? "" : " " + record->meta.SubTitle))
@@ -216,8 +214,14 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   if (!chart) {
     for (auto *value : {difficulty_, bpm_, judge_, length_, notes_, total_,
                        noteTypes_, score_, rate_, next_, clear_}) {
-      value->setText("");
+      value->setText("—");
     }
+    visible(emptyScore_, false);
+    visible(score_, true);
+    bestLabel_->setLocalizedText(i18n::message("menu.details.best.label"));
+    totalLabel_->setLocalizedText(i18n::message("menu.details.total.label"));
+    clearLamp_->clearBackgroundColor();
+    rate_->setThemedColor(ui_theme::textSecondary);
     if (record) {
       difficulty_->setLocalizedText(i18n::message(record->courseStart
           ? "library.chart.course.label" : record->solidArchive

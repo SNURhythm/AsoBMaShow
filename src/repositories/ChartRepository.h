@@ -31,7 +31,7 @@ struct ArchiveUnzipRecoveryRecord {
 enum class ChartRecordSortCriterion {
   Default,
   ClearMark,
-  Score,
+  Rate,
   Title,
   MinBpm,
   MaxBpm,

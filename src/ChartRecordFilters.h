@@ -35,7 +35,7 @@ defaultDirectionFor(ChartRecordSortCriterion criterion) {
     return ChartRecordSortDirection::Ascending;
   case ChartRecordSortCriterion::Default:
   case ChartRecordSortCriterion::ClearMark:
-  case ChartRecordSortCriterion::Score:
+  case ChartRecordSortCriterion::Rate:
   case ChartRecordSortCriterion::MaxBpm:
     return ChartRecordSortDirection::Descending;
   }
