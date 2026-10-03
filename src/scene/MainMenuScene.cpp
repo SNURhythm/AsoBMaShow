@@ -1226,7 +1226,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
   };
 
-  static constexpr int kFolderListItemHeight = kMenuActionHeight;
+  static constexpr int kFolderListItemHeight = 50;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
     return new LibraryFolderItemView(0, 0, kLibraryControlWidth,
                                      kFolderListItemHeight);
