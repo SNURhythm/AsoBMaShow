@@ -682,6 +682,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_temporary_storage_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_temporary_storage_tests.py -v)
+    set_tests_properties(android_temporary_storage_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     if (NOT IOS)
         add_executable(curl_redirect_policy_tests
             tests/curl_redirect_policy_tests.cpp
@@ -8628,6 +8637,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_skin_export_tests ${CMAKE_CURRENT_BINARY_DIR}/result_skin_export_fixture.cpp)
     target_compile_features(result_skin_export_tests PRIVATE cxx_std_23)
     asobmashow_register_test(result_skin_export_tests)
+    set(result_skin_timeout_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/result_skin_timeout_tests.cpp)
+    add_custom_command(
+        OUTPUT ${result_skin_timeout_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/result_skin_timeout_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${result_skin_timeout_source}
+        DEPENDS tests/result_skin_timeout_extract.py tests/result_skin_timeout_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/scene/ResultScene.cpp
+                src/scene/Scene.h src/scene/SceneManager.h src/scene/SceneManager.cpp
+        VERBATIM
+    )
+    add_executable(result_skin_timeout_tests ${result_skin_timeout_source})
+    target_compile_features(result_skin_timeout_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(result_skin_timeout_tests)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/replay_result_skin_extract.py

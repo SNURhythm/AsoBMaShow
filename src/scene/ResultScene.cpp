@@ -4434,11 +4434,16 @@ void ResultScene::renderScene() {
         resultSkinFadeoutStartedMillis = elapsedMillis;
       } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >
                  resultSkinSession->fadeoutMillis()) {
-        if (isCourseStageResult()) {
-          continueCourse();
-        } else {
-          exitResult();
-        }
+        // Scene::render still draws overlays after this method returns.
+        // Keep the scene alive until that render pass has unwound.
+        defer([this]() {
+          if (isCourseStageResult()) {
+            continueCourse();
+          } else {
+            exitResult();
+          }
+          return false;
+        }, 0, true);
         return;
       }
     }

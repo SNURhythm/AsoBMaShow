@@ -9,9 +9,12 @@ public final class AsoBMaShowApplication extends Application {
     public void onCreate() {
         super.onCreate();
         try {
-            Os.setenv("SQLITE_TMPDIR", getCacheDir().getAbsolutePath(), true);
+            String cachePath = getCacheDir().getAbsolutePath();
+            // libc++ otherwise falls back to /data/local/tmp, outside app storage.
+            Os.setenv("TMPDIR", cachePath, true);
+            Os.setenv("SQLITE_TMPDIR", cachePath, true);
         } catch (ErrnoException error) {
-            throw new IllegalStateException("Could not configure SQLite private temporary storage", error);
+            throw new IllegalStateException("Could not configure private temporary storage", error);
         }
     }
 }

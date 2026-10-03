@@ -3,6 +3,37 @@
 Base: `484a2d69` (`develop`, PR #115 merged).
 Fix branch: `fix/release-blockers-2026-10-03`.
 
+## Confirmed runtime blockers
+
+The follow-up program-code review found two release-blocking defects:
+
+- A selected result skin's scene/fadeout timeout navigated synchronously from
+  `ResultScene::renderScene()`. Scene replacement deleted the result scene,
+  then `Scene::render()` continued iterating its freed overlay views. Ordinary
+  chart results and course results could hit this use-after-free simply by
+  waiting for the skin's timeout. Navigation now uses the scene's deferred
+  queue, after rendering has unwound. A regression executes the complete
+  production render/scene-management methods: it aborts on the old code and
+  passes after the fix, including ordinary/course navigation, timer boundaries,
+  repeated rendering, persistence/details gates, and the course-replay guard.
+  The fixed fixture also passes AddressSanitizer.
+- Android startup configured `SQLITE_TMPDIR` but not `TMPDIR`. The pinned NDK
+  28.2.13676358 libc++ checks `TMPDIR`, `TMP`, `TEMP`, and `TEMPDIR`, then uses
+  `/data/local/tmp`, outside the app's writable private storage. This behavior
+  was confirmed in the installed aarch64 `libc++_shared.so`. Find BMS staging
+  and archive caches use `std::filesystem::temp_directory_path()`, so ordinary
+  app execution could fail to stage files; a thrown filesystem error could
+  also escape the download worker. Application startup now points native and
+  SQLite temporary storage to the app cache. Three Java regression tests
+  compile the actual application class and verify initialization, inherited
+  path replacement, and assignment failures; they failed before and pass after
+  the fix. Existing Android instrumentation also checks the process `TMPDIR`
+  and probes that directory, but was not run on a device during this review.
+
+Separate Astra reviewers approved each runtime fix and its regression coverage.
+The Android host tests substitute the Android environment API; they do not
+directly execute libc++ in an Android app process.
+
 ## Confirmed release-gate blocker
 
 The macOS workflow's required cross-platform release check fails before
@@ -70,7 +101,7 @@ production deadline was relaxed to accommodate machine contention.
 Review covered recent first-launch navigation, scene/view callback lifetimes,
 download recovery, and release workflow checks. The desktop app and all test
 targets build successfully. After the final changes and full rebuild, the
-complete parallel CTest run passed 411/411 tests in 184.50 seconds, including
+complete parallel CTest run passed 413/413 tests in 96.48 seconds, including
 the native iOS transfer and dependent evidence checks.
 
 Additional verification:
@@ -79,12 +110,13 @@ Additional verification:
 - iOS build setup: 49/49 passed.
 - iOS artifact-auditor tests: 16/16 passed.
 - macOS artifact-auditor tests: 7/7 passed.
+- Result timeout regression: passed with AddressSanitizer.
+- Android startup: 3/3 Java regression tests passed; the application class also
+  compiles against the real Android 36 SDK with Java 17.
 - Independent code review: findings addressed; final review approved with no
   remaining actionable findings.
 
-No additional runtime blocker was confirmed in the reviewed paths.
-
-This review does not establish signed release readiness. No full iOS/Android
-build, physical-device smoke test, Windows build, signing/notarization, store
-validation, or deployment was performed. Artifact-audit unit tests validate the
+This review does not establish signed release readiness. Local validation did
+not include a full iOS/Android build, physical-device smoke test, Windows build,
+signing/notarization, store validation, or deployment. Artifact-audit tests validate the
 auditors; they do not substitute for auditing a signed release artifact.
