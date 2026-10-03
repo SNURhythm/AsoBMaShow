@@ -29,7 +29,8 @@ struct Service {
   int pageRequests = 0;
   int pageAttempts = 0;
   bool acceptPages = true;
-  int open(int) { return 1; }
+  int opens = 0;
+  int open(int) { ++opens; return 1; }
   Snapshot snapshot() { return value; }
   bool loadNextPage(int) {
     ++pageAttempts;
@@ -54,6 +55,14 @@ struct MusicSelectScene {
     MusicSelectRankingSnapshot snapshot;
     std::int64_t updatedUnixMillis = 0;
   };
+  struct RankingModal {
+    bool visible = true;
+    bool closing = false;
+    bool isOpen() const { return visible; }
+    void update() { if (closing) visible = false; }
+    void close() { visible = false; }
+  };
+  RankingModal *rankingsModal_ = nullptr;
   MusicSelectRankingSnapshot ranking_;
   std::optional<int> rankingRequest_ = 1;
   std::map<std::string, CachedRanking, std::less<>> rankingCache_;
@@ -65,9 +74,26 @@ struct MusicSelectScene {
   int elapsedMicros() { return 1; }
   void setRanking(MusicSelectRankingSnapshot snapshot) { ranking_ = snapshot; }
   void updateRanking();
+  void updateRankingsModal();
+  void closeRankings();
 };
 SCENE_METHODS
 int main() {
+  ir::Service modalService;
+  MusicSelectScene modalScene{{&modalService}};
+  MusicSelectScene::RankingModal modal;
+  modalScene.rankingsModal_ = &modal;
+  modalScene.rankingLoadAtMicros_ = 0;
+  modalScene.updateRanking();
+  assert(modalService.opens == 0 && "skin debounce cannot replace an open modal request");
+  modal.closing = true;
+  modalScene.updateRankingsModal();
+  modalScene.updateRanking();
+  assert(modalService.opens == 1 && "closing modal resumes the skin request from shared cache");
+  modal.visible = true;
+  modalScene.closeRankings();
+  assert(!modal.isOpen());
+
   ir::Service service;
   MusicSelectScene scene{{&service}};
   auto finish = [&](const std::string &key) {

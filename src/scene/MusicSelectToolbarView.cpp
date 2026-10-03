@@ -104,6 +104,7 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::Drag,
                 MusicSelectToolbarControl::ChartMenu,
                 MusicSelectToolbarControl::PlayOptions,
+                MusicSelectToolbarControl::Rankings,
                 MusicSelectToolbarControl::MoreMenu,
                 MusicSelectToolbarControl::Collapse};
 
@@ -139,6 +140,9 @@ void MusicSelectToolbarView::rebuild() {
         break;
       case MusicSelectToolbarControl::MoreMenu:
         text = std::string(i18n::tr("music_select.toolbar.more.label")) + " ▾";
+        break;
+      case MusicSelectToolbarControl::Rankings:
+        text = i18n::tr("menu.rankings.label");
         break;
       case MusicSelectToolbarControl::PlayOptions:
         text = i18n::tr("music_select.toolbar.play_options.label");
@@ -227,6 +231,9 @@ void MusicSelectToolbarView::activateControl(
       callbacks_.openChartRecords();
     }
     break;
+  case MusicSelectToolbarControl::Rankings:
+    if (callbacks_.openRankings) callbacks_.openRankings();
+    break;
   case MusicSelectToolbarControl::RevealChart:
     if (callbacks_.revealChart) {
       callbacks_.revealChart();
@@ -273,6 +280,7 @@ bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control)
   case MusicSelectToolbarControl::MoreMenu: return bool(callbacks_.openMoreMenu);
   case MusicSelectToolbarControl::ChartViewer: return bool(callbacks_.openChartViewer);
   case MusicSelectToolbarControl::ChartRecords: return bool(callbacks_.openChartRecords);
+  case MusicSelectToolbarControl::Rankings: return bool(callbacks_.openRankings);
   case MusicSelectToolbarControl::RevealChart: return bool(callbacks_.revealChart);
   case MusicSelectToolbarControl::MusicPlayer: return bool(callbacks_.openMusicPlayer);
   case MusicSelectToolbarControl::Tasks: return bool(callbacks_.openTasks);

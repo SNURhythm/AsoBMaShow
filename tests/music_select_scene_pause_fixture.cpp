@@ -27,6 +27,8 @@ struct Worker {
 };
 
 struct MusicSelectScene {
+  void closeRankings() {}
+
   struct RevealMenu {
     void dismiss() {}
     void setViewportSize(int, int) {}

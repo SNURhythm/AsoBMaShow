@@ -96,6 +96,8 @@ class MusicSelectScene final : public Scene {
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
 public:
+  std::unique_ptr<int> rankingsModal_;
+
   explicit MusicSelectScene(ApplicationContext &context, Evidence &e)
       : Scene(context), e(e), previewController_(e, "preview-controller"),
         skinTouchGesture_(e, "gesture") {}

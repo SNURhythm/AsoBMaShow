@@ -83,6 +83,8 @@ struct PreviewAudio {
   void silence() { silenced = true; }
 };
 struct MusicSelectScene : Scene {
+  void closeRankings() {}
+
   struct RevealMenu { void dismiss() {} };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 

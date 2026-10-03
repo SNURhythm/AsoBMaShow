@@ -326,6 +326,10 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  void updateRankingsModal() {}
+
+  void closeRankings() {}
+
   struct RevealMenu {
     void dismiss() {}
     void setViewportSize(int, int) {}
