@@ -1,11 +1,56 @@
 # BMS parser consumer contract handoff — 2026-10-04
 
+## Final upstream handoff
+
+The parser performance/Java-parity follow-up is committed and pushed as
+`bb8658a3d68f06c11b4ce4ff0d6c9b91055f2961` on `bms-parser-cpp/main`.
+It fixes quadratic LN containment, ordinary Scan state retention, default
+charset detection/replacement, VOLWAV/custom metadata, and authored metronome
+cells. Its audit is `../bms-parser-cpp/docs/audits/2026-10-04-parser-review-fixes.md`.
+Modular/amalgamated suites and sanitizers passed. Actual Java comparisons
+passed 1,040 charts x four explicit RANDOM selections, under both sanitized
+Clang and GCC 15 `-O2`. This does not verify app consumers or historical replays.
+
+Generated artifacts at that revision (not yet copied into this application):
+
+- `build/bms_parser.hpp`: `0de1a5b678e806f2240471e5eb8d0fc3be5716c020d87bb47c9e255119222f25`
+- `build/bms_parser.cpp`: `311c451c4634e1f454a6c41eb82b86a54c9cf1160c822185fdfca8fe8ec27b39`
+
+Confirmed contracts and remaining API work:
+
+- **PMS remains unresolved:** path parsing uses the extension; byte Parse/Scan
+  still default to BMS and have no explicit format hint. Add any necessary
+  format API upstream and propagate the original filename/format through all
+  app byte-loading paths. Do not treat adopting this revision as fixing PMS.
+- **LN graph remains Java-compatible:** an unpaired visible head can have a
+  null tail. A paired endpoint can live outside active playable slots while
+  remaining chart-owned. App traversal/rendering must handle both; do not
+  assume every partner occurs in the active lane arrays or silently delete
+  upstream graph identities to avoid consumer fixes.
+- **Timing remains saturating at the parser boundary:** `Timing` and
+  `ParsedStopDuration` retain integer microseconds, including saturated values.
+  `GetStopDuration()` still returns double and may round `LLONG_MAX` to 2^63.
+  Consumer conversion/addition and playability policy remain app work.
+- Mines remain in the main `Notes` slots for parsed charts; preserve the
+  completed consumer recount work and raw damage semantics.
+- `ChartMeta::VolWav` defaults to zero and `Values` stores case-sensitive
+  `%`/`@` metadata. Automatic encoding now follows the reference; explicit
+  charset directives remain C++ extensions. Recheck metadata invalidation
+  together with adoption because decoded metadata/resource names can change.
+
+The app work recorded below is retained. Findings 2, 3, 6 and the broader
+numeric-consumer inventory still need completion. Verify findings 1, 4, 5
+against the adopted artifacts. This document update does not adopt artifacts,
+change app code, push the app branch, or override the user's existing push hold.
+The implementer should resolve that hold under the user's current instructions.
+
 ## Implementation progress — app consumer slice
 
 Work started from app commit `68382de1627f321aa8a56c7a961d75b4f7b974b7`.
 The user confirmed that a separate agent owns the in-progress upstream parser
-work. **No new parser artifacts have been adopted in this slice.** The final
-upstream commit, byte-format API and LN graph contract remain required before
+work. **No new parser artifacts have been adopted in this slice.** At the start
+of this slice, the final upstream contract was pending. The Final upstream
+handoff above now pins it and identifies the API work still required before
 PMS/LN adoption and the historical replay matrix can be completed.
 
 Current reviewed artifact SHA-256 identities (baseline, not final adoption):
@@ -451,18 +496,22 @@ AsoBMaShow parser-consumer fixes and investigate the replay-compatibility risk
 described there. Treat confirmed findings, preexisting weaknesses, withdrawn
 mine-damage speculation, and unverified concerns distinctly.
 
-First inspect git status and coordinate the final parser revision with the
-upstream work in ../bms-parser-cpp. Do not edit src/bms_parser.hpp or
+First inspect git status and preserve the completed consumer fixes at
+b64bf3d4 and all unrelated changes. The upstream starting revision is
+bb8658a3d68f06c11b4ce4ff0d6c9b91055f2961, already pushed in ../bms-parser-cpp.
+Read the Final upstream handoff section: PMS byte-format support is still
+missing and nullable/detached LN partners remain valid parser output. Do not edit src/bms_parser.hpp or
 src/bms_parser.cpp directly. If upstream changes are necessary, make them in
 the parser repository, run `make clean && make test && make test_amalgamation`,
 and copy both generated build/bms_parser files together only after verification.
 Follow AGENTS.md for parser commit/push and app branch integration. Do not
 create a worktree, deploy, or disturb unrelated/concurrent changes.
 
-Reproduce each confirmed finding and add meaningful regressions in the
-existing native targets. Fix null-LN consumption, unsafe saturated-time
-arithmetic, PMS format propagation, mine recount, and persistent metadata
-invalidation preserving added dates. Establish and test an explicit historical
+Reproduce the remaining confirmed findings and add meaningful regressions
+in the existing native targets. Complete null-LN consumption, PMS format
+propagation, and the broader numeric-consumer inventory. Revalidate the
+completed timing, mine recount, and metadata-invalidation fixes after adoption;
+preserve added dates and ship invalidation with the semantic update. Establish and test an explicit historical
 replay compatibility policy; do not claim parity from chart hashes alone.
 Do not introduce a mine-damage /2 change.
 
