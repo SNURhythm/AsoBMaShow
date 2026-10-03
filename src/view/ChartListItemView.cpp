@@ -318,7 +318,7 @@ void ChartListItemView::setClearRank(int clearRank) {
 
 void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   if (currentRecord.courseStart || solidArchive || unavailable ||
-      maxScore <= 0 || score <= 0) {
+      maxScore <= 0 || score < 0) {
     scoreRankShadowView->setText("");
     scoreRankWeightView->setText("");
     scoreRankView->setText("");

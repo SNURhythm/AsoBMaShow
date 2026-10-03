@@ -121,6 +121,16 @@ int main() {
             "a perfect score displays a full EX rate");
     require(bestScore->measureTextWidth(bestScore->getText()) <= bestScore->getWidth(),
             "100.00% fits without clipping in the rank badge");
+    row.setBestScoreRank(0, 2700);
+    require(rankBadge->getVisible() && bestScore->getText() == "0.00%",
+            "a recorded zero EX score remains visible as a zero rate");
+    bool hasFailingGrade = false;
+    for (auto *child : rankBadge->getChildren()) {
+      if (auto *text = dynamic_cast<TextView *>(child)) {
+        hasFailingGrade = hasFailingGrade || text->getText() == "F";
+      }
+    }
+    require(hasFailingGrade, "a recorded zero EX score displays grade F");
     row.setBestScoreRank(0, 0);
     require(!rankBadge->getVisible() && bestScore->getText().empty(),
             "unplayed rows hide the badge and clear the previous score");

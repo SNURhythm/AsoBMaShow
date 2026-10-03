@@ -93,6 +93,36 @@ int main() {
     require(view.getHeight() + 16 + 10 + 122 <= shortViewportContentHeight,
             "chart facts, best score and play settings fit above pinned actions at 16:9");
 
+    // Selecting non-chart rows must not leave an existing scroll offset past
+    // the end of the details now that placeholders preserve their height.
+    scroll.setHeight(300);
+    scroll.scrollToBottom();
+    const float selectedOffset = scroll.getScrollOffset();
+    require(selectedOffset > 0, "the details fixture starts scrolled down");
+    const auto requireStableScroll = [&]() {
+      view.applyYogaLayout();
+      require(view.getHeight() == selectedHeight &&
+                  scroll.getScrollOffset() == selectedOffset &&
+                  view.getY() + view.getHeight() == scroll.getY() + scroll.getHeight(),
+              "selection changes preserve the scrolled content bottom without another scroll event");
+    };
+    auto nonChart = record;
+    nonChart.courseStart = true;
+    view.setChart(&nonChart, std::nullopt, kNoClearTypeRank, "");
+    requireStableScroll();
+    nonChart.courseStart = false;
+    nonChart.solidArchive = true;
+    view.setChart(&nonChart, std::nullopt, kNoClearTypeRank, "");
+    requireStableScroll();
+    nonChart.solidArchive = false;
+    nonChart.unavailable = true;
+    view.setChart(&nonChart, std::nullopt, kNoClearTypeRank, "");
+    requireStableScroll();
+    view.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
+    requireStableScroll();
+    scroll.setHeight(800);
+    scroll.refreshContentLayout();
+
     record.meta.MinBpm = record.meta.MaxBpm = 0;
     record.meta.RankType = bms_parser::JudgeRankType::DefExRank;
     record.meta.Rank = 87;
