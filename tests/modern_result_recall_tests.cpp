@@ -368,7 +368,7 @@ void testFreshProvenanceBackedResultRecallsFromParsedChart() {
     output << "#PLAYER 1\n#TITLE Fresh Recall\n#ARTIST Test\n"
               "#BPM 120\n#PLAYLEVEL 1\n#RANK 2\n#TOTAL 200\n"
               "#WAV01 test.wav\n#RANDOM 2\n#IF 1\n#00111:01\n"
-              "#ELSE\n#00112:01\n#ENDIF\n";
+              "#ENDIF\n#IF 2\n#00112:01\n#ENDIF\n#ENDRANDOM\n";
   }
 
   std::atomic_bool cancelled{false};

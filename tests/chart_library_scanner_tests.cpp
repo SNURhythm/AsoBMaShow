@@ -537,7 +537,9 @@ void testScanMetadataMatchesFullParsingForFilesAndArchives() {
     assert(record.meta.Folder == (index == 0 ? root :
                                  archive_file::makeVirtualPath(archive, "song")));
     assert(record.hasBga);
-    assert(!record.hasBpmStop);
+    // jbms-parser takes the absolute value of STOP02 (-24), so the later
+    // row replaces STOP01 with a positive stop rather than clearing it.
+    assert(record.hasBpmStop);
     assert(!record.hasScrollChange);
   }
 }
@@ -560,6 +562,7 @@ void testFolderPreviewFallbackMatchesBeatorajaPerFolderScan() {
     std::ofstream chart(authoredPath);
     chart << "#PLAYER 1\n"
           << "#TITLE Authored\n"
+          << "#BPM 120\n"
           << "#PREVIEW custom.wav\n"
           << "#WAV01 sample.wav\n"
           << "#00111:01\n";
