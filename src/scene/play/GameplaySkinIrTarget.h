@@ -73,8 +73,11 @@ struct PlayfieldIrTargetState {
 [[nodiscard]] inline std::optional<int>
 gameplaySkinIrCurrentUserRank(const ir::IrRankingSnapshot &snapshot) {
   if (snapshot.state != ir::IrRankingSnapshotState::Succeeded ||
-      !snapshot.ranking || snapshot.paginationBlocked) return std::nullopt;
+      !snapshot.ranking) return std::nullopt;
   for (const auto &entry : snapshot.ranking->entries) {
+    if (entry.currentUser && entry.rank > 0) return entry.rank;
+  }
+  for (const auto &entry : snapshot.ranking->nearbyEntries) {
     if (entry.currentUser && entry.rank > 0) return entry.rank;
   }
   return std::nullopt;

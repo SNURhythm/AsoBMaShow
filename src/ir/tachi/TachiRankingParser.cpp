@@ -540,4 +540,63 @@ parseRankingPageResponse(std::string_view body, const IrChartQuery &query,
   }
 }
 
+TachiRankingPageOutcome
+parseNearbyRankingResponse(std::string_view body, const IrChartQuery &query,
+                           std::string_view expectedChartId,
+                           std::int64_t authenticatedUserId) noexcept {
+  try {
+    const auto chart = parseChartResolveResponse(body, query);
+    if (chart.status != ChartRankingStatus::Succeeded ||
+        chart.chartId != expectedChartId || authenticatedUserId <= 0) {
+      return {.status = chart.status == ChartRankingStatus::OversizedResponse
+                            ? chart.status : ChartRankingStatus::MalformedResponse,
+              .diagnostic = "Tachi nearby ranking chart is invalid"};
+    }
+    const Json document = Json::parse(body);
+    const auto &response = document.at("body");
+    const auto &own = response.at("pb");
+    const auto &above = response.at("adjacentAbove");
+    const auto &below = response.at("adjacentBelow");
+    auto users = parseUsers(response.at("users"));
+    if (!users || requiredInteger(own, "userID") != authenticatedUserId ||
+        !above.is_array() || !below.is_array() ||
+        above.size() > 5 || below.size() > 5) {
+      return {.diagnostic = "Tachi nearby ranking data is invalid"};
+    }
+    // This endpoint includes profiles for neighbors only. Identity comes
+    // from /status; an absent display name must not suppress the player's PB.
+    users->try_emplace(authenticatedUserId, "");
+    TachiRankingPage page;
+    auto ownEntry = parsePb(own, query, expectedChartId, authenticatedUserId,
+                            *users, page.outOf);
+    if (!ownEntry) return {.diagnostic = "Tachi nearby player is invalid"};
+    const int ownRank = ownEntry->rank;
+    page.entries.push_back(std::move(*ownEntry));
+    std::set<std::string> identities{std::to_string(authenticatedUserId)};
+    const auto append = [&](const Json &rows, bool preceding) {
+      for (const auto &pb : rows) {
+        auto entry = parsePb(pb, query, expectedChartId, authenticatedUserId,
+                             *users, page.outOf);
+        if (!entry || !identities.insert(entry->providerEntryId).second ||
+            (preceding ? entry->rank >= ownRank : entry->rank <= ownRank)) {
+          return false;
+        }
+        page.entries.push_back(std::move(*entry));
+      }
+      return true;
+    };
+    if (!append(above, true) || !append(below, false)) {
+      return {.diagnostic = "Tachi nearby ranking row is invalid"};
+    }
+    std::stable_sort(page.entries.begin(), page.entries.end(),
+                     [](const auto &a, const auto &b) { return a.rank < b.rank; });
+    for (const auto &entry : page.entries) {
+      page.userIds.push_back(std::stoll(entry.providerEntryId));
+    }
+    return {.status = ChartRankingStatus::Succeeded, .page = std::move(page)};
+  } catch (...) {
+    return {.diagnostic = "Tachi nearby ranking response parsing failed"};
+  }
+}
+
 } // namespace ir::tachi

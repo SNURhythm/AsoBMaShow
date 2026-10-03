@@ -299,16 +299,31 @@ struct IrRankingService::Impl {
         normalized.providerId = work.key.providerId;
         normalized.chart = work.request.chart;
         normalized.chart.chartSha256 = work.key.chartSha256;
-        for (auto &entry : normalized.entries) {
-          entry.playerName =
-              redactCredential(std::move(entry.playerName), credential);
+        bool credentialFreeEntryIds = true;
+        for (auto *entries : {&normalized.entries, &normalized.nearbyEntries}) {
+          for (auto &entry : *entries) {
+            entry.playerName =
+                redactCredential(std::move(entry.playerName), credential);
+            credentialFreeEntryIds = credentialFreeEntryIds &&
+                (credential.empty() || entry.providerEntryId.find(credential) ==
+                                           std::string::npos);
+          }
         }
-        const bool credentialFreeEntryIds =
-            credential.empty() ||
-            std::ranges::none_of(normalized.entries, [&](const auto &entry) {
-              return entry.providerEntryId.find(credential) !=
-                     std::string::npos;
-            });
+        if (!normalized.nearbyEntries.empty()) {
+          std::set<std::string> identities;
+          int previousRank = 0;
+          int ownRows = 0;
+          bool valid = normalized.nearbyEntries.size() <= 11;
+          for (const auto &entry : normalized.nearbyEntries) {
+            valid = valid && !entry.providerEntryId.empty() &&
+                    identities.insert(entry.providerEntryId).second &&
+                    entry.rank > 0 && entry.rank <= normalized.totalPlayers &&
+                    entry.rank >= previousRank;
+            previousRank = entry.rank;
+            ownRows += entry.currentUser ? 1 : 0;
+          }
+          if (!valid || ownRows != 1) normalized.nearbyEntries.clear();
+        }
         const bool validPageToken =
             credentialFreeEntryIds &&
             (!normalized.nextPageToken ||
@@ -353,6 +368,10 @@ struct IrRankingService::Impl {
                                 std::make_move_iterator(
                                     normalized.entries.end()));
           merged.nextPageToken = std::move(normalized.nextPageToken);
+          if (!merged.nextPageToken || std::ranges::any_of(merged.entries,
+                  [](const auto &entry) { return entry.currentUser; })) {
+            merged.nearbyEntries.clear();
+          }
           auto ranking =
               std::make_shared<const IrChartRanking>(std::move(merged));
           storeCacheLocked(work.key, ranking);

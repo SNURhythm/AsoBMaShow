@@ -421,7 +421,7 @@ private:
   std::uint64_t resultSkinRankingRevision = 0;
   result_skin_ir::RankingData resultSkinRanking;
   int resultSkinRankingOffset = 0;
-  bool resultSkinRankingOffsetChosen = false;
+  bool resultSkinRankingOffsetManuallyChosen = false;
   bool resultSkinRankingRefreshPending = false;
   std::optional<int> resultSkinPreviousIrRank;
   result_skin_ir::SubmissionTimers resultSkinSubmissionTimers;

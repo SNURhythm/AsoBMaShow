@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ir/IrRankingModels.h"
+#include "../ir/IrRankingWindow.h"
 #include "../ir/IrSubmissionService.h"
 
 #include <algorithm>
@@ -26,6 +26,8 @@ struct RankingData {
   std::optional<int> currentUserRank;
   std::optional<int> totalPlayers;
   std::optional<std::array<int, 11>> clearCounts;
+  std::vector<ResultIrRankingEntryData> nearbyEntries;
+  int nearbyOffset = 0;
 };
 
 inline int clearIndex(int rank) {
@@ -61,6 +63,16 @@ inline RankingData projectRanking(const ir::IrRankingSnapshot &source) {
     if (entry.currentUser) result.currentUserRank = entry.rank;
     if (complete) {
       ++(*result.clearCounts)[static_cast<std::size_t>(clearIndex(entry.clearType))];
+    }
+  }
+  if (!result.currentUserRank) {
+    result.nearbyOffset = ir::nearbyRankingOffset(ranking.nearbyEntries);
+    for (const auto &entry : ranking.nearbyEntries) {
+      result.nearbyEntries.push_back({.rank = entry.rank,
+          .playerName = entry.currentUser ? "YOU" : entry.playerName,
+          .score = entry.score, .clearType = entry.clearType,
+          .currentUser = entry.currentUser});
+      if (entry.currentUser) result.currentUserRank = entry.rank;
     }
   }
   return result;

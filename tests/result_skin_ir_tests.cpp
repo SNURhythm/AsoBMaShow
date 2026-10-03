@@ -56,6 +56,58 @@ int main() {
   check(projected.totalPlayers == 0 && projected.clearCounts,
         "successful empty ranking supplies zero counts");
 
+  ranking->totalPlayers = 6000;
+  ranking->nextPageToken = "more";
+  ranking->entries = {{.rank = 1, .playerName = "Top", .score = 190}};
+  ranking->nearbyEntries = {
+      {.rank = 4999, .playerName = "Above", .score = 102},
+      {.rank = 5000, .score = 100, .currentUser = true},
+      {.rank = 5001, .playerName = "Below", .score = 98}};
+  projected = result_skin_ir::projectRanking(source);
+  check(projected.currentUserRank == 5000 && !projected.clearCounts &&
+            projected.entries.size() == 1,
+        "nearby own rank is available without mistaking sparse rows for complete pages");
+  auto rows = ir::rankingWindow(projected.entries, projected.nearbyEntries,
+                                 projected.nearbyOffset, 4995);
+  check(rows.size() == 3 && rows[1].currentUser && rows[1].rank == 5000 &&
+            rows[1].playerName == "YOU",
+        "result's initial own-rank offset shows available nearby rows without needing page 50");
+  rows = ir::rankingWindow(projected.entries, projected.nearbyEntries,
+                           projected.nearbyOffset, 0);
+  check(rows.size() == 1 && rows[0].rank == 1,
+        "top-of-leaderboard navigation still shows the top page");
+  ranking->nearbyEntries[0].rank = 4998;
+  ranking->nearbyEntries.insert(ranking->nearbyEntries.begin(),
+      {.rank = 4998, .playerName = "Tied above", .score = 102});
+  projected = result_skin_ir::projectRanking(source);
+  rows = ir::rankingWindow(projected.entries, projected.nearbyEntries,
+                           projected.nearbyOffset, 4995);
+  check(rows.size() == 4 && rows[0].rank == 4998 && rows[1].rank == 4998 &&
+            rows[2].rank == 5000 && rows[2].currentUser,
+        "nearby window preserves competition ranks and tied neighbors");
+
+  ranking->entries.clear();
+  for (int rank = 1; rank <= 100; ++rank) ranking->entries.push_back({.rank = rank});
+  ranking->nearbyEntries.clear();
+  for (int rank = 96; rank <= 106; ++rank) {
+    ranking->nearbyEntries.push_back({.rank = rank, .currentUser = rank == 101});
+  }
+  projected = result_skin_ir::projectRanking(source);
+  rows = ir::rankingWindow(projected.entries, projected.nearbyEntries,
+                           projected.nearbyOffset, 90);
+  check(rows.size() == 10 && rows.front().rank == 91 && rows.back().rank == 100,
+        "nearby overlap cannot displace loaded top rows during explicit navigation");
+  rows = ir::rankingWindow(projected.entries, projected.nearbyEntries,
+                           projected.nearbyOffset, 96, 10, true);
+  check(rows.size() == 10 && rows[4].currentUser && rows[4].rank == 101,
+        "automatic result centering uses nearby rows across the prefix boundary");
+  ranking->nearbyEntries = {{.rank = 1}, {.rank = 2, .currentUser = true}, {.rank = 102}};
+  projected = result_skin_ir::projectRanking(source);
+  rows = ir::rankingWindow(projected.entries, projected.nearbyEntries,
+                           projected.nearbyOffset, 0, 10, true);
+  check(rows.size() == 3 && rows[1].currentUser && rows[1].rank == 2,
+        "own player tied near the top remains visible even when outside the first hundred rows");
+
   result_skin_ir::SubmissionTimers timers;
   ir::IrAttemptStatusSnapshot status;
   check(!timers.observe(status, 100) && !timers.startedMicros[0],

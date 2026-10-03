@@ -863,8 +863,34 @@ struct IrRankingModal::Impl {
 
     if (showList && presentation.ranking != visibleRanking) {
       const bool preserveScroll = visibleRanking != nullptr;
+      const auto previous = visibleRanking;
       visibleRanking = presentation.ranking;
       const auto retained = visibleRanking;
+      // New top pages insert rows before the distant nearby window. Keep
+      // the same player at the viewport's top instead of jumping backward.
+      if (previous && list->itemHeight > 0 && !previous->entries.empty()) {
+        const auto anchor = std::min(previous->entries.size() - 1,
+            static_cast<std::size_t>(std::max(0.0f, list->scrollOffset) / list->itemHeight));
+        const auto &id = previous->entries[anchor].providerEntryId;
+        if (!id.empty()) {
+          const auto found = std::ranges::find_if(retained->entries,
+              [&](const auto &entry) { return entry.providerEntryId == id; });
+          if (found != retained->entries.end()) {
+            list->scrollOffset += (static_cast<float>(found - retained->entries.begin()) -
+                                   static_cast<float>(anchor)) * list->itemHeight;
+          }
+        }
+      }
+      if (previous && list->selectedIndex >= 0 &&
+          list->selectedIndex < static_cast<int>(previous->entries.size())) {
+        const auto &id = previous->entries[static_cast<std::size_t>(list->selectedIndex)].providerEntryId;
+        if (!id.empty()) {
+          const auto found = std::ranges::find_if(retained->entries,
+              [&](const auto &entry) { return entry.providerEntryId == id; });
+          list->selectedIndex = found == retained->entries.end()
+                                    ? -1 : static_cast<int>(found - retained->entries.begin());
+        }
+      }
       auto provider = [retained](int index) -> const IrChartRankingEntry & {
         return retained->entries[static_cast<std::size_t>(index)];
       };
@@ -874,6 +900,14 @@ struct IrRankingModal::Impl {
       } else {
         list->setItemProvider(static_cast<int>(retained->entries.size()),
                               std::move(provider));
+        if (!retained->nearbyEntries.empty()) {
+          const auto own = std::ranges::find_if(retained->entries,
+              [](const auto &entry) { return entry.currentUser; });
+          if (own != retained->entries.end()) {
+            list->scrollOffset = std::max(0.0f,
+                static_cast<float>(own - retained->entries.begin()) - 4.0f) * list->itemHeight;
+          }
+        }
       }
     } else if (!showList) {
       visibleRanking.reset();

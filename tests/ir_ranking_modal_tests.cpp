@@ -238,6 +238,26 @@ void testComparisonStaysSeparateAndYouEntryIsHighlighted() {
   REQUIRE(you.maxComboText == "\xE2\x80\x94");
 }
 
+void testNearbyRowsAppearWithoutDuplicatingTopRows() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  auto value = std::make_shared<ir::IrChartRanking>();
+  value->totalPlayers = 6000;
+  value->nextPageToken = "page-2";
+  value->entries = {{.rank = 1, .providerEntryId = "top", .playerName = "Top"}};
+  value->nearbyEntries = {value->entries.front(),
+      {.rank = 5000, .providerEntryId = "own", .currentUser = true}};
+  auto source = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  source.ranking = value;
+  REQUIRE(model.apply(source));
+  REQUIRE(model.presentation().entryCount == 2);
+  REQUIRE(model.row(1, 1200).rankText == "#5000");
+  REQUIRE(model.row(1, 1200).highlighted);
+  REQUIRE(model.row(1, 1200).playerText == "You");
+  REQUIRE(value->entries.size() == 1);
+  REQUIRE(model.presentation().canLoadNextPage);
+}
+
 void testResponsiveRowsKeepFixedHeightCoreFields() {
   ir::IrRankingModalModel model;
   model.open(request(), "Test Chart");
@@ -587,6 +607,7 @@ int main() {
   testModalStateMappingAndActions();
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
+  testNearbyRowsAppearWithoutDuplicatingTopRows();
   testResponsiveRowsKeepFixedHeightCoreFields();
   testScoreDetailFormatsCompleteAndMissingData();
   testPaginationPresentationKeepsSuccessfulListVisible();

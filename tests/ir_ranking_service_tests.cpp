@@ -481,6 +481,35 @@ void testPaginationAppendsWithoutDiscardingVisibleRows() {
          "the service delegates continuation through the page method only");
 }
 
+void testNearbyRowsSurvivePagesUntilOwnRowIsReached() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  auto first = FakeRankingDriver::success("fake", request().chart, "first", "page-2");
+  first.ranking->totalPlayers = 4;
+  first.ranking->nearbyEntries = {{.rank = 3, .providerEntryId = "own",
+      .playerName = "Account", .currentUser = true}};
+  driver->push({.outcome = std::move(first)});
+  const auto generation = harness.openAndWait(request());
+  expect(harness.service->snapshot().ranking->nearbyEntries.size() == 1,
+         "first snapshot publishes distant own row alongside the prefix");
+  for (int rank : {2, 3}) {
+    auto next = FakeRankingDriver::success("fake", request().chart,
+        rank == 2 ? "second" : "own", "page-" + std::to_string(rank + 1));
+    next.ranking->totalPlayers = 4;
+    next.ranking->entries.front().rank = rank;
+    next.ranking->entries.front().currentUser = rank == 3;
+    driver->push({.outcome = std::move(next)});
+    expect(harness.service->loadNextPage(generation), "continuation queued");
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (harness.service->snapshot().loadingNextPage &&
+           std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    const auto value = harness.service->snapshot();
+    expect(value.ranking && value.ranking->entries.size() == static_cast<std::size_t>(rank) &&
+               value.ranking->nearbyEntries.size() == (rank == 2 ? 1U : 0U),
+           "nearby window survives intermediate pages and retires when prefix reaches own row");
+  }
+}
+
 void testPaginationFailureKeepsRowsAndStopsAutomaticRetry() {
   Harness harness;
   auto driver = harness.driver("fake");
@@ -599,12 +628,18 @@ void testCacheIdentityAndCredentialFreeDebugTypes() {
   auto hostileOutcome = FakeRankingDriver::success(
       "fake", request().chart, "sentinel-api-key");
   hostileOutcome.ranking->entries.front().providerEntryId = "safe-player-id";
+  hostileOutcome.ranking->totalPlayers = 6000;
+  hostileOutcome.ranking->nearbyEntries = {{.rank = 5000,
+      .providerEntryId = "safe-nearby-id", .playerName = "sentinel-api-key",
+      .currentUser = true}};
   hostile.driver("fake")->push({.outcome = std::move(hostileOutcome)});
   hostile.openAndWait(request());
   const auto hostileSnapshot = hostile.service->snapshot();
   expect(
       hostileSnapshot.ranking &&
-          hostileSnapshot.ranking->entries.front().playerName == "[redacted]",
+          hostileSnapshot.ranking->entries.front().playerName == "[redacted]" &&
+          hostileSnapshot.ranking->nearbyEntries.size() == 1 &&
+          hostileSnapshot.ranking->nearbyEntries.front().playerName == "[redacted]",
       "provider data cannot echo the current API key into the ranking cache");
 
   Harness hostileToken;
@@ -783,6 +818,7 @@ int main() {
   testFailuresAreNotCachedAndMissingCredentialCallsDriver();
   testLatestRequestCloseAndLateCompletion();
   testPaginationAppendsWithoutDiscardingVisibleRows();
+  testNearbyRowsSurvivePagesUntilOwnRowIsReached();
   testPaginationFailureKeepsRowsAndStopsAutomaticRetry();
   testPaginationRejectsDuplicateProviderRows();
   testCloseRejectsLatePaginationCompletion();

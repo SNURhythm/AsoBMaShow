@@ -88,7 +88,7 @@ struct ResultScene {
   std::uint64_t resultSkinRankingRevision = 0;
   result_skin_ir::RankingData resultSkinRanking;
   int resultSkinRankingOffset = 0;
-  bool resultSkinRankingOffsetChosen = false;
+  bool resultSkinRankingOffsetManuallyChosen = false;
   bool resultSkinRankingRefreshPending = false;
   std::optional<int> resultSkinPreviousIrRank;
   result_skin_ir::SubmissionTimers resultSkinSubmissionTimers;
@@ -98,6 +98,45 @@ struct ResultScene {
 PRODUCTION_RESULT_IR_UPDATE
 
 int main() {
+  ResultScene nearby;
+  auto &nearbyService = *nearby.context.irRankingService;
+  nearby.resultSkinRankingGeneration = nearbyService.open(*nearby.resultSkinRankingRequest);
+  auto distant = std::make_shared<ir::IrChartRanking>();
+  distant->totalPlayers = 6000;
+  distant->nextPageToken = "page-2";
+  distant->entries = {{.rank = 1, .score = 200}};
+  distant->nearbyEntries = {{.rank = 4999, .score = 101},
+      {.rank = 5000, .score = 100, .currentUser = true},
+      {.rank = 5001, .score = 99}};
+  nearbyService.finish(distant);
+  nearby.updateSelectedResultSkinRankings();
+  require(nearbyService.pages == 1 && nearbyService.current.loadingNextPage &&
+              nearby.resultSkinRanking.currentUserRank == 5000 &&
+              nearby.resultSkinRankingOffset == 4995 && !nearby.resultSkinRanking.clearCounts,
+          "result scene centers distant own rank immediately while page two is still pending");
+  const auto nearbyRows = ir::rankingWindow(nearby.resultSkinRanking.entries,
+      nearby.resultSkinRanking.nearbyEntries, nearby.resultSkinRanking.nearbyOffset,
+      nearby.resultSkinRankingOffset);
+  require(nearbyRows.size() == 3 && nearbyRows[1].currentUser,
+          "scene-selected offset exposes the fetched nearby player window");
+  nearby.context.irSubmissionService->current = {
+      .found = true, .state = ir::IrOutboxState::Succeeded};
+  nearby.updateSelectedResultSkinRankings();
+  require(nearbyService.refreshed == 1, "score submission refreshes the early nearby rank");
+  auto improved = std::make_shared<ir::IrChartRanking>(*distant);
+  for (auto &entry : improved->nearbyEntries) entry.rank -= 500;
+  nearbyService.finish(improved);
+  nearby.updateSelectedResultSkinRankings();
+  require(nearby.resultSkinRanking.currentUserRank == 4500 &&
+              nearby.resultSkinRankingOffset == 4495,
+          "automatic result window follows improved own rank after upload refresh");
+  nearby.resultSkinRankingOffset = 0;
+  nearby.resultSkinRankingOffsetManuallyChosen = true;
+  nearbyService.finish(distant);
+  nearby.updateSelectedResultSkinRankings();
+  require(nearby.resultSkinRankingOffset == 0,
+          "explicit user navigation survives later rank changes");
+
   ResultScene scene;
   auto &service = *scene.context.irRankingService;
   scene.resultSkinRankingGeneration = service.open(*scene.resultSkinRankingRequest);

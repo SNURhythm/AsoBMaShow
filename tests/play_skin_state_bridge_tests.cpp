@@ -2645,6 +2645,12 @@ void testIrTargetsUseCompleteRankingAndPinnedSelection() {
   ranking->entries[1].currentUser = false;
   expect(!gameplaySkinIrCurrentUserRank(snapshot),
          "a ranking without the user does not invent their previous rank");
+  ranking->nearbyEntries = {{.rank = 5000, .currentUser = true}};
+  snapshot.paginationBlocked = true;
+  expect(gameplaySkinIrCurrentUserRank(snapshot) == 5000,
+         "nearby own rank remains available when unrelated sequential pagination fails");
+  ranking->nearbyEntries.clear();
+  snapshot.paginationBlocked = false;
   ranking->entries[1] = userEntry;
 
   RuntimeHarness runtime;

@@ -129,6 +129,26 @@ void testShowsFirstPageWithoutWaitingForTheLeaderboard() {
          "complete leaderboard publishes exact clear counts and percentages");
 }
 
+void testNearbyOwnRankIsAvailableWhilePagesArePending() {
+  auto ranking = std::make_shared<ir::IrChartRanking>();
+  ranking->totalPlayers = 6000;
+  ranking->nextPageToken = "more";
+  ranking->entries = {{.rank = 1, .playerName = "Top", .score = 1900}};
+  ranking->nearbyEntries = {
+      {.rank = 4999, .playerName = "Above", .score = 1002},
+      {.rank = 5000, .score = 1000, .currentUser = true},
+      {.rank = 5001, .playerName = "Below", .score = 998}};
+  ir::IrRankingSnapshot source{.state = ir::IrRankingSnapshotState::Succeeded,
+                              .ranking = ranking, .paginationBlocked = true};
+  MusicSelectPropertyRuntimeSnapshot runtime;
+  runtime.ranking = projectMusicSelectRanking(source, 4998);
+  const auto values = projectMusicSelectProperties(AppSettings{}, MusicSelectBarManagerSnapshot{}, runtime);
+  expect(runtime.ranking.rank == 5000 && !runtime.ranking.complete &&
+             values.strings.contains(121) && values.strings.at(121) == "YOU" &&
+             values.integers.at(391) == 5000 && values.integers.at(381) == 1000,
+         "nearby rows keep server ranks and reach select skin even after continuation failure");
+}
+
 void testCacheIdentityIncludesIrAccountEvidence() {
   ir::IrRankingRequest request{
       .profileId = "profile",
@@ -150,6 +170,7 @@ void testCacheIdentityIncludesIrAccountEvidence() {
 int main(int argc, char **argv) {
   testProjectsServiceStateIntoBeatorajaRankingData();
   testShowsFirstPageWithoutWaitingForTheLeaderboard();
+  testNearbyOwnRankIsAvailableWhilePagesArePending();
   testCacheIdentityIncludesIrAccountEvidence();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_ranking_tests", failures,

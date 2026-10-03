@@ -1,3 +1,4 @@
+#include "../ir/IrRankingWindow.h"
 #include "MusicSelectPropertyProjection.h"
 #include "../BeatorajaClearType.h"
 
@@ -355,13 +356,10 @@ void projectRanking(Properties &out,
     }
   }
 
-  for (int visible = 0; visible < 10; ++visible) {
-    const int sourceIndex = visible + ranking.offset;
-    if (sourceIndex < 0 ||
-        sourceIndex >= static_cast<int>(ranking.entries.size())) {
-      continue;
-    }
-    const auto &entry = ranking.entries[static_cast<std::size_t>(sourceIndex)];
+  const auto rows = ir::rankingWindow(ranking.entries, ranking.nearbyEntries,
+                                       ranking.nearbyOffset, ranking.offset);
+  for (int visible = 0; visible < static_cast<int>(rows.size()); ++visible) {
+    const auto &entry = rows[static_cast<std::size_t>(visible)];
     out.strings[120 + visible] = entry.name;
     out.integers[380 + visible] = entry.score;
     out.integers[390 + visible] = entry.rank;

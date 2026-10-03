@@ -66,6 +66,58 @@ this callback test now runs serially so sibling tests do not compete with its
 production wall-clock budget. No Lua execution limit changed.
 The final full build and parallel CTest run passed 417/417 tests in 301.22 seconds.
 
+## Nearby-own-rank latency follow-up
+
+The remaining result-skin delay came from sequential top-page pagination:
+reaching rank 5,000 required about 50 ranking-page requests. Tachi provides a
+public `leaderboard-adjacent` endpoint for a known authenticated numeric user ID.
+Its current server implementation and a live public response were checked;
+it returns the player's PB and up to five neighbors on either side, while its
+profile list omits the player themself.
+
+The initial fetch now adds one adjacent request when the player's row is absent
+from an incomplete top page. This makes the nearby lookup independent of rank
+distance (two ranking requests, plus uncached chart/identity preflight). Missing
+PBs, unsupported endpoints, malformed responses and transient failures retain
+the normal page fallback; the optional request has a five-second timeout.
+Cancellation still cancels the complete fetch. Names are never fabricated from
+missing profile data, and all skin projections retain the `YOU` marker.
+
+Supplemental neighbors remain separate from the contiguous top-page prefix.
+They cannot count toward completion or clear statistics. Result skins display
+the nearby window immediately; music select receives own rank and available
+nearby rows, gameplay captures the previous rank, and the native list includes
+neighbors without duplicate players. Native pagination preserves its viewport
+and selected player by identity. The result view follows an improved own rank
+after the upload refresh unless the player has manually chosen a scroll position.
+
+Regression coverage includes distant ranks 110/5,000 with constant request
+counts, missing own profile, tied ranks, malformed/cross-chart/duplicate rows,
+encoded chart IDs, fallback and cancellation, credential redaction, supplemental
+row retirement, skin properties and the production result-update method while
+page two is pending. Initial driver tests failed four assertions before the
+fix; result/select projection checks failed before their integration. Independent
+review identified and verified fixes for prefix-window overlap, post-upload
+recentering and chart-ID encoding. No remaining actionable finding was reported.
+
+The desktop app and all test targets built successfully, including the final
+review corrections. The full parallel run completed in 249.44 seconds with
+413 passes, three failures and one blocked dependent test. All nearby-ranking
+regressions passed. The other failures were the coroutine yield fixture
+(`skin_lua_wall_time_limit_exceeded`), numeric-text formatting (`<no text>` for
+`-0.0`), and the sound-bundle decoder's 15-second CTest timeout. An immediate
+isolated rerun of the failed tests and their dependencies passed all 24 checks
+in 29.69 seconds without source changes; the decoder completed in 2.88 seconds.
+The formatting failure did not record a detailed callback diagnostic, so its
+precise cause is unconfirmed. No production or test deadline was relaxed for
+this follow-up. This was not a clean first-pass full-suite result.
+
+The live check verified the public endpoint's response shape, not authenticated
+device latency.
+Complete-only statistics and uncached arbitrary leaderboard positions still
+require sequential pages. No mobile build or deployment was performed for this
+follow-up.
+
 ## Confirmed runtime blockers
 
 The follow-up program-code review found two release-blocking defects:

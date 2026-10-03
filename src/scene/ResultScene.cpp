@@ -815,11 +815,10 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.configuration->irAccountName = context.irAccountNameSnapshot();
   data.playerName = context.profileManager.activeProfile().displayName;
   data.irOnline = !context.irAccountNameSnapshot().empty();
-  const auto rankingBegin = static_cast<std::size_t>(std::max(0, resultSkinRankingOffset));
-  for (std::size_t index = rankingBegin;
-       index < resultSkinRanking.entries.size() && index - rankingBegin < 10; ++index) {
-    data.irRankingEntries.push_back(resultSkinRanking.entries[index]);
-  }
+  const auto rows = ir::rankingWindow(resultSkinRanking.entries,
+      resultSkinRanking.nearbyEntries, resultSkinRanking.nearbyOffset,
+      resultSkinRankingOffset, 10, !resultSkinRankingOffsetManuallyChosen);
+  data.irRankingEntries.assign(rows.begin(), rows.end());
   data.irRankingEntryStart = resultSkinRankingOffset;
   data.irCurrentUserRank = resultSkinRanking.currentUserRank;
   data.irPreviousUserRank = resultSkinPreviousIrRank;
@@ -2722,10 +2721,9 @@ void ResultScene::updateSelectedResultSkinRankings() {
   if (snapshot.revision == resultSkinRankingRevision) return;
   resultSkinRankingRevision = snapshot.revision;
   resultSkinRanking = result_skin_ir::projectRanking(snapshot);
-  if (!resultSkinRankingOffsetChosen && resultSkinRanking.currentUserRank) {
+  if (!resultSkinRankingOffsetManuallyChosen && resultSkinRanking.currentUserRank) {
     resultSkinRankingOffset = *resultSkinRanking.currentUserRank > 10
                                   ? *resultSkinRanking.currentUserRank - 5 : 0;
-    resultSkinRankingOffsetChosen = true;
   }
 #endif
 }
@@ -4352,7 +4350,7 @@ void ResultScene::consumeResultSkinBuiltinEvents() {
   if (const auto position = resultSkinSession->takeQueuedRankingPosition()) {
     resultSkinRankingOffset = static_cast<int>(
         std::max(1, resultSkinRanking.totalPlayers.value_or(0)) * *position);
-    resultSkinRankingOffsetChosen = true;
+    resultSkinRankingOffsetManuallyChosen = true;
   }
   bool audioSettingsChanged = false;
   for (const auto &write : resultSkinSession->takeQueuedAudioVolumeWrites()) {
@@ -4549,7 +4547,7 @@ void ResultScene::cleanupScene() {
   resultSkinRankingRevision = 0;
   resultSkinRanking = {};
   resultSkinRankingOffset = 0;
-  resultSkinRankingOffsetChosen = false;
+  resultSkinRankingOffsetManuallyChosen = false;
   resultSkinRankingRefreshPending = false;
   resultSkinSubmissionTimers = {};
   rootLayout = nullptr;

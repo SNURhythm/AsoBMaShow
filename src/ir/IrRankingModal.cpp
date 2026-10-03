@@ -10,6 +10,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <set>
 #include <utility>
 
 namespace ir {
@@ -28,6 +29,7 @@ std::string rankText(int rank) {
 }
 
 std::string playerText(const IrChartRankingEntry &entry) {
+  if (entry.currentUser && entry.playerName.empty()) return "You";
   std::string value =
       entry.playerName.empty() ? std::string(kMissing) : entry.playerName;
   if (entry.currentUser) {
@@ -41,6 +43,20 @@ std::string scoreText(int score, int maximum) {
     return std::string(kMissing);
   }
   return std::to_string(score) + " / " + std::to_string(maximum);
+}
+
+std::shared_ptr<const IrChartRanking> rankingForPresentation(
+    const std::shared_ptr<const IrChartRanking> &source) {
+  if (!source || source->nearbyEntries.empty()) return source;
+  auto displayed = std::make_shared<IrChartRanking>(*source);
+  std::set<std::string> identities;
+  for (const auto &entry : displayed->entries) identities.insert(entry.providerEntryId);
+  for (const auto &entry : source->nearbyEntries) {
+    if (identities.insert(entry.providerEntryId).second) displayed->entries.push_back(entry);
+  }
+  std::stable_sort(displayed->entries.begin(), displayed->entries.end(),
+                   [](const auto &a, const auto &b) { return a.rank < b.rank; });
+  return displayed;
 }
 
 void setFailure(IrRankingModalPresentation &presentation,
@@ -283,9 +299,9 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     presentation_.detailText.clear();
     presentation_.canRefresh = true;
     presentation_.canRetry = false;
-    presentation_.ranking = snapshot.ranking;
+    presentation_.ranking = rankingForPresentation(snapshot.ranking);
     presentation_.entryCount =
-        static_cast<int>(snapshot.ranking->entries.size());
+        static_cast<int>(presentation_.ranking->entries.size());
     presentation_.fetchedAtText =
         formatIrRankingTimestamp(snapshot.ranking->fetchedAtUnixMillis);
     presentation_.canLoadNextPage =

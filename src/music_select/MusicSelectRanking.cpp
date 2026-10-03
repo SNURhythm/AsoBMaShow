@@ -1,4 +1,5 @@
 #include "MusicSelectRanking.h"
+#include "../ir/IrRankingWindow.h"
 
 #include <algorithm>
 
@@ -85,6 +86,16 @@ projectMusicSelectRanking(const ir::IrRankingSnapshot &source, int offset) {
                               .clearType = clearType});
     previousScore = entry.score;
     previousRank = rank;
+  }
+  if (result.rank == 0) {
+    result.nearbyOffset = ir::nearbyRankingOffset(source.ranking->nearbyEntries);
+    for (const auto &entry : source.ranking->nearbyEntries) {
+      result.nearbyEntries.push_back({.name = entry.currentUser ? "YOU" : entry.playerName,
+          .score = entry.score, .rank = entry.rank,
+          .playerType = entry.currentUser ? 1 : 0,
+          .clearType = beatorajaClearType(entry.clearType)});
+      if (entry.currentUser) result.rank = entry.rank;
+    }
   }
   return result;
 }
