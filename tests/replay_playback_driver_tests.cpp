@@ -4,6 +4,7 @@
 #include "replay/ReplaySetupAdapter.h"
 
 #include "ReplayData.h"
+#include "ReplayGhostUtils.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
 
@@ -226,6 +227,43 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
              assisted.replayData->clearType == kClearTypeLightAssistedEasyClearRank,
          std::string("paused play uses existing assist metadata during Watch: ") +
              assisted.diagnostic);
+
+  // Java can follow a paired endpoint outside active slots, while the runtime
+  // ReplayData adapter can address only active lane/time identities.
+  auto *headTimeline = chart.Measures.front()->TimeLines.front();
+  delete headTimeline->Notes[0];
+  auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(0, head);
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  tailTimeline->Timing = 750'000;
+  tailTimeline->SetNote(0, tail);
+  tailTimeline->Notes[0] = nullptr;
+  chart.DetachedNotes.emplace_back(tail);
+  chart.Measures.front()->TimeLines.push_back(tailTimeline);
+  replay.playback.input.back().songTimeMicros = 760'000;
+  auto detached = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, chart);
+  expect(detached.judgedResult.has_value(), "detached tail can be rejudged");
+  if (detached.judgedResult) {
+    saved = *detached.judgedResult;
+    detached = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, chart);
+    expect(detached.matched() && detached.replayData &&
+               !detached.consumerIdentityCompatible && !detached.diagnostic.empty(),
+           "matched detached endpoint retains diagnostic data but reports adapter incompatibility");
+    if (detached.replayData) {
+      const std::vector<const bms_parser::TimeLine *> timelines{headTimeline, tailTimeline};
+      const std::unordered_map<int, std::size_t> lanes{{0, 0}};
+      expect(replay_ghost::buildReplayGhostEvents(*detached.replayData, timelines, lanes,
+                                                 [](long long time) { return double(time); }).empty(),
+             "in-memory ghost projection rejects an unrepresentable detached event identity");
+    }
+  }
+  replay.playback.input.clear();
+  const auto unheld = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, chart);
+  expect(unheld.consumerIdentityCompatible,
+         "a detached graph alone does not reject a track without detached result events");
 }
 
 void testConcreteMaterializerSettlesExactTimeMineInput() {
@@ -372,6 +410,7 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   replay.playback.setup.longNoteMode = 1;
 
   std::vector<std::string> calls;
+  bool incompatibleIdentity = false;
   ChartReplayConsumer consumer({
       .loadContext = [&](std::string_view attemptId) {
         calls.emplace_back("context");
@@ -408,7 +447,9 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
         expect(document == replay && result == listed.result,
                "consumer materializes only the verified document and result");
         ReplayPlaybackMaterializationOutcome outcome;
-        outcome.state = ReplayPlaybackMaterializationState::ResultMismatch;
+        outcome.state = incompatibleIdentity ? ReplayPlaybackMaterializationState::Matched
+                                             : ReplayPlaybackMaterializationState::ResultMismatch;
+        outcome.consumerIdentityCompatible = !incompatibleIdentity;
         outcome.replayData = std::make_shared<ReplayData>();
         outcome.diagnostic = "Saved result differs from replay judging.";
         return outcome;
@@ -417,14 +458,19 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
 
   std::atomic_bool cancelled = false;
   auto loaded = consumer.load(listed, "selected/chart.bms", cancelled);
-  expect(loaded.ready() && loaded.chart && loaded.replayData &&
+  expect(!loaded.ready() && !loaded.chart && !loaded.replayData &&
+             loaded.state == ChartReplayConsumerState::ResultMismatch &&
              loaded.diagnostic ==
                  "Saved result differs from replay judging." &&
              calls == std::vector<std::string>{"context", "prepare",
                                                "materialize"},
-         "every chart replay action receives one structurally playable "
-         "preparation from exactly one chart parse, including a chart without "
-         "long notes, while result drift remains diagnostic");
+         "saved replay actions reject result drift after one parse and preserve the diagnostic");
+
+  incompatibleIdentity = true;
+  loaded = consumer.load(listed, "selected/chart.bms", cancelled);
+  expect(!loaded.ready() && !loaded.replayData &&
+             loaded.state == ChartReplayConsumerState::MaterializationFailed,
+         "matching score facts do not authorize an unrepresentable runtime note identity");
 
   calls.clear();
   ChartReplayConsumer missing({

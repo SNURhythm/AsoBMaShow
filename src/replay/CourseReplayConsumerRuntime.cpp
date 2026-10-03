@@ -28,7 +28,7 @@ CourseReplayConsumer makeRuntimeCourseReplayConsumer(
         }
         return play_options::parseChart(
             path, setup->randomSeed, setup->randomPrng, setup->randomValues,
-            cancelled, "modern course replay identity");
+            cancelled, "modern course replay identity", &diagnostic);
       },
       .loadContext = [context](std::string_view attemptId,
                                const ParsedCourseReplayFacts &facts) {
@@ -46,7 +46,7 @@ CourseReplayConsumer makeRuntimeCourseReplayConsumer(
           return std::unique_ptr<bms_parser::Chart>{};
         }
         auto prepared = play_options::prepareReplayChart(
-            path, *runtimeSetup, cancelled);
+            path, *runtimeSetup, cancelled, &diagnostic);
         if (!prepared && diagnostic.empty()) {
           diagnostic = "The course replay stage setup could not be applied.";
         }

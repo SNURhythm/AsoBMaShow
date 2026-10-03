@@ -10931,7 +10931,7 @@ void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
                              pathForLog(path) + ": " + errorMessage);
       return;
     }
-    parser.Parse(bytes, chart, addReadyMeasure, metaOnly, cancelled);
+    parser.Parse(bytes, chart, addReadyMeasure, metaOnly, cancelled, path);
     if (*chart != nullptr) {
       (*chart)->Meta.BmsPath = path;
       (*chart)->Meta.Folder = path.parent_path();
@@ -10961,7 +10961,7 @@ void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
     return;
   }
 
-  parser.Parse(bytes, chart, addReadyMeasure, metaOnly, cancelled);
+  parser.Parse(bytes, chart, addReadyMeasure, metaOnly, cancelled, innerPath);
   if (*chart != nullptr) {
     (*chart)->Meta.BmsPath = path;
     (*chart)->Meta.Folder =

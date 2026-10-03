@@ -325,6 +325,66 @@ void testInvalidClubTimingPreservesOutput(const std::filesystem::path &root) {
          "invalid club plan preserves the existing output file");
 }
 
+void testUnsupportedChartAdmission(const std::filesystem::path &root) {
+  const std::string malformed = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  const auto source = root / "unmatched-long-note.bms";
+  writeText(source, malformed);
+  const std::vector<unsigned char> bytes(malformed.begin(), malformed.end());
+  std::atomic_bool cancelled{false};
+  std::string diagnostic;
+  expect(!play_options::parseChart(source, cancelled, "unsupported fixture", &diagnostic) &&
+             diagnostic.find("long-note") != std::string::npos,
+         "filesystem preparation rejects an unsupported LN before playback");
+  expect(!play_options::parseChartBytes(source, bytes, std::nullopt,
+              std::nullopt, std::nullopt, cancelled, "unsupported fixture", &diagnostic) &&
+             diagnostic.find("long-note") != std::string::npos,
+         "buffered preparation enforces the same unsupported-LN policy");
+
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  parser.Parse(bytes, &raw, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  expect(chart && chart->Meta.TotalNotes == 1,
+         "raw parser retains the accepted unmatched head and its metadata");
+  if (!chart) return;
+  const auto output = root / "unsupported-chart.wav";
+  writeText(output, "preserved output");
+  const auto result = guardedRender(*chart, output);
+  expect(!result.success && result.message.find("long-note") != std::string::npos,
+         "direct audio export rejects unsupported LN graphs with a diagnostic");
+  expect(readText(output) == "preserved output" && chart->Meta.TotalNotes == 1,
+         "rejection preserves output and original parser metadata");
+
+  writeText(source, "#BPM 120\n#00051:0101\n");
+  auto paired = play_options::parseChart(source, cancelled, "supported fixture");
+  expect(paired && paired->Meta.TotalNotes == 1,
+         "an ordinary reciprocal LN pair remains playable");
+
+  auto audioFixture = chartFixture(root, "detached-long-note");
+  for (const auto replacement : {"02", "0002"}) {
+    const std::string detached = std::string("#BPM 120\n#WAV01 click.wav\n"
+        "#WAV02 click.wav\n#00051:0101\n#00011:") + replacement + "\n";
+    writeText(audioFixture->Meta.BmsPath, detached);
+    auto fromPath = play_options::parseChart(audioFixture->Meta.BmsPath,
+        cancelled, "detached fixture", &diagnostic);
+    auto fromBytes = play_options::parseChartBytes(audioFixture->Meta.BmsPath,
+        {detached.begin(), detached.end()}, std::nullopt, std::nullopt,
+        std::nullopt, cancelled, "detached fixture", &diagnostic);
+    expect(fromPath && fromBytes && diagnostic.empty() &&
+               fromPath->DetachedNotes.size() == 1 &&
+               fromBytes->DetachedNotes.size() == 1,
+           "path and buffered preparation preserve detached LN partners");
+    if (fromPath) {
+      const auto notes = fromPath->Meta.TotalNotes;
+      const auto rendered = guardedRender(*fromPath,
+          audioFixture->Meta.Folder / "detached.wav");
+      expect(rendered.success && fromPath->Meta.TotalNotes == notes &&
+                 fromPath->DetachedNotes.size() == 1,
+             "audio export supports detached partners without changing the graph");
+    }
+  }
+}
+
 void testCancellationBeforePublication(const std::filesystem::path &root) {
   auto chart = chartFixture(root, "cancel-before-write");
   const auto output = chart->Meta.Folder / "result.wav";
@@ -532,6 +592,7 @@ int main() {
     testSelectedLargeClubPlan(root);
     testOverflowScaleMetadata(root);
     testInvalidClubTimingPreservesOutput(root);
+    testUnsupportedChartAdmission(root);
     testCancellationBeforePublication(root);
     testTailAndWorkAdmission(root);
     testCancellationDuringWrite(root);

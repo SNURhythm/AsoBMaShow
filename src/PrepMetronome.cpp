@@ -1,4 +1,5 @@
 #include "PrepMetronome.h"
+#include "ChartPlayability.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,8 @@ constexpr double kMicrosPerMinute = 60000000.0;
 constexpr double kMicrosPerBmsMeasure = 240000000.0;
 constexpr double kBeatPositionStep = 0.25;
 constexpr double kBeatPositionTolerance = 0.000001;
+constexpr std::size_t kMaxGridSteps = 1'000'000;
+constexpr int kMaxCountInBeats = 1024;
 
 struct ChartBeat {
   long long timeMicros = 0;
@@ -84,6 +87,7 @@ struct ChartBeatWalk {
   double markerBpm = kDefaultBpm;
   double initialGridBpm = kDefaultBpm;
   std::optional<long long> firstGridTimeMicros;
+  bool valid = true;
 };
 
 double initialChartBpm(const bms_parser::Chart &chart) {
@@ -100,6 +104,7 @@ ChartBeatWalk walkChartBeatsBefore(const bms_parser::Chart &chart,
   result.markerBpm = activeBpm;
   result.initialGridBpm = activeBpm;
   double measureBeatPosition = 0.0;
+  std::size_t gridSteps = 0;
 
   const auto appendBeat = [&result, beatLimit](ChartBeat beat) {
     if (!result.beats.empty() &&
@@ -123,9 +128,7 @@ ChartBeatWalk walkChartBeatsBefore(const bms_parser::Chart &chart,
     double timingCursorBeatPosition = measureBeatPosition;
     std::size_t timelineIndex = 0;
     const auto processTimeline = [&](const bms_parser::TimeLine &timeline) {
-      timingCursorMicros =
-          timeline.Timing +
-          std::max(0LL, static_cast<long long>(timeline.GetStopDuration()));
+      timingCursorMicros = chart_timing::stopEnd(timeline);
       timingCursorBeatPosition = timeline.BeatPosition;
       if (timeline.BpmChange && isPositiveBpm(timeline.Bpm)) {
         activeBpm = timeline.Bpm;
@@ -135,6 +138,10 @@ ChartBeatWalk walkChartBeatsBefore(const bms_parser::Chart &chart,
     for (double localBeatPosition = 0.0;
          localBeatPosition < measure->Scale - kBeatPositionTolerance;
          localBeatPosition += kBeatPositionStep) {
+      if (++gridSteps > kMaxGridSteps) {
+        result.valid = false;
+        return result;
+      }
       const double targetBeatPosition =
           measureBeatPosition + localBeatPosition;
       while (timelineIndex < measure->TimeLines.size()) {
@@ -164,9 +171,18 @@ ChartBeatWalk walkChartBeatsBefore(const bms_parser::Chart &chart,
       if (localBeatPosition > kBeatPositionTolerance) {
         const double beatDistance =
             targetBeatPosition - timingCursorBeatPosition;
-        timeMicros = timingCursorMicros +
-                     static_cast<long long>(std::llround(
-                         kMicrosPerBmsMeasure * beatDistance / activeBpm));
+        const double duration = kMicrosPerBmsMeasure * beatDistance / activeBpm;
+        if (!std::isfinite(duration) || duration < 0.0 ||
+            duration >= static_cast<double>(std::numeric_limits<long long>::max())) {
+          result.valid = false;
+          return result;
+        }
+        const auto delta = chart_timing::rounded(duration);
+        if (timingCursorMicros > std::numeric_limits<long long>::max() - delta) {
+          result.valid = false;
+          return result;
+        }
+        timeMicros = timingCursorMicros + delta;
       }
 
       const bool firstGridBeat = !result.firstGridTimeMicros.has_value();
@@ -249,6 +265,9 @@ PrepMetronomePlan buildPlanFromMeta(
   plan.beatIntervalMicros = beatIntervalMicrosForBpm(plan.bpm);
   plan.leadInMicros =
       plan.beatIntervalMicros * static_cast<long long>(plan.beatsPerMeasure);
+  if (playbackAnchorMicros < std::numeric_limits<long long>::min() + plan.leadInMicros) {
+    return {};
+  }
   plan.startTimeMicros = playbackAnchorMicros - plan.leadInMicros;
 
   plan.clicks.reserve(static_cast<size_t>(plan.beatsPerMeasure));
@@ -281,25 +300,35 @@ PrepMetronomePlan buildPracticeCountInPlan(
     const bms_parser::Chart &chart, long long startMicros, int countInBeats,
     audio::PlaybackRate playback) {
   PrepMetronomePlan plan;
-  if (countInBeats <= 0) {
+  if (countInBeats <= 0 || countInBeats > kMaxCountInBeats ||
+      chart_playability::timingError(chart)) {
     return plan;
   }
 
   plan.enabled = true;
   auto beatWalk = walkChartBeatsBefore(
       chart, startMicros, static_cast<std::size_t>(countInBeats));
+  if (!beatWalk.valid) return {};
   plan.bpm = beatWalk.markerBpm;
   plan.beatsPerMeasure = effectiveBeatsPerMeasure(chart.Meta);
   plan.beatIntervalMicros = beatIntervalMicrosForBpm(plan.bpm);
   auto &beats = beatWalk.beats;
   const long long initialBeatIntervalMicros =
       beatIntervalMicrosForBpm(beatWalk.initialGridBpm);
+  if (initialBeatIntervalMicros >
+      std::numeric_limits<long long>::max() / countInBeats) return {};
+  const auto leadIn = initialBeatIntervalMicros * countInBeats;
+  if (startMicros < std::numeric_limits<long long>::min() + leadIn) return {};
   if (beats.empty()) {
     const long long gridAnchorMicros =
         beatWalk.firstGridTimeMicros.value_or(startMicros);
+    if (gridAnchorMicros < std::numeric_limits<long long>::min() + leadIn)
+      return {};
     long long precedingBeat = gridAnchorMicros - initialBeatIntervalMicros;
-    while (precedingBeat >= startMicros) {
-      precedingBeat -= initialBeatIntervalMicros;
+    if (precedingBeat >= startMicros) {
+      const auto distance = chart_timing::subtract(precedingBeat, startMicros);
+      const auto remainder = distance % initialBeatIntervalMicros;
+      precedingBeat = startMicros - (initialBeatIntervalMicros - remainder);
     }
     for (int beat = countInBeats - 1; beat >= 0; --beat) {
       beats.push_back({.timeMicros =
@@ -308,6 +337,8 @@ PrepMetronomePlan buildPracticeCountInPlan(
     }
   }
   while (beats.size() < static_cast<std::size_t>(countInBeats)) {
+    if (beats.front().timeMicros <
+        std::numeric_limits<long long>::min() + initialBeatIntervalMicros) return {};
     beats.push_front({.timeMicros = beats.front().timeMicros -
                                     initialBeatIntervalMicros,
                       .accent = false});
@@ -327,6 +358,9 @@ PrepMetronomePlan buildPracticeCountInPlan(
     plan.clicks.push_back({.timeMicros = 0, .accent = true});
   }
   plan.startTimeMicros = plan.clicks.front().timeMicros;
+  if (plan.startTimeMicros < 0 &&
+      startMicros > std::numeric_limits<long long>::max() + plan.startTimeMicros)
+    return {};
   plan.leadInMicros = startMicros - plan.startTimeMicros;
 
   // Clicks stay on the chart timeline. The rate-scaled audio clock converts

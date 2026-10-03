@@ -206,6 +206,7 @@ struct ConsumerHarness {
   std::vector<std::string> calls;
   bool contextReady = true;
   bool disagreeingCarriedGauge = false;
+  bool disagreeingStageResult = false;
 
   CourseReplayConsumer makeConsumer() {
     return CourseReplayConsumer({
@@ -285,7 +286,9 @@ struct ConsumerHarness {
                    "second stage receives the shared continuation state");
           }
           ReplayPlaybackMaterializationOutcome outcome{
-              .state = ReplayPlaybackMaterializationState::Matched,
+              .state = disagreeingStageResult
+                           ? ReplayPlaybackMaterializationState::ResultMismatch
+                           : ReplayPlaybackMaterializationState::Matched,
               .judgedResult = saved,
               .initialGaugeState = index == 0
                                        ? std::optional(gauge(80.0F))
@@ -355,7 +358,7 @@ void testReplayFailureStopsBeforeSetupAndProducesNoAdapter() {
          "missing course BRD stops before setup, judging, and adapters");
 }
 
-void testMaterializedCarriedStateDriftRemainsDiagnostic() {
+void testMaterializedCarriedStateDriftRejectsPlayback() {
   ConsumerHarness harness;
   harness.disagreeingCarriedGauge = true;
   auto consumer = harness.makeConsumer();
@@ -363,11 +366,29 @@ void testMaterializedCarriedStateDriftRemainsDiagnostic() {
   const std::vector<std::filesystem::path> paths{
       "selected/stage-0.bms", "selected/stage-1.bms"};
   const auto loaded = consumer.load(harness.listed, paths, cancelled);
-  expect(loaded.ready() && loaded.replayData &&
-             loaded.replayState() == ReplayState::Verified &&
+  expect(!loaded.ready() && !loaded.replayData &&
+             loaded.state == CourseReplayConsumerState::ResultMismatch &&
              !loaded.diagnostic.empty(),
-         "materialized carried gauge disagreement remains diagnostic while "
-         "the course stays playable");
+         "carried gauge disagreement rejects every course replay consumer");
+}
+
+void testStageResultDriftCannotProduceCourseLaunchAdapters() {
+  for (const auto mode : {CourseReplayLaunchMode::Watch,
+                          CourseReplayLaunchMode::RetrySame}) {
+    ConsumerHarness harness;
+    harness.disagreeingStageResult = true;
+    auto consumer = harness.makeConsumer();
+    std::atomic_bool cancelled = false;
+    const std::vector<std::filesystem::path> paths{
+        "selected/stage-0.bms", "selected/stage-1.bms"};
+    auto loaded = consumer.load(harness.listed, paths, cancelled);
+    expect(loaded.state == CourseReplayConsumerState::ResultMismatch &&
+               !loaded.ready() && !loaded.replayData &&
+               !loaded.diagnostic.empty(),
+           "stage drift is rejected before carrying a changed result forward");
+    expect(!makeCourseReplayLaunchSession(std::move(loaded), mode, true, true),
+           "Watch and Retry Same cannot launch a result-mismatched course");
+  }
 }
 
 void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
@@ -421,7 +442,8 @@ int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CONSUMER
   testConsumerOwnsOneVerifiedCoursePipelineAndContinuation();
   testReplayFailureStopsBeforeSetupAndProducesNoAdapter();
-  testMaterializedCarriedStateDriftRemainsDiagnostic();
+  testMaterializedCarriedStateDriftRejectsPlayback();
+  testStageResultDriftCannotProduceCourseLaunchAdapters();
   testVerifiedLaunchAdaptersSeparateWatchFromRetrySame();
 #else
   expect(false, "CourseReplayConsumer contract is not implemented");

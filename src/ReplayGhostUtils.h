@@ -54,7 +54,7 @@ inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
     HasTimeline &&hasTimeline,
     const std::function<double(long long)> &positionAtTime) {
   std::vector<ReplayGhostEvent> events;
-  if (!positionAtTime) {
+  if (!positionAtTime || !replayData.consumerIdentityCompatible) {
     return events;
   }
 
@@ -131,7 +131,7 @@ inline std::vector<ReplayMissMarker> buildReplayMissMarkers(
     const std::unordered_map<int, size_t> &laneToOrderIndex,
     const std::function<double(long long)> &positionAtTime) {
   std::vector<ReplayMissMarker> markers;
-  if (!positionAtTime) {
+  if (!positionAtTime || !replayData.consumerIdentityCompatible) {
     return markers;
   }
 

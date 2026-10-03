@@ -585,8 +585,13 @@ RhythmLaneInputController::releaseLane(int lane,
         continue;
       }
       auto *note = timeline->Notes[lane];
-      const auto *longNote =
-          dynamic_cast<const bms_parser::LongNote *>(note);
+      auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+      // Java releases the held processing pointer, including a tail displaced
+      // from its lane slot. The active head still identifies that pointer.
+      if (longNote != nullptr && !longNote->IsTail()) {
+        longNote = longNote->Tail;
+        note = longNote;
+      }
       if (longNote == nullptr || !longNote->IsTail() ||
           !longNote->IsHolding) {
         continue;

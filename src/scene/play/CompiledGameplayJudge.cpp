@@ -1,3 +1,4 @@
+#include "../../ChartTiming.h"
 #include "CompiledGameplayJudge.h"
 #include "Judge.h"
 
@@ -44,7 +45,7 @@ CompiledGameplayJudge CompiledGameplayJudge::from(const Judge &judge) {
 JudgeResult CompiledGameplayJudge::judgeAt(
     NoteJudgeRole role, std::int64_t noteTimeMicros,
     std::int64_t inputTimeMicros) const noexcept {
-  const std::int64_t diff = inputTimeMicros - noteTimeMicros;
+  const std::int64_t diff = chart_timing::subtract(inputTimeMicros, noteTimeMicros);
   const JudgeWindowContext context = windowContextForRole(role);
   const auto &windows = rules_.contexts[contextIndex(context)].windows;
   for (const auto &candidate : windows) {
@@ -104,7 +105,7 @@ std::int64_t CompiledGameplayJudge::latestHittableNoteTiming(
   }
   return earliest == std::numeric_limits<std::int64_t>::max()
              ? inputTimeMicros
-             : inputTimeMicros - earliest;
+             : chart_timing::subtract(inputTimeMicros, earliest);
 }
 
 std::int64_t CompiledGameplayJudge::latestHittableNoteTiming(

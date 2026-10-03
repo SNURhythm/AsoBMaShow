@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <atomic>
+#include <memory>
 
 namespace {
 
@@ -946,7 +948,56 @@ bool testRealtimeHcnProjectionDerivesActivityFromClockAndLane() {
 
 } // namespace
 
+bool testConstantOpacityDoesNotWrapNearMaximumTime() {
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  constexpr auto time = std::numeric_limits<long long>::max() - 1024;
+  model.timelines = {{.id = 1, .timeMicros = time, .scrollPosition = 0.0,
+                     .bpm = 120.0, .retainedForProjection = true, .retainedOrdinal = 0}};
+  model.notes = {{.id = 2, .timelineId = 1, .lane = 0}};
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = time};
+  PlayfieldProjection projection;
+  const auto result = projection.project(model, state,
+      {.constantScroll = true, .constantDurationMilliseconds = 100,
+       .constantFadeInMilliseconds = 100});
+  return result.notes.size() == 1 && result.notes.front().opacity == 1.0;
+}
+
+bool testDetachedPairsRenderOnlyFromActiveHeads() {
+  for (const bool detachHead : {false, true}) {
+    const std::string input = std::string("#BPM 120\n#00051:0101\n#00011:") +
+                              (detachHead ? "02\n" : "0002\n");
+    std::vector<unsigned char> bytes(input.begin(), input.end());
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(bytes, &raw, false, false, cancelled);
+    std::unique_ptr<bms_parser::Chart> chart(raw);
+    if (!chart || chart->DetachedNotes.size() != 1) return false;
+    const auto model = buildPlayfieldChartVisualModel(*chart, 1);
+    PlayfieldVisualState state;
+    state.clock = {.serial = 1, .visualTimeMicros = 0};
+    PlayfieldProjection projection;
+    const auto result = projection.project(model, state,
+        {.visibleScrollBefore = 2.0, .visibleScrollAfter = 2.0});
+    if (result.longNotes.size() != (detachHead ? 0U : 1U) ||
+        result.builtInPlan.longNotes.size() != (detachHead ? 0U : 1U) ||
+        result.notes.size() != 1) return false;
+    if (!detachHead && result.longNotes.front().tailTimeMicros != 1'000'000) return false;
+  }
+  return true;
+}
+
 int main() {
+  if (!testConstantOpacityDoesNotWrapNearMaximumTime()) {
+    std::cerr << "constant visibility offsets must saturate near maximum time\n";
+    return EXIT_FAILURE;
+  }
+  if (!testDetachedPairsRenderOnlyFromActiveHeads()) {
+    std::cerr << "detached LN rendering must follow direct Java head-pair traversal\n";
+    return EXIT_FAILURE;
+  }
   if (!testRealtimeHcnProjectionDerivesActivityFromClockAndLane()) {
     std::cerr << "realtime HCN activity must track display time, lane state and early resolution\n";
     return EXIT_FAILURE;

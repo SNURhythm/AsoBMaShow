@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LongNoteModeUtils.h"
+#include "ChartPlayability.h"
 #include "ReplayData.h"
 #include "scene/play/SkinGameplayGraphState.h"
 #include "bms_parser.hpp"
@@ -198,6 +199,7 @@ inline bool chartContainsLongNote(const bms_parser::Chart &chart) {
 
 inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
                                                int longNoteModeOverride = 0) {
+  chart_playability::requireSupportedLongNotes(chart);
   int totalNotes = 0;
   int totalLongNotes = 0;
   int totalScratchNotes = 0;
@@ -259,6 +261,7 @@ inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
 
 inline void applyEffectiveLongNoteModeToChart(bms_parser::Chart &chart,
                                               int longNoteModeOverride = 0) {
+  chart_playability::requireSupportedLongNotes(chart);
   const int lnMode = normalizeChartLongNoteModeValue(longNoteModeOverride);
   if (chart.Meta.LnMode == 0 && lnMode > 0 && chartContainsLongNote(chart)) {
     chart.Meta.LnMode = lnMode;

@@ -1,4 +1,5 @@
 #include "../../bms_parser.hpp"
+#include "../../ChartTiming.h"
 #include "GameplaySimulation.h"
 #include "GameplayNoteJudgeRole.h"
 #include "ManualKeysoundSelection.h"
@@ -15,7 +16,7 @@ constexpr std::int64_t kHellChargeGaugeTickMicros = 200'000;
 
 std::int64_t atTimingDeadline(const NoteDefinition &note) noexcept {
   // Resolve mines after every input edge stamped at their authored time.
-  return note.timingMicros + (note.kind == NoteKind::Landmine ? 1 : 0);
+  return chart_timing::add(note.timingMicros, note.kind == NoteKind::Landmine ? 1 : 0);
 }
 
 JudgeResult normalizeReleaseJudge(const JudgeResult &judge) {
@@ -27,7 +28,7 @@ JudgeResult normalizeReleaseJudge(const JudgeResult &judge) {
 }
 
 std::int64_t absoluteDistance(std::int64_t value) {
-  return value < 0 ? -value : value;
+  return value < 0 ? chart_timing::subtract(0, value) : value;
 }
 
 int longNoteJudgeSeverity(Judgement judgement) noexcept {
@@ -110,7 +111,7 @@ makeSkinGameplayGraphNotes(const GameplayDefinition &definition) {
         .sourceId = id,
         .second = note.timingMicros / 1'000'000,
         .countsTowardJudgement =
-            note.kind != NoteKind::Landmine && !classicTail,
+            note.inActiveSlot && note.kind != NoteKind::Landmine && !classicTail,
         .redirectSourceId = classicTail ? note.pairId
                                         : kInvalidSkinGameplayGraphSourceId,
     });
@@ -164,14 +165,21 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
       scoreState_.gaugeRules());
   const auto chronological = definition_.chronologicalNotes();
   atTimingNoteIds_.assign(chronological.begin(), chronological.end());
+  // JudgeManager finishes a held classic LN via its direct processing pointer,
+  // independently of whether the tail still occurs in the lane model.
+  for (NoteId id = 0; id < definition_.noteCount(); ++id) {
+    const auto &note = definition_.note(id);
+    if (!note.inActiveSlot && note.kind == NoteKind::LongTail &&
+        note.longNoteRule == LongNoteRule::Classic) atTimingNoteIds_.push_back(id);
+  }
   std::ranges::stable_sort(atTimingNoteIds_, {}, [&](NoteId id) {
     return atTimingDeadline(definition_.note(id));
   });
   latePoorNoteIds_.assign(chronological.begin(), chronological.end());
   std::ranges::stable_sort(latePoorNoteIds_, {}, [&](NoteId id) {
     const auto &note = definition_.note(id);
-    return note.timingMicros + config_.judge.automaticPoorLateMicros(
-        note.scratchLane ? NoteJudgeRole::Scratch : NoteJudgeRole::Normal);
+    return chart_timing::add(note.timingMicros, config_.judge.automaticPoorLateMicros(
+        note.scratchLane ? NoteJudgeRole::Scratch : NoteJudgeRole::Normal));
   });
   laneStates_.reserve(definition.lanes().size());
   for (const auto &lane : definition.lanes()) {
@@ -185,7 +193,7 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
 
 std::int64_t GameplaySimulation::inputTime(
     const GameplayInputContext &context) const noexcept {
-  return context.songTimeMicros - context.inputDelayMicros;
+  return chart_timing::subtract(context.songTimeMicros, context.inputDelayMicros);
 }
 
 GameplaySimulation::LaneRuntimeState *
@@ -360,7 +368,7 @@ void GameplaySimulation::markIdentityResolved(NoteId id) {
     return;
   }
   const auto &state = noteStates_[id];
-  if (!state.played && !state.dead) {
+  if (definition_.note(id).inActiveSlot && !state.played && !state.dead) {
     ++resolvedIdentityCount_;
   }
 }
@@ -416,13 +424,13 @@ void GameplaySimulation::maybeLatchChartComplete(
       config_.allowedNoteRange->endMicros !=
           std::numeric_limits<std::int64_t>::max();
   if (terminal() || hasBoundedNoteRange ||
-      resolvedIdentityCount_ != definition_.noteCount()) {
+      resolvedIdentityCount_ != definition_.chronologicalNotes().size()) {
     return;
   }
   const std::int64_t completionMicros =
-      definition_.metadata().finalTimelineTimeMicros +
-      std::max(config_.judge.automaticPoorLateMicros(NoteJudgeRole::Normal),
-               config_.judge.automaticPoorLateMicros(NoteJudgeRole::Scratch)) + 1;
+      chart_timing::add(chart_timing::add(definition_.metadata().finalTimelineTimeMicros,
+          std::max(config_.judge.automaticPoorLateMicros(NoteJudgeRole::Normal),
+                   config_.judge.automaticPoorLateMicros(NoteJudgeRole::Scratch))), 1);
   if (songTimeMicros >= completionMicros) {
     latchTerminal(GameplayTerminalReason::ChartComplete, songTimeMicros);
   }
@@ -473,7 +481,7 @@ GameplaySimulation::commitMiss(NoteId id, std::int64_t songTimeMicros,
                                std::int64_t judgeTimeMicros) {
   return commitMiss(
       id, songTimeMicros, judgeTimeMicros,
-      JudgeResult(Poor, judgeTimeMicros - definition_.note(id).timingMicros));
+      JudgeResult(Poor, chart_timing::subtract(judgeTimeMicros, definition_.note(id).timingMicros)));
 }
 
 GameplayInputResult GameplaySimulation::commitMiss(NoteId id,
@@ -519,7 +527,7 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   tailState.played = true;
   tailState.playedTimeMicros = songTimeMicros;
   const std::int64_t releaseTime = releaseJudge
-      ? tail.timingMicros + releaseJudge->Diff : songTimeMicros;
+      ? chart_timing::add(tail.timingMicros, releaseJudge->Diff) : songTimeMicros;
   tailState.releaseTimeMicros = releaseTime;
   clearPairHolding(tailId);
 
@@ -622,7 +630,9 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   }
 
   if (note.kind == NoteKind::LongTail) {
-    if (!state.holding || note.pairId == kInvalidNoteId ||
+    const bool autoChargeTail = config_.attempt.autoPlay && note.inActiveSlot &&
+                                note.longNoteRule != LongNoteRule::Classic;
+    if ((!state.holding && !autoChargeTail) || note.pairId == kInvalidNoteId ||
         (note.longNoteRule != LongNoteRule::Classic &&
          !config_.attempt.autoPlay)) {
       return;
@@ -738,6 +748,12 @@ void GameplaySimulation::processLatePoor(NoteId id,
 
   markMissed(id, songTimeMicros, true);
   clearPairHolding(id);
+  // Java's late-POOR lane scan never judges a classic LN end on its own.
+  // This matters when its head was displaced from the active lane slots.
+  if (note.kind == NoteKind::LongTail && note.longNoteRule == LongNoteRule::Classic) {
+    finishTransaction(songTimeMicros);
+    return;
+  }
   recordAutomaticResult(commitMiss(id, songTimeMicros, songTimeMicros));
   finishTransaction(songTimeMicros);
 }
@@ -816,15 +832,16 @@ void GameplaySimulation::integrateHellChargeInterval(
       const std::int64_t untilCrossing =
           gaining ? kHellChargeGaugeTickMicros + 1 - balance
                   : balance + kHellChargeGaugeTickMicros + 1;
-      if (untilCrossing <= toMicros - currentMicros) {
+      if (untilCrossing <= chart_timing::subtract(toMicros, currentMicros)) {
         nextCrossingMicros =
-            std::min(nextCrossingMicros, currentMicros + untilCrossing);
+            std::min<std::int64_t>(nextCrossingMicros,
+                                   chart_timing::add(currentMicros, untilCrossing));
       }
     }
 
     const std::int64_t intervalEnd =
         std::min(toMicros, nextCrossingMicros);
-    const std::int64_t activeDelta = intervalEnd - currentMicros;
+    const std::int64_t activeDelta = chart_timing::subtract(intervalEnd, currentMicros);
     for (const NoteId headId : heads) {
       if (!hellChargeActiveAt(headId, currentMicros)) {
         continue;
@@ -1036,12 +1053,14 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
             : std::numeric_limits<std::int64_t>::max();
     const std::int64_t latePoorDeadline =
         hasLatePoor
-            ? definition_.note(latePoorNoteIds_[latePoorCursor_]).timingMicros +
+            ? chart_timing::add(chart_timing::add(
+                  definition_.note(latePoorNoteIds_[latePoorCursor_]).timingMicros,
                   config_.judge.automaticPoorLateMicros(
                       definition_.note(latePoorNoteIds_[latePoorCursor_]).scratchLane
-                          ? NoteJudgeRole::Scratch : NoteJudgeRole::Normal) + 1
+                          ? NoteJudgeRole::Scratch : NoteJudgeRole::Normal)), 1)
             : std::numeric_limits<std::int64_t>::max();
-    const bool processAtTimingPhase = atTimingDeadlineMicros <= latePoorDeadline;
+    const bool processAtTimingPhase = hasAtTiming &&
+        (!hasLatePoor || atTimingDeadlineMicros <= latePoorDeadline);
     const std::int64_t noteDeadline =
         processAtTimingPhase ? atTimingDeadlineMicros : latePoorDeadline;
     const bool processRelease = pendingRelease != nullptr &&
@@ -1155,7 +1174,7 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
       latestLateEdge = std::max(latestLateEdge, window.lateMicros);
     }
   }
-  const std::int64_t poorCutoff = inputTimeMicros - latestLateEdge;
+  const std::int64_t poorCutoff = chart_timing::subtract(inputTimeMicros, latestLateEdge);
   const std::int64_t futureCutoff = std::max(
       config_.judge.latestHittableNoteTiming(NoteJudgeRole::Normal, inputTimeMicros),
       config_.judge.latestHittableNoteTiming(NoteJudgeRole::Scratch, inputTimeMicros));
@@ -1200,19 +1219,19 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
     const auto context = windowContextForRole(judgeRoleFor(currentNote));
     switch (config_.notePriorityMode) {
     case AppSettings::NotePriorityMode::Duration:
-      return std::llabs(currentNote.timingMicros - inputTimeMicros) >
-             std::llabs(nextNote.timingMicros - inputTimeMicros);
+      return absoluteDistance(chart_timing::subtract(currentNote.timingMicros, inputTimeMicros)) >
+             absoluteDistance(chart_timing::subtract(nextNote.timingMicros, inputTimeMicros));
     case AppSettings::NotePriorityMode::Combo: {
       const auto window = config_.judge.window(context, Good);
       return window.has_value() &&
-             currentNote.timingMicros < inputTimeMicros - window->lateMicros &&
-             nextNote.timingMicros <= inputTimeMicros - window->earlyMicros;
+             currentNote.timingMicros < chart_timing::subtract(inputTimeMicros, window->lateMicros) &&
+             nextNote.timingMicros <= chart_timing::subtract(inputTimeMicros, window->earlyMicros);
     }
     case AppSettings::NotePriorityMode::Score: {
       const auto window = config_.judge.window(context, Great);
       return window.has_value() &&
-             currentNote.timingMicros < inputTimeMicros - window->lateMicros &&
-             nextNote.timingMicros <= inputTimeMicros - window->earlyMicros;
+             currentNote.timingMicros < chart_timing::subtract(inputTimeMicros, window->lateMicros) &&
+             nextNote.timingMicros <= chart_timing::subtract(inputTimeMicros, window->earlyMicros);
     }
     case AppSettings::NotePriorityMode::Lowest:
       return false;
@@ -1584,7 +1603,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     multiBad.noteId = multiBadId;
     multiBad.hasJudge = true;
     multiBad.judge =
-        JudgeResult(Bad, judgedTime - multiBadNote.timingMicros);
+        JudgeResult(Bad, chart_timing::subtract(judgedTime, multiBadNote.timingMicros));
     commitJudge(multiBadId, multiBad.judge);
     multiBad.hasReplayEvent = true;
     multiBad.replayEvent = {
@@ -1742,7 +1761,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
     applied = worseLongNoteJudge(normalizeReleaseJudge(noteStates_[tail.pairId].acceptedHeadJudge),
                                  normalizeReleaseJudge(tailJudge));
   } else if (tail.scratchLane && !isBackSpin) {
-    applied = JudgeResult(Poor, judgedTime - tail.timingMicros);
+    applied = JudgeResult(Poor, chart_timing::subtract(judgedTime, tail.timingMicros));
   } else if (tailJudge.judgement == None || tailJudge.judgement == Kpoor) {
     applied = JudgeResult(Poor, tailJudge.Diff);
   }
@@ -1754,10 +1773,10 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   if (releaseMargin > 0 && applied.Diff < 0 &&
       (applied.judgement == Bad || applied.judgement == Poor)) {
     laneState->pendingReleaseTailId = selected;
-    laneState->pendingReleaseDeadline = judgedTime + releaseMargin;
+    laneState->pendingReleaseDeadline = chart_timing::add(judgedTime, releaseMargin);
     laneState->pendingReleaseJudge = JudgeResult(
         tail.longNoteRule == LongNoteRule::Classic ? Bad : applied.judgement,
-        judgedTime - tail.timingMicros);
+        chart_timing::subtract(judgedTime, tail.timingMicros));
     result.hasReplayEvent = true;
     result.replayEvent = {.action = GameplayReplayAction::Release, .lane = lane,
                          .songTimeMicros = judgedTime, .judgeTimeMicros = judgedTime};

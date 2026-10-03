@@ -1,0 +1,233 @@
+{
+  "chart": "long_notes.bms",
+  "buffered": false,
+  "randomValues": [],
+  "randomSeed": 123456,
+  "randomPrng": "std::mt19937_64",
+  "input": [
+    [
+      1750253,
+      0,
+      1,
+      0,
+      true
+    ],
+    [
+      2625380,
+      0,
+      1,
+      0,
+      false
+    ],
+    [
+      3500506,
+      0,
+      1,
+      1,
+      true
+    ],
+    [
+      4375633,
+      0,
+      1,
+      1,
+      false
+    ]
+  ],
+  "completion": 6375633,
+  "saved": {
+    "attempt": "123e4567-e89b-42d3-a456-426614174000",
+    "path": "long_notes.bms",
+    "md5": "5585e1a9ee5a87dabab0d37a8ae68ee1",
+    "sha256": "dd81c3f45e661ed405be7c0da9cd99ff319d386001887d23460f36bf8a0f625c",
+    "title": "Historical replay",
+    "artist": "Fixture",
+    "lnMode": 1,
+    "keyMode": 5,
+    "facts": [
+      4,
+      4,
+      2,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "gauge": 100.0,
+    "gaugeType": 2,
+    "gaugeHistory": [
+      100.0,
+      100.0
+    ],
+    "timing": [
+      [
+        2,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "provenance": "{\"schemaVersion\":6,\"ruleset\":{\"id\":\"lr2\",\"version\":4,\"scoringModel\":\"asobmashow-v1\",\"judgementModel\":\"lr2-v1\",\"gaugeModel\":\"lr2-gauge-v1\"},\"stages\":[{\"chartMd5\":\"5585e1a9ee5a87dabab0d37a8ae68ee1\",\"chartSha256\":\"dd81c3f45e661ed405be7c0da9cd99ff319d386001887d23460f36bf8a0f625c\",\"longNoteMode\":1,\"chartRandomSeed\":123456,\"chartRandomPrng\":\"std::mt19937_64\",\"chartRandomValues\":[],\"judgeRankSource\":\"chart\",\"sourceJudgeRank\":2,\"totalNotes\":2,\"playDurationSeconds\":4,\"authoredGaugeTotal\":200.0,\"effectiveGaugeTotal\":200.0,\"candidateSelection\":\"lowest\",\"effectiveJudgeWindows\":[{\"context\":\"normal\",\"judgement\":\"pgreat\",\"earlyMicros\":-18000,\"lateMicros\":18000},{\"context\":\"normal\",\"judgement\":\"great\",\"earlyMicros\":-40000,\"lateMicros\":40000},{\"context\":\"normal\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"normal\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"normal\",\"judgement\":\"kpoor\",\"earlyMicros\":-1000000,\"lateMicros\":0},{\"context\":\"scratch\",\"judgement\":\"pgreat\",\"earlyMicros\":-18000,\"lateMicros\":18000},{\"context\":\"scratch\",\"judgement\":\"great\",\"earlyMicros\":-40000,\"lateMicros\":40000},{\"context\":\"scratch\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"scratch\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"scratch\",\"judgement\":\"kpoor\",\"earlyMicros\":-1000000,\"lateMicros\":0},{\"context\":\"long-note-tail\",\"judgement\":\"pgreat\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-note-tail\",\"judgement\":\"great\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-note-tail\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-note-tail\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"long-note-tail\",\"judgement\":\"kpoor\",\"earlyMicros\":0,\"lateMicros\":0},{\"context\":\"long-scratch-tail\",\"judgement\":\"pgreat\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-scratch-tail\",\"judgement\":\"great\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-scratch-tail\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-scratch-tail\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"long-scratch-tail\",\"judgement\":\"kpoor\",\"earlyMicros\":0,\"lateMicros\":0}]}],\"gaugeType\":\"normal\",\"gaugeProfile\":\"standard\",\"gaugeAutoShift\":0,\"gaugeAutoShiftLowerBound\":\"assisted-easy\",\"player1\":{\"option\":\"NORMAL\",\"seed\":null},\"player2\":{\"option\":\"NORMAL\",\"seed\":null},\"doublePlayFlip\":false,\"assistOption\":\"OFF\",\"inputDevices\":[\"keyboard\"],\"autoPlay\":false,\"practice\":false,\"clubMode\":false,\"playback\":{\"percent\":100,\"mode\":\"pitch-shift\"},\"judgeWindowScalePercent\":100,\"startingGaugePercent\":null,\"eligibility\":\"verified\"}",
+    "playedAt": 1700000000123,
+    "fingerprint": "c38a9090a9644d9ab774fbcabc37035aaeda4224dc797cfa23cfb6b3c9808bf9"
+  },
+  "legacyEvents": [
+    [
+      0,
+      0,
+      1750253,
+      1750253,
+      1750253,
+      0,
+      0,
+      20.0,
+      2,
+      0,
+      0
+    ],
+    [
+      1,
+      0,
+      2625380,
+      2625380,
+      2625380,
+      0,
+      0,
+      100.0,
+      2,
+      1,
+      2
+    ],
+    [
+      1,
+      0,
+      -1,
+      2625380,
+      2625380,
+      6,
+      0,
+      100.0,
+      2,
+      1,
+      2
+    ],
+    [
+      0,
+      1,
+      3500506,
+      3500506,
+      3500506,
+      0,
+      0,
+      100.0,
+      2,
+      1,
+      2
+    ],
+    [
+      1,
+      1,
+      4375633,
+      4375633,
+      4375633,
+      0,
+      0,
+      100.0,
+      2,
+      2,
+      4
+    ],
+    [
+      1,
+      1,
+      -1,
+      4375633,
+      4375633,
+      6,
+      0,
+      100.0,
+      2,
+      2,
+      4
+    ]
+  ],
+  "observations": {
+    "keyMode": 5,
+    "totalNotes": 2,
+    "notes": [
+      [
+        0,
+        1750253,
+        1,
+        1,
+        1
+      ],
+      [
+        0,
+        2625380,
+        -1,
+        2,
+        0
+      ],
+      [
+        1,
+        3500506,
+        2,
+        1,
+        3
+      ],
+      [
+        1,
+        4375633,
+        -1,
+        2,
+        2
+      ]
+    ],
+    "lookupAddressed": 4,
+    "lookupMatched": 4,
+    "ghost": [
+      0,
+      2,
+      4
+    ],
+    "keysounds": [
+      [
+        1750253,
+        1
+      ],
+      [
+        3500506,
+        2
+      ]
+    ]
+  }
+}

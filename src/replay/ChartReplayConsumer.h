@@ -57,7 +57,8 @@ struct ChartReplayConsumerDependencies {
 
 // The sole modern chart replay preparation pipeline. Consumers receive an
 // in-memory compatibility track after selected-chart identity, BRD setup, and
-// replay judging succeed. Saved-result disagreement remains diagnostic.
+// replay judging reproduce the saved result. Disagreement rejects playback;
+// the saved result and original replay remain unchanged.
 class ChartReplayConsumer {
 public:
   explicit ChartReplayConsumer(ChartReplayConsumerDependencies dependencies);

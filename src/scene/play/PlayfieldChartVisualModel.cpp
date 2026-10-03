@@ -1,3 +1,4 @@
+#include "../../ChartPlayability.h"
 #include "PlayfieldChartVisualModel.h"
 #include "GameplayScrollGeometry.h"
 
@@ -124,11 +125,7 @@ ChartLongNoteMode longNoteMode(const bms_parser::LongNote &note,
 }
 
 long long stopMicros(const bms_parser::TimeLine &timeline) {
-  const double value = timeline.GetStopDuration();
-  if (!std::isfinite(value) || value <= 0.0) {
-    return 0;
-  }
-  return static_cast<long long>(std::llround(value));
+  return chart_timing::stopDuration(timeline);
 }
 
 bool hasAny(const std::vector<bms_parser::Note *> &notes) {
@@ -592,6 +589,7 @@ std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
 PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                int longNoteModeOverride) {
+  chart_playability::requireSupportedLongNotes(chart);
   PlayfieldChartVisualModel result;
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
@@ -886,6 +884,32 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     }
   }
 
+  // Java renders/densities a head through getPair(), even if that endpoint
+  // was overwritten in its lane. Retain it as a graph-only descriptor.
+  for (std::size_t index = 0; index < pending.size(); ++index) {
+    const auto *ln = dynamic_cast<const bms_parser::LongNote *>(pending[index].source);
+    if (ln == nullptr) continue;
+    const auto *pair = ln->IsTail() ? ln->Head : ln->Tail;
+    if (noteIds.contains(pair)) continue;
+    const auto timelineIt = timelineIds.find(pair->Timeline);
+    if (timelineIt == timelineIds.end()) {
+      throw std::invalid_argument("Invalid long-note chart: partner timeline is absent.");
+    }
+    ChartVisualNote value{
+        .id = nextId++,
+        .timelineId = timelineIt->second,
+        .lane = pair->Lane,
+        .kind = pair->IsTail() ? ChartVisualNoteKind::LongTail
+                               : ChartVisualNoteKind::LongHead,
+        .source = pending[index].value.source,
+        .longNoteMode = longNoteMode(*pair, chart, longNoteModeOverride),
+        .authoredOrdinal = noteOrdinal++,
+        .inActiveSlot = false,
+    };
+    noteIds.emplace(pair, value.id);
+    pending.push_back({.source = pair, .value = value});
+  }
+
   result.notes.reserve(pending.size());
   for (auto &entry : pending) {
     if (const auto *longNote =
@@ -956,7 +980,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                              note.kind == ChartVisualNoteKind::LongTail &&
                              note.longNoteMode == ChartLongNoteMode::LN;
     const bool countsTowardJudgement =
-        note.source == ChartVisualNoteSource::Playable &&
+        note.inActiveSlot && note.source == ChartVisualNoteSource::Playable &&
         note.kind != ChartVisualNoteKind::Mine && !classicTail;
     graph.judgementNotes.push_back(
         {.sourceId = note.id,
@@ -964,7 +988,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
          .countsTowardJudgement = countsTowardJudgement,
          .redirectSourceId = classicTail ? note.pairId
                                          : kInvalidSkinGameplayGraphSourceId});
-    if (second < 0 || static_cast<std::uint64_t>(second) >=
+    if (!note.inActiveSlot || second < 0 || static_cast<std::uint64_t>(second) >=
                           graph.normalDistribution.size()) {
       continue;
     }
@@ -1087,8 +1111,8 @@ double speedObjectMultiplierAtTime(const PlayfieldChartVisualModel &model,
   if (end <= start) {
     return next->speed;
   }
-  double progress = static_cast<double>(timeMicros - start) /
-                    static_cast<double>(end - start);
+  double progress = (static_cast<double>(timeMicros) - static_cast<double>(start)) /
+                    (static_cast<double>(end) - static_cast<double>(start));
   progress = std::max(0.0, std::min(1.0, progress));
   return speed + (next->speed - speed) * progress;
 }

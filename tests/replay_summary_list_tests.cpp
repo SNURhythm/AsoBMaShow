@@ -130,12 +130,77 @@ bool testContinuingAutoShiftReplayHasNoGaugeCutoff() {
   }
   return passed;
 }
+
+bool testAutoPlayDetachedLongNoteTraversal() {
+  for (const int mode : {1, 2, 3}) {
+    for (const bool detachHead : {false, true}) {
+      bms_parser::Parser parser;
+      bms_parser::Chart *raw = nullptr;
+      std::atomic_bool cancelled = false;
+      const std::string text = std::string("#BPM 120\n#00051:0101\n#00011:") +
+          (detachHead ? "02\n" : "0002\n");
+      parser.Parse(std::vector<unsigned char>(text.begin(), text.end()),
+                   &raw, false, false, cancelled);
+      std::unique_ptr<bms_parser::Chart> chart(raw);
+      if (!chart || chart->DetachedNotes.empty()) return false;
+      applyEffectiveLongNoteModeToChart(*chart, mode);
+      const auto replay = replay_autoplay::BuildReplayData(
+          *chart, GaugeType::Normal, GaugeAutoShiftMode::None);
+      const bool classic = mode == 1;
+      const int expectedScore = classic && detachHead ? 2 : 4;
+      const std::size_t expectedEvents = classic ? (detachHead ? 2 : 4) : 3;
+      const bool representable = !(classic && !detachHead);
+      if (replay.finalScore != expectedScore ||
+          replay.events.size() != expectedEvents ||
+          replay.consumerIdentityCompatible != representable) {
+        std::cerr << "synthetic autoplay follows active CN endpoints and the "
+                     "held classic pair, preserving detached event admission "
+                  << "(mode " << mode << ", detached head " << detachHead << ")\n";
+        return false;
+      }
+      if (!std::is_sorted(replay.events.begin(), replay.events.end(),
+              [](const auto &left, const auto &right) {
+                return left.songTimeMicros < right.songTimeMicros;
+              }) || replay.events.back().score != replay.finalScore) {
+        std::cerr << "synthetic autoplay applies scoring in event time order\n";
+        return false;
+      }
+      if (!representable) {
+        auto liveState = replay_result::BuildInitialGaugeState(*chart, replay);
+        liveState.gaugeHistory = {20.0f, 40.0f, 60.0f};
+        const auto chartGraph = replay_result::BuildSkinGameplayChartGraphState(
+            *chart, liveState);
+        const auto graph = replay_result::BuildSkinGameplayGraphState(
+            *chart, replay, liveState);
+        if (!graph.chart || !graph.dynamic ||
+            *graph.chart != *chartGraph.chart ||
+            !graph.dynamic->distributionOmitted ||
+            !graph.dynamic->judgementDistribution.empty() ||
+            !graph.dynamic->earlyLateDistribution.empty() ||
+            graph.dynamic->recentJudgeTimingsMillis !=
+                emptySkinRecentJudgeTimings() ||
+            graph.dynamic->gaugeHistories != chartGraph.dynamic->gaugeHistories ||
+            graph.dynamic->gaugeHistories[static_cast<std::size_t>(
+                gaugeTypeIndex(GaugeType::Normal))] != liveState.gaugeHistory ||
+            graph.dynamic->gaugeType != chartGraph.dynamic->gaugeType ||
+            graph.dynamic->gaugeBorder != chartGraph.dynamic->gaugeBorder ||
+            graph.dynamic->gaugeSupported != chartGraph.dynamic->gaugeSupported) {
+          std::cerr << "detached classic tail graph must omit ambiguous replay "
+                       "judgements and retain authored chart and live gauge history\n";
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
 } // namespace
 
 int main() {
   const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
   const bool continuingAutoShift = testContinuingAutoShiftReplayHasNoGaugeCutoff();
-  if (!recoveredPmsResult || !continuingAutoShift) return 1;
+  const bool detachedAutoPlay = testAutoPlayDetachedLongNoteTraversal();
+  if (!recoveredPmsResult || !continuingAutoShift || !detachedAutoPlay) return 1;
 
   ReplaySummary summary;
   summary.initialGaugeType = GaugeType::Hard;
@@ -891,6 +956,28 @@ int main() {
   if (std::abs(lowTotalAutoSummary.finalGauge - 40.0f) > 0.01f) {
     std::cerr << "synthetic Auto summary must respect authored TOTAL"
               << std::endl;
+    return 1;
+  }
+
+  bms_parser::Parser detachedParser;
+  bms_parser::Chart *rawDetached = nullptr;
+  std::atomic_bool cancelled = false;
+  const std::string detachedText = "#BPM 120\n#00051:0101\n#00011:02\n";
+  detachedParser.Parse(std::vector<unsigned char>(detachedText.begin(), detachedText.end()),
+                       &rawDetached, false, false, cancelled);
+  std::unique_ptr<bms_parser::Chart> detached(rawDetached);
+  if (!detached || detached->DetachedNotes.empty()) return 1;
+  detached->Meta.LnMode = 1;
+  ReplayData detachedReplay;
+  detachedReplay.events = {{.action = ReplayEventAction::Press,
+                            .lane = 0, .noteTimeMicros = 0,
+                            .judgement = PGreat, .combo = 1, .score = 2}};
+  const auto detachedState = replay_result::BuildResultState(*detached, detachedReplay);
+  const auto detachedGraph = replay_result::BuildSkinGameplayGraphState(
+      *detached, detachedReplay, detachedState);
+  if (!detachedGraph.dynamic || detachedGraph.dynamic->judgementDistribution.empty() ||
+      detachedGraph.dynamic->judgementDistribution[0][1] != 1) {
+    std::cerr << "detached pair must not replace the active normal result graph identity\n";
     return 1;
   }
 

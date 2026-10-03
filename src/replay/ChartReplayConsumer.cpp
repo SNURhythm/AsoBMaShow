@@ -96,7 +96,16 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
 
     auto materialized = dependencies_.materialize(
         verified.document, verified.result, *preparedChart);
-    if (!materialized.playable()) {
+    // Diagnostic rejudging may retain a track whose facts drifted. Saved-result
+    // consumers must not present that track as the historical performance.
+    if (materialized.state == ReplayPlaybackMaterializationState::ResultMismatch) {
+      return failure(ChartReplayConsumerState::ResultMismatch,
+                     materialized.diagnostic.empty()
+                         ? "Replay no longer reproduces the saved result."
+                         : std::move(materialized.diagnostic),
+                     std::move(context));
+    }
+    if (!materialized.playable() || !materialized.consumerIdentityCompatible) {
       return failure(ChartReplayConsumerState::MaterializationFailed,
                      materialized.diagnostic.empty()
                          ? "Replay judging could not produce playback data."

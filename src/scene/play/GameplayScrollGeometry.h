@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GamePlayTiming.h"
+#include "../../ChartTiming.h"
 
 #include <algorithm>
 #include <array>
@@ -81,16 +82,16 @@ scrollPositionAtTime(std::span<const ScrollPositionTimeline> timelines,
   }
 
   const auto &previous = *std::prev(next);
-  const long long stopEnd = previous.timeMicros + previous.stopMicros;
+  const long long stopEnd = chart_timing::add(previous.timeMicros, previous.stopMicros);
   if (timeMicros <= stopEnd) {
     return previous.scrollPosition;
   }
   const long long scrollDuration =
-      next->timeMicros - previous.timeMicros - previous.stopMicros;
+      chart_timing::subtract(next->timeMicros, stopEnd);
   if (scrollDuration <= 0) {
     return next->scrollPosition;
   }
-  const double progress = std::clamp(static_cast<double>(timeMicros - stopEnd) /
+  const double progress = std::clamp((static_cast<double>(timeMicros) - static_cast<double>(stopEnd)) /
                                          static_cast<double>(scrollDuration),
                                      0.0, 1.0);
   return previous.scrollPosition +
@@ -114,14 +115,14 @@ inline double advanceFutureTimelineY(double currentY, double beatDistance,
     return currentY + beatDistance * previousScroll * rxhs;
   }
   const double travelDuration =
-      static_cast<double>(timelineTimeMicros - previousTimeMicros) -
+      (static_cast<double>(timelineTimeMicros) - static_cast<double>(previousTimeMicros)) -
       previousStopDurationMicros;
   if (travelDuration == 0.0) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   return currentY +
          beatDistance * previousScroll *
-             static_cast<double>(timelineTimeMicros - currentTimeMicros) /
+             (static_cast<double>(timelineTimeMicros) - static_cast<double>(currentTimeMicros)) /
              travelDuration * rxhs;
 }
 

@@ -97,6 +97,9 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
   for (const auto &note : chartModel_->notes) {
     notesById_.emplace(note.id, &note);
     noteStates_.emplace(note.id, NotePresentationState{.id = note.id});
+    // Retain partner identities for visual links, but lane/time replay events
+    // and automatic adapter traversal can address active slots only.
+    if (!note.inActiveSlot) continue;
     lanePressed_.try_emplace(note.lane, false);
     if (const auto timelineTime = timelineTimeById_.find(note.timelineId);
         timelineTime != timelineTimeById_.end()) {

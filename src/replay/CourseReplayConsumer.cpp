@@ -18,16 +18,6 @@ CourseReplayConsumerOutcome failure(
           .diagnostic = std::move(diagnostic)};
 }
 
-void appendDiagnostic(std::string &destination, std::string_view value) {
-  if (value.empty()) {
-    return;
-  }
-  if (!destination.empty()) {
-    destination += " ";
-  }
-  destination += value;
-}
-
 result_persistence::ModernChartResult chartResultForStage(
     const result_persistence::ModernCourseResult &course,
     std::size_t index) {
@@ -299,7 +289,6 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     judgedStages.reserve(parsedCharts.size());
     std::optional<CourseContinuationState> continuation;
     ReplayPlaybackCarryState carry;
-    std::string playbackDiagnostic;
 
     for (std::size_t index = 0; index < parsedCharts.size(); ++index) {
       const auto &savedStage = verified.result.stages[index];
@@ -347,7 +336,15 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
           chartResultForStage(verified.result, index);
       auto materialized = dependencies_.materializeStage(
           stageDocument, savedChartResult, *prepared, carry);
-      if (!materialized.playable() || !materialized.judgedResult ||
+      if (materialized.state == ReplayPlaybackMaterializationState::ResultMismatch) {
+        return failure(CourseReplayConsumerState::ResultMismatch,
+                       materialized.diagnostic.empty()
+                           ? "Course replay stage no longer reproduces the saved result."
+                           : std::move(materialized.diagnostic),
+                       std::move(context));
+      }
+      if (!materialized.playable() || !materialized.consumerIdentityCompatible ||
+          !materialized.judgedResult ||
           !materialized.initialGaugeState || !materialized.finalGaugeState) {
         return failure(CourseReplayConsumerState::MaterializationFailed,
                        materialized.diagnostic.empty()
@@ -355,18 +352,10 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
                            : std::move(materialized.diagnostic),
                        std::move(context));
       }
-      if (materialized.state ==
-          ReplayPlaybackMaterializationState::ResultMismatch) {
-        appendDiagnostic(
-            playbackDiagnostic,
-            materialized.diagnostic.empty()
-                ? "Course replay stage result differs from the saved result."
-                : materialized.diagnostic);
-      }
       if (!finalGaugeAgrees(materialized)) {
-        appendDiagnostic(
-            playbackDiagnostic,
-            "Course replay stage gauge differs from its judged result.");
+        return failure(CourseReplayConsumerState::ResultMismatch,
+                       "Course replay stage gauge differs from its judged result.",
+                       std::move(context));
       }
 
       if (!continuation) {
@@ -432,9 +421,9 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
             completedPrefixMaximumScore(verified.result) ||
         continuation->maximumCombo != verified.result.maxCombo ||
         continuation->gauge.currentGauge != verified.result.finalGauge) {
-      appendDiagnostic(
-          playbackDiagnostic,
-          "Materialized course aggregate differs from its saved result.");
+      return failure(CourseReplayConsumerState::ResultMismatch,
+                     "Materialized course aggregate differs from its saved result.",
+                     std::move(context));
     }
 
     auto judgedCourse = rebuildJudgedCourseResult(
@@ -450,7 +439,8 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
         result_persistence::compareModernCourseResultFacts(
             verified.result, *judgedCourse);
     if (!courseAgreement.agrees()) {
-      appendDiagnostic(playbackDiagnostic, courseAgreement.diagnostic);
+      return failure(CourseReplayConsumerState::ResultMismatch,
+                     courseAgreement.diagnostic, std::move(context));
     }
 
     auto replayData =
@@ -460,8 +450,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
             .charts = std::move(preparedCharts),
             .materializedStages = std::move(materializedStages),
             .replayData = std::move(replayData),
-            .continuation = std::move(continuation),
-            .diagnostic = std::move(playbackDiagnostic)};
+            .continuation = std::move(continuation)};
   } catch (...) {
     return failure(CourseReplayConsumerState::MaterializationFailed,
                    "Course replay preparation failed.");

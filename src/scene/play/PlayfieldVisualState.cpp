@@ -136,7 +136,7 @@ void PlayfieldVisualStateStore::resetModel(
   for (const auto &note : model.notes) {
     const auto lane = laneIndices_.find(note.lane);
     const auto time = timelineTimes.find(note.timelineId);
-    if (note.kind != ChartVisualNoteKind::LongHead ||
+    if (!note.inActiveSlot || note.kind != ChartVisualNoteKind::LongHead ||
         lane == laneIndices_.end() || time == timelineTimes.end()) {
       continue;
     }

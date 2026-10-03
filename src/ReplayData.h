@@ -46,6 +46,24 @@ struct ReplayEvent {
 
 namespace replay_note {
 
+inline constexpr const char *kUnsupportedIdentityDiagnostic =
+    "Replay playback cannot represent a detached long-note endpoint. "
+    "The original replay and saved result are unchanged.";
+
+// Runtime event adapters use active lane/time slots, unlike the live judge's
+// complete graph identities. Null notes are non-judging input or gauge events.
+inline bool hasActiveIdentity(const bms_parser::Note *note) {
+  if (note == nullptr) return true;
+  if (note->Timeline == nullptr) return false;
+  for (const auto *active : note->Timeline->Notes) {
+    if (active == note) return true;
+  }
+  for (const auto *active : note->Timeline->LandmineNotes) {
+    if (active == note) return true;
+  }
+  return false;
+}
+
 inline std::string key(int lane, long long noteTimeMicros) {
   return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
 }
@@ -71,6 +89,8 @@ struct ReplayLaneCoverEvent {
 struct ReplayData {
   int id = 0;
   bool autoPlay = false;
+  // Runtime only: no schema/provenance claim is invented for stored replays.
+  bool consumerIdentityCompatible = true;
   bms_parser::ChartMeta chartMeta;
   std::optional<unsigned int> randomSeed;
   std::optional<std::string> randomPrng;

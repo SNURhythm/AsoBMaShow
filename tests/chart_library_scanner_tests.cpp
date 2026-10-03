@@ -1,11 +1,13 @@
 #include "../src/ArchiveRAII.h"
 #include "../src/ArchiveFile.h"
 #include "../src/ChartLibraryScanner.h"
+#include "../src/PlayOptionUtils.h"
 #include "../src/Utils.h"
 #include "../src/repositories/ChartRepository.h"
 #include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/sqlite3.h"
 #include "fixtures/archive/mixed_encryption_zip.h"
+#include "fixtures/parser/pms_scan_baseline.h"
 
 #include <archive_entry.h>
 
@@ -1473,6 +1475,192 @@ void testMissingFullScanRootPreservesMetadataRebuildState() {
   assert(metadataRebuildRequired(databasePath));
   assert(hasArchiveLog(archive_file::debugLogLines(), root,
                        "Configured chart folder is unavailable"));
+}
+
+void assertPmsMapping(const bms_parser::Chart &chart, bool pms) {
+  assert(chart.Meta.KeyMode == (pms ? 9 : 10));
+  assert(chart.Meta.IsDP == !pms);
+  assert(chart.Meta.TotalNotes == 4);
+  assert(chart.Meta.TotalLongNotes == 1);
+  assert(chart.Meta.TotalScratchNotes == 0);
+  assert(chart.Meta.TotalBackSpinNotes == 0);
+  std::vector<int> lanes;
+  int heads = 0;
+  int tails = 0;
+  for (const auto *measure : chart.Measures) {
+    for (const auto *timeline : measure->TimeLines) {
+      for (auto *note : timeline->Notes) {
+        if (!note) continue;
+        lanes.push_back(note->Lane);
+        if (!note->IsLongNote()) continue;
+        const auto *ln = static_cast<const bms_parser::LongNote *>(note);
+        if (ln->IsTail()) {
+          ++tails;
+          assert(ln->Head && ln->Head->Tail == ln);
+          assert(ln->Head->Timeline->Timing == 2000000);
+        } else {
+          ++heads;
+          assert(ln->Tail && ln->Tail->Head == ln);
+          assert(ln->Tail->Timeline->Timing == 3000000);
+        }
+        assert(ln->Lane == 1);
+      }
+    }
+  }
+  assert(lanes == (pms ? std::vector<int>{0, 5, 8, 1, 1}
+                      : std::vector<int>{0, 9, 12, 1, 1}));
+  assert(heads == 1 && tails == 1);
+}
+
+void testPmsFormatSurvivesBufferedChartLoading() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  const std::string text = pms_scan_baseline::chart;
+  const std::vector<unsigned char> bytes(text.begin(), text.end());
+  const std::vector<std::string> names{"lower.pms", "upper.PMS", "ordinary.bms"};
+  std::vector<std::filesystem::path> paths;
+  std::vector<std::pair<std::string, std::string>> entries;
+  for (const auto &name : names) {
+    const auto path = root / name;
+    std::ofstream(path, std::ios::binary) << text;
+    paths.push_back(path);
+    entries.emplace_back("nested/" + name, text);
+  }
+  // A .pms directory in the outer path must not turn inner BMS into PMS;
+  // the .zip suffix must not turn inner PMS into BMS.
+  const auto archive = writeZip(root / "outer.pms" / "charts.zip", entries);
+  for (const auto &name : names) {
+    paths.push_back(archive_file::makeVirtualPath(archive, "nested/" + name));
+  }
+  std::atomic_bool cancelled{false};
+  for (const auto &path : paths) {
+    const bool pms = path.extension() != ".bms";
+    bms_parser::Parser parser;
+    parser.SetRandomSeed(1);
+    bms_parser::Chart *raw = nullptr;
+    archive_file::parseChart(parser, path, &raw, false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> chart(raw);
+    assert(chart);
+    assertPmsMapping(*chart, pms);
+    assert(chart->Meta.BmsPath == path);
+    assert(chart->Meta.Folder == path.parent_path());
+    const auto buffered = play_options::parseChartBytes(
+        path, bytes, 1U, std::nullopt, std::nullopt, cancelled);
+    assert(buffered);
+    assertPmsMapping(*buffered, pms);
+    assert(buffered->Meta.BmsPath == path);
+  }
+  // SAF chart bytes carry a logical display filename, never a content URI.
+  for (const auto &name : names) {
+    const auto logical = std::filesystem::path("@androidtree@") /
+                         "0123456789abcdef" / "Library" / name;
+    const auto buffered = play_options::parseChartBytes(
+        logical, bytes, 1U, std::nullopt, std::nullopt, cancelled);
+    assert(buffered);
+    assertPmsMapping(*buffered, logical.extension() != ".bms");
+    assert(buffered->Meta.BmsPath == logical);
+    assert(buffered->Meta.Folder == logical.parent_path());
+  }
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session && session->InsertEntry(root));
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {root}).completed);
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.records.size() == paths.size());
+  for (const auto &record : records.records) {
+    const auto &meta = record.meta;
+    const bool pms = meta.BmsPath.extension() != ".bms";
+    assert(meta.KeyMode == (pms ? 9 : 10));
+    assert(meta.TotalNotes == 4 && meta.TotalLongNotes == 1);
+    assert(meta.TotalScratchNotes == 0 && meta.TotalBackSpinNotes == 0);
+    assert(meta.PlayLength == 3000000);
+  }
+}
+
+void testHistoricalPmsMetadataRebuildsUnchangedSources() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  const auto ordinary = root / "mapping.pms";
+  std::ofstream(ordinary, std::ios::binary) << pms_scan_baseline::chart;
+  const auto archive = writeZip(root / "same.zip",
+      {{"mapping.PMS", pms_scan_baseline::chart}});
+  const auto archived = archive_file::makeVirtualPath(archive, "mapping.PMS");
+  const std::array paths{ordinary, archived};
+  const auto archiveSize = std::filesystem::file_size(archive);
+  const auto archiveTime = std::filesystem::last_write_time(archive);
+  const auto ordinaryTime = std::filesystem::last_write_time(ordinary);
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartLibraryScanner scanner;
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->InsertEntry(root));
+    assert(scanner.ScanWithResult(*session, {root}).completed);
+    assert(session->CountAllChartMeta() == 2);
+    sqlite3 *database = nullptr;
+    assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+    sqlite3_stmt *statement = nullptr;
+    assert(sqlite3_prepare_v2(database,
+        "UPDATE chart_meta SET keys=?,total_notes=?,total_long_notes=?,"
+        "length=?,add_date=123456 WHERE path=?", -1, &statement, nullptr) == SQLITE_OK);
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+      const std::string path = chart_storage_identity::StoredPathText(paths[i]);
+      sqlite3_bind_int(statement, 1, i == 0 ? pms_scan_baseline::ordinaryKeys
+                                           : pms_scan_baseline::archivedKeys);
+      sqlite3_bind_int(statement, 2, pms_scan_baseline::notes);
+      sqlite3_bind_int(statement, 3, pms_scan_baseline::longNotes);
+      sqlite3_bind_int64(statement, 4, pms_scan_baseline::playLength);
+      sqlite3_bind_text(statement, 5, path.c_str(), -1, SQLITE_TRANSIENT);
+      assert(sqlite3_step(statement) == SQLITE_DONE);
+      assert(sqlite3_changes(database) == 1);
+      assert(sqlite3_reset(statement) == SQLITE_OK);
+    }
+    assert(sqlite3_finalize(statement) == SQLITE_OK);
+    assert(sqlite3_exec(database, "PRAGMA user_version=12", nullptr, nullptr,
+                        nullptr) == SQLITE_OK);
+    assert(sqlite3_close(database) == SQLITE_OK);
+    const auto oldRecords = session->SelectChartMetaByPaths(paths);
+    assert(oldRecords.records.size() == 2);
+    for (const auto &record : oldRecords.records) {
+      assert(record.meta.KeyMode == (record.meta.BmsPath == ordinary ? 9 : 10));
+      assert(record.meta.SHA256 == pms_scan_baseline::sha256);
+    }
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 0);
+    assert(metadataRebuildRequired(databasePath));
+    assert(scanner.ScanWithResult(*session, {root}).completed);
+    assert(!metadataRebuildRequired(databasePath));
+    const auto records = session->SelectChartMetaByPaths(paths);
+    assert(records.records.size() == 2);
+    for (const auto &record : records.records) {
+      assert(record.meta.KeyMode == 9);
+      assert(record.meta.SHA256 == pms_scan_baseline::sha256);
+      assert(record.meta.TotalNotes == pms_scan_baseline::notes);
+      assert(record.meta.TotalLongNotes == pms_scan_baseline::longNotes);
+      assert(record.meta.PlayLength == pms_scan_baseline::playLength);
+      assert(record.addDateSeconds == 123456);
+    }
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 2);
+    assert(scanner.Scan(*session, {root}) == 0);
+    assert(!metadataRebuildRequired(databasePath));
+  }
+  assert(std::filesystem::file_size(archive) == archiveSize);
+  assert(std::filesystem::last_write_time(archive) == archiveTime);
+  assert(std::filesystem::last_write_time(ordinary) == ordinaryTime);
 }
 
 void testParserUpgradeRebuildsUnchangedSources() {
@@ -3092,6 +3280,8 @@ void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
 } // namespace
 
 int main() {
+  testPmsFormatSurvivesBufferedChartLoading();
+  testHistoricalPmsMetadataRebuildsUnchangedSources();
   testUntrustedIncompleteMarkersDoNotHideCharts();
   for (bool requireReadable : {false, true}) {
     for (bool registerDuringScan : {false, true}) {

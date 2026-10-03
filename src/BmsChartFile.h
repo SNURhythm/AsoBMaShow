@@ -7,8 +7,8 @@
 
 namespace asobmshow::bms_chart_file {
 
-inline constexpr std::array<std::string_view, 3> kBmsChartExtensions = {
-    ".bms", ".bme", ".bml"};
+inline constexpr std::array<std::string_view, 4> kBmsChartExtensions = {
+    ".bms", ".bme", ".bml", ".pms"};
 
 namespace detail {
 

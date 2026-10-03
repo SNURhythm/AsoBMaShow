@@ -1,6 +1,12 @@
 #include "scene/play/PlayfieldChartVisualModel.h"
 #include "graph_allocation_guard.h"
 #include "bms_parser.hpp"
+#include "ChartPlayability.h"
+#include "ChartTiming.h"
+
+#include <atomic>
+#include <memory>
+#include <stdexcept>
 
 #include <algorithm>
 #include <array>
@@ -398,7 +404,83 @@ bool testSpeedObjectInterpolationUsesPinnedTimelineSemantics() {
 
 } // namespace
 
+bool testLongNoteGraphsPreserveReferencePairTraversal() {
+  const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  std::vector<unsigned char> bytes(input.begin(), input.end());
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(bytes, &raw, false, false, cancelled);
+  std::unique_ptr<bms_parser::Chart> chart(raw);
+  if (!chart || chart->Meta.TotalNotes != 1) return false;
+  const auto rejects = [](const bms_parser::Chart &candidate) {
+    try {
+      (void)buildPlayfieldChartVisualModel(candidate, 1);
+    } catch (const std::invalid_argument &error) {
+      return std::string(error.what()).find("long-note") != std::string::npos;
+    }
+    return false;
+  };
+  if (!rejects(*chart) || chart->Meta.TotalNotes != 1) return false;
+
+  bms_parser::Chart paired;
+  auto *measure = new bms_parser::Measure();
+  auto *first = new bms_parser::TimeLine(8, false);
+  auto *last = new bms_parser::TimeLine(8, false);
+  first->Bpm = last->Bpm = 120.0;
+  last->Timing = 1'000'000;
+  auto *head = new bms_parser::LongNote(1);
+  auto *tail = new bms_parser::LongNote(2);
+  head->Tail = tail;
+  tail->Head = head;
+  first->SetNote(0, head);
+  last->SetNote(0, tail);
+  measure->TimeLines = {first, last};
+  paired.Measures.push_back(measure);
+  paired.Meta.TotalNotes = 1;
+  if (chart_playability::longNoteError(paired) ||
+      buildPlayfieldChartVisualModel(paired, 1).notes.size() != 2) return false;
+  tail->Timeline = nullptr;
+  if (!rejects(paired) || head->Tail != tail) return false;
+  tail->Timeline = last;
+  last->Notes[0] = nullptr;
+  const auto detachedTailModel = buildPlayfieldChartVisualModel(paired, 1);
+  const bool detachedTailSupported = detachedTailModel.notes.size() == 2 &&
+      detachedTailModel.notes[0].pairId == detachedTailModel.notes[1].id &&
+      !detachedTailModel.notes[1].inActiveSlot &&
+      detachedTailModel.staticMetadata.longKeyNotes == 1;
+  last->Notes[0] = tail;
+  first->Notes[0] = nullptr;
+  const auto detachedHeadModel = buildPlayfieldChartVisualModel(paired, 1);
+  const bool detachedHeadSupported = detachedHeadModel.notes.size() == 2 &&
+      !detachedHeadModel.notes[1].inActiveSlot &&
+      detachedHeadModel.staticMetadata.longKeyNotes == 0;
+  first->Notes[0] = head;
+  head->Tail = nullptr;
+  const bool orphanTailRejected = rejects(paired);
+  head->Tail = tail;
+  return detachedTailSupported && detachedHeadSupported && orphanTailRejected &&
+         paired.Meta.TotalNotes == 1 && tail->Head == head;
+}
+
+bool testSaturatedStopRetainsExactIntegerValue() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Bpm = 120.0;
+  timeline->ParsedStopDuration = std::numeric_limits<long long>::max();
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  const auto model = buildPlayfieldChartVisualModel(chart, 1);
+  return model.timelines.front().stopMicros == std::numeric_limits<long long>::max() &&
+         chart_playability::error(chart).has_value() &&
+         chart_timing::add(std::numeric_limits<long long>::max(), 1) ==
+             std::numeric_limits<long long>::max();
+}
+
 int main() {
+  if (!testLongNoteGraphsPreserveReferencePairTraversal() ||
+      !testSaturatedStopRetainsExactIntegerValue()) return EXIT_FAILURE;
   if (!testStaticChartMetadata()) {
     return EXIT_FAILURE;
   }

@@ -1,0 +1,15 @@
+#TITLE Historical replay
+#ARTIST Fixture
+#BPM 137.123
+#RANK 2
+#TOTAL 200
+#WAV01 first.wav
+#WAV02 second.wav
+#RANDOM 2
+#IF 1
+#00111:01
+#ELSE
+#00112:02
+#ENDIF
+#ENDRANDOM
+#00213:01

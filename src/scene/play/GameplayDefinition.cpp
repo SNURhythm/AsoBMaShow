@@ -98,6 +98,7 @@ GameplayDefinition::hellChargeHeads() const noexcept {
 
 GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
                                            int longNoteModeOverride) {
+  chart_playability::requireSupportedLongNotes(chart);
   GameplayDefinition result;
   result.metadata_ = {
       .totalNotes = chart.Meta.TotalNotes,
@@ -160,6 +161,12 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
     }
   }
 
+  const auto identities = chart_playability::noteIdentities(chart);
+  for (std::size_t index = identities.activeCount; index < identities.notes.size(); ++index) {
+    append(identities.notes[index]);
+    result.notes_.back().inActiveSlot = false;
+  }
+
   for (const auto &[source, id] : ids) {
     const auto *longNote =
         dynamic_cast<const bms_parser::LongNote *>(source);
@@ -206,7 +213,7 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
     }
   }
 
-  result.chronologicalNoteIds_.resize(result.notes_.size());
+  result.chronologicalNoteIds_.resize(identities.activeCount);
   std::iota(result.chronologicalNoteIds_.begin(),
             result.chronologicalNoteIds_.end(), NoteId{0});
   std::ranges::sort(result.chronologicalNoteIds_,
@@ -228,7 +235,7 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
   }
 
   for (const auto &note : result.notes_) {
-    if (note.kind == NoteKind::Landmine) {
+    if (!note.inActiveSlot || note.kind == NoteKind::Landmine) {
       continue;
     }
     auto lane = std::ranges::lower_bound(

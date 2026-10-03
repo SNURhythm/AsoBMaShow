@@ -1789,6 +1789,31 @@ void testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount() {
          "and does not double-count its press and release");
 }
 
+void testDetachedPartnerCannotReplaceActiveReplayPresentationIdentity() {
+  bms_parser::Parser parser;
+  std::atomic_bool cancelled = false;
+  bms_parser::Chart *raw = nullptr;
+  const std::string text = "#BPM 120\n#00051:0101\n#00011:02\n";
+  parser.Parse(std::vector<unsigned char>(text.begin(), text.end()),
+               &raw, false, false, cancelled);
+  std::unique_ptr<bms_parser::Chart> parsed(raw);
+  expect(parsed && !parsed->DetachedNotes.empty(), "fixture has a detached head");
+  if (!parsed) return;
+  parsed->Meta.LnMode = 1;
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(*parsed, settings, configuration, bga));
+  expect(created.presentation != nullptr, "detached pair presentation is created");
+  if (!created.presentation) return;
+  const ReplayEvent normal{.action = ReplayEventAction::Press,
+                            .lane = 0, .noteTimeMicros = 0,
+                            .judgement = PGreat};
+  expect(created.presentation->applyReplayEvent(normal, {}, true),
+         "active normal judgement must not resolve to the detached classic head");
+}
+
 void testBuiltInReplayPresentationPreprocessesGhostsAndMisses() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2498,6 +2523,7 @@ int main() {
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
   testReplayGraphAuthorityMatchesTheGameplayProducer();
   testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
+  testDetachedPartnerCannotReplaceActiveReplayPresentationIdentity();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testMultiBadLeavesChargeTailForItsOwnMiss();

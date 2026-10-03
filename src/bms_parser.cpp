@@ -837,6 +837,67 @@ void EucKrConverter::BytesToUTF8(const unsigned char *input, size_t size,
 
 } // namespace bms_parser
 
+
+namespace bms_parser::detail {
+namespace {
+struct Character { unsigned codepoint; size_t consumed; size_t matched; };
+Character decode(const unsigned char *bytes, size_t size, LegacyCharset charset) {
+  const unsigned a = bytes[0];
+  if (a < 0x80) return {a, 1, 1};
+  const bool ms932 = charset == LegacyCharset::Ms932;
+  if (ms932 && a >= 0xa1 && a <= 0xdf) return {a + 0xfec0, 1, 1};
+  const bool lead = ms932 ? ((a >= 0x81 && a <= 0x9f) || (a >= 0xe0 && a <= 0xfc))
+                          : (a >= 0xa1 && a <= 0xfe);
+  if (!lead || size < 2) return {0xfffd, 1, 0};
+  const unsigned b = bytes[1];
+  const auto invalidLength = ms932 ? kMs932InvalidPairLength[a] : kEucKrInvalidPairLength[a];
+  uint32_t entry = 0xfffd | (invalidLength == 1 ? 0x40000 : 0);
+  if (ms932 && b >= 0x40 && b <= 0xfc) {
+    const size_t row = a <= 0x9f ? a - 0x81 : a - 0xe0 + 31;
+    entry = kMs932Pairs[row * 189 + b - 0x40];
+  } else if (!ms932 && b >= 0xa1 && b <= 0xfe) {
+    entry = kJavaEucKrPairs[(a - 0xa1) * 94 + b - 0xa1];
+  }
+  const unsigned cp = entry & 0xffff;
+  // Java leaves a separately decodable second byte after a malformed lead.
+  return {cp, cp == 0xfffd && b < 0x80 ? size_t{1} : (entry & 0x40000) ? size_t{1} : size_t{2}, (entry >> 16) & 3};
+}
+}
+size_t legacyRoundTripPrefix(const unsigned char *bytes, size_t size, LegacyCharset charset) {
+  size_t i = 0;
+  while (i < size) {
+    i += asciiPrefixLength(bytes + i, size - i);
+    if (i == size) break;
+    const auto ch = decode(bytes + i, size - i, charset);
+    if (ch.matched < ch.consumed) return i + ch.matched;
+    i += ch.consumed;
+  }
+  return i;
+}
+void decodeJavaLegacy(const unsigned char *bytes, size_t size, LegacyCharset charset,
+                      std::string &result) {
+  result.clear();
+  result.reserve(size);
+  for (size_t i = 0; i < size;) {
+    const size_t ascii = asciiPrefixLength(bytes + i, size - i);
+    result.append(reinterpret_cast<const char *>(bytes + i), ascii);
+    i += ascii;
+    if (i == size) break;
+    const auto ch = decode(bytes + i, size - i, charset);
+    i += ch.consumed;
+    const auto cp = ch.codepoint;
+    if (cp < 0x800) {
+      result.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    } else {
+      result.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    }
+  }
+}
+}
+
 /*
  * Copyright (C) 2024 VioletXF, khoeun03
  * This program is free software: you can redistribute it and/or modify
@@ -2302,94 +2363,6 @@ bool hasUtf16BeBom(const std::vector<unsigned char> &bytes) {
   return bytes.size() >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff;
 }
 
-std::string bytesToString(const std::vector<unsigned char> &bytes,
-                          size_t offset) {
-  if (offset >= bytes.size()) {
-    return "";
-  }
-  return std::string(reinterpret_cast<const char *>(bytes.data() + offset),
-                     bytes.size() - offset);
-}
-
-bool isValidUtf8(const std::vector<unsigned char> &bytes, size_t offset) {
-  size_t i = offset;
-  while (i < bytes.size()) {
-    const unsigned char c = bytes[i];
-    if (c < 0x80) {
-      i += bms_parser::detail::asciiPrefixLength(bytes.data() + i,
-                                               bytes.size() - i);
-      continue;
-    }
-    if (c >= 0xc2 && c <= 0xdf) {
-      if (i + 1 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 2;
-      continue;
-    }
-    if (c == 0xe0) {
-      if (i + 2 >= bytes.size() || bytes[i + 1] < 0xa0 ||
-          bytes[i + 1] > 0xbf || (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c >= 0xe1 && c <= 0xec) {
-      if (i + 2 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
-          (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c == 0xed) {
-      if (i + 2 >= bytes.size() || bytes[i + 1] < 0x80 ||
-          bytes[i + 1] > 0x9f || (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c >= 0xee && c <= 0xef) {
-      if (i + 2 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
-          (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c == 0xf0) {
-      if (i + 3 >= bytes.size() || bytes[i + 1] < 0x90 ||
-          bytes[i + 1] > 0xbf || (bytes[i + 2] & 0xc0) != 0x80 ||
-          (bytes[i + 3] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 4;
-      continue;
-    }
-    if (c >= 0xf1 && c <= 0xf3) {
-      if (i + 3 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
-          (bytes[i + 2] & 0xc0) != 0x80 ||
-          (bytes[i + 3] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 4;
-      continue;
-    }
-    if (c == 0xf4) {
-      if (i + 3 >= bytes.size() || bytes[i + 1] < 0x80 ||
-          bytes[i + 1] > 0x8f || (bytes[i + 2] & 0xc0) != 0x80 ||
-          (bytes[i + 3] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 4;
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
 
 void appendUtf8CodePoint(uint32_t codePoint, std::string &result) {
   if (codePoint <= 0x7F) {
@@ -2554,68 +2527,85 @@ bool charsetIsEucKr(const std::string &charset) {
          charset == "KSX1001";
 }
 
-bool isShiftJisLeadByte(unsigned char byte) {
-  return (byte >= 0x81 && byte <= 0x9F) || (byte >= 0xE0 && byte <= 0xFC);
-}
-
-bool isShiftJisTrailByte(unsigned char byte) {
-  return (byte >= 0x40 && byte <= 0x7E) || (byte >= 0x80 && byte <= 0xFC);
-}
-
-bool isEucKrLeadByte(unsigned char byte) {
-  return byte >= 0xA1 && byte <= 0xFE;
-}
-
-bool isEucKrTrailByte(unsigned char byte) {
-  return byte >= 0xA1 && byte <= 0xFE;
-}
-
-bool shouldDecodeNoBomAsEucKr(const std::vector<unsigned char> &bytes,
-                              size_t offset) {
-  size_t eucKrPairs = 0;
-  size_t shiftJisPairs = 0;
-  size_t nextEucKr = offset;
-  size_t nextShiftJis = offset;
-  size_t index = offset;
-  while (index < bytes.size()) {
-    index += bms_parser::detail::asciiPrefixLength(bytes.data() + index,
-                                                 bytes.size() - index);
-    if (index + 1 >= bytes.size()) {
-      break;
+// Java replaces one malformed UTF-8 subsequence, preserving a following ASCII
+// byte. A complete encoded surrogate is a single malformed subsequence.
+void javaUtf8(const unsigned char *bytes, size_t size, std::string &result) {
+  result.clear();
+  result.reserve(size);
+  size_t i = 0;
+  while (i < size) {
+    const size_t ascii = bms_parser::detail::asciiPrefixLength(bytes + i, size - i);
+    result.append(reinterpret_cast<const char *>(bytes + i), ascii);
+    i += ascii;
+    if (i == size) break;
+    const unsigned a = bytes[i];
+    size_t width = a >= 0xc2 && a <= 0xdf ? 2 :
+                   a >= 0xe0 && a <= 0xef ? 3 :
+                   a >= 0xf0 && a <= 0xf4 ? 4 : 1;
+    size_t consumed = 1;
+    unsigned cp = a & (width == 2 ? 0x1f : width == 3 ? 0xf : 7);
+    while (consumed < width && i + consumed < size) {
+      const unsigned b = bytes[i + consumed];
+      if ((b & 0xc0) != 0x80 ||
+          (consumed == 1 && ((a == 0xe0 && b < 0xa0) ||
+           (a == 0xf0 && b < 0x90) || (a == 0xf4 && b > 0x8f)))) break;
+      cp = (cp << 6) | (b & 0x3f);
+      ++consumed;
     }
-    // Each encoding must retain its own pair boundaries. A trail byte consumed
-    // by one encoding can still be a lead byte for the other encoding.
-    if (index >= nextEucKr && isEucKrLeadByte(bytes[index]) &&
-        isEucKrTrailByte(bytes[index + 1])) {
-      ++eucKrPairs;
-      nextEucKr = index + 2;
-    }
-    if (index >= nextShiftJis && isShiftJisLeadByte(bytes[index]) &&
-        isShiftJisTrailByte(bytes[index + 1])) {
-      ++shiftJisPairs;
-      nextShiftJis = index + 2;
-    }
-    ++index;
+    if (width > 1 && consumed == width && !(cp >= 0xd800 && cp <= 0xdfff))
+      result.append(reinterpret_cast<const char *>(bytes + i), width);
+    else appendUtf8CodePoint(0xfffd, result);
+    i += consumed;
   }
-  return eucKrPairs > shiftJisPairs;
+}
+
+void utf32BytesToUtf8(const std::vector<unsigned char> &bytes, size_t offset,
+                      bool little, std::string &content) {
+  content.clear();
+  for (size_t i = offset; i + 3 < bytes.size(); i += 4) {
+    uint32_t cp = 0;
+    for (int j = 0; j < 4; ++j) cp = (cp << 8) | bytes[i + (little ? 3 - j : j)];
+    if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) cp = 0xfffd;
+    appendUtf8CodePoint(cp, content);
+  }
+  if ((bytes.size() - offset) % 4) appendUtf8CodePoint(0xfffd, content);
+}
+
+// Reencode decoded UTF text to count the unchanged byte prefix, matching the
+// reference's > length - 4 tolerance (including a cut character at 64 KiB).
+size_t unicodeRoundTripPrefix(const std::vector<unsigned char> &bytes,
+                              const std::string &decoded, int width, bool little) {
+  size_t matched = 0;
+  for (size_t i = 0; i < decoded.size();) {
+    unsigned a = static_cast<unsigned char>(decoded[i++]);
+    unsigned cp = a;
+    int continuation = a < 0x80 ? 0 : a < 0xe0 ? 1 : a < 0xf0 ? 2 : 3;
+    if (continuation) cp &= (1u << (6 - continuation)) - 1;
+    while (continuation--) cp = (cp << 6) | (static_cast<unsigned char>(decoded[i++]) & 0x3f);
+    unsigned char encoded[4];
+    size_t count = 0;
+    auto unit = [&](unsigned value, int n) {
+      for (int j = 0; j < n; ++j) encoded[count++] = static_cast<unsigned char>(value >> (8 * (little ? j : n - 1 - j)));
+    };
+    if (width == 4) unit(cp, 4);
+    else if (cp < 0x10000) unit(cp, 2);
+    else { cp -= 0x10000; unit(0xd800 + (cp >> 10), 2); unit(0xdc00 + (cp & 0x3ff), 2); }
+    for (size_t j = 0; j < count; ++j) {
+      if (matched == bytes.size() || bytes[matched] != encoded[j]) return matched;
+      ++matched;
+    }
+  }
+  return matched;
 }
 
 // Returns whether the legacy Shift-JIS decoder produced the text.
 bool decodeBmsText(const std::vector<unsigned char> &bytes,
                    std::string &content) {
-  const size_t utf8Offset = 0;
   if (bytes.size() >= 4 &&
       ((bytes[0] == 0xff && bytes[1] == 0xfe && bytes[2] == 0 && bytes[3] == 0) ||
        (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xfe && bytes[3] == 0xff))) {
     const bool little = bytes[0] == 0xff;
-    content.clear();
-    for (size_t i = 4; i + 3 < bytes.size(); i += 4) {
-      uint32_t cp = 0;
-      for (int j = 0; j < 4; ++j) cp = (cp << 8) | bytes[i + (little ? 3 - j : j)];
-      if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) cp = 0xfffd;
-      appendUtf8CodePoint(cp, content);
-    }
-    if ((bytes.size() - 4) % 4) appendUtf8CodePoint(0xfffd, content);
+    utf32BytesToUtf8(bytes, 4, little, content);
     return false;
   }
   if (hasUtf16LeBom(bytes)) {
@@ -2629,31 +2619,52 @@ bool decodeBmsText(const std::vector<unsigned char> &bytes,
 
   const std::string charset = declaredCharset(bytes);
   if (hasUtf8Bom(bytes) || charsetIsUtf8(charset)) {
-    content = bytesToString(bytes, utf8Offset);
+    javaUtf8(bytes.data(), bytes.size(), content);
     return false;
   }
   if (charsetIsEucKr(charset)) {
     bms_parser::EucKrConverter::BytesToUTF8(
-        bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
+        bytes.data(), bytes.size(), content);
     return false;
   }
   if (charsetIsShiftJis(charset)) {
     bms_parser::ShiftJISConverter::BytesToUTF8(
-        bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
+        bytes.data(), bytes.size(), content);
     return true;
   }
-  if (isValidUtf8(bytes, utf8Offset)) {
-    content = bytesToString(bytes, utf8Offset);
+  using bms_parser::detail::LegacyCharset;
+  const size_t length = std::min(bytes.size(), size_t{64 * 1024});
+  const bool hasMarker = std::find_if(bytes.begin(), bytes.begin() + length,
+      [](unsigned char c) { return c == '#' || c == '\r' || c == '\n'; }) != bytes.begin() + length;
+  const auto accepted = [length](size_t prefix) { return prefix + 4 > length; };
+  for (const auto encoding : {LegacyCharset::EucKr, LegacyCharset::Ms932}) {
+    if (hasMarker && accepted(bms_parser::detail::legacyRoundTripPrefix(bytes.data(), length, encoding))) {
+      bms_parser::detail::decodeJavaLegacy(bytes.data(), bytes.size(), encoding, content);
+      return encoding == LegacyCharset::Ms932;
+    }
+  }
+  std::string probe;
+  javaUtf8(bytes.data(), length, probe);
+  size_t matched = 0;
+  while (matched < length && matched < probe.size() && bytes[matched] == static_cast<unsigned char>(probe[matched])) ++matched;
+  if (hasMarker && accepted(matched)) {
+    javaUtf8(bytes.data(), bytes.size(), content);
     return false;
   }
-  if (shouldDecodeNoBomAsEucKr(bytes, utf8Offset)) {
-    bms_parser::EucKrConverter::BytesToUTF8(
-        bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
-    return false;
+  const std::vector<unsigned char> sample(bytes.begin(), bytes.begin() + length);
+  for (const int width : {2, 4}) {
+    for (const bool little : {false, true}) {
+      if (width == 2) utf16BytesToUtf8(sample, 0, little, probe);
+      else utf32BytesToUtf8(sample, 0, little, probe);
+      if (probe.find_first_of("#\r\n") != std::string::npos &&
+          accepted(unicodeRoundTripPrefix(sample, probe, width, little))) {
+        if (width == 2) utf16BytesToUtf8(bytes, 0, little, content);
+        else utf32BytesToUtf8(bytes, 0, little, content);
+        return false;
+      }
+    }
   }
-
-  bms_parser::ShiftJISConverter::BytesToUTF8(
-      bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
+  bms_parser::detail::decodeJavaLegacy(bytes.data(), bytes.size(), LegacyCharset::Ms932, content);
   return true;
 }
 
@@ -3009,31 +3020,52 @@ void Parser::Parse(const std::filesystem::path &fpath, Chart **chart,
   std::vector<unsigned char> bytes(static_cast<size_t>(size));
   file.seekg(0, std::ios::beg);
   if (!file.read(reinterpret_cast<char *>(bytes.data()), size)) return;
-  auto extension = fpath.extension().string();
-  std::transform(extension.begin(), extension.end(), extension.begin(),
-                 [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; });
-  ParseInternal(bytes, chart, addReadyMeasure, metaOnly, bCancelled, nullptr,
-                extension == ".pms");
+  Parse(bytes, chart, addReadyMeasure, metaOnly, bCancelled, fpath);
   if (*chart) {
     (*chart)->Meta.BmsPath = fpath;
     (*chart)->Meta.Folder = fpath.parent_path();
   }
 }
 
+namespace {
+bool isPmsSource(const std::filesystem::path &sourcePath) {
+  auto extension = sourcePath.extension().string();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; });
+  return extension == ".pms";
+}
+} // namespace
+
 void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                    bool addReadyMeasure, bool metaOnly,
                    std::atomic_bool &bCancelled) {
-  ParseInternal(bytes, chart, addReadyMeasure, metaOnly, bCancelled, nullptr);
+  Parse(bytes, chart, addReadyMeasure, metaOnly, bCancelled, {});
+}
+
+void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
+                   bool addReadyMeasure, bool metaOnly,
+                   std::atomic_bool &bCancelled,
+                   const std::filesystem::path &sourcePath) {
+  ParseInternal(bytes, chart, addReadyMeasure, metaOnly, bCancelled, nullptr,
+                isPmsSource(sourcePath));
 }
 
 std::optional<ChartScanResult>
 Parser::Scan(const std::vector<unsigned char> &bytes,
              std::atomic_bool &bCancelled) {
+  return Scan(bytes, bCancelled, {});
+}
+
+std::optional<ChartScanResult>
+Parser::Scan(const std::vector<unsigned char> &bytes,
+             std::atomic_bool &bCancelled,
+             const std::filesystem::path &sourcePath) {
   if (bCancelled) return std::nullopt;
   ChartScanResult result;
   Chart *raw = nullptr;
   try {
-    ParseInternal(bytes, &raw, false, false, bCancelled, &result);
+    ParseInternal(bytes, &raw, false, false, bCancelled, &result,
+                  isPmsSource(sourcePath));
   } catch (...) {
     delete raw;
     throw;
@@ -3056,18 +3088,11 @@ Parser::Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled) {
   file.seekg(0, std::ios::beg);
   if (!file.read(reinterpret_cast<char *>(bytes.data()), size))
     return std::nullopt;
-  auto extension = path.extension().string();
-  std::transform(extension.begin(), extension.end(), extension.begin(),
-                 [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; });
-  ChartScanResult result;
-  Chart *raw = nullptr;
-  ParseInternal(bytes, &raw, false, false, bCancelled, &result, extension == ".pms");
-  const std::unique_ptr<Chart> chart(raw);
-  if (!chart || bCancelled) return std::nullopt;
-  result.Meta = std::move(chart->Meta);
-  result.Meta.BmsPath = path;
-  result.Meta.Folder = path.parent_path();
-  result.HasBga = !chart->BmpTable.empty();
+  auto result = Scan(bytes, bCancelled, path);
+  if (result) {
+    result->Meta.BmsPath = path;
+    result->Meta.Folder = path.parent_path();
+  }
   return result;
 }
 
@@ -3191,6 +3216,11 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       return;
     }
     // std::cout << line << std::endl;
+    if (line.size() > 1 && (line[0] == '%' || line[0] == '@')) {
+      const size_t space = line.find(' ');
+      if (space != std::string_view::npos && space + 1 < line.size())
+        new_chart->Meta.Values[std::string(line.substr(1, space - 1))] = std::string(line.substr(space + 1));
+    }
     if (line.size() <= 1 || line[0] != L'#')
       continue;
     if (bCancelled) {
@@ -3327,7 +3357,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       } else {
         static constexpr std::string_view commands[] = {
           "PLAYER", "GENRE", "TITLE", "SUBTITLE", "ARTIST", "SUBARTIST",
-          "PLAYLEVEL", "RANK", "DEFEXRANK", "TOTAL", "STAGEFILE", "BACKBMP",
+          "PLAYLEVEL", "RANK", "DEFEXRANK", "TOTAL", "VOLWAV", "STAGEFILE", "BACKBMP",
           "PREVIEW", "LNOBJ", "LNMODE", "DIFFICULTY", "BANNER"};
         for (auto command : commands) {
           if (lineUnits > command.size() + 2 &&
@@ -3449,6 +3479,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
   std::vector<std::pair<unsigned long long, unsigned long long>> prepTimingPositions;
   detail::ParserScratchArena timelineNodes;
   std::deque<TimeLine> scratchTimelines;
+  TimeLine carriedTimeline(0, true);
   for (auto measureIdx = 0; measureIdx <= lastMeasure; ++measureIdx) {
     if (bCancelled) {
       return;
@@ -3611,7 +3642,11 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
         }
         const std::string_view val(cell, 2);
         const int object = channel == BpmChange ? ParseHex(val) : ParseInt(val);
-        if (object <= 0 && !(channel == LaneAutoplay && val == "**")) continue;
+        // Only the synthetic ready measure may use the internal click token.
+        // Authored measures have already shifted by one when it is enabled.
+        const bool readyClick = addReadyMeasure && measureIdx == 0 &&
+                                channel == LaneAutoplay && val == "**";
+        if (object <= 0 && !readyClick) continue;
       if (!scratchlessKeyMode && !pms) {
         if (laneNumber == 5 || laneNumber == 6 || laneNumber == 13 ||
             laneNumber == 14) {
@@ -3829,6 +3864,10 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
     }
     if (measureIdx == 0 && currentBpm == 0)
       currentBpm = javaTimelines.begin()->second.bpm;
+    if (measureIdx == 0 && javaTimelines.begin()->second.bpm == 0) return;
+    parsedNotes.setTiming(measureBeatPosition, [&](double section) {
+      return javaLong(javaTimelines.at(section).time);
+    });
     auto lastPosition = 0.0;
 
     measure->Timing = javaLong(timePassed);
@@ -3934,6 +3973,27 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
         measureHasPrepTimingContent,
         static_cast<int>(prepTimingPositions.size()));
     measureBeatPosition += measure->Scale;
+    parsedNotes.advance(*new_chart, materialize, measureBeatPosition);
+
+    // Future rows cannot address an earlier measure. Keep a timing
+    // predecessor and any timeline rounded onto the next bar, not the chart.
+    auto futureState = javaTimelines.lower_bound(measureBeatPosition);
+    for (auto it = javaTimelines.begin(); it != futureState; ++it) {
+      minBpm = std::min(minBpm, it->second.bpm);
+      maxBpm = std::max(maxBpm, it->second.bpm);
+    }
+    if (futureState != javaTimelines.begin())
+      javaTimelines.erase(javaTimelines.begin(), std::prev(futureState));
+    globalTimelines.erase(globalTimelines.begin(),
+                          globalTimelines.lower_bound(measureBeatPosition));
+    if (!materialize) {
+      if (!globalTimelines.empty()) {
+        auto &timeline = globalTimelines.begin()->second;
+        if (timeline != &carriedTimeline) carriedTimeline = *timeline;
+        timeline = &carriedTimeline;
+      }
+      scratchTimelines.clear();
+    }
     if (materialize) {
       new_chart->Measures.push_back(ownedMeasure.release());
     }
@@ -3945,11 +4005,6 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
                    .count()
             << "\n";
 #endif
-  if ((lastMeasure >= 0 || !metaOnly) && javaTimelines.begin()->second.bpm == 0)
-    return;
-  parsedNotes.setTiming([&](double section) {
-    return javaLong(javaTimelines.at(section).time);
-  });
   parsedNotes.finish(*new_chart, materialize);
   for (const auto &[section, state] : javaTimelines) {
     minBpm = std::min(minBpm, state.bpm);
@@ -4076,6 +4131,8 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       Chart->Meta.HasTotal = true;
     }
   } else if (commandIs("VOLWAV")) {
+    int volume;
+    if (parseInteger(Value, volume)) Chart->Meta.VolWav = volume;
   } else if (commandIs("STAGEFILE")) {
     Chart->Meta.StageFile = utf8_to_path_t(resourcePath(Value, shiftJis));
   } else if (commandIs("BANNER")) {

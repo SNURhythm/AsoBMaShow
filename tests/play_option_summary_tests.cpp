@@ -4,6 +4,8 @@
 
 #include <cassert>
 #include <iostream>
+#include <atomic>
+#include <memory>
 
 void testLaneOrders() {
   bms_parser::ChartMeta single;
@@ -47,7 +49,36 @@ void testSyntheticChartOwnership() {
   }
 }
 
+void testDetachedPairsFollowModifiedActiveLane() {
+  for (const std::string option : {"MIRROR", "RANDOM"}) {
+    for (const bool detachHead : {false, true}) {
+      const std::string input = std::string("#BPM 120\n#00051:0101\n#00011:") +
+                                (detachHead ? "02\n" : "0002\n");
+      std::vector<unsigned char> bytes(input.begin(), input.end());
+      bms_parser::Parser parser;
+      bms_parser::Chart *raw = nullptr;
+      std::atomic_bool cancelled{false};
+      parser.Parse(bytes, &raw, false, false, cancelled);
+      std::unique_ptr<bms_parser::Chart> chart(raw);
+      assert(chart && chart->DetachedNotes.size() == 1);
+      auto *detached = static_cast<bms_parser::LongNote *>(chart->DetachedNotes.front().get());
+      auto *active = detachHead ? detached->Tail : detached->Head;
+      const auto *timeline = detached->Timeline;
+      const int count = chart->Meta.TotalNotes;
+      std::optional<std::string> applied;
+      std::optional<long long> seed;
+      assert(play_options::applyPlayOptionModifier(*chart, option, 123, 0, applied, seed));
+      assert(detached->Lane == active->Lane && detached->Timeline == timeline &&
+             chart->Meta.TotalNotes == count);
+      assert(detachHead ? detached->Tail == active && active->Head == detached
+                        : detached->Head == active && active->Tail == detached);
+      if (option == "MIRROR") assert(active->Lane != 0);
+    }
+  }
+}
+
 int main() {
+  testDetachedPairsFollowModifiedActiveLane();
   for (int keyMode : {7, 14}) {
     bms_parser::ChartMeta meta;
     meta.KeyMode = keyMode;

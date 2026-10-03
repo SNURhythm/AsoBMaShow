@@ -29,6 +29,7 @@ struct NoteDefinition {
   NoteId pairId = kInvalidNoteId;
   bool scratchLane = false;
   float mineDamage = 0.0F;
+  bool inActiveSlot = true;
 };
 
 struct KeysoundSourceDefinition {

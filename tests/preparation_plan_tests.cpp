@@ -26,6 +26,8 @@ bms_parser::TimeLine *addTimeline(bms_parser::Chart &chart,
   }
   auto *timeline = new bms_parser::TimeLine(16, false);
   timeline->Timing = timingMicros;
+  timeline->Bpm = chart.Meta.Bpm;
+  timeline->BeatPosition = timingMicros * chart.Meta.Bpm / 240000000.0;
   chart.Measures.front()->TimeLines.push_back(timeline);
   return timeline;
 }

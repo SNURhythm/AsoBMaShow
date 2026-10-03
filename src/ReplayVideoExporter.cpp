@@ -4459,6 +4459,10 @@ ReplayVideoExportResult
 ReplayVideoExporter::Export(ApplicationContext &context,
                             bms_parser::Chart *chart, const ReplayData &replay,
                             const ReplayVideoExportOptions &options) {
+  if (!replay.consumerIdentityCompatible) {
+    return {.success = false,
+            .message = replay_note::kUnsupportedIdentityDiagnostic};
+  }
   if (replay.abortedAtSongTimeMicros.has_value()) {
     return {.success = false,
             .message = "Video export of aborted replays is unsupported."};
