@@ -6310,6 +6310,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_definitions(play_skin_session_tests PRIVATE
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_PLAY_SKIN_SESSION_TESTING=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
             ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )
@@ -8356,6 +8357,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_runtime_tests)
         asobmashow_register_test(lua_skin_runtime_tests)
+        # Preserve production callback deadlines without sibling-test preemption.
+        set_tests_properties(lua_skin_runtime_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if (TARGET lua_skin_binding_decoder_tests)
         asobmashow_register_test(lua_skin_binding_decoder_tests)

@@ -70,20 +70,22 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
 
     def test_download_redirects_cannot_downgrade_https_to_http(self):
         self.assertIn("CurlRedirectProtocolsForInitialUrl", self.curl_raii)
-        for source, expected_redirect_guards in (
-            (self.download_support, 3),
-            (self.difficulty_importer, 1),
-        ):
-            self.assertEqual(
-                len(
-                    re.findall(
+        for source in (self.download_support, self.difficulty_importer):
+            # Audit each request before execution, including newly added probes.
+            requests = re.findall(
+                r"curl_easy_setopt\(curl\.get\(\), CURLOPT_URL,.*?"
+                r"curl_easy_perform\(curl\.get\(\)\)",
+                source,
+                flags=re.DOTALL,
+            )
+            self.assertTrue(requests, "No curl requests found to audit")
+            for request in requests:
+                with self.subTest(request=request):
+                    self.assertRegex(
+                        request,
                         r"CURLOPT_REDIR_PROTOCOLS_STR,\s*"
                         r"CurlRedirectProtocolsForInitialUrl\(url\)",
-                        source,
                     )
-                ),
-                expected_redirect_guards,
-            )
         self.assertIn("AsoHttpsRedirectDelegate", self.ios_natives)
         self.assertIn("rejectedInsecureRedirect", self.ios_natives)
         self.assertIn(

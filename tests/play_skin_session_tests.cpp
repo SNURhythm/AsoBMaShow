@@ -4853,12 +4853,6 @@ void testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain() {
                      .renderDirectoryScansPerformed == 0,
          "five hundred evaluated frames perform no image/font/movie/audio "
          "decode or upload after preparation");
-  expect(created.session->callbackWallMicrosForTesting() <=
-             static_cast<std::uint64_t>(
-                 LuaRuntimePolicy::gameplayFrame.maxWallTime.count()) *
-                 1'000U,
-         "the test-scoped callback measurement stays within the production "
-         "gameplay-frame budget");
   const auto active = fixture.liveCounters()->snapshot();
   expect(active.liveTextures == 2 && active.liveResources == 1 &&
              active.liveCpuPixmaps == 0 && active.liveMovies == 1 &&
@@ -10040,6 +10034,9 @@ void testRequestedExternalResultSkinCreatesSession() {
 } // namespace
 
 int main(int argc, char **argv) {
+  // These tests verify session state and instruction limits, not host scheduling.
+  // Real callback/frame deadlines remain covered by lua_skin_runtime_tests.
+  LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
   if (argc == 2 && std::string_view(argv[1]) == "--result-bp-properties") {
     testResultBridgeCountsUnplayedPmsNotesInBadPoints();
     testResultBridgeComparesExactBadPointsForRecordFlags();

@@ -300,8 +300,8 @@ private:
 };
 
 #if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
-// Test-only deterministic quota failures at otherwise hard-to-reach Lua API
-// allocation boundaries.  These are unavailable from production builds.
+// Test-only deterministic resource-budget controls. These are unavailable from
+// production builds; unset wall time uses the real monotonic clock.
 enum class LuaRuntimeTestAllocationPoint : std::uint8_t {
   ValueReference,
   CallbackName,
@@ -312,6 +312,8 @@ enum class LuaRuntimeTestAllocationPoint : std::uint8_t {
 class LuaRuntimeTestHooks final {
 public:
   static void failNextAllocationAt(LuaRuntimeTestAllocationPoint) noexcept;
+  static void setWallTime(
+      std::optional<std::chrono::steady_clock::time_point>) noexcept;
 };
 #endif
 
