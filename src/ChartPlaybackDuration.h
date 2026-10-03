@@ -4,6 +4,7 @@
 #include "bms_parser.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 
 namespace chart_playback_duration {
@@ -78,13 +79,20 @@ inline long long ChartTimelineEndMicros(const bms_parser::Chart &chart) {
 
 inline long long GameplayEndMicros(const bms_parser::Chart &chart,
                                    long long latePoorTimingMicros) {
-  return ChartLastTimelineMicros(chart) + std::max(0LL, latePoorTimingMicros);
+  const auto end = ChartLastTimelineMicros(chart);
+  const auto delay = std::max(0LL, latePoorTimingMicros);
+  return end > std::numeric_limits<long long>::max() - delay
+             ? std::numeric_limits<long long>::max()
+             : end + delay;
 }
 
 inline long long GameplayResultTransitionMicros(
     const bms_parser::Chart &chart, long long latePoorTimingMicros) {
-  return GameplayEndMicros(chart, latePoorTimingMicros) +
-         kGameplayResultTransitionDelayMicros;
+  const auto end = GameplayEndMicros(chart, latePoorTimingMicros);
+  return end > std::numeric_limits<long long>::max() -
+                   kGameplayResultTransitionDelayMicros
+             ? std::numeric_limits<long long>::max()
+             : end + kGameplayResultTransitionDelayMicros;
 }
 
 inline long long ReplayTimelineEndMicros(const bms_parser::Chart &chart,

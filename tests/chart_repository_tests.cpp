@@ -613,7 +613,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 12);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 13);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -824,7 +824,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=13"));
+                   "PRAGMA user_version=14"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -2034,7 +2034,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 12);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 13);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -2203,7 +2203,60 @@ void testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan() {
     assert(queryInt(database.get(),
                     "SELECT add_date FROM chart_meta WHERE title='New'") > 345678);
     assert(queryInt(database.get(), "SELECT adddate FROM folder") == 345678);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 12);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 13);
+  }
+}
+
+void testParserSemanticsMigrationIsResumable() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "parser-semantics.db";
+  auto meta = chartMeta(temporary.path());
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->InsertChartMeta(meta));
+  }
+  {
+    auto database = openDatabase(path);
+    assert(execute(database.get(),
+        "UPDATE chart_meta SET add_date=234567;"
+        "CREATE TABLE chart_meta_rebuild_add_dates("
+        "path TEXT PRIMARY KEY,add_date INTEGER NOT NULL) WITHOUT ROWID;"
+        "INSERT INTO chart_meta_rebuild_add_dates SELECT path,123456 FROM chart_meta;"
+        "INSERT INTO archive_scan_cache(path,solid,chart_count) VALUES('same.zip',0,1);"
+        "INSERT INTO chart_scan_completed_archive(archive_path) VALUES('same.zip');"
+        "PRAGMA user_version=12"));
+  }
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 0);
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 0);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_scan_completed_archive") == 0);
+    assert(queryInt(database.get(), "SELECT add_date FROM chart_meta_rebuild_add_dates") == 123456);
+    assert(session->InsertChartMeta(meta));
+    assert(queryInt(database.get(), "SELECT add_date FROM chart_meta") == 123456);
+  }
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 1);
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "SELECT required FROM chart_meta_rebuild_state") == 1);
+    assert(session->ClearChartMetadataRebuildRequired());
+  }
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 1);
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "SELECT required FROM chart_meta_rebuild_state") == 0);
+    assert(queryInt(database.get(), "SELECT add_date FROM chart_meta") == 123456);
   }
 }
 
@@ -2231,16 +2284,16 @@ void testSolidArchiveClassificationMigration() {
     ChartRepository repository(path);
     assert(repository.EnsureReady());
     auto session = repository.OpenSession();
-    assert(session && session->CountAllChartMeta() == 1);
+    assert(session && session->CountAllChartMeta() == 0);
     auto database = openDatabase(path);
     assert(queryInt(database.get(),
         "SELECT COUNT(*) FROM archive_scan_cache WHERE solid=0 "
         "AND lower(path) LIKE '%.7z'") == 0);
-    assert(queryInt(database.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 2);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 0);
     assert(queryInt(database.get(),
         "SELECT COUNT(*) FROM chart_scan_completed_archive WHERE archive_path='old.7z'") == 0);
     assert(queryInt(database.get(),
-        "SELECT COUNT(*) FROM chart_scan_completed_archive WHERE archive_path='keep.zip'") == 1);
+        "SELECT COUNT(*) FROM chart_scan_completed_archive WHERE archive_path='keep.zip'") == 0);
   }
 }
 
@@ -2347,13 +2400,13 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 12);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 13);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
                     "WHERE id=1") == 1);
   }
-  assert(repository.GetLibraryRevision() == revisionBefore + 6);
+  assert(repository.GetLibraryRevision() == revisionBefore + 7);
 }
 
 void testLegacyIosContainerPathRebasesToCurrentDocuments() {
@@ -4168,6 +4221,7 @@ int main(int argc, char **argv) {
   testJudgeRankMetadataMigrationRequestsReparse();
   testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan();
   testSolidArchiveClassificationMigration();
+  testParserSemanticsMigrationIsResumable();
   testSolidArchiveDirectoryLoadsOnlyArchiveRecords();
   testChartMigrationReleaseFailureDoesNotReportSuccess();
   testLegacyIosContainerPathRebasesToCurrentDocuments();

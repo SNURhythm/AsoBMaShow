@@ -1,8 +1,12 @@
 #include "../src/audio/ClubBeat.h"
+#include "../src/ChartPlaybackDuration.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <memory>
+#include <string>
 
 namespace {
 int failures = 0;
@@ -98,6 +102,76 @@ void testDeterministicBoundedSynthesis() {
   require(kick.samples.size() % 2 == 0 && clapA.samples.size() % 2 == 0,
           "synthetic PCM is stereo interleaved");
 }
+
+void testParsedSaturatedStops() {
+  for (const auto *stop : {"Infinity", "1e300"}) {
+    const std::string input = std::string("#BPM 120\n#STOP01 ") + stop +
+                              "\n#00009:01\n#00111:01\n";
+    std::vector<unsigned char> bytes(input.begin(), input.end());
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(bytes, &raw, false, false, cancelled);
+    std::unique_ptr<bms_parser::Chart> chart(raw);
+    require(chart != nullptr, "extreme STOP fixture parses");
+    if (chart) {
+      require(club_beat::buildPlan(*chart).empty(),
+              "unrepresentable STOP rejects the entire club plan");
+    }
+  }
+}
+
+void testInvalidTiming() {
+  for (const double bpm : {std::numeric_limits<double>::denorm_min(), 120.0}) {
+    bms_parser::Chart chart;
+    chart.Meta.Bpm = bpm;
+    chart.Measures = {measure(std::numeric_limits<long long>::max() - 10)};
+    require(club_beat::buildPlan(chart).empty(),
+            "beat conversion and timestamp addition reject overflow");
+  }
+  for (const double stop : {-48.0, std::numeric_limits<double>::quiet_NaN()}) {
+    bms_parser::Chart chart;
+    chart.Meta.Bpm = 120;
+    auto *first = measure(0);
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Bpm = 120;
+    timeline->StopLength = stop;
+    first->TimeLines.push_back(timeline);
+    chart.Measures.push_back(first);
+    require(club_beat::buildPlan(chart).empty(),
+            "negative or NaN authored STOP rejects the entire plan");
+  }
+}
+
+void testBoundedPlanning() {
+  bms_parser::Chart chart;
+  chart.Meta.Bpm = 120;
+  chart.Measures = {measure(0, 1e300)};
+  std::atomic_bool cancelled{true};
+  require(club_beat::buildPlan(chart, &cancelled).empty(),
+          "cancelled extreme chart produces no beats");
+  // Run only after the numeric regression passes so the unfixed implementation
+  // fails promptly rather than spending unbounded time producing this plan.
+  if (failures == 0) {
+    require(club_beat::buildPlan(chart).empty(),
+            "extreme measure scale rejects before unbounded event production");
+  }
+}
+
+void testSaturatedGameplayEndHelpers() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalLength = std::numeric_limits<long long>::max() - 5;
+  require(chart_playback_duration::GameplayEndMicros(chart, 10) ==
+              std::numeric_limits<long long>::max(),
+          "gameplay end helper saturates a timestamp plus positive offset");
+  require(chart_playback_duration::GameplayResultTransitionMicros(chart, -1) ==
+              std::numeric_limits<long long>::max(),
+          "result helper saturates the transition delay and ignores negative grace");
+  chart.Meta.TotalLength = 1'000'000;
+  require(chart_playback_duration::GameplayResultTransitionMicros(chart, 100) ==
+              3'000'100,
+          "ordinary gameplay end helper retains grace and transition delays");
+}
 } // namespace
 
 int main() {
@@ -105,5 +179,9 @@ int main() {
   testThreeFourPattern();
   testTempoChangeAndStop();
   testDeterministicBoundedSynthesis();
+  testParsedSaturatedStops();
+  testInvalidTiming();
+  testBoundedPlanning();
+  testSaturatedGameplayEndHelpers();
   return failures == 0 ? 0 : 1;
 }

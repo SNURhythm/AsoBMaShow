@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace club_beat {
 namespace {
@@ -26,40 +27,68 @@ float clampSample(double value) {
 } // namespace
 
 std::vector<Event> buildPlan(const bms_parser::Chart &chart,
-                             const std::atomic_bool *cancelled) {
+                             const std::atomic_bool *cancelled,
+                             PlanError *error) {
+  if (error != nullptr) *error = PlanError::None;
+  const auto fail = [&](PlanError reason) -> std::vector<Event> {
+    if (error != nullptr) *error = reason;
+    return {};
+  };
+  const auto isCancelled = [&] {
+    return cancelled != nullptr && cancelled->load(std::memory_order_relaxed);
+  };
+  // LLONG_MAX rounds up to 2^63 in double; use an exclusive upper bound.
+  const auto addDuration = [](long long start, double duration,
+                              long long &end) {
+    if (start < 0 || !std::isfinite(duration) || duration < 0.0 ||
+        duration >= 0x1p63) return false;
+    const auto delta = static_cast<long long>(duration);
+    if (start > std::numeric_limits<long long>::max() - delta) return false;
+    end = start + delta;
+    return true;
+  };
   std::vector<Event> result;
   double activeBpm = initialBpm(chart);
   double measureBeatPosition = 0.0;
 
   for (const auto *measure : chart.Measures) {
-    if (measure == nullptr || !std::isfinite(measure->Scale) ||
-        measure->Scale <= 0.0) {
+    if (isCancelled()) return fail(PlanError::Cancelled);
+    if (measure == nullptr) {
       continue;
+    }
+    if (!std::isfinite(measure->Scale) || measure->Scale < 0.0 ||
+        measure->Timing < 0) return fail(PlanError::InvalidTiming);
+    const double measureBeats =
+        std::ceil(std::max(0.0, measure->Scale - kTolerance) * 4.0);
+    if (measureBeats > static_cast<double>(kMaxPlanEvents - result.size())) {
+      return fail(PlanError::WorkLimit);
     }
 
     long long timingCursorMicros = measure->Timing;
     double timingCursorBeatPosition = measureBeatPosition;
     std::size_t timelineIndex = 0;
     const auto processTimeline = [&](const bms_parser::TimeLine &timeline) {
-      timingCursorMicros =
-          timeline.Timing +
-          std::max(0LL, static_cast<long long>(timeline.GetStopDuration()));
+      if (!std::isfinite(timeline.BeatPosition) || timeline.BeatPosition < 0.0 ||
+          !std::isfinite(timeline.StopLength) || timeline.StopLength < 0.0 ||
+          !addDuration(timeline.Timing, timeline.GetStopDuration(),
+                       timingCursorMicros)) return false;
       timingCursorBeatPosition = timeline.BeatPosition;
       if (timeline.BpmChange && validBpm(timeline.Bpm)) {
         activeBpm = timeline.Bpm;
       }
+      return true;
     };
 
     int beatInMeasure = 1;
     for (double localBeatPosition = 0.0;
          localBeatPosition < measure->Scale - kTolerance;
          localBeatPosition += kBeatPositionStep, ++beatInMeasure) {
-      if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
-        return {};
-      }
+      if (isCancelled()) return fail(PlanError::Cancelled);
+      if (result.size() >= kMaxPlanEvents) return fail(PlanError::WorkLimit);
       const double targetBeatPosition =
           measureBeatPosition + localBeatPosition;
       while (timelineIndex < measure->TimeLines.size()) {
+        if (isCancelled()) return fail(PlanError::Cancelled);
         const auto *timeline = measure->TimeLines[timelineIndex];
         if (timeline == nullptr ||
             timeline->BeatPosition + kTolerance <
@@ -70,7 +99,7 @@ std::vector<Event> buildPlan(const bms_parser::Chart &chart,
         if (timeline->BeatPosition + kTolerance >= targetBeatPosition) {
           break;
         }
-        processTimeline(*timeline);
+        if (!processTimeline(*timeline)) return fail(PlanError::InvalidTiming);
         ++timelineIndex;
       }
 
@@ -81,12 +110,13 @@ std::vector<Event> buildPlan(const bms_parser::Chart &chart,
       if (localBeatPosition > kTolerance) {
         const double beatDistance =
             targetBeatPosition - timingCursorBeatPosition;
-        timeMicros = timingCursorMicros +
-                     static_cast<long long>(std::llround(
-                         kMicrosPerBmsMeasure * beatDistance / activeBpm));
+        if (!addDuration(timingCursorMicros,
+                         std::round(kMicrosPerBmsMeasure * beatDistance / activeBpm),
+                         timeMicros)) return fail(PlanError::InvalidTiming);
       }
 
       while (timelineIndex < measure->TimeLines.size()) {
+        if (isCancelled()) return fail(PlanError::Cancelled);
         const auto *timeline = measure->TimeLines[timelineIndex];
         if (timeline == nullptr ||
             timeline->BeatPosition + kTolerance <
@@ -99,7 +129,7 @@ std::vector<Event> buildPlan(const bms_parser::Chart &chart,
           break;
         }
         timeMicros = timeline->Timing;
-        processTimeline(*timeline);
+        if (!processTimeline(*timeline)) return fail(PlanError::InvalidTiming);
         ++timelineIndex;
       }
 
@@ -110,12 +140,14 @@ std::vector<Event> buildPlan(const bms_parser::Chart &chart,
     }
 
     while (timelineIndex < measure->TimeLines.size()) {
+      if (isCancelled()) return fail(PlanError::Cancelled);
       const auto *timeline = measure->TimeLines[timelineIndex++];
       if (timeline != nullptr) {
-        processTimeline(*timeline);
+        if (!processTimeline(*timeline)) return fail(PlanError::InvalidTiming);
       }
     }
     measureBeatPosition += measure->Scale;
+    if (!std::isfinite(measureBeatPosition)) return fail(PlanError::InvalidTiming);
   }
   return result;
 }

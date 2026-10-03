@@ -777,7 +777,17 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
         decodedClubSound(club_beat::synthesizeKick(kOutputSampleRate));
     const DecodedSound clap =
         decodedClubSound(club_beat::synthesizeClap(kOutputSampleRate));
-    for (const auto &event : club_beat::buildPlan(chart, &isCancelled)) {
+    club_beat::PlanError planError;
+    const auto clubPlan = club_beat::buildPlan(chart, &isCancelled, &planError);
+    if (planError != club_beat::PlanError::None) {
+      budget.error = planError == club_beat::PlanError::Cancelled
+                         ? "Chart audio club beat planning cancelled"
+                     : planError == club_beat::PlanError::WorkLimit
+                         ? "Chart audio club beat plan limit exceeded"
+                         : "Chart audio club beat timing is not representable";
+      return failure();
+    }
+    for (const auto &event : clubPlan) {
       const auto time = outputTimeMicrosFromTimelineStart(event.timeMicros,
           options.timelineStartMicros, options.playback);
       if (!mixSoundAt(mix, kick, time, options.playback, budget)) return failure();

@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 enum class CourseLongNoteMode { Unspecified, LN, CN, HCN };
@@ -202,6 +203,13 @@ inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
   int totalScratchNotes = 0;
   int totalBackSpinNotes = 0;
   int totalLandmineNotes = 0;
+  std::unordered_set<const bms_parser::Note *> countedMines;
+  const auto countMine = [&](bms_parser::Note *note) {
+    if (note != nullptr && note->IsLandmineNote() &&
+        countedMines.insert(note).second) {
+      ++totalLandmineNotes;
+    }
+  };
 
   for (auto *measure : chart.Measures) {
     if (measure == nullptr) {
@@ -213,6 +221,7 @@ inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
       }
       for (auto *note : timeline->Notes) {
         if (note == nullptr || note->IsLandmineNote()) {
+          countMine(note);
           continue;
         }
         const bool scratch = chartLaneIsScratch(chart.Meta, note->Lane);
@@ -236,9 +245,7 @@ inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
         }
       }
       for (auto *landmine : timeline->LandmineNotes) {
-        if (landmine != nullptr) {
-          ++totalLandmineNotes;
-        }
+        countMine(landmine);
       }
     }
   }

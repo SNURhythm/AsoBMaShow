@@ -2399,9 +2399,47 @@ void testReplayChartMetadataAuthorityUsesMatchedLibraryRecord() {
          "document, stage, and back-image facts");
 }
 
+void testParsedMineCountsSurvivePreparation() {
+  for (const int overrideMode : {0, 1, 2, 3}) {
+    const std::string input =
+        "#BPM 120\n#000D1:01\n#000D6:02\n#00011:0001\n"
+        "#00016:0001\n#00151:0101\n#00156:0101\n";
+    std::vector<unsigned char> bytes(input.begin(), input.end());
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(bytes, &raw, false, false, cancelled);
+    std::unique_ptr<bms_parser::Chart> chart(raw);
+    expect(chart && chart->Meta.TotalLandmineNotes == 2,
+           "real parser stores two mines before effective-LN preparation");
+    if (!chart) continue;
+    applyEffectiveLongNoteModeToChart(*chart, overrideMode);
+    expect(chart->Meta.TotalLandmineNotes == 2,
+           "effective-LN recount retains parsed key and scratch mines");
+    expect(chart->Meta.TotalScratchNotes == 1 &&
+               chart->Meta.TotalNotes == (overrideMode >= 2 ? 6 : 4),
+           "mines stay outside playable and scratch counters under LN overrides");
+
+    auto *timeline = chart->Measures.front()->TimeLines.front();
+    auto *mine = static_cast<bms_parser::LandmineNote *>(timeline->Notes[0]);
+    expect(mine && mine->IsLandmineNote(), "first parsed lane contains a mine");
+    if (!mine) continue;
+    timeline->LandmineNotes[0] = mine;
+    applyEffectiveLongNoteModeToChart(*chart, overrideMode);
+    expect(chart->Meta.TotalLandmineNotes == 2,
+           "a mine aliased by both containers is counted once");
+    timeline->Notes[0] = nullptr;
+    applyEffectiveLongNoteModeToChart(*chart, overrideMode);
+    expect(chart->Meta.TotalLandmineNotes == 2,
+           "a mine in the alternate container is still counted");
+    // Keep just one owner for the parser timeline destructor.
+  }
+}
+
 } // namespace
 
 int main() {
+  testParsedMineCountsSurvivePreparation();
   if (SDL_Init(SDL_INIT_TIMER) != 0) {
     std::cerr << "FAIL: SDL timer initialization failed: " << SDL_GetError()
               << '\n';

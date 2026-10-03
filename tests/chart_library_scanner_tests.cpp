@@ -1475,6 +1475,94 @@ void testMissingFullScanRootPreservesMetadataRebuildState() {
                        "Configured chart folder is unavailable"));
 }
 
+void testParserUpgradeRebuildsUnchangedSources() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto looseRoot = root / "loose";
+  const auto ordinary = writeChart(looseRoot, "chart", "Parser migration loose");
+  const auto archive = writeZip(root / "same.zip",
+      {{"chart.bms", chartText("Parser migration archive")}});
+  const auto archived = archive_file::makeVirtualPath(archive, "chart.bms");
+  const std::array paths{ordinary, archived};
+  const auto archiveSize = std::filesystem::file_size(archive);
+  const auto archiveTime = std::filesystem::last_write_time(archive);
+  const auto ordinaryTime = std::filesystem::last_write_time(ordinary);
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartLibraryScanner scanner;
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->InsertEntry(root));
+    assert(scanner.ScanWithResult(*session, {root}).completed);
+    assert(session->CountAllChartMeta() == 2);
+  }
+  {
+    sqlite3 *database = nullptr;
+    assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+    // Simulate stale semantic metadata without touching either source or the
+    // archive's cache identity. Exact historical parser comparisons are separate.
+    assert(sqlite3_exec(database,
+        "UPDATE chart_meta SET total_notes=777,keys=14,add_date=123456;"
+        "PRAGMA user_version=12", nullptr, nullptr, nullptr) == SQLITE_OK);
+    assert(sqlite3_close(database) == SQLITE_OK);
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 0);
+    assert(metadataRebuildRequired(databasePath));
+    std::stop_source stop;
+    stop.request_stop();
+    const auto token = stop.get_token();
+    assert(!scanner.ScanWithResult(*session, {root}, &token).completed);
+    assert(metadataRebuildRequired(databasePath));
+    const auto disconnected = temporary.path() / "offline";
+    std::filesystem::rename(root, disconnected);
+    assert(!scanner.ScanWithResult(*session, {root}).completed);
+    assert(metadataRebuildRequired(databasePath));
+    std::filesystem::rename(disconnected, root);
+    assert(scanner.ScanScopedWithResult(*session, {looseRoot}).completed);
+    assert(session->CountAllChartMeta() == 1);
+    assert(metadataRebuildRequired(databasePath));
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 1);
+    assert(scanner.ScanWithResult(*session, {root}).completed);
+    assert(!metadataRebuildRequired(databasePath));
+    const auto records = session->SelectChartMetaByPaths(paths);
+    assert(records.records.size() == 2);
+    for (const auto &record : records.records) {
+      std::atomic_bool cancelled{false};
+      bms_parser::Parser parser;
+      bms_parser::Chart *raw = nullptr;
+      archive_file::parseChart(parser, record.meta.BmsPath, &raw, false, false,
+                               cancelled);
+      const std::unique_ptr<bms_parser::Chart> parsed(raw);
+      assert(parsed);
+      assert(record.meta.KeyMode == parsed->Meta.KeyMode);
+      assert(record.meta.TotalNotes == parsed->Meta.TotalNotes);
+      assert(record.meta.TotalNotes != 777);
+      assert(record.addDateSeconds == 123456);
+    }
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 2);
+    assert(scanner.Scan(*session, {root}) == 0);
+    assert(!metadataRebuildRequired(databasePath));
+  }
+  assert(std::filesystem::file_size(archive) == archiveSize);
+  assert(std::filesystem::last_write_time(archive) == archiveTime);
+  assert(std::filesystem::last_write_time(ordinary) == ordinaryTime);
+}
+
 void testPartialLibraryFullScanPreservesMetadataRebuildState() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -3035,6 +3123,7 @@ int main() {
   testRebuildFlagClearFailureDoesNotReportCompletedScan();
   testMissingFullScanRootPreservesMetadataRebuildState();
   testPartialLibraryFullScanPreservesMetadataRebuildState();
+  testParserUpgradeRebuildsUnchangedSources();
   testAddedScanStorageFailureDoesNotQualifyExistingChart();
   testAddedScanParseFailureDoesNotQualifyExistingChart();
   testArchiveChartCountReportsStorageReadFailure();

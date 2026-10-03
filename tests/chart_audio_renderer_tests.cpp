@@ -312,6 +312,19 @@ void testOverflowScaleMetadata(const std::filesystem::path &root) {
          "overflow-scale metadata is rejected before allocating or narrowing");
 }
 
+void testInvalidClubTimingPreservesOutput(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "invalid-club-timing");
+  auto *timeline = chart->Measures.front()->TimeLines.front();
+  timeline->StopLength = -48;
+  const auto output = chart->Meta.Folder / "result.wav";
+  writeText(output, "preserved output");
+  const auto result = guardedRender(*chart, output, {.clubMode = true});
+  expect(!result.success && result.message.find("timing") != std::string::npos,
+         "export reports invalid club timing rather than silently omitting beats");
+  expect(readText(output) == "preserved output",
+         "invalid club plan preserves the existing output file");
+}
+
 void testCancellationBeforePublication(const std::filesystem::path &root) {
   auto chart = chartFixture(root, "cancel-before-write");
   const auto output = chart->Meta.Folder / "result.wav";
@@ -518,6 +531,7 @@ int main() {
     testSelectedHighMixWork(root);
     testSelectedLargeClubPlan(root);
     testOverflowScaleMetadata(root);
+    testInvalidClubTimingPreservesOutput(root);
     testCancellationBeforePublication(root);
     testTailAndWorkAdmission(root);
     testCancellationDuringWrite(root);
