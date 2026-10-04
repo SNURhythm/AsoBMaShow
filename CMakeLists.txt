@@ -665,6 +665,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
 
+    add_executable(android_graphics_options_tests
+        tests/android_graphics_options_tests.cpp
+    )
+    target_include_directories(android_graphics_options_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
+    )
+    target_compile_features(android_graphics_options_tests PRIVATE cxx_std_17)
+    target_link_libraries(android_graphics_options_tests PRIVATE bgfx)
+    add_test(NAME android_graphics_options_tests COMMAND android_graphics_options_tests)
+    set_tests_properties(android_graphics_options_tests PROPERTIES LABELS platform_android)
+
     add_test(NAME generate_select_sounds_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/generate_select_sounds_tests.py -v)

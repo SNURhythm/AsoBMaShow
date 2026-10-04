@@ -8,6 +8,9 @@
 #include "replay/ReplayFileReconciler.h"
 #include "bgfx_helper.h"
 #include "rendering/BgfxInitLimits.h"
+#if TARGET_OS_ANDROID
+#include "rendering/AndroidGraphicsOptions.h"
+#endif
 #include "rendering/ShaderManager.h"
 #include "./audio/decoder.h"
 #include "bx/math.h"
@@ -113,6 +116,9 @@ static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
 static float s_renderScale = 1.0f;
 static uint32_t s_bgfxResetFlags = 0;
+#if TARGET_OS_ANDROID
+static rendering::AndroidGraphicsOptions s_androidGraphicsOptions;
+#endif
 #if TARGET_OS_IPHONE
 static void *s_iosMetalLayer = nullptr;
 #endif
@@ -123,6 +129,7 @@ constexpr float kDefaultRenderScale = 1.0f;
 
 float resolveRenderScale() { return kDefaultRenderScale; }
 
+#if !TARGET_OS_ANDROID
 uint32_t parseMsaaFlag(int samples) {
   switch (samples) {
   case 0:
@@ -139,6 +146,7 @@ uint32_t parseMsaaFlag(int samples) {
     return BGFX_RESET_NONE;
   }
 }
+#endif
 
 std::filesystem::path
 absolutePathOrOriginal(const std::filesystem::path &path) {
@@ -181,6 +189,9 @@ void changeWorkingDirectoryToExecutableDir(
 }
 
 uint32_t resolveResetFlags() {
+#if TARGET_OS_ANDROID
+  return rendering::androidGraphicsResetFlags(s_androidGraphicsOptions);
+#else
 #if TARGET_OS_OSX
   constexpr int msaaSamples = 0;
 #else
@@ -192,10 +203,8 @@ uint32_t resolveResetFlags() {
     // Single-threaded Metal must submit the freshly encoded frame now.
     flags |= BGFX_RESET_VSYNC | BGFX_RESET_FLIP_AFTER_RENDER;
   }
-  if (TARGET_PLATFORM == Android) {
-    flags |= BGFX_RESET_VSYNC;
-  }
   return flags;
+#endif
 }
 
 int scaledDimension(int logicalSize) {
@@ -417,12 +426,6 @@ static int getAndroidSdkVersion() {
 
 #endif
 
-static uint32_t withoutMsaaResetFlags(uint32_t flags) {
-  constexpr uint32_t msaaMask = BGFX_RESET_MSAA_X2 | BGFX_RESET_MSAA_X4 |
-                                BGFX_RESET_MSAA_X8 | BGFX_RESET_MSAA_X16;
-  return flags & ~msaaMask;
-}
-
 static int runApplication(const bgfx::Init &bgfxInit) {
   SDL_Log("bgfx_init: %d x %d", bgfxInit.resolution.width,
           bgfxInit.resolution.height);
@@ -431,14 +434,14 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   const bool androidEmulator = isAndroidEmulator();
   const int androidSdkVersion = getAndroidSdkVersion();
   const bool skipAndroidEmulatorVulkan =
+      s_androidGraphicsOptions.renderer == bgfx::RendererType::Count &&
       androidEmulator && androidSdkVersion >= 33;
   if (skipAndroidEmulatorVulkan) {
     SDL_Log("Android emulator API %d detected; skipping Vulkan stub renderer",
             androidSdkVersion);
-  } else {
-    rendererCandidates.push_back(bgfx::RendererType::Vulkan);
   }
-  rendererCandidates.push_back(bgfx::RendererType::OpenGLES);
+  rendererCandidates = rendering::androidRendererCandidates(
+      s_androidGraphicsOptions, androidEmulator, androidSdkVersion);
 #elif __APPLE__
   rendererCandidates.push_back(bgfx::RendererType::Metal);
 #else
@@ -449,17 +452,37 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   for (const auto rendererType : rendererCandidates) {
     selectedInit.type = rendererType;
 #if TARGET_OS_ANDROID
-    selectedInit.resolution.formatColor =
-        rendererType == bgfx::RendererType::Vulkan ? bgfx::TextureFormat::RGBA8
-                                                   : bgfx::TextureFormat::BGRA8;
+    rendering::configureAndroidRenderer(selectedInit, rendererType);
 #endif
     SDL_Log("Trying bgfx renderer: %s",
             rendererType == bgfx::RendererType::Count
                 ? "auto"
                 : bgfx::getRendererName(rendererType));
     if (bgfx::init(selectedInit)) {
+#if TARGET_OS_ANDROID
+      if (bgfx::getRendererType() != rendererType) {
+        SDL_Log("Unexpected bgfx renderer: requested %s, received %s",
+                bgfx::getRendererName(rendererType),
+                bgfx::getRendererName(bgfx::getRendererType()));
+        bgfx::shutdown();
+        continue;
+      }
+#endif
       SDL_Log("bgfx renderer: %s",
               bgfx::getRendererName(bgfx::getRendererType()));
+#if TARGET_OS_ANDROID
+      const bgfx::Caps *caps = bgfx::getCaps();
+      SDL_Log("Android graphics: vendor=0x%04x device=0x%04x "
+              "originBottomLeft=%d homogeneousDepth=%d | "
+              "drawable=%ux%u colorFormat=%d requestedMSAA=%d reset=0x%08x",
+              static_cast<unsigned>(caps->vendorId),
+              static_cast<unsigned>(caps->deviceId), caps->originBottomLeft,
+              caps->homogeneousDepth, selectedInit.resolution.width,
+              selectedInit.resolution.height,
+              static_cast<int>(selectedInit.resolution.formatColor),
+              s_androidGraphicsOptions.msaaSamples,
+              selectedInit.resolution.reset);
+#endif
       // Keep debug rendering disabled in normal runtime to avoid perturbing
       // frame pacing and post-process output.
       // bgfx::setDebug(BGFX_DEBUG_TEXT);
@@ -548,6 +571,26 @@ int main(int argv, char **args) {
 
   changeWorkingDirectoryToExecutableDir(exePath);
 
+#if TARGET_OS_ANDROID
+  for (int index = 1; index < argv; ++index) {
+    if (args[index] != nullptr &&
+        rendering::parseAndroidGraphicsArgument(args[index],
+                                                 s_androidGraphicsOptions) ==
+            rendering::GraphicsArgumentResult::Invalid) {
+      SDL_Log("Invalid Android graphics option: %s", args[index]);
+      return EXIT_FAILURE;
+    }
+  }
+  SDL_Log("Android device: manufacturer=%s model=%s hardware=%s "
+          "soc=%s sdk=%d build=%s",
+          getAndroidSystemProperty("ro.product.manufacturer").c_str(),
+          getAndroidSystemProperty("ro.product.model").c_str(),
+          getAndroidSystemProperty("ro.hardware").c_str(),
+          getAndroidSystemProperty("ro.soc.model").c_str(),
+          getAndroidSdkVersion(),
+          getAndroidSystemProperty("ro.build.display.id").c_str());
+#endif
+
 #ifdef _WIN32
   // search dll in ./lib
   SetDllDirectoryA("lib");
@@ -596,15 +639,6 @@ int main(int argv, char **args) {
   }
   s_renderScale = resolveRenderScale();
   s_bgfxResetFlags = resolveResetFlags();
-#if TARGET_OS_ANDROID
-  if (isAndroidEmulator()) {
-    const uint32_t adjustedResetFlags = withoutMsaaResetFlags(s_bgfxResetFlags);
-    if (adjustedResetFlags != s_bgfxResetFlags) {
-      SDL_Log("Android emulator detected; disabling bgfx MSAA reset flags");
-    }
-    s_bgfxResetFlags = adjustedResetFlags;
-  }
-#endif
   SDL_Log("Render scale: %.2f | bgfx reset flags: 0x%08x", s_renderScale,
           s_bgfxResetFlags);
 

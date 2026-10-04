@@ -182,6 +182,25 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     @Override
+    protected String[] getArguments() {
+        // Launch-time diagnostics remain usable when the rendered UI is broken.
+        // These apply only to a fresh native startup; force-stop before testing.
+        ArrayList<String> arguments = new ArrayList<>();
+        Intent intent = getIntent();
+        if (intent != null) {
+            String backend = intent.getStringExtra("graphics_backend");
+            String msaa = intent.getStringExtra("graphics_msaa");
+            if (backend != null) {
+                arguments.add("--android-renderer=" + backend);
+            }
+            if (msaa != null) {
+                arguments.add("--android-msaa=" + msaa);
+            }
+        }
+        return arguments.toArray(new String[0]);
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         super.onCreate(savedInstanceState);
