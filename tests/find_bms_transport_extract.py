@@ -47,7 +47,7 @@ def main():
     pieces = [header[callback_start:callback_stop],
               objective_class(native, "AsoHttpsRedirectDelegate")]
     pieces.append("using IOSDownloadCheckpoint = std::function<bool()>;")
-    for name in ("DownloadURLTextIOS", "PostURLTextIOS", "ProbeDownloadURLIOS"):
+    for name in ("DownloadURLTextIOS", "DownloadURLBytesIOS", "PostURLTextIOS", "ProbeDownloadURLIOS"):
         start = header.index("bool " + name + "(")
         pieces.append(header[start:header.index(";", start) + 1])
     bounded = "@interface AsoTextDownloadDelegate" in native
@@ -56,7 +56,7 @@ def main():
         pieces.append(objective_class(native, "AsoTextDownloadDelegate"))
     if "bool RequestURLTextIOS(" in native:
         pieces.append(function(native, "bool RequestURLTextIOS("))
-    for name in ("DownloadURLTextIOS", "PostURLTextIOS", "ProbeDownloadURLIOS"):
+    for name in ("DownloadURLTextIOS", "DownloadURLBytesIOS", "PostURLTextIOS", "ProbeDownloadURLIOS"):
         pieces.append(function(native, "bool " + name + "("))
     for name in ("fetchUrlText", "postUrlText"):
         pieces.append(function(transport, "std::optional<std::string> " + name + "("))
