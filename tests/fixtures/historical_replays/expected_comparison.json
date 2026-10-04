@@ -1,0 +1,923 @@
+[
+  {
+    "case": "ordinary",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      3,
+      3
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 3,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          0,
+          2625380,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          1,
+          3500506,
+          2,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 3,
+      "lookupMatched": 3,
+      "ghost": [
+        0,
+        2,
+        4,
+        6
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          2625380,
+          1
+        ],
+        [
+          3500506,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "7ae4c2a5ccddceba8ee16970bd04884b2b6efa57a97c4fd2db0bb0c1302d8b34",
+    "judgedFacts": [
+      6,
+      6,
+      3,
+      0,
+      3,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "fractional_stop",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      5,
+      5
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 5,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          0,
+          1916944,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          0,
+          2505407,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          1,
+          2672098,
+          2,
+          0,
+          4294967295
+        ],
+        [
+          1,
+          3838933,
+          2,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 5,
+      "lookupMatched": 5,
+      "ghost": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          1916944,
+          1
+        ],
+        [
+          2505407,
+          1
+        ],
+        [
+          2672098,
+          2
+        ],
+        [
+          3838933,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "f34285751b9933fc05d5190c158d6cc7bd8ae5fe6e74c3e478077620af68f562",
+    "judgedFacts": [
+      10,
+      10,
+      5,
+      0,
+      5,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "long_notes",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      4,
+      4
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 2,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          1,
+          1
+        ],
+        [
+          0,
+          2625380,
+          -1,
+          2,
+          0
+        ],
+        [
+          1,
+          3500506,
+          2,
+          1,
+          3
+        ],
+        [
+          1,
+          4375633,
+          -1,
+          2,
+          2
+        ]
+      ],
+      "lookupAddressed": 4,
+      "lookupMatched": 4,
+      "ghost": [
+        0,
+        2,
+        4
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          3500506,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "c38a9090a9644d9ab774fbcabc37035aaeda4224dc797cfa23cfb6b3c9808bf9",
+    "judgedFacts": [
+      4,
+      4,
+      2,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "lnobj",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      4,
+      4
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 2,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          1,
+          1
+        ],
+        [
+          0,
+          3062943,
+          -1,
+          2,
+          0
+        ],
+        [
+          1,
+          3500506,
+          2,
+          1,
+          3
+        ],
+        [
+          1,
+          4813196,
+          -1,
+          2,
+          2
+        ]
+      ],
+      "lookupAddressed": 4,
+      "lookupMatched": 4,
+      "ghost": [
+        0,
+        2,
+        4
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          3500506,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "b7d6779003eee05e3708121be62b9bf80c0cc32b4113f899df0de80af5492dbf",
+    "judgedFacts": [
+      4,
+      4,
+      2,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "random_1",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      3,
+      3
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 3,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          1,
+          1750253,
+          2,
+          0,
+          4294967295
+        ],
+        [
+          2,
+          3500506,
+          1,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 3,
+      "lookupMatched": 3,
+      "ghost": [
+        0,
+        2,
+        4,
+        6
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          1750253,
+          2
+        ],
+        [
+          3500506,
+          1
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "2f13bed6dc17d5fd84572e51903b90702fa123523b3e37d064e02a19f49b19ff",
+    "judgedFacts": [
+      6,
+      6,
+      3,
+      0,
+      3,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "random_2",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      1,
+      1
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 1,
+      "notes": [
+        [
+          2,
+          3500506,
+          1,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 1,
+      "lookupMatched": 1,
+      "ghost": [
+        0,
+        2
+      ],
+      "keysounds": [
+        [
+          3500506,
+          1
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "131bf4e25693760a0e05e1770190c5728ce033003d720e8c44fc79ba2eff5530",
+    "judgedFacts": [
+      2,
+      2,
+      1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "pms_path",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      5,
+      5
+    ],
+    "notesEqual": true,
+    "ghostEqual": true,
+    "keysoundsEqual": true,
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "currentObservations": {
+      "keyMode": 9,
+      "totalNotes": 4,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          5,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          8,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          1,
+          3500506,
+          1,
+          1,
+          4
+        ],
+        [
+          1,
+          4375633,
+          -1,
+          2,
+          3
+        ]
+      ],
+      "lookupAddressed": 5,
+      "lookupMatched": 5,
+      "ghost": [
+        0,
+        2,
+        4,
+        6,
+        8
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          1750253,
+          1
+        ],
+        [
+          1750253,
+          1
+        ],
+        [
+          3500506,
+          1
+        ]
+      ]
+    },
+    "diagnostic": "",
+    "judgedFingerprint": "3fb284efda4602c211bcf7567e7103ff243921ff6000b402d8c5dce91a189a66",
+    "judgedFacts": [
+      8,
+      8,
+      4,
+      0,
+      4,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": true
+  },
+  {
+    "case": "pms_buffered",
+    "admitted": true,
+    "identityMatch": false,
+    "randomSetupMatch": true,
+    "lookup": [
+      3,
+      5
+    ],
+    "notesEqual": false,
+    "ghostEqual": true,
+    "keysoundsEqual": false,
+    "resultMatched": false,
+    "fingerprintEqual": false,
+    "currentObservations": {
+      "keyMode": 9,
+      "totalNotes": 4,
+      "notes": [
+        [
+          0,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          5,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          8,
+          1750253,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          1,
+          3500506,
+          1,
+          1,
+          4
+        ],
+        [
+          1,
+          4375633,
+          -1,
+          2,
+          3
+        ]
+      ],
+      "lookupAddressed": 5,
+      "lookupMatched": 3,
+      "ghost": [
+        0,
+        2,
+        4,
+        6,
+        8
+      ],
+      "keysounds": [
+        [
+          1750253,
+          1
+        ],
+        [
+          3500506,
+          1
+        ]
+      ]
+    },
+    "diagnostic": "score outcome facts differ",
+    "judgedFingerprint": "8c1bdacf24957919db0677487474deea4d7654f2ca42a908820ca5dfb5f26ecf",
+    "judgedFacts": [
+      4,
+      8,
+      1,
+      2,
+      2,
+      0,
+      0,
+      0,
+      2,
+      0,
+      0,
+      2,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": false
+  },
+  {
+    "case": "orphan",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      1,
+      1
+    ],
+    "notesEqual": false,
+    "ghostEqual": false,
+    "keysoundsEqual": true,
+    "resultMatched": false,
+    "fingerprintEqual": false,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 1,
+      "notes": [
+        [
+          0,
+          0,
+          1,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 1,
+      "lookupMatched": 1,
+      "ghost": [
+        0,
+        0
+      ],
+      "keysounds": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    "diagnostic": "score outcome facts differ",
+    "judgedFingerprint": "f44550020da8a94741f6c4f424d01a53b6df1b4c3002b02e48f056b0d7a669cd",
+    "judgedFacts": [
+      2,
+      2,
+      1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": false
+  },
+  {
+    "case": "detached_head",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      2,
+      2
+    ],
+    "notesEqual": false,
+    "ghostEqual": false,
+    "keysoundsEqual": true,
+    "resultMatched": false,
+    "fingerprintEqual": false,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 2,
+      "notes": [
+        [
+          0,
+          0,
+          2,
+          0,
+          4294967295
+        ],
+        [
+          0,
+          1000000,
+          -1,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 2,
+      "lookupMatched": 2,
+      "ghost": [
+        0,
+        2,
+        2
+      ],
+      "keysounds": [
+        [
+          0,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "score outcome facts differ",
+    "judgedFingerprint": "a98bdc193632b079175d47f80cf025a108d93186d53b839cc2832e3b42ffb1fa",
+    "judgedFacts": [
+      2,
+      4,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": false
+  },
+  {
+    "case": "detached_tail",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      2,
+      2
+    ],
+    "notesEqual": false,
+    "ghostEqual": false,
+    "keysoundsEqual": true,
+    "resultMatched": false,
+    "fingerprintEqual": false,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 2,
+      "notes": [
+        [
+          0,
+          0,
+          1,
+          0,
+          4294967295
+        ],
+        [
+          0,
+          1000000,
+          2,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 2,
+      "lookupMatched": 2,
+      "ghost": [
+        0,
+        0,
+        2
+      ],
+      "keysounds": [
+        [
+          0,
+          1
+        ],
+        [
+          1000000,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "score outcome facts differ",
+    "judgedFingerprint": "9e33cf39dafceeebeabcf2fada0e74c814f9570a02395a0919b110727f1aee56",
+    "judgedFacts": [
+      4,
+      4,
+      2,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": false
+  },
+  {
+    "case": "course_ordinary",
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "endingCombo": 3,
+    "diagnostic": "",
+    "lookup": [
+      3,
+      3
+    ],
+    "ghostEqual": true,
+    "keysoundsEqual": true
+  },
+  {
+    "case": "course_fractional_stop",
+    "resultMatched": true,
+    "fingerprintEqual": true,
+    "endingCombo": 8,
+    "diagnostic": "",
+    "lookup": [
+      5,
+      5
+    ],
+    "ghostEqual": true,
+    "keysoundsEqual": true
+  }
+]

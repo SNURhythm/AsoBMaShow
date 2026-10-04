@@ -979,30 +979,7 @@ bool hasReachedFirstPlayableNote(const bms_parser::Chart &chart,
 
 std::vector<bms_parser::Note *>
 buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
-  std::vector<bms_parser::Note *> result;
-  std::unordered_set<bms_parser::Note *> seen;
-  const auto append = [&](bms_parser::Note *note) {
-    if (note != nullptr && seen.insert(note).second) {
-      result.push_back(note);
-    }
-  };
-  for (auto *measure : chart.Measures) {
-    if (measure == nullptr) {
-      continue;
-    }
-    for (auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr) {
-        continue;
-      }
-      for (auto *note : timeline->Notes) {
-        append(note);
-      }
-      for (auto *note : timeline->LandmineNotes) {
-        append(note);
-      }
-    }
-  }
-  return result;
+  return chart_playability::noteIdentities(chart).notes;
 }
 
 std::optional<gameplay::RealtimeTouchLayout>
@@ -2871,10 +2848,15 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
           .combo = source.combo,
           .score = source.score,
       };
+      const bool representable = source.noteId == gameplay::kInvalidNoteId ||
+          (source.noteId < session.notes.size() &&
+           replay_note::hasActiveIdentity(session.notes[source.noteId]));
       if (capturePolicy.captureAnalytics) {
+        analyticsReplay.consumerIdentityCompatible &= representable;
         analyticsReplay.events.push_back(event);
       }
       if (capturePolicy.recordReplay) {
+        recordedReplay.consumerIdentityCompatible &= representable;
         recordedReplay.events.push_back(event);
       }
     }
@@ -3557,6 +3539,9 @@ bool GamePlayScene::reset() {
         note->Reset();
       }
     }
+  }
+  for (auto *note : chart_playability::noteIdentities(*chart).notes) {
+    note->Reset();
   }
   context.jukebox.stop();
   std::string playbackRateError;
@@ -5724,6 +5709,15 @@ void GamePlayScene::initializePlayfieldVisualNoteSources() {
       }
     }
   }
+  std::unordered_set<const bms_parser::Note *> seenVisualNotes(
+      playfieldVisualNoteSources.begin(), playfieldVisualNoteSources.end());
+  for (std::size_t index = 0; index < playfieldVisualNoteSources.size(); ++index) {
+    const auto *ln = dynamic_cast<const bms_parser::LongNote *>(playfieldVisualNoteSources[index]);
+    if (ln == nullptr) continue;
+    const auto *pair = ln->IsTail() ? ln->Head : ln->Tail;
+    if (pair != nullptr && seenVisualNotes.insert(pair).second)
+      playfieldVisualNoteSources.push_back(pair);
+  }
   if (playfieldVisualNoteSources.size() !=
       playfieldChartVisualModel.notes.size()) {
     playfieldVisualNoteSources.clear();
@@ -7268,6 +7262,22 @@ void GamePlayScene::checkPassedTimeline(long long time) {
   const long long judgedTime = getJudgementTimeMicros(time);
   const long long poorCutoff = judgedTime - latePoorTiming;
   const bool replayPlayback = isReplayPlayback();
+  // A classic LN finishes through JudgeManager's held pair pointer even when
+  // its tail was overwritten in the lane. CN/HCN autoplay still follows only
+  // active lane slots, so do not synthesize their detached tail events here.
+  for (const auto &owned : chart->DetachedNotes) {
+    auto *tail = dynamic_cast<bms_parser::LongNote *>(owned.get());
+    if (tail == nullptr || !tail->IsTail() || !tail->IsHolding || tail->IsPlayed ||
+        tail->Timeline == nullptr || tail->Timeline->Timing > judgedTime ||
+        !effectiveLongNoteIsClassic(tail, chart, options.longNoteMode)) continue;
+    tail->Release(judgedTime);
+    const auto judgeResult = judgeClassicLongNoteRelease(
+        rulesetPolicyBuild.policy->judge, chart->Meta, options.longNoteMode,
+        tail, judgedTime);
+    onJudge(judgeResult, eventClock, false, tail);
+    appendReplayEvent(ReplayEventAction::Release, tail->Lane, tail,
+                      time, judgedTime, judgeResult);
+  }
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -7335,7 +7345,10 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                                 judgedTime, poorResult);
               continue;
-            } else if (!longNote->IsTail()) {
+            } else if (longNote->IsTail()) {
+              markLongNoteMissed(longNote, judgedTime);
+              continue;
+            } else {
               markLongNoteMissed(longNote, judgedTime);
               if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
                 markLongNoteMissed(longNote->Tail, judgedTime, false);
@@ -7375,11 +7388,11 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           if (note->IsLongNote()) {
             const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             if (longNote->IsTail()) {
-              if (!longNote->IsHolding) {
-                continue;
-              }
               const bool chargeLongNote = effectiveLongNoteIsCharge(
                   longNote, chart, options.longNoteMode);
+              if (!longNote->IsHolding && !(chargeLongNote && options.autoPlay)) {
+                continue;
+              }
               if (chargeLongNote && !options.autoPlay) {
                 continue;
               }
@@ -7861,10 +7874,13 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
     event.gaugeType = state->gaugeType;
     event.combo = state->combo;
     event.score = state->getScore();
+    const bool representable = replay_note::hasActiveIdentity(note);
     if (capturePolicy.captureAnalytics) {
+      analyticsReplay.consumerIdentityCompatible &= representable;
       analyticsReplay.events.push_back(event);
     }
     if (capturePolicy.recordReplay) {
+      recordedReplay.consumerIdentityCompatible &= representable;
       recordedReplay.events.push_back(event);
     }
   }

@@ -1,3 +1,4 @@
+#include "../../ChartPlayability.h"
 //
 // Created by XF on 9/2/2024.
 //
@@ -1993,7 +1994,8 @@ void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
     bool renderBudgetReserved) {
-  if (!renderBudgetReserved) {
+  if (!renderBudgetReserved || head == nullptr || head->Timeline == nullptr ||
+      head->Tail == nullptr || head->Tail->Timeline == nullptr) {
     return;
   }
   // assert head
@@ -2466,16 +2468,15 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
         timeMicros < terminalScrollAnchor->timeMicros) {
       const auto *previous = timelines.back();
       const long long stopEnd =
-          previous->Timing + static_cast<long long>(previous->GetStopDuration());
+          chart_timing::stopEnd(*previous);
       if (timeMicros <= stopEnd) {
         return timelineScrollPositions.back();
       }
       const long long scrollDuration =
-          terminalScrollAnchor->timeMicros - previous->Timing -
-          static_cast<long long>(previous->GetStopDuration());
+          chart_timing::subtract(terminalScrollAnchor->timeMicros, stopEnd);
       if (scrollDuration > 0) {
         const double progress = std::clamp(
-            static_cast<double>(timeMicros - stopEnd) /
+            (static_cast<double>(timeMicros) - static_cast<double>(stopEnd)) /
                 static_cast<double>(scrollDuration),
             0.0, 1.0);
         return timelineScrollPositions.back() +
@@ -2501,20 +2502,20 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
   const size_t prevTimelineIndex = timelineIndex - 1;
   const auto *prevTimeline = timelines[prevTimelineIndex];
   const long long stopDuration =
-      static_cast<long long>(prevTimeline->GetStopDuration());
-  const long long stopEnd = prevTimeline->Timing + stopDuration;
+      chart_timing::stopDuration(*prevTimeline);
+  const long long stopEnd = chart_timing::add(prevTimeline->Timing, stopDuration);
   if (timeMicros <= stopEnd) {
     return timelineScrollPositions[prevTimelineIndex];
   }
 
   const long long scrollDuration =
-      timeline->Timing - prevTimeline->Timing - stopDuration;
+      chart_timing::subtract(timeline->Timing, stopEnd);
   if (scrollDuration <= 0) {
     return timelineScrollPositions[timelineIndex];
   }
 
   const double progress =
-      std::clamp(static_cast<double>(timeMicros - stopEnd) /
+      std::clamp((static_cast<double>(timeMicros) - static_cast<double>(stopEnd)) /
                      static_cast<double>(scrollDuration),
                  0.0, 1.0);
   return timelineScrollPositions[prevTimelineIndex] +
@@ -3300,7 +3301,7 @@ void BMSRenderer::renderFrame(
             return;
           }
           if (note.timeMicros < (mine ? chartTimeMicros
-                                      : chartTimeMicros - latePoorTiming)) {
+                                      : chart_timing::subtract(chartTimeMicros, latePoorTiming))) {
             return;
           }
           if (!std::isfinite(noteY)) {
@@ -3457,7 +3458,7 @@ void BMSRenderer::renderFrame(
       }
       const int lane = rendererLaneFor(longNote.lane);
       const float legacyHeadY =
-          longNote.headTimeMicros < chartTimeMicros - latePoorTiming
+          longNote.headTimeMicros < chart_timing::subtract(chartTimeMicros, latePoorTiming)
               ? lowerBound
               : headY;
       const float headRenderY =
@@ -3722,7 +3723,7 @@ void BMSRenderer::renderFrame(
            .height = 0.05F});
 #endif
     }
-    if (timeLine->Timing < chartTimeMicros - latePoorTiming) {
+    if (timeLine->Timing < chart_timing::subtract(chartTimeMicros, latePoorTiming)) {
       state.currentTimelineIndex = i;
     }
     const bool rowHasLongHead =
@@ -3776,7 +3777,7 @@ void BMSRenderer::renderFrame(
         rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
         return true;
       };
-      if (timeLine->Timing >= chartTimeMicros - latePoorTiming) {
+      if (timeLine->Timing >= chart_timing::subtract(chartTimeMicros, latePoorTiming)) {
         // note is in the hittable timing
         if (note->IsDead) {
           if (keepDeadLongNoteBody()) {
@@ -3795,8 +3796,8 @@ void BMSRenderer::renderFrame(
         if (note->IsLongNote()) {
           auto *longNote = static_cast<bms_parser::LongNote *>(note);
           if (longNote->IsTail()) {
-            if (longNote->Head == nullptr) {
-              // ignore malformed chart: long note is not terminated
+            if (!chart_playability::inActiveSlot(longNote->Head)) {
+              // Java renders from active heads, never a displaced head.
               return;
             }
             // find head's y
@@ -3886,8 +3887,19 @@ void BMSRenderer::renderFrame(
 
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
-    drawLongNote(pair.second.headY, upperBound, pair.first,
-                 pair.second.order, pair.second.renderBudgetReserved);
+    const auto *tail = pair.first->Tail;
+    if (tail == nullptr || tail->Timeline == nullptr) continue;
+    if (!chart_playability::inActiveSlot(tail)) {
+      if (tail->Timeline->Timing < chartTimeMicros) continue;
+      const float tailY = gameplay_scroll_geometry::renderY(
+          scrollPositionAtTime(tail->Timeline->Timing), currentScrollPosition,
+          rxhs, judgeY);
+      drawLongNote(pair.second.headY, tailY, pair.first,
+                   pair.second.order, pair.second.renderBudgetReserved);
+    } else {
+      drawLongNote(pair.second.headY, upperBound, pair.first,
+                   pair.second.order, pair.second.renderBudgetReserved);
+    }
   }
   }
 
@@ -4191,7 +4203,7 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   const bool refreshedTimingText = showTimingDirection || showTimingMs;
   if (refreshedTimingText) {
     renderedTimingTextUntilMicros =
-        displayTimeMicros + kJudgementTimingTextLingerMicros;
+        chart_timing::add(displayTimeMicros, kJudgementTimingTextLingerMicros);
   }
   const bool keepLingeringTimingText =
       !refreshedTimingText &&

@@ -3430,7 +3430,13 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
   }
   if (clubMode) {
     ensureClubBeatSoundsLoaded();
-    for (const auto &event : club_beat::buildPlan(chart)) {
+    club_beat::PlanError planError;
+    const auto clubPlan = club_beat::buildPlan(chart, &isCancelled, &planError);
+    if (planError != club_beat::PlanError::None &&
+        planError != club_beat::PlanError::Cancelled) {
+      SDL_Log("Club beat disabled: invalid timing or plan limit exceeded");
+    }
+    for (const auto &event : clubPlan) {
       audioList.push_back(makeScheduledAudioEvent(
           event.timeMicros, kClubKickWav, JukeboxAudioSource::ClubBeat));
       if (event.clap) {

@@ -194,6 +194,7 @@ buildReplayGraphNoteLookup(const PlayfieldChartVisualModel &model) {
   ReplayGraphNoteLookup lookup;
   lookup.reserve(model.notes.size());
   for (const auto &note : model.notes) {
+    if (!note.inActiveSlot) continue;
     const auto timeline = timelineTimes.find(note.timelineId);
     if (timeline == timelineTimes.end()) {
       continue;
@@ -310,6 +311,16 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
 SkinGameplayGraphState BuildSkinGameplayGraphState(
     bms_parser::Chart &chart, const ReplayData &replay,
     const RhythmState &state) {
+  if (!replay.consumerIdentityCompatible) {
+    // Lane/time events cannot distinguish a detached partner from its active
+    // replacement. Keep the live gauge history without inventing judgements.
+    auto graph = BuildSkinGameplayChartGraphState(chart, state);
+    auto dynamic =
+        std::make_shared<SkinGameplayDynamicGraphState>(*graph.dynamic);
+    dynamic->distributionOmitted = true;
+    graph.dynamic = std::move(dynamic);
+    return graph;
+  }
   const PlayfieldChartVisualModel model =
       buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode);
   auto chartGraph =

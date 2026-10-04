@@ -361,6 +361,11 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   const auto events = simulation.replayEvents().first(acceptedReplayEventCount);
   replay.events.reserve(events.size());
   for (const auto &event : events) {
+    if (event.noteId != gameplay::kInvalidNoteId &&
+        !definition.note(event.noteId).inActiveSlot) {
+      outcome.consumerIdentityCompatible = false;
+      outcome.diagnostic = replay_note::kUnsupportedIdentityDiagnostic;
+    }
     replay.events.push_back({.action = replayAction(event.action),
                              .lane = event.lane,
                              .noteTimeMicros = event.noteTimeMicros,
@@ -390,6 +395,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
          .changeKind = event.changeKind,
          .resetVisibleTimeReference = event.resetVisibleTimeReference});
   }
+  replay.consumerIdentityCompatible = outcome.consumerIdentityCompatible;
   outcome.replayData = std::make_shared<ReplayData>(std::move(replay));
   return outcome;
 }

@@ -21,6 +21,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <unordered_map>
+#include <atomic>
+#include <memory>
 
 namespace {
 static_assert(std::derived_from<BMSRenderer, BuiltInPlayfieldPresentation>);
@@ -2803,6 +2805,161 @@ void testAutoplayNormalReleaseCarriesSourceTimeWithoutReplay() {
 }
 } // namespace
 
+void testExtremeTimelineDeadlinesDoNotWrapIntoThePast() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, std::numeric_limits<long long>::max() - 1024)
+      ->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  {
+    const auto judge = gameplay::CompiledGameplayJudge::from(Judge(3));
+    require(judge.latestHittableNoteTiming(std::numeric_limits<long long>::max()) ==
+                std::numeric_limits<long long>::max(),
+            "near-maximum input candidate window saturates");
+    gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+    const auto pressed = simulation.pressLane(1,
+        {.songTimeMicros = std::numeric_limits<long long>::max() - 1024});
+    require(pressed.hasJudge && pressed.judge.judgement == PGreat,
+            "near-maximum manual input still selects its exact note");
+  }
+  for (const bool autoplay : {false, true}) {
+    gameplay::GameplaySimulation simulation(definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+         .attempt = {.autoPlay = autoplay}});
+    (void)simulation.advanceTo(0, 0);
+    require(!simulation.noteState(0).played && !simulation.terminal() &&
+                simulation.snapshot().judgeCounts[Poor] == 0,
+            "near-maximum note deadlines saturate instead of judging in the past");
+    (void)simulation.advanceTo(std::numeric_limits<long long>::max(),
+                              std::numeric_limits<long long>::max());
+    require(simulation.terminal() && simulation.noteState(0).played &&
+                simulation.snapshot().judgeCounts[autoplay ? PGreat : Poor] == 1,
+            "saturated real deadlines do not select an exhausted sentinel phase");
+  }
+}
+
+void testDefinitionUsesDemotedNormalNote() {
+  const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
+               &raw, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  require(chart && chart->Meta.TotalNotes == 1, "parser demotes an unpaired head");
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 1);
+  require(definition.noteCount() == 1 &&
+              definition.note(0).kind == gameplay::NoteKind::Normal &&
+              definition.note(0).pairId == gameplay::kInvalidNoteId,
+          "definition sees a normal note with no pair");
+  gameplay::GameplaySimulation simulation(definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+       .attempt = {.autoPlay = true}});
+  (void)simulation.advanceTo(2'000'000, 2'000'000);
+  require(simulation.snapshot().judgeCounts[PGreat] == 1,
+          "demoted normal note receives an ordinary autoplay judgement");
+}
+
+void testSelectedModeFinalizesMalformedHold() {
+  for (const int mode : {1, 2, 3}) {
+    const std::string input = "#BPM 120\n#00151:0101\n#00111:0002\n";
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
+                 &raw, false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> chart(raw);
+    applyEffectiveLongNoteModeToChart(*chart, mode);
+    require(chart->Meta.TotalNotes == 2 && chart->Meta.TotalLongNotes == (mode == 1 ? 1 : 0),
+            "chosen mode preserves healthy classic hold and demotes unusable CN/HCN");
+    const auto definition = gameplay::buildGameplayDefinition(*chart, mode);
+    gameplay::GameplaySimulation simulation(definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+         .attempt = {.autoPlay = true}});
+    (void)simulation.advanceTo(4'000'000, 4'000'000);
+    require(simulation.snapshot().judgeCounts[PGreat] == 2,
+            "both active scoring notes remain legally judgeable after finalization");
+  }
+}
+
+void testParsedExtremeTimingRemainsSafeAfterNegativePreroll() {
+  const std::string input = "#BPM 1000000000000\n#STOP01 7.378697629483768e+24\n"
+                            "#00009:01\n#00111:0101\n";
+  std::vector<unsigned char> bytes(input.begin(), input.end());
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(bytes, &raw, false, false, cancelled);
+  std::unique_ptr<bms_parser::Chart> chart(raw);
+  require(chart != nullptr && !chart_playability::timingError(*chart),
+          "near-limit parser fixture remains representable at admission");
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+  require(definition.noteCount() == 2, "near-limit fixture contains two active notes");
+  for (const bool autoplay : {false, true}) {
+    gameplay::GameplaySimulation simulation(definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+         .attempt = {.autoPlay = autoplay}});
+    (void)simulation.advanceTo(-1'000'000, -1'000'000);
+    (void)simulation.advanceTo(std::numeric_limits<long long>::max(),
+                              std::numeric_limits<long long>::max());
+    require(simulation.terminal() &&
+                simulation.snapshot().judgeCounts[autoplay ? PGreat : Poor] == 2,
+            "parsed near-limit chart safely advances from negative pre-roll");
+  }
+}
+
+void testDetachedLongNotePartnersFollowReferenceTraversal() {
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                          bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    for (const bool detachHead : {false, true}) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = 7;
+      auto *measure = new bms_parser::Measure();
+      auto *head = addLongNote(*measure, 1'000'000, 2'000'000, 1, type);
+      auto *tail = head->Tail;
+      auto *detached = detachHead ? head : tail;
+      detached->Timeline->Notes[1] = nullptr;
+      chart.DetachedNotes.emplace_back(detached);
+      chart.Measures.push_back(measure);
+      recalculateEffectiveLongNoteCounts(chart);
+      const bool classic = type == bms_parser::LongNoteType::LongNote;
+      require(chart.Meta.TotalNotes == (classic && detachHead ? 0 : 1),
+              "detached pair identity does not add an active score note");
+      const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+      require(definition.noteCount() == 2 && definition.chronologicalNotes().size() == 1 &&
+                  definition.laneNotes(1).size() == 1 &&
+                  definition.note(0).pairId == 1 && definition.note(1).pairId == 0 &&
+                  !definition.note(1).inActiveSlot,
+              "detached partner remains addressable but outside Java lane traversal");
+      gameplay::GameplaySimulation simulation(definition,
+          {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+           .attempt = {.autoPlay = true}});
+      (void)simulation.advanceTo(3'000'000, 3'000'000);
+      require(simulation.snapshot().score == (classic && detachHead ? 0 : 2),
+              "autoplay follows active heads/CN tails and held classic detached tails");
+      require(simulation.noteState(1).played == (classic && !detachHead),
+              "autoplay does not synthesize detached head or charge-tail lane events");
+      require(head->Tail == tail && tail->Head == head && detached->Timeline != nullptr,
+              "definition and simulation leave the parser graph intact");
+      require(simulation.terminal(), "pair-only identities do not prevent chart completion");
+      if (!detachHead) {
+        std::unordered_map<int, bool> pressed;
+        RecordingPresentationEvents events;
+        RhythmLaneInputController controller(&chart, &events, pressed, Judge(3), 0);
+        (void)controller.pressLane(1, 1, {.songTimeMicros = 1'000'000});
+        const auto release = controller.releaseLane(1, {.songTimeMicros = 2'000'000});
+        require(release.note == tail && release.hasJudge && release.judge.judgement == PGreat,
+                "legacy lane input releases detached partner through active head");
+      }
+
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     const std::string name = argv[1];
@@ -2823,6 +2980,11 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
+  testDefinitionUsesDemotedNormalNote();
+  testSelectedModeFinalizesMalformedHold();
+  testParsedExtremeTimingRemainsSafeAfterNegativePreroll();
+  testExtremeTimelineDeadlinesDoNotWrapIntoThePast();
+  testDetachedLongNotePartnersFollowReferenceTraversal();
   testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
   testReferenceEmptyPoorRetainsCloserPlayedNote();
   testReferenceLr2EmptyPoorRetainsCloserPlayedNote();

@@ -44,6 +44,8 @@ struct ReplayPlaybackMaterializationOutcome {
   std::optional<GaugeStateSnapshot> finalGaugeState;
   int endingCombo = 0;
   std::shared_ptr<ReplayData> replayData;
+  // Lane/time adapters cannot represent a judged detached endpoint identity.
+  bool consumerIdentityCompatible = true;
   std::string diagnostic;
 
   [[nodiscard]] bool matched() const noexcept {
@@ -70,10 +72,9 @@ public:
       const ReplayJudgingSink &judge,
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
 
-  // Builds the single judged, in-memory compatibility track used by Watch,
-  // Retry Same, G-Battle, practice ghost, and video export. Saved-result
-  // disagreement is reported on the outcome but does not discard a
-  // structurally playable track.
+  // Builds a judged, in-memory track and retains result disagreement for
+  // diagnostics. ChartReplayConsumer and CourseReplayConsumer require matched
+  // facts before exposing this track to saved-replay actions.
   [[nodiscard]] static ReplayPlaybackMaterializationOutcome
   materializeForConsumers(
       const ReplayChartDocument &document,

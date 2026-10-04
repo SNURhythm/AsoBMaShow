@@ -1,0 +1,135 @@
+{
+  "chart": "orphan.bms",
+  "buffered": false,
+  "randomValues": [],
+  "randomSeed": 123456,
+  "randomPrng": "std::mt19937_64",
+  "input": [
+    [
+      0,
+      0,
+      1,
+      0,
+      true
+    ],
+    [
+      10000,
+      0,
+      1,
+      0,
+      false
+    ]
+  ],
+  "completion": 2000000,
+  "saved": {
+    "attempt": "123e4567-e89b-42d3-a456-426614174000",
+    "path": "orphan.bms",
+    "md5": "78a9a78a35d87f0c19f711a8ca7840c3",
+    "sha256": "204b7e1f41ab7b21cc6c975737bf447f054a2e87199de713adb24617c2daf64f",
+    "title": "Historical replay",
+    "artist": "Fixture",
+    "lnMode": 1,
+    "keyMode": 5,
+    "facts": [
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "gauge": 20.0,
+    "gaugeType": 2,
+    "gaugeHistory": [],
+    "timing": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "provenance": "{\"schemaVersion\":6,\"ruleset\":{\"id\":\"lr2\",\"version\":4,\"scoringModel\":\"asobmashow-v1\",\"judgementModel\":\"lr2-v1\",\"gaugeModel\":\"lr2-gauge-v1\"},\"stages\":[{\"chartMd5\":\"78a9a78a35d87f0c19f711a8ca7840c3\",\"chartSha256\":\"204b7e1f41ab7b21cc6c975737bf447f054a2e87199de713adb24617c2daf64f\",\"longNoteMode\":1,\"chartRandomSeed\":123456,\"chartRandomPrng\":\"std::mt19937_64\",\"chartRandomValues\":[],\"judgeRankSource\":\"chart\",\"sourceJudgeRank\":2,\"totalNotes\":1,\"playDurationSeconds\":0,\"authoredGaugeTotal\":200.0,\"effectiveGaugeTotal\":200.0,\"candidateSelection\":\"lowest\",\"effectiveJudgeWindows\":[{\"context\":\"normal\",\"judgement\":\"pgreat\",\"earlyMicros\":-18000,\"lateMicros\":18000},{\"context\":\"normal\",\"judgement\":\"great\",\"earlyMicros\":-40000,\"lateMicros\":40000},{\"context\":\"normal\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"normal\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"normal\",\"judgement\":\"kpoor\",\"earlyMicros\":-1000000,\"lateMicros\":0},{\"context\":\"scratch\",\"judgement\":\"pgreat\",\"earlyMicros\":-18000,\"lateMicros\":18000},{\"context\":\"scratch\",\"judgement\":\"great\",\"earlyMicros\":-40000,\"lateMicros\":40000},{\"context\":\"scratch\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"scratch\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"scratch\",\"judgement\":\"kpoor\",\"earlyMicros\":-1000000,\"lateMicros\":0},{\"context\":\"long-note-tail\",\"judgement\":\"pgreat\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-note-tail\",\"judgement\":\"great\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-note-tail\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-note-tail\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"long-note-tail\",\"judgement\":\"kpoor\",\"earlyMicros\":0,\"lateMicros\":0},{\"context\":\"long-scratch-tail\",\"judgement\":\"pgreat\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-scratch-tail\",\"judgement\":\"great\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-scratch-tail\",\"judgement\":\"good\",\"earlyMicros\":-100000,\"lateMicros\":100000},{\"context\":\"long-scratch-tail\",\"judgement\":\"bad\",\"earlyMicros\":-200000,\"lateMicros\":200000},{\"context\":\"long-scratch-tail\",\"judgement\":\"kpoor\",\"earlyMicros\":0,\"lateMicros\":0}]}],\"gaugeType\":\"normal\",\"gaugeProfile\":\"standard\",\"gaugeAutoShift\":0,\"gaugeAutoShiftLowerBound\":\"assisted-easy\",\"player1\":{\"option\":\"NORMAL\",\"seed\":null},\"player2\":{\"option\":\"NORMAL\",\"seed\":null},\"doublePlayFlip\":false,\"assistOption\":\"OFF\",\"inputDevices\":[\"keyboard\"],\"autoPlay\":false,\"practice\":false,\"clubMode\":false,\"playback\":{\"percent\":100,\"mode\":\"pitch-shift\"},\"judgeWindowScalePercent\":100,\"startingGaugePercent\":null,\"eligibility\":\"verified\"}",
+    "playedAt": 1700000000123,
+    "fingerprint": "10fe232e8cb76d1e6ac8e560d553d3303fd99aeb216aab44c730566fe164b2f5"
+  },
+  "legacyEvents": [
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      20.0,
+      2,
+      0,
+      0
+    ],
+    [
+      1,
+      0,
+      -1,
+      10000,
+      10000,
+      6,
+      0,
+      20.0,
+      2,
+      0,
+      0
+    ]
+  ],
+  "observations": {
+    "keyMode": 5,
+    "totalNotes": 1,
+    "notes": [
+      [
+        0,
+        0,
+        1,
+        1,
+        4294967295
+      ]
+    ],
+    "lookupAddressed": 1,
+    "lookupMatched": 1,
+    "ghost": [],
+    "keysounds": [
+      [
+        0,
+        1
+      ]
+    ]
+  }
+}

@@ -76,7 +76,7 @@ bool isWithinLatePoorWindow(
     const PlayfieldProjectionRequest &request) noexcept {
   const auto latePoorTiming = std::max<std::int64_t>(
       0, request.latePoorTimingMicros);
-  return timelineMicros >= visualTimeMicros - latePoorTiming;
+  return timelineMicros >= chart_timing::subtract(visualTimeMicros, latePoorTiming);
 }
 
 // LaneRenderer draws ordinary, mine, and hidden single notes only while their
@@ -193,8 +193,9 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
     const auto *timeline = orderedTimelines[index];
     double y = originY;
     const double releaseTime =
-        static_cast<double>(timeline->timeMicros + timeline->stopMicros +
-                            badTimeMicros);
+        static_cast<double>(timeline->timeMicros) +
+        static_cast<double>(timeline->stopMicros) +
+        static_cast<double>(badTimeMicros);
     if (index + 1U < orderedTimelines.size()) {
       std::size_t segment = index;
       while (segment + 1U < orderedTimelines.size() &&
@@ -214,7 +215,7 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
         ++segment;
       }
       const auto *current = orderedTimelines[segment];
-      if (current->timeMicros + current->stopMicros < timeMicros &&
+      if (chart_timing::add(current->timeMicros, current->stopMicros) < timeMicros &&
           static_cast<double>(timeMicros) > releaseTime) {
         const double stopTime = std::max(
             releaseTime - static_cast<double>(current->timeMicros) -
@@ -225,7 +226,7 @@ std::vector<PmsPoorTimelineDescent> pmsPoorTimelineDescents(
               static_cast<double>(current->stopMicros) - stopTime) *
              descentHeight * current->bpm / kQuarterNoteMicros;
       }
-    } else if (timeline->timeMicros + timeline->stopMicros < timeMicros &&
+    } else if (chart_timing::add(timeline->timeMicros, timeline->stopMicros) < timeMicros &&
                static_cast<double>(timeMicros) > releaseTime) {
       const double stopTime = std::max(
           releaseTime - static_cast<double>(timeline->timeMicros) -
@@ -288,9 +289,9 @@ constantOpacity(long long timelineMicros, long long visualTimeMicros,
     return 1.0;
   }
   const long long targetTime =
-      visualTimeMicros +
-      static_cast<long long>(request.constantDurationMilliseconds) * 1'000LL;
-  const long long timeDifference = timelineMicros - targetTime;
+      chart_timing::add(visualTimeMicros,
+          static_cast<long long>(request.constantDurationMilliseconds) * 1'000LL);
+  const long long timeDifference = chart_timing::subtract(timelineMicros, targetTime);
   const long long alphaLimit =
       static_cast<long long>(request.constantFadeInMilliseconds) * 1'000LL;
   if (alphaLimit >= 0) {
@@ -390,7 +391,7 @@ TimelinePositionWalk walkTimelinePositions(
       result.renderIndexByTimelineId.emplace(timeline->id,
                                              result.renderYs.size());
       result.renderYs.push_back(std::numeric_limits<float>::quiet_NaN());
-      if (timeline->timeMicros < timeMicros - latePoorTimingMicros) {
+      if (timeline->timeMicros < chart_timing::subtract(timeMicros, latePoorTimingMicros)) {
         result.nextStartRetainedOrdinal = timeline->retainedOrdinal;
       }
     }
@@ -431,7 +432,7 @@ TimelinePositionWalk walkTimelinePositions(
     result.renderIndexByTimelineId.emplace(timeline->id,
                                            result.renderYs.size());
     result.renderYs.push_back(y);
-    if (timeline->timeMicros < timeMicros - latePoorTimingMicros) {
+    if (timeline->timeMicros < chart_timing::subtract(timeMicros, latePoorTimingMicros)) {
       result.nextStartRetainedOrdinal = timeline->retainedOrdinal;
     }
   }
@@ -557,7 +558,7 @@ void PlayfieldProjection::rebuildIndex(const PlayfieldChartVisualModel &model) {
   index_.notesByTimeline.reserve(index_.orderedTimelines.size());
   for (const auto &note : model.notes) {
     index_.notesById.emplace(note.id, &note);
-    index_.orderedNotes.push_back(&note);
+    if (note.inActiveSlot) index_.orderedNotes.push_back(&note);
   }
   std::stable_sort(index_.orderedNotes.begin(), index_.orderedNotes.end(),
                    [](const auto *left, const auto *right) {
@@ -916,7 +917,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   const auto appendCandidateLongHead =
       [&candidateLongHeads, &candidateLongHeadIds,
        &isBeforeVisibleNoteStart](const ChartVisualNote *head) {
-        if (head != nullptr && !isBeforeVisibleNoteStart(head) &&
+        if (head != nullptr && head->inActiveSlot && !isBeforeVisibleNoteStart(head) &&
             candidateLongHeadIds.insert(head->id).second) {
           candidateLongHeads.push_back(head);
         }
@@ -967,6 +968,12 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
           appendCandidateLongHead(head->second);
         }
       }
+    }
+
+    if (source == ChartVisualNoteSource::Playable &&
+        note->kind == ChartVisualNoteKind::LongTail) {
+      const auto head = notes.find(note->pairId);
+      if (head != notes.end() && !head->second->inActiveSlot) return;
     }
 
     if (source == ChartVisualNoteSource::Playable &&
@@ -1381,11 +1388,11 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         builtInTimelineWasTraversed(tailTimeline->retainedOrdinal);
     const bool spansDerivedStart =
         headTimeline->timeMicros <
-            timeMicros -
-                std::max<std::int64_t>(0, request.latePoorTimingMicros) &&
+            chart_timing::subtract(timeMicros,
+                std::max<std::int64_t>(0, request.latePoorTimingMicros)) &&
         tailTimeline->timeMicros >=
-            timeMicros -
-                std::max<std::int64_t>(0, request.latePoorTimingMicros);
+            chart_timing::subtract(timeMicros,
+                std::max<std::int64_t>(0, request.latePoorTimingMicros));
     if (!headTraversed && !tailTraversed && !spansDerivedStart) {
       continue;
     }

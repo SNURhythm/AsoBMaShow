@@ -4,13 +4,16 @@
 #include "PlayOptionUtils.h"
 #include "repositories/ChartRepository.h"
 #include "repositories/ReplayRepository.h"
+#include "replay/ChartReplayConsumer.h"
 #include "replay/ReplayFileStore.h"
+#include "replay/ReplaySetupAdapter.h"
 #include "replay/ReplaySetupProvenance.h"
 #define HAS_CHART_RECORD_ACTIONS 1
 #else
 #define HAS_CHART_RECORD_ACTIONS 0
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -142,7 +145,7 @@ void testResultOnlyFallbackAndLifetime() {
           "completion owns the chart referenced by its rhythm state after input and file removal");
 }
 
-void testPreparedReplayReuseAndOwnership() {
+void testPreparedReplayReuseAndOwnership(bool mismatchingReplay = false) {
   Fixture fixture(true);
   ReplayRepository repository(fixture.directory / "replay.db");
   require(repository.EnsureSchema(), "repository schema initializes");
@@ -157,6 +160,47 @@ void testPreparedReplayReuseAndOwnership() {
       .playback = {.setup = *setup},
       .timeBounds = {.completionSongTimeMicros = 5'000'000},
   };
+  auto runtimeSetup = replay::makeReplayDataFromSetup(
+      *setup, fixture.result.score.provenance, fixture.record.meta, diagnostic);
+  require(runtimeSetup.has_value(), "MIRROR runtime setup projects: " + diagnostic);
+  std::atomic_bool cancelled{false};
+  auto chart = play_options::prepareReplayChart(
+      fixture.record.meta.BmsPath, *runtimeSetup, cancelled, &diagnostic);
+  require(chart != nullptr, "MIRROR fixture prepares: " + diagnostic);
+  for (const auto *measure : chart->Measures) {
+    for (const auto *timeline : measure->TimeLines) {
+      for (const auto *note : timeline->Notes) {
+        if (!note) continue;
+        document.playback.input.push_back({
+            .songTimeMicros = timeline->Timing,
+            .control = {.kind = replay::LogicalControlKind::Lane,
+                        .player = 1, .lane = note->Lane},
+            .pressed = true});
+        document.playback.input.push_back({
+            .songTimeMicros = timeline->Timing + 10'000,
+            .control = {.kind = replay::LogicalControlKind::Lane,
+                        .player = 1, .lane = note->Lane},
+            .pressed = false});
+      }
+    }
+  }
+  std::stable_sort(document.playback.input.begin(), document.playback.input.end(),
+      [](const auto &left, const auto &right) {
+        return left.songTimeMicros < right.songTimeMicros;
+      });
+  document.timeBounds.completionSongTimeMicros = chart->Meta.TotalLength + 1'000'000;
+  const auto judged = replay::ReplayPlaybackMaterializer::materializeForConsumers(
+      document, fixture.result, *chart);
+  require(judged.judgedResult.has_value(),
+          "real gameplay judges the MIRROR replay fixture: " + judged.diagnostic);
+  fixture.result = *judged.judgedResult;
+  const int expectedScore = fixture.result.score.score;
+  require(expectedScore == 10 && fixture.result.score.pGreat == 5,
+          "MIRROR input genuinely judges all five chart notes");
+  require(replay::ReplayPlaybackMaterializer::materializeForConsumers(
+              document, fixture.result, *chart).matched(),
+          "generated saved facts match the genuine replay before persistence");
+  if (mismatchingReplay) document.playback.input.clear();
   replay::BeatorajaReplayCodec codec;
   const auto bytes = codec.encodeChart(document, fixture.result.playedAtUnixMillis,
                                         diagnostic);
@@ -181,9 +225,24 @@ void testPreparedReplayReuseAndOwnership() {
       .identity = reserved.reservation->identity,
       .metadata = installed.file->metadata,
   });
-  std::atomic_bool cancelled{false};
   auto prepared = chart_records::prepareChartResult(repository, fixture.record,
                                                      fixture.result.attemptId, cancelled);
+  if (mismatchingReplay) {
+    const auto saved = repository.LoadModernChartResultByAttempt(fixture.result.attemptId);
+    require(saved.record.has_value(), "mismatching replay keeps its saved result");
+    const auto rejected = replay::makeRuntimeChartReplayConsumer(repository).load(
+        *saved.record, fixture.record.meta.BmsPath, cancelled);
+    require(rejected.state == replay::ChartReplayConsumerState::ResultMismatch &&
+                !rejected.ready() && !rejected.diagnostic.empty(),
+            "genuine saved score and empty replay receive a mismatch diagnostic");
+    require(prepared.completion && !prepared.completion->retryData &&
+                prepared.completion->view.state.getScore() == expectedScore &&
+                prepared.completion->view.result.resultFingerprint ==
+                    fixture.result.resultFingerprint &&
+                saved.record->result.resultFingerprint == fixture.result.resultFingerprint,
+            "mismatching replay disables Retry Same while preserving durable saved facts");
+    return;
+  }
   require(prepared.completion && prepared.completion->retryData,
           "verified replay is retained by the prepared result");
   auto completion = prepared.completion;
@@ -201,7 +260,7 @@ void testPreparedReplayReuseAndOwnership() {
   auto fallback = chart_records::prepareChartResult(repository, fixture.record,
                                                      fixture.result.attemptId, cancelled);
   require(fallback.completion && !fallback.completion->retryData &&
-              fallback.completion->view.state.getScore() == 7,
+              fallback.completion->view.state.getScore() == expectedScore,
           "a missing optional replay falls back to the durable saved result");
 }
 
@@ -234,6 +293,7 @@ int main() {
 #if HAS_CHART_RECORD_ACTIONS
     testResultOnlyFallbackAndLifetime();
     testPreparedReplayReuseAndOwnership();
+    testPreparedReplayReuseAndOwnership(true);
     testFailuresAndCancellation();
 #else
     require(false, "shared chart record actions are not implemented");

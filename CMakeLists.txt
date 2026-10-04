@@ -3856,6 +3856,47 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_playback_driver_tests PRIVATE cxx_std_23)
 
+    add_executable(historical_replay_compatibility_tests
+        tests/historical_replay_compatibility.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
+        src/scene/play/Judge.cpp
+        src/scene/play/ReplayKeysoundSchedule.cpp
+        src/MinizBridge.c
+        src/sqlite3.c
+    )
+    target_include_directories(historical_replay_compatibility_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
+    )
+    target_compile_features(historical_replay_compatibility_tests PRIVATE cxx_std_23)
+    target_compile_definitions(historical_replay_compatibility_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
         src/ArchiveFile.cpp
@@ -5211,6 +5252,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(play_option_summary_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(play_option_summary_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(play_option_summary_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(play_option_summary_tests PRIVATE SDL2::SDL2-static)
+    else()
+        target_link_libraries(play_option_summary_tests PRIVATE SDL2)
+    endif()
 
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
@@ -8310,6 +8358,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_replay_context_tests
         course_replay_consumer_tests
         replay_playback_driver_tests
+        historical_replay_compatibility_tests
         best_replay_resolver_tests
         best_replay_load_tests
         music_playlist_repository_tests

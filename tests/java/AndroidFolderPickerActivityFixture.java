@@ -7,11 +7,28 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.lang.reflect.Method;
 import java.io.File;
+import java.util.Locale;
 
 public final class AndroidFolderPickerActivityFixture {
     public static void main(String[] arguments) throws Exception {
         String scenario = arguments[0];
         PickerActivity activity = new PickerActivity();
+        if (scenario.equals("chart-formats")) {
+            Method predicate = PickerActivity.class.getDeclaredMethod("isChartFile", String.class);
+            predicate.setAccessible(true);
+            for (String name : new String[]{"song.pms", "song.PMS", "song.PmS",
+                    "song.bms", "song.BME", "song.bml"}) {
+                if (!(Boolean) predicate.invoke(activity, name)) {
+                    throw new AssertionError("Supported chart omitted: " + name);
+                }
+            }
+            for (String name : new String[]{"song.pms.zip", "song.wav", "song.pms.bak", "pms"}) {
+                if ((Boolean) predicate.invoke(activity, name)) {
+                    throw new AssertionError("Non-chart discovered: " + name);
+                }
+            }
+            return;
+        }
         if (scenario.startsWith("storage-")) {
             testStorageAccess(activity, scenario);
             return;

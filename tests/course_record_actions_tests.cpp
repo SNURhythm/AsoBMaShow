@@ -5,6 +5,7 @@
 #include "PlayOptionUtils.h"
 #include "repositories/ReplayRepository.h"
 #include "replay/ReplayFileStore.h"
+#include "replay/ReplayPlaybackMaterializer.h"
 #include "replay/ReplaySetupProvenance.h"
 #define HAS_COURSE_RECORD_ACTIONS 1
 #else
@@ -239,7 +240,7 @@ void testRecallPreservesSavedFullCourseFacts() {
           "saved fact overlay retains parsed and unplayed chart rank metadata");
 }
 
-void testVerifiedReplayOwnershipAndMissingFileFallback() {
+void testVerifiedReplayOwnershipAndMissingFileFallback(bool mismatchedReplay = false) {
   Fixture fixture;
   ReplayRepository repository(fixture.directory / "replay.db");
   require(repository.EnsureSchema(), "repository schema initializes");
@@ -249,18 +250,89 @@ void testVerifiedReplayOwnershipAndMissingFileFallback() {
       .beatorajaConstraintIds = {4},
   };
   std::string diagnostic;
-  for (const auto &stage : fixture.result.stages) {
+  std::atomic_bool cancelled{false};
+  replay::ReplayPlaybackCarryState carry;
+  for (auto &stage : fixture.result.stages) {
     auto setup = replay::captureLocalReplaySetup(
         {.chart = {.md5 = stage.score.chartMd5,
                    .sha256 = stage.score.chartSha256,
                    .keyMode = stage.keyMode},
          .longNoteMode = 1}, stage.score.provenance, diagnostic);
     require(setup.has_value(), "real replay setup captures: " + diagnostic);
-    document.playback.stages.push_back({.setup = *setup});
+    auto chart = play_options::parseChart(
+        fixture.records[stage.stageIndex].meta.BmsPath, cancelled,
+        "judged course replay fixture");
+    require(chart != nullptr, "course replay fixture parses its actual stage");
+    replay::ReplayChartDocument stageDocument{
+        .playback = {.setup = *setup},
+        .timeBounds = {.completionSongTimeMicros = 5'000'000},
+    };
+    for (const auto *measure : chart->Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        for (const auto *note : timeline->Notes) {
+          if (note == nullptr) continue;
+          for (const bool pressed : {true, false}) {
+            stageDocument.playback.input.push_back({
+                .songTimeMicros = timeline->Timing + (pressed ? 0 : 10'000),
+                .control = {.kind = replay::LogicalControlKind::Lane,
+                            .player = 1, .lane = note->Lane},
+                .pressed = pressed,
+            });
+          }
+        }
+      }
+    }
+    result_persistence::ModernChartResult savedStage{
+        .attemptId = fixture.result.attemptId,
+        .score = stage.score,
+        .keyMode = stage.keyMode,
+        .adoptedGaugeType = stage.adoptedGaugeType,
+        .adoptedGaugeHistory = stage.adoptedGaugeHistory,
+        .judgementTiming = stage.judgementTiming,
+        .playedAtUnixMillis = fixture.result.playedAtUnixMillis,
+    };
+    const auto judged = replay::ReplayPlaybackMaterializer::materializeForConsumers(
+        stageDocument, savedStage, *chart, carry);
+    require(judged.judgedResult && judged.finalGaugeState,
+            "real course input produces stage facts: " + judged.diagnostic);
+    stage.score = judged.judgedResult->score;
+    stage.adoptedGaugeType = judged.judgedResult->adoptedGaugeType;
+    stage.adoptedGaugeHistory = judged.judgedResult->adoptedGaugeHistory;
+    stage.judgementTiming = judged.judgedResult->judgementTiming;
+    carry = {.gauge = judged.finalGaugeState,
+             .combo = judged.endingCombo,
+             .maximumCombo = stage.score.maxCombo};
+    require(stage.score.score == 10 && stage.score.pGreat == 5 &&
+                carry.combo == (stage.stageIndex + 1) * 5,
+            "fixture judges five actual presses and carries course combo");
+    document.playback.stages.push_back(std::move(stageDocument.playback));
     document.playback.restMicrosAfterStage.push_back(stage.stageIndex == 0 ? 1'000'000 : 0);
     document.timeBounds.push_back({.completionSongTimeMicros = 5'000'000});
     pathInput.stageSha256.push_back(stage.score.chartSha256);
   }
+  const auto &saved = fixture.result;
+  auto captured = result_persistence::captureModernCourseResult({
+      .attemptId = saved.attemptId,
+      .courseKey = saved.courseKey,
+      .legacyCourseId = saved.legacyCourseId,
+      .courseName = saved.courseName,
+      .courseGroupName = saved.courseGroupName,
+      .constraintJson = saved.constraintJson,
+      .requestedPlayOption = saved.requestedPlayOption,
+      .assistOption = saved.assistOption,
+      .initialGaugeType = saved.initialGaugeType,
+      .gaugeProfile = saved.gaugeProfile,
+      .gaugeAutoShift = saved.gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = saved.gaugeAutoShiftLowerBound,
+      .longNoteMode = saved.longNoteMode,
+      .clearType = saved.clearType,
+      .stages = saved.stages,
+      .entryFacts = saved.entryFacts,
+      .playedAtUnixMillis = saved.playedAtUnixMillis,
+  }, diagnostic);
+  require(captured.has_value(), "judged course facts capture: " + diagnostic);
+  fixture.result = std::move(*captured);
+  if (mismatchedReplay) document.playback.stages.back().input.clear();
   replay::BeatorajaReplayCodec codec;
   const auto bytes = codec.encodeCourse(document, fixture.result.playedAtUnixMillis,
                                          diagnostic);
@@ -286,11 +358,25 @@ void testVerifiedReplayOwnershipAndMissingFileFallback() {
   };
   require(repository.StageModernCourseResult(fixture.result, attachment, pathInput).status ==
               ModernCourseStageStatus::Staged, "real result and replay attachment stage");
-  std::atomic_bool cancelled{false};
   auto prepared = course_records::prepareCourseResult(repository, fixture.result.attemptId,
                                                        fixture.selection(), true, cancelled);
   require(prepared.session != nullptr, "attached replay result prepares");
   auto session = prepared.session;
+  if (mismatchedReplay) {
+    require(!session->resultBrowseReplayData &&
+                !session->resultBrowseStageReplay(0) &&
+                !session->resultBrowseStageReplay(1) &&
+                session->completedResults[0].gameplayGraph.chart &&
+                session->completedResults[1].state.getScore() == 10,
+            "a replay that disagrees in the second stage is rejected while saved "
+            "course results and chart graphs remain available");
+    const auto stored = repository.LoadModernCourseResultByAttempt(fixture.result.attemptId);
+    require(stored.record &&
+                stored.record->result.resultFingerprint == fixture.result.resultFingerprint &&
+                stored.record->result.finalScore == 20,
+            "rejecting an optional mismatched replay does not rewrite the saved result");
+    return;
+  }
   require(session->resultBrowseStageReplay(0) && session->resultBrowseReplayChart(0) &&
               session->resultBrowseStageReplay(1) && session->resultBrowseReplayChart(1),
           "verified completed replay prefix is attached to the owned result session");
@@ -309,7 +395,7 @@ void testVerifiedReplayOwnershipAndMissingFileFallback() {
                                                        fixture.selection(), true, cancelled);
   require(fallback.session && !fallback.session->resultBrowseReplayData &&
               fallback.session->completedResults[0].gameplayGraph.chart &&
-              fallback.session->completedResults[0].state.getScore() == 7,
+              fallback.session->completedResults[0].state.getScore() == 10,
           "an absent optional replay preserves saved result state and chart graphs");
 }
 
@@ -424,6 +510,7 @@ int main() {
     testExactPartialCourseIncludesFailedStageRemainderInBadPoints();
     testFailureAndCancellation();
     testVerifiedReplayOwnershipAndMissingFileFallback();
+    testVerifiedReplayOwnershipAndMissingFileFallback(true);
 #else
     require(false, "shared course record actions are not implemented");
 #endif

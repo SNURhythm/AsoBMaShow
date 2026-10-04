@@ -2309,7 +2309,8 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private boolean isChartFile(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".bms") || lower.endsWith(".bme") || lower.endsWith(".bml");
+        return lower.endsWith(".bms") || lower.endsWith(".bme")
+                || lower.endsWith(".bml") || lower.endsWith(".pms");
     }
 
     private boolean hasManageExternalStorageAccess() {

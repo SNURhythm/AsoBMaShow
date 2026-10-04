@@ -312,6 +312,113 @@ void testOverflowScaleMetadata(const std::filesystem::path &root) {
          "overflow-scale metadata is rejected before allocating or narrowing");
 }
 
+void testInvalidClubTimingPreservesOutput(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "invalid-club-timing");
+  auto *timeline = chart->Measures.front()->TimeLines.front();
+  timeline->StopLength = -48;
+  const auto output = chart->Meta.Folder / "result.wav";
+  writeText(output, "preserved output");
+  const auto result = guardedRender(*chart, output, {.clubMode = true});
+  expect(!result.success && result.message.find("timing") != std::string::npos,
+         "export reports invalid club timing rather than silently omitting beats");
+  expect(readText(output) == "preserved output",
+         "invalid club plan preserves the existing output file");
+}
+
+void testReferenceChartAdmission(const std::filesystem::path &root) {
+  const std::string malformed = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  const auto source = root / "unmatched-long-note.bms";
+  writeText(source, malformed);
+  const std::vector<unsigned char> bytes(malformed.begin(), malformed.end());
+  std::atomic_bool cancelled{false};
+  std::string diagnostic;
+  const auto fromPath = play_options::parseChart(source, cancelled, "reference fixture", &diagnostic);
+  expect(fromPath && fromPath->Meta.TotalNotes == 1 && fromPath->Meta.TotalLongNotes == 0 && diagnostic.empty(),
+         "filesystem parser adapter accepts the demoted normal note");
+  const auto fromBytes = play_options::parseChartBytes(source, bytes, std::nullopt,
+              std::nullopt, std::nullopt, cancelled, "reference fixture", &diagnostic);
+  expect(fromBytes && fromBytes->Meta.TotalNotes == 1 && fromBytes->Meta.TotalLongNotes == 0 && diagnostic.empty(),
+         "buffered parser adapter accepts the demoted normal note");
+
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  parser.Parse(bytes, &raw, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  expect(chart && chart->Meta.TotalNotes == 1,
+         "raw parser demotes the unmatched head and retains its metadata");
+  if (!chart) return;
+  for (const int mode : {1, 2, 3}) {
+    try {
+      bms_parser::Chart *modeRaw = nullptr;
+      parser.Parse(bytes, &modeRaw, false, false, cancelled);
+      const std::unique_ptr<bms_parser::Chart> modeChart(modeRaw);
+      expect(modeChart != nullptr, "each LN mode starts with the reference graph");
+      if (!modeChart) continue;
+      applyEffectiveLongNoteModeToChart(*modeChart, mode);
+      expect(modeChart->Meta.TotalNotes == 1 && modeChart->Meta.TotalLongNotes == 0,
+             "demoted normal note counts are independent of selected LN mode");
+    } catch (const std::exception &) {
+      expect(false, "LN mode preparation must not add graph admission rules");
+    }
+  }
+  for (const int mode : {1, 2, 3}) {
+    const std::string late = "#BPM 120\n#00151:0101\n#00111:0002\n";
+    auto selected = play_options::parseChartBytes(source, {late.begin(), late.end()},
+        std::nullopt, std::nullopt, std::nullopt, cancelled, "selected LN mode");
+    expect(selected && selected->Meta.TotalLongNotes == 1,
+           "undefined mode initially retains healthy classic detached-tail head");
+    if (!selected) continue;
+    applyEffectiveLongNoteModeToChart(*selected, mode);
+    expect(selected->Meta.TotalNotes == 2 && selected->Meta.TotalLongNotes == (mode == 1 ? 1 : 0),
+           "selected CN/HCN mode finalizes unusable hold as normal in parser library");
+    applyEffectiveLongNoteModeToChart(*selected, mode);
+    expect(selected->Meta.TotalNotes == 2 && selected->Meta.TotalLongNotes == (mode == 1 ? 1 : 0),
+           "repeated mode finalization is idempotent");
+  }
+  const auto output = root / "unsupported-chart.wav";
+  writeText(output, "preserved output");
+  const auto result = guardedRender(*chart, output);
+  expect(result.success && readText(output).starts_with("RIFF"),
+         "audio scheduling does not impose an unrelated LN pairing restriction");
+  expect(chart->Meta.TotalNotes == 1, "audio export preserves the parsed graph's counts");
+
+  const std::string extreme = "#BPM 120\n#STOP01 Infinity\n#00009:01\n#00111:01\n";
+  writeText(source, extreme);
+  const auto saturated = play_options::parseChart(source, cancelled, "saturated fixture");
+  expect(saturated &&
+             saturated->Meta.TotalLength == std::numeric_limits<long long>::max(),
+         "the parser adapter retains saturated timing without chart rejection");
+
+  writeText(source, "#BPM 120\n#00051:0101\n");
+  auto paired = play_options::parseChart(source, cancelled, "supported fixture");
+  expect(paired && paired->Meta.TotalNotes == 1,
+         "an ordinary reciprocal LN pair remains playable");
+
+  auto audioFixture = chartFixture(root, "detached-long-note");
+  for (const auto replacement : {"02", "0002"}) {
+    const std::string detached = std::string("#BPM 120\n#WAV01 click.wav\n"
+        "#WAV02 click.wav\n#00051:0101\n#00011:") + replacement + "\n";
+    writeText(audioFixture->Meta.BmsPath, detached);
+    auto fromPath = play_options::parseChart(audioFixture->Meta.BmsPath,
+        cancelled, "detached fixture", &diagnostic);
+    auto fromBytes = play_options::parseChartBytes(audioFixture->Meta.BmsPath,
+        {detached.begin(), detached.end()}, std::nullopt, std::nullopt,
+        std::nullopt, cancelled, "detached fixture", &diagnostic);
+    expect(fromPath && fromBytes && diagnostic.empty() &&
+               fromPath->DetachedNotes.empty() &&
+               fromBytes->DetachedNotes.empty(),
+           "path and buffered preparation demote malformed LN endpoints");
+    if (fromPath) {
+      const auto notes = fromPath->Meta.TotalNotes;
+      const auto rendered = guardedRender(*fromPath,
+          audioFixture->Meta.Folder / "detached.wav");
+      expect(rendered.success && fromPath->Meta.TotalNotes == notes &&
+                 fromPath->DetachedNotes.empty(),
+             "audio export preserves parser-demoted normal notes");
+    }
+  }
+}
+
 void testCancellationBeforePublication(const std::filesystem::path &root) {
   auto chart = chartFixture(root, "cancel-before-write");
   const auto output = chart->Meta.Folder / "result.wav";
@@ -518,6 +625,8 @@ int main() {
     testSelectedHighMixWork(root);
     testSelectedLargeClubPlan(root);
     testOverflowScaleMetadata(root);
+    testInvalidClubTimingPreservesOutput(root);
+    testReferenceChartAdmission(root);
     testCancellationBeforePublication(root);
     testTailAndWorkAdmission(root);
     testCancellationDuringWrite(root);

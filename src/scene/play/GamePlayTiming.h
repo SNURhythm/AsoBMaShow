@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../audio/PlaybackRate.h"
+#include "../../ChartTiming.h"
 #include "Judgement.h"
 
 #include <cmath>
@@ -22,12 +23,12 @@ struct FrameTiming {
 
 inline long long gameplayTimeFromRawSongTime(long long rawSongTimeMicros,
                                              long long audioOffsetMicros) {
-  return rawSongTimeMicros + audioOffsetMicros;
+  return chart_timing::add(rawSongTimeMicros, audioOffsetMicros);
 }
 
 inline long long rawSongTimeFromGameplayTime(long long gameplayTimeMicros,
                                              long long audioOffsetMicros) {
-  return gameplayTimeMicros - audioOffsetMicros;
+  return chart_timing::subtract(gameplayTimeMicros, audioOffsetMicros);
 }
 
 inline std::optional<long long> rawSongTimeFromGameplayTime(
@@ -48,7 +49,7 @@ inline FrameTiming frameTiming(long long rawSongTimeMicros,
       .rawSongTimeMicros = rawSongTimeMicros,
       .gameplayTimeMicros = gameplayTimeMicros,
       .bgaTimeMicros = gameplayTimeMicros,
-      .visualTimeMicros = gameplayTimeMicros - visualOffsetMicros,
+      .visualTimeMicros = chart_timing::subtract(gameplayTimeMicros, visualOffsetMicros),
   };
 }
 
@@ -61,20 +62,20 @@ inline PracticeFrameTiming practiceFrameTiming(long long rawSongTimeMicros,
     return {.chartTimeMicros = chartTimeMicros};
   }
   return {
-      .chartTimeMicros = endMicros - 1,
+      .chartTimeMicros = chart_timing::subtract(endMicros, 1),
       .sectionComplete = true,
   };
 }
 
 inline long long visualTimeMicros(long long songTimeMicros,
                                   long long visualOffsetMicros) {
-  return songTimeMicros - visualOffsetMicros;
+  return chart_timing::subtract(songTimeMicros, visualOffsetMicros);
 }
 
 inline long long noteDisplayTimeMicros(long long visualTimeMicros,
                                        int displayTimingMilliseconds) {
-  return visualTimeMicros +
-         static_cast<long long>(displayTimingMilliseconds) * 1'000LL;
+  return chart_timing::add(visualTimeMicros,
+      static_cast<long long>(displayTimingMilliseconds) * 1'000LL);
 }
 
 // Exact JudgeManager notes-display timing auto-adjust. The source mutates
@@ -104,7 +105,7 @@ inline double leadInBeatDistance(long long targetTimeMicros,
       bpm <= 0.0) {
     return 0.0;
   }
-  return static_cast<double>(targetTimeMicros - renderTimeMicros) * bpm /
+  return (static_cast<double>(targetTimeMicros) - static_cast<double>(renderTimeMicros)) * bpm /
          240000000.0;
 }
 

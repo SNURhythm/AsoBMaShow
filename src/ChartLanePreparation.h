@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bms_parser.hpp"
+#include "ChartPlayability.h"
 
 #include <utility>
 
@@ -31,4 +32,5 @@ inline void applyDoublePlayFlipToChart(bms_parser::Chart &chart) {
       }
     }
   }
+  chart_playability::alignDetachedLongNoteLanes(chart);
 }

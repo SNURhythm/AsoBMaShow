@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LongNoteModeUtils.h"
+#include "ChartPlayability.h"
 #include "ReplayData.h"
 #include "scene/play/SkinGameplayGraphState.h"
 #include "bms_parser.hpp"
@@ -14,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 enum class CourseLongNoteMode { Unspecified, LN, CN, HCN };
@@ -196,12 +198,20 @@ inline bool chartContainsLongNote(const bms_parser::Chart &chart) {
 }
 
 inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
-                                               int longNoteModeOverride = 0) {
+                                               int longNoteModeOverride = 0,
+                                               bool finalizeLongNoteMode = false) {
   int totalNotes = 0;
   int totalLongNotes = 0;
   int totalScratchNotes = 0;
   int totalBackSpinNotes = 0;
   int totalLandmineNotes = 0;
+  std::unordered_set<const bms_parser::Note *> countedMines;
+  const auto countMine = [&](bms_parser::Note *note) {
+    if (note != nullptr && note->IsLandmineNote() &&
+        countedMines.insert(note).second) {
+      ++totalLandmineNotes;
+    }
+  };
 
   for (auto *measure : chart.Measures) {
     if (measure == nullptr) {
@@ -213,7 +223,13 @@ inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
       }
       for (auto *note : timeline->Notes) {
         if (note == nullptr || note->IsLandmineNote()) {
+          countMine(note);
           continue;
+        }
+        if (finalizeLongNoteMode && note->IsLongNote()) {
+          const auto type = resolveEffectiveLongNoteType(
+              static_cast<bms_parser::LongNote *>(note), &chart, longNoteModeOverride);
+          note = timeline->DemoteUnusableLongNote(note->Lane, type);
         }
         const bool scratch = chartLaneIsScratch(chart.Meta, note->Lane);
         if (note->IsLongNote()) {
@@ -236,9 +252,7 @@ inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
         }
       }
       for (auto *landmine : timeline->LandmineNotes) {
-        if (landmine != nullptr) {
-          ++totalLandmineNotes;
-        }
+        countMine(landmine);
       }
     }
   }
@@ -256,7 +270,8 @@ inline void applyEffectiveLongNoteModeToChart(bms_parser::Chart &chart,
   if (chart.Meta.LnMode == 0 && lnMode > 0 && chartContainsLongNote(chart)) {
     chart.Meta.LnMode = lnMode;
   }
-  recalculateEffectiveLongNoteCounts(chart, lnMode);
+  // Preparation runs before gameplay/visual models cache note pointers.
+  recalculateEffectiveLongNoteCounts(chart, lnMode, true);
 }
 
 inline void

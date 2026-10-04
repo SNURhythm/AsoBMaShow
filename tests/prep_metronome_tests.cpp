@@ -5,6 +5,9 @@
 #include <cmath>
 #include <iostream>
 #include <optional>
+#include <atomic>
+#include <memory>
+#include <limits>
 
 #define ASSERT_EQ(expected, actual, label)                                     \
   if ((expected) != (actual)) {                                                \
@@ -27,6 +30,62 @@
   }
 
 int main() {
+  {
+    constexpr auto maximum = std::numeric_limits<long long>::max();
+    constexpr auto minimum = std::numeric_limits<long long>::min();
+    ASSERT_EQ(maximum, gameplay_timing::frameTiming(maximum - 5, 10, -10).visualTimeMicros,
+              "frame offsets saturate above the parser time range");
+    ASSERT_EQ(minimum, gameplay_timing::rawSongTimeFromGameplayTime(minimum + 5, 10),
+              "raw clock conversion saturates below representable range");
+    ASSERT_EQ(minimum, gameplay_timing::visualTimeMicros(minimum + 5, 10),
+              "visual offset cannot underflow");
+    ASSERT_EQ(maximum, gameplay_timing::noteDisplayTimeMicros(maximum - 1024, 100),
+              "note display offset cannot overflow");
+    ASSERT_TRUE(std::isfinite(gameplay_timing::leadInBeatDistance(maximum, -1'000'000, 120.0)),
+                "negative pre-roll to distant note uses floating distance");
+  }
+
+  for (const auto &stop : {"Infinity", "1e300"}) {
+    const std::string input = std::string("#BPM 120\n#STOP01 ") + stop +
+                              "\n#00009:01\n#00111:01\n";
+    std::vector<unsigned char> bytes(input.begin(), input.end());
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(bytes, &raw, false, false, cancelled);
+    std::unique_ptr<bms_parser::Chart> chart(raw);
+    ASSERT_TRUE(chart != nullptr, "extreme STOP chart parsed");
+    const auto invalid = prep_metronome::buildPracticeCountInPlan(
+        *chart, 5'000'000, 4, {});
+    ASSERT_TRUE(!invalid.enabled && invalid.clicks.empty(),
+                "unsupported timing disables complete count-in plan");
+  }
+  {
+    bms_parser::Chart chart;
+    auto *measure = new bms_parser::Measure();
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Bpm = 120.0;
+    timeline->StopLength = -48;
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+    ASSERT_TRUE(!prep_metronome::buildPracticeCountInPlan(chart, 1'000'000, 4, {}).enabled,
+                "negative application STOP disables count-in");
+  }
+  {
+    bms_parser::Chart chart;
+    auto *measure = new bms_parser::Measure();
+    measure->Scale = 1e20;
+    chart.Measures.push_back(measure);
+    const auto invalid = prep_metronome::buildPracticeCountInPlan(
+        chart, std::numeric_limits<long long>::max(), 4, {});
+    ASSERT_TRUE(!invalid.enabled && invalid.clicks.empty(),
+                "huge authored grid has bounded work");
+    const auto oversized = prep_metronome::buildPracticeCountInPlan(
+        chart, 0, std::numeric_limits<int>::max(), {});
+    ASSERT_TRUE(!oversized.enabled && oversized.clicks.empty(),
+                "huge count-in request has bounded memory");
+  }
+
   const auto compensatedTravel = [](audio::PlaybackRate rate,
                                     long long realMicros, double bpm) {
     constexpr double referenceBpm = 120.0;

@@ -2,6 +2,7 @@
 
 #include "ArchiveFile.h"
 #include "ChartLanePreparation.h"
+#include "ChartPlayability.h"
 #include "CoursePlaySession.h"
 #include "DurablePayloadLimits.h"
 #include "ReplayData.h"
@@ -433,6 +434,7 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
   }
 
   modifier->Modify(chart);
+  chart_playability::alignDetachedLongNoteLanes(chart);
   applyEffectiveLongNoteModeToChart(chart);
   appliedOption = modifier->Name();
   appliedSeed = usesRandomizer(*appliedOption)
@@ -538,7 +540,9 @@ inline std::unique_ptr<bms_parser::Chart> parseChartBytes(
     const std::optional<unsigned int> &randomSeed,
     const std::optional<std::string> &randomPrng,
     const std::optional<std::vector<int>> &randomValues,
-    std::atomic_bool &cancelled, std::string_view logContext = "chart") {
+    std::atomic_bool &cancelled, std::string_view logContext = "chart",
+    std::string *diagnostic = nullptr) {
+  if (diagnostic != nullptr) diagnostic->clear();
   if (path.empty()) {
     SDL_Log("Cannot parse %.*s: chart path is empty",
             static_cast<int>(logContext.size()), logContext.data());
@@ -557,7 +561,12 @@ inline std::unique_ptr<bms_parser::Chart> parseChartBytes(
   const std::string pathText = fspath_to_utf8(path);
   archive_file::appendDebugLogLine("Parse " + std::string(logContext) +
                                    " from bytes: " + pathText);
-  parser.Parse(bytes, &parsedChart, false, false, cancelled);
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  const bool isArchive =
+      archive_file::splitVirtualPath(path, archivePath, innerPath);
+  parser.Parse(bytes, &parsedChart, false, false, cancelled,
+               isArchive ? innerPath : path);
   if (parsedChart != nullptr) {
     assignParsedChartPathMetadata(*parsedChart, path);
     archive_file::appendDebugLogLine(
@@ -580,7 +589,9 @@ parseChart(const std::filesystem::path &path,
            const std::optional<unsigned int> &randomSeed,
            const std::optional<std::string> &randomPrng,
            const std::optional<std::vector<int>> &randomValues,
-           std::atomic_bool &cancelled, std::string_view logContext = "chart") {
+           std::atomic_bool &cancelled, std::string_view logContext = "chart",
+           std::string *diagnostic = nullptr) {
+  if (diagnostic != nullptr) diagnostic->clear();
   if (path.empty()) {
     SDL_Log("Cannot parse %.*s: chart path is empty",
             static_cast<int>(logContext.size()), logContext.data());
@@ -621,32 +632,36 @@ inline std::unique_ptr<bms_parser::Chart>
 parseChart(const std::filesystem::path &path,
            const std::optional<unsigned int> &randomSeed,
            const std::optional<std::string> &randomPrng,
-           std::atomic_bool &cancelled, std::string_view logContext = "chart") {
+           std::atomic_bool &cancelled, std::string_view logContext = "chart",
+           std::string *diagnostic = nullptr) {
   return parseChart(path, randomSeed, randomPrng, std::nullopt, cancelled,
-                    logContext);
+                    logContext, diagnostic);
 }
 
 inline std::unique_ptr<bms_parser::Chart>
 parseChart(const std::filesystem::path &path, std::atomic_bool &cancelled,
-           std::string_view logContext = "chart") {
+           std::string_view logContext = "chart",
+           std::string *diagnostic = nullptr) {
   return parseChart(path, std::nullopt, std::nullopt, std::nullopt, cancelled,
-                    logContext);
+                    logContext, diagnostic);
 }
 
 inline std::unique_ptr<bms_parser::Chart>
 parseChart(const bms_parser::ChartMeta &meta, std::atomic_bool &cancelled,
-           std::string_view logContext = "chart") {
+           std::string_view logContext = "chart",
+           std::string *diagnostic = nullptr) {
   return parseChart(meta.BmsPath, meta.RandomSeed, meta.RandomPrng,
                     randomValuesOrNull(meta.RandomValues), cancelled,
-                    logContext);
+                    logContext, diagnostic);
 }
 
 inline std::unique_ptr<bms_parser::Chart>
 parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
-                    std::atomic_bool &cancelled) {
+                    std::atomic_bool &cancelled,
+                    std::string *diagnostic = nullptr) {
   return parseChart(path, replay.randomSeed, replay.randomPrng,
                     randomValuesOrNull(replay.randomValues), cancelled,
-                    "replay");
+                    "replay", diagnostic);
 }
 
 inline std::optional<std::vector<result_persistence::ModernCourseEntryFacts>>
@@ -737,8 +752,9 @@ prepareCourseEntryFacts(const CoursePlaySession &session,
 
 inline std::unique_ptr<bms_parser::Chart>
 prepareReplayChart(const std::filesystem::path &path, const ReplayData &replay,
-                   std::atomic_bool &cancelled) {
-  auto chart = parseChartForReplay(path, replay, cancelled);
+                   std::atomic_bool &cancelled,
+                   std::string *diagnostic = nullptr) {
+  auto chart = parseChartForReplay(path, replay, cancelled, diagnostic);
   if (chart == nullptr || cancelled || !applyReplayPlayOptions(*chart, replay)) {
     return nullptr;
   }

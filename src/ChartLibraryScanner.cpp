@@ -798,7 +798,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         bytes = &fileBytes;
       }
       if (bytes != nullptr) {
-        chart = parser.Scan(*bytes, cancelled);
+        chart = parser.Scan(*bytes, cancelled, isArchive ? innerPath : path);
         if (chart) {
           chart->Meta.BmsPath = path;
           if (isArchive) {

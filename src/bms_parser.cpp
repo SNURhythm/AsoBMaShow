@@ -15,8 +15,30 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <utility>
 namespace bms_parser {
 Chart::Chart() = default;
+
+Chart::Chart(Chart &&other) noexcept : Chart() { Swap(other); }
+
+Chart &Chart::operator=(Chart &&other) noexcept {
+  if (this != &other) {
+    Chart incoming(std::move(other));
+    Swap(incoming);
+  }
+  return *this;
+}
+
+void Chart::Swap(Chart &other) noexcept {
+  using std::swap;
+  swap(Meta, other.Meta);
+  Measures.swap(other.Measures);
+  DetachedNotes.swap(other.DetachedNotes);
+  WavTable.swap(other.WavTable);
+  ReferencedWavTable.swap(other.ReferencedWavTable);
+  BmpTable.swap(other.BmpTable);
+  ReferencedBmpTable.swap(other.ReferencedBmpTable);
+}
 
 Chart::~Chart() {
   for (const auto &measure : Measures) {
@@ -815,6 +837,67 @@ void EucKrConverter::BytesToUTF8(const unsigned char *input, size_t size,
 
 } // namespace bms_parser
 
+
+namespace bms_parser::detail {
+namespace {
+struct Character { unsigned codepoint; size_t consumed; size_t matched; };
+Character decode(const unsigned char *bytes, size_t size, LegacyCharset charset) {
+  const unsigned a = bytes[0];
+  if (a < 0x80) return {a, 1, 1};
+  const bool ms932 = charset == LegacyCharset::Ms932;
+  if (ms932 && a >= 0xa1 && a <= 0xdf) return {a + 0xfec0, 1, 1};
+  const bool lead = ms932 ? ((a >= 0x81 && a <= 0x9f) || (a >= 0xe0 && a <= 0xfc))
+                          : (a >= 0xa1 && a <= 0xfe);
+  if (!lead || size < 2) return {0xfffd, 1, 0};
+  const unsigned b = bytes[1];
+  const auto invalidLength = ms932 ? kMs932InvalidPairLength[a] : kEucKrInvalidPairLength[a];
+  uint32_t entry = 0xfffd | (invalidLength == 1 ? 0x40000 : 0);
+  if (ms932 && b >= 0x40 && b <= 0xfc) {
+    const size_t row = a <= 0x9f ? a - 0x81 : a - 0xe0 + 31;
+    entry = kMs932Pairs[row * 189 + b - 0x40];
+  } else if (!ms932 && b >= 0xa1 && b <= 0xfe) {
+    entry = kJavaEucKrPairs[(a - 0xa1) * 94 + b - 0xa1];
+  }
+  const unsigned cp = entry & 0xffff;
+  // Java leaves a separately decodable second byte after a malformed lead.
+  return {cp, cp == 0xfffd && b < 0x80 ? size_t{1} : (entry & 0x40000) ? size_t{1} : size_t{2}, (entry >> 16) & 3};
+}
+}
+size_t legacyRoundTripPrefix(const unsigned char *bytes, size_t size, LegacyCharset charset) {
+  size_t i = 0;
+  while (i < size) {
+    i += asciiPrefixLength(bytes + i, size - i);
+    if (i == size) break;
+    const auto ch = decode(bytes + i, size - i, charset);
+    if (ch.matched < ch.consumed) return i + ch.matched;
+    i += ch.consumed;
+  }
+  return i;
+}
+void decodeJavaLegacy(const unsigned char *bytes, size_t size, LegacyCharset charset,
+                      std::string &result) {
+  result.clear();
+  result.reserve(size);
+  for (size_t i = 0; i < size;) {
+    const size_t ascii = asciiPrefixLength(bytes + i, size - i);
+    result.append(reinterpret_cast<const char *>(bytes + i), ascii);
+    i += ascii;
+    if (i == size) break;
+    const auto ch = decode(bytes + i, size - i, charset);
+    i += ch.consumed;
+    const auto cp = ch.codepoint;
+    if (cp < 0x800) {
+      result.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    } else {
+      result.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    }
+  }
+}
+}
+
 /*
  * Copyright (C) 2024 VioletXF, khoeun03
  * This program is free software: you can redistribute it and/or modify
@@ -874,7 +957,7 @@ LongNoteType ResolveLongNoteType(LongNoteType Type, int LnMode) {
   return LongNoteTypeFromLnMode(LnMode);
 }
 
-bool LongNote::IsTail() const { return Tail == nullptr; }
+bool LongNote::IsTail() const { return Head != nullptr; }
 
 LongNote::LongNote(int Wav, LongNoteType Type) : Note(Wav), Type(Type) {
   Tail = nullptr;
@@ -887,13 +970,13 @@ void LongNote::SetType(LongNoteType Type) { this->Type = Type; }
 void LongNote::Press(long long Time) {
   Play(Time);
   IsHolding = true;
-  Tail->IsHolding = true;
+  if (Tail) Tail->IsHolding = true;
 }
 
 void LongNote::Release(long long Time) {
   Play(Time);
   IsHolding = false;
-  Head->IsHolding = false;
+  if (Head) Head->IsHolding = false;
   ReleaseTime = Time;
 }
 
@@ -1036,16 +1119,6 @@ std::vector<TimeLine *> GetAllTimeLines(Chart &chart) {
                      measure->TimeLines.end());
   }
   return timelines;
-}
-
-bool IsLongTail(const Note *note) {
-  const auto *ln = dynamic_cast<const LongNote *>(note);
-  return ln != nullptr && ln->IsTail();
-}
-
-bool IsLongHead(const Note *note) {
-  const auto *ln = dynamic_cast<const LongNote *>(note);
-  return ln != nullptr && !ln->IsTail();
 }
 
 void AssignNote(TimeLine &timeline, int lane, Note *note) {
@@ -1603,13 +1676,21 @@ void BaseModifier::RecalculateNoteCounts(Chart &chart) {
   int totalLandmineNotes = 0;
 
   for (const auto *timeline : GetAllTimeLines(chart)) {
+    if (!IsCountedNoteTime(timeline->Timing)) continue;
     for (size_t lane = 0; lane < timeline->Notes.size(); ++lane) {
       const Note *note = timeline->Notes[lane];
-      if (note == nullptr || IsLongTail(note)) {
+      if (note == nullptr) continue;
+      if (dynamic_cast<const LandmineNote *>(note)) {
+        ++totalLandmineNotes;
         continue;
       }
+      const auto *ln = dynamic_cast<const LongNote *>(note);
+      if (ln && ln->IsTail() &&
+          ln->Type != LongNoteType::ChargeNote &&
+          ln->Type != LongNoteType::HellChargeNote)
+        continue;
       ++totalNotes;
-      if (IsLongHead(note)) {
+      if (ln) {
         if (IsScratchLane(chart.Meta, static_cast<int>(lane))) {
           ++totalBackSpinNotes;
         } else {
@@ -2061,6 +2142,9 @@ Note::~Note() { Timeline = nullptr; }
 #include <iterator>
 #include <random>
 
+#if defined(__APPLE__)
+#include <CommonCrypto/CommonDigest.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -2073,7 +2157,6 @@ Note::~Note() { Timeline = nullptr; }
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <regex>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -2082,7 +2165,87 @@ Note::~Note() { Timeline = nullptr; }
 #define BMS_PARSER_VERBOSE 0
 #endif
 
+// Java evaluates these double operations separately (no fused multiply-add).
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#elif defined(__GNUC__)
+#pragma GCC optimize ("fp-contract=off")
+#endif
+
 namespace {
+
+std::string md5Fingerprint(const unsigned char *bytes, bms_parser::MD5::size_type length) {
+#if defined(__APPLE__)
+  static_assert(sizeof(CC_LONG) == sizeof(bms_parser::MD5::size_type));
+  unsigned char digest[CC_MD5_DIGEST_LENGTH];
+  // BMS identifies existing charts by their required legacy MD5 fingerprint.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  CC_MD5(bytes, static_cast<CC_LONG>(length), digest);
+#pragma GCC diagnostic pop
+  char result[CC_MD5_DIGEST_LENGTH * 2 + 1];
+  constexpr char hex[] = "0123456789abcdef";
+  for (unsigned int i = 0; i < CC_MD5_DIGEST_LENGTH; ++i) {
+    result[i * 2] = hex[digest[i] >> 4];
+    result[i * 2 + 1] = hex[digest[i] & 15];
+  }
+  result[CC_MD5_DIGEST_LENGTH * 2] = 0;
+  return result;
+#else
+  bms_parser::MD5 hash;
+  hash.update(bytes, length);
+  hash.finalize();
+  return hash.hexdigest();
+#endif
+}
+
+// Header offsets in BMSDecoder are Java UTF-16 code-unit offsets. Preserve
+// whole UTF-8 characters; a sliced surrogate has Java's UTF-8 replacement '?'.
+size_t utf8CharacterBytes(std::string_view value, size_t index) {
+  const auto c = static_cast<unsigned char>(value[index]);
+  const size_t width = c >= 0xc2 && c <= 0xdf ? 2 :
+                       c >= 0xe0 && c <= 0xef ? 3 :
+                       c >= 0xf0 && c <= 0xf4 ? 4 : 1;
+  if (index + width > value.size()) return 1;
+  for (size_t n = 1; n < width; ++n)
+    if ((static_cast<unsigned char>(value[index + n]) & 0xc0) != 0x80) return 1;
+  return width;
+}
+
+size_t javaStringLengthUpTo(std::string_view value, size_t limit) {
+  size_t length = 0;
+  for (size_t i = 0; i < value.size() && length < limit;) {
+    const size_t width = utf8CharacterBytes(value, i);
+    length += width == 4 ? 2 : 1;
+    i += width;
+  }
+  return std::min(length, limit);
+}
+
+std::string javaSubstring(std::string_view value, size_t first,
+                          size_t count = std::string_view::npos) {
+  std::string result;
+  size_t unit = 0;
+  const size_t last = count == std::string_view::npos ? count : first + count;
+  for (size_t i = 0; i < value.size();) {
+    const size_t width = utf8CharacterBytes(value, i);
+    const size_t units = width == 4 ? 2 : 1;
+    if (unit >= first && unit + units <= last) {
+      // Once the UTF-16 start is resolved, an unbounded suffix needs no more
+      // character-by-character decoding or appending.
+      if (count == std::string_view::npos) {
+        result.append(value.substr(i));
+        break;
+      }
+      result.append(value.substr(i, width));
+    }
+    else if (unit < last && unit + units > first) result.push_back('?');
+    i += width;
+    unit += units;
+    if (unit >= last) break;
+  }
+  return result;
+}
 
 std::string javaTrimmedHeaderValue(std::string_view value) {
   while (!value.empty() &&
@@ -2094,6 +2257,133 @@ std::string javaTrimmedHeaderValue(std::string_view value) {
     value.remove_suffix(1);
   }
   return std::string(value);
+}
+
+std::string resourcePath(std::string_view value, bool shiftJis) {
+  auto path = javaTrimmedHeaderValue(value);
+  std::replace(path.begin(), path.end(), '\\', '/');
+  // The legacy Shift-JIS converter renders byte 0x5c as a yen sign. In BMS
+  // resource paths that byte is the Windows directory separator (MS932).
+  // Other decoders can produce a literal Unicode yen sign in a filename.
+  if (shiftJis) {
+    for (auto pos = path.find("\xc2\xa5"); pos != std::string::npos;
+         pos = path.find("\xc2\xa5", pos + 1)) path.replace(pos, 2, "/");
+  }
+  return path;
+}
+
+// Double.parseDouble grammar, including Java type suffixes, underflow and
+// non-finite literals. Individual headers apply the reference's value checks.
+bool parseJavaDouble(std::string_view value, double &result) {
+  auto text = javaTrimmedHeaderValue(value);
+  if (text.empty()) return false;
+  size_t offset = (text.front() == '+' || text.front() == '-') ? 1 : 0;
+  const std::string_view unsignedText(text.data() + offset, text.size() - offset);
+  if (unsignedText == "NaN") {
+    result = std::numeric_limits<double>::quiet_NaN();
+    return true;
+  }
+  if (unsignedText == "Infinity") {
+    result = text.front() == '-' ? -std::numeric_limits<double>::infinity()
+                                 : std::numeric_limits<double>::infinity();
+    return true;
+  }
+  const bool hex = offset + 1 < text.size() && text[offset] == '0' &&
+                   (text[offset + 1] == 'x' || text[offset + 1] == 'X');
+  if (hex) offset += 2;
+  const auto digits = [&](bool hexadecimal) {
+    const size_t begin = offset;
+    while (offset < text.size()) {
+      const char c = text[offset];
+      if (!(c >= '0' && c <= '9') &&
+          !(hexadecimal && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))) break;
+      ++offset;
+    }
+    return offset - begin;
+  };
+  size_t mantissaDigits = digits(hex);
+  if (offset < text.size() && text[offset] == '.') {
+    ++offset;
+    mantissaDigits += digits(hex);
+  }
+  if (!mantissaDigits) return false;
+  const bool exponent = offset < text.size() &&
+      (hex ? text[offset] == 'p' || text[offset] == 'P'
+           : text[offset] == 'e' || text[offset] == 'E');
+  if (hex && !exponent) return false;
+  if (exponent) {
+    ++offset;
+    if (offset < text.size() && (text[offset] == '+' || text[offset] == '-')) ++offset;
+    if (!digits(false)) return false;
+  }
+  if (offset < text.size() && (text[offset] == 'd' || text[offset] == 'D' ||
+                              text[offset] == 'f' || text[offset] == 'F')) {
+    if (offset + 1 != text.size()) return false;
+    text.pop_back();
+  } else if (offset != text.size()) return false;
+  result = std::strtod(text.c_str(), nullptr);
+  return true;
+}
+
+// Integer.parseInt accepts Character.digit(char, radix), including BMP
+// decimal digits and full-width Latin letters. Supplementary pairs are invalid.
+bool parseInteger(std::string_view value, int &result, int radix = 10) {
+  const auto text = javaTrimmedHeaderValue(value);
+  if (text.empty()) return false;
+  size_t offset = 0;
+  const bool negative = text[0] == '-';
+  if (text[0] == '+' || negative) ++offset;
+  if (offset == text.size()) return false;
+  const unsigned int zeros[] = {
+    0x0030, 0x0660, 0x06f0, 0x07c0, 0x0966, 0x09e6, 0x0a66,
+    0x0ae6, 0x0b66, 0x0be6, 0x0c66, 0x0ce6, 0x0d66, 0x0de6,
+    0x0e50, 0x0ed0, 0x0f20, 0x1040, 0x1090, 0x17e0, 0x1810,
+    0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40,
+    0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50,
+    0xabf0, 0xff10};
+  long long number = 0;
+  while (offset < text.size()) {
+    unsigned int c = static_cast<unsigned char>(text[offset++]);
+    if (c >= 0x80) {
+      int trailing = c >= 0xe0 && c < 0xf0 ? 2 : c >= 0xc2 && c < 0xe0 ? 1 : -1;
+      if (trailing < 0 || offset + trailing > text.size()) return false;
+      c &= trailing == 2 ? 0x0f : 0x1f;
+      for (int i = 0; i < trailing; ++i) {
+        const auto next = static_cast<unsigned char>(text[offset++]);
+        if ((next & 0xc0) != 0x80) return false;
+        c = (c << 6) | (next & 0x3f);
+      }
+    }
+    if (radix == 36) {
+      // LNOBJ applies String.toUpperCase before Integer.parseInt. These are
+      // the BMP expansions that become valid radix-36 Latin letters.
+      const std::pair<unsigned int, const char *> expansions[] = {
+        {0x00df, "SS"}, {0x0131, "I"}, {0x017f, "S"}, {0xfb00, "FF"},
+        {0xfb01, "FI"}, {0xfb02, "FL"}, {0xfb03, "FFI"}, {0xfb04, "FFL"},
+        {0xfb05, "ST"}, {0xfb06, "ST"}};
+      bool expanded = false;
+      for (const auto &[codePoint, letters] : expansions) if (c == codePoint) {
+        for (const char *letter = letters; *letter; ++letter) {
+          number = number * radix + (*letter - 'A' + 10);
+          if (number > (negative ? 2147483648LL : 2147483647LL)) return false;
+        }
+        expanded = true;
+        break;
+      }
+      if (expanded) continue;
+    }
+    int digit = -1;
+    for (auto zero : zeros) if (c >= zero && c < zero + 10) digit = c - zero;
+    if (c >= 'A' && c <= 'Z') digit = c - 'A' + 10;
+    if (c >= 'a' && c <= 'z') digit = c - 'a' + 10;
+    if (c >= 0xff21 && c <= 0xff3a) digit = c - 0xff21 + 10;
+    if (c >= 0xff41 && c <= 0xff5a) digit = c - 0xff41 + 10;
+    if (digit < 0 || digit >= radix) return false;
+    number = number * radix + digit;
+    if (number > (negative ? 2147483648LL : 2147483647LL)) return false;
+  }
+  result = static_cast<int>(negative ? -number : number);
+  return true;
 }
 
 bool hasUtf8Bom(const std::vector<unsigned char> &bytes) {
@@ -2109,94 +2399,6 @@ bool hasUtf16BeBom(const std::vector<unsigned char> &bytes) {
   return bytes.size() >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff;
 }
 
-std::string bytesToString(const std::vector<unsigned char> &bytes,
-                          size_t offset) {
-  if (offset >= bytes.size()) {
-    return "";
-  }
-  return std::string(reinterpret_cast<const char *>(bytes.data() + offset),
-                     bytes.size() - offset);
-}
-
-bool isValidUtf8(const std::vector<unsigned char> &bytes, size_t offset) {
-  size_t i = offset;
-  while (i < bytes.size()) {
-    const unsigned char c = bytes[i];
-    if (c < 0x80) {
-      i += bms_parser::detail::asciiPrefixLength(bytes.data() + i,
-                                               bytes.size() - i);
-      continue;
-    }
-    if (c >= 0xc2 && c <= 0xdf) {
-      if (i + 1 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 2;
-      continue;
-    }
-    if (c == 0xe0) {
-      if (i + 2 >= bytes.size() || bytes[i + 1] < 0xa0 ||
-          bytes[i + 1] > 0xbf || (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c >= 0xe1 && c <= 0xec) {
-      if (i + 2 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
-          (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c == 0xed) {
-      if (i + 2 >= bytes.size() || bytes[i + 1] < 0x80 ||
-          bytes[i + 1] > 0x9f || (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c >= 0xee && c <= 0xef) {
-      if (i + 2 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
-          (bytes[i + 2] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 3;
-      continue;
-    }
-    if (c == 0xf0) {
-      if (i + 3 >= bytes.size() || bytes[i + 1] < 0x90 ||
-          bytes[i + 1] > 0xbf || (bytes[i + 2] & 0xc0) != 0x80 ||
-          (bytes[i + 3] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 4;
-      continue;
-    }
-    if (c >= 0xf1 && c <= 0xf3) {
-      if (i + 3 >= bytes.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
-          (bytes[i + 2] & 0xc0) != 0x80 ||
-          (bytes[i + 3] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 4;
-      continue;
-    }
-    if (c == 0xf4) {
-      if (i + 3 >= bytes.size() || bytes[i + 1] < 0x80 ||
-          bytes[i + 1] > 0x8f || (bytes[i + 2] & 0xc0) != 0x80 ||
-          (bytes[i + 3] & 0xc0) != 0x80) {
-        return false;
-      }
-      i += 4;
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
 
 void appendUtf8CodePoint(uint32_t codePoint, std::string &result) {
   if (codePoint <= 0x7F) {
@@ -2241,13 +2443,14 @@ void utf16BytesToUtf8(const std::vector<unsigned char> &bytes, size_t offset,
     if (unit >= 0xD800 && unit <= 0xDBFF) {
       if (index + 1 < bytes.size()) {
         const uint16_t low = readUnit(index);
+        index += 2; // Java consumes a malformed surrogate pair together.
         if (low >= 0xDC00 && low <= 0xDFFF) {
-          index += 2;
           codePoint = 0x10000 + (((unit - 0xD800) << 10) | (low - 0xDC00));
         } else {
           codePoint = kReplacementCodePoint;
         }
       } else {
+        index = bytes.size(); // Include an odd trailing byte in this error.
         codePoint = kReplacementCodePoint;
       }
     } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
@@ -2256,6 +2459,7 @@ void utf16BytesToUtf8(const std::vector<unsigned char> &bytes, size_t offset,
 
     appendUtf8CodePoint(codePoint, result);
   }
+  if (index < bytes.size()) appendUtf8CodePoint(kReplacementCodePoint, result);
 }
 
 bool asciiWhitespace(unsigned char c) { return c == ' ' || c == '\t'; }
@@ -2359,102 +2563,166 @@ bool charsetIsEucKr(const std::string &charset) {
          charset == "KSX1001";
 }
 
-bool isShiftJisLeadByte(unsigned char byte) {
-  return (byte >= 0x81 && byte <= 0x9F) || (byte >= 0xE0 && byte <= 0xFC);
-}
-
-bool isShiftJisTrailByte(unsigned char byte) {
-  return (byte >= 0x40 && byte <= 0x7E) || (byte >= 0x80 && byte <= 0xFC);
-}
-
-bool isEucKrLeadByte(unsigned char byte) {
-  return byte >= 0xA1 && byte <= 0xFE;
-}
-
-bool isEucKrTrailByte(unsigned char byte) {
-  return byte >= 0xA1 && byte <= 0xFE;
-}
-
-bool shouldDecodeNoBomAsEucKr(const std::vector<unsigned char> &bytes,
-                              size_t offset) {
-  size_t eucKrPairs = 0;
-  size_t shiftJisPairs = 0;
-  size_t nextEucKr = offset;
-  size_t nextShiftJis = offset;
-  size_t index = offset;
-  while (index < bytes.size()) {
-    index += bms_parser::detail::asciiPrefixLength(bytes.data() + index,
-                                                 bytes.size() - index);
-    if (index + 1 >= bytes.size()) {
-      break;
+// Java replaces one malformed UTF-8 subsequence, preserving a following ASCII
+// byte. A complete encoded surrogate is a single malformed subsequence.
+void javaUtf8(const unsigned char *bytes, size_t size, std::string &result) {
+  result.clear();
+  result.reserve(size);
+  size_t i = 0;
+  while (i < size) {
+    const size_t ascii = bms_parser::detail::asciiPrefixLength(bytes + i, size - i);
+    result.append(reinterpret_cast<const char *>(bytes + i), ascii);
+    i += ascii;
+    if (i == size) break;
+    const unsigned a = bytes[i];
+    size_t width = a >= 0xc2 && a <= 0xdf ? 2 :
+                   a >= 0xe0 && a <= 0xef ? 3 :
+                   a >= 0xf0 && a <= 0xf4 ? 4 : 1;
+    size_t consumed = 1;
+    unsigned cp = a & (width == 2 ? 0x1f : width == 3 ? 0xf : 7);
+    while (consumed < width && i + consumed < size) {
+      const unsigned b = bytes[i + consumed];
+      if ((b & 0xc0) != 0x80 ||
+          (consumed == 1 && ((a == 0xe0 && b < 0xa0) ||
+           (a == 0xf0 && b < 0x90) || (a == 0xf4 && b > 0x8f)))) break;
+      cp = (cp << 6) | (b & 0x3f);
+      ++consumed;
     }
-    // Each encoding must retain its own pair boundaries. A trail byte consumed
-    // by one encoding can still be a lead byte for the other encoding.
-    if (index >= nextEucKr && isEucKrLeadByte(bytes[index]) &&
-        isEucKrTrailByte(bytes[index + 1])) {
-      ++eucKrPairs;
-      nextEucKr = index + 2;
-    }
-    if (index >= nextShiftJis && isShiftJisLeadByte(bytes[index]) &&
-        isShiftJisTrailByte(bytes[index + 1])) {
-      ++shiftJisPairs;
-      nextShiftJis = index + 2;
-    }
-    ++index;
+    if (width > 1 && consumed == width && !(cp >= 0xd800 && cp <= 0xdfff))
+      result.append(reinterpret_cast<const char *>(bytes + i), width);
+    else appendUtf8CodePoint(0xfffd, result);
+    i += consumed;
   }
-  return eucKrPairs > shiftJisPairs;
 }
 
-void decodeBmsText(const std::vector<unsigned char> &bytes,
+void utf32BytesToUtf8(const std::vector<unsigned char> &bytes, size_t offset,
+                      bool little, std::string &content) {
+  content.clear();
+  for (size_t i = offset; i + 3 < bytes.size(); i += 4) {
+    uint32_t cp = 0;
+    for (int j = 0; j < 4; ++j) cp = (cp << 8) | bytes[i + (little ? 3 - j : j)];
+    if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) cp = 0xfffd;
+    appendUtf8CodePoint(cp, content);
+  }
+  if ((bytes.size() - offset) % 4) appendUtf8CodePoint(0xfffd, content);
+}
+
+// Reencode decoded UTF text to count the unchanged byte prefix, matching the
+// reference's > length - 4 tolerance (including a cut character at 64 KiB).
+size_t unicodeRoundTripPrefix(const std::vector<unsigned char> &bytes,
+                              const std::string &decoded, int width, bool little) {
+  size_t matched = 0;
+  for (size_t i = 0; i < decoded.size();) {
+    unsigned a = static_cast<unsigned char>(decoded[i++]);
+    unsigned cp = a;
+    int continuation = a < 0x80 ? 0 : a < 0xe0 ? 1 : a < 0xf0 ? 2 : 3;
+    if (continuation) cp &= (1u << (6 - continuation)) - 1;
+    while (continuation--) cp = (cp << 6) | (static_cast<unsigned char>(decoded[i++]) & 0x3f);
+    unsigned char encoded[4];
+    size_t count = 0;
+    auto unit = [&](unsigned value, int n) {
+      for (int j = 0; j < n; ++j) encoded[count++] = static_cast<unsigned char>(value >> (8 * (little ? j : n - 1 - j)));
+    };
+    if (width == 4) unit(cp, 4);
+    else if (cp < 0x10000) unit(cp, 2);
+    else { cp -= 0x10000; unit(0xd800 + (cp >> 10), 2); unit(0xdc00 + (cp & 0x3ff), 2); }
+    for (size_t j = 0; j < count; ++j) {
+      if (matched == bytes.size() || bytes[matched] != encoded[j]) return matched;
+      ++matched;
+    }
+  }
+  return matched;
+}
+
+// Returns whether the legacy Shift-JIS decoder produced the text.
+bool decodeBmsText(const std::vector<unsigned char> &bytes,
                    std::string &content) {
-  const size_t utf8Offset = hasUtf8Bom(bytes) ? 3 : 0;
+  if (bytes.size() >= 4 &&
+      ((bytes[0] == 0xff && bytes[1] == 0xfe && bytes[2] == 0 && bytes[3] == 0) ||
+       (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xfe && bytes[3] == 0xff))) {
+    const bool little = bytes[0] == 0xff;
+    utf32BytesToUtf8(bytes, 4, little, content);
+    return false;
+  }
   if (hasUtf16LeBom(bytes)) {
-    utf16BytesToUtf8(bytes, 2, true, content);
-    return;
+    utf16BytesToUtf8(bytes, 0, true, content);
+    return false;
   }
   if (hasUtf16BeBom(bytes)) {
-    utf16BytesToUtf8(bytes, 2, false, content);
-    return;
+    utf16BytesToUtf8(bytes, 0, false, content);
+    return false;
   }
 
   const std::string charset = declaredCharset(bytes);
   if (hasUtf8Bom(bytes) || charsetIsUtf8(charset)) {
-    content = bytesToString(bytes, utf8Offset);
-    return;
+    javaUtf8(bytes.data(), bytes.size(), content);
+    return false;
   }
   if (charsetIsEucKr(charset)) {
     bms_parser::EucKrConverter::BytesToUTF8(
-        bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
-    return;
+        bytes.data(), bytes.size(), content);
+    return false;
   }
   if (charsetIsShiftJis(charset)) {
     bms_parser::ShiftJISConverter::BytesToUTF8(
-        bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
-    return;
+        bytes.data(), bytes.size(), content);
+    return true;
   }
-  if (isValidUtf8(bytes, utf8Offset)) {
-    content = bytesToString(bytes, utf8Offset);
-    return;
+  using bms_parser::detail::LegacyCharset;
+  const size_t length = std::min(bytes.size(), size_t{64 * 1024});
+  const bool hasMarker = std::find_if(bytes.begin(), bytes.begin() + length,
+      [](unsigned char c) { return c == '#' || c == '\r' || c == '\n'; }) != bytes.begin() + length;
+  const auto accepted = [length](size_t prefix) { return prefix + 4 > length; };
+  for (const auto encoding : {LegacyCharset::EucKr, LegacyCharset::Ms932}) {
+    if (hasMarker && accepted(bms_parser::detail::legacyRoundTripPrefix(bytes.data(), length, encoding))) {
+      bms_parser::detail::decodeJavaLegacy(bytes.data(), bytes.size(), encoding, content);
+      return encoding == LegacyCharset::Ms932;
+    }
   }
-  if (shouldDecodeNoBomAsEucKr(bytes, utf8Offset)) {
-    bms_parser::EucKrConverter::BytesToUTF8(
-        bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
-    return;
+  std::string probe;
+  javaUtf8(bytes.data(), length, probe);
+  size_t matched = 0;
+  while (matched < length && matched < probe.size() && bytes[matched] == static_cast<unsigned char>(probe[matched])) ++matched;
+  if (hasMarker && accepted(matched)) {
+    javaUtf8(bytes.data(), bytes.size(), content);
+    return false;
   }
-
-  bms_parser::ShiftJISConverter::BytesToUTF8(
-      bytes.data() + utf8Offset, bytes.size() - utf8Offset, content);
+  const std::vector<unsigned char> sample(bytes.begin(), bytes.begin() + length);
+  for (const int width : {2, 4}) {
+    for (const bool little : {false, true}) {
+      if (width == 2) utf16BytesToUtf8(sample, 0, little, probe);
+      else utf32BytesToUtf8(sample, 0, little, probe);
+      if (probe.find_first_of("#\r\n") != std::string::npos &&
+          accepted(unicodeRoundTripPrefix(sample, probe, width, little))) {
+        if (width == 2) utf16BytesToUtf8(bytes, 0, little, content);
+        else utf32BytesToUtf8(bytes, 0, little, content);
+        return false;
+      }
+    }
+  }
+  bms_parser::detail::decodeJavaLegacy(bytes.data(), bytes.size(), LegacyCharset::Ms932, content);
+  return true;
 }
 
 bool finitePositive(double value) {
   return std::isfinite(value) && value > 0.0;
 }
 
+// Java narrowing conversion saturates infinities/overflow and maps NaN to zero.
+long long javaLong(double value) {
+  if (std::isnan(value)) return 0;
+  if (value >= static_cast<double>(std::numeric_limits<long long>::max()))
+    return std::numeric_limits<long long>::max();
+  if (value <= static_cast<double>(std::numeric_limits<long long>::min()))
+    return std::numeric_limits<long long>::min();
+  return static_cast<long long>(value);
+}
+
 int guessedBeatsForScale(double scale) {
   if (!finitePositive(scale)) {
     return 4;
   }
-  const int beats = static_cast<int>(std::lround(scale * 4.0));
+  const int beats = static_cast<int>(std::lround(std::min(scale, 4.0) * 4.0));
   return std::clamp(beats, 1, 16);
 }
 
@@ -2620,7 +2888,8 @@ void addDuration(std::map<T, long long> &durations, std::vector<T> &order,
   if (durations.find(key) == durations.end()) {
     order.push_back(key);
   }
-  durations[key] += durationMicros;
+  auto &total = durations[key];
+  total += std::min(durationMicros, std::numeric_limits<long long>::max() - total);
 }
 
 template <typename T>
@@ -2778,63 +3047,61 @@ inline bool Parser::MatchHeader(const std::string_view &str,
 void Parser::Parse(const std::filesystem::path &fpath, Chart **chart,
                    bool addReadyMeasure, bool metaOnly,
                    std::atomic_bool &bCancelled) {
-#if BMS_PARSER_VERBOSE == 1
-  auto startTime = std::chrono::high_resolution_clock::now();
-#endif
-  std::vector<unsigned char> bytes;
-  std::ifstream file(fpath, std::ios::binary);
-  if (!file.is_open()) {
-    std::cout << "Failed to open file: " << fpath << std::endl;
-    return;
-  }
-#if BMS_PARSER_VERBOSE == 1
-  // measure file read time
-  auto midStartTime = std::chrono::high_resolution_clock::now();
-#endif
-  file.seekg(0, std::ios::end);
-  auto size = file.tellg();
+  *chart = nullptr;
+  if (bCancelled) return;
+  std::ifstream file(fpath, std::ios::binary | std::ios::ate);
+  if (!file) return;
+  const auto size = file.tellg();
+  if (size < 0) return;
+  std::vector<unsigned char> bytes(static_cast<size_t>(size));
   file.seekg(0, std::ios::beg);
-  bytes.resize(static_cast<size_t>(size));
-  file.read(reinterpret_cast<char *>(bytes.data()), size);
-  file.close();
-#if BMS_PARSER_VERBOSE == 1
-  std::cout << "File read took "
-            << std::chrono::duration_cast<std::chrono::microseconds>(
-                   std::chrono::high_resolution_clock::now() - midStartTime)
-                   .count()
-            << "\n";
-#endif
-  Parse(bytes, chart, addReadyMeasure, metaOnly, bCancelled);
-  auto new_chart = *chart;
-  if (new_chart != nullptr) {
-    new_chart->Meta.BmsPath = fpath;
-
-    new_chart->Meta.Folder = fpath.parent_path();
+  if (!file.read(reinterpret_cast<char *>(bytes.data()), size)) return;
+  Parse(bytes, chart, addReadyMeasure, metaOnly, bCancelled, fpath);
+  if (*chart) {
+    (*chart)->Meta.BmsPath = fpath;
+    (*chart)->Meta.Folder = fpath.parent_path();
   }
-#if BMS_PARSER_VERBOSE == 1
-  auto endTime = std::chrono::high_resolution_clock::now();
-  std::cout << "Total parsing+reading took "
-            << std::chrono::duration_cast<std::chrono::microseconds>(endTime -
-                                                                     startTime)
-                   .count()
-            << "\n";
-#endif
 }
+
+namespace {
+bool isPmsSource(const std::filesystem::path &sourcePath) {
+  auto extension = sourcePath.extension().string();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; });
+  return extension == ".pms";
+}
+} // namespace
 
 void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                    bool addReadyMeasure, bool metaOnly,
                    std::atomic_bool &bCancelled) {
-  ParseInternal(bytes, chart, addReadyMeasure, metaOnly, bCancelled, nullptr);
+  Parse(bytes, chart, addReadyMeasure, metaOnly, bCancelled, {});
+}
+
+void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
+                   bool addReadyMeasure, bool metaOnly,
+                   std::atomic_bool &bCancelled,
+                   const std::filesystem::path &sourcePath) {
+  ParseInternal(bytes, chart, addReadyMeasure, metaOnly, bCancelled, nullptr,
+                isPmsSource(sourcePath));
 }
 
 std::optional<ChartScanResult>
 Parser::Scan(const std::vector<unsigned char> &bytes,
              std::atomic_bool &bCancelled) {
+  return Scan(bytes, bCancelled, {});
+}
+
+std::optional<ChartScanResult>
+Parser::Scan(const std::vector<unsigned char> &bytes,
+             std::atomic_bool &bCancelled,
+             const std::filesystem::path &sourcePath) {
   if (bCancelled) return std::nullopt;
   ChartScanResult result;
   Chart *raw = nullptr;
   try {
-    ParseInternal(bytes, &raw, false, false, bCancelled, &result);
+    ParseInternal(bytes, &raw, false, false, bCancelled, &result,
+                  isPmsSource(sourcePath));
   } catch (...) {
     delete raw;
     throw;
@@ -2857,7 +3124,7 @@ Parser::Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled) {
   file.seekg(0, std::ios::beg);
   if (!file.read(reinterpret_cast<char *>(bytes.data()), size))
     return std::nullopt;
-  auto result = Scan(bytes, bCancelled);
+  auto result = Scan(bytes, bCancelled, path);
   if (result) {
     result->Meta.BmsPath = path;
     result->Meta.Folder = path.parent_path();
@@ -2867,24 +3134,33 @@ Parser::Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled) {
 
 void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **chart,
                           bool addReadyMeasure, bool metaOnly,
-                          std::atomic_bool &bCancelled, ChartScanResult *scan) {
+                          std::atomic_bool &bCancelled, ChartScanResult *scan,
+                          bool pms) {
   // Scan traverses all full-mode events for identical timing/statistics. Legacy
   // metaOnly keeps its existing shortcuts; neither mode needs lane-note objects.
   const bool materialize = !metaOnly && scan == nullptr;
+  BpmTable.clear();
+  StopLengthTable.clear();
+  ScrollTable.clear();
+  SpeedTable.clear();
+  UseBase62 = false;
+  Lnobj = -1;
 #if BMS_PARSER_VERBOSE == 1
   auto startTime = std::chrono::high_resolution_clock::now();
 #endif
-  auto new_chart = new Chart();
-  *chart = new_chart;
+  *chart = nullptr;
+  auto ownedChart = std::make_unique<Chart>();
+  auto new_chart = ownedChart.get();
+  new_chart->Meta.Player = 0; // BMSModel's unspecified PLAYER value.
   new_chart->Meta.RandomSeed = Seed;
   new_chart->Meta.RandomPrng = RandomPrng;
 
-  static std::regex headerRegex(R"(^#([A-Za-z]+?)(\d\d)? +?(.+)?)");
 
   if (bCancelled) {
     return;
   }
 
+  std::deque<std::string> normalizedChannelData;
   auto measures =
       std::unordered_map<int, std::vector<std::pair<int, std::string_view>>>();
 
@@ -2893,10 +3169,9 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
 #if BMS_PARSER_VERBOSE == 1
   auto md5StartTime = std::chrono::high_resolution_clock::now();
 #endif
-  MD5 md5;
-  md5.update(bytes.data(), bytes.size());
-  md5.finalize();
-  new_chart->Meta.MD5 = md5.hexdigest();
+  // Preserve the existing one-shot MD5 length conversion on every backend.
+  new_chart->Meta.MD5 = md5Fingerprint(
+      bytes.data(), static_cast<MD5::size_type>(bytes.size()));
 #if BMS_PARSER_VERBOSE == 1
   std::cout << "Hashing MD5 took "
             << std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2922,7 +3197,10 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
   auto midStartTime = std::chrono::high_resolution_clock::now();
 #endif
   std::string content;
-  decodeBmsText(bytes, content);
+  const bool shiftJis = decodeBmsText(bytes, content);
+  // BufferedReader.readLine accepts CR, LF and CRLF. Extra empty lines from
+  // CRLF are ignored; hashes above still use the original bytes.
+  std::replace(content.begin(), content.end(), '\r', '\n');
 #if BMS_PARSER_VERBOSE == 1
   std::cout << "BMS text decoding took "
             << std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2931,69 +3209,47 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
             << "\n";
 #endif
   // std::wcout<<content<<std::endl;
-  struct ConditionalFrame {
-    bool parentSkipped = false;
-    bool branchMatched = false;
-    bool currentSkipped = false;
-    size_t randomDepth = 0;
-  };
-  struct RandomFrame {
-    bool active = false;
-  };
   std::vector<int> RandomStack;
-  std::vector<RandomFrame> RandomFrames;
-  std::vector<ConditionalFrame> ConditionalStack;
-  auto isSkipping = [&]() {
-    for (const auto &frame : ConditionalStack) {
-      if (frame.currentSkipped) {
-        return true;
-      }
-    }
-    for (const auto &frame : RandomFrames) {
-      if (!frame.active) {
-        return true;
-      }
-    }
-    return false;
-  };
-  auto popRandomFrame = [&]() {
-    if (RandomFrames.empty()) {
-      return;
-    }
-    const bool wasActive = RandomFrames.back().active;
-    RandomFrames.pop_back();
-    if (wasActive && !RandomStack.empty()) {
-      RandomStack.pop_back();
-    }
-  };
-  auto isInsideConditionalBranchOfRandomDepth = [&](size_t randomDepth) {
-    for (auto it = ConditionalStack.rbegin(); it != ConditionalStack.rend();
-         ++it) {
-      if (it->randomDepth == randomDepth) {
-        return true;
-      }
-      if (it->randomDepth < randomDepth) {
-        return false;
-      }
-    }
-    return false;
-  };
-  auto closeUnbranchedRandomFrames = [&]() {
-    while (!RandomFrames.empty() &&
-           !isInsideConditionalBranchOfRandomDepth(RandomFrames.size())) {
-      popRandomFrame();
-    }
+  std::vector<bool> ConditionalStack;
+  const auto isSkipping = [&]() {
+    return !ConditionalStack.empty() && ConditionalStack.back();
   };
   // init prng with seed
   std::mt19937_64 Prng(Seed);
 
   // Views remain valid until all measures are consumed: content is immutable.
   const std::string_view text(content);
+  // BASE applies to the entire file, including definitions preceding it.
+  // Channel numbers themselves always use base 36.
+  for (size_t start = 0; start < text.size();) {
+    const auto end = text.find('\n', start);
+    const auto line = text.substr(start, end == std::string_view::npos
+                                            ? text.size() - start : end - start);
+    if (line.size() > 5 && MatchHeader(line, "#BASE") &&
+        line[5] == ' ') {
+      int base = 36;
+      UseBase62 = parseInteger(line.substr(6), base) && base == 62;
+    }
+    if (end == std::string_view::npos) break;
+    start = end + 1;
+  }
   size_t lineStart = 0;
 #if BMS_PARSER_VERBOSE == 1
   midStartTime = std::chrono::high_resolution_clock::now();
 #endif
   auto lastMeasure = -1;
+  static constexpr std::string_view commands[] = {
+    "PLAYER", "GENRE", "TITLE", "SUBTITLE", "ARTIST", "SUBARTIST",
+    "PLAYLEVEL", "RANK", "DEFEXRANK", "TOTAL", "VOLWAV", "STAGEFILE", "BACKBMP",
+    "PREVIEW", "LNOBJ", "LNMODE", "DIFFICULTY", "BANNER"};
+  // Special headers compare at most ten UTF-16 units. Generic headers require
+  // strictly more than name.size() + 2, so count through one additional unit.
+  // Deriving the bound from this list keeps longer future names covered.
+  static constexpr size_t headerLengthLimit = [] {
+    size_t limit = 10;
+    for (auto command : commands) limit = std::max(limit, command.size() + 3);
+    return limit;
+  }();
   while (lineStart < text.size()) {
     const size_t newline = text.find('\n', lineStart);
     const size_t lineEnd =
@@ -3007,194 +3263,160 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       return;
     }
     // std::cout << line << std::endl;
+    if (line.size() > 1 && (line[0] == '%' || line[0] == '@')) {
+      const size_t space = line.find(' ');
+      if (space != std::string_view::npos && space + 1 < line.size())
+        new_chart->Meta.Values[std::string(line.substr(1, space - 1))] = std::string(line.substr(space + 1));
+    }
     if (line.size() <= 1 || line[0] != L'#')
       continue;
     if (bCancelled) {
       return;
     }
 
-    if (MatchHeader(line, "#IF")) // #IF n
-    {
-      const bool parentSkipped = isSkipping();
-      if (RandomStack.empty() && !parentSkipped) {
-        // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
-        continue;
-      }
-      const int CurrentRandom = parentSkipped ? 0 : RandomStack.back();
-      const int n = static_cast<int>(
-          std::strtol(std::string(line.substr(4)).c_str(), nullptr, 10));
-      const bool matched = !parentSkipped && CurrentRandom == n;
-      ConditionalStack.push_back({parentSkipped, matched,
-                                  parentSkipped || !matched,
-                                  RandomFrames.size()});
-      continue;
-    }
-    if (MatchHeader(line, "#ELSEIF")) {
-      if (ConditionalStack.empty()) {
-        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
-        continue;
-      }
-      auto &frame = ConditionalStack.back();
-      const int n = static_cast<int>(
-          std::strtol(std::string(line.substr(8)).c_str(), nullptr, 10));
-      if (frame.parentSkipped || frame.branchMatched || RandomStack.empty()) {
-        frame.currentSkipped = true;
-        continue;
-      }
-      const int CurrentRandom = RandomStack.back();
-      const bool matched = CurrentRandom == n;
-      frame.branchMatched = matched;
-      frame.currentSkipped = !matched;
-      continue;
-    }
-    if (MatchHeader(line, "#ELSE")) {
-      if (ConditionalStack.empty()) {
-        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
-        continue;
-      }
-      auto &frame = ConditionalStack.back();
-      if (frame.parentSkipped) {
-        frame.currentSkipped = true;
-      } else {
-        frame.currentSkipped = frame.branchMatched;
-        frame.branchMatched = true;
+    const size_t lineUnits = javaStringLengthUpTo(line, headerLengthLimit);
+    const auto directive = [&](std::string_view name) {
+      return MatchHeader(line, name);
+    };
+    if (directive("#RANDOM")) {
+      if (lineUnits < 8) return; // Java substring failure aborts decoding.
+      int n;
+      if (parseInteger(javaSubstring(line, 8), n)) {
+        const size_t index = new_chart->Meta.RandomValues.size();
+        const int selected = index < RandomValues.size() ? RandomValues[index] :
+            static_cast<int>(std::generate_canonical<double, 53>(Prng) * n) + 1;
+        new_chart->Meta.RandomValues.push_back(selected);
+        RandomStack.push_back(selected);
       }
       continue;
     }
-    if (MatchHeader(line, "#ENDIF") || MatchHeader(line, "#END IF")) {
-      if (ConditionalStack.empty()) {
-        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
-        continue;
+    if (directive("#IF")) {
+      if (!RandomStack.empty()) {
+        if (lineUnits < 4) return;
+        int n;
+        if (parseInteger(javaSubstring(line, 4), n))
+          ConditionalStack.push_back(RandomStack.back() != n);
       }
-      ConditionalStack.pop_back();
       continue;
     }
-    if (MatchHeader(line, "#RANDOM") ||
-        MatchHeader(line, "#RONDAM")) // #RANDOM n
-    {
-      closeUnbranchedRandomFrames();
-      if (isSkipping()) {
-        RandomFrames.push_back({false});
-        continue;
-      }
-      const int n = static_cast<int>(
-          std::strtol(std::string(line.substr(7)).c_str(), nullptr, 10));
-      if (n <= 0) {
-        continue;
-      }
-      const size_t randomIndex = new_chart->Meta.RandomValues.size();
-      int selectedRandom;
-      if (randomIndex < RandomValues.size()) {
-        selectedRandom = RandomValues[randomIndex];
-      } else {
-        std::uniform_int_distribution<int> dist(1, n);
-        selectedRandom = dist(Prng);
-      }
-      new_chart->Meta.RandomValues.push_back(selectedRandom);
-      RandomStack.push_back(selectedRandom);
-      RandomFrames.push_back({true});
+    if (directive("#ENDIF")) {
+      if (!ConditionalStack.empty()) ConditionalStack.pop_back();
       continue;
     }
-    if (MatchHeader(line, "#ENDRANDOM")) {
-      if (RandomFrames.empty()) {
-        // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
-        continue;
-      }
-      popRandomFrame();
+    if (directive("#ENDRANDOM")) {
+      if (!RandomStack.empty()) RandomStack.pop_back();
       continue;
     }
-    if (isSkipping()) {
-      continue;
-    }
-    if (MatchHeader(line, "#4K")) {
+    if (isSkipping()) continue;
+    if (directive("#4K")) {
       ParseHeader(new_chart, "4K", "", "");
       continue;
     }
-    if (MatchHeader(line, "#6K")) {
+    if (directive("#6K")) {
       ParseHeader(new_chart, "6K", "", "");
       continue;
     }
-    if (MatchHeader(line, "#8K")) {
+    if (directive("#8K")) {
       ParseHeader(new_chart, "8K", "", "");
       continue;
     }
 
-    if (line.length() >= 7 && std::isdigit(static_cast<unsigned char>(line[1])) &&
+    if (lineUnits >= 7 && std::isdigit(static_cast<unsigned char>(line[1])) &&
         std::isdigit(static_cast<unsigned char>(line[2])) &&
-        std::isdigit(static_cast<unsigned char>(line[3])) &&
-        line[6] == ':') {
+        std::isdigit(static_cast<unsigned char>(line[3]))) {
       const int measure =
           (line[1] - '0') * 100 + (line[2] - '0') * 10 + (line[3] - '0');
       lastMeasure = std::max(lastMeasure, measure);
       const std::string_view ch = line.substr(4, 2);
-      const int channel = ParseInt(ch);
-      const std::string_view value = line.substr(7);
+      const int channel = ParseInt(ch, true);
+      const auto colon = line.find(':');
+      std::string_view value = line.substr(colon == std::string_view::npos ? 0 : colon + 1);
+      if (channel != SectionRate && std::any_of(value.begin(), value.end(),
+          [](unsigned char c) { return c >= 0x80; })) {
+        std::string cells;
+        for (size_t i = 0; i < value.size();) {
+          const auto c = static_cast<unsigned char>(value[i++]);
+          if (c < 0x80) cells.push_back(c);
+          else {
+            cells.append(c >= 0xf0 ? 2 : 1, '?');
+            while (i < value.size() && (static_cast<unsigned char>(value[i]) & 0xc0) == 0x80) ++i;
+          }
+        }
+        normalizedChannelData.push_back(std::move(cells));
+        value = normalizedChannelData.back();
+      }
       measures[measure].emplace_back(channel, value);
     } else {
       if (MatchHeader(line, "#WAV")) {
         if (!materialize) {
           continue;
         }
-        if (line.length() < 7) {
+        if (lineUnits < 8) {
           continue;
         }
-        const auto xx = line.substr(4, 2);
-        const auto value = line.substr(7);
-        ParseHeader(new_chart, "WAV", xx, std::string(value));
+        const auto xx = javaSubstring(line, 4, 2);
+        const auto value = javaSubstring(line, 7);
+        ParseHeader(new_chart, "WAV", xx, std::string(value), shiftJis);
       } else if (MatchHeader(line, "#BMP")) {
         if (metaOnly) {
           continue;
         }
-        if (line.length() < 7) {
+        if (lineUnits < 8) {
           continue;
         }
-        const auto xx = line.substr(4, 2);
-        const auto value = line.substr(7);
-        ParseHeader(new_chart, "BMP", xx, std::string(value));
+        const auto xx = javaSubstring(line, 4, 2);
+        const auto value = javaSubstring(line, 7);
+        ParseHeader(new_chart, "BMP", xx, std::string(value), shiftJis);
       } else if (MatchHeader(line, "#STOP")) {
-        if (line.length() < 8) {
+        if (lineUnits < 8) {
           continue;
         }
-        const auto xx = line.substr(5, 2);
-        const auto value = line.substr(8);
+        const auto xx = javaSubstring(line, 5, 2);
+        const auto value = javaSubstring(line, 8);
         ParseHeader(new_chart, "STOP", xx, std::string(value));
       } else if (MatchHeader(line, "#BPM")) {
-        if (line.substr(4).rfind(' ', 0) == 0) {
-          const auto value = line.substr(5);
+        if (lineUnits <= 4 || (line[4] != ' ' && lineUnits < 7)) return;
+        if (lineUnits > 4 && line[4] == ' ') {
+          const auto value = javaSubstring(line, 5);
           ParseHeader(new_chart, "BPM", "", std::string(value));
         } else {
-          if (line.length() < 7) {
+          if (lineUnits < 7) {
             continue;
           }
-          const auto xx = line.substr(4, 2);
-          const auto value = line.substr(7);
+          const auto xx = javaSubstring(line, 4, 2);
+          const auto value = javaSubstring(line, 7);
           ParseHeader(new_chart, "BPM", xx, std::string(value));
         }
       } else if (MatchHeader(line, "#SCROLL")) {
-        if (line.length() < 10) {
+        if (lineUnits < 10) {
           continue;
         }
-        const auto xx = line.substr(7, 2);
-        const auto value = line.substr(10);
+        const auto xx = javaSubstring(line, 7, 2);
+        const auto value = javaSubstring(line, 10);
         ParseHeader(new_chart, "SCROLL", xx, std::string(value));
       } else if (MatchHeader(line, "#SPEED")) {
-        if (line.length() < 9) {
+        if (lineUnits < 9) {
           continue;
         }
-        const auto xx = line.substr(6, 2);
-        const auto value = line.substr(9);
+        const auto xx = javaSubstring(line, 6, 2);
+        const auto value = javaSubstring(line, 9);
         ParseHeader(new_chart, "SPEED", xx, std::string(value));
       } else {
-        std::match_results<std::string_view::const_iterator> matcher;
-
-        if (std::regex_search(line.begin(), line.end(), matcher, headerRegex)) {
-          std::string xx = matcher[2].str();
-          std::string value = matcher[3].str();
-          if (value.empty()) {
-            value = xx;
-            xx = "";
+        // The leading # is one ASCII byte and one UTF-16 unit; matching the
+        // remaining view needs no allocation or whole-value transcoding.
+        for (auto command : commands) {
+          if (lineUnits > command.size() + 2 &&
+              MatchHeader(line.substr(1), command)) {
+            const auto value = javaTrimmedHeaderValue(javaSubstring(line, command.size() + 2));
+            if (command == "LNOBJ" && UseBase62) {
+              size_t chars = 0;
+              for (unsigned char c : value)
+                if ((c & 0xc0) != 0x80) chars += c >= 0xf0 ? 2 : 1;
+              if (chars < 2) return;
+            }
+            ParseHeader(new_chart, command, "", value, shiftJis);
+            break;
           }
-          ParseHeader(new_chart, matcher[1].str(), xx, value);
         }
       }
     }
@@ -3209,28 +3431,86 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
   if (bCancelled) {
     return;
   }
+  if (pms) {
+    new_chart->Meta.KeyMode = 9;
+    new_chart->Meta.IsDP = false;
+  }
+  if (!pms && !new_chart->Meta.IsScratchlessKeyMode()) {
+    const int bases[] = {P1KeyBase, P2KeyBase, P1InvisibleKeyBase, P2InvisibleKeyBase,
+                         P1LongKeyBase, P2LongKeyBase, P1MineKeyBase, P2MineKeyBase};
+    for (const auto &[measure, rows] : measures) for (const auto &[channel, data] : rows) {
+      for (int base : bases) {
+        if (channel < base || channel >= base + 9) continue;
+        bool active = false;
+        for (size_t i = 0; i + 1 < data.size(); i += 2)
+          if (ParseInt(data.substr(i, 2)) > 0) { active = true; break; }
+        if (!active) break;
+        if (channel - base >= 7) {
+          if (new_chart->Meta.KeyMode == 5) new_chart->Meta.KeyMode = 7;
+          else if (new_chart->Meta.KeyMode == 10) new_chart->Meta.KeyMode = 14;
+        }
+        if (base == P2KeyBase || base == P2InvisibleKeyBase ||
+            base == P2LongKeyBase || base == P2MineKeyBase) {
+          if (new_chart->Meta.KeyMode == 5) new_chart->Meta.KeyMode = 10;
+          else if (new_chart->Meta.KeyMode == 7) new_chart->Meta.KeyMode = 14;
+          new_chart->Meta.IsDP = true;
+        }
+        break;
+      }
+    }
+  }
+  double initialBpm = new_chart->Meta.Bpm;
+  if (!(initialBpm > 0) && (lastMeasure >= 0 || !metaOnly)) {
+    // A BPM object at the origin can supply the initial tempo too.
+    const auto first = measures.find(0);
+    if (first != measures.end()) {
+      for (const auto &[channel, data] : first->second) {
+        if (data.size() < 2) continue;
+        const auto cell = data.substr(0, 2);
+        if (channel == BpmChange) {
+          const int bpm = ParseHex(cell);
+          if (bpm > 0) initialBpm = bpm;
+        } else if (channel == BpmChangeExtend) {
+          const auto found = BpmTable.find(ParseInt(cell));
+          if (found != BpmTable.end() && cell != "00") initialBpm = found->second;
+        }
+      }
+    }
+  }
+  // Explicit metadata-only inspection remains available without timing.
+  if (addReadyMeasure && !(initialBpm > 0)) return;
+  if (!metaOnly) lastMeasure = std::max(lastMeasure, 0);
   if (addReadyMeasure) {
+    for (int measure = lastMeasure; measure >= 0; --measure) {
+      const auto found = measures.find(measure);
+      if (found != measures.end()) {
+        auto events = std::move(found->second);
+        measures.erase(found);
+        measures[measure + 1] = std::move(events);
+      }
+    }
+    ++lastMeasure;
     measures[0] = std::vector<std::pair<int, std::string_view>>();
     measures[0].emplace_back(LaneAutoplay, "********");
   }
 
   double timePassed = 0;
-  int totalNotes = 0;
-  int totalLongNotes = 0;
-  int totalScratchNotes = 0;
-  int totalBackSpinNotes = 0;
-  int totalLandmineNotes = 0;
-  auto currentBpm = new_chart->Meta.Bpm;
-  auto currentScroll = 1.0;
-  auto currentSpeed = 1.0;
+  struct JavaTimelineState {
+    double position = 0, time = 0, bpm = 0, scroll = 1, speed = 1;
+    long long stop = 0;
+  };
+  // Retain the last immutable predecessor and any rounded next-bar state.
+  // Their values outlive the per-measure timeline arena.
+  JavaTimelineState previousState{0, 0, new_chart->Meta.Bpm};
+  std::optional<JavaTimelineState> boundaryState;
+  // Cells cannot pass the next bar. Only a cell rounded onto that boundary
+  // can be addressed again by a later measure.
+  std::optional<double> carriedPosition;
+  TimeLine *retainedTimeline = nullptr;
+  detail::ParserNotes parsedNotes(NoWav, new_chart->Meta.LnMode, bCancelled);
+  auto currentBpm = initialBpm;
   auto minBpm = new_chart->Meta.Bpm;
   auto maxBpm = new_chart->Meta.Bpm;
-  std::array<Note *, TempKey> lastNote{};
-  std::array<LongNote *, TempKey> lnStart{};
-  // Metadata parsing needs lane state, not allocated (then deleted) notes.
-  std::array<bool, TempKey> hasLastNote{};
-  std::array<bool, TempKey> hasLnStart{};
-  const auto channelLongNoteType = LongNoteTypeFromLnMode(new_chart->Meta.LnMode);
 #if BMS_PARSER_VERBOSE == 1
   midStartTime = std::chrono::high_resolution_clock::now();
 #endif
@@ -3249,6 +3529,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
   std::vector<std::pair<unsigned long long, unsigned long long>> prepTimingPositions;
   detail::ParserScratchArena timelineNodes;
   std::deque<TimeLine> scratchTimelines;
+  TimeLine carriedTimeline(0, true);
   for (auto measureIdx = 0; measureIdx <= lastMeasure; ++measureIdx) {
     if (bCancelled) {
       return;
@@ -3259,7 +3540,8 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
 
     // gcd (int, int)
     Measure scratchMeasure;
-    auto measure = materialize ? new Measure() : &scratchMeasure;
+    auto ownedMeasure = materialize ? std::make_unique<Measure>() : nullptr;
+    auto measure = materialize ? ownedMeasure.get() : &scratchMeasure;
     bool explicitSectionRate = false;
     bool measureHasPrepTimingContent = false;
     bool measureHasAudibleContent = false;
@@ -3268,30 +3550,64 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
     // live in a deque so their addresses stay stable without one allocation per
     // object; full charts retain their existing new/delete ownership contract.
     timelineNodes.reset();
-    scratchTimelines.clear();
 
     // NOTE: this should be an ordered map
     struct TimelineEntry {
       TimeLine *timeline = nullptr;
-      bool playable = false;
+      std::unique_ptr<TimeLine> owned;
+      bool hasStop = false;
+      JavaTimelineState state;
+      TimelineEntry *predecessor = nullptr;
+      size_t insertionRank = 0;
+      bool initialized = false;
     };
     using TimelineAllocator =
         detail::ParserScratchAllocator<std::pair<const double, TimelineEntry>>;
     std::map<double, TimelineEntry, std::less<double>, TimelineAllocator>
         timelines{TimelineAllocator(timelineNodes)};
+    // Section computes its final rate before placing any channel objects.
+    for (const auto &[channel, data] : measures[measureIdx]) {
+      double scale;
+      if (channel == SectionRate && parseJavaDouble(data, scale) && scale > 0 &&
+          std::isfinite(measureBeatPosition + scale) &&
+          measureBeatPosition + scale > measureBeatPosition) {
+        measure->Scale = scale;
+        explicitSectionRate = true;
+      }
+    }
     const auto ensureTimeline = [&](double position) {
-      auto result = timelines.try_emplace(position);
+      const double section = measureBeatPosition + position * measure->Scale;
+      auto result = timelines.try_emplace(section);
       if (result.second) {
-        if (materialize) {
-          result.first->second.timeline = new TimeLine(TempKey, false);
-        } else {
-          scratchTimelines.emplace_back(TempKey, true);
-          result.first->second.timeline = &scratchTimelines.back();
+        auto &entry = result.first->second;
+        entry.state.position = section;
+        if (section == previousState.position) {
+          entry.state = previousState;
+          entry.initialized = true;
+        } else if (boundaryState && section == boundaryState->position) {
+          entry.state = *boundaryState;
+          entry.initialized = true;
+        }
+        if (carriedPosition && *carriedPosition == section)
+          entry.timeline = retainedTimeline;
+        else {
+          if (materialize) {
+            entry.owned = std::make_unique<TimeLine>(TempKey, false);
+            entry.timeline = entry.owned.get();
+          } else {
+            scratchTimelines.emplace_back(TempKey, true);
+            entry.timeline = &scratchTimelines.back();
+          }
         }
       }
       return result.first;
     };
-    double bgaPoorTimingExtent = 0.0;
+    ensureTimeline(0);
+    struct Controls {
+      std::optional<double> bpm, stop, scroll, speed;
+    };
+    std::map<double, Controls> controls;
+    std::vector<TimelineEntry *> insertionOrder;
 
     for (auto &pair : measures[measureIdx]) {
       if (bCancelled) {
@@ -3299,16 +3615,12 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       }
       auto channel = pair.first;
       auto &data = pair.second;
-      if (channel == SectionRate) {
-        measure->Scale = std::strtod(std::string(data).c_str(), nullptr);
-        explicitSectionRate = true;
-        continue;
-      }
+      if (channel == SectionRate) continue;
 
       const bool scratchlessKeyMode =
           new_chart->Meta.IsScratchlessKeyMode();
       const auto *keyAssign =
-          scratchlessKeyMode ? KeyAssign::Scratchless(new_chart->Meta.KeyMode)
+          pms ? KeyAssign::PopN : scratchlessKeyMode ? KeyAssign::Scratchless(new_chart->Meta.KeyMode)
                              : KeyAssign::Beat7;
       auto laneNumber = 0; // NOTE: This is intentionally set to 0, not -1!
       if (channel >= P1KeyBase && channel < P1KeyBase + 9) {
@@ -3342,9 +3654,61 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       if (laneNumber == -1) {
         continue;
       }
-      const bool isScratch =
-          !scratchlessKeyMode && (laneNumber == 7 || laneNumber == 15);
-      if (!scratchlessKeyMode) {
+      const auto dataCount = data.length() / 2;
+      if (channel == PoorPlay) {
+        if (scan != nullptr) continue;
+        BgaPoorSequence sequence;
+        sequence.Frames.reserve(dataCount);
+        int singleId = 0;
+        for (size_t j = 0; j < dataCount; ++j) {
+          if (bCancelled) return;
+          int id = ParseInt(data.substr(j * 2, 2));
+          if (id < 0) id = 0;
+          sequence.Frames.push_back(id);
+          if (id != 0) {
+            if (singleId == 0) singleId = id;
+            else if (singleId != id) singleId = -1;
+          }
+        }
+        if (singleId != -1) sequence.Frames.assign(1, singleId);
+        for (int &id : sequence.Frames) {
+          if (new_chart->BmpTable.count(id)) RegisterReferencedBmpId(new_chart, id, metaOnly);
+          else id = BgaSequenceBlank;
+        }
+        ensureTimeline(0.0)->second.timeline->BgaPoor = std::move(sequence);
+        continue;
+      }
+      const bool channelCanAnchorPrepTiming =
+          channel == LaneAutoplay || channel == BpmChange ||
+          channel == BpmChangeExtend || channel == Stop || channel == Scroll ||
+          channel == Speed || channel == P1KeyBase || channel == P1InvisibleKeyBase ||
+          channel == P1LongKeyBase || channel == P1MineKeyBase;
+      const bool channelHasAudibleContent =
+          channel == LaneAutoplay || channel == P1KeyBase ||
+          channel == P1InvisibleKeyBase || channel == P1LongKeyBase ||
+          channel == P1MineKeyBase;
+      if (!channelCanAnchorPrepTiming && channel != BgaPlay && channel != LayerPlay)
+        continue;
+      for (size_t j = 0; j < dataCount; ++j) {
+        if (bCancelled) {
+          break;
+        }
+        const char *cell = data.data() + j * 2;
+        if (cell[0] == '0' && cell[1] == '0') {
+          if (timelines.empty() && j == 0) {
+            ensureTimeline(0.0); // add ghost timeline
+          }
+
+          continue;
+        }
+        const std::string_view val(cell, 2);
+        const int object = channel == BpmChange ? ParseHex(val) : ParseInt(val);
+        // Only the synthetic ready measure may use the internal click token.
+        // Authored measures have already shifted by one when it is enabled.
+        const bool readyClick = addReadyMeasure && measureIdx == 0 &&
+                                channel == LaneAutoplay && val == "**";
+        if (object <= 0 && !readyClick) continue;
+      if (!scratchlessKeyMode && !pms) {
         if (laneNumber == 5 || laneNumber == 6 || laneNumber == 13 ||
             laneNumber == 14) {
           if (new_chart->Meta.KeyMode == 5) {
@@ -3363,81 +3727,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
         }
       }
 
-      const auto dataCount = data.length() / 2;
-      if (channel == PoorPlay) {
-        bool hasActiveCell = false;
-        for (size_t j = 0; j < dataCount; ++j) {
-          if (bCancelled) {
-            break;
-          }
-          if (data[j * 2] != '0' || data[j * 2 + 1] != '0') {
-            hasActiveCell = true;
-            break;
-          }
-        }
-        if (bCancelled) {
-          break;
-        }
-        if (!hasActiveCell) {
-          continue;
-        }
-        BgaPoorSequence sequence;
-        if (scan == nullptr) sequence.Frames.reserve(dataCount);
-        for (size_t j = 0; j < dataCount; ++j) {
-          if (bCancelled) {
-            break;
-          }
-          const std::string_view value(data.data() + j * 2, 2);
-          if (value[0] != '0' || value[1] != '0') {
-            const auto g = Gcd(j, dataCount);
-            const auto positionNumerator = j / g;
-            const auto positionDenominator = dataCount / g;
-            const auto position =
-                static_cast<double>(positionNumerator) /
-                static_cast<double>(positionDenominator);
-            bgaPoorTimingExtent = std::max(bgaPoorTimingExtent, position);
-          } else {
-            if (scan == nullptr) sequence.Frames.push_back(BgaSequenceBlank);
-            continue;
-          }
-          if (scan != nullptr) continue;
-          const int bmpId = ParseInt(value);
-          if (CheckResourceIdRange(bmpId) &&
-              new_chart->BmpTable.find(bmpId) != new_chart->BmpTable.end()) {
-            RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
-            sequence.Frames.push_back(bmpId);
-          } else {
-            sequence.Frames.push_back(BgaSequenceBlank);
-          }
-        }
-        if (bCancelled) {
-          break;
-        }
-        ensureTimeline(0.0)->second.timeline->BgaPoor = std::move(sequence);
-        continue;
-      }
-      const bool channelCanAnchorPrepTiming =
-          channel == LaneAutoplay || channel == BpmChange ||
-          channel == BpmChangeExtend || channel == Stop || channel == Scroll ||
-          channel == Speed || channel == P1KeyBase || channel == P1InvisibleKeyBase ||
-          channel == P1LongKeyBase || channel == P1MineKeyBase;
-      const bool channelHasAudibleContent =
-          channel == LaneAutoplay || channel == P1KeyBase ||
-          channel == P1InvisibleKeyBase || channel == P1LongKeyBase ||
-          channel == P1MineKeyBase;
-      for (size_t j = 0; j < dataCount; ++j) {
-        if (bCancelled) {
-          break;
-        }
-        const char *cell = data.data() + j * 2;
-        if (cell[0] == '0' && cell[1] == '0') {
-          if (timelines.empty() && j == 0) {
-            ensureTimeline(0.0); // add ghost timeline
-          }
 
-          continue;
-        }
-        const std::string_view val(cell, 2);
         const auto g = Gcd(j, dataCount);
         // ReSharper disable PossibleLossOfFraction
 
@@ -3455,7 +3745,15 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
           measureHasAudibleContent = true;
         }
 
+        if ((channel == BpmChangeExtend && !BpmTable.count(object)) ||
+            (channel == Stop && !StopLengthTable.count(object)) ||
+            (channel == Scroll && !ScrollTable.count(object)) ||
+            (channel == Speed && !SpeedTable.count(object))) continue;
         auto entry = ensureTimeline(position);
+        if (channel == LaneAutoplay || channel == BgaPlay || channel == LayerPlay ||
+            channel == P1KeyBase || channel == P1LongKeyBase ||
+            channel == P1MineKeyBase || channel == P1InvisibleKeyBase)
+          insertionOrder.push_back(&entry->second);
         auto timeline = entry->second.timeline;
         if (channel == LaneAutoplay || channel == P1InvisibleKeyBase) {
           if (metaOnly) {
@@ -3480,6 +3778,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
         case BpmChange: {
           int bpm = ParseHex(val);
           timeline->Bpm = static_cast<double>(bpm);
+          controls[position].bpm = bpm;
           // std::cout << "BPM_CHANGE: " << timeline->Bpm << ", on measure " <<
           // measureIdx << std::endl; Debug.Log($"BPM_CHANGE: {timeline.Bpm}, on
           // measure {measureIdx}");
@@ -3508,9 +3807,9 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
           }
           if (const auto bpm = BpmTable.find(id); bpm != BpmTable.end()) {
             timeline->Bpm = bpm->second;
+            controls[position].bpm = bpm->second;
           } else {
-            timeline->Bpm = 0;
-            // std::cout<<"Undefined BPM: "<<id<<std::endl;
+            break;
           }
           // Debug.Log($"BPM_CHANGE_EXTEND: {timeline.Bpm}, on measure
           // {measureIdx}, {val}");
@@ -3523,11 +3822,10 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
             // UE_LOG(LogTemp, Warning, TEXT("Invalid Scroll id: %s"), *val);
             break;
           }
-          timeline->ScrollChange = true;
           if (const auto scroll = ScrollTable.find(id); scroll != ScrollTable.end()) {
             timeline->Scroll = scroll->second;
-          } else {
-            timeline->Scroll = 1;
+            controls[position].scroll = scroll->second;
+            timeline->ScrollChange = true;
           }
           // Debug.Log($"SCROLL: {timeline.Scroll}, on measure {measureIdx}");
           break;
@@ -3537,6 +3835,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
           const auto speed = SpeedTable.find(id);
           if (speed != SpeedTable.end()) {
             timeline->Speed = speed->second;
+            controls[position].speed = speed->second;
             timeline->HasSpeedObject = true;
           }
           break;
@@ -3550,104 +3849,35 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
           }
           if (const auto stop = StopLengthTable.find(id); stop != StopLengthTable.end()) {
             timeline->StopLength = stop->second;
-          } else {
-            timeline->StopLength = 0;
+            controls[position].stop = stop->second;
+            entry->second.hasStop = true;
           }
           // Debug.Log($"STOP: {timeline.StopLength}, on measure {measureIdx}");
           break;
         }
         case P1KeyBase: {
-          entry->second.playable = true;
-          const auto ch = ParseInt(val);
-          if (ch == Lnobj && hasLastNote[laneNumber]) {
-            if (isScratch) {
-              ++totalBackSpinNotes;
-            } else {
-              ++totalLongNotes;
-            }
-
-            auto last = lastNote[laneNumber];
-            lastNote[laneNumber] = nullptr;
-            hasLastNote[laneNumber] = false;
-            if (!materialize) {
-              break;
-            }
-
-            auto lastTimeline = last->Timeline;
-            auto ln = new LongNote{last->Wav, channelLongNoteType};
-            delete last;
-            ln->Tail = new LongNote{NoWav, ln->Type};
-            ln->Tail->Head = ln;
-            lastTimeline->SetNote(laneNumber, ln);
-            timeline->SetNote(laneNumber, ln->Tail);
-          } else {
-            const int wavId = ToWaveId(new_chart, val, !materialize);
-            RegisterReferencedWaveId(new_chart, wavId);
-            hasLastNote[laneNumber] = true;
-            ++totalNotes;
-            if (isScratch) {
-              ++totalScratchNotes;
-            }
-            if (!materialize) {
-              break;
-            }
-            auto note = new Note{wavId};
-            lastNote[laneNumber] = note;
-            timeline->SetNote(laneNumber, note);
-          }
-        } break;
-        case P1InvisibleKeyBase: {
-          if (!materialize) break;
-          const int wavId = ToWaveId(new_chart, val, metaOnly);
-          RegisterReferencedWaveId(new_chart, wavId);
-          auto invNote = new Note{wavId};
-          timeline->SetInvisibleNote(laneNumber, invNote);
+          const int wav = ToWaveId(new_chart, val, !materialize);
+          parsedNotes.normal(laneNumber, entry->first, wav,
+                             object == Lnobj, materialize ? timeline : nullptr);
           break;
         }
-
+        case P1InvisibleKeyBase: {
+          if (!materialize) break;
+          const int wav = ToWaveId(new_chart, val, false);
+          timeline->SetInvisibleNote(laneNumber, new Note(wav));
+          break;
+        }
         case P1LongKeyBase: {
-          // Beatoraja's BMS decoder always materializes 5x/6x channels as
-          // lane notes. Its effective LN judgement mode is independent of
-          // whether these channel objects exist.
-          entry->second.playable = true;
-          if (!hasLnStart[laneNumber]) {
-            hasLnStart[laneNumber] = true;
-            ++totalNotes;
-            if (isScratch) {
-              ++totalBackSpinNotes;
-            } else {
-              ++totalLongNotes;
-            }
-
-            const int wavId = ToWaveId(new_chart, val, !materialize);
-            RegisterReferencedWaveId(new_chart, wavId);
-            if (!materialize) {
-              break;
-            }
-            auto ln = new LongNote{wavId, channelLongNoteType};
-            lnStart[laneNumber] = ln;
-            timeline->SetNote(laneNumber, ln);
-          } else {
-            if (materialize) {
-              auto tail = new LongNote{NoWav, lnStart[laneNumber]->Type};
-              tail->Head = lnStart[laneNumber];
-              lnStart[laneNumber]->Tail = tail;
-              timeline->SetNote(laneNumber, tail);
-            }
-            lnStart[laneNumber] = nullptr;
-            hasLnStart[laneNumber] = false;
-          }
+          const int wav = ToWaveId(new_chart, val, !materialize);
+          parsedNotes.longNote(laneNumber, entry->first, wav,
+                               materialize ? timeline : nullptr);
           break;
         }
         case P1MineKeyBase: {
-          entry->second.playable = true;
-          // landmine
-          ++totalLandmineNotes;
-          if (!materialize) {
-            break;
-          }
-          const auto damage = static_cast<float>(ParseInt(val, true)) / 2.0f;
-          timeline->SetNote(laneNumber, new LandmineNote{damage});
+          const float damage = static_cast<float>(ParseInt(val, true));
+          const int wav = new_chart->WavTable.count(0) ? 0 : NoWav;
+          parsedNotes.mine(laneNumber, entry->first, wav, damage,
+                           materialize ? timeline : nullptr);
           break;
         }
         default:
@@ -3656,35 +3886,94 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       }
     }
 
-    if (bCancelled) {
-      if (materialize) {
-        for (const auto &[position, entry] : timelines) {
-          (void)position;
-          delete entry.timeline;
-        }
-        delete measure;
-      }
-      delete new_chart;
-      *chart = nullptr;
-      return;
+    if (bCancelled) return;
+
+    // Rank the first insertion of every position in Java's order: bar line,
+    // sorted controls, then channel objects in source order.
+    size_t nextInsertionRank = 0;
+    const auto schedule = [&](TimelineEntry &entry) {
+      if (!entry.initialized && entry.insertionRank == 0)
+        entry.insertionRank = ++nextInsertionRank;
+    };
+    schedule(timelines.begin()->second);
+    for (const auto &[position, control] : controls) {
+      if (bCancelled) return;
+      schedule(timelines.at(measureBeatPosition + position * measure->Scale));
     }
-
-    new_chart->Meta.TotalNotes = totalNotes;
-    new_chart->Meta.TotalLongNotes = totalLongNotes;
-    new_chart->Meta.TotalScratchNotes = totalScratchNotes;
-    new_chart->Meta.TotalBackSpinNotes = totalBackSpinNotes;
-    new_chart->Meta.TotalLandmineNotes = totalLandmineNotes;
-
+    for (auto *entry : insertionOrder) {
+      if (bCancelled) return;
+      schedule(*entry);
+    }
+    // A monotone stack finds the nearest position on the left that existed
+    // when each entry was first inserted. Each entry is pushed/popped once.
+    TimelineEntry *predecessor = nullptr;
+    for (auto &[section, entry] : timelines) {
+      if (bCancelled) return;
+      while (predecessor && predecessor->insertionRank > entry.insertionRank) {
+        if (bCancelled) return;
+        predecessor = predecessor->predecessor;
+      }
+      entry.predecessor = predecessor;
+      predecessor = &entry;
+    }
+    const auto insertJavaTimeline = [&](TimelineEntry &entry) -> JavaTimelineState & {
+      if (!entry.initialized) {
+        const double section = entry.state.position;
+        auto state = entry.predecessor ? entry.predecessor->state : previousState;
+        state.time = state.time + static_cast<double>(state.stop) +
+                     (240000000.0 * (section - state.position)) / state.bpm;
+        state.position = section;
+        state.stop = 0;
+        entry.state = state;
+        entry.initialized = true;
+      }
+      return entry.state;
+    };
+    insertJavaTimeline(timelines.begin()->second);
+    for (const auto &[position, control] : controls) {
+      if (bCancelled) return;
+      auto &state = insertJavaTimeline(
+          timelines.at(measureBeatPosition + position * measure->Scale));
+      if (control.speed) state.speed = *control.speed;
+      if (control.scroll) state.scroll = *control.scroll;
+      if (control.bpm) state.bpm = *control.bpm;
+      if (control.stop)
+        state.stop = javaLong(240000000.0 * (*control.stop / 192.0) / state.bpm);
+    }
+    for (auto *entry : insertionOrder) {
+      if (bCancelled) return;
+      insertJavaTimeline(*entry);
+    }
+    if (measureIdx == 0 && currentBpm == 0)
+      currentBpm = timelines.begin()->second.state.bpm;
+    if (measureIdx == 0 && timelines.begin()->second.state.bpm == 0) return;
+    if (!parsedNotes.setTiming(measureBeatPosition, [&](double section) {
+      return javaLong(timelines.at(section).state.time);
+    })) return;
     auto lastPosition = 0.0;
 
-    measure->Timing = static_cast<long long>(timePassed);
+    measure->Timing = javaLong(timePassed);
+    boundaryState.reset();
 
     for (auto &pair : timelines) {
       if (bCancelled) {
         break;
       }
-      const auto position = pair.first;
+      const auto position = (pair.first - measureBeatPosition) / measure->Scale;
       const auto timeline = pair.second.timeline;
+      const auto &state = pair.second.state;
+      timeline->Timing = javaLong(state.time);
+      timeline->BeatPosition = pair.first;
+      timeline->Bpm = state.bpm;
+      timeline->Scroll = state.scroll;
+      timeline->Speed = state.speed;
+      timeline->ParsedStopDuration = state.stop;
+      if (pair.first < measureBeatPosition + measure->Scale) {
+        parsedNotes.observeTimeline(pair.first, timeline->Timing);
+        minBpm = std::min(minBpm, state.bpm);
+        maxBpm = std::max(maxBpm, state.bpm);
+        previousState = state;
+      } else boundaryState = state;
 
       // Debug.Log($"measure: {measureIdx}, position: {position}, lastPosition:
       // {lastPosition} bpm: {bpm} scale: {measure.scale} interval: {240 * 1000
@@ -3692,86 +3981,49 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       const auto interval =
           240000000.0 * (position - lastPosition) * measure->Scale / currentBpm;
       addDuration(bpmDurations, bpmOrder, currentBpm,
-                  static_cast<long long>(std::llround(interval)));
+                  javaLong(std::round(interval)));
       timePassed += interval;
-      timeline->Timing = static_cast<long long>(timePassed);
-      timeline->BeatPosition = measureBeatPosition + position * measure->Scale;
-      if (timeline->BpmChange) {
-        currentBpm = timeline->Bpm;
-        minBpm = std::min(minBpm, timeline->Bpm);
-        maxBpm = std::max(maxBpm, timeline->Bpm);
-      } else {
-        timeline->Bpm = currentBpm;
-      }
-
-      if (timeline->ScrollChange) {
-        currentScroll = timeline->Scroll;
-      } else {
-        timeline->Scroll = currentScroll;
-      }
-
-      if (timeline->HasSpeedObject) {
-        currentSpeed = timeline->Speed;
-      } else {
-        timeline->Speed = currentSpeed;
-      }
-
+      currentBpm = timeline->Bpm;
       // Debug.Log($"measure: {measureIdx}, position: {position}, lastPosition:
       // {lastPosition}, bpm: {currentBpm} scale: {measure.Scale} interval:
       // {interval} stop: {timeline.GetStopDuration()}");
 
-      const auto stopDuration = timeline->GetStopDuration();
+      const auto stopDuration = javaLong(timeline->GetStopDuration());
       addDuration(bpmDurations, bpmOrder, timeline->Bpm,
-                  static_cast<long long>(std::llround(stopDuration)));
+                  javaLong(stopDuration));
       timePassed += stopDuration;
-      if (pair.second.playable) {
-        new_chart->Meta.PlayLength = timeline->Timing;
-      }
       if (scan != nullptr) {
         scan->HasBpmStop = scan->HasBpmStop || timeline->StopLength > 0;
         scan->HasScrollChange = scan->HasScrollChange || timeline->Scroll != 1.0;
       }
-      if (materialize) {
-        measure->TimeLines.push_back(timeline);
+      if (materialize && pair.second.owned) {
+        measure->TimeLines.push_back(pair.second.owned.release());
       }
 
       lastPosition = position;
     }
 
-    if (bgaPoorTimingExtent > lastPosition) {
-      const auto interval = 240000000.0 *
-                            (bgaPoorTimingExtent - lastPosition) *
-                            measure->Scale / currentBpm;
-      addDuration(bpmDurations, bpmOrder, currentBpm,
-                  static_cast<long long>(std::llround(interval)));
-      timePassed += interval;
-      lastPosition = bgaPoorTimingExtent;
+    if (bCancelled) return;
+
+    const auto nextBoundary = timelines.find(measureBeatPosition + measure->Scale);
+    if (nextBoundary != timelines.end()) {
+      carriedPosition = nextBoundary->first;
+      retainedTimeline = nextBoundary->second.timeline;
+    } else {
+      carriedPosition.reset();
+      retainedTimeline = nullptr;
     }
 
-    if (!materialize) {
-      timelines.clear();
-    }
-
-    if (materialize && measure->TimeLines.empty()) {
-      auto timeline = new TimeLine(TempKey, metaOnly);
-      timeline->Timing = static_cast<long long>(timePassed);
-      timeline->BeatPosition = measureBeatPosition;
-      timeline->Bpm = currentBpm;
-      timeline->Scroll = currentScroll;
-      timeline->Speed = currentSpeed;
-      measure->TimeLines.push_back(timeline);
-    }
-    if (materialize) {
-      measure->TimeLines[0]->IsFirstInMeasure = true;
-    }
+    if (materialize && !measure->TimeLines.empty())
+      measure->TimeLines.front()->IsFirstInMeasure = true;
     const auto finalInterval =
         240000000.0 * (1 - lastPosition) * measure->Scale / currentBpm;
     addDuration(bpmDurations, bpmOrder, currentBpm,
-                static_cast<long long>(std::llround(finalInterval)));
+                javaLong(std::round(finalInterval)));
     timePassed += finalInterval;
     const int measureBeats = guessedBeatsForScale(measure->Scale);
     const long long measureDuration =
-        static_cast<long long>(timePassed) - measure->Timing;
+        javaLong(timePassed) - measure->Timing;
     std::sort(prepTimingPositions.begin(), prepTimingPositions.end());
     prepTimingPositions.erase(
         std::unique(prepTimingPositions.begin(), prepTimingPositions.end()),
@@ -3825,8 +4077,18 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
         measureHasPrepTimingContent,
         static_cast<int>(prepTimingPositions.size()));
     measureBeatPosition += measure->Scale;
+    if (!parsedNotes.advance(*new_chart, materialize, measureBeatPosition)) return;
+
+    if (!materialize) {
+      timelines.clear();
+      if (retainedTimeline) {
+        if (retainedTimeline != &carriedTimeline) carriedTimeline = *retainedTimeline;
+        retainedTimeline = &carriedTimeline;
+      }
+      scratchTimelines.clear();
+    }
     if (materialize) {
-      new_chart->Measures.push_back(measure);
+      new_chart->Measures.push_back(ownedMeasure.release());
     }
   }
 #if BMS_PARSER_VERBOSE == 1
@@ -3836,7 +4098,32 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
                    .count()
             << "\n";
 #endif
-  new_chart->Meta.TotalLength = static_cast<long long>(timePassed);
+  parsedNotes.observeTimeline(previousState.position, javaLong(previousState.time));
+  if (boundaryState)
+    parsedNotes.observeTimeline(boundaryState->position, javaLong(boundaryState->time));
+  if (!parsedNotes.finish(*new_chart, materialize)) return;
+  minBpm = std::min(minBpm, previousState.bpm);
+  maxBpm = std::max(maxBpm, previousState.bpm);
+  if (boundaryState) {
+    minBpm = std::min(minBpm, boundaryState->bpm);
+    maxBpm = std::max(maxBpm, boundaryState->bpm);
+  }
+  if (materialize) {
+    new_chart->ReferencedWavTable.clear();
+    for (const auto *measure : new_chart->Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        if (bCancelled) return;
+        for (const auto *notes : {&timeline->Notes, &timeline->InvisibleNotes,
+                                   &timeline->BackgroundNotes}) {
+          for (const auto *note : *notes) {
+            if (bCancelled) return;
+            if (note) RegisterReferencedWaveId(new_chart, note->Wav);
+          }
+        }
+      }
+    }
+  }
+  new_chart->Meta.TotalLength = javaLong(timePassed);
   new_chart->Meta.MinBpm = minBpm;
   new_chart->Meta.MaxBpm = maxBpm;
   new_chart->Meta.MostPrevalentBpm =
@@ -3848,39 +4135,8 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
   new_chart->Meta.GuessedBeatsPerMeasure = guessedBeats;
   new_chart->Meta.GuessedBeatBpm = mostPrevalentPrepBeatBpm(
       prepBeatBpmDurations, prepBeatBpmOrder, guessedBeats);
-  if (new_chart->Meta.Difficulty == 0) {
-    std::string FullTitle;
-    FullTitle.reserve(new_chart->Meta.Title.length() +
-                      new_chart->Meta.SubTitle.length());
-    std::transform(new_chart->Meta.Title.begin(), new_chart->Meta.Title.end(),
-                   std::back_inserter(FullTitle), ::towlower);
-    std::transform(new_chart->Meta.SubTitle.begin(),
-                   new_chart->Meta.SubTitle.end(),
-                   std::back_inserter(FullTitle), ::towlower);
-    if (FullTitle.find("easy") != std::string::npos) {
-      new_chart->Meta.Difficulty = 1;
-    } else if (FullTitle.find("normal") != std::string::npos) {
-      new_chart->Meta.Difficulty = 2;
-    } else if (FullTitle.find("hyper") != std::string::npos) {
-      new_chart->Meta.Difficulty = 3;
-    } else if (FullTitle.find("another") != std::string::npos) {
-      new_chart->Meta.Difficulty = 4;
-    } else if (FullTitle.find("insane") != std::string::npos) {
-      new_chart->Meta.Difficulty = 5;
-    } else {
-      if (totalNotes < 250) {
-        new_chart->Meta.Difficulty = 1;
-      } else if (totalNotes < 600) {
-        new_chart->Meta.Difficulty = 2;
-      } else if (totalNotes < 1000) {
-        new_chart->Meta.Difficulty = 3;
-      } else if (totalNotes < 2000) {
-        new_chart->Meta.Difficulty = 4;
-      } else {
-        new_chart->Meta.Difficulty = 5;
-      }
-    }
-  }
+  if (bCancelled) return;
+  *chart = ownedChart.release();
 
 #if BMS_PARSER_VERBOSE == 1
   std::cout << "Total parsing time: "
@@ -3892,51 +4148,47 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
 }
 
 void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
-                         std::string_view Xx, const std::string &Value) {
+                         std::string_view Xx, const std::string &Value,
+                         bool shiftJis) {
   // Debug.Log($"cmd: {cmd}, xx: {xx} isXXNull: {xx == null}, value: {value}");
+  const auto commandIs = [&](std::string_view name) {
+    return cmd.size() == name.size() && MatchHeader(cmd, name);
+  };
   // BASE 62
-  if (MatchHeader(cmd, "BASE")) {
-    if (Value.empty()) {
-      return; // TODO: handle this
-    }
-    auto base = static_cast<int>(std::strtol(Value.c_str(), nullptr, 10));
-    std::wcout << "BASE: " << base << std::endl;
-    if (base != 36 && base != 62) {
-      return; // TODO: handle this
-    }
-    this->UseBase62 = base == 62;
-  } else if (MatchHeader(cmd, "4K")) {
+  if (commandIs("BASE")) {
+    return; // Resolved before decoding any resource IDs.
+  } else if (commandIs("4K")) {
     Chart->Meta.KeyMode = 4;
     Chart->Meta.IsDP = false;
-  } else if (MatchHeader(cmd, "6K")) {
+  } else if (commandIs("6K")) {
     Chart->Meta.KeyMode = 6;
     Chart->Meta.IsDP = false;
-  } else if (MatchHeader(cmd, "8K")) {
+  } else if (commandIs("8K")) {
     Chart->Meta.KeyMode = 8;
     Chart->Meta.IsDP = false;
-  } else if (MatchHeader(cmd, "PLAYER")) {
-    Chart->Meta.Player =
-        static_cast<int>(std::strtol(Value.c_str(), nullptr, 10));
-  } else if (MatchHeader(cmd, "GENRE")) {
-    Chart->Meta.Genre = Value;
-  } else if (MatchHeader(cmd, "TITLE")) {
-    Chart->Meta.Title = Value;
-  } else if (MatchHeader(cmd, "SUBTITLE")) {
-    Chart->Meta.SubTitle = Value;
-  } else if (MatchHeader(cmd, "ARTIST")) {
-    Chart->Meta.Artist = Value;
-  } else if (MatchHeader(cmd, "SUBARTIST")) {
-    Chart->Meta.SubArtist = Value;
-  } else if (MatchHeader(cmd, "DIFFICULTY")) {
-    Chart->Meta.Difficulty =
-        static_cast<int>(std::strtol(Value.c_str(), nullptr, 10));
-  } else if (MatchHeader(cmd, "BPM")) {
-    if (Value.empty()) {
-      return; // TODO: handle this
-    }
+  } else if (commandIs("PLAYER")) {
+    int player;
+    if (parseInteger(Value, player) && player >= 1 && player < 3)
+      Chart->Meta.Player = player;
+  } else if (commandIs("GENRE")) {
+    Chart->Meta.Genre = javaTrimmedHeaderValue(Value);
+  } else if (commandIs("TITLE")) {
+    Chart->Meta.Title = javaTrimmedHeaderValue(Value);
+  } else if (commandIs("SUBTITLE")) {
+    Chart->Meta.SubTitle = javaTrimmedHeaderValue(Value);
+  } else if (commandIs("ARTIST")) {
+    Chart->Meta.Artist = javaTrimmedHeaderValue(Value);
+  } else if (commandIs("SUBARTIST")) {
+    Chart->Meta.SubArtist = javaTrimmedHeaderValue(Value);
+  } else if (commandIs("DIFFICULTY")) {
+    int difficulty;
+    if (parseInteger(Value, difficulty)) Chart->Meta.Difficulty = difficulty;
+  } else if (commandIs("BPM")) {
+    double bpm;
+    if (!parseJavaDouble(Value, bpm) || !(bpm > 0)) return;
     if (Xx.empty()) {
       // chart initial bpm
-      Chart->Meta.Bpm = std::strtod(Value.c_str(), nullptr);
+      Chart->Meta.Bpm = bpm;
       // std::cout << "MainBPM: " << Chart->Meta.Bpm << std::endl;
     } else {
       // Debug.Log($"BPM: {DecodeBase36(xx)} = {double.Parse(value)}");
@@ -3945,9 +4197,9 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
         // UE_LOG(LogTemp, Warning, TEXT("Invalid BPM id: %s"), *Xx);
         return;
       }
-      BpmTable[id] = std::strtod(Value.c_str(), nullptr);
+      BpmTable[id] = bpm;
     }
-  } else if (MatchHeader(cmd, "STOP")) {
+  } else if (commandIs("STOP")) {
     if (Value.empty() || Xx.empty()) {
       return; // TODO: handle this
     }
@@ -3956,46 +4208,43 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       // UE_LOG(LogTemp, Warning, TEXT("Invalid STOP id: %s"), *Xx);
       return;
     }
-    StopLengthTable[id] = std::strtod(Value.c_str(), nullptr);
-  } else if (MatchHeader(cmd, "MIDIFILE")) {
+    double stop;
+    if (parseJavaDouble(Value, stop)) StopLengthTable[id] = std::abs(stop);
+  } else if (commandIs("MIDIFILE")) {
     // TODO: handle this
-  } else if (MatchHeader(cmd, "VIDEOFILE")) {
-  } else if (MatchHeader(cmd, "PLAYLEVEL")) {
+  } else if (commandIs("VIDEOFILE")) {
+  } else if (commandIs("PLAYLEVEL")) {
     Chart->Meta.PlayLevelText = javaTrimmedHeaderValue(Value);
-    Chart->Meta.PlayLevel =
-        std::strtod(Value.c_str(), nullptr); // TODO: handle error
-  } else if (MatchHeader(cmd, "RANK") || MatchHeader(cmd, "DEFEXRANK")) {
-    // Match Integer.parseInt: reject trailing text, fractions and overflow.
-    // Invalid headers leave the previous valid rank and its source unchanged.
-    const auto text = javaTrimmedHeaderValue(Value);
-    char *end = nullptr;
-    errno = 0;
-    const long rank = std::strtol(text.c_str(), &end, 10);
-    const bool extended = MatchHeader(cmd, "DEFEXRANK");
-    if (!text.empty() && end == text.c_str() + text.size() &&
-        errno != ERANGE && rank <= std::numeric_limits<int>::max() &&
+    double level;
+    if (parseJavaDouble(Value, level)) Chart->Meta.PlayLevel = level;
+  } else if (commandIs("RANK") || commandIs("DEFEXRANK")) {
+    const bool extended = commandIs("DEFEXRANK");
+    int rank;
+    if (parseInteger(Value, rank) &&
         (extended ? rank > 0 : rank >= 0 && rank < 5)) {
-      Chart->Meta.Rank = static_cast<int>(rank);
-      Chart->Meta.RankType = extended ? JudgeRankType::DefExRank
-                                      : JudgeRankType::BmsRank;
+      Chart->Meta.Rank = rank;
+      Chart->Meta.RankType = extended ? JudgeRankType::DefExRank : JudgeRankType::BmsRank;
     }
-  } else if (MatchHeader(cmd, "TOTAL")) {
-    auto total = std::strtod(Value.c_str(), nullptr);
-    if (total > 0) {
+  } else if (commandIs("TOTAL")) {
+    double total;
+    if (parseJavaDouble(Value, total) && total > 0) {
       Chart->Meta.Total = total;
       Chart->Meta.HasTotal = true;
     }
-  } else if (MatchHeader(cmd, "VOLWAV")) {
-  } else if (MatchHeader(cmd, "STAGEFILE")) {
-    Chart->Meta.StageFile = utf8_to_path_t(Value);
-  } else if (MatchHeader(cmd, "BANNER")) {
-    Chart->Meta.Banner = utf8_to_path_t(Value);
-  } else if (MatchHeader(cmd, "BACKBMP")) {
-    Chart->Meta.BackBmp = utf8_to_path_t(Value);
-  } else if (MatchHeader(cmd, "PREVIEW")) {
-    Chart->Meta.Preview = utf8_to_path_t(Value);
-  } else if (MatchHeader(cmd, "WAV")) {
-    if (Xx.empty() || Value.empty()) {
+  } else if (commandIs("VOLWAV")) {
+    int volume;
+    if (parseInteger(Value, volume)) Chart->Meta.VolWav = volume;
+  } else if (commandIs("STAGEFILE")) {
+    Chart->Meta.StageFile = utf8_to_path_t(resourcePath(Value, shiftJis));
+  } else if (commandIs("BANNER")) {
+    Chart->Meta.Banner = utf8_to_path_t(resourcePath(Value, shiftJis));
+  } else if (commandIs("BACKBMP")) {
+    Chart->Meta.BackBmp = utf8_to_path_t(resourcePath(Value, shiftJis));
+  } else if (commandIs("PREVIEW")) {
+    Chart->Meta.Preview = utf8_to_path_t(resourcePath(Value, shiftJis));
+  } else if (commandIs("WAV")) {
+    const auto path = resourcePath(Value, shiftJis);
+    if (Xx.empty()) {
       // UE_LOG(LogTemp, Warning, TEXT("WAV command requires two arguments"));
       return;
     }
@@ -4004,13 +4253,14 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       // UE_LOG(LogTemp, Warning, TEXT("Invalid WAV id: %s"), *Xx);
       return;
     }
-    Chart->WavTable[id] = Value;
+    Chart->WavTable[id] = path;
     if (Chart->ReferencedWavTable.find(id) !=
         Chart->ReferencedWavTable.end()) {
-      Chart->ReferencedWavTable[id] = Value;
+      Chart->ReferencedWavTable[id] = path;
     }
-  } else if (MatchHeader(cmd, "BMP")) {
-    if (Xx.empty() || Value.empty()) {
+  } else if (commandIs("BMP")) {
+    const auto path = resourcePath(Value, shiftJis);
+    if (Xx.empty()) {
       // UE_LOG(LogTemp, Warning, TEXT("BMP command requires two arguments"));
       return;
     }
@@ -4019,29 +4269,41 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       // UE_LOG(LogTemp, Warning, TEXT("Invalid BMP id: %s"), *Xx);
       return;
     }
-    Chart->BmpTable[id] = Value;
+    Chart->BmpTable[id] = path;
     if (Chart->ReferencedBmpTable.find(id) !=
         Chart->ReferencedBmpTable.end()) {
-      Chart->ReferencedBmpTable[id] = Value;
+      Chart->ReferencedBmpTable[id] = path;
     }
     if (Xx == "00") {
-      Chart->ReferencedBmpTable[id] = Value;
+      Chart->ReferencedBmpTable[id] = path;
       Chart->Meta.BgaPoorDefault = true;
     }
-  } else if (MatchHeader(cmd, "LNOBJ")) {
-    Lnobj = ParseInt(Value);
-  } else if (MatchHeader(cmd, "LNMODE")) {
-    Chart->Meta.LnMode =
-        static_cast<int>(std::strtol(Value.c_str(), nullptr, 10));
-  } else if (MatchHeader(cmd, "SCROLL")) {
+  } else if (commandIs("LNOBJ")) {
+    const auto text = javaTrimmedHeaderValue(Value);
+    if (UseBase62) {
+      if (text.size() >= 2) {
+        const int id = ParseInt(std::string_view(text).substr(0, 2));
+        if (id >= 0) Lnobj = id;
+      }
+    } else {
+      int id;
+      if (parseInteger(text, id, 36)) Lnobj = id;
+    }
+  } else if (commandIs("LNMODE")) {
+    int mode;
+    if (parseInteger(Value, mode) && mode >= 0 && mode <= 3)
+      Chart->Meta.LnMode = mode;
+  } else if (commandIs("SCROLL")) {
     auto xx = ParseInt(Xx);
-    auto value = std::strtod(Value.c_str(), nullptr);
-    ScrollTable[xx] = value;
+    double value;
+    if (CheckResourceIdRange(xx) && parseJavaDouble(Value, value))
+      ScrollTable[xx] = value;
     // std::wcout << "SCROLL: " << xx << " = " << value << std::endl;
-  } else if (MatchHeader(cmd, "SPEED")) {
+  } else if (commandIs("SPEED")) {
     auto xx = ParseInt(Xx);
-    auto value = std::strtod(Value.c_str(), nullptr);
-    SpeedTable[xx] = value;
+    double value;
+    if (CheckResourceIdRange(xx) && parseJavaDouble(Value, value))
+      SpeedTable[xx] = value;
   } else {
 #if BMS_PARSER_VERBOSE == 1
     std::cout << "Unknown command: " << cmd << std::endl;
@@ -4106,56 +4368,29 @@ inline void Parser::RegisterReferencedBmpId(Chart *Chart, int BmpId,
   Chart->ReferencedBmpTable[BmpId] = bmpIt->second;
 }
 
-inline int Parser::ParseHex(std::string_view Str) {
-  auto result = 0;
-  for (size_t i = 0; i < Str.length(); ++i) {
-    auto c = Str[i];
-    if (c >= '0' && c <= '9') {
-      result = result * 16 + c - '0';
-    } else if (c >= 'A' && c <= 'F') {
-      result = result * 16 + c - 'A' + 10;
-    } else if (c >= 'a' && c <= 'f') {
-      result = result * 16 + c - 'a' + 10;
-    }
-  }
-  return result;
+inline int Parser::ParseHex(std::string_view str) {
+  // Section.BPM_CHANGE decodes both digits in base 36, then applies hex weights.
+  if (str.size() != 2) return -1;
+  const auto digit = [](unsigned char c) {
+    return c >= '0' && c <= '9' ? c - '0' :
+           c >= 'A' && c <= 'Z' ? c - 'A' + 10 :
+           c >= 'a' && c <= 'z' ? c - 'a' + 10 : -1;
+  };
+  const int high = digit(str[0]), low = digit(str[1]);
+  return high < 0 || low < 0 ? -1 : high * 16 + low;
 }
 
-inline int Parser::ParseInt(std::string_view Str, bool forceBase36) const {
-  if (forceBase36 || !UseBase62) {
-    // Note cells and resource IDs are normally two ASCII base-36 digits.
-    // Decode within the view; its following bytes may contain more note cells.
-    if (Str.size() == 2) {
-      const auto digit = [](unsigned char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'A' && c <= 'Z') return c - 'A' + 10;
-        if (c >= 'a' && c <= 'z') return c - 'a' + 10;
-        return -1;
-      };
-      const int first = digit(static_cast<unsigned char>(Str[0]));
-      const int second = digit(static_cast<unsigned char>(Str[1]));
-      if (first >= 0 && second >= 0) {
-        return first * 36 + second;
-      }
-    }
-    // Preserve strtol's existing handling of signs, whitespace, partial values,
-    // and overflow, while providing the terminator that a view does not have.
-    return static_cast<int>(std::strtol(std::string(Str).c_str(), nullptr, 36));
+inline int Parser::ParseInt(std::string_view str, bool forceBase36) const {
+  if (str.empty() || str.size() > 2) return -1;
+  const int base = !forceBase36 && UseBase62 ? 62 : 36;
+  int result = 0;
+  for (unsigned char c : str) {
+    int digit = c >= '0' && c <= '9' ? c - '0' :
+                c >= 'A' && c <= 'Z' ? c - 'A' + 10 :
+                c >= 'a' && c <= 'z' ? c - 'a' + (base == 62 ? 36 : 10) : -1;
+    if (digit < 0) return -1;
+    result = result * base + digit;
   }
-
-  auto result = 0;
-  for (size_t i = 0; i < Str.length(); ++i) {
-    auto c = Str[i];
-    if (c >= '0' && c <= '9') {
-      result = result * 62 + c - '0';
-    } else if (c >= 'A' && c <= 'Z') {
-      result = result * 62 + c - 'A' + 10;
-    } else if (c >= 'a' && c <= 'z') {
-      result = result * 62 + c - 'a' + 36;
-    } else
-      return -1;
-  }
-  // std::wcout << "ParseInt62: " << Str << " = " << result << std::endl;
   return result;
 }
 #ifdef _WIN32
@@ -4228,6 +4463,10 @@ Parser::~Parser() = default;
 
 // http://www.zedwood.com/article/cpp-sha256-function
 #include <cstring>
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2) && \
+    defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#include <arm_neon.h>
+#endif
 
 namespace bms_parser {
 const unsigned int SHA256::sha256_k[64] = // UL = uint32
@@ -4244,6 +4483,38 @@ const unsigned int SHA256::sha256_k[64] = // UL = uint32
      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
 void SHA256::transform(const unsigned char *message, unsigned int block_nb) {
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2) && \
+    defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  // The target guarantees SHA2 instructions. Keep the existing update/final
+  // code, including its length encoding, identical on both compression paths.
+  uint32x4_t abcd = vld1q_u32(m_h);
+  uint32x4_t efgh = vld1q_u32(m_h + 4);
+  for (unsigned int block = 0; block < block_nb; ++block) {
+    const auto savedAbcd = abcd;
+    const auto savedEfgh = efgh;
+    uint32x4_t schedule[4];
+    for (unsigned int group = 0; group < 4; ++group)
+      schedule[group] = vreinterpretq_u32_u8(
+          vrev32q_u8(vld1q_u8(message + group * 16)));
+    for (unsigned int group = 0; group < 16; ++group) {
+      const unsigned int slot = group & 3;
+      if (group >= 4) {
+        schedule[slot] = vsha256su1q_u32(
+            vsha256su0q_u32(schedule[slot], schedule[(slot + 1) & 3]),
+            schedule[(slot + 2) & 3], schedule[(slot + 3) & 3]);
+      }
+      const auto words = vaddq_u32(schedule[slot], vld1q_u32(sha256_k + group * 4));
+      const auto priorAbcd = abcd;
+      abcd = vsha256hq_u32(abcd, efgh, words);
+      efgh = vsha256h2q_u32(efgh, priorAbcd, words);
+    }
+    abcd = vaddq_u32(abcd, savedAbcd);
+    efgh = vaddq_u32(efgh, savedEfgh);
+    message += SHA224_256_BLOCK_SIZE;
+  }
+  vst1q_u32(m_h, abcd);
+  vst1q_u32(m_h + 4, efgh);
+#else
   uint32 w[64];
   const unsigned char *sub_block;
   int i;
@@ -4282,6 +4553,7 @@ void SHA256::transform(const unsigned char *message, unsigned int block_nb) {
     m_h[0] += a; m_h[1] += b; m_h[2] += c; m_h[3] += d;
     m_h[4] += e; m_h[5] += f; m_h[6] += g; m_h[7] += h;
   }
+#endif
 }
 
 void SHA256::init() {
@@ -4441,6 +4713,8 @@ void ShiftJISConverter::BytesToUTF8(const unsigned char *input, size_t size,
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cmath>
+#include <limits>
 namespace bms_parser {
 TimeLine::TimeLine(int lanes, bool metaOnly) {
   if (metaOnly) {
@@ -4458,10 +4732,36 @@ TimeLine *TimeLine::SetNote(int lane, Note *note) {
   return this;
 }
 
+Note *TimeLine::DemoteUnusableLongNote(int lane, LongNoteType resolvedType) {
+  auto *ln = dynamic_cast<LongNote *>(Notes.at(lane));
+  if (!ln) return Notes[lane];
+  auto *partner = ln->IsTail() ? ln->Head : ln->Tail;
+  const bool reciprocal = partner &&
+      (ln->IsTail() ? partner->Tail == ln : partner->Head == ln);
+  const bool active = partner && partner->Timeline && partner->Lane >= 0 &&
+      static_cast<size_t>(partner->Lane) < partner->Timeline->Notes.size() &&
+      partner->Timeline->Notes[partner->Lane] == partner;
+  if (reciprocal && (active || (!ln->IsTail() &&
+      (resolvedType == LongNoteType::LongNote || resolvedType == LongNoteType::Undefined))))
+    return ln;
+  // Allocate before mutating ownership so allocation failure leaves the graph intact.
+  auto *normal = new Note(*ln);
+  if (partner) {
+    if (partner->Head == ln) partner->Head = nullptr;
+    if (partner->Tail == ln) partner->Tail = nullptr;
+  }
+  Notes[lane] = normal;
+  delete ln;
+  return normal;
+}
+
 TimeLine *TimeLine::SetInvisibleNote(int lane, Note *note) {
+  if (InvisibleNotes[lane] != note) delete InvisibleNotes[lane];
   InvisibleNotes[lane] = note;
-  note->Lane = lane;
-  note->Timeline = this;
+  if (note) {
+    note->Lane = lane;
+    note->Timeline = this;
+  }
   return this;
 }
 
@@ -4479,7 +4779,15 @@ TimeLine *TimeLine::AddBackgroundNote(Note *note) {
 }
 
 double TimeLine::GetStopDuration() const {
-  return 1250000.0 * StopLength / Bpm; // 1250000 = 240 * 1000 * 1000 / 192
+  if (ParsedStopDuration) return static_cast<double>(*ParsedStopDuration);
+  // Section.java divides the definition by 192 before converting to long.
+  const double duration = 240000000.0 * (StopLength / 192.0) / Bpm;
+  if (std::isnan(duration)) return 0;
+  if (duration >= static_cast<double>(std::numeric_limits<long long>::max()))
+    return static_cast<double>(std::numeric_limits<long long>::max());
+  if (duration <= static_cast<double>(std::numeric_limits<long long>::min()))
+    return static_cast<double>(std::numeric_limits<long long>::min());
+  return std::trunc(duration);
 }
 
 TimeLine::~TimeLine() {

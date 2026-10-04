@@ -130,12 +130,91 @@ bool testContinuingAutoShiftReplayHasNoGaugeCutoff() {
   }
   return passed;
 }
+
+bool testAutoPlaySelectiveLongNotes() {
+  for (const int startMeasure : {0, 1}) for (const int mode : {1, 2, 3}) {
+    for (const bool detachHead : {false, true}) {
+      bms_parser::Parser parser;
+      bms_parser::Chart *raw = nullptr;
+      std::atomic_bool cancelled = false;
+      const std::string measure = startMeasure == 0 ? "000" : "001";
+      const std::string text = "#BPM 120\n#" + measure + "51:0101\n#" + measure + "11:" +
+          (detachHead ? "02\n" : "0002\n");
+      parser.Parse(std::vector<unsigned char>(text.begin(), text.end()),
+                   &raw, false, false, cancelled);
+      std::unique_ptr<bms_parser::Chart> chart(raw);
+      if (!chart) return false;
+      applyEffectiveLongNoteModeToChart(*chart, mode);
+      const auto replay = replay_autoplay::BuildReplayData(
+          *chart, GaugeType::Normal, GaugeAutoShiftMode::None);
+      const bool representable = !(startMeasure == 1 && mode == 1 && !detachHead);
+      if (replay.finalScore != 4 || replay.events.size() != 4 ||
+          replay.consumerIdentityCompatible != representable) {
+        std::cerr << "demoted notes must produce ordinary, replayable judgements\n";
+        return false;
+      }
+      if (!std::is_sorted(replay.events.begin(), replay.events.end(),
+              [](const auto &left, const auto &right) {
+                return left.songTimeMicros < right.songTimeMicros;
+              }) || replay.events.back().score != replay.finalScore) {
+        std::cerr << "synthetic autoplay applies scoring in event time order\n";
+        return false;
+      }
+
+      if (!representable) {
+        auto liveState = replay_result::BuildInitialGaugeState(*chart, replay);
+        liveState.gaugeHistory = {20.0f, 40.0f, 60.0f};
+        const auto chartGraph = replay_result::BuildSkinGameplayChartGraphState(
+            *chart, liveState);
+        const auto graph = replay_result::BuildSkinGameplayGraphState(
+            *chart, replay, liveState);
+        if (!graph.chart || !graph.dynamic ||
+            *graph.chart != *chartGraph.chart ||
+            !graph.dynamic->distributionOmitted ||
+            !graph.dynamic->judgementDistribution.empty() ||
+            !graph.dynamic->earlyLateDistribution.empty() ||
+            graph.dynamic->recentJudgeTimingsMillis !=
+                emptySkinRecentJudgeTimings() ||
+            graph.dynamic->gaugeHistories != chartGraph.dynamic->gaugeHistories ||
+            graph.dynamic->gaugeHistories[static_cast<std::size_t>(
+                gaugeTypeIndex(GaugeType::Normal))] != liveState.gaugeHistory ||
+            graph.dynamic->gaugeType != chartGraph.dynamic->gaugeType ||
+            graph.dynamic->gaugeBorder != chartGraph.dynamic->gaugeBorder ||
+            graph.dynamic->gaugeSupported != chartGraph.dynamic->gaugeSupported) {
+          std::cerr << "detached classic tail graph must omit ambiguous replay "
+                       "judgements and retain authored chart and live gauge history\n";
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
 } // namespace
 
+bool testAutoPlayDemotedUnpairedHead() {
+  // The parser now exposes this surviving endpoint as an ordinary normal note.
+  const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
+               &raw, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  if (!chart || chart->Meta.TotalNotes != 1) return false;
+  const auto replay = replay_autoplay::BuildReplayData(
+      *chart, GaugeType::Normal, GaugeAutoShiftMode::None);
+  return replay.events.size() == 2 &&
+         replay.events.front().action == ReplayEventAction::Press &&
+         replay.finalScore == 2 && chart->Meta.TotalNotes == 1;
+}
+
 int main() {
+  if (!testAutoPlayDemotedUnpairedHead()) return 1;
   const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
   const bool continuingAutoShift = testContinuingAutoShiftReplayHasNoGaugeCutoff();
-  if (!recoveredPmsResult || !continuingAutoShift) return 1;
+  const bool detachedAutoPlay = testAutoPlaySelectiveLongNotes();
+  if (!recoveredPmsResult || !continuingAutoShift || !detachedAutoPlay) return 1;
 
   ReplaySummary summary;
   summary.initialGaugeType = GaugeType::Hard;
@@ -891,6 +970,28 @@ int main() {
   if (std::abs(lowTotalAutoSummary.finalGauge - 40.0f) > 0.01f) {
     std::cerr << "synthetic Auto summary must respect authored TOTAL"
               << std::endl;
+    return 1;
+  }
+
+  bms_parser::Parser detachedParser;
+  bms_parser::Chart *rawDetached = nullptr;
+  std::atomic_bool cancelled = false;
+  const std::string detachedText = "#BPM 120\n#00051:0101\n#00011:02\n";
+  detachedParser.Parse(std::vector<unsigned char>(detachedText.begin(), detachedText.end()),
+                       &rawDetached, false, false, cancelled);
+  std::unique_ptr<bms_parser::Chart> detached(rawDetached);
+  if (!detached || !detached->DetachedNotes.empty()) return 1;
+  detached->Meta.LnMode = 1;
+  ReplayData detachedReplay;
+  detachedReplay.events = {{.action = ReplayEventAction::Press,
+                            .lane = 0, .noteTimeMicros = 0,
+                            .judgement = PGreat, .combo = 1, .score = 2}};
+  const auto detachedState = replay_result::BuildResultState(*detached, detachedReplay);
+  const auto detachedGraph = replay_result::BuildSkinGameplayGraphState(
+      *detached, detachedReplay, detachedState);
+  if (!detachedGraph.dynamic || detachedGraph.dynamic->judgementDistribution.empty() ||
+      detachedGraph.dynamic->judgementDistribution[0][1] != 1) {
+    std::cerr << "detached pair must not replace the active normal result graph identity\n";
     return 1;
   }
 

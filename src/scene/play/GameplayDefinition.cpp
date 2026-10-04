@@ -118,6 +118,9 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
     if (note == nullptr || ids.contains(note)) {
       return;
     }
+    if (note->Timeline == nullptr) {
+      throw std::invalid_argument("Cannot read note timing: timeline is absent.");
+    }
     const NoteId id = static_cast<NoteId>(result.notes_.size());
     ids.emplace(note, id);
     const auto kind = noteKind(note);
@@ -158,6 +161,12 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
         append(note);
       }
     }
+  }
+
+  const auto identities = chart_playability::noteIdentities(chart);
+  for (std::size_t index = identities.activeCount; index < identities.notes.size(); ++index) {
+    append(identities.notes[index]);
+    result.notes_.back().inActiveSlot = false;
   }
 
   for (const auto &[source, id] : ids) {
@@ -206,7 +215,7 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
     }
   }
 
-  result.chronologicalNoteIds_.resize(result.notes_.size());
+  result.chronologicalNoteIds_.resize(identities.activeCount);
   std::iota(result.chronologicalNoteIds_.begin(),
             result.chronologicalNoteIds_.end(), NoteId{0});
   std::ranges::sort(result.chronologicalNoteIds_,
@@ -228,7 +237,7 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
   }
 
   for (const auto &note : result.notes_) {
-    if (note.kind == NoteKind::Landmine) {
+    if (!note.inActiveSlot || note.kind == NoteKind::Landmine) {
       continue;
     }
     auto lane = std::ranges::lower_bound(

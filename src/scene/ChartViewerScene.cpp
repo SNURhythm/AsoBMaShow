@@ -1,3 +1,4 @@
+#include "../ChartTiming.h"
 #include "../i18n/Localization.h"
 #include "ChartViewerScene.h"
 #include "ChartViewerNoteGeometry.h"
@@ -1515,8 +1516,7 @@ private:
       const auto *prev = orderedTimelines[i - 1];
       const auto *current = orderedTimelines[i];
       const long long stopEnd =
-          prev->Timing +
-          std::max(0LL, static_cast<long long>(prev->GetStopDuration()));
+          chart_timing::stopEnd(*prev);
       if (clampedTime <= stopEnd) {
         return prev->BeatPosition;
       }
@@ -1536,8 +1536,7 @@ private:
 
     const auto *last = orderedTimelines.back();
     const long long stopEnd =
-        last->Timing +
-        std::max(0LL, static_cast<long long>(last->GetStopDuration()));
+        chart_timing::stopEnd(*last);
     if (clampedTime <= stopEnd) {
       return last->BeatPosition;
     }
@@ -1571,8 +1570,7 @@ private:
       }
       const double progress =
           std::clamp(clampedBeat / first->BeatPosition, 0.0, 1.0);
-      return static_cast<long long>(
-          std::llround(static_cast<double>(first->Timing) * progress));
+      return chart_timing::rounded(static_cast<double>(first->Timing) * progress);
     }
 
     for (size_t i = 1; i < orderedTimelines.size(); ++i) {
@@ -1583,8 +1581,7 @@ private:
           return prev->Timing;
         }
         const long long stopEnd =
-            prev->Timing +
-            std::max(0LL, static_cast<long long>(prev->GetStopDuration()));
+            chart_timing::stopEnd(*prev);
         const double beatDistance = current->BeatPosition - prev->BeatPosition;
         if (beatDistance <= epsilon) {
           return current->Timing;
@@ -1592,9 +1589,9 @@ private:
         const double progress =
             std::clamp((clampedBeat - prev->BeatPosition) / beatDistance, 0.0,
                        1.0);
-        return static_cast<long long>(std::llround(
+        return chart_timing::rounded(
             static_cast<double>(stopEnd) +
-            static_cast<double>(current->Timing - stopEnd) * progress));
+            (static_cast<double>(current->Timing) - static_cast<double>(stopEnd)) * progress);
       }
     }
 
@@ -1603,8 +1600,7 @@ private:
       return last->Timing;
     }
     const long long stopEnd =
-        last->Timing +
-        std::max(0LL, static_cast<long long>(last->GetStopDuration()));
+        chart_timing::stopEnd(*last);
     const long long totalLength =
         chart != nullptr ? std::max(chart->Meta.TotalLength, last->Timing)
                          : last->Timing;
@@ -1615,9 +1611,9 @@ private:
     const double progress =
         std::clamp((clampedBeat - last->BeatPosition) / beatDistance, 0.0,
                    1.0);
-    return static_cast<long long>(std::llround(
+    return chart_timing::rounded(
         static_cast<double>(stopEnd) +
-        static_cast<double>(totalLength - stopEnd) * progress));
+        (static_cast<double>(totalLength) - static_cast<double>(stopEnd)) * progress);
   }
 
   void renderLabels(RenderContext &context) {
@@ -2412,8 +2408,8 @@ void ChartViewerScene::update(float dt) {
   if (listenActive && canvasView != nullptr) {
     const long long rawTime = context.jukebox.getTimeMicros();
     const long long displayTime =
-        rawTime + static_cast<long long>(context.settings.audioOffsetMs) *
-                      1000LL;
+        chart_timing::add(rawTime, static_cast<long long>(context.settings.audioOffsetMs) *
+                      1000LL);
     canvasView->setPlaybackTime(displayTime, true);
     if (chart != nullptr && listenEndMicros > 0 && rawTime >= listenEndMicros) {
       stopListening();
@@ -2508,6 +2504,14 @@ void ChartViewerScene::cleanupScene() {
 }
 
 void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
+  if (!replayData.consumerIdentityCompatible) {
+    practiceGhostReplay.reset();
+    clearGhostReplay();
+    if (statusText != nullptr) {
+      statusText->setText(replay_note::kUnsupportedIdentityDiagnostic);
+    }
+    return;
+  }
   if (replayData.events.empty()) {
     practiceGhostReplay.reset();
     clearGhostReplay();
@@ -2982,6 +2986,7 @@ void ChartViewerScene::parseAndRefresh(
   std::atomic_bool cancelled = false;
   std::vector<unsigned char> sourceBytes;
   std::unique_ptr<bms_parser::Chart> parsed;
+  std::string parseDiagnostic;
   try {
     std::string readError;
     if (!archive_file::readFile(record.meta.BmsPath, sourceBytes, &readError) ||
@@ -2993,9 +2998,10 @@ void ChartViewerScene::parseAndRefresh(
     } else {
       parsed = play_options::parseChartBytes(
           record.meta.BmsPath, sourceBytes, randomSeed, randomPrng,
-          requestedValues, cancelled, "chart viewer");
+          requestedValues, cancelled, "chart viewer", &parseDiagnostic);
     }
   } catch (const std::exception &e) {
+    parseDiagnostic = e.what();
     SDL_Log("Chart viewer parse failed: %s", e.what());
     archive_file::appendDebugLogLine(
         "Chart viewer parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
@@ -3010,7 +3016,8 @@ void ChartViewerScene::parseAndRefresh(
       canvasView->setChart(nullptr);
     }
     if (statusText != nullptr) {
-      statusText->setText(i18n::tr("chart_viewer.parse_failed.label"));
+      statusText->setText(parseDiagnostic.empty()
+          ? i18n::tr("chart_viewer.parse_failed.label") : parseDiagnostic);
     }
     refreshHeaderText();
     updateSelectionText();
@@ -3446,6 +3453,12 @@ void ChartViewerScene::loadPracticeGhostReplay() {
 bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
                                             int loadedReplayId,
                                             const std::string &successText) {
+  if (!replayData.consumerIdentityCompatible) {
+    if (statusText != nullptr) {
+      statusText->setText(replay_note::kUnsupportedIdentityDiagnostic);
+    }
+    return false;
+  }
   if (canvasView == nullptr) {
     return false;
   }
@@ -3493,6 +3506,12 @@ bool ChartViewerScene::applyPreparedGhostReplayData(
     const ReplayData &replayData,
     std::unique_ptr<bms_parser::Chart> preparedChart, int loadedReplayId,
     const std::string &successText) {
+  if (!replayData.consumerIdentityCompatible) {
+    if (statusText != nullptr) {
+      statusText->setText(replay_note::kUnsupportedIdentityDiagnostic);
+    }
+    return false;
+  }
   if (canvasView == nullptr || preparedChart == nullptr) {
     return false;
   }
@@ -3548,7 +3567,9 @@ void ChartViewerScene::loadSelectedGhostReplay() {
                                       parseCancelled);
           if (!loaded.ready() || parseCancelled) {
             if (statusText != nullptr) {
-              statusText->setText(i18n::tr("chart_viewer.ghost_load_failed.label"));
+              statusText->setText(loaded.diagnostic.empty()
+                  ? i18n::tr("chart_viewer.ghost_load_failed.label")
+                  : loaded.diagnostic);
             }
             return true;
           }
@@ -4177,6 +4198,7 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
   practiceReplayRulesetSnapshot = request.replayRulesetSnapshot;
 
   bool replayGhostUnavailable = false;
+  std::string replayGhostDiagnostic;
   if (request.source == practice::LaunchSource::ReplayResult &&
       request.modernReplayAttemptId.has_value()) {
     const auto exact = context.replayRepository.LoadModernChartResultByAttempt(
@@ -4200,6 +4222,7 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
         }
       } else {
         replayGhostUnavailable = true;
+        replayGhostDiagnostic = loaded.diagnostic;
       }
     } else {
       replayGhostUnavailable = true;
@@ -4235,10 +4258,14 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     }
   }
   if (statusText != nullptr) {
-    statusText->setLocalizedText(i18n::message(
-        replayGhostUnavailable
-            ? "chart_viewer.section_ready_ghost_unavailable.label"
-            : "chart_viewer.section_ready.label"));
+    if (!replayGhostDiagnostic.empty()) {
+      statusText->setText(replayGhostDiagnostic);
+    } else {
+      statusText->setLocalizedText(i18n::message(
+          replayGhostUnavailable
+              ? "chart_viewer.section_ready_ghost_unavailable.label"
+              : "chart_viewer.section_ready.label"));
+    }
   }
   updatePracticeGhostReplayButton();
   updateGhostControls();
@@ -4435,9 +4462,9 @@ void ChartViewerScene::startListeningFromSelection() {
         context.jukebox.seek(std::max(0LL, selectedTime));
         listenActive = true;
         canvasView->setPlaybackTime(
-            selectedTime +
+            chart_timing::add(selectedTime,
                 static_cast<long long>(context.settings.audioOffsetMs) *
-                    1000LL,
+                    1000LL),
             true);
         if (statusText != nullptr && chart != nullptr) {
           statusText->setText(std::to_string(chart->Meta.TotalNotes) +

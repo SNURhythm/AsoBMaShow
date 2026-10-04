@@ -30,7 +30,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 12;
+constexpr int kChartDatabaseSchemaVersion = 14;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -408,11 +408,11 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed,
     // through interrupted scans and archive-prefix replacement until the full
     // library rebuild completes.
     ok = execSql(db,
-                 "CREATE TABLE chart_meta_rebuild_add_dates("
+                 "CREATE TABLE IF NOT EXISTS chart_meta_rebuild_add_dates("
                  "path TEXT PRIMARY KEY,add_date INTEGER NOT NULL) WITHOUT ROWID",
                  "creating chart rebuild added dates") &&
          execSql(db,
-                 "INSERT INTO chart_meta_rebuild_add_dates "
+                 "INSERT OR IGNORE INTO chart_meta_rebuild_add_dates "
                  "SELECT path,add_date FROM chart_meta",
                  "preserving chart rebuild added dates");
   }
@@ -798,6 +798,14 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {10, "persist selector folder add dates", migrateChartDatabaseToVersion10},
       {11, "refresh 7-Zip solid classification", migrateChartDatabaseToVersion11},
       {12, "preserve chart judge rank source", migrateChartDatabaseToVersion12},
+      {13, "refresh parser semantic metadata", [](sqlite3 *db, bool &completed) {
+         // Ordinary files and unchanged archives otherwise keep counts, key
+         // modes and timing produced by an older parser indefinitely.
+         return invalidateChartMetadataForNormalScan(db, completed, true);
+       }},
+      {14, "refresh malformed long-note counts", [](sqlite3 *db, bool &completed) {
+         return invalidateChartMetadataForNormalScan(db, completed, true);
+       }},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

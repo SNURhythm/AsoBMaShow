@@ -91,6 +91,8 @@ struct ChartVisualNote {
   ChartLongNoteMode longNoteMode = ChartLongNoteMode::LN;
   int mineDamage = 0;
   std::uint32_t authoredOrdinal = 0;
+  // Pair-only identities are addressable but are not independent lane objects.
+  bool inActiveSlot = true;
 
   bool operator==(const ChartVisualNote &) const = default;
 };

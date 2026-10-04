@@ -35,7 +35,7 @@ ChartReplayConsumer makeRuntimeChartReplayConsumer(
           return std::unique_ptr<bms_parser::Chart>{};
         }
         auto prepared = play_options::prepareReplayChart(
-            path, *runtimeSetup, cancelled);
+            path, *runtimeSetup, cancelled, &diagnostic);
         if (prepared == nullptr && diagnostic.empty()) {
           diagnostic = "The replay chart setup could not be applied.";
         }

@@ -147,6 +147,7 @@ inline ReplayData BuildReplayData(
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);
 
+  std::vector<const bms_parser::Note *> eventNotes;
   for (auto *measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
@@ -159,32 +160,45 @@ inline ReplayData BuildReplayData(
         if (note == nullptr || note->IsLandmineNote()) {
           continue;
         }
-        if (note->IsLongNote()) {
-          auto *longNote = static_cast<bms_parser::LongNote *>(note);
-          if (!longNote->IsTail()) {
-            if (effectiveLongNoteIsCharge(longNote, chart)) {
-              applyAutoPlayJudge(state, perfect);
-            }
-            replay.events.push_back(makeAutoPlayEvent(
-                ReplayEventAction::Press, note, timeline->Timing, perfect,
-                state));
-          } else {
-            applyAutoPlayJudge(state, perfect);
-            replay.events.push_back(makeAutoPlayEvent(
-                ReplayEventAction::Release, note, timeline->Timing, perfect,
-                state));
+        const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+        if (longNote != nullptr && !effectiveLongNoteIsCharge(longNote, chart)) {
+          // Java never judges an unheld classic end through the lane scan.
+          if (longNote->IsTail() && !replay_note::hasActiveIdentity(longNote->Head)) {
+            continue;
+          }
+          eventNotes.push_back(note);
+          // Held classic ends follow the direct pair, including displaced ends.
+          if (!longNote->IsTail() && longNote->Tail != nullptr &&
+              !replay_note::hasActiveIdentity(longNote->Tail)) {
+            eventNotes.push_back(longNote->Tail);
           }
           continue;
         }
-
-        applyAutoPlayJudge(state, perfect);
-        replay.events.push_back(makeAutoPlayEvent(
-            ReplayEventAction::Press, note, timeline->Timing, perfect, state));
-        replay.events.push_back(makeAutoPlayEvent(
-            ReplayEventAction::Release, note, timeline->Timing, noJudge,
-            state));
+        eventNotes.push_back(note);
       }
     }
+  }
+  std::stable_sort(eventNotes.begin(), eventNotes.end(),
+      [](const auto *left, const auto *right) {
+        return left->Timeline->Timing < right->Timeline->Timing;
+      });
+  for (const auto *note : eventNotes) {
+    replay.consumerIdentityCompatible &= replay_note::hasActiveIdentity(note);
+    const auto time = note->Timeline->Timing;
+    if (const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note)) {
+      if (longNote->IsTail() || effectiveLongNoteIsCharge(longNote, chart)) {
+        applyAutoPlayJudge(state, perfect);
+      }
+      replay.events.push_back(makeAutoPlayEvent(
+          longNote->IsTail() ? ReplayEventAction::Release : ReplayEventAction::Press,
+          note, time, perfect, state));
+      continue;
+    }
+    applyAutoPlayJudge(state, perfect);
+    replay.events.push_back(makeAutoPlayEvent(
+        ReplayEventAction::Press, note, time, perfect, state));
+    replay.events.push_back(makeAutoPlayEvent(
+        ReplayEventAction::Release, note, time, noJudge, state));
   }
 
   replay.finalScore = state.getScore();
