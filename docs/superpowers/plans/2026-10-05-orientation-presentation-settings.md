@@ -113,6 +113,25 @@
 
 - [x] Run `git diff --check`; build `main` and all affected test targets in one `cmake --build cmake-build-debug --target ... -j 6` invocation. Run focused tests before `ctest --test-dir cmake-build-debug --output-on-failure -j 6`.
 - [x] Investigate failures using their actual output. The prior run had a reproducible, unchanged Metal SDF-shadow failure; do not label a new failure pre-existing without checking the affected source and baseline evidence.
-- [ ] Per the final user request, skip Android builds and run `scripts/ios_firebase_deploy.sh` for Firebase iOS distribution after desktop verification. Leave iOS device and visual validation to the user.
+- [x] Per the final user request, skip Android builds and run `scripts/ios_firebase_deploy.sh` for Firebase iOS distribution after desktop verification. Leave iOS device and visual validation to the user.
 - [x] Obtain the execution method's final review, address findings, and rerun only affected checks. Independent settings survive save/reload tests. Final visual verification is assigned to the user on the requested Firebase build because desktop CUA could not attach to the test window.
-- [ ] Commit remaining verified fixes, push the current branch upstream, and report results plus any unresolved platform/test limitations. Leave unrelated iOS project changes unstaged.
+- [x] Commit remaining verified fixes, push the current branch upstream, and report results plus any unresolved platform/test limitations. Leave unrelated iOS project changes unstaged.
+
+## Verification outcome
+
+- Desktop app and all test targets compile. Full CTest ran 423 checks: 419 passed initially; the four failures were fixed and all four passed on rerun. The previously observed Metal SDF failure did not reproduce.
+- Fresh final review found two important issues: judgement candidate strategy must remain shared, and selector resume must wait for pending orientation skin revalidation. Both are fixed with regressions observed failing before the fixes and passing afterward. No deferred minor findings.
+- Firebase iOS release `0.0.1 (202610041725)` was built, signed, artifact-audited, uploaded, and distributed successfully from code commit `cc990c58`. Release ID: `68a8igciobim8`.
+- Android was skipped at the user's request. The user will inspect the portrait layout and orientation switching on the Firebase build; desktop CUA could not attach to the running test window. Automated projection and actual-Yoga layout checks passed.
+- The user's pre-existing Xcode project modifications remain unstaged and byte-for-byte unchanged after deployment.
+
+## Implementation decisions
+
+- Use the existing feature checkout and push to its upstream as AGENTS explicitly requires; do not create a worktree — user provisioning policy overrides skill default — no isolation from concurrent manual iOS edits, so preserve those edits.
+- retain landscape-default compatibility overloads for focused fixtures while production callers pass captured orientation — avoids unrelated fixture churn; an unconverted future caller would default to landscape. Serialize unresolved skin commits per player as before while maintaining independent orientation generations, because shared safety policy spans both slots — preserves atomic policy changes; concurrent edits can briefly report busy.
+- preserve runtime orientation in ProfileSessionCoordinator rather than ProfileRuntimeReapply — the transactional settings replacement is the authoritative boundary, before skin binding; if incorrect, orientation could change during a player switch. Wait for asynchronous revalidation before replacing selector/result skins — prevents a transient unavailable-skin error; rotation may briefly retain or blank the previous skin while preparing.
+- frame actual built-in keymode width in BMSRenderer using captured presentation configuration, in addition to the default camera setup — main camera setup lacks chart keymode; missing it would clip wider DP layouts. Portrait lane length now bounds the rendered playfield; landscape keeps its prior screen-top intersection — makes extended length meaningful; portrait scroll spacing changes with length as intended. Visual desktop inspection is deferred to final verification because the UI service cannot find the running window — geometry is covered automatically but visual polish is not yet verified.
+- use the actual Yoga engine behind the existing production-method fixture for layout verification because desktop CUA still reports cgWindowNotFound — validates sizes/placement/pinned actions without inventing a screenshot; long-label and modal visual polish remain unverified.
+- follow the existing AGENTS commit/push instruction instead of the finishing skill integration menu — current-branch push is already authorized, and no merge or PR is requested; cost if wrong: changes are published to the feature branch sooner than desired.
+
+Deferred minors: none.
