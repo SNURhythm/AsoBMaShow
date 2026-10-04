@@ -2841,6 +2841,22 @@ void testExtremeTimelineDeadlinesDoNotWrapIntoThePast() {
   }
 }
 
+void testDefinitionPreservesReferenceUnpairedHead() {
+  const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
+               &raw, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  require(chart && chart->Meta.TotalNotes == 1, "reference decoder accepts an unpaired head");
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 1);
+  require(definition.noteCount() == 1 &&
+              definition.note(0).kind == gameplay::NoteKind::LongHead &&
+              definition.note(0).pairId == gameplay::kInvalidNoteId,
+          "definition retains the reference graph without a graph admission policy");
+}
+
 void testParsedExtremeTimingRemainsSafeAfterNegativePreroll() {
   const std::string input = "#BPM 1000000000000\n#STOP01 7.378697629483768e+24\n"
                             "#00009:01\n#00111:0101\n";
@@ -2936,6 +2952,7 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
+  testDefinitionPreservesReferenceUnpairedHead();
   testParsedExtremeTimingRemainsSafeAfterNegativePreroll();
   testExtremeTimelineDeadlinesDoNotWrapIntoThePast();
   testDetachedLongNotePartnersFollowReferenceTraversal();

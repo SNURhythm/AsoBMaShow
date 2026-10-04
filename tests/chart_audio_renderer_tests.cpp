@@ -325,20 +325,20 @@ void testInvalidClubTimingPreservesOutput(const std::filesystem::path &root) {
          "invalid club plan preserves the existing output file");
 }
 
-void testUnsupportedChartAdmission(const std::filesystem::path &root) {
+void testReferenceChartAdmission(const std::filesystem::path &root) {
   const std::string malformed = "#BPM 120\n#00002:5e-324\n#00151:01\n";
   const auto source = root / "unmatched-long-note.bms";
   writeText(source, malformed);
   const std::vector<unsigned char> bytes(malformed.begin(), malformed.end());
   std::atomic_bool cancelled{false};
   std::string diagnostic;
-  expect(!play_options::parseChart(source, cancelled, "unsupported fixture", &diagnostic) &&
-             diagnostic.find("long-note") != std::string::npos,
-         "filesystem preparation rejects an unsupported LN before playback");
-  expect(!play_options::parseChartBytes(source, bytes, std::nullopt,
-              std::nullopt, std::nullopt, cancelled, "unsupported fixture", &diagnostic) &&
-             diagnostic.find("long-note") != std::string::npos,
-         "buffered preparation enforces the same unsupported-LN policy");
+  const auto fromPath = play_options::parseChart(source, cancelled, "reference fixture", &diagnostic);
+  expect(fromPath && fromPath->Meta.TotalNotes == 1 && diagnostic.empty(),
+         "filesystem parser adapter retains the reference's accepted unpaired LN");
+  const auto fromBytes = play_options::parseChartBytes(source, bytes, std::nullopt,
+              std::nullopt, std::nullopt, cancelled, "reference fixture", &diagnostic);
+  expect(fromBytes && fromBytes->Meta.TotalNotes == 1 && diagnostic.empty(),
+         "buffered parser adapter retains the reference's accepted unpaired LN");
 
   bms_parser::Parser parser;
   bms_parser::Chart *raw = nullptr;
@@ -347,13 +347,33 @@ void testUnsupportedChartAdmission(const std::filesystem::path &root) {
   expect(chart && chart->Meta.TotalNotes == 1,
          "raw parser retains the accepted unmatched head and its metadata");
   if (!chart) return;
+  for (const int mode : {1, 2, 3}) {
+    try {
+      bms_parser::Chart *modeRaw = nullptr;
+      parser.Parse(bytes, &modeRaw, false, false, cancelled);
+      const std::unique_ptr<bms_parser::Chart> modeChart(modeRaw);
+      expect(modeChart != nullptr, "each LN mode starts with the reference graph");
+      if (!modeChart) continue;
+      applyEffectiveLongNoteModeToChart(*modeChart, mode);
+      expect(modeChart->Meta.LnMode == mode && modeChart->Meta.TotalNotes == 1,
+             "reference note counting does not require an LN partner");
+    } catch (const std::exception &) {
+      expect(false, "LN mode preparation must not add graph admission rules");
+    }
+  }
   const auto output = root / "unsupported-chart.wav";
   writeText(output, "preserved output");
   const auto result = guardedRender(*chart, output);
-  expect(!result.success && result.message.find("long-note") != std::string::npos,
-         "direct audio export rejects unsupported LN graphs with a diagnostic");
-  expect(readText(output) == "preserved output" && chart->Meta.TotalNotes == 1,
-         "rejection preserves output and original parser metadata");
+  expect(result.success && readText(output).starts_with("RIFF"),
+         "audio scheduling does not impose an unrelated LN pairing restriction");
+  expect(chart->Meta.TotalNotes == 1, "audio export preserves the parsed graph's counts");
+
+  const std::string extreme = "#BPM 120\n#STOP01 Infinity\n#00009:01\n#00111:01\n";
+  writeText(source, extreme);
+  const auto saturated = play_options::parseChart(source, cancelled, "saturated fixture");
+  expect(saturated &&
+             saturated->Meta.TotalLength == std::numeric_limits<long long>::max(),
+         "the parser adapter retains saturated timing without chart rejection");
 
   writeText(source, "#BPM 120\n#00051:0101\n");
   auto paired = play_options::parseChart(source, cancelled, "supported fixture");
@@ -592,7 +612,7 @@ int main() {
     testSelectedLargeClubPlan(root);
     testOverflowScaleMetadata(root);
     testInvalidClubTimingPreservesOutput(root);
-    testUnsupportedChartAdmission(root);
+    testReferenceChartAdmission(root);
     testCancellationBeforePublication(root);
     testTailAndWorkAdmission(root);
     testCancellationDuringWrite(root);

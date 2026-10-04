@@ -3,7 +3,6 @@
 #include "../ArchiveFile.h"
 #include "../AtomicFile.h"
 #include "../ChartPlaybackDuration.h"
-#include "../ChartPlayability.h"
 #include "../RAII.h"
 #include "../Utils.h"
 #include "../Uuid.h"
@@ -733,9 +732,6 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     return {.outputPath = path, .message = budget.error};
   };
   if (!budget.checkpoint()) return failure();
-  if (const auto unsupported = chart_playability::error(chart)) {
-    return {.success = false, .outputPath = path, .message = *unsupported};
-  }
   const long long baseDuration = baseDurationMicros(chart, options);
   const long double initialFrames = std::max(1.0L, std::ceil(
       static_cast<long double>(baseDuration) * kOutputSampleRate / 1000000.0L));

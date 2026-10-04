@@ -535,22 +535,6 @@ inline bool configureParserRandom(
   return true;
 }
 
-inline std::unique_ptr<bms_parser::Chart> admitParsedChart(
-    std::unique_ptr<bms_parser::Chart> chart, std::string_view logContext,
-    std::string *diagnostic) {
-  if (chart != nullptr) {
-    if (const auto unsupported = chart_playability::error(*chart)) {
-      if (diagnostic != nullptr) *diagnostic = *unsupported;
-      SDL_Log("Cannot prepare %.*s: %s", static_cast<int>(logContext.size()),
-              logContext.data(), unsupported->c_str());
-      archive_file::appendDebugLogLine("Cannot prepare " +
-          std::string(logContext) + ": " + *unsupported);
-      return nullptr;
-    }
-  }
-  return chart;
-}
-
 inline std::unique_ptr<bms_parser::Chart> parseChartBytes(
     const std::filesystem::path &path, const std::vector<unsigned char> &bytes,
     const std::optional<unsigned int> &randomSeed,
@@ -597,8 +581,7 @@ inline std::unique_ptr<bms_parser::Chart> parseChartBytes(
                                      std::string(logContext) + ": " +
                                      pathText);
   }
-  return admitParsedChart(std::unique_ptr<bms_parser::Chart>(parsedChart),
-                           logContext, diagnostic);
+  return std::unique_ptr<bms_parser::Chart>(parsedChart);
 }
 
 inline std::unique_ptr<bms_parser::Chart>
@@ -642,8 +625,7 @@ parseChart(const std::filesystem::path &path,
                                      std::string(logContext) + ": " +
                                      pathText);
   }
-  return admitParsedChart(std::unique_ptr<bms_parser::Chart>(parsedChart),
-                           logContext, diagnostic);
+  return std::unique_ptr<bms_parser::Chart>(parsedChart);
 }
 
 inline std::unique_ptr<bms_parser::Chart>

@@ -196,7 +196,26 @@ bool testAutoPlayDetachedLongNoteTraversal() {
 }
 } // namespace
 
+bool testAutoPlayUnpairedHeadKeepsReferenceHeadEvent() {
+  // JudgeManager.java:258-270 emits the head press and assigns getPair()
+  // to processing. A null pair cannot create a later release event.
+  const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
+               &raw, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  if (!chart || chart->Meta.TotalNotes != 1) return false;
+  const auto replay = replay_autoplay::BuildReplayData(
+      *chart, GaugeType::Normal, GaugeAutoShiftMode::None);
+  return replay.events.size() == 1 &&
+         replay.events.front().action == ReplayEventAction::Press &&
+         replay.finalScore == 0 && chart->Meta.TotalNotes == 1;
+}
+
 int main() {
+  if (!testAutoPlayUnpairedHeadKeepsReferenceHeadEvent()) return 1;
   const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
   const bool continuingAutoShift = testContinuingAutoShiftReplayHasNoGaugeCutoff();
   const bool detachedAutoPlay = testAutoPlayDetachedLongNoteTraversal();

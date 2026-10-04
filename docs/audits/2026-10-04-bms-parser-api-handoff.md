@@ -41,12 +41,13 @@ must ship with this adoption; this branch has not been deployed separately.
 At the user's request, the behavior reference is local beatoraja
 `ad42f56c4658e968f93b24bf23440fe51cb9878e`. LaneRenderer and SongInformation
 follow non-null pair pointers even when the partner was displaced from its
-lane slot. Null pairs cause reference exceptions; the application reports an
-invalid-chart diagnostic safely before playback/view/export instead.
+lane slot. The user's subsequent instruction is to follow that reference
+without extra chart rejection, invented repair, or fallback policies.
 
-The raw parser graph and its ownership remain unchanged. Shared preparation
-and direct audio export reject missing pairs, missing endpoint timelines and
-nonreciprocal links. Detached reciprocal partners remain supported. Gameplay
+The raw parser graph and its ownership remain unchanged. Parser adapters,
+LN-mode/count preparation, gameplay-definition construction, synthetic autoplay
+and direct audio scheduling no longer impose blanket LN graph admission.
+Detached reciprocal partners remain supported. Gameplay
 and visual models retain stable partner identities outside active lane scans,
 without inventing playable notes or adding distribution counts. Classic held
 LN tails remain reachable directly; charge-note autoplay still follows active
@@ -58,7 +59,26 @@ they are not a runtime Java JudgeManager comparison. Reference locations are
 `src/bms/player/beatoraja/play/LaneRenderer.java:552,563`, and
 `src/bms/player/beatoraja/play/JudgeManager.java:270,273-285,431,445,572-573`. The exact tiny-scale
 null-head reproducer, orphan/null-timeline constructed graphs, detached
-head/tail cases and ordinary pairs have regression coverage. Mine recount and raw mine damage remain unchanged.
+head/tail cases and ordinary pairs have regression coverage. Mine recount and
+raw mine damage remain unchanged.
+
+The reference does not have a single exception policy for every caller.
+Actual `SongData` probes confirm that lightweight scanning accepts the null
+fixture, while full `SongData` construction and `setBMSModel` propagate
+`NullPointerException`. The database information updater catches runtime
+exceptions and skips that derived-information update. Gameplay's normal skin
+draw method has no such catch; the per-object safe method is used by skin
+previews. The bundled LWJGL thread catches and rethrows rather than resuming
+the frame loop. These are source, bytecode and headless caller observations;
+a whole-application crash was not reproduced.
+
+Accordingly, the C++ visual model preserves the reference's missing-partner
+failure at the actual song-information access, using a C++ exception instead
+of a null-pointer dereference. It does not reject the chart at parse time,
+drop the note, invent an endpoint, or manufacture successful density data.
+Parser acceptance is not a claim that every later reference operation succeeds.
+Synthetic classic-LN autoplay emits the surviving head press without a
+fabricated tail event, following `JudgeManager.java:258–270`.
 
 ### Numeric consumers
 
@@ -66,9 +86,10 @@ head/tail cases and ordinary pairs have regression coverage. Mine recount and ra
 and provides guarded rounding and saturating arithmetic. STOP/interpolation
 consumers in the visual model, viewer, renderer, projection and prep metronome
 use it. Judgment deadlines, candidate windows, visual offsets and near-limit
-clock transitions use checked arithmetic too. Shared chart admission rejects
-nonfinite/negative parsed STOP values, invalid scale/tempo values and unrepresentable timestamps/STOP ends, including parser
-saturation. This does not impose an arbitrary maximum chart duration.
+clock transitions use checked arithmetic too. The application parser adapters
+retain the parser's saturated timing instead of imposing a separate timing
+admission rule. An operation can still fail its own representability or output
+budget checks; that is distinct from discarding the decoded chart.
 
 Prep count-in work is bounded to 1,000,000 grid steps and 1,024 requested beats;
 invalid or excessive plans return no partial output. Existing club planning
@@ -104,6 +125,33 @@ scheduling. Legacy storage remains history-only under its existing capability
 policy. See the matrix's limitations for fixture and device coverage.
 
 ### Verification record
+
+- Reference-behavior follow-up: removed the additional chart-admission rules
+  described above. New regressions first failed on path/byte admission,
+  LN-mode preparation, gameplay-definition construction and synthetic autoplay;
+  they now pass. Each LN/CN/HCN count-preparation case reparses a fresh chart
+  and asserts the selected mode. Saturated timing remains accepted at the
+  parser adapter, and direct audio scheduling accepts the unpaired-head
+  fixture without changing its graph or counts.
+- The follow-up full desktop build passed; CTest passed **420/420**, zero
+  failures, in **149.70 seconds**. The final corrected mode-coverage test was
+  rebuilt and passed separately. Visual-model and gameplay suites passed
+  ASan/UBSan, including float-cast and signed-integer overflow checks, via
+  `python3 tests/run_parser_consumer_sanitizers.py visual gameplay`.
+- Independent read-only review found no remaining actionable issue after
+  correcting the mode-coverage test. No deployment or application push was
+  performed. Generated parser artifacts still match upstream byte-for-byte;
+  this follow-up extends upstream reference tests/documentation without
+  altering parser production behavior.
+- The expanded upstream probes pass fifteen decoder/visibility cases and six
+  actual `SongData` caller cases. The optional database runtime probe cannot
+  initialize the bundled SQLite driver's native library on macOS ARM. Its
+  catch-and-continue path is source-verified. Full graphics application launch
+  and end-to-end malformed-chart playability remain unverified.
+  The upstream reference follow-up is committed as `9d5f5e7`; the adopted
+  generated parser pair remains unchanged from `5c3bb2f`.
+
+Earlier adoption verification, retained for provenance:
 
 - Executed the eleven-fixture Java probe added in upstream test-only commit
   `a4adbdff27c1b55dcbdb78e954e87b989973d20d` against the pinned local

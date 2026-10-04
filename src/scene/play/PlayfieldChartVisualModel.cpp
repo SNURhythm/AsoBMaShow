@@ -447,6 +447,13 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
         }
         const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
         if (longNote != nullptr && !longNote->IsTail()) {
+          // SongInformation.java dereferences getPair() here. Preserve that
+          // operation's failure without making it a parser admission rule or
+          // dereferencing a null C++ pointer.
+          if (longNote->Tail == nullptr || longNote->Tail->Timeline == nullptr) {
+            throw std::invalid_argument(
+                "Cannot calculate song information: long-note endpoint is absent.");
+          }
           const long long tailMillis =
               longNote->Tail->Timeline->Timing / 1'000'000;
           const std::uint64_t tailSecond = static_cast<std::uint64_t>(tailMillis);
@@ -589,7 +596,6 @@ std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
 PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                                int longNoteModeOverride) {
-  chart_playability::requireSupportedLongNotes(chart);
   PlayfieldChartVisualModel result;
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
@@ -890,6 +896,9 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     const auto *ln = dynamic_cast<const bms_parser::LongNote *>(pending[index].source);
     if (ln == nullptr) continue;
     const auto *pair = ln->IsTail() ? ln->Head : ln->Tail;
+    if (pair == nullptr) {
+      throw std::invalid_argument("Cannot read long-note partner: endpoint is absent.");
+    }
     if (noteIds.contains(pair)) continue;
     const auto timelineIt = timelineIds.find(pair->Timeline);
     if (timelineIt == timelineIds.end()) {

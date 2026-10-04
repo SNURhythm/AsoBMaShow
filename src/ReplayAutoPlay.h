@@ -115,7 +115,6 @@ inline ReplayData BuildReplayData(
     bool clubMode = false,
     GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
     GameplayRuleset ruleset = kDefaultGameplayRuleset) {
-  chart_playability::requireSupportedLongNotes(chart);
   ReplayData replay;
   replay.id = kReplayId;
   replay.autoPlay = true;
@@ -169,7 +168,8 @@ inline ReplayData BuildReplayData(
           }
           eventNotes.push_back(note);
           // Held classic ends follow the direct pair, including displaced ends.
-          if (!longNote->IsTail() && !replay_note::hasActiveIdentity(longNote->Tail)) {
+          if (!longNote->IsTail() && longNote->Tail != nullptr &&
+              !replay_note::hasActiveIdentity(longNote->Tail)) {
             eventNotes.push_back(longNote->Tail);
           }
           continue;

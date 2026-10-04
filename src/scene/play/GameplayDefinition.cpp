@@ -98,7 +98,6 @@ GameplayDefinition::hellChargeHeads() const noexcept {
 
 GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
                                            int longNoteModeOverride) {
-  chart_playability::requireSupportedLongNotes(chart);
   GameplayDefinition result;
   result.metadata_ = {
       .totalNotes = chart.Meta.TotalNotes,
@@ -118,6 +117,9 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
   const auto append = [&](const bms_parser::Note *note) {
     if (note == nullptr || ids.contains(note)) {
       return;
+    }
+    if (note->Timeline == nullptr) {
+      throw std::invalid_argument("Cannot read note timing: timeline is absent.");
     }
     const NoteId id = static_cast<NoteId>(result.notes_.size());
     ids.emplace(note, id);

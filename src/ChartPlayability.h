@@ -9,8 +9,8 @@
 
 namespace chart_playability {
 // Beatoraja follows getPair() even when the partner is displaced from a lane
-// slot. Keep those identities. A missing pair/timeline cannot be consumed by
-// its renderer or SongInformation; report that invalid graph before traversal.
+// slot. Keep those identities. These diagnostic helpers do not define parser
+// admission: retain the accepted graph and let each consumer perform its work.
 inline std::optional<std::string>
 longNoteError(const bms_parser::Chart &chart) {
   std::vector<const bms_parser::Note *> pending;
@@ -134,8 +134,4 @@ inline std::optional<std::string> error(const bms_parser::Chart &chart) {
   return timingError(chart);
 }
 
-inline void requireSupportedLongNotes(const bms_parser::Chart &chart) {
-  if (const auto failure = longNoteError(chart))
-    throw std::invalid_argument(*failure);
-}
 } // namespace chart_playability
