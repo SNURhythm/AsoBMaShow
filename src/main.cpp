@@ -1,3 +1,4 @@
+#include "settings/PresentationOrientationState.h"
 #include "perf/LatencyTelemetry.h"
 #include "targets.h"
 #include "AppDatabaseInitializer.h"
@@ -787,10 +788,15 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+  player_settings::PresentationOrientationState presentationOrientation;
+  presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
   bool orientationLocked = false;
   auto appliedOrientation = context.settings.screenOrientation;
   context.setGameplayOrientationLocked = [&](bool locked) {
     orientationLocked = locked;
+    presentationOrientation.setGameplayLocked(locked);
+    if (context.sceneManager)
+      context.sceneManager->setPresentationOrientation(presentationOrientation.orientation());
     appliedOrientation = context.settings.screenOrientation;
     screen_orientation::apply(appliedOrientation, locked);
   };
@@ -807,6 +813,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
   bgfx::setViewMode(rendering::readback_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
+  sceneManager.setPresentationOrientation(presentationOrientation.orientation());
   sceneManager.registerScene("Intro", std::make_unique<IntroScene>(context));
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
@@ -1071,6 +1078,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       rendering::heightScale =
           static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
       rendering::updateUIScale(targetRenderW, targetRenderH);
+      presentationOrientation.updateViewport(targetRenderW, targetRenderH);
+      sceneManager.setPresentationOrientation(presentationOrientation.orientation());
 
       // set bgfx resolution
       bgfx::reset(rendering::render_width, rendering::render_height,
@@ -1208,13 +1217,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
 #endif
 
-      if (scene_event_routing::shouldDispatchToScene(event)) {
-        auto result = sceneManager.handleEvents(event);
-        if (result.quit) {
-          context.quitFlag = true;
-        }
-      }
-
       // on window resize
       if (event.type == SDL_WINDOWEVENT &&
           (event.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -1223,6 +1225,13 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         const int logicalH = event.window.data2;
         if (!applyWindowResize(logicalW, logicalH)) {
           deferWindowResize(logicalW, logicalH);
+        }
+      }
+
+      if (scene_event_routing::shouldDispatchToScene(event)) {
+        auto result = sceneManager.handleEvents(event);
+        if (result.quit) {
+          context.quitFlag = true;
         }
       }
 

@@ -1253,6 +1253,11 @@ GameplayViewportPersistenceResult GameplaySkinLifecycle::requestViewportReset(
   return impl_->submitViewport(identity, viewport);
 }
 
+bool GameplaySkinLifecycle::presentationReady() const noexcept {
+  return impl_->initialized && !impl_->stopped &&
+         impl_->pendingRevalidations.empty() && !impl_->activationWorkInFlight();
+}
+
 void GameplaySkinLifecycle::poll() {
   if (impl_->stopped || !impl_->initialized) {
     return;

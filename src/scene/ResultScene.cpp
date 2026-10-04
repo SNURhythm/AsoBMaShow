@@ -4115,6 +4115,30 @@ void ResultScene::init() {
     local->skinTimingStatisticsPrepared = true;
   }
 
+  buildResultView();
+  if (local != nullptr && isCourseStageResult() &&
+      local->courseOptions.session != nullptr &&
+      local->courseOptions.session->courseReplayPlayback) {
+    const long long restMicros =
+        local->courseOptions.session->restMicrosAfterCurrentStage();
+    const Uint64 delayMs =
+        static_cast<Uint64>((std::max(0LL, restMicros) + 999LL) / 1000LL);
+    defer(
+        [this]() {
+          continueCourse();
+          return false;
+        },
+        delayMs, true);
+  }
+}
+
+void ResultScene::onPresentationOrientationChanged() {
+  if (rootLayout) presentationSkinRefreshPending = true;
+}
+
+void ResultScene::buildResultView() {
+  auto *local = localSource();
+  const auto *remote = remoteSource();
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
   viewportLayout = new View(0, 0, rendering::window_width, rendering::window_height);
@@ -4252,23 +4276,21 @@ void ResultScene::init() {
 
   rootLayout->applyYogaLayout();
 
-  if (local != nullptr && isCourseStageResult() &&
-      local->courseOptions.session != nullptr &&
-      local->courseOptions.session->courseReplayPlayback) {
-    const long long restMicros =
-        local->courseOptions.session->restMicrosAfterCurrentStage();
-    const Uint64 delayMs =
-        static_cast<Uint64>((std::max(0LL, restMicros) + 999LL) / 1000LL);
-    defer(
-        [this]() {
-          continueCourse();
-          return false;
-        },
-        delayMs, true);
-  }
+
 }
 
 void ResultScene::update(float dt) {
+  if (presentationSkinRefreshPending
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+      && (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())
+#endif
+      ) {
+    presentationSkinRefreshPending = false;
+    cleanupScene();
+    for (auto *view : views) delete view;
+    views.clear();
+    buildResultView();
+  }
   (void)dt;
   resizeResultLayout();
   auto *local = localSource();

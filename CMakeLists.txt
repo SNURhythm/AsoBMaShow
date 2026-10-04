@@ -5702,6 +5702,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
 
+    add_executable(presentation_orientation_state_tests tests/presentation_orientation_state_tests.cpp src/settings/AudioVideoSettings.cpp)
+    target_include_directories(presentation_orientation_state_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(presentation_orientation_state_tests PRIVATE cxx_std_23)
+    add_test(NAME presentation_orientation_state_tests COMMAND presentation_orientation_state_tests)
+
     add_executable(profile_settings_persistence_tests
         tests/profile_settings_persistence_tests.cpp
         src/CourseIdentity.cpp

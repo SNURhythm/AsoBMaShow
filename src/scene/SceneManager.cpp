@@ -49,6 +49,23 @@ void SceneManager::updateForegroundSceneState() {
   }
 }
 
+void SceneManager::setPresentationOrientation(player_settings::PresentationOrientation orientation) {
+  if (context.settings.activePresentationOrientation() == orientation) return;
+  // Finish edits while their original owner is still selected. Retained scenes
+  // keep their lists/selection; only presentation controls are refreshed.
+  auto retained = backgroundScenes;
+  if (currentScene) retained.insert(currentScene);
+  for (auto *scene : retained) scene->onPresentationOrientationWillChange();
+  context.settings.setActivePresentationOrientation(orientation);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (context.gameplaySkinLifecycle) {
+    if (const auto profile = skin::makeSkinProfileId(context.profileManager.activeProfile().id))
+      context.gameplaySkinLifecycle->profileChanged(*profile, orientation);
+  }
+#endif
+  for (auto *scene : retained) scene->onPresentationOrientationChanged();
+}
+
 void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene> scene) {
   registeredScenes[name] = std::move(scene);
 }

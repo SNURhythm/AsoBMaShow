@@ -75,12 +75,12 @@
 - `void setGameplayLocked(bool)` freezes/resumes viewport selection, and `PresentationOrientation orientation() const` reports the selected block.
 - Skin settings controller binding includes `(profileId, orientation, clientId)`; changing either owner component uses the existing cancellation/rebinding lifecycle.
 
-- [ ] Add failing tests: landscape → portrait → landscape restores settings; gameplay lock holds portrait through resize/pause/retry; unlocking resolves the newest viewport. Profile switching preserves the runtime viewport selection even though it loads a different settings document.
-- [ ] Add failing controller tests: a text edit and skin activation initiated in portrait retain their owner after rotation; a late completion cannot reactivate portrait in a landscape scene.
-- [ ] Run the targeted tests and confirm failures.
-- [ ] Integrate selection before scene update/input and camera update. On rotation, finish pending edits against their captured block, replace controls, and rebind skins through existing activation/lease lifecycles. Rebuild retained scenes when their owner orientation differs; preserve ordinary menu selection and preview state.
-- [ ] Display the active orientation beside presentation controls using existing localization conventions. Reset affects the active block only. Handle explicit orientation setting changes using the resulting viewport, not the requested native orientation before it takes effect.
-- [ ] Run state/controller/profile/lifecycle tests to passing; commit.
+- [x] Add failing tests: landscape → portrait → landscape restores settings; gameplay lock holds portrait through resize/pause/retry; unlocking resolves the newest viewport. Profile switching preserves the runtime viewport selection even though it loads a different settings document.
+- [x] Add failing controller tests: a text edit and skin activation initiated in portrait retain their owner after rotation; a late completion cannot reactivate portrait in a landscape scene.
+- [x] Run the targeted tests and confirm failures.
+- [x] Integrate selection before scene update/input and camera update. On rotation, finish pending edits against their captured block, replace controls, and rebind skins through existing activation/lease lifecycles. Rebuild retained scenes when their owner orientation differs; preserve ordinary menu selection and preview state.
+- [x] Display the active orientation beside presentation controls using existing localization conventions. Reset affects the active block only. Handle explicit orientation setting changes using the resulting viewport, not the requested native orientation before it takes effect.
+- [x] Run state/controller/profile/lifecycle tests to passing; commit.
 
 ### Task 4: Controls, rendering, and touch geometry
 

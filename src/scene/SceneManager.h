@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SDL2/SDL.h>
+#include "../settings/PresentationOrientation.h"
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -44,6 +45,7 @@ public:
   void changeScene(Scene *newScene, bool keepBackground = false);
   void changeScene(const std::string& sceneName, bool keepBackground = false);
   
+  void setPresentationOrientation(player_settings::PresentationOrientation);
   EventHandleResult handleEvents(SDL_Event &event);
   void cleanup();
   void update(float dt);

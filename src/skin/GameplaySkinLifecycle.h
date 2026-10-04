@@ -111,6 +111,7 @@ public:
   GameplayViewportPersistenceResult
   requestViewportReset(const PlaySkinSessionIdentity &, ViewportSettings);
   void poll();
+  [[nodiscard]] bool presentationReady() const noexcept;
   [[nodiscard]] std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
   [[nodiscard]] GameplaySkinAcquisition

@@ -747,6 +747,10 @@ void MainMenuScene::onResume() {
   }
   refreshLibraryIfNeeded();
   reselectCurrentChart();
+  queueSelectedSkinHandoff();
+}
+
+void MainMenuScene::queueSelectedSkinHandoff() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   // Settings retains the built-in selector. Re-evaluate type 5 after resume
   // unwinds, so changing the scene cannot clean up views inside onResume().
@@ -781,6 +785,11 @@ void MainMenuScene::onResume() {
     return true;
   }, 0, true);
 #endif
+}
+
+void MainMenuScene::onPresentationOrientationChanged() {
+  updatePanelLayout();
+  presentationSkinRefreshPending = true;
 }
 
 void MainMenuScene::onLanguageChanged() {
@@ -6967,6 +6976,13 @@ void MainMenuScene::applyReplayExportResult() {
 }
 
 void MainMenuScene::update(float dt) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (presentationSkinRefreshPending &&
+      (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
+    presentationSkinRefreshPending = false;
+    queueSelectedSkinHandoff();
+  }
+#endif
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   refreshScoreClearRanksIfNeeded();

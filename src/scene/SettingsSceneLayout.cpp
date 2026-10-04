@@ -2769,6 +2769,10 @@ void SettingsScene::initView() {
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
       makeText(i18n::message("settings.navigation.settings.label"), metrics.titleSize, ui_theme::textPrimary()));
+  headerText->addView(makeText(i18n::message(
+      context.settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait
+          ? "settings.presentation.portrait.label" : "settings.presentation.landscape.label"),
+      metrics.smallTextSize, ui_theme::textSecondary()));
   header->addView(headerText);
 
   auto *backLabel =

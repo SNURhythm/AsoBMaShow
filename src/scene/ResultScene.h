@@ -301,6 +301,9 @@ public:
   ~ResultScene() override;
 
   void init() override;
+  void onPresentationOrientationChanged() override;
+  bool presentationSkinRefreshPending = false;
+  void buildResultView();
   void update(float dt) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   bool renderViewBeforeScene(const View *view) const override;

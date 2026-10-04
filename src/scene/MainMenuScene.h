@@ -81,6 +81,9 @@ public:
   void onPause() override;
   void onResume() override;
   void onLanguageChanged() override;
+  void onPresentationOrientationChanged() override;
+  bool presentationSkinRefreshPending = false;
+  void queueSelectedSkinHandoff();
   void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
 

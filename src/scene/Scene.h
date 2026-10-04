@@ -23,6 +23,8 @@ public:
   std::map<Uint64, std::pair<Uint64, std::vector<std::function<bool()>>>>
       deferred;
   virtual void init() = 0; // Initialize the scene
+  virtual void onPresentationOrientationWillChange() {}
+  virtual void onPresentationOrientationChanged() {}
   virtual void onPause() {}
   virtual void onResume() {}
   virtual void onLanguageChanged() {

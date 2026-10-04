@@ -1,6 +1,7 @@
 // Keep production scene ownership/event ordering; substitute only SDL, UI, and
 // application services so the regression needs neither graphics nor audio.
 #include "i18n/Localization.h"
+#include "settings/PresentationOrientation.h"
 
 #include <atomic>
 #include <cassert>
@@ -27,6 +28,11 @@ struct BackgroundTasks {
 };
 class ApplicationContext {
 public:
+  struct Settings {
+    player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+    auto activePresentationOrientation() const { return orientation; }
+    void setActivePresentationOrientation(player_settings::PresentationOrientation value) { orientation = value; }
+  } settings;
   Uint64 currentFrame = 0;
   int uiBatchRenderer = 0;
   SceneManager *sceneManager = nullptr;
@@ -68,6 +74,12 @@ PRODUCTION_MANAGER_METHODS
 struct ObservedScene final : Scene {
   explicit ObservedScene(ApplicationContext &context, bool tutorial = false)
       : Scene(context), tutorial(tutorial) {}
+  player_settings::PresentationOrientation editOwner = player_settings::PresentationOrientation::Landscape;
+  int presentationChanges = 0;
+  void onPresentationOrientationWillChange() override {
+    editOwner = context.settings.activePresentationOrientation();
+  }
+  void onPresentationOrientationChanged() override { ++presentationChanges; }
   bool tutorial = false;
   int initializations = 0;
   int cleanups = 0;
@@ -255,6 +267,14 @@ int main() {
   manager.update(0);
   manager.handleEvents(event);
   assert(originalLabel->languageChanges == 2);
+
+  manager.setPresentationOrientation(player_settings::PresentationOrientation::Portrait);
+  assert(retained->editOwner == player_settings::PresentationOrientation::Landscape);
+  assert(context.settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait);
+  assert(retained->presentationChanges == 1);
+  manager.setPresentationOrientation(player_settings::PresentationOrientation::Portrait);
+  assert(retained->presentationChanges == 1);
+  assertRetainedState(*retained, originalLabel);
 
   // Language changes outside event delivery are picked up at the next frame.
   i18n::setLanguage(i18n::Language::English);

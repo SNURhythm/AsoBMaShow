@@ -713,6 +713,14 @@ void MusicSelectScene::onResume() {
   }
 }
 
+void MusicSelectScene::onPresentationOrientationChanged() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  cancelSkinPreparation();
+  skinSession_.reset();
+  presentationSkinRefreshPending = true;
+#endif
+}
+
 void MusicSelectScene::onLanguageChanged() {
   Scene::onLanguageChanged();
   // Native retained controls update in place; skin content, playback, and
@@ -3317,6 +3325,13 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (presentationSkinRefreshPending &&
+      (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
+    presentationSkinRefreshPending = false;
+    if (!reactivateSkinAfterSettings()) return;
+  }
+#endif
   if (failed_ || !sceneActive_ || context.appInBackground.load()) return;
   if (auto completion = recordsTask_.takeCompletion()) {
     finishRecordsLoading();
@@ -4335,7 +4350,8 @@ bool MusicSelectScene::activateSkin(
       .configuration = request.activation.reconciledSettings,
       .configurationDigest = request.activation.configurationDigest,
       .viewport = request.viewport,
-      .safetyLevel = request.safetyLevel};
+      .safetyLevel = request.safetyLevel,
+      .orientation = request.orientation};
   if (!failed_ && skinSession_ && activeSkinIdentity_ == identity) return true;
   cancelSkinPreparation();
   skinSession_.reset();

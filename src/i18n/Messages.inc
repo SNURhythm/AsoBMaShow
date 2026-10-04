@@ -1270,6 +1270,8 @@
 {"settings.display.orientation.label", "Screen orientation", "화면 방향", "画面の向き"},
 {"settings.display.orientation_auto.label", "Auto", "자동", "自動"},
 {"settings.display.orientation_help.message", "Applies immediately. Auto follows device rotation. Gameplay locks the orientation it starts in until you leave play.", "즉시 적용됩니다. 자동은 기기 회전을 따릅니다. 플레이를 시작하면 종료할 때까지 시작 방향으로 고정됩니다.", "すぐに適用されます。自動では端末の回転に従います。プレイ中は終了するまで開始時の向きに固定されます。"},
+{"settings.presentation.portrait.label", "Portrait appearance", "세로 화면 설정", "縦向きの表示設定"},
+{"settings.presentation.landscape.label", "Landscape appearance", "가로 화면 설정", "横向きの表示設定"},
 {"settings.display.orientation_landscape.label", "Landscape", "가로", "横向き"},
 {"settings.display.orientation_portrait.label", "Portrait", "세로", "縦向き"},
 {"settings.display.preview.countdown.one", "Reverting in {seconds} second", "{seconds}초 후 이전 설정으로 돌아갑니다", "{seconds}秒後に元の設定に戻ります"},

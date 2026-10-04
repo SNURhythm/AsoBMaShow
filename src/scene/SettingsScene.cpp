@@ -189,6 +189,27 @@ void SettingsScene::init() {
   ensureLayoutUpToDate();
 }
 
+void SettingsScene::onPresentationOrientationWillChange() {
+  const auto finishSelected = [&](auto &&self, View *view) -> bool {
+    if (auto *input = dynamic_cast<TextInputBox *>(view); input && input->getSelected()) {
+      input->endEditing();
+      return true;
+    }
+    for (auto *child : view->getChildren()) if (self(self, child)) return true;
+    return false;
+  };
+  for (auto *view : views) if (finishSelected(finishSelected, view)) break;
+}
+
+void SettingsScene::onPresentationOrientationChanged() {
+  lastLayoutWidth = -1;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  ensureGameplaySkinSettingsController();
+#endif
+  syncPreviewPresentationConfiguration();
+  ensureLayoutUpToDate();
+}
+
 void SettingsScene::onLanguageChanged() {
   View::LayoutBatchScope batch;
   Scene::onLanguageChanged();

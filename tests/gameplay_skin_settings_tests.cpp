@@ -172,22 +172,22 @@ class FakeProfileOwner final : public ISkinProfileSettingsOwner,
 public:
   explicit FakeProfileOwner(std::vector<SkinProfileId> profiles) {
     for (auto &profile : profiles) {
-      snapshots_.emplace(
-          profile.opaque,
-          VersionedSkinProfileSettings{.profileId = profile, .generation = 1});
+      for (auto orientation : player_settings::kPresentationOrientations)
+        snapshots_.emplace(std::pair{profile.opaque, orientation},
+            VersionedSkinProfileSettings{.profileId = profile, .generation = 1, .orientation = orientation});
     }
   }
 
   VersionedSkinProfileSettings
   snapshot(const SkinProfileId &profile, PresentationOrientation orientation = PresentationOrientation::Landscape) const override {
-    return snapshots_.at(profile.opaque);
+    return snapshots_.at({profile.opaque, orientation});
   }
 
   using ISkinProfileSettingsOwner::beginCommit;
   SkinProfileCommitResult beginCommit(const SkinProfileId &profile, PresentationOrientation orientation,
                                       std::uint64_t expectedGeneration,
                                       SkinProfileSettings candidate) override {
-    auto &current = snapshots_.at(profile.opaque);
+    auto &current = snapshots_.at({profile.opaque, orientation});
     if (rejectNextCommitGeneration) {
       rejectNextCommitGeneration = false;
       return {.status = SkinProfileCommitResult::Status::GenerationChanged,
@@ -202,7 +202,7 @@ public:
     const std::uint64_t ticket = ++nextCommitTicket_;
     ++current.generation;
     current.settings = std::move(candidate);
-    commits_.emplace(ticket, profile);
+    commits_.emplace(ticket, std::pair{profile.opaque, orientation});
     return {.status = SkinProfileCommitResult::Status::Pending,
             .ticket = ticket,
             .snapshot = current};
@@ -220,7 +220,7 @@ public:
     }
     return {.status = SkinProfileCommitResult::Status::Persisted,
             .ticket = ticket,
-            .snapshot = snapshots_.at(found->second.opaque)};
+            .snapshot = snapshots_.at(found->second)};
   }
 
   void acknowledgeCommit(std::uint64_t ticket) noexcept override {
@@ -303,8 +303,8 @@ private:
   std::uint64_t nextCommitTicket_ = 0;
   std::uint64_t nextInventoryTicket_ = 0;
   std::uint64_t inventoryGeneration_ = 0;
-  std::map<std::string, VersionedSkinProfileSettings> snapshots_;
-  std::map<std::uint64_t, SkinProfileId> commits_;
+  std::map<std::pair<std::string, PresentationOrientation>, VersionedSkinProfileSettings> snapshots_;
+  std::map<std::uint64_t, std::pair<std::string, PresentationOrientation>> commits_;
   std::vector<std::uint64_t> inventories_;
 };
 
@@ -1209,6 +1209,55 @@ void testProfileSwitchDetachesPendingProfileSaveAndUnlocksNewProfile() {
          "detached old profile save remains durable and profile-scoped");
 }
 
+void testOrientationSwitchDetachesPendingProfileSave() {
+  Fixture fixture;
+  const auto folder = fixture.temp.root() / "PendingProfileSave";
+  writeText(folder / "play/play7.luaskin", "return { type = 0 }");
+  fixture.folderResults.push_back(picked(folder, "PendingProfileSave",
+                                         PlatformTemporaryPathKind::Directory));
+  auto controller = fixture.makeController();
+  installQueuedImport(fixture, *controller, false);
+  const SkinEntryId entry = controller->snapshot().entries.front().entry;
+
+  fixture.owner.commitsReady = false;
+  const ViewportSettings stretch{.mode = ViewportMode::Stretch};
+  expect(controller->setViewport(entry, stretch).accepted,
+         "pending-profile fixture starts profile-only persistence");
+  expect(fixture.owner.snapshot(fixture.profileA)
+                 .settings.entries.at(entry)
+                 .viewport.mode == ViewportMode::Stretch,
+         "old profile owns its accepted optimistic settings snapshot");
+
+  controller->profileChanged(fixture.profileA, fixture.commits.createClient(), PresentationOrientation::Portrait);
+  expect(controller->snapshot().state == GameplaySkinSettingsState::Ready,
+         "profile switch clears detached profile-save wait state locally");
+  const ViewportSettings custom{.mode = ViewportMode::Custom,
+                                .customBase = CustomViewportBase::Fit,
+                                .scaleX = 1.25F,
+                                .scaleY = 0.75F,
+                                .translateX = 20.0F,
+                                .translateY = -12.0F};
+  expect(controller->setViewport(entry, custom).accepted,
+         "new profile accepts a save while old profile save remains pending");
+
+  fixture.owner.commitsReady = true;
+  expect(pumpUntil(fixture, *controller,
+                   [&] {
+                     const auto settings =
+                         fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+                     const auto found = settings.entries.find(entry);
+                     return found != settings.entries.end() &&
+                            found->second.viewport == custom &&
+                            controller->snapshot().state ==
+                                GameplaySkinSettingsState::Ready;
+                   }),
+         "new profile save completes without receiving the old completion");
+  expect(fixture.owner.snapshot(fixture.profileA)
+                 .settings.entries.at(entry)
+                 .viewport.mode == ViewportMode::Stretch,
+         "detached old profile save remains durable and profile-scoped");
+}
+
 void testCollisionRejectRetainsSourceAndReplacePublishesAtomically() {
   Fixture fixture;
   const auto original = fixture.temp.root() / "CollisionOriginal";
@@ -1756,6 +1805,7 @@ void testMusicSelectSelectionDefaultsToBuiltInAndSurvivesSanitize() {
 } // namespace
 
 int main() {
+  testOrientationSwitchDetachesPendingProfileSave();
   testSourceNameSuggestionPreservesTypedSemantics();
   testFallbackPackageIdentityIsStableAcrossLanguages();
   testOperationMessagesFollowLanguage();

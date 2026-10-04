@@ -921,6 +921,15 @@ void expectFirstProfileState(SwitchFixture &fixture,
          std::string(label) + " exposes first profile result history");
 }
 
+void testProfileSwitchRetainsRuntimePresentationOrientation() {
+  SwitchFixture fixture;
+  fixture.currentSettings.setActivePresentationOrientation(AppSettings::PresentationOrientation::Portrait);
+  const auto result = fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(result.ok(), "portrait profile switch succeeds");
+  expect(fixture.currentSettings.activePresentationOrientation() == AppSettings::PresentationOrientation::Portrait,
+         "profile switch retains viewport orientation instead of loaded default");
+}
+
 void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   SwitchFixture fixture;
   if (fixture.firstId.empty() || fixture.secondId.empty()) {
@@ -2633,6 +2642,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 } // namespace
 
 int main() {
+  testProfileSwitchRetainsRuntimePresentationOrientation();
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
   testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
   testPostActivationOwnerNotificationCannotRollbackCommittedProfile();

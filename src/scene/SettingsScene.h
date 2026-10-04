@@ -76,6 +76,8 @@ public:
   void init() override;
   void update(float dt) override;
   void onLanguageChanged() override;
+  void onPresentationOrientationWillChange() override;
+  void onPresentationOrientationChanged() override;
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
