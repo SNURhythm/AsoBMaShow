@@ -111,6 +111,7 @@ struct ResultSkinSession {
 struct ApplicationContext {
   struct Settings {
     struct Skin { std::map<int, int> selectedSkinEntries; } skin;
+    Settings &presentation() { return *this; }
   } settings;
   std::unique_ptr<skin::Lifecycle> gameplaySkinLifecycle = std::make_unique<skin::Lifecycle>();
   std::optional<int> skinStorageRoots = 1;

@@ -192,7 +192,7 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
       formatJudgementIndicatorRangeLabel(
           context.settings.presentation().judgementIndicatorRangeMilliseconds);
   const i18n::Text notePriorityLabel =
-      formatNotePriorityModeLabel(context.settings.presentation().notePriorityMode);
+      formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const i18n::Text invisibleNotesLabel =
       context.settings.showInvisibleNotes ? i18n::message("settings.controls.invisible_notes.shown.label") : i18n::message("settings.controls.invisible_notes.hidden.label");
   const i18n::Text markProcessedNotesLabel =
@@ -429,7 +429,7 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                                ? SettingsButtonTone::Success
                                : SettingsButtonTone::Info);
   applySemanticButtonStyle(notePriorityModeButton, notePriorityModeText,
-                           context.settings.presentation().notePriorityMode ==
+                           context.settings.notePriorityMode ==
                                    AppSettings::NotePriorityMode::Lowest
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);

@@ -29,6 +29,7 @@ enum {
 };
 struct SDL_Event { int type = SDL_MOUSEBUTTONUP; struct { int event = 0; } window; };
 class SceneManager;
+namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
 struct BackgroundTasks { void setGameplayPaused(bool) {} };
 struct ApplicationContext {
   Uint64 currentFrame = 0;
@@ -39,7 +40,12 @@ struct ApplicationContext {
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
   int gameplayBgaCompositeState = 0;
-  struct { struct { int video = 0; } audioVideo; } settings;
+  struct {
+    struct { int video = 0; } audioVideo;
+    player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+    auto activePresentationOrientation() const { return orientation; }
+    void setActivePresentationOrientation(player_settings::PresentationOrientation value) { orientation = value; }
+  } settings;
 };
 struct RenderContext {
   explicit RenderContext(int) {}

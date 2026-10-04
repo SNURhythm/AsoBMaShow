@@ -459,8 +459,11 @@ require(
     "the scene exit guard must delegate to typed persistence semantics",
 )
 init_body = function_body(result_source, "ResultScene", "init")
+view_body = function_body(result_source, "ResultScene", "buildResultView")
 require(
-    ordered(init_body, "persistModernCourseResult();", "addResultPersistenceStatus();"),
+    ordered(init_body, "persistModernCourseResult();", "buildResultView();")
+    and "addResultPersistenceStatus();" in view_body
+    and "persistModernCourseResult(" not in view_body,
     "course final results must persist before the blocking status is rendered",
 )
 

@@ -13,11 +13,11 @@
 inline ResultSkinConfigurationData
 makeResultSkinConfiguration(const AppSettings &settings) {
   const int judgeAlgorithmImageIndex =
-      settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Combo
+      settings.notePriorityMode == AppSettings::NotePriorityMode::Combo
           ? 0
-      : settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Duration
+      : settings.notePriorityMode == AppSettings::NotePriorityMode::Duration
           ? 1
-      : settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Lowest
+      : settings.notePriorityMode == AppSettings::NotePriorityMode::Lowest
           ? 2
           : std::numeric_limits<int>::min();
   const int gaugeAutoShiftImageIndex =

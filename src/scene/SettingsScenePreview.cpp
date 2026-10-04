@@ -433,7 +433,7 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
       .songTimeMicros = previewElapsedMicros,
       .laneBeamTimeMicros = previewElapsedMicros,
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.presentation().notePriorityMode,
+      .notePriorityMode = context.settings.notePriorityMode,
   };
   auto result =
       previewLaneController->pressLane(mainLane, compensateLane, inputContext);
@@ -457,7 +457,7 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
       .songTimeMicros = previewElapsedMicros,
       .laneBeamTimeMicros = previewElapsedMicros,
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.presentation().notePriorityMode,
+      .notePriorityMode = context.settings.notePriorityMode,
   };
   auto result =
       previewLaneController->releaseLane(lane, inputContext, isBackSpin);

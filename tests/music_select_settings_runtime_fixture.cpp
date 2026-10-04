@@ -104,16 +104,21 @@ struct SceneManager {
   void changeScene(const char *name) { registered = name; }
 };
 struct Lifecycle {
+  bool ready = true;
+  int calls = 0;
+  bool presentationReady() const { return ready; }
   std::optional<skin::GameplaySkinActivationRequest> next;
   skin::GameplaySkinAcquisitionDisposition disposition = skin::GameplaySkinAcquisitionDisposition::Ready;
   skin::GameplaySkinAcquisition acquireForSkinType(int type, bool gameplay) {
     assert(type == 5 && !gameplay);
+    ++calls;
     return {.disposition = disposition, .request = std::move(next)};
   }
 };
 struct ApplicationContext {
-  struct {
+  struct Settings {
     skin::SkinProfileSettings skin;
+    Settings &presentation() { return *this; }
     struct { struct { float masterVolume = 1; } audio; } audioVideo;
   } settings;
   std::optional<skin::SkinStorageRoots> skinStorageRoots;
@@ -126,7 +131,7 @@ struct ApplicationContext {
   Lifecycle *gameplaySkinLifecycle = nullptr;
   SceneManager *sceneManager = nullptr;
 };
-struct View { void setVisible(bool) {} };
+struct View { bool visible = false; void setVisible(bool value) { visible = value; } };
 struct Preview { void resumeDefaultBgm() {} };
 struct MusicSelectScene {
   ApplicationContext &context;
@@ -134,10 +139,13 @@ struct MusicSelectScene {
   std::string selectedSkinPath_;
   bool sceneActive_ = true, launching_ = false, failed_ = false;
   bool reactivateSkinOnResume_ = false;
+  bool presentationSkinRefreshPending = false;
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
   std::future<std::unique_ptr<skin::MusicSelectSkinSession>> skinPreparation_;
   std::stop_source skinPreparationStop_;
   View *errorView_ = nullptr;
+  View loadingView;
+  View *skinLoadingView_ = &loadingView;
   Preview *previewAudio_ = nullptr;
   ACTIVATION_IDENTITY
   MusicSelectScene(ApplicationContext &value, skin::GameplaySkinActivationRequest request)
@@ -148,7 +156,7 @@ struct MusicSelectScene {
   }
   int makeFrame() { return 0; }
   void enterError(std::vector<skin::SkinDiagnostic>) { failed_ = true; skinSession_.reset(); }
-  void buildSkinLoadingView() {}
+  void buildSkinLoadingView() { skinLoadingView_->setVisible(true); }
   void hideDecideOverlay() {}
   void onApplicationBackgroundChanged(bool) {}
   void syncToolbar() {}
@@ -161,6 +169,7 @@ struct MusicSelectScene {
   bool reactivateSkinAfterSettings();
   void openSettings();
   void onResume();
+  void update(float);
 };
 SCENE_METHODS
 
@@ -231,9 +240,19 @@ end}
     expect(manager.retained == &scene, "Settings must retain its selector owner");
     scene.sceneActive_ = false;
     scene.skinSession_->suspendAudio();
+    lifecycle.ready = false;
     scene.onResume();
+    expect(!scene.failed_ && lifecycle.calls == 0 && scene.reactivateSkinOnResume_ &&
+               scene.presentationSkinRefreshPending,
+           "resume during orientation revalidation waits without consuming activation or entering error");
+    lifecycle.ready = true;
+    scene.update(0);
+    expect(!scene.presentationSkinRefreshPending && !scene.reactivateSkinOnResume_,
+           "ready resume consumes pending orientation refresh exactly once");
     scene.finishPreparation();
     if (changed == 0) {
+      expect(!scene.skinLoadingView_->visible,
+             "retained ready skin dismisses the revalidation loading screen");
       expect(scene.skinSession_->epoch == epoch && scene.skinSession_->counter() == 3,
              "unchanged Settings must preserve the live Lua runtime and sentinel despite a fresh request serial");
     } else {

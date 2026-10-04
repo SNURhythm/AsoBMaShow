@@ -434,16 +434,6 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
           judgementIndicatorRangeMilliseconds);
   judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
-  switch (notePriorityMode) {
-  case NotePriorityMode::Lowest:
-  case NotePriorityMode::Combo:
-  case NotePriorityMode::Duration:
-  case NotePriorityMode::Score:
-    break;
-  default:
-    notePriorityMode = NotePriorityMode::Combo;
-    break;
-  }
   switch (judgementIndicatorRenderMode) {
   case JudgementIndicatorRenderMode::World3D:
   case JudgementIndicatorRenderMode::Hud2D:
@@ -489,6 +479,16 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
 }
 
 void AppSettings::sanitize() {
+  switch (notePriorityMode) {
+  case NotePriorityMode::Lowest:
+  case NotePriorityMode::Combo:
+  case NotePriorityMode::Duration:
+  case NotePriorityMode::Score:
+    break;
+  default:
+    notePriorityMode = NotePriorityMode::Combo;
+    break;
+  }
   skin::SkinProfileSettings safety;
   safety.safetyLevel = skinSafetyLevel;
   safety.sanitize();
@@ -853,8 +853,8 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
       } else if (key == "play_area_width_14k") {
         settings.presentation().playAreaWidth14K = std::stof(value);
       } else if (key == "note_priority_mode") {
-        settings.presentation().notePriorityMode =
-            parseNotePriorityMode(value, settings.presentation().notePriorityMode);
+        settings.notePriorityMode =
+            parseNotePriorityMode(value, settings.notePriorityMode);
       } else if (key == "judgement_indicator_enabled") {
         bool parsed = settings.presentation().judgementIndicatorEnabled;
         if (parseBool(value, parsed)) {

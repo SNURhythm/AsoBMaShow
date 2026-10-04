@@ -129,7 +129,7 @@ AppSettings makeDistinctSettings() {
   value.presentation().playAreaWidth8K = 8.5f;
   value.presentation().playAreaWidth10K = 9.6f;
   value.presentation().playAreaWidth14K = 10.7f;
-  value.presentation().notePriorityMode = AppSettings::NotePriorityMode::Score;
+  value.notePriorityMode = AppSettings::NotePriorityMode::Score;
   value.presentation().judgementIndicatorEnabled = false;
   value.presentation().judgementIndicatorY = 0.22f;
   value.presentation().judgementIndicatorWidthScale = 1.45f;
@@ -1826,7 +1826,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
-  writeFile(path, R"({"schemaVersion":7,"laneLength":11,
+  writeFile(path, R"({"schemaVersion":7,"laneLength":11,"notePriorityMode":3,
                      "audioOffsetMs":23,"gameplayHispeed":2.5,
                      "skin":{"selectedSkinEntries":{"0":{"package":"Example","path":"play.json"}},
                        "entries":[{"entry":{"package":"Example","path":"play.json"},
@@ -1842,6 +1842,10 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   if (!document.contains("presentations")) return;
   auto &landscape = document["presentations"]["landscape"];
   auto &portrait = document["presentations"]["portrait"];
+  expect(document.value("notePriorityMode", -1) == 3 &&
+             !landscape.contains("notePriorityMode") &&
+             !portrait.contains("notePriorityMode"),
+         "legacy judgement candidate strategy stays shared across orientations");
   expect(landscape["laneLength"] == 11,
          "migration preserves legacy landscape lane length");
   expect(portrait["laneLength"] == 16 && portrait["laneAngleDegrees"] == 0,

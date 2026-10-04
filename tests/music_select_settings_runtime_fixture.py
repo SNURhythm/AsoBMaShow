@@ -17,6 +17,9 @@ def generate():
     ):
         start = source.index(signature)
         methods.append(source[start:source.index("{", start)] + function_body(source, signature))
+    update = function_body(source, "void MusicSelectScene::update(float)")
+    methods.append("void MusicSelectScene::update(float) " +
+                   update[:update.index("  if (failed_ || !sceneActive_")] + "}")
     identity = ""
     if "struct SkinActivationIdentity" in header:
         start = header.index("struct SkinActivationIdentity")

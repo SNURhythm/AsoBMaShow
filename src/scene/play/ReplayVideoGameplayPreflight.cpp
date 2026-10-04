@@ -116,7 +116,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .touchVisualizationEnabled = touchVisualizationEnabled,
       .replayGhostRenderingEnabled = replayGhostRenderingEnabled,
       .judgeAlgorithmImageIndex =
-          beatorajaJudgeAlgorithmImageIndex(settings.presentation().notePriorityMode),
+          beatorajaJudgeAlgorithmImageIndex(settings.notePriorityMode),
   };
 }
 

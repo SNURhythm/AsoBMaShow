@@ -18,7 +18,7 @@
 - Keep calibration, green number/hispeed preferences, input mappings, audio, rulesets, records, installed skin packages, and skin safety policy shared.
 - Legacy built-in values migrate to landscape; portrait receives its own defaults. Copy existing skin settings into both orientations once.
 - Library/Songs occupy an upper row in portrait, approximately 30%/70% width. Details occupies approximately 40% of usable height below. Landscape retains three columns.
-- Use the current checkout. Preserve unrelated iOS project edits; no worktree, deployment, or whole-file formatting. Commit and push verified task changes to the existing upstream.
+- Use the current checkout. Preserve unrelated iOS project edits; no worktree or whole-file formatting. Firebase iOS distribution is authorized by the final user request. Commit and push verified task changes to the existing upstream.
 - Run one build at a time in each build directory and run platform builds sequentially. The user handles iOS device testing.
 
 ## Review Focus
@@ -111,8 +111,8 @@
 
 **Files:** Only fixes within the preceding task scope, plus this plan's completion checkboxes.
 
-- [ ] Run `git diff --check`; build `main` and all affected test targets in one `cmake --build cmake-build-debug --target ... -j 6` invocation. Run focused tests before `ctest --test-dir cmake-build-debug --output-on-failure -j 6`.
-- [ ] Investigate failures using their actual output. The prior run had a reproducible, unchanged Metal SDF-shadow failure; do not label a new failure pre-existing without checking the affected source and baseline evidence.
-- [ ] Run `scripts/android_firebase_deploy.sh --build-only` after desktop compilation finishes. Leave iOS device validation to the user and report whether any iOS compile check was performed. Do not run a distribution action.
-- [ ] Obtain the execution method's final review, address findings, and rerun only affected checks. Verify separate settings after restart and the final portrait menu visually.
+- [x] Run `git diff --check`; build `main` and all affected test targets in one `cmake --build cmake-build-debug --target ... -j 6` invocation. Run focused tests before `ctest --test-dir cmake-build-debug --output-on-failure -j 6`.
+- [x] Investigate failures using their actual output. The prior run had a reproducible, unchanged Metal SDF-shadow failure; do not label a new failure pre-existing without checking the affected source and baseline evidence.
+- [ ] Per the final user request, skip Android builds and run `scripts/ios_firebase_deploy.sh` for Firebase iOS distribution after desktop verification. Leave iOS device and visual validation to the user.
+- [x] Obtain the execution method's final review, address findings, and rerun only affected checks. Independent settings survive save/reload tests. Final visual verification is assigned to the user on the requested Firebase build because desktop CUA could not attach to the test window.
 - [ ] Commit remaining verified fixes, push the current branch upstream, and report results plus any unresolved platform/test limitations. Leave unrelated iOS project changes unstaged.

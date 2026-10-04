@@ -256,13 +256,13 @@ void testSelectedPlayConfigGuardsAndRemainingModifiers() {
               settings.hispeedAutoAdjust != autoHispeed,
           "selected PlayConfig boolean events toggle exact fields");
 
-  settings.presentation().notePriorityMode = AppSettings::NotePriorityMode::Combo;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Combo;
   (void)run(context, 340, -1);
-  require(settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Lowest,
+  require(settings.notePriorityMode == AppSettings::NotePriorityMode::Lowest,
           "judge algorithm reverses in Combo/Duration/Lowest order");
-  settings.presentation().notePriorityMode = AppSettings::NotePriorityMode::Score;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Score;
   require(!run(context, 340).settingsChanged &&
-              settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Score,
+              settings.notePriorityMode == AppSettings::NotePriorityMode::Score,
           "Score judge algorithm is the source-defined exact no-op");
 
   settings.skinSortId = "RIVALOPTION";

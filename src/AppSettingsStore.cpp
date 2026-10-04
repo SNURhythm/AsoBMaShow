@@ -540,7 +540,6 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"playAreaWidth8K", settings.playAreaWidth8K},
       {"playAreaWidth10K", settings.playAreaWidth10K},
       {"playAreaWidth14K", settings.playAreaWidth14K},
-      {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
       {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
       {"judgementIndicatorY", settings.judgementIndicatorY},
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
@@ -564,6 +563,7 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
 json settingsToJson(const AppSettings &settings) {
   json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
+      {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
       {"visibleTimeDurationMilliseconds",
@@ -704,8 +704,6 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             diagnostics);
   readValue(document, "playAreaWidth14K", settings.playAreaWidth14K,
             diagnostics);
-  readEnum(document, "notePriorityMode", settings.notePriorityMode,
-           diagnostics);
   readValue(document, "judgementIndicatorEnabled",
             settings.judgementIndicatorEnabled, diagnostics);
   readValue(document, "judgementIndicatorY", settings.judgementIndicatorY,
@@ -737,6 +735,7 @@ AppSettings settingsFromJson(const json &document,
       document.contains("selectedGaugeType")) {
     settings.selectedGaugeAutoShiftMode = "none";
   }
+  readEnum(document, "notePriorityMode", settings.notePriorityMode, diagnostics);
   readValue(document, "audioOffsetMs", settings.audioOffsetMs, diagnostics);
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
   if (document.contains("visibleTimeDurationMilliseconds")) {

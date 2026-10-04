@@ -755,6 +755,12 @@ void MainMenuScene::queueSelectedSkinHandoff() {
   // Settings retains the built-in selector. Re-evaluate type 5 after resume
   // unwinds, so changing the scene cannot clean up views inside onResume().
   defer([this]() {
+    if (context.gameplaySkinLifecycle &&
+        !context.gameplaySkinLifecycle->presentationReady()) {
+      presentationSkinRefreshPending = true;
+      return true;
+    }
+    presentationSkinRefreshPending = false;
     skin::GameplaySkinAcquisition acquisition;
     if (context.gameplaySkinLifecycle) {
       acquisition =

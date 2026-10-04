@@ -55,6 +55,8 @@ struct SceneManager {
 };
 struct Lifecycle {
   int calls = 0;
+  bool ready = true;
+  bool presentationReady() const { return ready; }
   skin::GameplaySkinAcquisition next;
   skin::GameplaySkinAcquisition acquireForSkinType(int type, bool boundary) {
     assert(type == 5 && !boundary);
@@ -73,6 +75,7 @@ struct MainMenuScene {
   std::vector<std::function<bool()>> deferred;
   int scoreClearRanks = 0, scoreBestScores = 0, folderClearData = 0;
   int scoreClearRanksRevision = 0, refreshed = 0;
+  bool presentationSkinRefreshPending = false;
   void defer(std::function<bool()> callback, int delay, bool waitFrame) {
     assert(delay == 0 && waitFrame);
     deferred.push_back(std::move(callback));
@@ -89,6 +92,25 @@ struct MainMenuScene {
 };
 
 int main() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  {
+    MainMenuScene menu;
+    SceneManager manager;
+    Lifecycle lifecycle;
+    menu.context.sceneManager = &manager;
+    menu.context.gameplaySkinLifecycle = &lifecycle;
+    lifecycle.ready = false;
+    menu.onResume();
+    menu.deferred.back()();
+    assert(lifecycle.calls == 0 && !manager.current && menu.presentationSkinRefreshPending);
+    lifecycle.ready = true;
+    lifecycle.next.disposition = skin::GameplaySkinAcquisitionDisposition::Ready;
+    lifecycle.next.request.emplace();
+    menu.queueSelectedSkinHandoff();
+    menu.deferred.back()();
+    assert(lifecycle.calls == 1 && manager.current && !menu.presentationSkinRefreshPending);
+  }
+#endif
   for (int scenario = 0; scenario < 5; ++scenario) {
     MainMenuScene menu;
     SceneManager manager;

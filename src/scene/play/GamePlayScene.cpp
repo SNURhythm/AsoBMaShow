@@ -1760,7 +1760,7 @@ bool GamePlayScene::enterPracticeMenu() {
       return false;
     }
     rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
-        options, *chart, context.settings.presentation().notePriorityMode);
+        options, *chart, context.settings.notePriorityMode);
     if (!rulesetPolicyBuild.built()) {
       showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
       return false;
@@ -1809,7 +1809,7 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   }
 
   rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
-      options, *chart, context.settings.presentation().notePriorityMode);
+      options, *chart, context.settings.notePriorityMode);
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
     return false;
@@ -2051,7 +2051,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   gameplay::GameplaySimulationConfig simulationConfig{
       .judge = rulesetPolicyBuild.policy->judge,
       .gaugeRules = rulesetPolicyBuild.policy->gauge,
-      .notePriorityMode = context.settings.presentation().notePriorityMode,
+      .notePriorityMode = context.settings.notePriorityMode,
       .attempt =
           {
               .initialGaugeType = state->selectedGaugeType,
@@ -2883,7 +2883,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
-          this->options, *this->chart, context.settings.presentation().notePriorityMode)),
+          this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
@@ -2905,7 +2905,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
                                        this->chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
-          this->options, *this->chart, context.settings.presentation().notePriorityMode)),
+          this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
@@ -3154,7 +3154,7 @@ void GamePlayScene::init() {
       .replayGhostRenderingEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
       .judgeAlgorithmImageIndex =
-          beatorajaJudgeAlgorithmImageIndex(context.settings.presentation().notePriorityMode),
+          beatorajaJudgeAlgorithmImageIndex(context.settings.notePriorityMode),
   };
   playfieldVisualStateStore->setConfiguration(playfieldPresentationConfiguration);
   presentation->configure(playfieldPresentationConfiguration);
@@ -7156,7 +7156,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       .laneBeamTimeMicros = playfieldVisualEventTimeMicros(
           gameplayTimeMicros, getVisualOffsetMicros()),
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.presentation().notePriorityMode,
+      .notePriorityMode = context.settings.notePriorityMode,
   };
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
@@ -7241,7 +7241,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       .laneBeamTimeMicros = playfieldVisualEventTimeMicros(
           gameplayTimeMicros, getVisualOffsetMicros()),
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.presentation().notePriorityMode,
+      .notePriorityMode = context.settings.notePriorityMode,
   };
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),

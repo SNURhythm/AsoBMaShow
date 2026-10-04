@@ -771,7 +771,7 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
   out.imageIndexes[331] = settings.presentation().liftEnabled ? 1 : 0;
   out.imageIndexes[332] = settings.presentation().hiddenEnabled ? 1 : 0;
   out.imageIndexes[340] =
-      beatorajaJudgeAlgorithmImageIndex(settings.presentation().notePriorityMode);
+      beatorajaJudgeAlgorithmImageIndex(settings.notePriorityMode);
   out.imageIndexes[342] = settings.hispeedAutoAdjust ? 1 : 0;
   out.imageIndexes[343] = settings.guideSoundEffects ? 1 : 0;
   out.imageIndexes[350] = settings.extraNoteDepth;

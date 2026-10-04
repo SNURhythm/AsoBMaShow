@@ -51,11 +51,16 @@ struct MusicSelectScene {
   struct FolderStatusLoader { void cancel() {} };
   FolderStatusLoader *folderStatusLoader_ = nullptr;
   std::optional<int> folderStatusRowsRevision_, folderStatusRetryAt_;
-  struct Context { std::atomic_bool appInBackground = false; } context;
+  struct Lifecycle { bool presentationReady() const { return true; } };
+  struct Context {
+    std::atomic_bool appInBackground = false;
+    Lifecycle *gameplaySkinLifecycle = nullptr;
+  } context;
   bool sceneActive_ = true;
   bool failed_ = false;
   bool launching_ = false;
   bool reactivateSkinOnResume_ = false;
+  bool presentationSkinRefreshPending = false;
   Preview previewController_;
   Preview preview;
   Preview *previewAudio_ = &preview;
@@ -79,6 +84,7 @@ struct MusicSelectScene {
   void reloadLibrary() {}
   void selectedBarMoved() { ++selectionChanges; }
   bool reactivateSkinAfterSettings() { return true; }
+  void buildSkinLoadingView() {}
   void onPause();
   void onResume();
   void onApplicationBackgroundChanged(bool background);

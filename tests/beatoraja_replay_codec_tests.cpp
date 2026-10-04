@@ -105,7 +105,7 @@ replay::ReplaySetup setup(std::string sha = std::string(64, 'a'),
   value.judgeWindowScalePercent = 90;
   value.startingGaugePercent = 42.5F;
   value.initialLaneCoverPercent = 37;
-  value.presentation().laneCoverEnabled = true;
+  value.laneCoverEnabled = true;
   value.clubMode = true;
   return value;
 }

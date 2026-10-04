@@ -1507,8 +1507,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         notePriorityModeText);
   notePriorityModeButton->setOnClickListener([this]() {
-    context.settings.presentation().notePriorityMode =
-        nextNotePriorityMode(context.settings.presentation().notePriorityMode);
+    context.settings.notePriorityMode =
+        nextNotePriorityMode(context.settings.notePriorityMode);
     persistSettings();
   });
   notePriorityControls->addView(notePriorityModeButton);

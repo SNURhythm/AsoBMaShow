@@ -378,9 +378,9 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
     break;
   case 340: {
     if (!context.hasSelectedPlayConfig) break;
-    const auto index = notePriorityIndex(settings.presentation().notePriorityMode);
+    const auto index = notePriorityIndex(settings.notePriorityMode);
     if (!index) break;
-    settings.presentation().notePriorityMode = notePriorityAt(
+    settings.notePriorityMode = notePriorityAt(
         cycleInteger(*index, 3, argument1));
     changedWithSound(outcome);
     break;

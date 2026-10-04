@@ -192,6 +192,7 @@ public:
   int bgaBrightnessPercent = kDefaultBgaBrightnessPercent;
   float bgaBlurStrength = kDefaultBgaBlurStrength;
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
+  NotePriorityMode notePriorityMode = NotePriorityMode::Combo;
   using PresentationOrientation = player_settings::PresentationOrientation;
   struct PresentationSettings {
     float laneAngleDegrees = kDefaultLaneAngleDegrees;
@@ -212,7 +213,6 @@ public:
     float playAreaWidth8K = kDefaultPlayAreaWidth;
     float playAreaWidth10K = kDefaultPlayAreaWidth;
     float playAreaWidth14K = kDefaultPlayAreaWidth;
-    NotePriorityMode notePriorityMode = NotePriorityMode::Combo;
     bool judgementIndicatorEnabled = true;
     float judgementIndicatorY = kDefaultJudgementIndicatorY;
     float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;

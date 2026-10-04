@@ -697,7 +697,14 @@ void MusicSelectScene::onResume() {
   if (background) onApplicationBackgroundChanged(true);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (reactivateSkinOnResume_) {
+    if (context.gameplaySkinLifecycle &&
+        !context.gameplaySkinLifecycle->presentationReady()) {
+      presentationSkinRefreshPending = true;
+      buildSkinLoadingView();
+      return;
+    }
     reactivateSkinOnResume_ = false;
+    presentationSkinRefreshPending = false;
     if (!reactivateSkinAfterSettings()) return;
   }
   if (!background && !failed_ && skinSession_) skinSession_->resumeAudio();
@@ -3329,6 +3336,10 @@ void MusicSelectScene::update(float) {
   if (presentationSkinRefreshPending &&
       (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
     presentationSkinRefreshPending = false;
+    if (reactivateSkinOnResume_) {
+      onResume();
+      return;
+    }
     if (!reactivateSkinAfterSettings()) return;
   }
 #endif
@@ -4352,7 +4363,10 @@ bool MusicSelectScene::activateSkin(
       .viewport = request.viewport,
       .safetyLevel = request.safetyLevel,
       .orientation = request.orientation};
-  if (!failed_ && skinSession_ && activeSkinIdentity_ == identity) return true;
+  if (!failed_ && skinSession_ && activeSkinIdentity_ == identity) {
+    if (skinLoadingView_ != nullptr) skinLoadingView_->setVisible(false);
+    return true;
+  }
   cancelSkinPreparation();
   skinSession_.reset();
   failed_ = false;

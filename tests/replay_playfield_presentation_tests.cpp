@@ -446,7 +446,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.presentation().judgementTimingMillisecondsCriteria =
       AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
   settings.presentation().gaugeBarPosition = AppSettings::GaugeBarPosition::Left;
-  settings.presentation().notePriorityMode = AppSettings::NotePriorityMode::Duration;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
 
   bms_parser::Chart chart;
   chart.Meta.Bpm = 120.0;

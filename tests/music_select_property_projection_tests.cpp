@@ -200,7 +200,7 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   settings.presentation().liftEnabled = true;
   settings.presentation().hiddenEnabled = false;
   settings.hispeedAutoAdjust = true;
-  settings.presentation().notePriorityMode = AppSettings::NotePriorityMode::Duration;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
   settings.audioVideo.audio.masterVolume = 0.75F;
   settings.audioVideo.audio.keysoundVolume = 0.5F;
   settings.audioVideo.audio.bgmVolume = 0.25F;

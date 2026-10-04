@@ -9141,7 +9141,7 @@ void testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces() {
   settings.presentation().liftEnabled = true;
   settings.presentation().hiddenEnabled = true;
   settings.hispeedAutoAdjust = true;
-  settings.presentation().notePriorityMode = AppSettings::NotePriorityMode::Duration;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
   settings.selectedAssistOption = assist_options::kBpmGuide;
   settings.selectedGaugeAutoShiftMode = "best_clear";
   settings.selectedGaugeAutoShiftLowerBound = "normal";
