@@ -18,20 +18,20 @@
   "format": 2,
   "outputs": {
     "shaders/dx11/fs_skin_quad.bin": {
-      "bytes": 2012,
-      "sha256": "151ae3ac62d5b02bf4a8e10db43f7e3f1fabec1c80d1484739932e79e723aa0c"
+      "bytes": 1360,
+      "sha256": "38dfe1170617bf6cbb03075a31bcc94d60ecaa0751750c8a826c610d68df3f87"
     },
     "shaders/dx11/fs_skin_yuvrgb.bin": {
-      "bytes": 1065,
-      "sha256": "00fbeafb0f5cdcf194e51d0e9b731de7e2b97d8a65ee7b5c0bbd6efeaa41c60e"
+      "bytes": 825,
+      "sha256": "de7e716a0020f0b6fff0c8dd3716a2026c2201d83aa3a73aee2ab06c8206fa25"
     },
     "shaders/dx11/vs_skin_quad.bin": {
-      "bytes": 774,
-      "sha256": "dc1c4943cf793d8271c086a7046a01bb80b362f7ee7b971652cb33f34f48c401"
+      "bytes": 634,
+      "sha256": "1bac8bfd4ea3bd3dc0f5d64e301df401fb134cd74ae4f7f20cdbab0b487167e7"
     },
     "shaders/dx11/vs_skin_yuvrgb.bin": {
-      "bytes": 774,
-      "sha256": "dc1c4943cf793d8271c086a7046a01bb80b362f7ee7b971652cb33f34f48c401"
+      "bytes": 634,
+      "sha256": "1bac8bfd4ea3bd3dc0f5d64e301df401fb134cd74ae4f7f20cdbab0b487167e7"
     },
     "shaders/essl/fs_skin_quad.bin": {
       "bytes": 2662,
