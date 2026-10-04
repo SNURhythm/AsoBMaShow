@@ -2622,7 +2622,8 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
       expect(execute(database.get(), "DROP INDEX IF EXISTS idx_scores_best_eligible_" +
                          std::to_string(RulesetDescriptor::For(GameplayRuleset::LR2).version) +
                          "_" + std::to_string(
-                             RulesetDescriptor::For(GameplayRuleset::Beatoraja).version)),
+                             RulesetDescriptor::For(GameplayRuleset::Beatoraja).version) +
+                         "_compat1"),
              "legacy score fixture removes the current eligibility index");
       for (const std::string_view table : {"scores", "course_scores"}) {
         for (const std::string_view column :

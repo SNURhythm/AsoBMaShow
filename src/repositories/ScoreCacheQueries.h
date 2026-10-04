@@ -2,6 +2,7 @@
 
 #include "../ProfileDatabaseActivity.h"
 #include "../ScoreProvenance.h"
+#include "../ScoreRulesetCompatibility.h"
 #include "ScoreRepositoryModels.h"
 #include "SqliteRAII.h"
 #include "../scene/play/RhythmState.h"
@@ -136,8 +137,7 @@ inline std::string keyHasValueExpr(std::string_view keyExpr) {
 
 inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
   const std::string prefix(alias);
-  const auto matches = [&](GameplayRuleset selection) {
-    const auto rules = RulesetDescriptor::For(selection);
+  const auto matches = [&](const RulesetDescriptor &rules) {
     const auto field = [&](std::string_view name) {
       return "json_extract(" + prefix + ".provenance_json, '$.ruleset." +
              std::string(name) + "')";
@@ -148,14 +148,19 @@ inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
            "' AND " + field("judgementModel") + " = '" + rules.judgementModel +
            "' AND " + field("gaugeModel") + " = '" + rules.gaugeModel + "')";
   };
+  const auto compatible = [&](GameplayRuleset selection) {
+    const auto current = RulesetDescriptor::For(selection);
+    const auto previous = previousBestScoreCompatibleRuleset(current);
+    return matches(current) + (previous ? " OR " + matches(*previous) : "");
+  };
   // Historical and imported rows without a known policy retain their existing
-  // treatment. Known policies must match the current implementation; the saved
-  // provenance itself remains immutable for replay and attempt fingerprints.
+  // treatment. Known policies allow only the explicit parity-update exception;
+  // saved provenance remains immutable for replay and attempt fingerprints.
   return "(" + prefix + ".eligibility <> " +
          std::to_string(static_cast<int>(ScoreEligibility::Modified)) +
          " AND (" + prefix + ".ruleset_version = 0 OR CASE WHEN json_valid(" +
-         prefix + ".provenance_json) THEN (" + matches(GameplayRuleset::LR2) +
-         " OR " + matches(GameplayRuleset::Beatoraja) + ") ELSE 0 END))";
+         prefix + ".provenance_json) THEN (" + compatible(GameplayRuleset::LR2) +
+         " OR " + compatible(GameplayRuleset::Beatoraja) + ") ELSE 0 END))";
 }
 
 inline std::string rankLookupForMode(const std::string &sha256Expr,
@@ -369,6 +374,9 @@ detachScoreDatabaseIfAttached(sqlite3 *db) {
 }
 
 inline std::optional<std::string>
+rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {});
+
+inline std::optional<std::string>
 ensureScoreSummarySchema(sqlite3 *db, std::string_view schema = {});
 
 inline std::optional<std::string>
@@ -453,9 +461,33 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
   if (detail::scoreTableHasProvenance(db, schema)) {
     const auto lr2 = RulesetDescriptor::For(GameplayRuleset::LR2);
     const auto beatoraja = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
-    const std::string index = detail::qualifiedName(
-        schema, "idx_scores_best_eligible_" + std::to_string(lr2.version) +
-                    "_" + std::to_string(beatoraja.version));
+    const std::string oldIndexName =
+        "idx_scores_best_eligible_" + std::to_string(lr2.version) + "_" +
+        std::to_string(beatoraja.version);
+    const std::string index =
+        detail::qualifiedName(schema, oldIndexName + "_compat1");
+    // The shipped strict-policy index identifies profiles whose caches need a
+    // one-time refresh, even when a lower current score already fills them.
+    SqliteStatementHandle oldIndex;
+    const std::string oldIndexQuery =
+        "SELECT 1 FROM " + detail::qualifiedName(schema, "sqlite_master") +
+        " WHERE type='index' AND name='" + oldIndexName + "'";
+    if (prepareSqliteStatement(db, oldIndexQuery, oldIndex) != SQLITE_OK) {
+      return sqliteDatabaseError(db);
+    }
+    const int oldIndexResult = sqlite3_step(oldIndex.get());
+    if (oldIndexResult != SQLITE_ROW && oldIndexResult != SQLITE_DONE) {
+      return sqliteDatabaseError(db);
+    }
+    oldIndex.reset();
+    if (oldIndexResult == SQLITE_ROW) {
+      if (const auto error = rebuildScoreSummaryTables(db, schema)) {
+        return error;
+      }
+      const std::string dropIndex =
+          "DROP INDEX " + detail::qualifiedName(schema, oldIndexName);
+      if (const auto error = executeSqlite(db, dropIndex.c_str())) return error;
+    }
     const std::string createEligibleIndex =
         "CREATE INDEX IF NOT EXISTS " + index +
         " ON scores(chart_sha256) WHERE " +
@@ -484,7 +516,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
 }
 
 inline std::optional<std::string>
-rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
+rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema) {
   profile_database_activity::WriteGuard operation;
   const std::string clearTable = detail::clearRankSummaryTable(schema);
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
