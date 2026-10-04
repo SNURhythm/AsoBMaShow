@@ -359,6 +359,7 @@ private:
 
   void initView(ApplicationContext &context);
   void updatePanelLayout();
+  float portraitDetailsHeight(float availableHeight) const;
   void updateMenuPresentation(bool portrait);
   void applyThemeChange();
   void reloadProfileSelectionsFromSettings();

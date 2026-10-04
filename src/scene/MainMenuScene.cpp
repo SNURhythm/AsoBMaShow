@@ -2021,6 +2021,18 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rootLayout->applyYogaLayout();
 }
 
+float MainMenuScene::portraitDetailsHeight(float availableHeight) const {
+  const auto *primary = rootLayout->findViewByName("mainMenuPrimaryActions");
+  const float detailsHeight = detailsContent_ ? detailsContent_->getHeight() : 0;
+  const float controlsHeight = detailsControlsContent_ ? detailsControlsContent_->getHeight() : 0;
+  const float actionsHeight = primary ? primary->getHeight() : 0;
+  // Match the two scroll columns, the action gap, and the panel's 16-unit
+  // top/bottom padding plus border. Tall content stays scrollable while the
+  // browser retains room for its toolbar and song rows.
+  const float contentHeight = std::max(detailsHeight, controlsHeight + actionsHeight + 8);
+  return std::clamp(contentHeight + 34, 0.0F, std::max(0.0F, availableHeight - 320));
+}
+
 void MainMenuScene::updatePanelLayout() {
   if (!rootLayout) return;
   View::LayoutBatchScope batch;
@@ -2028,7 +2040,7 @@ void MainMenuScene::updatePanelLayout() {
   const auto safe = getSafeAreaInsetsUi();
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
   const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - 24);
-  const float detailsHeight = contentHeight * 0.4F;
+  const float detailsHeight = portraitDetailsHeight(contentHeight);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *actions = rootLayout->findViewByName("mainMenuLibraryActions");
@@ -2061,11 +2073,11 @@ void MainMenuScene::updatePanelLayout() {
   }
   if (detailsScroll) {
     detailsScroll->setWidth(portrait ? YGUndefined : kDetailsPanelWidth - 20);
-    detailsScroll->setHeight(portrait ? std::max(0.0F, detailsHeight - 32) : YGUndefined);
+    detailsScroll->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
   }
   if (controls) {
     controls->setWidth(YGUndefined);
-    controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 32) : YGUndefined);
+    controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
   }
   updateMenuPresentation(portrait);
 }
@@ -7148,6 +7160,14 @@ void MainMenuScene::update(float dt) {
   }
   if (rankingsModal) {
     rankingsModal->update();
+  }
+  if (rootLayout && rendering::window_height > rendering::window_width) {
+    const auto safe = getSafeAreaInsetsUi();
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - 24);
+    const auto *details = rootLayout->findViewByName("mainMenuDetails");
+    if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
+      updatePanelLayout();
+    }
   }
 }
 

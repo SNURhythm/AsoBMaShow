@@ -14,7 +14,9 @@ class UiScaleTests(unittest.TestCase):
         method = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
                          "void MainMenuScene::updatePanelLayout()") + "\n" + extract(
                              (root / "src/scene/MainMenuScene.cpp").read_text(),
-                             "void MainMenuScene::updateMenuPresentation(bool portrait)")
+                             "void MainMenuScene::updateMenuPresentation(bool portrait)") + "\n" + extract(
+                                 (root / "src/scene/MainMenuScene.cpp").read_text(),
+                                 "float MainMenuScene::portraitDetailsHeight(float availableHeight) const")
         source = r'''
 #include <yoga/Yoga.h>
 #include <array>
@@ -47,6 +49,7 @@ struct View {
   void setAutoFitText(bool) {}
   void setVisible(bool v) { visible=v; }
   bool getVisible() { return visible; }
+  int getHeight() const { return YGNodeLayoutGetHeight(node); }
   void setDisplay(YGDisplay v) { YGNodeStyleSetDisplay(node,v); }
   bool moveTo(View& target) { if(parent==&target)return true; if(parent) { YGNodeRemoveChild(parent->node,node); std::erase(parent->children,this); } target.add(*this); return true; }
   void add(View& v) { v.parent=this; children.push_back(&v);YGNodeInsertChild(node,v.node,children.size()-1); }
@@ -71,6 +74,7 @@ struct MainMenuScene {
   Button *replayButton,*rankingsButton,*startButton,*unzipButton,*findBmsButton;
   View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
   void updatePanelLayout(); void updateMenuPresentation(bool portrait);
+  float portraitDetailsHeight(float) const;
 };
 PRODUCTION_METHOD
 int main() {
@@ -105,11 +109,21 @@ int main() {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
     root.setPadding(Edge::Top,58)->setPadding(Edge::Bottom,48);
+    content.setHeight(340);controlsContent.setHeight(260);
+    YGNodeCalculateLayout(content.node,YGUndefined,YGUndefined,YGDirectionLTR);
+    YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
+    scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
     scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
     float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
     if(dimensions.second>dimensions.first) {
       const float usable=dimensions.second-106-24;
-      assert(std::abs(bh/usable-.6)<.01 && std::abs(dh/usable-.4)<.01);
+      assert(std::abs(dh-(260+136+8+34))<1 && std::abs(bh+dh-usable)<1);
+      controlsContent.setHeight(400);
+      YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
+      assert(scene.portraitDetailsHeight(usable)==std::min(578.0F,usable-320));
+      assert(scene.portraitDetailsHeight(600)==280);
+      controlsContent.setHeight(260);
+      YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
       assert(YGNodeLayoutGetLeft(songs.node)>YGNodeLayoutGetLeft(library.node));
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
       assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
