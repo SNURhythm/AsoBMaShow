@@ -1916,6 +1916,61 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+void verifyJudgementFeedbackStyles(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  rendering::UiBatchRenderer batch;
+  auto config = presentationConfig(0);
+  for (const auto textPercent : {50, 100, 150, 200, 100}) {
+    config.judgementTextSizePercent = textPercent;
+    config.judgementTextBold = textPercent != 100;
+    config.judgementTimingSizePercent = 250 - textPercent;
+    config.judgementTimingBold = !config.judgementTextBold;
+    for (const int width : {1080, 1920}) {
+      rendering::window_width = width;
+      renderer.configure(config);
+      renderer.onJudge(JudgeResult(Great, -15'000), 1234, 9999,
+                       {.songTimeMicros = kRenderMicros,
+                        .visualTimeMicros = kRenderMicros,
+                        .bgaTimeMicros = kRenderMicros});
+      batch.beginFrame();
+      RenderContext context(batch);
+      {
+        RenderContext::UiBatchScope scope(context);
+        renderer.render(context, kRenderMicros, kRenderMicros);
+      }
+      const auto views = renderer.judgementFeedbackTextViewsForTesting();
+      expect(views[0]->pointSize() == std::lround(38 * textPercent / 100.0f) &&
+                 views[1]->pointSize() == std::lround(21 * (250 - textPercent) / 100.0f) &&
+                 views[2]->pointSize() == views[1]->pointSize(),
+             "judgement and timing feedback scale independently during live reconfiguration");
+      expect((views[0]->fontWeight() == TextView::FontWeight::Bold) == config.judgementTextBold &&
+                 (views[1]->fontWeight() == TextView::FontWeight::Bold) == config.judgementTimingBold &&
+                 views[2]->fontWeight() == views[1]->fontWeight(),
+             "judgement and timing boldness update independently");
+      for (const auto *view : views) {
+        if (!view->getVisible() || view->getText().empty() ||
+            view->textureWidth() > view->getContentWidth() ||
+            view->textureHeight() > view->getContentHeight()) {
+          std::cerr << "Feedback bounds: " << view->getText() << " font " << view->pointSize()
+                    << " texture " << view->textureWidth() << 'x' << view->textureHeight()
+                    << " content " << view->getContentWidth() << 'x' << view->getContentHeight() << '\n';
+        }
+        expect(view->getVisible() && !view->getText().empty() &&
+                   view->textureWidth() <= view->getContentWidth() &&
+                   view->textureHeight() <= view->getContentHeight(),
+               "resized feedback remains visible and fits its text box");
+      }
+      expect(views[1]->getY() + views[1]->getHeight() <= views[0]->getY(),
+             "timing feedback stays above the independently sized judgement");
+      bgfx::frame();
+    }
+  }
+  rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
+}
+
 void verifyNoteBoundsReachScreenEdgesAfterRotation() {
   SyntheticChartFixture fixture;
   Judge judge(fixture.chart->Meta.Rank);
@@ -2059,6 +2114,7 @@ int main() {
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
       verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();
+      verifyJudgementFeedbackStyles(target);
       verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';

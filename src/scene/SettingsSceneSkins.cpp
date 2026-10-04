@@ -714,6 +714,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
   }
 
   appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
+  body->addView(buildJudgementFeedbackStyleControls(metrics));
   appendNumeric(
       i18n::message("settings.skins.judge_text_y.percent_label"),
       std::to_string(judgementTextYToPercent(context.settings.presentation().judgementTextY)),

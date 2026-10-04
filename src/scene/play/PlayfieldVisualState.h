@@ -114,6 +114,10 @@ struct PlayfieldPresentationConfig {
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
   float judgementTextY = 0.0F;
+  int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTextBold = false;
+  int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTimingBold = false;
   bool judgementCounterEnabled = false;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;

@@ -363,6 +363,10 @@ private:
   double mainBpm = 0.0;
   bool renderHud = true;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
+  int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTextBold = false;
+  int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTimingBold = false;
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
@@ -432,6 +436,7 @@ private:
   std::array<float, 4> gameplayHudTitleRect() const;
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
+  void refreshJudgementFeedbackTextStyle();
   void updateJudgementCounterText();
   void synchronizeCapturedJudgementHud(const PlayfieldVisualState &);
   void publishJudgementCounterSnapshot(const JudgementCounterSnapshot &snapshot);
@@ -636,6 +641,8 @@ public:
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode, int rangeMilliseconds);
   void setJudgementTextY(float y);
+  void setJudgementFeedbackStyle(int textSizePercent, bool textBold,
+                                int timingSizePercent, bool timingBold);
   void setJudgementCounterEnabled(bool enabled);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
@@ -672,6 +679,11 @@ public:
   void setStartLaneIndicators(std::vector<int> lanes);
   void setStartLaneIndicatorsVisible(bool visible);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  [[nodiscard]] std::array<const TextView *, 3>
+  judgementFeedbackTextViewsForTesting() const {
+    return {judgeText.get(), judgementTimingDirectionText.get(),
+            judgementTimingMsText.get()};
+  }
   void setCharacterizationRecorder(
       bms_renderer_characterization::Recorder *recorder) {
     characterizationRecorder = recorder;

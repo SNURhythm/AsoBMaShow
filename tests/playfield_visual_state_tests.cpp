@@ -352,6 +352,10 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
       .judgementIndicatorHudMode = true,
       .judgementIndicatorRangeMilliseconds = 180,
       .judgementTextY = 0.35F,
+      .judgementTextSizePercent = 150,
+      .judgementTextBold = true,
+      .judgementTimingSizePercent = 75,
+      .judgementTimingBold = true,
       .judgementCounterEnabled = true,
       .judgementCounterPosition =
           AppSettings::JudgementCounterPosition::Left,

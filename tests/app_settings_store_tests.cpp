@@ -1855,6 +1855,13 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   portrait["skin"]["entries"][0]["settings"]["options"]["Style"] = 7;
   portrait["playAreaWidth7K"] = 15;
   portrait["laneLength"] = 32;
+  portrait["judgementTextSizePercent"] = 150;
+  portrait["judgementTextBold"] = true;
+  portrait["judgementTimingSizePercent"] = 75;
+  portrait["judgementTimingBold"] = false;
+  landscape["judgementTextSizePercent"] = 25;
+  landscape["judgementTimingSizePercent"] = 400;
+  landscape["judgementTimingBold"] = true;
   landscape["laneLength"] = 100;
   writeFile(path, document.dump());
   loaded = AppSettingsStore::Load(path);
@@ -1866,6 +1873,16 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   expect(document["presentations"]["landscape"]["playAreaWidth7K"] == 8 &&
              document["presentations"]["landscape"]["laneLength"] == 12,
          "landscape uses its own values and accepted bounds");
+  expect(document["presentations"]["portrait"]["judgementTextSizePercent"] == 150 &&
+             document["presentations"]["portrait"]["judgementTextBold"] == true &&
+             document["presentations"]["portrait"]["judgementTimingSizePercent"] == 75 &&
+             document["presentations"]["portrait"]["judgementTimingBold"] == false,
+         "judgement and timing text styles persist independently");
+  expect(document["presentations"]["landscape"]["judgementTextSizePercent"] == 50 &&
+             document["presentations"]["landscape"]["judgementTextBold"] == false &&
+             document["presentations"]["landscape"]["judgementTimingSizePercent"] == 200 &&
+             document["presentations"]["landscape"]["judgementTimingBold"] == true,
+         "feedback styles use independent orientation values and clamp invalid sizes");
   expect(loaded.settings.audioOffsetMs == 23 &&
              loaded.settings.gameplayHispeed == 2.5f,
          "presentation migration preserves shared play preferences");

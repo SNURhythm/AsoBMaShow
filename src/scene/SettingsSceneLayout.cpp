@@ -8,6 +8,7 @@
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+#include <charconv>
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
@@ -763,6 +764,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     previewControls->addView(makePreviewStepRow(
         minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
+    previewControls->addView(buildJudgementFeedbackStyleControls(metrics));
 
     previewControls->addView(makeSummaryRow(
         metrics, "FAST/SLOW", &summaryJudgementTimingFastSlowValueText));
@@ -1029,6 +1031,76 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   return;
 }
 
+View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &metrics) {
+  auto *body = new View();
+  body->setFlexDirection(FlexDirection::Column);
+  body->setWidthPercent(100);
+  body->setGap(metrics.compact ? 8.0f : 12.0f);
+  const auto appendStyle = [this, body, &metrics](const i18n::Text &label,
+      int AppSettings::PresentationSettings::*sizeMember,
+      bool AppSettings::PresentationSettings::*boldMember) {
+    auto *heading = makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
+                             TextView::LEFT, TextView::MIDDLE);
+    heading->setWidthPercent(100);
+    heading->setWrap(true);
+    body->addView(heading);
+    auto *row = new View();
+    row->setWidthPercent(100);
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setAlignItems(YGAlignCenter);
+    row->setGap(8);
+    auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+    input->setEditingText(std::to_string(context.settings.presentation().*sizeMember));
+    input->onEditingFinished([this, input, sizeMember](const std::string &) {
+      auto &value = context.settings.presentation().*sizeMember;
+      const auto &text = input->getText();
+      int parsed = value;
+      const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+      if (result.ec == std::errc{} && result.ptr == text.data() + text.size()) {
+        value = std::clamp(parsed, AppSettings::kMinJudgementFeedbackSizePercent,
+                           AppSettings::kMaxJudgementFeedbackSizePercent);
+      }
+      input->setEditingText(std::to_string(value));
+      persistSettings();
+    });
+    row->addView(input);
+    auto *weightText = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+                                TextView::CENTER, TextView::MIDDLE);
+    const auto refreshWeight = [this, weightText, boldMember]() {
+      weightText->setLocalizedText(i18n::message(context.settings.presentation().*boldMember
+          ? "settings.skins.feedback.bold.label" : "settings.skins.feedback.regular.label"));
+    };
+    refreshWeight();
+    auto *weight = makeControlButton(metrics.compact ? 132 : 156,
+                                     metrics.actionButtonHeight, weightText);
+    weight->setOnClickListener([this, boldMember, refreshWeight]() {
+      auto &bold = context.settings.presentation().*boldMember;
+      bold = !bold;
+      refreshWeight();
+      persistSettings();
+    });
+    row->addView(weight);
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([this, input, sizeMember, boldMember, refreshWeight]() {
+      context.settings.presentation().*sizeMember = AppSettings::kDefaultJudgementFeedbackSizePercent;
+      context.settings.presentation().*boldMember = false;
+      input->setEditingText(std::to_string(AppSettings::kDefaultJudgementFeedbackSizePercent));
+      refreshWeight();
+      persistSettings();
+    });
+    row->addView(reset);
+    body->addView(row);
+  };
+  appendStyle(i18n::message("settings.skins.feedback.judgement_size.percent_label"),
+              &AppSettings::PresentationSettings::judgementTextSizePercent,
+              &AppSettings::PresentationSettings::judgementTextBold);
+  appendStyle(i18n::message("settings.skins.feedback.timing_size.percent_label"),
+              &AppSettings::PresentationSettings::judgementTimingSizePercent,
+              &AppSettings::PresentationSettings::judgementTimingBold);
+  return body;
+}
+
 View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -1217,6 +1289,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   });
   judgementTextYControls->addView(resetJudgementTextY);
   judgementFeedbackControls->addView(judgementTextYControls);
+  judgementFeedbackControls->addView(buildJudgementFeedbackStyleControls(metrics));
 
   auto *timingCriteriaControls = new View();
   timingCriteriaControls->setFlexDirection(FlexDirection::Row);

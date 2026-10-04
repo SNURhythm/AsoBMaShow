@@ -48,6 +48,8 @@ namespace {
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
 constexpr long long kJudgementTimingTextLingerMicros = 1000000LL;
 constexpr const char *kHudFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr int kHudGaugeTypeWidth = 26;
+constexpr int kHudGaugeGap = 4;
 constexpr size_t kHudCounterItemCount = 7;
 constexpr float kTouchPointMinRadius = 26.0f;
 constexpr float kTouchPointMaxRadius = 58.0f;
@@ -945,6 +947,7 @@ BMSRenderer::BMSRenderer(
   judgementTimingMsText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   judgementTimingMsText->setOverflow(TextView::TextOverflow::Hidden);
   judgementTimingMsText->setVisible(false);
+  refreshJudgementFeedbackTextStyle();
   layoutCenteredJudgementText();
   scoreText = std::make_unique<TextView>(kHudFontPath, 34);
   scoreText->setAlign(TextView::LEFT);
@@ -1203,7 +1206,7 @@ std::array<float, 4> BMSRenderer::hudGaugeRect() const {
   y = std::max(128.0f, y);
 
   const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
-  constexpr float kSideBadgeInset = 56.0f;
+  constexpr float kSideBadgeInset = 12.0f + kHudGaugeTypeWidth + kHudGaugeGap;
   float x = left ? kSideBadgeInset
                  : static_cast<float>(rendering::window_width) -
                        kSideBadgeInset - width;
@@ -1576,9 +1579,9 @@ void BMSRenderer::layoutGaugeText() {
   constexpr int textWidth = 76;
   constexpr int textHeight = 36;
   const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
-  const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 8.0f))
+  const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + kHudGaugeGap))
                      : static_cast<int>(
-                           std::round(rect[0] - textWidth - 8.0f));
+                           std::round(rect[0] - textWidth - kHudGaugeGap));
   const float maximum = currentGaugeMaximum;
   const float progress =
       std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
@@ -1596,8 +1599,8 @@ void BMSRenderer::layoutGaugeText() {
           gaugeAutoShiftEnabled(currentGaugeAutoShift));
       gaugeAutoShiftText->setRotationDegrees(left ? -90.0f : 90.0f);
     }
-    constexpr int typeWidth = 34;
-    constexpr int typePadding = 12;
+    constexpr int typeWidth = kHudGaugeTypeWidth;
+    constexpr int typePadding = 8;
     constexpr int gasGap = 4;
     const int gaugeLabelLength = gaugeTypeText->textureWidth();
     const bool autoShiftEnabled =
@@ -1610,8 +1613,8 @@ void BMSRenderer::layoutGaugeText() {
                        (autoShiftEnabled ? gasGap : 0) + typePadding * 2,
                    76, 188);
     const int typeX =
-        left ? static_cast<int>(std::round(rect[0] - typeWidth - 8.0f))
-             : static_cast<int>(std::round(rect[0] + rect[2] + 8.0f));
+        left ? static_cast<int>(std::round(rect[0] - typeWidth - kHudGaugeGap))
+             : static_cast<int>(std::round(rect[0] + rect[2] + kHudGaugeGap));
     const int typeY = static_cast<int>(
         std::round(rect[1] + (rect[3] - typeHeight) * 0.24f));
     if (gaugeTypeBadge != nullptr) {
@@ -1826,8 +1829,13 @@ void BMSRenderer::layoutCenteredJudgementText() {
   judgementLayoutHasPacemakerDelta = hasPacemakerDelta;
 
   const int maxAvailableWidth = std::max(1, judgementLayoutWidth - 48);
-  const int judgeLineHeight = 68;
-  const int timingLineHeight = 28;
+  const float judgeScale = judgementTextSizePercent / 100.0f;
+  const float timingScale = judgementTimingSizePercent / 100.0f;
+  const int judgeLineHeight = std::max(static_cast<int>(std::lround(68 * judgeScale)),
+                                      judgeText ? judgeText->textureHeight() : 0);
+  const int timingLineHeight = std::max({static_cast<int>(std::lround(28 * timingScale)),
+      judgementTimingDirectionText ? judgementTimingDirectionText->textureHeight() : 0,
+      judgementTimingMsText ? judgementTimingMsText->textureHeight() : 0});
   const int pacemakerDeltaLineHeight = 40;
   const int lineGap = 2;
   const float normalizedY =
@@ -1839,8 +1847,9 @@ void BMSRenderer::layoutCenteredJudgementText() {
 
   int judgeWidth = 1;
   if (judgeText != nullptr && judgeText->getVisible()) {
-    const int minJudgeWidth = std::min(170, maxAvailableWidth);
-    judgeWidth = std::clamp(judgeText->textureWidth() + 28, minJudgeWidth,
+    const int minJudgeWidth = std::min(static_cast<int>(std::lround(170 * judgeScale)),
+                                       maxAvailableWidth);
+    judgeWidth = std::clamp(judgeText->textureWidth() + static_cast<int>(std::lround(28 * judgeScale)), minJudgeWidth,
                             maxAvailableWidth);
   }
   const int judgeY =
@@ -1856,8 +1865,8 @@ void BMSRenderer::layoutCenteredJudgementText() {
   constexpr int kTimingMsMaxWidth = 96;
   constexpr int kTimingInnerGap = 6;
   const int timingWidth =
-      std::min(maxAvailableWidth, kTimingDirectionMaxWidth + kTimingInnerGap +
-                                      kTimingMsMaxWidth);
+      std::min(maxAvailableWidth, static_cast<int>(std::lround(
+          (kTimingDirectionMaxWidth + kTimingInnerGap + kTimingMsMaxWidth) * timingScale)));
   const int timingX = (judgementLayoutWidth - timingWidth) / 2;
   const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
   const int pacemakerDeltaWidth = std::min(maxAvailableWidth, 220);
@@ -4433,6 +4442,10 @@ void BMSRenderer::configure(
       configuration.judgementIndicatorHudMode,
       configuration.judgementIndicatorRangeMilliseconds);
   setJudgementTextY(configuration.judgementTextY);
+  setJudgementFeedbackStyle(configuration.judgementTextSizePercent,
+                           configuration.judgementTextBold,
+                           configuration.judgementTimingSizePercent,
+                           configuration.judgementTimingBold);
   setJudgementCounterEnabled(configuration.judgementCounterEnabled);
   setJudgementCounterPosition(configuration.judgementCounterPosition);
   setJudgementTimingFastSlowCriteria(configuration.fastSlowCriteria);
@@ -4895,6 +4908,50 @@ void BMSRenderer::setJudgementTextY(float y) {
     return;
   }
   judgementTextY = clamped;
+  judgementLayoutWidth = 0;
+  judgementLayoutHeight = 0;
+}
+
+void BMSRenderer::setJudgementFeedbackStyle(int textSizePercent, bool textBold,
+                                           int timingSizePercent, bool timingBold) {
+  textSizePercent = std::clamp(textSizePercent,
+      AppSettings::kMinJudgementFeedbackSizePercent,
+      AppSettings::kMaxJudgementFeedbackSizePercent);
+  timingSizePercent = std::clamp(timingSizePercent,
+      AppSettings::kMinJudgementFeedbackSizePercent,
+      AppSettings::kMaxJudgementFeedbackSizePercent);
+  if (judgementTextSizePercent == textSizePercent && judgementTextBold == textBold &&
+      judgementTimingSizePercent == timingSizePercent && judgementTimingBold == timingBold) {
+    return;
+  }
+  judgementTextSizePercent = textSizePercent;
+  judgementTextBold = textBold;
+  judgementTimingSizePercent = timingSizePercent;
+  judgementTimingBold = timingBold;
+  refreshJudgementFeedbackTextStyle();
+}
+
+void BMSRenderer::refreshJudgementFeedbackTextStyle() {
+  const auto restyle = [](std::unique_ptr<TextView> &view, int baseSize,
+                          int percent, bool bold, TextView::TextAlign align) {
+    if (view == nullptr) return;
+    const int size = static_cast<int>(std::lround(baseSize * percent / 100.0f));
+    const auto weight = bold ? TextView::FontWeight::Bold : TextView::FontWeight::Regular;
+    if (view->pointSize() == size && view->fontWeight() == weight) return;
+    auto replacement = std::make_unique<TextView>(kHudFontPath, size, weight);
+    replacement->setAlign(align);
+    replacement->setVAlign(TextView::MIDDLE);
+    replacement->setOverflow(TextView::TextOverflow::Hidden);
+    replacement->setText(view->getText());
+    replacement->setColor(view->currentColor());
+    replacement->setVisible(view->getVisible());
+    view = std::move(replacement);
+  };
+  restyle(judgeText, 38, judgementTextSizePercent, judgementTextBold, TextView::CENTER);
+  restyle(judgementTimingDirectionText, 21, judgementTimingSizePercent,
+          judgementTimingBold, TextView::LEFT);
+  restyle(judgementTimingMsText, 21, judgementTimingSizePercent,
+          judgementTimingBold, TextView::RIGHT);
   judgementLayoutWidth = 0;
   judgementLayoutHeight = 0;
 }

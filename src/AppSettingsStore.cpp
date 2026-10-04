@@ -546,6 +546,10 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementIndicatorRangeMilliseconds",
        settings.judgementIndicatorRangeMilliseconds},
       {"judgementTextY", settings.judgementTextY},
+      {"judgementTextSizePercent", settings.judgementTextSizePercent},
+      {"judgementTextBold", settings.judgementTextBold},
+      {"judgementTimingSizePercent", settings.judgementTimingSizePercent},
+      {"judgementTimingBold", settings.judgementTimingBold},
       {"judgementIndicatorRenderMode",
        static_cast<int>(settings.judgementIndicatorRenderMode)},
       {"judgementCounterEnabled", settings.judgementCounterEnabled},
@@ -713,6 +717,10 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
   readValue(document, "judgementIndicatorRangeMilliseconds",
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
   readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
+  readValue(document, "judgementTextSizePercent", settings.judgementTextSizePercent, diagnostics);
+  readValue(document, "judgementTextBold", settings.judgementTextBold, diagnostics);
+  readValue(document, "judgementTimingSizePercent", settings.judgementTimingSizePercent, diagnostics);
+  readValue(document, "judgementTimingBold", settings.judgementTimingBold, diagnostics);
   readEnum(document, "judgementIndicatorRenderMode",
            settings.judgementIndicatorRenderMode, diagnostics);
   readValue(document, "judgementCounterEnabled",

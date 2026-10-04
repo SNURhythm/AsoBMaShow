@@ -439,6 +439,10 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
   settings.presentation().judgementIndicatorRangeMilliseconds = 123;
   settings.presentation().judgementTextY = 0.6F;
+  settings.presentation().judgementTextSizePercent = 150;
+  settings.presentation().judgementTextBold = true;
+  settings.presentation().judgementTimingSizePercent = 75;
+  settings.presentation().judgementTimingBold = true;
   settings.presentation().judgementCounterEnabled = false;
   settings.presentation().judgementCounterPosition = AppSettings::JudgementCounterPosition::Top;
   settings.presentation().judgementTimingFastSlowCriteria =
@@ -498,6 +502,10 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.judgementIndicatorHudMode &&
              configuration.judgementIndicatorRangeMilliseconds == 123 &&
              configuration.judgementTextY == 0.6F &&
+             configuration.judgementTextSizePercent == 150 &&
+             configuration.judgementTextBold == true &&
+             configuration.judgementTimingSizePercent == 75 &&
+             configuration.judgementTimingBold == true &&
              !configuration.judgementCounterEnabled &&
              configuration.judgementCounterPosition ==
                  AppSettings::JudgementCounterPosition::Top &&

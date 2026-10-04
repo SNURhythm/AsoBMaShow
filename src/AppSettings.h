@@ -125,6 +125,9 @@ public:
   static constexpr float kMinJudgementTextY = 0.0f;
   static constexpr float kMaxJudgementTextY = 1.0f;
   static constexpr float kDefaultJudgementTextY = 0.55f;
+  static constexpr int kDefaultJudgementFeedbackSizePercent = 100;
+  static constexpr int kMinJudgementFeedbackSizePercent = 50;
+  static constexpr int kMaxJudgementFeedbackSizePercent = 200;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
   static constexpr const char *kDefaultLnMode = "LN";
@@ -219,6 +222,10 @@ public:
     int judgementIndicatorRangeMilliseconds =
         kDefaultJudgementIndicatorRangeMilliseconds;
     float judgementTextY = kDefaultJudgementTextY;
+    int judgementTextSizePercent = kDefaultJudgementFeedbackSizePercent;
+    bool judgementTextBold = false;
+    int judgementTimingSizePercent = kDefaultJudgementFeedbackSizePercent;
+    bool judgementTimingBold = false;
     JudgementIndicatorRenderMode judgementIndicatorRenderMode =
         JudgementIndicatorRenderMode::World3D;
     bool judgementCounterEnabled = true;

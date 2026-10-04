@@ -434,6 +434,10 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
           judgementIndicatorRangeMilliseconds);
   judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
+  judgementTextSizePercent = std::clamp(judgementTextSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
+  judgementTimingSizePercent = std::clamp(judgementTimingSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
   switch (judgementIndicatorRenderMode) {
   case JudgementIndicatorRenderMode::World3D:
   case JudgementIndicatorRenderMode::Hud2D:

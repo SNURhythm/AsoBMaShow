@@ -3143,6 +3143,10 @@ void GamePlayScene::init() {
       .judgementIndicatorRangeMilliseconds =
           context.settings.presentation().judgementIndicatorRangeMilliseconds,
       .judgementTextY = context.settings.presentation().judgementTextY,
+      .judgementTextSizePercent = context.settings.presentation().judgementTextSizePercent,
+      .judgementTextBold = context.settings.presentation().judgementTextBold,
+      .judgementTimingSizePercent = context.settings.presentation().judgementTimingSizePercent,
+      .judgementTimingBold = context.settings.presentation().judgementTimingBold,
       .judgementCounterEnabled = context.settings.presentation().judgementCounterEnabled,
       .judgementCounterPosition = context.settings.presentation().judgementCounterPosition,
       .fastSlowCriteria = context.settings.presentation().judgementTimingFastSlowCriteria,

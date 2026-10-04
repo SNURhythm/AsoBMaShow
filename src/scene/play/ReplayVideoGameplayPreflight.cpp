@@ -108,6 +108,10 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .judgementIndicatorRangeMilliseconds =
           settings.presentation().judgementIndicatorRangeMilliseconds,
       .judgementTextY = settings.presentation().judgementTextY,
+      .judgementTextSizePercent = settings.presentation().judgementTextSizePercent,
+      .judgementTextBold = settings.presentation().judgementTextBold,
+      .judgementTimingSizePercent = settings.presentation().judgementTimingSizePercent,
+      .judgementTimingBold = settings.presentation().judgementTimingBold,
       .judgementCounterEnabled = settings.presentation().judgementCounterEnabled,
       .judgementCounterPosition = settings.presentation().judgementCounterPosition,
       .fastSlowCriteria = settings.presentation().judgementTimingFastSlowCriteria,
