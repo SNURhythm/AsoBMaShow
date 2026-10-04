@@ -3367,9 +3367,11 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
         const auto value = javaSubstring(line, 9);
         ParseHeader(new_chart, "SPEED", xx, std::string(value));
       } else {
+        // The leading # is one ASCII byte and one UTF-16 unit; matching the
+        // remaining view needs no allocation or whole-value transcoding.
         for (auto command : commands) {
           if (lineUnits > command.size() + 2 &&
-              MatchHeader(javaSubstring(line, 1), command)) {
+              MatchHeader(line.substr(1), command)) {
             const auto value = javaTrimmedHeaderValue(javaSubstring(line, command.size() + 2));
             if (command == "LNOBJ" && UseBase62) {
               size_t chars = 0;
@@ -3462,8 +3464,10 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
     double position = 0, time = 0, bpm = 0, scroll = 1, speed = 1;
     long long stop = 0;
   };
-  std::map<double, JavaTimelineState> javaTimelines;
-  javaTimelines.emplace(0, JavaTimelineState{0, 0, new_chart->Meta.Bpm});
+  // Retain the last immutable predecessor and any rounded next-bar state.
+  // Their values outlive the per-measure timeline arena.
+  JavaTimelineState previousState{0, 0, new_chart->Meta.Bpm};
+  std::optional<JavaTimelineState> boundaryState;
   // Cells cannot pass the next bar. Only a cell rounded onto that boundary
   // can be addressed again by a later measure.
   std::optional<double> carriedPosition;
@@ -3517,6 +3521,10 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       TimeLine *timeline = nullptr;
       std::unique_ptr<TimeLine> owned;
       bool hasStop = false;
+      JavaTimelineState state;
+      TimelineEntry *predecessor = nullptr;
+      size_t insertionRank = 0;
+      bool initialized = false;
     };
     using TimelineAllocator =
         detail::ParserScratchAllocator<std::pair<const double, TimelineEntry>>;
@@ -3537,6 +3545,14 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       auto result = timelines.try_emplace(section);
       if (result.second) {
         auto &entry = result.first->second;
+        entry.state.position = section;
+        if (section == previousState.position) {
+          entry.state = previousState;
+          entry.initialized = true;
+        } else if (boundaryState && section == boundaryState->position) {
+          entry.state = *boundaryState;
+          entry.initialized = true;
+        }
         if (carriedPosition && *carriedPosition == section)
           entry.timeline = retainedTimeline;
         else {
@@ -3556,7 +3572,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       std::optional<double> bpm, stop, scroll, speed;
     };
     std::map<double, Controls> controls;
-    std::vector<double> insertionOrder;
+    std::vector<TimelineEntry *> insertionOrder;
 
     for (auto &pair : measures[measureIdx]) {
       if (bCancelled) {
@@ -3694,15 +3710,15 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
           measureHasAudibleContent = true;
         }
 
-        if (channel == LaneAutoplay || channel == BgaPlay || channel == LayerPlay ||
-            channel == P1KeyBase || channel == P1LongKeyBase ||
-            channel == P1MineKeyBase || channel == P1InvisibleKeyBase)
-          insertionOrder.push_back(position);
         if ((channel == BpmChangeExtend && !BpmTable.count(object)) ||
             (channel == Stop && !StopLengthTable.count(object)) ||
             (channel == Scroll && !ScrollTable.count(object)) ||
             (channel == Speed && !SpeedTable.count(object))) continue;
         auto entry = ensureTimeline(position);
+        if (channel == LaneAutoplay || channel == BgaPlay || channel == LayerPlay ||
+            channel == P1KeyBase || channel == P1LongKeyBase ||
+            channel == P1MineKeyBase || channel == P1InvisibleKeyBase)
+          insertionOrder.push_back(&entry->second);
         auto timeline = entry->second.timeline;
         if (channel == LaneAutoplay || channel == P1InvisibleKeyBase) {
           if (metaOnly) {
@@ -3837,54 +3853,72 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
 
     if (bCancelled) return;
 
-    // Section.makeTimeLines inserts the bar line, then sorted controls, then
-    // channel objects in source order. Each new time uses its cached predecessor.
-    const auto insertJavaTimeline = [&](double section) -> JavaTimelineState & {
-      auto found = javaTimelines.find(section);
-      if (found != javaTimelines.end()) return found->second;
-      auto lower = javaTimelines.lower_bound(section);
-      auto state = std::prev(lower)->second;
-      state.time = state.time + static_cast<double>(state.stop) +
-                   (240000000.0 * (section - state.position)) / state.bpm;
-      state.position = section;
-      state.stop = 0;
-      return javaTimelines.emplace(section, state).first->second;
+    // Rank the first insertion of every position in Java's order: bar line,
+    // sorted controls, then channel objects in source order.
+    size_t nextInsertionRank = 0;
+    const auto schedule = [&](TimelineEntry &entry) {
+      if (!entry.initialized && entry.insertionRank == 0)
+        entry.insertionRank = ++nextInsertionRank;
     };
-    insertJavaTimeline(measureBeatPosition);
+    schedule(timelines.begin()->second);
     for (const auto &[position, control] : controls) {
       if (bCancelled) return;
-      const double section = measureBeatPosition + position * measure->Scale;
-      auto &state = insertJavaTimeline(section);
+      schedule(timelines.at(measureBeatPosition + position * measure->Scale));
+    }
+    for (auto *entry : insertionOrder) {
+      if (bCancelled) return;
+      schedule(*entry);
+    }
+    // A monotone stack finds the nearest position on the left that existed
+    // when each entry was first inserted. Each entry is pushed/popped once.
+    TimelineEntry *predecessor = nullptr;
+    for (auto &[section, entry] : timelines) {
+      if (bCancelled) return;
+      while (predecessor && predecessor->insertionRank > entry.insertionRank) {
+        if (bCancelled) return;
+        predecessor = predecessor->predecessor;
+      }
+      entry.predecessor = predecessor;
+      predecessor = &entry;
+    }
+    const auto insertJavaTimeline = [&](TimelineEntry &entry) -> JavaTimelineState & {
+      if (!entry.initialized) {
+        const double section = entry.state.position;
+        auto state = entry.predecessor ? entry.predecessor->state : previousState;
+        state.time = state.time + static_cast<double>(state.stop) +
+                     (240000000.0 * (section - state.position)) / state.bpm;
+        state.position = section;
+        state.stop = 0;
+        entry.state = state;
+        entry.initialized = true;
+      }
+      return entry.state;
+    };
+    insertJavaTimeline(timelines.begin()->second);
+    for (const auto &[position, control] : controls) {
+      if (bCancelled) return;
+      auto &state = insertJavaTimeline(
+          timelines.at(measureBeatPosition + position * measure->Scale));
       if (control.speed) state.speed = *control.speed;
       if (control.scroll) state.scroll = *control.scroll;
       if (control.bpm) state.bpm = *control.bpm;
       if (control.stop)
         state.stop = javaLong(240000000.0 * (*control.stop / 192.0) / state.bpm);
     }
-    for (double position : insertionOrder) {
+    for (auto *entry : insertionOrder) {
       if (bCancelled) return;
-      insertJavaTimeline(measureBeatPosition + position * measure->Scale);
-    }
-    for (const auto &[section, entry] : timelines) {
-      if (bCancelled) return;
-      const auto &state = javaTimelines.at(section);
-      auto *tl = entry.timeline;
-      tl->Timing = javaLong(state.time);
-      tl->BeatPosition = section;
-      tl->Bpm = state.bpm;
-      tl->Scroll = state.scroll;
-      tl->Speed = state.speed;
-      tl->ParsedStopDuration = state.stop;
+      insertJavaTimeline(*entry);
     }
     if (measureIdx == 0 && currentBpm == 0)
-      currentBpm = javaTimelines.begin()->second.bpm;
-    if (measureIdx == 0 && javaTimelines.begin()->second.bpm == 0) return;
+      currentBpm = timelines.begin()->second.state.bpm;
+    if (measureIdx == 0 && timelines.begin()->second.state.bpm == 0) return;
     if (!parsedNotes.setTiming(measureBeatPosition, [&](double section) {
-      return javaLong(javaTimelines.at(section).time);
+      return javaLong(timelines.at(section).state.time);
     })) return;
     auto lastPosition = 0.0;
 
     measure->Timing = javaLong(timePassed);
+    boundaryState.reset();
 
     for (auto &pair : timelines) {
       if (bCancelled) {
@@ -3892,6 +3926,19 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       }
       const auto position = (pair.first - measureBeatPosition) / measure->Scale;
       const auto timeline = pair.second.timeline;
+      const auto &state = pair.second.state;
+      timeline->Timing = javaLong(state.time);
+      timeline->BeatPosition = pair.first;
+      timeline->Bpm = state.bpm;
+      timeline->Scroll = state.scroll;
+      timeline->Speed = state.speed;
+      timeline->ParsedStopDuration = state.stop;
+      if (pair.first < measureBeatPosition + measure->Scale) {
+        parsedNotes.observeTimeline(pair.first, timeline->Timing);
+        minBpm = std::min(minBpm, state.bpm);
+        maxBpm = std::max(maxBpm, state.bpm);
+        previousState = state;
+      } else boundaryState = state;
 
       // Debug.Log($"measure: {measureIdx}, position: {position}, lastPosition:
       // {lastPosition} bpm: {bpm} scale: {measure.scale} interval: {240 * 1000
@@ -3931,7 +3978,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
       carriedPosition.reset();
       retainedTimeline = nullptr;
     }
-    if (!materialize) timelines.clear();
+
     if (materialize && !measure->TimeLines.empty())
       measure->TimeLines.front()->IsFirstInMeasure = true;
     const auto finalInterval =
@@ -3997,18 +4044,8 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
     measureBeatPosition += measure->Scale;
     if (!parsedNotes.advance(*new_chart, materialize, measureBeatPosition)) return;
 
-    // Future rows cannot address an earlier measure. Keep a timing
-    // predecessor and any timeline rounded onto the next bar, not the chart.
-    auto futureState = javaTimelines.lower_bound(measureBeatPosition);
-    for (auto it = javaTimelines.begin(); it != futureState; ++it) {
-      if (bCancelled) return;
-      parsedNotes.observeTimeline(it->first, javaLong(it->second.time));
-      minBpm = std::min(minBpm, it->second.bpm);
-      maxBpm = std::max(maxBpm, it->second.bpm);
-    }
-    if (futureState != javaTimelines.begin())
-      javaTimelines.erase(javaTimelines.begin(), std::prev(futureState));
     if (!materialize) {
+      timelines.clear();
       if (retainedTimeline) {
         if (retainedTimeline != &carriedTimeline) carriedTimeline = *retainedTimeline;
         retainedTimeline = &carriedTimeline;
@@ -4026,15 +4063,15 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
                    .count()
             << "\n";
 #endif
-  for (const auto &[section, state] : javaTimelines) {
-    if (bCancelled) return;
-    parsedNotes.observeTimeline(section, javaLong(state.time));
-  }
+  parsedNotes.observeTimeline(previousState.position, javaLong(previousState.time));
+  if (boundaryState)
+    parsedNotes.observeTimeline(boundaryState->position, javaLong(boundaryState->time));
   if (!parsedNotes.finish(*new_chart, materialize)) return;
-  for (const auto &[section, state] : javaTimelines) {
-    if (bCancelled) return;
-    minBpm = std::min(minBpm, state.bpm);
-    maxBpm = std::max(maxBpm, state.bpm);
+  minBpm = std::min(minBpm, previousState.bpm);
+  maxBpm = std::max(maxBpm, previousState.bpm);
+  if (boundaryState) {
+    minBpm = std::min(minBpm, boundaryState->bpm);
+    maxBpm = std::max(maxBpm, boundaryState->bpm);
   }
   if (materialize) {
     new_chart->ReferencedWavTable.clear();

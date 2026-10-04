@@ -2,7 +2,7 @@
 
 ## Current selective malformed-LN policy
 
-The application adopts parser revision `00f9fc732162bbc4e10fac6920d9204eed43b30d`, including both
+The application adopts parser revision `4c40a2d6bae8adab30f80eae0347e05740d8eaef`, including both
 amalgamated artifacts generated and tested upstream. This supersedes the
 unchanged-graph policy in the historical adoption notes below.
 
@@ -27,6 +27,17 @@ time and 10% less Scan/metadata CPU time than the preceding `fc7f84f` parser.
 The remaining cost versus `2b964abd` is documented in upstream
 `docs/audits/2026-10-04-baseline-review-loop.md`.
 
+The subsequent timing consolidation stores cached timing in the existing
+per-measure index and resolves source-order predecessors with a linear stack.
+It removes duplicate tree allocations and combines timeline passes while
+preserving exact timestamps, note graphs and all existing consumer policy.
+Generic header matching uses a view after the leading ASCII `#`.
+Paired 517-chart CPU measurements improve Scan by 9%, Full parsing by 6%, and
+metadata parsing by 7% relative to `00f9fc7`. The remaining cost is still roughly
+1.36–1.40x the earlier `2b964abd` parser. Full measurements and the discarded
+chronological prototype's out-of-bounds timing case are recorded upstream in
+`docs/performance/2026-10-04-timing-consolidation.md`.
+
 For undefined LNs whose player-selected mode becomes known later,
 `applyEffectiveLongNoteModeToChart` calls the parser library's
 `TimeLine::DemoteUnusableLongNote` in the existing count pass. This happens before
@@ -44,18 +55,19 @@ graphs and still report saved-result mismatches. Their archived JSON, BRD,
 SQLite data, chart bytes and immutable manifest were not changed. The user
 authorized pushing the application branch; no deployment is included.
 
-The final application build passes, and all 420 CTest tests pass with zero
-failures (225.54 seconds). Visual, projection and gameplay consumer suites pass
-with ASan/UBSan on this parser. Upstream
-Clang modular/amalgamated suites, GCC 15 unit/resource suites and sanitized
-modular unit/resource suites pass. The selective-policy Java comparison passes
-all 4,168 chart/seed selections, and 4,300 additional independent sanitized
-comparisons pass without unexpected differences. Final parser, performance and
-application source reviews found no remaining actionable issue. The generated
-files match upstream byte for byte:
+The application build and all 420 CTest tests pass with zero failures
+(235.39 seconds). Upstream clean Clang
+modular/amalgamated suites, GCC 15 unit/resource suites and ASan/UBSan plus
+float-cast-overflow modular suites pass. Fresh selective-policy Java comparison
+passes all 4,168 chart/seed selections. Independent timing validation passes
+4,800 sanitized Java comparisons and 19,200 byte-identical complete snapshots.
+The initial exact prototype also passed 8,170 real/generated chart snapshots.
+Final correctness, performance and application-adoption source reviews found
+no remaining actionable issue. The generated files match upstream byte for byte;
+the public header is unchanged from the previous adoption:
 
 - `src/bms_parser.hpp`: `4339e276fd3f8f0a3693bafdd6a86dc1d667250811fb70eb2847e7bb776b703e`
-- `src/bms_parser.cpp`: `1db907ef78d8d9f95790329554c79b453d45fc377ccf840258dc8a9406ca021a`
+- `src/bms_parser.cpp`: `25a74031bee26f931ba62a2f4c7e7ba2dc96e103d9f44834d2822beebe01ed78`
 
 ## Historical application adoption and compatibility policy
 
