@@ -38,7 +38,7 @@
   `scripts/android_firebase_deploy.sh --build-only --variant playDebug`
 - Debug variants remain debug-signed. Do not use debug signing for Firebase or Play release builds.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
-- GitHub Actions deploys Android from `.github/workflows/mobile-beta-deploy.yml` only for commits pushed to `develop`. The Android job has no dependency on the iOS/TestFlight job, so they can run in parallel when matching self-hosted runners are available. The job reads Android signing values from GitHub Actions secrets, and the self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
+- GitHub Actions deploys Android from `.github/workflows/mobile-beta-deploy.yml` only for commits pushed to `main`. The Android job has no dependency on the iOS/TestFlight job, so they can run in parallel when matching self-hosted runners are available. The job reads Android signing values from GitHub Actions secrets, and the self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
 
 ## Android Emulator Testing
 
