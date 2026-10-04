@@ -4715,6 +4715,7 @@ template <typename T> struct ParserScratchAllocator {
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <deque>
 #include <map>
 #include <limits>
@@ -4746,8 +4747,8 @@ public:
   static constexpr int Lanes = 16;
   std::array<std::map<Position, Event *>, Lanes> lanes;
 
-  explicit ParserNotes(int silentWav, int mode)
-      : noWav(silentWav), lnType(LongNoteTypeFromLnMode(mode)) {}
+  explicit ParserNotes(int silentWav, int mode, const std::atomic_bool &cancelled)
+      : noWav(silentWav), lnType(LongNoteTypeFromLnMode(mode)), cancelled(cancelled) {}
 
   void normal(int lane, Position pos, int wav, bool endpoint, TimeLine *timeline) {
     auto &slots = lanes[lane];
@@ -4810,6 +4811,7 @@ public:
     auto *head = open[lane];
     auto it = slots.upper_bound(head->pos);
     while (it != slots.end() && it->first < pos) {
+      if (cancelled) return;
       if (it->second->kind == Kind::Normal) background(*it->second);
       if (last[lane] == it->first) last[lane].reset();
       it->second->activeSlot = false;
@@ -4833,12 +4835,14 @@ public:
   }
 
   template<class Timing>
-  void setTiming(Position measureStart, Timing timing) {
+  bool setTiming(Position measureStart, Timing timing) {
     // Previously visited positions are immutable, except a rounded cell at
     // the current bar. LNOBJ copies an older candidate's cached time itself.
-    for (size_t i = untimedBegin; i < events.size(); ++i)
+    for (size_t i = untimedBegin; i < events.size(); ++i) {
+      if (cancelled) return false;
       if (events[i].pos >= measureStart)
         events[i].timing = timing(events[i].pos);
+    }
     untimedBegin = events.size();
     for (int lane = 0; lane < Lanes; ++lane) {
       const auto boundary = lanes[lane].find(measureStart);
@@ -4847,6 +4851,7 @@ public:
       if (open[lane] && open[lane]->pos == measureStart)
         open[lane]->timing = timing(measureStart);
     }
+    return !cancelled;
   }
 
   // Called only once the timeline position is immutable.
@@ -4854,10 +4859,11 @@ public:
     if (timing / 1000 >= 1000) firstLateTimeline = std::min(firstLateTimeline, pos);
   }
 
-  void advance(Chart &chart, bool materialize, Position boundary) {
+  bool advance(Chart &chart, bool materialize, Position boundary) {
     const auto scratchLanes = chart.Meta.GetScratchLaneIndices();
     size_t possibleLive = 2 * pendingClassic.size();
     for (int lane = 0; lane < Lanes; ++lane) {
+      if (cancelled) return false;
       auto &slots = lanes[lane];
       Position keepFrom = boundary;
       // A later close can still remove normal notes anywhere inside an open
@@ -4873,6 +4879,7 @@ public:
                            != scratchLanes.end();
       auto it = slots.begin();
       while (it != slots.end() && it->first < keepFrom) {
+        if (cancelled) return false;
         // A partner at a rounded measure boundary can still be overwritten.
         // Finalize both endpoints only once their slots are immutable.
         const auto *partner = it->second->pair;
@@ -4886,16 +4893,19 @@ public:
         it = slots.erase(it);
       }
       auto &intervals = completed[lane];
-      while (!intervals.empty() && intervals.begin()->second < boundary)
+      while (!intervals.empty() && intervals.begin()->second < boundary) {
+        if (cancelled) return false;
         intervals.erase(intervals.begin());
+      }
       possibleLive += 2 * (slots.size() + (open[lane] != nullptr));
     }
     // Collect only when enough events are retired. An unresolved chart-long
     // hold therefore grows linearly instead of being copied every measure.
-    if (events.size() > 2 * possibleLive + 1024) collect(chart);
+    if (events.size() > 2 * possibleLive + 1024) return collect(chart);
+    return !cancelled;
   }
 
-  void finish(Chart &chart, bool materialize) {
+  bool finish(Chart &chart, bool materialize) {
     for (int lane = 0; lane < Lanes; ++lane)
       if (open[lane] && open[lane]->pos != std::numeric_limits<double>::denorm_min())
         erase(lane, open[lane]->pos);
@@ -4903,8 +4913,10 @@ public:
     for (int lane = 0; lane < Lanes; ++lane) {
       const bool scratch = std::find(scratchLanes.begin(), scratchLanes.end(), lane)
                            != scratchLanes.end();
-      for (auto &[pos, event] : lanes[lane])
+      for (auto &[pos, event] : lanes[lane]) {
+        if (cancelled) return false;
         publish(chart, *event, lane, scratch, materialize);
+      }
     }
     // Beatoraja's standard start-time preparation shifts active notes only.
     // A detached classic tail would keep its old time/section, distorting the
@@ -4912,19 +4924,24 @@ public:
     const bool shiftsStart = firstActive && firstActive->first < firstLateTimeline &&
                              firstActive->second / 1000 < 1000;
     for (const auto &pending : pendingClassic) {
+      if (cancelled) return false;
       auto &event = *pending.event;
       if (shiftsStart || event.pair->pos <= event.pos ||
           event.pair->timing <= event.timing) demote(event);
       commit(chart, event, pending.lane, pending.scratch, materialize);
     }
     // Healthy classic heads still own detached tail identities.
-    for (auto &event : events)
+    for (auto &event : events) {
+      if (cancelled) return false;
       if (event.owner) chart.DetachedNotes.push_back(std::move(event.owner));
+    }
+    return !cancelled;
   }
 
 private:
   const int noWav;
   const LongNoteType lnType;
+  const std::atomic_bool &cancelled;
   std::deque<Event> events;
   size_t untimedBegin = 0;
   struct PendingClassic { Event *event; int lane; bool scratch; };
@@ -4943,7 +4960,7 @@ private:
                       LongNoteType::Undefined, nullptr, nullptr});
     return &events.back();
   }
-  void collect(Chart &chart) {
+  bool collect(Chart &chart) {
     std::map<Event *, Event *> retained;
     const auto retain = [&](Event *event) {
       if (!event) return;
@@ -4951,26 +4968,44 @@ private:
       if (event->pair) retained.emplace(event->pair, nullptr);
     };
     for (int lane = 0; lane < Lanes; ++lane) {
-      for (const auto &[pos, event] : lanes[lane]) retain(event);
+      for (const auto &[pos, event] : lanes[lane]) {
+        if (cancelled) return false;
+        retain(event);
+      }
       retain(open[lane]);
     }
-    for (const auto &pending : pendingClassic) retain(pending.event);
+    for (const auto &pending : pendingClassic) {
+      if (cancelled) return false;
+      retain(pending.event);
+    }
     std::deque<Event> remaining;
     for (auto &[event, relocated] : retained) {
+      if (cancelled) return false;
       remaining.push_back(std::move(*event));
       relocated = &remaining.back();
     }
-    for (auto &event : remaining)
+    for (auto &event : remaining) {
+      if (cancelled) return false;
       if (event.pair) event.pair = retained.at(event.pair);
+    }
     for (int lane = 0; lane < Lanes; ++lane) {
-      for (auto &[pos, event] : lanes[lane]) event = retained.at(event);
+      for (auto &[pos, event] : lanes[lane]) {
+        if (cancelled) return false;
+        event = retained.at(event);
+      }
       if (open[lane]) open[lane] = retained.at(open[lane]);
     }
-    for (auto &event : events)
+    for (auto &event : events) {
+      if (cancelled) return false;
       if (event.owner) chart.DetachedNotes.push_back(std::move(event.owner));
-    for (auto &pending : pendingClassic) pending.event = retained.at(pending.event);
+    }
+    for (auto &pending : pendingClassic) {
+      if (cancelled) return false;
+      pending.event = retained.at(pending.event);
+    }
     events.swap(remaining);
     untimedBegin = events.size();
+    return !cancelled;
   }
   static void demote(Event &event) {
     event.kind = Kind::Normal;
@@ -5043,6 +5078,7 @@ private:
     if (it != intervals.begin() && std::prev(it)->second >= start)
       it = std::prev(it);
     while (it != intervals.end() && it->first <= end) {
+      if (cancelled) return;
       start = std::min(start, it->first);
       end = std::max(end, it->second);
       it = intervals.erase(it);
