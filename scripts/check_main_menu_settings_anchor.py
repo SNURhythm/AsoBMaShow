@@ -75,7 +75,8 @@ require(
 require_in_order(
     "rightScroll->setContentView(rightContent);",
     "right->addView(rightScroll);",
-    "right->addView(settingsButton);",
+    "primaryActions->addView(settingsButton);",
+    "right->addView(primaryActions);",
     "rootLayout->addView(right);",
 )
 require_settings_in_order(

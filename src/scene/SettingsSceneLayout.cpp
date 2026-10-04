@@ -2801,13 +2801,14 @@ void SettingsScene::initView() {
   header->addView(backButton);
   rootLayout->addView(header);
 
-  const int tabColumnWidth = std::min(
+  const bool portrait = rendering::window_height > rendering::window_width;
+  const int tabColumnWidth = portrait ? (metrics.contentWidth - 16) / 3 : std::min(
       metrics.contentWidth,
       metrics.compact ? std::clamp(metrics.contentWidth / 4, 150, 190)
                       : std::clamp(metrics.contentWidth / 6, 220, 280));
   const int scrollRightPadding = metrics.compact ? 12 : 16;
-  metrics.cardsWidth = std::max(0, metrics.contentWidth - tabColumnWidth -
-                                       metrics.bodyGap - scrollRightPadding);
+  metrics.cardsWidth = std::max(0, metrics.contentWidth - scrollRightPadding -
+      (portrait ? 0 : tabColumnWidth + metrics.bodyGap));
   metrics.useDualCardRow = !metrics.compact && metrics.cardsWidth >= 980;
   metrics.secondaryCardWidth =
       metrics.useDualCardRow
@@ -2815,15 +2816,16 @@ void SettingsScene::initView() {
           : metrics.cardsWidth;
 
   auto *content = new View();
-  content->setFlexDirection(FlexDirection::Row);
+  content->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
   content->setGap(static_cast<float>(metrics.bodyGap));
   content->setFlex(1.0f);
   content->setAlignItems(YGAlignStretch);
 
   auto *tabControls = new View();
-  tabControls->setFlexDirection(FlexDirection::Column);
+  tabControls->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
+  tabControls->setFlexWrap(portrait ? YGWrapWrap : YGWrapNoWrap);
   tabControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  tabControls->setWidth(static_cast<float>(tabColumnWidth));
+  tabControls->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
   tabControls->setFlexShrink(0.0f);
   auto makeTabButton = [&](SettingsTab tab, const i18n::Text &label,
                            TextView **labelOut) {
@@ -2907,7 +2909,8 @@ void SettingsScene::initView() {
   tabControls->addView(irTabButton);
   tabControls->addView(miscTabButton);
   auto *tabRail = new ScrollView();
-  tabRail->setWidth(static_cast<float>(tabColumnWidth));
+  tabRail->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
+  if (portrait) tabRail->setHeight(metrics.actionButtonHeight * 4.0F + 24.0F);
   tabRail->setFlexShrink(0.0f);
   tabRail->setContentView(tabControls);
   content->addView(tabRail);

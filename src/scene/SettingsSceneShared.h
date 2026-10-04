@@ -83,6 +83,8 @@ inline SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.left * static_cast<float>(rendering::window_width)));
   insets.right = static_cast<int>(std::lround(
       normalized.right * static_cast<float>(rendering::window_width)));
+  insets.bottom = static_cast<int>(std::lround(
+      normalized.bottom * static_cast<float>(rendering::window_height)));
 #endif
   return insets;
 }
@@ -90,7 +92,8 @@ inline SafeAreaInsets getSafeAreaInsetsUi() {
 inline LayoutMetrics resolveLayoutMetrics() {
   LayoutMetrics metrics;
   metrics.safe = getSafeAreaInsetsUi();
-  metrics.compact = rendering::window_height < 980;
+  metrics.compact = rendering::window_height < 980 ||
+                    rendering::window_width < rendering::window_height;
   metrics.ultraCompact = rendering::window_height < 860;
 
   if (metrics.ultraCompact) {

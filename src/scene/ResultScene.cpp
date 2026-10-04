@@ -28,6 +28,7 @@
 #include "../view/OverlayPortal.h"
 #include "../view/TextView.h"
 #include "../view/ScrollView.h"
+#include "../rendering/UiSafeArea.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
@@ -1601,7 +1602,7 @@ void ResultScene::addResultPersistenceStatus() {
   modalPanel->addView(modalFooter);
 
   persistenceDetailsModalRoot->addView(modalPanel);
-  rootLayout->addView(persistenceDetailsModalRoot);
+  viewportLayout->addView(persistenceDetailsModalRoot);
 }
 
 ir::IrResultPresentation ResultScene::makeIrResultPresentation() const {
@@ -2358,7 +2359,7 @@ void ResultScene::buildResultTouchControls() {
   resultTouchControlsOverlay = overlay;
   resultTouchControlsPanel = panel;
   resultTouchControlsRestore = restore;
-  rootLayout->addView(overlay);
+  viewportLayout->addView(overlay);
 }
 
 void ResultScene::setResultTouchControlsHidden(bool hidden) {
@@ -2916,7 +2917,7 @@ void ResultScene::showCourseDetails() {
   close->setOnClickListener([this]() { courseDetailsModalRoot->setVisible(false); });
   panel->addView(close);
   courseDetailsModalRoot->addView(panel);
-  rootLayout->addView(courseDetailsModalRoot);
+  viewportLayout->addView(courseDetailsModalRoot);
   rootLayout->applyYogaLayout();
 }
 
@@ -3114,7 +3115,7 @@ void ResultScene::buildCourseExitConfirmation() {
   overlay->addView(panel);
   overlay->setVisible(false);
   courseExitConfirmation = overlay;
-  rootLayout->addView(overlay);
+  viewportLayout->addView(overlay);
 }
 
 void ResultScene::showCourseExitConfirmation() {
@@ -4116,7 +4117,10 @@ void ResultScene::init() {
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
-  addView(rootLayout);
+  viewportLayout = new View(0, 0, rendering::window_width, rendering::window_height);
+  viewportLayout->setFlexDirection(FlexDirection::Column);
+  addView(viewportLayout);
+  std::unique_ptr<View> pendingRoot(rootLayout);
 
   std::optional<practice::ResultModel> analyticsModel;
   std::vector<ResultGaugeSeries> series;
@@ -4131,8 +4135,17 @@ void ResultScene::init() {
   ResultSkinData data = makeResultSkinData();
   data.showTimingAnalytics = analyticsModel.has_value();
   data.showResultGraph = !series.empty();
+  rootLayout->setHeight(YGUndefined);
+  rootLayout->setMinHeight(rendering::window_height);
   const bool selectedResultSkin = startSelectedResultSkin();
-  if (!selectedResultSkin) {
+  if (selectedResultSkin) {
+    rootLayout->setSize(rendering::window_width, rendering::window_height);
+    viewportLayout->addView(pendingRoot.release());
+  } else {
+    resultScroll = new ScrollView();
+    resultScroll->setFlex(1)->setMinHeight(0);
+    viewportLayout->addView(resultScroll);
+    resultScroll->setContentView(pendingRoot.release());
     skin->buildLayout("Result", rootLayout, &data);
     if (resultSkinActivationFailed) {
       handleResultSkinRenderFailure();
@@ -4183,7 +4196,7 @@ void ResultScene::init() {
   rankingOverlayPortal->setPosition(Edge::Left, 0);
   rankingOverlayPortal->setPosition(Edge::Top, 0);
   rankingOverlayPortal->setZIndex(2000);
-  rootLayout->addView(rankingOverlayPortal);
+  viewportLayout->addView(rankingOverlayPortal);
 
   if (selectedResultSkin) {
     requestSelectedResultSkinRankings();
@@ -4257,6 +4270,7 @@ void ResultScene::init() {
 
 void ResultScene::update(float dt) {
   (void)dt;
+  resizeResultLayout();
   auto *local = localSource();
   if (local != nullptr) {
     updatePracticeSectionAction();
@@ -4456,14 +4470,14 @@ EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
   if (resultSkinPointerContinuation && queueResultSkinPointerEvent(event)) {
     return {};
   }
-  if (rootLayout != nullptr && !rootLayout->handleEvents(event)) return {};
+  if (viewportLayout != nullptr && !viewportLayout->handleEvents(event)) return {};
   if (queueResultSkinPointerEvent(event)) return {};
   return {};
 }
 
 bool ResultScene::renderViewBeforeScene(const View *view) const {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  return view != rootLayout ||
+  return view != viewportLayout ||
          !shouldRenderResultRootAfterSkin(resultSkinSession != nullptr);
 #else
   (void)view;
@@ -4554,6 +4568,35 @@ void ResultScene::renderScene() {
   }
 }
 
+void ResultScene::resizeResultLayout() {
+  if (!viewportLayout || !rootLayout) return;
+  const auto safe = rendering::uiSafeAreaInsets();
+  const std::array<int, 6> signature = {rendering::window_width,
+      rendering::window_height, safe.top, safe.right, safe.bottom, safe.left};
+  if (signature == resultLayoutSignature) return;
+  resultLayoutSignature = signature;
+  View::LayoutBatchScope batch;
+  viewportLayout->setSize(rendering::window_width, rendering::window_height);
+  for (auto *overlay : std::array<View *, 3>{resultTouchControlsOverlay,
+                         resultTouchControlsRestore, courseExitConfirmation}) {
+    if (overlay) overlay->setSize(rendering::window_width, rendering::window_height);
+  }
+  if (!resultScroll) {
+    rootLayout->setSize(rendering::window_width, rendering::window_height);
+    rootLayout->setMinHeight(rendering::window_height);
+    return;
+  }
+  resultScroll->setMargin(Edge::Top, safe.top)->setMargin(Edge::Right, safe.right);
+  resultScroll->setMargin(Edge::Bottom, safe.bottom)->setMargin(Edge::Left, safe.left);
+  const int width = rendering::window_width - safe.left - safe.right;
+  const int height = rendering::window_height - safe.top - safe.bottom;
+  rootLayout->setWidth(width);
+  rootLayout->setHeight(YGUndefined);
+  rootLayout->setMinHeight(height);
+  DefaultSkin::resizeResultLayout(rootLayout, width, height);
+  resultScroll->refreshContentLayout();
+}
+
 void ResultScene::cleanupScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   resultSkinSession.reset();
@@ -4575,6 +4618,9 @@ void ResultScene::cleanupScene() {
   resultSkinRankingRefreshPending = false;
   resultSkinSubmissionTimers = {};
   rootLayout = nullptr;
+  viewportLayout = nullptr;
+  resultScroll = nullptr;
+  resultLayoutSignature = {};
   graphPlaceHolder = nullptr;
   resultTouchControlsOverlay = nullptr;
   resultTouchControlsPanel = nullptr;

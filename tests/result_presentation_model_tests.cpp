@@ -962,6 +962,24 @@ void testDefaultSkinLocalPresentationContract() {
          "local no-previous comparison placeholders remain rendered");
 }
 
+void testPortraitResultKeepsComparisonCardsReadable() {
+  const auto model = makeLocalResultPresentation(localMeta(), localState(), localOptions());
+  const auto root = buildPresentationLayout(model, 1080, 1920, true);
+  const auto *grade = root->findViewByName("resultSummaryCard:grade");
+  const auto *score = root->findViewByName("resultSummaryCard:score");
+  const auto *lamp = root->findViewByName("resultSummaryCard:lamp");
+  const auto *combo = root->findViewByName("resultSummaryCard:combo");
+  expect(grade && score && lamp && combo, "portrait keeps all result comparisons");
+  if (grade && score && lamp && combo) {
+    expect(lamp->getY() >= grade->getY() + grade->getHeight(),
+           "portrait stacks comparisons into two readable rows");
+    expect(score->getWidth() >= 450 && combo->getWidth() >= 450,
+           "portrait comparisons retain enough width for current and best scores");
+    expect(combo->getX() + combo->getWidth() <= 1080,
+           "portrait comparisons stay inside the viewport");
+  }
+}
+
 void testDefaultSkinLegacyNullPresentationParity() {
   const auto meta = localMeta();
   const auto state = localState();
@@ -1270,6 +1288,7 @@ int main() {
   testRemoteGaugeLabelAndLampFallbackSemantics();
   testLocalizedResultsKeepSemanticLayoutAndColors();
   testDefaultSkinLocalPresentationContract();
+  testPortraitResultKeepsComparisonCardsReadable();
   testDefaultSkinLegacyNullPresentationParity();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();

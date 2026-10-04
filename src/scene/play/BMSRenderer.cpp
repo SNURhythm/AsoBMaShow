@@ -4,6 +4,7 @@
 //
 
 #include "BMSRenderer.h"
+#include "../../rendering/UiSafeArea.h"
 
 #include "BeatorajaHiSpeedChart.h"
 
@@ -470,7 +471,7 @@ float gameplayHudMetricsHeight(bool showPacemaker) {
 }
 
 float gameplayHudMetricsY(bool showPacemaker) {
-  return static_cast<float>(rendering::window_height) - kHudMargin -
+  return static_cast<float>(rendering::window_height) - rendering::uiSafeAreaInsets().bottom - kHudMargin -
          gameplayHudMetricsHeight(showPacemaker);
 }
 
@@ -574,6 +575,7 @@ std::optional<std::pair<float, float>> projectWorldToUi(float worldX,
 JudgementCounterLayout judgementCounterLayoutFor(
     AppSettings::JudgementCounterPosition position, float titleWidth,
     float rightReserveLeft, bool compactSideCounter) {
+  const auto safe = rendering::uiSafeAreaInsets();
   JudgementCounterLayout layout;
   layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
   layout.gap = layout.horizontal ? 8.0f : 6.0f;
@@ -597,23 +599,23 @@ JudgementCounterLayout judgementCounterLayoutFor(
   case AppSettings::JudgementCounterPosition::Top: {
     layout.x = (static_cast<float>(rendering::window_width) - totalWidth) *
                0.5f;
-    layout.y = 28.0f;
-    const float titleRight = 28.0f + titleWidth;
+    layout.y = safe.top + 28.0f;
+    const float titleRight = safe.left + 28.0f + titleWidth;
     if (layout.x < titleRight + 16.0f ||
         layout.x + totalWidth > rightReserveLeft) {
-      layout.y = 124.0f;
+      layout.y = safe.top + 124.0f;
     }
     break;
   }
   case AppSettings::JudgementCounterPosition::Left:
-    layout.x = 28.0f;
+    layout.x = safe.left + 28.0f;
     layout.y = std::max(
         126.0f, (static_cast<float>(rendering::window_height) - totalHeight) *
                     0.5f);
     break;
   case AppSettings::JudgementCounterPosition::Right:
     layout.x =
-        static_cast<float>(rendering::window_width) - 28.0f - totalWidth;
+        static_cast<float>(rendering::window_width) - safe.right - 28.0f - totalWidth;
     layout.y = std::max(
         126.0f, (static_cast<float>(rendering::window_height) - totalHeight) *
                     0.5f);
@@ -1159,6 +1161,7 @@ void BMSRenderer::drawRoundedPanel(float x, float y, float width, float height,
 }
 
 void BMSRenderer::drawGameplayHudPanels() {
+  const auto safe = rendering::uiSafeAreaInsets();
   constexpr float margin = 28.0f;
   constexpr float radius = 12.0f;
   const float titleWidth = gameplayHudTitleWidth();
@@ -1168,10 +1171,10 @@ void BMSRenderer::drawGameplayHudPanels() {
   const float metricsHeight = gameplayHudMetricsHeight(showPacemaker);
 
   if (titleWidth > 1.0f) {
-    drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
+    drawHudRoundedPanel(safe.left + margin, safe.top + margin, titleWidth, 82.0f, radius,
                         hudPanelFill(), hudPanelBorder());
   }
-  drawHudRoundedPanel(margin, gameplayHudMetricsY(showPacemaker), metricsWidth,
+  drawHudRoundedPanel(safe.left + margin, gameplayHudMetricsY(showPacemaker), metricsWidth,
                       metricsHeight, radius, hudPanelStrongFill(),
                       hudPanelBorder());
 }
@@ -1219,9 +1222,10 @@ std::array<float, 4> BMSRenderer::hudGaugeRect() const {
 }
 
 std::array<float, 4> BMSRenderer::autoPlayMarkRect() {
+  const auto safe = rendering::uiSafeAreaInsets();
   const float pauseLeft =
       std::max(kHudMargin, static_cast<float>(rendering::window_width) -
-                               kPauseButtonLeftOffset);
+                               safe.right - kPauseButtonLeftOffset);
   const float availableWidth =
       std::max(1.0f, pauseLeft - kAutoPlayMarkGap - kHudMargin);
   const float preferredWidth =
@@ -1230,7 +1234,7 @@ std::array<float, 4> BMSRenderer::autoPlayMarkRect() {
   const float width = std::min(preferredWidth, availableWidth);
   const float x =
       std::max(kHudMargin, pauseLeft - kAutoPlayMarkGap - width);
-  return {x, kPauseButtonTop, width, kPauseButtonSize};
+  return {x, safe.top + kPauseButtonTop, width, kPauseButtonSize};
 }
 
 void BMSRenderer::layoutAutoPlayMark(TextView *text) {
@@ -1442,15 +1446,16 @@ void BMSRenderer::drawJudgementCounterPanels() {
 }
 
 void BMSRenderer::layoutGameplayHud() {
-  constexpr int margin = 28;
+  const auto safe = rendering::uiSafeAreaInsets();
+  const int margin = safe.left + 28;
   const int titleWidth = static_cast<int>(gameplayHudTitleWidth());
   const bool titleVisible = titleWidth > 48;
   if (titleText != nullptr) {
     titleText->setVisible(titleVisible);
   }
-  placeText(titleText.get(), margin + 18, margin + 8,
+  placeText(titleText.get(), margin + 18, safe.top + 36,
             std::max(1, titleWidth - 36), 34);
-  placeText(playOptionText.get(), margin + 18, margin + 44,
+  placeText(playOptionText.get(), margin + 18, safe.top + 72,
             std::max(1, titleWidth - 36), 26);
 
   const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
@@ -1698,10 +1703,11 @@ void BMSRenderer::refreshGaugeTextStyle() {
 }
 
 float BMSRenderer::gameplayHudTitleWidth() const {
-  constexpr float kTitleMargin = 28.0f;
+  const auto safe = rendering::uiSafeAreaInsets();
+  const float kTitleMargin = safe.left + 28.0f;
   constexpr float kLaneGap = 18.0f;
-  constexpr float kTitleTop = 28.0f;
-  constexpr float kTitleBottom = kTitleTop + 82.0f;
+  const float kTitleTop = safe.top + 28.0f;
+  const float kTitleBottom = kTitleTop + 82.0f;
 
   const float baseWidth = baseGameplayHudTitleWidth();
   const float laneLeft = projectedLaneLeftUiInBand(kTitleTop, kTitleBottom);

@@ -352,6 +352,7 @@ private:
   i18n::Text musicStatusMessage;
 
   void initView(ApplicationContext &context);
+  void updatePanelLayout();
   void applyThemeChange();
   void reloadProfileSelectionsFromSettings();
   void reloadFolderItems(bool preserveViewState = false);

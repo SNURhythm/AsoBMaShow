@@ -63,7 +63,7 @@
             android:label="@string/app_name"
             android:launchMode="singleInstance"
             android:preferMinimalPostProcessing="true"
-            android:screenOrientation="landscape">
+            android:screenOrientation="fullUser">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

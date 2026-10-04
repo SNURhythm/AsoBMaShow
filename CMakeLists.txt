@@ -8898,6 +8898,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_launch_tests)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
+    add_test(NAME ui_scale_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(result_presentation_model_tests)
     asobmashow_register_test(remote_result_scene_tests)

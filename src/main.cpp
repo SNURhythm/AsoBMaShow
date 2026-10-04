@@ -310,9 +310,12 @@ int rendering::ui_view_height = rendering::design_height;
 Camera *rendering::main_camera = nullptr;
 Camera rendering::game_camera{rendering::main_view};
 void rendering::updateUIScale(int renderW, int renderH) {
+  if (renderW <= 0 || renderH <= 0) {
+    return;
+  }
   render_width = renderW;
   render_height = renderH;
-  window_width = design_width;
+  window_width = renderW < renderH ? design_height : design_width;
   ui_scale_x = static_cast<float>(renderW) / static_cast<float>(window_width);
   ui_scale_y = ui_scale_x;
   window_height = static_cast<int>(renderH / ui_scale_y);
@@ -558,6 +561,8 @@ int main(int argv, char **args) {
 #endif
   rendering::main_camera = &rendering::game_camera;
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+  SDL_SetHint(SDL_HINT_ORIENTATIONS,
+              "Portrait PortraitUpsideDown LandscapeLeft LandscapeRight");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
 #if TARGET_OS_IPHONE
   // UIKit exposes a physical trackpad as a mouse. SDL otherwise mirrors every
@@ -782,6 +787,14 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+  bool orientationLocked = false;
+  auto appliedOrientation = context.settings.screenOrientation;
+  context.setGameplayOrientationLocked = [&](bool locked) {
+    orientationLocked = locked;
+    appliedOrientation = context.settings.screenOrientation;
+    screen_orientation::apply(appliedOrientation, locked);
+  };
+  screen_orientation::apply(appliedOrientation, false);
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
   if (context.chartLibraryTasks) {
     context.chartLibraryTasks->start();
@@ -970,6 +983,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+    if (!orientationLocked &&
+        appliedOrientation != context.settings.screenOrientation) {
+      appliedOrientation = context.settings.screenOrientation;
+      screen_orientation::apply(appliedOrientation, false);
+    }
     context.pollGameplaySkinCommits();
     if (context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
@@ -1582,6 +1600,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     //
   }
   sceneManager.cleanup();
+  context.setGameplayOrientationLocked = {};
   if (context.displaySettingsManager) {
     const auto shutdownResult = context.displaySettingsManager->shutdown();
     if (!shutdownResult.message.empty()) {
@@ -1670,7 +1689,12 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
   bgfx::setViewTransform(blurViewH, nullptr, ortho);
   bgfx::setViewTransform(blurViewV, nullptr, ortho);
 
-  constexpr float kCameraDepth = 2.1f;
+  const float aspect =
+      float(rendering::window_width) / float(rendering::window_height);
+  // Preserve the landscape horizontal field of view in a tall viewport.
+  // Keeping the landscape camera distance would crop the outside lanes.
+  const float kCameraDepth = 2.1f *
+      (aspect < 1.0f ? (16.0f / 9.0f) / aspect : 1.0f);
   const float laneLookAtY = settings.laneLength * 0.25f;
   const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
   bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0f};
@@ -1678,8 +1702,6 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
                   laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
                   -kCameraDepth};
 
-  float aspect =
-      float(rendering::window_width) / float(rendering::window_height);
   rendering::game_camera.edit()
       .setPosition(eye)
       .setLookAt(at)

@@ -4,6 +4,7 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "platform/ScreenOrientation.h"
 #include "skin/SkinProfileSettings.h"
 
 #include <algorithm>
@@ -230,6 +231,7 @@ public:
       JudgementTimingDisplayCriteria::GreatOrBelow;
   GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
+  screen_orientation::Mode screenOrientation = screen_orientation::Mode::Auto;
   bool systemPlaybackShowJacket = true;
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;

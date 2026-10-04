@@ -598,6 +598,7 @@ json settingsToJson(const AppSettings &settings) {
        static_cast<int>(settings.judgementTimingMillisecondsCriteria)},
       {"gaugeBarPosition", static_cast<int>(settings.gaugeBarPosition)},
       {"uiThemeMode", static_cast<int>(settings.uiThemeMode)},
+      {"screenOrientation", static_cast<int>(settings.screenOrientation)},
       {"systemPlaybackShowJacket", settings.systemPlaybackShowJacket},
       {"systemPlaybackShowTitle", settings.systemPlaybackShowTitle},
       {"systemPlaybackShowArtist", settings.systemPlaybackShowArtist},
@@ -792,6 +793,7 @@ AppSettings settingsFromJson(const json &document,
   readEnum(document, "gaugeBarPosition", settings.gaugeBarPosition,
            diagnostics);
   readEnum(document, "uiThemeMode", settings.uiThemeMode, diagnostics);
+  readEnum(document, "screenOrientation", settings.screenOrientation, diagnostics);
   readValue(document, "systemPlaybackShowJacket",
             settings.systemPlaybackShowJacket, diagnostics);
   readValue(document, "systemPlaybackShowTitle",

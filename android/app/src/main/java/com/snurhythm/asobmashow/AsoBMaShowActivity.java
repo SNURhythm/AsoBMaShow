@@ -183,14 +183,12 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         super.onCreate(savedInstanceState);
         handleArchiveImportIntent(getIntent());
     }
 
     @Override
     protected void onResume() {
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         super.onResume();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = true;
@@ -254,7 +252,38 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     public void setOrientationBis(int width, int height, boolean resizable, String hint) {
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        // Orientation belongs to the app setting and gameplay lifetime, not
+        // SDL's initial window dimensions or surface recreation.
+    }
+
+    private boolean gameplayOrientationLocked;
+
+    public void setScreenOrientation(int mode, boolean lockCurrent) {
+        CountDownLatch applied = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            try {
+                if (lockCurrent) {
+                    if (!gameplayOrientationLocked) {
+                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+                    }
+                } else {
+                    setRequestedOrientation(mode == 1
+                            ? ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                            : mode == 2 ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                        : ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+                }
+                gameplayOrientationLocked = lockCurrent;
+            } finally {
+                applied.countDown();
+            }
+        });
+        // Gameplay must not start until the interface's current orientation
+        // has been captured. SDL's native thread is separate from the UI thread.
+        try {
+            applied.await();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override

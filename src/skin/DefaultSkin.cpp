@@ -99,6 +99,7 @@ void DefaultSkin::buildLayout(const std::string &screenName, View *root,
                               void *data) {
   if (screenName == "Result") {
     buildResultLayout(root, static_cast<ResultSkinData *>(data));
+    resizeResultLayout(root, rendering::window_width, rendering::window_height);
   }
 }
 
@@ -110,7 +111,44 @@ bool DefaultSkin::rebuildLayoutSection(const std::string &sectionName,
   View::LayoutBatchScope layoutBatch;
   root->clearChildren();
   buildResultSummary(root, static_cast<ResultSkinData *>(data));
+  resizeResultLayout(root, rendering::window_width, rendering::window_height);
   return true;
+}
+
+void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
+  if (!root) return;
+  View::LayoutBatchScope batch;
+  const bool portrait = height > width;
+  const auto metrics = result_layout::metricsFor(
+      static_cast<float>(height), TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android);
+  const float contentWidth = std::max(0.0F, width - 2 * metrics.rootPadding);
+  if (auto *summary = root->findViewByName("resultSummary")) {
+    const bool stack = portrait && summary->getChildren().size() > 3;
+    summary->setFlexWrap(stack ? YGWrapWrap : YGWrapNoWrap);
+    summary->setHeight(stack ? metrics.summaryHeight * 2 + 12 : metrics.summaryHeight);
+    summary->setFlexShrink(0);
+    for (auto *card : summary->getChildren()) {
+      card->setHeight(metrics.summaryHeight);
+      const bool fixedGrade = card->getName() == "resultSummaryCard:grade" &&
+                              YGNodeStyleGetFlexGrow(card->getNode()) == 0;
+      card->setFlexBasis(stack ? (contentWidth - 12) / 2
+                              : (fixedGrade ? YGUndefined : 0.0F));
+    }
+  }
+  if (auto *details = root->findViewByName("detailsGrid")) {
+    details->setFlexWrap(portrait ? YGWrapWrap : YGWrapNoWrap);
+    details->setHeight(portrait ? metrics.detailsHeight * 2 : metrics.detailsHeight);
+    details->setFlexShrink(0);
+    for (auto *tile : details->getChildren()) {
+      tile->setHeight(portrait ? metrics.detailsHeight : YGUndefined);
+      tile->setFlexBasis(portrait ? contentWidth / 4 - 1 : 0.0F);
+    }
+  }
+  if (auto *visuals = root->findViewByName("resultVisuals")) {
+    visuals->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+    visuals->setHeight(portrait ? metrics.visualHeight * 2 + metrics.visualGap : metrics.visualHeight);
+    visuals->setMinHeight(portrait ? metrics.visualHeight * 2 + metrics.visualGap : metrics.visualMinimumHeight);
+  }
 }
 
 void DefaultSkin::buildResultSummary(View *root, ResultSkinData *data) {

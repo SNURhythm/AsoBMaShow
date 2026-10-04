@@ -554,6 +554,7 @@ void AppSettings::sanitize() {
     uiThemeMode = UiThemeMode::Dark;
     break;
   }
+  screenOrientation = screen_orientation::sanitize(screenOrientation);
   selectedGameplayRuleset = std::string(gameplayRulesetId(
       gameplayRulesetSelectionOrDefault(selectedGameplayRuleset)));
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);

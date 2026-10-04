@@ -15,8 +15,9 @@ private:
   ApplicationContext &context;
   bool isRegisteredScene(const Scene *scene) const;
   void cleanupSceneInstance(Scene *scene);
-  void updateBackgroundTaskPauseState();
+  void updateForegroundSceneState();
   bool resumingScene_ = false;
+  bool orientationLocked_ = false;
   std::optional<std::pair<std::string, bool>> pendingRegisteredSceneChange_;
 
 public:

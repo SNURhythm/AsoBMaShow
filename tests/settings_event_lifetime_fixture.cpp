@@ -37,6 +37,7 @@ struct ApplicationContext {
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
+  std::function<void(bool)> setGameplayOrientationLocked;
   int gameplayBgaCompositeState = 0;
   struct { struct { int video = 0; } audioVideo; } settings;
 };

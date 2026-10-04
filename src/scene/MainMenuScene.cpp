@@ -389,6 +389,8 @@ SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.left * static_cast<float>(rendering::window_width)));
   insets.right = static_cast<int>(std::lround(
       normalized.right * static_cast<float>(rendering::window_width)));
+  insets.bottom = static_cast<int>(std::lround(
+      normalized.bottom * static_cast<float>(rendering::window_height)));
 #endif
   return insets;
 }
@@ -1375,6 +1377,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay);
 
   auto nav = new View();
+  nav->setName("mainMenuLibrary");
   nav->setFlexDirection(FlexDirection::Column);
   nav->setAlignItems(YGAlignStretch);
   nav->setWidth(kLibraryPanelWidth);
@@ -1385,6 +1388,12 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   nav->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   nav->setThemedBorderColor(ui_theme::hairline);
   nav->setBorderWidth(1);
+
+  auto *libraryActions = new View();
+  libraryActions->setName("mainMenuLibraryActions");
+  libraryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
+  libraryActions->setFlexShrink(0);
+  nav->addView(libraryActions);
 
   bool showAddFolderButton = true;
   i18n::Text addFolderButtonLabel = i18n::message("menu.add_folder.label");
@@ -1416,7 +1425,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
         this->context.requestAddChartFolderFromFiles();
       }
     });
-    nav->addView(addFolderButton);
+    libraryActions->addView(addFolderButton);
   }
 #if TARGET_OS_ANDROID
   auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
@@ -1437,7 +1446,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
           this->context.chartLibraryFolderActions->requestImportArchive();
         }
       });
-  nav->addView(importArchiveButton);
+  libraryActions->addView(importArchiveButton);
 #endif
 
   folderRecyclerView->setFlex(1);
@@ -1448,6 +1457,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rootLayout->addView(nav);
 
   auto left = new View();
+  left->setMinWidth(0)->setMinHeight(0);
   left->setFlexDirection(FlexDirection::Column);
   left->setAlignItems(YGAlignStretch);
   left->setFlex(1);
@@ -1634,6 +1644,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rootLayout->addView(left);
 
   auto right = new View();
+  right->setName("mainMenuDetails");
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
   right->setWidth(kDetailsPanelWidth);
@@ -1647,6 +1658,8 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   right->setPadding(Edge::Bottom, 16);
 
   auto *rightScroll = new ScrollView();
+  rightScroll->setName("mainMenuDetailsScroll");
+  rightScroll->setMinWidth(0)->setMinHeight(0);
   tutorialRightScroll_ = rightScroll;
   rightScroll->setWidth(kDetailsPanelWidth - 20);
   rightScroll->setFlex(1);
@@ -1936,9 +1949,13 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
   // Primary actions stay reachable while chart details and tools scroll.
-  right->addView(startButton);
-  right->addView(recordActions);
-  right->addView(settingsButton);
+  auto *primaryActions = new View();
+  primaryActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
+  primaryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
+  primaryActions->addView(startButton);
+  primaryActions->addView(recordActions);
+  primaryActions->addView(settingsButton);
+  right->addView(primaryActions);
   rootLayout->addView(right);
   buildPlayOptionsModal();
   recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
@@ -1952,7 +1969,39 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   reloadFolderItems();
   reloadChartList();
   libraryRevision = context.chartRepository.GetLibraryRevision();
+  updatePanelLayout();
   rootLayout->applyYogaLayout();
+}
+
+void MainMenuScene::updatePanelLayout() {
+  if (!rootLayout) return;
+  View::LayoutBatchScope batch;
+  const bool portrait = rendering::window_height > rendering::window_width;
+  auto *library = rootLayout->findViewByName("mainMenuLibrary");
+  auto *actions = rootLayout->findViewByName("mainMenuLibraryActions");
+  auto *details = rootLayout->findViewByName("mainMenuDetails");
+  auto *detailsScroll = rootLayout->findViewByName("mainMenuDetailsScroll");
+  rootLayout->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+  if (library) {
+    library->setWidth(portrait ? YGUndefined : kLibraryPanelWidth);
+    library->setHeight(portrait ? 280.0F : YGUndefined);
+    library->setFlexShrink(0);
+  }
+  if (actions) {
+    actions->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
+  }
+  if (details) {
+    details->setWidth(portrait ? YGUndefined : kDetailsPanelWidth);
+    details->setHeight(portrait ? 340.0F : YGUndefined);
+    details->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
+    details->setPadding(Edge::Left, portrait ? 12.0F : 0.0F);
+    details->setPadding(Edge::Right, portrait ? 12.0F : 0.0F);
+    details->setPadding(Edge::Top, portrait ? 16.0F : 0.0F);
+  }
+  if (detailsScroll) {
+    detailsScroll->setWidth(portrait ? YGUndefined : kDetailsPanelWidth - 20);
+    detailsScroll->setHeight(portrait ? 308.0F : YGUndefined);
+  }
 }
 
 void MainMenuScene::reloadFolderItems(bool preserveViewState) {
@@ -7017,6 +7066,7 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
     rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
     rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
+    updatePanelLayout();
     rootLayout->applyYogaLayout();
   }
   if (tutorial_ && tutorial_->getVisible()) {

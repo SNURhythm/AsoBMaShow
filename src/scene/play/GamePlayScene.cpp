@@ -67,6 +67,7 @@
 #include "../../view/UiTheme.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
+#include "../../rendering/UiSafeArea.h"
 
 #include <algorithm>
 #include <array>
@@ -2516,12 +2517,14 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
     return;
   }
   auto &session = *realtimeGameplaySession;
+  const auto safeInsets = rendering::uiSafeAreaInsets();
   if (pauseButton != nullptr) {
-    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+    pauseButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                    safeInsets.top + 38);
   }
   if (practiceRestartButton != nullptr) {
-    practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
-                                               98);
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                               safeInsets.top + 98);
   }
   refreshGameplayPresentationGeometry();
   const auto currentKey = makeRealtimeTouchLayoutRefreshKey(
@@ -6640,12 +6643,14 @@ void GamePlayScene::renderScene() {
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope uiBatchScope(renderContext);
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
+  const auto safeInsets = rendering::uiSafeAreaInsets();
   if (pauseButton != nullptr) {
-    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+    pauseButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                    safeInsets.top + 38);
   }
   if (practiceRestartButton != nullptr) {
-    practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
-                                               98);
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                               safeInsets.top + 98);
   }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinResetLayoutButton != nullptr) {

@@ -4,6 +4,7 @@
 #include "audio/NativeMusicPlayer.h"
 #include "ir/IrHttpClientIOS.h"
 #include "platform/PhotoAuthorizationPolicy.h"
+#include "platform/ScreenOrientation.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -4381,6 +4382,73 @@ std::string GetIOSApplicationSupportPath() {
     }
     return std::string(directory.fileSystemRepresentation);
   }
+}
+
+void screen_orientation::apply(Mode mode, bool lockCurrent) {
+  const auto update = ^{
+    UIWindow *window = FindActiveWindow();
+    if (window == nil) return;
+    static UIInterfaceOrientation lockedOrientation = UIInterfaceOrientationUnknown;
+    const UIInterfaceOrientation current = window.windowScene != nil
+        ? window.windowScene.interfaceOrientation
+        : window.rootViewController.interfaceOrientation;
+    if (lockCurrent && lockedOrientation == UIInterfaceOrientationUnknown) {
+      lockedOrientation = current;
+    } else if (!lockCurrent) {
+      lockedOrientation = UIInterfaceOrientationUnknown;
+    }
+
+    UIInterfaceOrientationMask mask = UIInterfaceOrientationMaskAll;
+    const char *hint = "Portrait PortraitUpsideDown LandscapeLeft LandscapeRight";
+    if (lockCurrent) {
+      switch (lockedOrientation) {
+      case UIInterfaceOrientationLandscapeLeft:
+        mask = UIInterfaceOrientationMaskLandscapeLeft;
+        hint = "LandscapeLeft";
+        break;
+      case UIInterfaceOrientationLandscapeRight:
+        mask = UIInterfaceOrientationMaskLandscapeRight;
+        hint = "LandscapeRight";
+        break;
+      case UIInterfaceOrientationPortraitUpsideDown:
+        mask = UIInterfaceOrientationMaskPortraitUpsideDown;
+        hint = "PortraitUpsideDown";
+        break;
+      default:
+        mask = UIInterfaceOrientationMaskPortrait;
+        hint = "Portrait";
+        break;
+      }
+    } else if (mode == Mode::Landscape) {
+      mask = UIInterfaceOrientationMaskLandscape;
+      hint = "LandscapeLeft LandscapeRight";
+    } else if (mode == Mode::Portrait) {
+      mask = UIInterfaceOrientationMaskPortrait;
+      hint = "Portrait";
+    }
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, hint);
+    if (@available(iOS 16.0, *)) {
+      [window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
+      // Only force geometry for an explicit mode. Auto leaves the choice to
+      // UIKit, including the user's system rotation lock.
+      if (window.windowScene != nil && !lockCurrent && mode != Mode::Auto &&
+          !(mask & (1UL << current))) {
+        UIWindowSceneGeometryPreferencesIOS *preferences =
+            [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+        [window.windowScene requestGeometryUpdateWithPreferences:preferences
+            errorHandler:^(NSError *error) {
+              NSLog(@"Could not apply screen orientation: %@", error);
+            }];
+      } else if (window.windowScene == nil) {
+        // SDL2 also supports the pre-UIScene application lifecycle.
+        [UIViewController attemptRotationToDeviceOrientation];
+      }
+    } else {
+      [UIViewController attemptRotationToDeviceOrientation];
+    }
+  };
+  if ([NSThread isMainThread]) update();
+  else dispatch_sync(dispatch_get_main_queue(), update);
 }
 
 // get nwh

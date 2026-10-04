@@ -385,6 +385,32 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
 View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   ensureAudioVideoSession();
   auto *cardsColumn = makeAudioVideoCardsColumn(metrics);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  auto *orientationControls = new View();
+  orientationControls->setFlexDirection(FlexDirection::Row)->setGap(12);
+  for (const auto &[mode, label] : {
+           std::pair{screen_orientation::Mode::Auto, "settings.display.orientation_auto.label"},
+           std::pair{screen_orientation::Mode::Landscape, "settings.display.orientation_landscape.label"},
+           std::pair{screen_orientation::Mode::Portrait, "settings.display.orientation_portrait.label"}}) {
+    auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
+                          ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+    auto *button = context.settings.screenOrientation == mode
+        ? makeAccentButton(0, metrics.actionButtonHeight, text, ui_theme::cyan())
+        : makeControlButton(0, metrics.actionButtonHeight, text);
+    button->setFlex(1)->setMinWidth(0);
+    button->setOnClickListener([this, mode] {
+      context.settings.screenOrientation = mode;
+      persistSettings();
+      // Rebuild on the next update, after this button's callback returns.
+      lastLayoutWidth = -1;
+    });
+    orientationControls->addView(button);
+  }
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.display.orientation.label"),
+      i18n::message("settings.display.orientation_help.message"),
+      orientationControls, metrics.modeCardHeight, metrics.cardsWidth));
+#endif
   if (audioVideoSession == nullptr ||
       context.displaySettingsManager == nullptr) {
     cardsColumn->addView(makeCard(

@@ -33,6 +33,7 @@ public:
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
+  std::function<void(bool)> setGameplayOrientationLocked;
   int gameplayBgaCompositeState = 0;
 };
 struct RenderContext {
@@ -151,7 +152,50 @@ void testTutorialMenuReturnsWithState() {
   }
 }
 
+void testGameplayOrientationFollowsSceneLifetime() {
+  ApplicationContext context;
+  bool locked = false;
+  std::vector<bool> requests;
+  context.setGameplayOrientationLocked = [&](bool value) {
+    locked = value;
+    requests.push_back(value);
+  };
+  SceneManager manager(context);
+  struct Gameplay final : Scene {
+    bool &locked;
+    bool fail;
+    Gameplay(ApplicationContext &context, bool &locked, bool fail = false)
+        : Scene(context), locked(locked), fail(fail) {}
+    bool locksOrientation() const override { return true; }
+    void init() override {
+      assert(locked && "lock the current orientation before gameplay loading");
+      if (fail) throw 1;
+    }
+    void update(float) override { assert(locked); }
+    void renderScene() override {}
+    void cleanupScene() override {}
+  };
+  manager.changeScene(std::make_unique<ObservedScene>(context));
+  manager.changeScene(std::make_unique<Gameplay>(context, locked), true);
+  manager.currentScene->onApplicationBackgroundChanged(true);
+  manager.currentScene->onApplicationBackgroundChanged(false);
+  manager.update(0);
+  manager.changeScene(std::make_unique<Gameplay>(context, locked));
+  assert(requests == std::vector<bool>{true} && "retry must not recapture device orientation");
+  manager.changeScene(std::make_unique<ObservedScene>(context));
+  assert(!locked && "results and menus restore the selected orientation mode");
+  try {
+    manager.changeScene(std::make_unique<Gameplay>(context, locked, true));
+    assert(false);
+  } catch (int) {}
+  assert(!locked && "failed gameplay initialization must release the lock");
+  manager.changeScene(std::make_unique<Gameplay>(context, locked));
+  manager.cleanup();
+  assert(!locked && "shutdown must release the lock");
+}
+
 int main() {
+  testGameplayOrientationFollowsSceneLifetime();
   testTutorialMenuReturnsWithState();
   i18n::setLanguage(i18n::Language::English);
   ApplicationContext context;

@@ -6,6 +6,7 @@
 #include "StableHash.h"
 #include "audio/NativeMusicPlayer.h"
 #include "library/ChartLibraryTaskService.h"
+#include "platform/ScreenOrientation.h"
 
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_log.h>
@@ -675,6 +676,27 @@ long long parseLongLongOrZero(const std::string &value) {
 }
 
 } // namespace
+
+void screen_orientation::apply(Mode mode, bool lockCurrent) {
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  if (env == nullptr) return;
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (activity == nullptr) return;
+  jclass activityClass = env->GetObjectClass(activity);
+  if (activityClass != nullptr) {
+    jmethodID method = env->GetMethodID(activityClass, "setScreenOrientation", "(IZ)V");
+    if (method != nullptr) {
+      env->CallVoidMethod(activity, method, static_cast<jint>(mode),
+                          lockCurrent ? JNI_TRUE : JNI_FALSE);
+    }
+    env->DeleteLocalRef(activityClass);
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+    SDL_Log("Could not apply Android screen orientation");
+  }
+  env->DeleteLocalRef(activity);
+}
 
 void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks) {
   std::lock_guard lock(gAndroidImportTasksMutex);

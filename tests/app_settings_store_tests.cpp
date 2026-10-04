@@ -1128,6 +1128,25 @@ void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
   }
 }
 
+void testScreenOrientationRoundTripAndDefaults() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  for (const auto &[input, expected] :
+       {std::pair{nlohmann::json(0), 0}, {nlohmann::json(1), 1},
+        {nlohmann::json(2), 2}, {nlohmann::json(99), 0},
+        {nlohmann::json("portrait"), 0}, {nlohmann::json(nullptr), 0}}) {
+    nlohmann::json document = {{"schemaVersion", AppSettingsStore::kCurrentSchemaVersion}};
+    if (!input.is_null()) document["screenOrientation"] = input;
+    writeFile(path, document.dump());
+    auto loaded = AppSettingsStore::Load(path);
+    std::string error;
+    expect(AppSettingsStore::Save(path, loaded.settings, error), "save orientation setting");
+    const auto saved = nlohmann::json::parse(readFile(path));
+    expect(saved.value("screenOrientation", -1) == expected,
+           "orientation survives restart; old and invalid settings default to Auto");
+  }
+}
+
 void testIpadGestureReminderRoundTrip() {
   TempDirectory temp;
   expect(AppSettings{}.ipadGestureReminderEnabled,
@@ -1825,6 +1844,7 @@ int main() {
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testIpadGestureReminderRoundTrip();
+  testScreenOrientationRoundTripAndDefaults();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();
