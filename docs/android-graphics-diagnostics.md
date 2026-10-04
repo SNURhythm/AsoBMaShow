@@ -80,3 +80,24 @@ with both sample requests produced readable intro screens. Forced Vulkan with
 also lost visible content after attempting to enter the menu, so scene-transition
 validation is incomplete. These observations are not a reproduction of the
 reported horizontal bands and do not establish a physical-device fix.
+
+## Shader audit and follow-up fixes
+
+The packaged Android shaders matched the repository. All 19 committed Vulkan
+modules passed `spirv-val`; fresh compilation matched all 19 GLES shaders.
+Vulkan instruction differences were limited to equivalent repeated calculations
+in three fragment shaders, with no nonfinite constants found.
+
+The audit found and fixed three separate issues: the legacy Makefile compiled
+the first shader of each stage into unrelated output names; incremental builds
+ignored shared includes and varying definitions; and distance-field text used
+undefined `smoothstep` edges when shadow smoothing was zero. Make now delegates
+to the Python compiler path, which also tracks recursive includes, the compiler,
+and build-script changes. Distance-field shadows use a hard threshold when
+their smoothing edges coincide, including after float rounding.
+
+Regression coverage compiles named Make targets and checks dependency changes.
+A real Metal readback reproduced the old zero-width threshold failure and now
+passes for zero, tiny, and positive smoothing widths. The desktop build and all
+422 CTest tests passed. These shader fixes are not a confirmed explanation of
+the reported phone screenshot.

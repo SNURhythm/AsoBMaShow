@@ -1,12 +1,14 @@
+import argparse
 import glob
 import os
+from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 
 # get shaderc from env "SHADERC"
 root_path = f"{os.path.dirname(os.path.realpath(__file__))}/.."
-current_path = os.getcwd()
 bgfx_path = f"{root_path}/bgfx/bgfx"
 bgfx_build_path = f"{bgfx_path}/.build/"
 shaderc = os.getenv("SHADERC")
@@ -17,20 +19,45 @@ if shaderc is None:
         shaderc = f"{bgfx_build_path}/win64_mingw-gcc/bin/shadercRelease.exe"
     else:
         shaderc = f"{bgfx_build_path}/linux64_gcc/bin/shadercRelease"
-    # if shaderc doesn't exist, try to build with make shaderc
-    if not os.path.exists(shaderc):
-        os.chdir(bgfx_path)
-        subprocess.run(["make", "-j14", "shaderc"], check=True)
-        os.chdir(current_path)
     # normalize path
     shaderc = os.path.abspath(shaderc)
-    print(f"Using shaderc: {shaderc}")
+
+
+def ensure_shader_compiler():
+    # Cleaning and importing dependency checks must not build the toolchain.
+    if os.getenv("SHADERC") is None:
+        if not os.path.exists(shaderc):
+            subprocess.run(["make", "-j14", "shaderc"], cwd=bgfx_path, check=True)
+        print(f"Using shaderc: {shaderc}")
 
 
 def should_recompile_shader(src, dst):
     if not os.path.exists(dst):
         return True
-    return os.path.getmtime(src) > os.path.getmtime(dst)
+    source = Path(src).resolve()
+    source_root = Path(root_path).resolve() / "shader_src"
+    dependencies = {Path(__file__).resolve()}
+    compiler_path = shutil.which(shaderc) or shaderc
+    dependencies.add(Path(compiler_path).resolve())
+    varying = source.parent / "varying.def.sc"
+    if varying.is_file():
+        dependencies.add(varying)
+    pending = [source]
+    while pending:
+        dependency = pending.pop()
+        if dependency in dependencies:
+            continue
+        dependencies.add(dependency)
+        for include in re.findall(
+                r'^\s*#\s*include\s*[<"]([^>"]+)[>"]',
+                dependency.read_text(encoding="utf-8"), re.MULTILINE):
+            candidates = (dependency.parent / include, source_root / include)
+            resolved = next((path.resolve() for path in candidates if path.is_file()), None)
+            if resolved is None:
+                raise RuntimeError(f"Missing shader include {include} from {dependency}")
+            pending.append(resolved)
+    output_time = os.path.getmtime(dst)
+    return any(path.stat().st_mtime > output_time for path in dependencies)
 
 
 def essl_shader_needs_recompile(src, dst):
@@ -58,7 +85,7 @@ def patch_essl_shader(dst):
 def compile_shader(src, dst, type, platform, profile):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     result = subprocess.run(
-        [shaderc, "-f", src, "-o", dst, "--platform", platform, "--type", type, "--profile", profile, "-O 3", "-i", "."]
+        [shaderc, "-f", src, "-o", dst, "--platform", platform, "--type", type, "--profile", profile, "-O", "3", "-i", "."]
     )
     if result.returncode != 0:
         print(f"Failed to compile shader {src} to {dst}")
@@ -67,68 +94,52 @@ def compile_shader(src, dst, type, platform, profile):
         exit(1)
 
 
-def compile_all_shaders():
-    # fs_*.sc : fragment shaders
-    # vs_*.sc : vertex shaders
+BACKENDS = {
+    "metal": ("osx", "metal"),
+    "spirv": ("windows", "spirv"),
+    "essl": ("android", "310_es"),
+    "dx11": ("windows", "s_5_0"),
+}
 
-    # glob recursively
-    fs_shaders = glob.glob("**/fs_*.sc", recursive=True)
-    vs_shaders = glob.glob("**/vs_*.sc", recursive=True)
-    compile_dx11 = sys.platform == "win32"
 
-    for fs_shader in fs_shaders:
-        if fs_shader.endswith("def.sc"):
-            continue
-        print(fs_shader)
-        dst = "../shaders/metal/" + fs_shader.replace(".sc", ".bin")
-        if should_recompile_shader(fs_shader, dst):
-            compile_shader(fs_shader, dst, "f", "osx", "metal")
-        dst = "../shaders/spirv/" + fs_shader.replace(".sc", ".bin")
-        if should_recompile_shader(fs_shader, dst):
-            compile_shader(fs_shader, dst, "f", "windows", "spirv")
-        dst = "../shaders/essl/" + fs_shader.replace(".sc", ".bin")
-        if essl_shader_needs_recompile(fs_shader, dst):
-            # shaderc 1.18.129 corrupts some ESSL 100/300 float constants into
-            # -inf. Compile through 310_es, then downshift compatible GLSL to
-            # 300_es for Android GLES 3.0.
-            compile_shader(fs_shader, dst, "f", "android", "310_es")
-            patch_essl_shader(dst)
-        dst = "../shaders/dx11/" + fs_shader.replace(".sc", ".bin")
-        if compile_dx11 and should_recompile_shader(fs_shader, dst):
-            compile_shader(fs_shader, dst, "f", "windows", "s_5_0")
-        elif not compile_dx11 and not os.path.exists(dst):
-            print(f"Skipping DX11 shader on this platform: {dst}")
-
-    for vs_shader in vs_shaders:
-        if vs_shader.endswith("def.sc"):
-            continue
-        print(vs_shader)
-        dst = "../shaders/metal/" + vs_shader.replace(".sc", ".bin")
-        if should_recompile_shader(vs_shader, dst):
-            compile_shader(vs_shader, dst, "v", "osx", "metal")
-        dst = "../shaders/spirv/" + vs_shader.replace(".sc", ".bin")
-        if should_recompile_shader(vs_shader, dst):
-            compile_shader(vs_shader, dst, "v", "windows", "spirv")
-        dst = "../shaders/essl/" + vs_shader.replace(".sc", ".bin")
-        if essl_shader_needs_recompile(vs_shader, dst):
-            # shaderc 1.18.129 corrupts some ESSL 100/300 float constants into
-            # -inf. Compile through 310_es, then downshift compatible GLSL to
-            # 300_es for Android GLES 3.0.
-            compile_shader(vs_shader, dst, "v", "android", "310_es")
-            patch_essl_shader(dst)
-        dst = "../shaders/dx11/" + vs_shader.replace(".sc", ".bin")
-        if compile_dx11 and should_recompile_shader(vs_shader, dst):
-            compile_shader(vs_shader, dst, "v", "windows", "s_5_0")
-        elif not compile_dx11 and not os.path.exists(dst):
-            print(f"Skipping DX11 shader on this platform: {dst}")
+def compile_all_shaders(backends=None, shaders=None):
+    if backends is None:
+        backends = ["metal", "spirv", "essl"]
+        if sys.platform == "win32":
+            backends.append("dx11")
+    if "dx11" in backends and sys.platform != "win32":
+        raise RuntimeError("DX11 shaders must be compiled on Windows")
+    if shaders is None:
+        shaders = sorted(glob.glob("**/fs_*.sc", recursive=True) +
+                         glob.glob("**/vs_*.sc", recursive=True))
+    for source in shaders:
+        path = Path(source)
+        if (path.is_absolute() or ".." in path.parts or not path.is_file() or
+                path.suffix != ".sc" or not path.name.startswith(("vs_", "fs_"))):
+            raise RuntimeError(f"Invalid shader source: {source}")
+        print(source)
+        for backend in backends:
+            destination = str(Path("../shaders") / backend / path.with_suffix(".bin"))
+            needs_recompile = (essl_shader_needs_recompile if backend == "essl"
+                               else should_recompile_shader)
+            if needs_recompile(source, destination):
+                platform, profile = BACKENDS[backend]
+                compile_shader(source, destination, path.name[0], platform, profile)
+                if backend == "essl":
+                    # shaderc 1.18.129 corrupts some ESSL 100/300 constants into
+                    # -inf. Downshift the compatible 310_es output to GLES 3.0.
+                    patch_essl_shader(destination)
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    if len(args) > 0 and args[0] == "clean":
-        shutil.rmtree("../shaders/metal", ignore_errors=True)
-        shutil.rmtree("../shaders/spirv", ignore_errors=True)
-        shutil.rmtree("../shaders/essl", ignore_errors=True)
-        shutil.rmtree("../shaders/dx11", ignore_errors=True)
+    parser = argparse.ArgumentParser(description="Compile bgfx shaders")
+    parser.add_argument("command", nargs="?", choices=["clean"])
+    parser.add_argument("--backend", action="append", choices=BACKENDS)
+    parser.add_argument("--shader", action="append", help="Source path relative to shader_src")
+    args = parser.parse_args()
+    if args.command == "clean":
+        for backend in BACKENDS:
+            shutil.rmtree(f"../shaders/{backend}", ignore_errors=True)
     else:
-        compile_all_shaders()
+        ensure_shader_compiler()
+        compile_all_shaders(args.backend, args.shader)

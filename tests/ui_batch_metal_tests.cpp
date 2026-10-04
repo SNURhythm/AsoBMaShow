@@ -148,9 +148,100 @@ bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
   return passed;
 }
 
+bool testDistanceFieldShadowThreshold() {
+  const auto output = bgfx::createTexture2D(
+      128, 128, false, 1, bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(
+      128, 128, false, 1, bgfx::TextureFormat::BGRA8,
+      BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  const auto framebuffer = bgfx::isValid(output)
+                               ? bgfx::createFrameBuffer(1, &output, false)
+                               : bgfx::FrameBufferHandle{bgfx::kInvalidHandle};
+  // Exact 0.5 needs a float texture: 8-bit alpha cannot represent the threshold.
+  // The first texel keeps the main glyph transparent while the shadow samples
+  // below, at, and above the threshold from the remaining three texels.
+  const std::array<float, 16> texels{
+      1, 1, 1, 0, 1, 1, 1, 0.25f, 1, 1, 1, 0.5f, 1, 1, 1, 0.75f};
+  const auto texture = bgfx::createTexture2D(
+      4, 1, false, 1, bgfx::TextureFormat::RGBA32F,
+      BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT,
+      bgfx::copy(texels.data(), sizeof(texels)));
+  bool passed = bgfx::isValid(output) && bgfx::isValid(readback) &&
+                bgfx::isValid(framebuffer) && bgfx::isValid(texture);
+  if (passed) {
+    float ortho[16];
+    bx::mtxOrtho(ortho, 0, 128, 128, 0, 0, 100, 0,
+                 bgfx::getCaps()->homogeneousDepth);
+    bgfx::setViewFrameBuffer(rendering::ui_view, framebuffer);
+    bgfx::setViewRect(rendering::ui_view, 0, 0, 128, 128);
+    bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+    bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+    bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_COLOR, 0x00000000U);
+    const auto program = rendering::ShaderManager::getInstance().getProgram(
+        "vs_skin_quad.bin", "fs_skin_distance_field.bin");
+    auto &uniforms = rendering::UniformCache::getInstance();
+    rendering::UiBatchRenderer renderer;
+    renderer.beginFrame();
+    renderer.begin();
+    for (int tile = 0; tile < 9; ++tile) {
+      const float x = static_cast<float>(tile * 12);
+      const std::array<rendering::PosTexCoord0Vertex, 4> vertices{{
+          {x, 0, 0, 0.125f, 0.5f}, {x + 12, 0, 0, 0.125f, 0.5f},
+          {x + 12, 16, 0, 0.125f, 0.5f}, {x, 16, 0, 0.125f, 0.5f}}};
+      constexpr std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+      rendering::UiBatchState state{
+          .program = program,
+          .texture = texture,
+          .sampler = uniforms.getSampler("s_texColor"),
+          .state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A};
+      state.textureOpacity = 0.5f; // Supply the shader's Color0 vertex stream.
+      state.uniforms[0] = {uniforms.getVec4("u_distanceParameters"),
+                            {0.5f, tile < 3 ? 0.0f : (tile < 6 ? 1.0e-20f : 0.125f),
+                             -0.25f * (1 + tile % 3), 0.0f}};
+      state.uniforms[1] = {uniforms.getVec4("u_shadowColor"), {1, 0, 0, 1}};
+      state.uniformCount = 2;
+      constexpr std::array<float, 4> outline{};
+      bgfx::setUniform(uniforms.getVec4("u_outlineColor"), outline.data());
+      passed = renderer.appendTextured(vertices, indices, state) && passed;
+      passed = renderer.flush() && passed;
+    }
+    renderer.end();
+    bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    auto frame = bgfx::frame();
+    std::vector<std::uint8_t> pixels(128 * 128 * 4);
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    for (int guard = 0; frame < ready && guard < 16; ++guard) {
+      frame = bgfx::frame();
+    }
+    passed = ready != std::numeric_limits<std::uint32_t>::max() &&
+             frame >= ready && passed;
+    constexpr std::array<int, 9> expectedAlpha{0, 255, 255, 0, 255, 255, 0, 128, 255};
+    for (int tile = 0; tile < 9; ++tile) {
+      const int alpha = pixels[(8 * 128 + tile * 12 + 6) * 4 + 3];
+      if (std::abs(alpha - expectedAlpha[tile]) > 1) {
+        std::cerr << "FAIL: distance-field shadow tile " << tile
+                  << " alpha " << alpha << " expected " << expectedAlpha[tile]
+                  << '\n';
+        passed = false;
+      }
+    }
+  } else {
+    std::cerr << "FAIL: distance-field test resources are unavailable\n";
+  }
+  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  if (bgfx::isValid(framebuffer)) bgfx::destroy(framebuffer);
+  if (bgfx::isValid(output)) bgfx::destroy(output);
+  if (bgfx::isValid(readback)) bgfx::destroy(readback);
+  if (bgfx::isValid(texture)) bgfx::destroy(texture);
+  return passed;
+}
+
 } // namespace
 
 int main() {
+  // CTest runs in the repository root; do not prefer stale shader copies next
+  // to the executable over the artifacts this test is supposed to validate.
+  SDL_SetHint(SDL_HINT_APPLE_RWFROMFILE_USE_RESOURCES, "0");
   bgfx::Init init;
   init.type = bgfx::RendererType::Metal;
   init.fallback = false;
@@ -160,7 +251,8 @@ int main() {
     std::cerr << "FAIL: headless Metal initialization failed\n";
     return 1;
   }
-  const bool passed = testMixedUiBatchesSurviveGrowthAndSceneChanges();
+  bool passed = testMixedUiBatchesSurviveGrowthAndSceneChanges();
+  passed = testDistanceFieldShadowThreshold() && passed;
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::frame();

@@ -1,65 +1,32 @@
+# Keep backend profiles, include dependencies, and ESSL compatibility handling
+# in the same compiler path used by CI and direct local builds.
+PYTHON ?= python3
 
-# TODO: compile all shaders for all profiles
-# example: shaderc -f shaders/fs_blurV.sc -o shaders/metal/fs_blurV.bin --platform osx --type f --profile metal -O 3
+.PHONY: all metal spirv essl dx11 clean print-shaders FORCE
 
-# get all shader files (fs_*.sc, vs_*.sc) with wildcard, patsubst
+all:
+	$(PYTHON) make.py
 
-FRAGMENT_SHADERS := $(wildcard fs_*.sc */fs_*.sc)
-
-
-FRAGMENT_SHADERS_BIN_METAL := $(foreach shader,$(FRAGMENT_SHADERS),../shaders/metal/$(subst .sc,.bin,$(shader)))
-
-FRAGMENT_SHADERS_BIN_VULKAN := $(foreach shader,$(FRAGMENT_SHADERS),../shaders/spirv/$(subst .sc,.bin,$(shader)))
-FRAGMENT_SHADERS_BIN_ESSL := $(foreach shader,$(FRAGMENT_SHADERS),../shaders/essl/$(subst .sc,.bin,$(shader)))
-VERTEX_SHADERS := $(wildcard vs_*.sc */vs_*.sc)
-VERTEX_SHADERS_BIN_METAL := $(foreach shader,$(VERTEX_SHADERS),../shaders/metal/$(subst .sc,.bin,$(shader)))
-VERTEX_SHADERS_BIN_VULKAN := $(foreach shader,$(VERTEX_SHADERS),../shaders/spirv/$(subst .sc,.bin,$(shader)))
-VERTEX_SHADERS_BIN_ESSL := $(foreach shader,$(VERTEX_SHADERS),../shaders/essl/$(subst .sc,.bin,$(shader)))
-
-all: metal spirv essl $(FRAGMENT_SHADERS_BIN_METAL) $(VERTEX_SHADERS_BIN_METAL) $(FRAGMENT_SHADERS_BIN_VULKAN) $(VERTEX_SHADERS_BIN_VULKAN) $(FRAGMENT_SHADERS_BIN_ESSL) $(VERTEX_SHADERS_BIN_ESSL)
-
-print-shaders:
-	@echo "$(FRAGMENT_SHADERS_BIN_METAL)"
+metal spirv essl dx11:
+	$(PYTHON) make.py --backend $@
 
 clean:
-	rm -rf ../shaders/metal ../shaders/spirv ../shaders/essl
+	$(PYTHON) make.py clean
 
-metal: metal_dir $(FRAGMENT_SHADERS_BIN_METAL) $(VERTEX_SHADERS_BIN_METAL)
+print-shaders:
+	@echo "$(patsubst %.sc,../shaders/metal/%.bin,$(wildcard fs_*.sc */fs_*.sc))"
 
-metal_dir:
-	mkdir -p ../shaders/metal
+# Always consult the Python dependency check, including for an existing target.
+../shaders/metal/%.bin: FORCE
+	$(PYTHON) make.py --backend metal --shader "$*.sc"
 
+../shaders/spirv/%.bin: FORCE
+	$(PYTHON) make.py --backend spirv --shader "$*.sc"
 
-$(FRAGMENT_SHADERS_BIN_METAL): $(FRAGMENT_SHADERS)
-	mkdir -p $(dir $@)
-	$(SHADERC) -f $< -o $@ --platform osx --type f --profile metal -O 3 -i .
+../shaders/essl/%.bin: FORCE
+	$(PYTHON) make.py --backend essl --shader "$*.sc"
 
-$(VERTEX_SHADERS_BIN_METAL): $(VERTEX_SHADERS)
-	mkdir -p $(dir $@)
-	$(SHADERC) -f $< -o $@ --platform osx --type v --profile metal -O 3 -i .
+../shaders/dx11/%.bin: FORCE
+	$(PYTHON) make.py --backend dx11 --shader "$*.sc"
 
-spirv: spirv_dir $(FRAGMENT_SHADERS_BIN_VULKAN) $(VERTEX_SHADERS_BIN_VULKAN)
-
-spirv_dir:
-	mkdir -p ../shaders/spirv
-
-$(FRAGMENT_SHADERS_BIN_VULKAN): $(FRAGMENT_SHADERS)
-	mkdir -p $(dir $@)
-	$(SHADERC) -f $< -o $@ --platform windows --type f --profile spirv -O 3 -i .
-
-$(VERTEX_SHADERS_BIN_VULKAN): $(VERTEX_SHADERS)
-	mkdir -p $(dir $@)
-	$(SHADERC) -f $< -o $@ --platform windows --type v --profile spirv -O 3 -i .
-
-essl: essl_dir $(FRAGMENT_SHADERS_BIN_ESSL) $(VERTEX_SHADERS_BIN_ESSL)
-
-essl_dir:
-	mkdir -p ../shaders/essl
-
-$(FRAGMENT_SHADERS_BIN_ESSL): $(FRAGMENT_SHADERS)
-	mkdir -p $(dir $@)
-	$(SHADERC) -f $< -o $@ --platform android --type f --profile 100_es -O 3 -i .
-
-$(VERTEX_SHADERS_BIN_ESSL): $(VERTEX_SHADERS)
-	mkdir -p $(dir $@)
-	$(SHADERC) -f $< -o $@ --platform android --type v --profile 100_es -O 3 -i .
+FORCE:

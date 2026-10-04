@@ -21,9 +21,15 @@ void main()
 
     float shadowDistance = texture2D(
         s_texColor, v_texcoord0 - u_distanceParameters.zw).a;
-    float shadowAlpha = smoothstep(0.5 - u_distanceParameters.y,
-                                   0.5 + u_distanceParameters.y,
-                                   shadowDistance);
+    float shadowEdge0 = 0.5 - u_distanceParameters.y;
+    float shadowEdge1 = 0.5 + u_distanceParameters.y;
+    // Zero smoothing (the default), or a width rounded away at float
+    // precision, is a hard threshold. smoothstep requires distinct edges.
+    float shadowAlpha = step(0.5, shadowDistance);
+    if (shadowEdge0 < shadowEdge1)
+    {
+        shadowAlpha = smoothstep(shadowEdge0, shadowEdge1, shadowDistance);
+    }
     vec4 shadow = vec4(u_shadowColor.rgb, u_shadowColor.a * shadowAlpha);
     gl_FragColor = mix(shadow, mainColor, mainColor.a);
 }

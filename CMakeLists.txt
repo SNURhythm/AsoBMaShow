@@ -2570,6 +2570,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(shader_compile_workflow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME shader_build_tests
+        COMMAND ${Python3_EXECUTABLE} -B -m unittest tests/shader_build_tests.py -v)
+    set_tests_properties(shader_build_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME windows_skin_shader_artifact_contract
         COMMAND ${Python3_EXECUTABLE}
                 -B
