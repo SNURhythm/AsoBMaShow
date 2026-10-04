@@ -78,6 +78,7 @@ public:
   void onLanguageChanged() override;
   void onPresentationOrientationWillChange() override;
   void onPresentationOrientationChanged() override;
+  bool renderViewBeforeScene(const View *) const override { return !previewActive; }
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;

@@ -549,7 +549,8 @@ void SettingsScene::appendSelectedSkinHudSettings(
         makeWrappedText(label, metrics.bodyTextSize, ui_theme::cyan()));
   };
   const auto appendNumeric =
-      [this, body, &metrics](const i18n::Text &label, const std::string &value,
+      [this, body, &metrics, includeBuiltInOnlySettings](const i18n::Text &label, const std::string &value,
+                             const std::string &defaultValue,
                              std::function<void(const std::string &)> apply) {
         auto *row = new View();
         row->setFlexDirection(FlexDirection::Row);
@@ -565,11 +566,19 @@ void SettingsScene::appendSelectedSkinHudSettings(
         auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
         input->setEditingText(value);
         input->onEditingFinished(
-            [this, input, apply = std::move(apply)](const std::string &) {
+            [this, input, apply](const std::string &) {
               apply(input->getText());
               lastLayoutWidth = -1;
             });
         row->addView(input);
+        if (includeBuiltInOnlySettings) {
+          auto *reset = makeResetButton(metrics);
+          reset->setOnClickListener([this, apply, defaultValue]() {
+            apply(defaultValue);
+            lastLayoutWidth = -1;
+          });
+          row->addView(reset);
+        }
         body->addView(row);
       };
   const auto appendToggle = [this, body,
@@ -607,6 +616,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
       i18n::message("settings.skins.indicator_y.percent_label"),
       std::to_string(
           judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY)),
+      std::to_string(judgementIndicatorYToPercent(AppSettings::kDefaultJudgementIndicatorY)),
       [this](const std::string &text) {
         context.settings.presentation().judgementIndicatorY = judgementIndicatorPercentToY(
             std::clamp(sanitizeOffsetComponent(
@@ -618,6 +628,8 @@ void SettingsScene::appendSelectedSkinHudSettings(
   appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
                 std::to_string(judgementIndicatorWidthScaleToPercent(
                     context.settings.presentation().judgementIndicatorWidthScale)),
+                std::to_string(judgementIndicatorWidthScaleToPercent(
+                    AppSettings::kDefaultJudgementIndicatorWidthScale)),
                 [this](const std::string &text) {
                   const int current = judgementIndicatorWidthScaleToPercent(
                       context.settings.presentation().judgementIndicatorWidthScale);
@@ -629,6 +641,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
   appendNumeric(
       i18n::message("settings.skins.indicator_range_ms.label"),
       std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds),
+      std::to_string(AppSettings::kDefaultJudgementIndicatorRangeMilliseconds),
       [this](const std::string &text) {
         context.settings.presentation().judgementIndicatorRangeMilliseconds =
             clampJudgementIndicatorRangeMilliseconds(sanitizeOffsetComponent(
@@ -704,6 +717,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
   appendNumeric(
       i18n::message("settings.skins.judge_text_y.percent_label"),
       std::to_string(judgementTextYToPercent(context.settings.presentation().judgementTextY)),
+      std::to_string(judgementTextYToPercent(AppSettings::kDefaultJudgementTextY)),
       [this](const std::string &text) {
         context.settings.presentation().judgementTextY = judgementTextPercentToY(std::clamp(
             sanitizeOffsetComponent(
@@ -785,6 +799,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                                 ui_theme::lime()));
   const auto appendNumeric =
       [this, body, &metrics](const i18n::Text &label, const std::string &value,
+                             const std::string &defaultValue,
                              std::function<void(const std::string &)> apply) {
         auto *row = new View();
         row->setFlexDirection(FlexDirection::Row);
@@ -800,16 +815,23 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
         input->setEditingText(value);
         input->onEditingFinished(
-            [this, input, apply = std::move(apply)](const std::string &) {
+            [this, input, apply](const std::string &) {
               apply(input->getText());
               lastLayoutWidth = -1;
             });
         row->addView(input);
+        auto *reset = makeResetButton(metrics);
+        reset->setOnClickListener([this, apply, defaultValue]() {
+          apply(defaultValue);
+          lastLayoutWidth = -1;
+        });
+        row->addView(reset);
         body->addView(row);
       };
 
   appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
                 formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
+                formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1),
                 [this](const std::string &text) {
                   context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
                       text, context.settings.presentation().laneAngleDegrees,
@@ -818,6 +840,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                   persistSettings();
                 });
   appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
+                formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1),
                 [this](const std::string &text) {
                   context.settings.presentation().laneLength = sanitizeViewportComponent(
                       text, context.settings.presentation().laneLength,
@@ -826,6 +849,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                 });
   appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
                 std::to_string(context.settings.presentation().laneBeamLengthPercent),
+                std::to_string(AppSettings::kDefaultLaneBeamLengthPercent),
                 [this](const std::string &text) {
                   context.settings.presentation().laneBeamLengthPercent =
                       clampLaneBeamLengthPercent(sanitizeOffsetComponent(
@@ -835,6 +859,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
   appendNumeric(i18n::message("settings.skins.play_area_width.key_mode", {{"keys", std::to_string(keyMode)}}),
                 formatPlayAreaWidthLabel(
                     context.settings.playAreaWidthForKeyMode(keyMode)),
+                formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue),
                 [this, keyMode](const std::string &text) {
                   context.settings.setPlayAreaWidthForKeyMode(
                       keyMode,

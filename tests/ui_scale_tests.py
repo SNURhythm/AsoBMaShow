@@ -144,6 +144,97 @@ int main() {
                             os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
+    def test_preview_actions_share_a_row_in_both_orientations(self):
+        root = Path(__file__).resolve().parents[1]
+        layout = (root / "src/scene/SettingsSceneLayout.cpp").read_text()
+        start = layout.index("  auto *previewActions = new View();")
+        actions = layout[start:layout.index("  rootLayout->addView(previewPanel);", start)]
+        source = r'''
+#include <yoga/Yoga.h>
+#include <cassert>
+#include <cmath>
+#include <initializer_list>
+enum class FlexDirection { Row=YGFlexDirectionRow, Column=YGFlexDirectionColumn };
+struct View {
+  YGNodeRef node=YGNodeNew();
+  View* setWidth(float v) { YGNodeStyleSetWidth(node,v); return this; }
+  View* setMinWidth(float v) { YGNodeStyleSetMinWidth(node,v); return this; }
+  View* setFlex(float v) { YGNodeStyleSetFlex(node,v); return this; }
+  View* setWidthPercent(float v) { YGNodeStyleSetWidthPercent(node,v); return this; }
+  void setFlexDirection(FlexDirection v) { YGNodeStyleSetFlexDirection(node,YGFlexDirection(v)); }
+  void setFlexWrap(YGWrap v) { YGNodeStyleSetFlexWrap(node,v); }
+  void setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v); }
+  void setAlignItems(YGAlign v) { YGNodeStyleSetAlignItems(node,v); }
+  void setJustifyContent(YGJustify v) { YGNodeStyleSetJustifyContent(node,v); }
+  void addView(View* v) { YGNodeInsertChild(node,v->node,YGNodeGetChildCount(node)); }
+};
+int main() {
+  for (bool compact : {false,true}) for (int width : {280,472,660}) {
+    struct { bool compact; } metrics{compact};
+    View panel,restart,done;
+    View *previewPanel=&panel,*restartButton=&restart,*doneButton=&done;
+    panel.setWidth(width);
+    restart.setWidth(300); done.setWidth(300);
+    YGNodeStyleSetHeight(restart.node,60); YGNodeStyleSetHeight(done.node,60);
+    PRODUCTION_ACTIONS
+    YGNodeCalculateLayout(panel.node,width,YGUndefined,YGDirectionLTR);
+    assert(YGNodeLayoutGetTop(restart.node)==YGNodeLayoutGetTop(done.node));
+    assert(YGNodeLayoutGetLeft(done.node)>=YGNodeLayoutGetWidth(restart.node));
+    assert(YGNodeLayoutGetLeft(done.node)+YGNodeLayoutGetWidth(done.node)<=width);
+    assert(std::abs(YGNodeLayoutGetWidth(done.node)-YGNodeLayoutGetWidth(restart.node))<=1);
+  }
+}
+'''.replace("PRODUCTION_ACTIONS", actions)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-preview-actions-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), str(path),
+                            os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_preview_controls_render_after_hud(self):
+        root = Path(__file__).resolve().parents[1]
+        base = (root / "src/scene/Scene.h").read_text()
+        settings = (root / "src/scene/SettingsScene.h").read_text()
+        render = extract(base, "void render()")
+        policy = extract(settings if "renderViewBeforeScene(" in settings else base,
+                         "bool renderViewBeforeScene(")
+        source = r'''
+#include <cassert>
+#include <string>
+#include <vector>
+std::vector<std::string> draws;
+struct RenderContext { explicit RenderContext(int) {} struct UiBatchScope { explicit UiBatchScope(RenderContext&) {} }; };
+struct View { void render(RenderContext&) { draws.push_back("settings pane"); } };
+struct Scene {
+  struct { int uiBatchRenderer=0; } context;
+  std::vector<View*> views;
+  virtual bool renderViewBeforeScene(const View*) const { return true; }
+  virtual void renderScene() { draws.push_back("HUD"); }
+  PRODUCTION_RENDER
+};
+struct SettingsScene : Scene {
+  bool previewActive=true;
+  PRODUCTION_POLICY
+};
+int main() {
+  View pane;
+  SettingsScene settings;
+  settings.views={&pane};
+  settings.render();
+  assert((draws==std::vector<std::string>{"HUD","settings pane"}));
+  draws.clear();settings.previewActive=false;settings.render();
+  assert((draws==std::vector<std::string>{"settings pane","HUD"}));
+}
+'''.replace("PRODUCTION_RENDER", render).replace("PRODUCTION_POLICY", policy)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-preview-layering-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_gameplay_title_uses_bottom_right_only_in_portrait(self):
         root = Path(__file__).resolve().parents[1]
         renderer = (root / "src/scene/play/BMSRenderer.cpp").read_text()

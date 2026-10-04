@@ -295,44 +295,70 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     visibleTimeControls->addView(visibleTimeModeRow);
   }
 
-  auto *fixedHispeedChoices = new View();
-  fixedHispeedChoices->setFlexDirection(FlexDirection::Row);
-  fixedHispeedChoices->setFlexWrap(YGWrapWrap);
-  fixedHispeedChoices->setAlignItems(YGAlignCenter);
-  fixedHispeedChoices->setGap(metrics.compact ? 6.0F : 8.0F);
-  auto *fixedHispeedLabel =
-      makeText(i18n::message("settings.visible_time_controls.fixed_hi_speed.label"), metrics.smallTextSize,
-               ui_theme::textSecondary(), TextView::LEFT, TextView::MIDDLE);
-  fixedHispeedLabel->setMinWidth(0.0F);
-  fixedHispeedLabel->setFlexShrink(1.0F);
-  fixedHispeedChoices->addView(fixedHispeedLabel);
-  for (const auto mode :
-       {AppSettings::HiSpeedFixMode::Off, AppSettings::HiSpeedFixMode::Start,
-        AppSettings::HiSpeedFixMode::Max, AppSettings::HiSpeedFixMode::Main,
-        AppSettings::HiSpeedFixMode::Min}) {
-    auto *choiceLabel = makeText(formatVisibleTimeBpmStrategyLabel(mode),
-                                 metrics.smallTextSize, ui_theme::textPrimary(),
-                                 TextView::CENTER, TextView::MIDDLE);
-    const int width =
-        std::max(metrics.compact ? 84 : 96, choiceLabel->textureWidth() + 28);
-    auto *choice =
-        context.settings.hispeedFixMode == mode
-            ? makeAccentButton(width, metrics.actionButtonHeight,
-                               choiceLabel,
-                               ui_theme::cyan())
-            : makeControlButton(width, metrics.actionButtonHeight, choiceLabel);
-    choice->setOnClickListener([this, mode]() {
-      if (context.settings.hispeedFixMode == mode) {
-        return;
-      }
-      context.settings.hispeedFixMode = mode;
-      persistSettings();
-      syncPreviewPresentationConfiguration();
-      lastLayoutWidth = -1;
-    });
-    fixedHispeedChoices->addView(choice);
+  if (compactAdjustments) {
+    auto *fixedHispeed = new DropdownView(
+        {.onOptionSelected = [this](const std::string &id) {
+          context.settings.hispeedFixMode =
+              static_cast<AppSettings::HiSpeedFixMode>(std::stoi(id));
+          persistSettings();
+          syncPreviewPresentationConfiguration();
+        }}, overlayPortal);
+    std::vector<DropdownView::Option> modes;
+    for (const auto mode :
+         {AppSettings::HiSpeedFixMode::Off, AppSettings::HiSpeedFixMode::Start,
+          AppSettings::HiSpeedFixMode::Max, AppSettings::HiSpeedFixMode::Main,
+          AppSettings::HiSpeedFixMode::Min}) {
+      modes.push_back({.id = std::to_string(static_cast<int>(mode)),
+                       .label = formatVisibleTimeBpmStrategyLabel(mode)});
+    }
+    visibleTimeControls->addView(makeWrappedText(
+        i18n::message("settings.visible_time_controls.fixed_hi_speed.label"),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    fixedHispeed->refresh({.selectedId = std::to_string(static_cast<int>(context.settings.hispeedFixMode)),
+                           .options = std::move(modes), .maxVisibleItems = 5});
+    fixedHispeed->setWidthPercent(100)->setMinWidth(0);
+    fixedHispeed->setHeight(metrics.actionButtonHeight);
+    visibleTimeControls->addView(fixedHispeed);
+  } else {
+    auto *fixedHispeedChoices = new View();
+    fixedHispeedChoices->setFlexDirection(FlexDirection::Row);
+    fixedHispeedChoices->setFlexWrap(YGWrapWrap);
+    fixedHispeedChoices->setAlignItems(YGAlignCenter);
+    fixedHispeedChoices->setGap(metrics.compact ? 6.0F : 8.0F);
+    auto *fixedHispeedLabel =
+        makeText(i18n::message("settings.visible_time_controls.fixed_hi_speed.label"), metrics.smallTextSize,
+                 ui_theme::textSecondary(), TextView::LEFT, TextView::MIDDLE);
+    fixedHispeedLabel->setMinWidth(0.0F);
+    fixedHispeedLabel->setFlexShrink(1.0F);
+    fixedHispeedChoices->addView(fixedHispeedLabel);
+    for (const auto mode :
+         {AppSettings::HiSpeedFixMode::Off, AppSettings::HiSpeedFixMode::Start,
+          AppSettings::HiSpeedFixMode::Max, AppSettings::HiSpeedFixMode::Main,
+          AppSettings::HiSpeedFixMode::Min}) {
+      auto *choiceLabel = makeText(formatVisibleTimeBpmStrategyLabel(mode),
+                                   metrics.smallTextSize, ui_theme::textPrimary(),
+                                   TextView::CENTER, TextView::MIDDLE);
+      const int width =
+          std::max(metrics.compact ? 84 : 96, choiceLabel->textureWidth() + 28);
+      auto *choice =
+          context.settings.hispeedFixMode == mode
+              ? makeAccentButton(width, metrics.actionButtonHeight,
+                                 choiceLabel,
+                                 ui_theme::cyan())
+              : makeControlButton(width, metrics.actionButtonHeight, choiceLabel);
+      choice->setOnClickListener([this, mode]() {
+        if (context.settings.hispeedFixMode == mode) {
+          return;
+        }
+        context.settings.hispeedFixMode = mode;
+        persistSettings();
+        syncPreviewPresentationConfiguration();
+        lastLayoutWidth = -1;
+      });
+      fixedHispeedChoices->addView(choice);
+    }
+    visibleTimeControls->addView(fixedHispeedChoices);
   }
-  visibleTimeControls->addView(fixedHispeedChoices);
   auto *visibleTimeValueControls = new View();
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
   visibleTimeValueControls->setFlexWrap(YGWrapWrap);
@@ -985,9 +1011,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   doneButton->setOnClickListener([this]() { stopLanePreview(); });
 
   auto *previewActions = new View();
-  previewActions->setFlexDirection(metrics.compact ? FlexDirection::Column
-                                                   : FlexDirection::Row);
-  previewActions->setFlexWrap(YGWrapWrap);
+  previewActions->setFlexDirection(FlexDirection::Row);
+  for (auto *button : {restartButton, doneButton}) {
+    button->setWidth(0)->setMinWidth(0)->setFlex(1);
+  }
   previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
   previewActions->setAlignItems(YGAlignCenter);
   previewActions->setWidthPercent(100.0f);
@@ -2753,7 +2780,14 @@ void SettingsScene::initView() {
   rootLayout->setGap(static_cast<float>(metrics.rootGap));
 
   if (previewActive) {
+    overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                      rendering::window_height);
+    overlayPortal->setPositionType(YGPositionTypeAbsolute);
+    overlayPortal->setPosition(Edge::Left, 0);
+    overlayPortal->setPosition(Edge::Top, 0);
+    overlayPortal->setZIndex(900);
     buildPreviewLayout(metrics);
+    rootLayout->addView(overlayPortal);
     return;
   }
 
