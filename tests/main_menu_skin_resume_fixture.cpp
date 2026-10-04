@@ -94,7 +94,7 @@ int main() {
     Lifecycle lifecycle;
     menu.context.sceneManager = &manager;
     if (scenario < 3) menu.context.gameplaySkinLifecycle = &lifecycle;
-    if (scenario == 4) menu.context.settings.skin.selectedSkinEntries.insert(5);
+    if (scenario == 4) menu.context.settings.presentation().skin.selectedSkinEntries.insert(5);
     menu.onResume();
     assert(menu.refreshed == 1 && !manager.current && lifecycle.calls == 0);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

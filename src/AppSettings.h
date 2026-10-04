@@ -4,6 +4,7 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
 #include "skin/SkinProfileSettings.h"
 
@@ -191,45 +192,79 @@ public:
   int bgaBrightnessPercent = kDefaultBgaBrightnessPercent;
   float bgaBlurStrength = kDefaultBgaBlurStrength;
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
-  float laneAngleDegrees = kDefaultLaneAngleDegrees;
-  float laneLength = kDefaultLaneLength;
-  int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
-  int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
-  bool laneCoverEnabled = true;
-  // PlayConfig's Lift/HIDDEN configuration. The pinned source defaults each
-  // ratio to 0.1 while both planes begin disabled.
-  bool liftEnabled = false;
-  float liftRatio = 0.1F;
-  bool hiddenEnabled = false;
-  float hiddenRatio = 0.1F;
+  using PresentationOrientation = player_settings::PresentationOrientation;
+  struct PresentationSettings {
+    float laneAngleDegrees = kDefaultLaneAngleDegrees;
+    float laneLength = kDefaultLaneLength;
+    int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
+    int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
+    bool laneCoverEnabled = true;
+    // PlayConfig's Lift/HIDDEN configuration. The pinned source defaults each
+    // ratio to 0.1 while both planes begin disabled.
+    bool liftEnabled = false;
+    float liftRatio = 0.1F;
+    bool hiddenEnabled = false;
+    float hiddenRatio = 0.1F;
+    float playAreaWidth4K = kDefaultPlayAreaWidth;
+    float playAreaWidth5K = kDefaultPlayAreaWidth;
+    float playAreaWidth6K = kDefaultPlayAreaWidth;
+    float playAreaWidth7K = kDefaultPlayAreaWidth;
+    float playAreaWidth8K = kDefaultPlayAreaWidth;
+    float playAreaWidth10K = kDefaultPlayAreaWidth;
+    float playAreaWidth14K = kDefaultPlayAreaWidth;
+    NotePriorityMode notePriorityMode = NotePriorityMode::Combo;
+    bool judgementIndicatorEnabled = true;
+    float judgementIndicatorY = kDefaultJudgementIndicatorY;
+    float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+    int judgementIndicatorRangeMilliseconds =
+        kDefaultJudgementIndicatorRangeMilliseconds;
+    float judgementTextY = kDefaultJudgementTextY;
+    JudgementIndicatorRenderMode judgementIndicatorRenderMode =
+        JudgementIndicatorRenderMode::World3D;
+    bool judgementCounterEnabled = true;
+    JudgementCounterPosition judgementCounterPosition =
+        JudgementCounterPosition::Right;
+    JudgementTimingDisplayCriteria judgementTimingFastSlowCriteria =
+        JudgementTimingDisplayCriteria::GreatOrBelow;
+    JudgementTimingDisplayCriteria judgementTimingMillisecondsCriteria =
+        JudgementTimingDisplayCriteria::GreatOrBelow;
+    GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
+    skin::SkinProfileSettings skin;
+    explicit PresentationSettings(PresentationOrientation orientation =
+                                      PresentationOrientation::Landscape) {
+      const auto policy = player_settings::presentationGeometryPolicy(orientation);
+      laneAngleDegrees = policy.angle.defaultValue;
+      laneLength = policy.length.defaultValue;
+      playAreaWidth4K = playAreaWidth5K = playAreaWidth6K = playAreaWidth7K =
+          playAreaWidth8K = playAreaWidth10K = playAreaWidth14K = policy.width.defaultValue;
+    }
+    void sanitize(PresentationOrientation orientation);
+    bool operator==(const PresentationSettings &) const = default;
+  };
+
+  PresentationSettings &presentation() {
+    return presentation(activeOrientation_.value);
+  }
+  const PresentationSettings &presentation() const {
+    return presentation(activeOrientation_.value);
+  }
+  PresentationSettings &presentation(PresentationOrientation orientation) {
+    return presentations_[orientation == PresentationOrientation::Portrait ? 1 : 0];
+  }
+  const PresentationSettings &presentation(PresentationOrientation orientation) const {
+    return presentations_[orientation == PresentationOrientation::Portrait ? 1 : 0];
+  }
+  PresentationOrientation activePresentationOrientation() const {
+    return activeOrientation_.value;
+  }
+  void setActivePresentationOrientation(PresentationOrientation orientation) {
+    activeOrientation_.value = orientation;
+  }
+  skin::SkinSafetyLevel skinSafetyLevel = skin::SkinSafetyLevel::Standard;
   // Matches PlayConfig.hispeedautoadjust. When lane cover changes during play,
   // keep the green number at the current BPM instead of the configured
   // reference BPM.
   bool hispeedAutoAdjust = false;
-  float playAreaWidth4K = kDefaultPlayAreaWidth;
-  float playAreaWidth5K = kDefaultPlayAreaWidth;
-  float playAreaWidth6K = kDefaultPlayAreaWidth;
-  float playAreaWidth7K = kDefaultPlayAreaWidth;
-  float playAreaWidth8K = kDefaultPlayAreaWidth;
-  float playAreaWidth10K = kDefaultPlayAreaWidth;
-  float playAreaWidth14K = kDefaultPlayAreaWidth;
-  NotePriorityMode notePriorityMode = NotePriorityMode::Combo;
-  bool judgementIndicatorEnabled = true;
-  float judgementIndicatorY = kDefaultJudgementIndicatorY;
-  float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
-  int judgementIndicatorRangeMilliseconds =
-      kDefaultJudgementIndicatorRangeMilliseconds;
-  float judgementTextY = kDefaultJudgementTextY;
-  JudgementIndicatorRenderMode judgementIndicatorRenderMode =
-      JudgementIndicatorRenderMode::World3D;
-  bool judgementCounterEnabled = true;
-  JudgementCounterPosition judgementCounterPosition =
-      JudgementCounterPosition::Right;
-  JudgementTimingDisplayCriteria judgementTimingFastSlowCriteria =
-      JudgementTimingDisplayCriteria::GreatOrBelow;
-  JudgementTimingDisplayCriteria judgementTimingMillisecondsCriteria =
-      JudgementTimingDisplayCriteria::GreatOrBelow;
-  GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   screen_orientation::Mode screenOrientation = screen_orientation::Mode::Auto;
   bool systemPlaybackShowJacket = true;
@@ -299,8 +334,6 @@ public:
   std::map<std::string, ir::IrProviderSettings> irProviders = {
       {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},
   };
-  skin::SkinProfileSettings skin;
-
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;
   void setPlayAreaWidthForKeyMode(int keyMode, float width);
@@ -330,6 +363,14 @@ public:
   bool operator==(const AppSettings &) const = default;
 
 private:
+  // Viewport selection is runtime context, not a persisted preference.
+  struct RuntimeOrientation {
+    PresentationOrientation value = PresentationOrientation::Landscape;
+    bool operator==(const RuntimeOrientation &) const { return true; }
+  } activeOrientation_;
+  std::array<PresentationSettings, 2> presentations_ = {
+      PresentationSettings{PresentationOrientation::Landscape},
+      PresentationSettings{PresentationOrientation::Portrait}};
   friend class AppSettingsStore;
   static bool parseLegacyCfg(std::istream &input, AppSettings &settings,
                              std::vector<std::string> *diagnostics = nullptr);

@@ -1760,7 +1760,7 @@ bool GamePlayScene::enterPracticeMenu() {
       return false;
     }
     rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
-        options, *chart, context.settings.notePriorityMode);
+        options, *chart, context.settings.presentation().notePriorityMode);
     if (!rulesetPolicyBuild.built()) {
       showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
       return false;
@@ -1809,7 +1809,7 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   }
 
   rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
-      options, *chart, context.settings.notePriorityMode);
+      options, *chart, context.settings.presentation().notePriorityMode);
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
     return false;
@@ -2051,7 +2051,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   gameplay::GameplaySimulationConfig simulationConfig{
       .judge = rulesetPolicyBuild.policy->judge,
       .gaugeRules = rulesetPolicyBuild.policy->gauge,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = context.settings.presentation().notePriorityMode,
       .attempt =
           {
               .initialGaugeType = state->selectedGaugeType,
@@ -2883,7 +2883,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
-          this->options, *this->chart, context.settings.notePriorityMode)),
+          this->options, *this->chart, context.settings.presentation().notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
@@ -2905,7 +2905,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
                                        this->chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
-          this->options, *this->chart, context.settings.notePriorityMode)),
+          this->options, *this->chart, context.settings.presentation().notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
@@ -2968,20 +2968,20 @@ void GamePlayScene::init() {
   const auto replayInitialLaneCover =
       isReplayPlayback() && !courseNoSpeed()
           ? replayInitialLaneCoverState(
-                *options.replayData, context.settings.noteStartPositionPercent,
-                context.settings.laneCoverEnabled)
+                *options.replayData, context.settings.presentation().noteStartPositionPercent,
+                context.settings.presentation().laneCoverEnabled)
           : ReplayInitialLaneCoverState{
                 .percent = effectiveNoteStartPositionPercent(),
-                .enabled = context.settings.laneCoverEnabled};
+                .enabled = context.settings.presentation().laneCoverEnabled};
   playfieldLaneCoverEnabled = replayInitialLaneCover.enabled;
   playfieldLaneCoverPercent = replayInitialLaneCover.percent;
   playfieldLaneCoverPercentExact =
       static_cast<float>(playfieldLaneCoverPercent);
-  playfieldLiftEnabled = context.settings.liftEnabled;
-  playfieldLiftRatio = courseNoSpeed() ? 0.0F : context.settings.liftRatio;
-  playfieldHiddenEnabled = context.settings.hiddenEnabled;
+  playfieldLiftEnabled = context.settings.presentation().liftEnabled;
+  playfieldLiftRatio = courseNoSpeed() ? 0.0F : context.settings.presentation().liftRatio;
+  playfieldHiddenEnabled = context.settings.presentation().hiddenEnabled;
   playfieldHiddenRatio =
-      courseNoSpeed() ? 0.0F : context.settings.hiddenRatio;
+      courseNoSpeed() ? 0.0F : context.settings.presentation().hiddenRatio;
   playfieldChangeLiftTarget = true;
   playfieldHispeedState.emplace(
       gameplay_hispeed::Settings{
@@ -3099,7 +3099,7 @@ void GamePlayScene::init() {
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
-      .laneBeamLengthPercent = context.settings.laneBeamLengthPercent,
+      .laneBeamLengthPercent = context.settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
@@ -3130,28 +3130,28 @@ void GamePlayScene::init() {
       .constantScroll = !courseNoSpeed() && context.settings.constantScroll,
       .constantFadeInMilliseconds =
           context.settings.constantFadeInMilliseconds,
-      .judgementIndicatorEnabled = context.settings.judgementIndicatorEnabled,
-      .judgementIndicatorY = context.settings.judgementIndicatorY,
+      .judgementIndicatorEnabled = context.settings.presentation().judgementIndicatorEnabled,
+      .judgementIndicatorY = context.settings.presentation().judgementIndicatorY,
       .judgementIndicatorWidthScale =
-          context.settings.judgementIndicatorWidthScale,
+          context.settings.presentation().judgementIndicatorWidthScale,
       .judgementIndicatorHudMode =
-          context.settings.judgementIndicatorRenderMode ==
+          context.settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
-          context.settings.judgementIndicatorRangeMilliseconds,
-      .judgementTextY = context.settings.judgementTextY,
-      .judgementCounterEnabled = context.settings.judgementCounterEnabled,
-      .judgementCounterPosition = context.settings.judgementCounterPosition,
-      .fastSlowCriteria = context.settings.judgementTimingFastSlowCriteria,
+          context.settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextY = context.settings.presentation().judgementTextY,
+      .judgementCounterEnabled = context.settings.presentation().judgementCounterEnabled,
+      .judgementCounterPosition = context.settings.presentation().judgementCounterPosition,
+      .fastSlowCriteria = context.settings.presentation().judgementTimingFastSlowCriteria,
       .millisecondsCriteria =
-          context.settings.judgementTimingMillisecondsCriteria,
-      .gaugeBarPosition = context.settings.gaugeBarPosition,
+          context.settings.presentation().judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = context.settings.presentation().gaugeBarPosition,
       .touchVisualizationEnabled = options.touchVisualizationEnabled.value_or(
           context.settings.touchVisualizationEnabled),
       .replayGhostRenderingEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
       .judgeAlgorithmImageIndex =
-          beatorajaJudgeAlgorithmImageIndex(context.settings.notePriorityMode),
+          beatorajaJudgeAlgorithmImageIndex(context.settings.presentation().notePriorityMode),
   };
   playfieldVisualStateStore->setConfiguration(playfieldPresentationConfiguration);
   presentation->configure(playfieldPresentationConfiguration);
@@ -4383,7 +4383,7 @@ void GamePlayScene::applyStartSelectControlActions(
           const int nextPercent = static_cast<int>(std::lround(next));
           if (next != playfieldLaneCoverPercentExact) {
             playfieldLaneCoverPercentExact = next;
-            context.settings.noteStartPositionPercent = nextPercent;
+            context.settings.presentation().noteStartPositionPercent = nextPercent;
             playfieldLaneCoverPercent = nextPercent;
             playfieldHispeedState->setLaneCover(
                 nextPercent, currentNoteDisplayBpm(),
@@ -4404,7 +4404,7 @@ void GamePlayScene::applyStartSelectControlActions(
               0.0F, 1.0F);
           if (next != playfieldLiftRatio) {
             playfieldLiftRatio = next;
-            context.settings.liftRatio = next;
+            context.settings.presentation().liftRatio = next;
             playfieldHispeedState->setLaneCover(
                 playfieldLaneCoverPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
@@ -4418,7 +4418,7 @@ void GamePlayScene::applyStartSelectControlActions(
               0.0F, 1.0F);
           if (next != playfieldHiddenRatio) {
             playfieldHiddenRatio = next;
-            context.settings.hiddenRatio = next;
+            context.settings.presentation().hiddenRatio = next;
             playfieldHispeedState->setLaneCover(
                 playfieldLaneCoverPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
@@ -4431,7 +4431,7 @@ void GamePlayScene::applyStartSelectControlActions(
     case gameplay::StartSelectControlActionKind::ToggleLaneCover:
       if (!courseNoSpeed()) {
         playfieldLaneCoverEnabled = !playfieldLaneCoverEnabled;
-        context.settings.laneCoverEnabled = playfieldLaneCoverEnabled;
+        context.settings.presentation().laneCoverEnabled = playfieldLaneCoverEnabled;
         playfieldHispeedState->setLaneCoverEnabled(playfieldLaneCoverEnabled);
         playfieldLaneCoverResetPending = false;
         refreshRuntimePresentationConfiguration();
@@ -4542,14 +4542,14 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   if (courseNoSpeed() || deltaPercent == 0) {
     return;
   }
-  const int previous = context.settings.noteStartPositionPercent;
+  const int previous = context.settings.presentation().noteStartPositionPercent;
   const int next = std::clamp(previous + deltaPercent,
                               AppSettings::kMinNoteStartPositionPercent,
                               AppSettings::kMaxNoteStartPositionPercent);
   if (next == previous) {
     return;
   }
-  context.settings.noteStartPositionPercent = next;
+  context.settings.presentation().noteStartPositionPercent = next;
   playfieldLaneCoverPercent = next;
   playfieldLaneCoverPercentExact = static_cast<float>(next);
   playfieldHispeedState->setLaneCover(
@@ -4733,7 +4733,7 @@ int GamePlayScene::effectiveVisibleTimeDurationMilliseconds() const {
 
 int GamePlayScene::effectiveNoteStartPositionPercent() const {
   return courseNoSpeed() ? AppSettings::kDefaultNoteStartPositionPercent
-                         : context.settings.noteStartPositionPercent;
+                         : context.settings.presentation().noteStartPositionPercent;
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
@@ -7153,7 +7153,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       .laneBeamTimeMicros = playfieldVisualEventTimeMicros(
           gameplayTimeMicros, getVisualOffsetMicros()),
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = context.settings.presentation().notePriorityMode,
   };
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
@@ -7238,7 +7238,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       .laneBeamTimeMicros = playfieldVisualEventTimeMicros(
           gameplayTimeMicros, getVisualOffsetMicros()),
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = context.settings.presentation().notePriorityMode,
   };
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
@@ -8067,10 +8067,10 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
       floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
 
   auto applyDrag = [&]() -> bool {
-    const int previous = context.settings.noteStartPositionPercent;
+    const int previous = context.settings.presentation().noteStartPositionPercent;
     const int next = builtInPresentation->dragLaneCoverHandleTo(
         renderX, renderY, floatingLaneCoverDragOffsetY);
-    context.settings.noteStartPositionPercent = next;
+    context.settings.presentation().noteStartPositionPercent = next;
     playfieldLaneCoverPercent = next;
     playfieldLaneCoverPercentExact = static_cast<float>(next);
     if (next == previous) {

@@ -271,8 +271,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
                        .hispeed = creation.settings.gameplayHispeed,
                        .margin = creation.settings.hispeedMargin,
                        .laneCoverPercent =
-                           creation.settings.noteStartPositionPercent,
-                       .laneCoverEnabled = creation.settings.laneCoverEnabled},
+                           creation.settings.presentation().noteStartPositionPercent,
+                       .laneCoverEnabled = creation.settings.presentation().laneCoverEnabled},
                       gameplay_hispeed::summarizeChartBpm(creation.chart)),
                   std::move(runtimeSkinConfigurationSelection),
                   graphJudgeWindows, graphGaugeHistoryCapacity)),

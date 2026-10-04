@@ -26,8 +26,8 @@ previewPresentationConfiguration(const AppSettings &settings,
        .durationMilliseconds = settings.visibleTimeDurationMilliseconds,
        .hispeed = settings.gameplayHispeed,
        .margin = settings.hispeedMargin,
-       .laneCoverPercent = settings.noteStartPositionPercent,
-       .laneCoverEnabled = settings.laneCoverEnabled},
+       .laneCoverPercent = settings.presentation().noteStartPositionPercent,
+       .laneCoverEnabled = settings.presentation().laneCoverEnabled},
       gameplay_hispeed::summarizeChartBpm(chart));
   return {
       .visibleTimeDurationMilliseconds =
@@ -38,28 +38,28 @@ previewPresentationConfiguration(const AppSettings &settings,
       .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
-      .laneCoverEnabled = settings.laneCoverEnabled,
-      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
-      .noteStartPositionPercent = settings.noteStartPositionPercent,
+      .laneCoverEnabled = settings.presentation().laneCoverEnabled,
+      .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
+      .noteStartPositionPercent = settings.presentation().noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .markProcessedNotes = settings.markProcessedNotes,
-      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
-      .judgementIndicatorY = settings.judgementIndicatorY,
+      .judgementIndicatorEnabled = settings.presentation().judgementIndicatorEnabled,
+      .judgementIndicatorY = settings.presentation().judgementIndicatorY,
       .judgementIndicatorWidthScale =
-          settings.judgementIndicatorWidthScale,
+          settings.presentation().judgementIndicatorWidthScale,
       .judgementIndicatorHudMode =
-          settings.judgementIndicatorRenderMode ==
+          settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
-          settings.judgementIndicatorRangeMilliseconds,
-      .judgementTextY = settings.judgementTextY,
-      .judgementCounterEnabled = settings.judgementCounterEnabled,
-      .judgementCounterPosition = settings.judgementCounterPosition,
-      .fastSlowCriteria = settings.judgementTimingFastSlowCriteria,
+          settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextY = settings.presentation().judgementTextY,
+      .judgementCounterEnabled = settings.presentation().judgementCounterEnabled,
+      .judgementCounterPosition = settings.presentation().judgementCounterPosition,
+      .fastSlowCriteria = settings.presentation().judgementTimingFastSlowCriteria,
       .millisecondsCriteria =
-          settings.judgementTimingMillisecondsCriteria,
-      .gaugeBarPosition = settings.gaugeBarPosition,
+          settings.presentation().judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = settings.presentation().gaugeBarPosition,
       .touchVisualizationEnabled = settings.touchVisualizationEnabled,
       .replayGhostRenderingEnabled = false,
   };
@@ -430,7 +430,7 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
       .songTimeMicros = previewElapsedMicros,
       .laneBeamTimeMicros = previewElapsedMicros,
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = context.settings.presentation().notePriorityMode,
   };
   auto result =
       previewLaneController->pressLane(mainLane, compensateLane, inputContext);
@@ -454,7 +454,7 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
       .songTimeMicros = previewElapsedMicros,
       .laneBeamTimeMicros = previewElapsedMicros,
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = context.settings.presentation().notePriorityMode,
   };
   auto result =
       previewLaneController->releaseLane(lane, inputContext, isBackSpin);

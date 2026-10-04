@@ -227,7 +227,7 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
   expect(second.ok() && second.profile,
          "reverse-order merge creates an inactive blocker profile");
   AppSettings active;
-  active.skin = selectedSettings(1);
+  active.presentation().skin = selectedSettings(1);
   active.irProviders["tachi"].enabled = false;
   BlockingStore store;
   store.failCall = 3;
@@ -280,7 +280,7 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
                  skin::SkinProfileCommitResult::Status::RetryableFailure &&
              loaded.status == AppSettingsLoadStatus::Loaded &&
              loaded.settings.irProviders.at("tachi").enabled &&
-             loaded.settings.skin.entries.at(sampleEntry())
+             loaded.settings.presentation().skin.entries.at(sampleEntry())
                      .options.at("variant") == 1,
          "failed skin successor leaves the ordinary edit and prior skin "
          "durable");
@@ -304,7 +304,7 @@ void testFullSaveKeepsOptimisticSkinWhileSuccessorIsPersisting() {
   expect(inactive.ok() && inactive.profile,
          "full-save skin coherence creates an inactive blocker");
   AppSettings active;
-  active.skin = selectedSettings(1);
+  active.presentation().skin = selectedSettings(1);
   QueuedSaveStore store;
   TestSignal ordinarySaveAdmitted;
   ProfileSettingsPersistenceCoordinator coordinator(
@@ -346,8 +346,8 @@ void testFullSaveKeepsOptimisticSkinWhileSuccessorIsPersisting() {
   store.releaseFirstSave();
   store.waitUntilThirdEntered();
   fullSave.join();
-  expect(active.skin.entries.at(sampleEntry()).options.at("variant") == 2 &&
-             ordinary.skin.entries.at(sampleEntry()).options.at("variant") ==
+  expect(active.presentation().skin.entries.at(sampleEntry()).options.at("variant") == 2 &&
+             ordinary.presentation().skin.entries.at(sampleEntry()).options.at("variant") ==
                  2,
          "completed full save keeps the newer optimistic skin until its save completes");
 
@@ -445,7 +445,7 @@ void testPostAdmissionFailureRollsBackWithoutPublishingOrEnqueueing() {
                  "skin_profile_ticket_unknown" &&
              afterFailure.generation == base.generation &&
              afterFailure.settings == base.settings &&
-             active.skin == base.settings && saveCalls == 0,
+             active.presentation().skin == base.settings && saveCalls == 0,
          "post-admission exception rolls back state and leaves no pollable "
          "ticket or queued I/O");
 
@@ -542,8 +542,8 @@ void testOrdinarySaveMergesPendingSkinAndLatestIrCandidate() {
   const auto committed = waitForCommit(coordinator, pending.ticket);
   expect(committed.status == skin::SkinProfileCommitResult::Status::Persisted,
          "pending skin commit remains independently pollable");
-  expect(ordinary.skin.gameplayCompatibilityEnabled &&
-             ordinary.skin.entries.at(sampleEntry()).options.at("variant") ==
+  expect(ordinary.presentation().skin.gameplayCompatibilityEnabled &&
+             ordinary.presentation().skin.entries.at(sampleEntry()).options.at("variant") ==
                  42 &&
              ordinary.irProviders.at("tachi").enabled,
          "ordinary candidate merges durable skin and keeps the IR edit");
@@ -671,7 +671,7 @@ void testSnapshotWorkerCannotReconcileAcrossInventoryMutation() {
                           ? skin::makeSkinProfileId(late.profile->id)
                           : std::optional<skin::SkinProfileId>{};
   AppSettings lateSettings;
-  lateSettings.skin = selectedSettings(67);
+  lateSettings.presentation().skin = selectedSettings(67);
   if (lateId) {
     coordinator.bindCommittedActiveProfile(*lateId, lateSettings);
   }
@@ -685,7 +685,7 @@ void testSnapshotWorkerCannotReconcileAcrossInventoryMutation() {
   const auto lateSnapshot =
       lateId ? coordinator.snapshot(*lateId) : skin::VersionedSkinProfileSettings{};
   expect(result && result->cancelled && !result->complete && !result->inventory &&
-             lateId && lateSnapshot.settings == lateSettings.skin,
+             lateId && lateSnapshot.settings == lateSettings.presentation().skin,
          "a snapshot worker that loses its inventory generation cannot erase "
          "or overwrite a later bound profile");
 }
@@ -728,7 +728,7 @@ void testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket() {
              failed.failure->code == "skin_profile_worker_failure" &&
              failed.snapshot && failed.snapshot->settings == base.settings &&
              coordinator.snapshot(profile).settings == base.settings &&
-             active.skin == base.settings && ordinary.skin == base.settings,
+             active.presentation().skin == base.settings && ordinary.presentation().skin == base.settings,
          "non-standard skin worker failure rolls back optimistic state and "
          "cannot leak its candidate into a later ordinary save");
 }
@@ -921,10 +921,10 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
          "overwritten snapshot fixture loads its initial inactive settings");
   AppSettings replacement = beforeReplacement.settings;
   const auto replacementEntry = sampleEntry("Replacement");
-  replacement.skin.selectedGameplayEntries[0] = replacementEntry;
-  replacement.skin.entries[replacementEntry].options["variant"] = 73;
-  replacement.skin.sanitize();
-  expect(replacement.skin != beforeReplacement.settings.skin,
+  replacement.presentation().skin.selectedGameplayEntries[0] = replacementEntry;
+  replacement.presentation().skin.entries[replacementEntry].options["variant"] = 73;
+  replacement.presentation().skin.sanitize();
+  expect(replacement.presentation().skin != beforeReplacement.settings.presentation().skin,
          "replacement fixture changes the inactive skin settings");
   auto mutation = coordinator.beginInventoryMutation();
   const auto overwritten = manager.installProfile(
@@ -958,7 +958,7 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
       AppSettingsStore::Load(manager.pathsFor(created.profile->id).settingsJson);
   expect(durable.status == AppSettingsLoadStatus::Loaded,
          "overwritten inactive profile settings remain loadable");
-  expect(durable.settings.skin == replacement.skin,
+  expect(durable.settings.presentation().skin == replacement.presentation().skin,
          "overwritten inactive profile has replacement settings on disk");
 
   const auto refreshedTicket = coordinator.beginSnapshotAllProfiles();
@@ -971,7 +971,7 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
                               : skin::VersionedSkinProfileSettings{};
   expect(refreshed && refreshed->complete && refreshed->inventory,
          "overwritten profile refresh completes with an inventory");
-  expect(typedId && cached.settings == replacement.skin,
+  expect(typedId && cached.settings == replacement.presentation().skin,
          "overwritten profile refresh updates cached skin settings");
   expect(cached.generation > initialGeneration,
          "overwritten profile refresh advances its generation");

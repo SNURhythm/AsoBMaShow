@@ -144,7 +144,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       : manager(managerValue), activeSettings(settingsValue),
         dependencies(std::move(dependencyValue)),
         activeProfileId(manager.activeProfile().id) {
-    profiles[activeProfileId].settings = activeSettings.skin;
+    profiles[activeProfileId].settings = activeSettings.presentation().skin;
     profiles[activeProfileId].durableSettings = activeSettings;
     worker = std::thread([this] { run(); });
   }
@@ -196,7 +196,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         return;
       }
       merged = state->second.durableSettings;
-      merged.skin = job.settings.skin;
+      merged.presentation().skin = job.settings.presentation().skin;
     }
     merged.sanitize();
     std::string error;
@@ -231,7 +231,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         return;
       }
       if (state->second.generation == job.skinGeneration) {
-        job.settings.skin = state->second.settings;
+        job.settings.presentation().skin = state->second.settings;
       }
     }
     job.settings.sanitize();
@@ -295,9 +295,9 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       if (!mutateIfCurrent([&] {
             auto [state, inserted] = profiles.try_emplace(input.id.opaque);
             if (inserted) {
-              state->second.settings = loaded.settings.skin;
+              state->second.settings = loaded.settings.presentation().skin;
               state->second.durableSettings = loaded.settings;
-            } else if (state->second.settings != loaded.settings.skin ||
+            } else if (state->second.settings != loaded.settings.presentation().skin ||
                        state->second.durableSettings != loaded.settings) {
               if (state->second.highWaterGeneration ==
                   std::numeric_limits<std::uint64_t>::max()) {
@@ -308,7 +308,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
               }
               ++state->second.highWaterGeneration;
               state->second.generation = state->second.highWaterGeneration;
-              state->second.settings = loaded.settings.skin;
+              state->second.settings = loaded.settings.presentation().skin;
               state->second.durableSettings = loaded.settings;
             }
             inventory.profiles.push_back(snapshotLocked(input.id));
@@ -507,10 +507,10 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
   skin::SkinProfileCommitResult admissionFailure;
   try {
     previous = state.settings;
-    activePrevious = impl_->activeSettings.skin;
+    activePrevious = impl_->activeSettings.presentation().skin;
     activeCandidate = candidate;
     full = impl_->activeSettings;
-    full.skin = candidate;
+    full.presentation().skin = candidate;
     const skin::VersionedSkinProfileSettings nextSnapshot{
         .profileId = profileId,
         .generation = reservedGeneration,
@@ -561,7 +561,7 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
   state.unresolvedTicket = ticket;
   const bool activeProfile = impl_->activeProfileId == profileId.opaque;
   if (activeProfile) {
-    impl_->activeSettings.skin = std::move(activeCandidate);
+    impl_->activeSettings.presentation().skin = std::move(activeCandidate);
   }
   try {
     if (impl_->dependencies.afterSkinCommitStatePublished) {
@@ -569,7 +569,7 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
     }
   } catch (...) {
     if (activeProfile) {
-      impl_->activeSettings.skin = std::move(activePrevious);
+      impl_->activeSettings.presentation().skin = std::move(activePrevious);
     }
     state.settings = std::move(previous);
     state.generation = previousGeneration;
@@ -593,7 +593,7 @@ ProfileSettingsPersistenceCoordinator::pollCommit(std::uint64_t ticket) {
   if (found->second.status != skin::SkinProfileCommitResult::Status::Pending &&
       found->second.snapshot &&
       found->second.snapshot->profileId.opaque == impl_->activeProfileId) {
-    impl_->activeSettings.skin = found->second.snapshot->settings;
+    impl_->activeSettings.presentation().skin = found->second.snapshot->settings;
   }
   return found->second;
 }
@@ -788,7 +788,7 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
     const auto state = impl_->profiles.find(profileId.opaque);
     if (profileId.opaque == impl_->activeProfileId &&
         state != impl_->profiles.end()) {
-      settings.skin = state->second.settings;
+      settings.presentation().skin = state->second.settings;
       impl_->activeSettings = settings;
     }
   }
@@ -830,7 +830,7 @@ void ProfileSettingsPersistenceCoordinator::bindCommittedActiveProfile(
   state.highWaterGeneration =
       std::max(state.highWaterGeneration, state.generation);
   state.generation = ++state.highWaterGeneration;
-  state.settings = settings.skin;
+  state.settings = settings.presentation().skin;
   state.durableSettings = settings;
   impl_->activeProfileId = profileId.opaque;
   impl_->activeSettings = settings;

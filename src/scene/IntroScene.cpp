@@ -92,7 +92,7 @@ void IntroScene::start() {
   if (context.gameplaySkinLifecycle) {
     acquisition =
         context.gameplaySkinLifecycle->acquireForSkinType(5, false);
-  } else if (context.settings.skin.selectedSkinEntries.contains(5)) {
+  } else if (context.settings.presentation().skin.selectedSkinEntries.contains(5)) {
     acquisition.disposition =
         skin::GameplaySkinAcquisitionDisposition::Failed;
     acquisition.failure = skin::GameplaySkinAcquisitionFailure{

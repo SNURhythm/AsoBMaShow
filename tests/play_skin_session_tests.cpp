@@ -9137,11 +9137,11 @@ void testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces() {
   settings.longNoteModifierMode = 3;
   settings.sevenToNinePattern = 5;
   settings.sevenToNineType = 4;
-  settings.laneCoverEnabled = false;
-  settings.liftEnabled = true;
-  settings.hiddenEnabled = true;
+  settings.presentation().laneCoverEnabled = false;
+  settings.presentation().liftEnabled = true;
+  settings.presentation().hiddenEnabled = true;
   settings.hispeedAutoAdjust = true;
-  settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
+  settings.presentation().notePriorityMode = AppSettings::NotePriorityMode::Duration;
   settings.selectedAssistOption = assist_options::kBpmGuide;
   settings.selectedGaugeAutoShiftMode = "best_clear";
   settings.selectedGaugeAutoShiftLowerBound = "normal";

@@ -123,7 +123,7 @@ Camera game_camera;
 Camera* main_camera = &game_camera;
 }
 namespace gameplay_geometry { constexpr float kPlayAreaCenterX = 4; }
-struct AppSettings { float laneLength = 8, laneAngleDegrees = 13.4; };
+struct AppSettings { float laneLength = 8, laneAngleDegrees = 13.4; const AppSettings &presentation() const { return *this; } };
 PRODUCTION_METHOD
 int main() {
   using namespace rendering;
@@ -134,7 +134,7 @@ int main() {
     window_width = 1080;
     window_height = height;
     resetViewTransform(1080,height,4,5,6,settings);
-    const float angle = bx::toRad(settings.laneAngleDegrees);
+    const float angle = bx::toRad(settings.presentation().laneAngleDegrees);
     const float depthAtJudge = -game_camera.eye.y * std::sin(angle)
                               - game_camera.eye.z * std::cos(angle);
     const float visibleWidth = 2 * depthAtJudge * std::tan(bx::toRad(60))

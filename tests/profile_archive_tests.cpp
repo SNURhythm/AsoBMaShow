@@ -748,6 +748,7 @@ private:
     targetId = target.profile->id;
 
     AppSettings settings;
+    settings.presentation(AppSettings::PresentationOrientation::Portrait).laneLength = 27;
     settings.audioOffsetMs = -37;
     settings.setVisibleTimeGreenNumber(765);
     settings.selectedGameplayRuleset = "beatoraja";
@@ -758,15 +759,15 @@ private:
             ? skin::normalizeEntryPath(*skinPackage, "play/main.luaskin").entry
             : std::nullopt;
     if (skinEntry) {
-      auto &entrySettings = settings.skin.entries[*skinEntry];
+      auto &entrySettings = settings.presentation().skin.entries[*skinEntry];
       entrySettings.options["Lane cover"] = 4;
       entrySettings.offsets["Judge"] = {.x = 12, .y = -9, .a = 32};
       entrySettings.viewport = {
           .mode = skin::ViewportMode::Stretch,
           .customBase = skin::CustomViewportBase::Fit,
       };
-      settings.skin.selected7KeyEntry = *skinEntry;
-      settings.skin.gameplayCompatibilityEnabled = true;
+      settings.presentation().skin.selected7KeyEntry = *skinEntry;
+      settings.presentation().skin.gameplayCompatibilityEnabled = true;
     }
     settings.sanitize();
     std::string error;
@@ -1780,8 +1781,11 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
   expect(
       importedSettings.status == AppSettingsLoadStatus::Loaded &&
           sourceLoadedSettings.status == AppSettingsLoadStatus::Loaded &&
-          importedSettings.settings.skin == sourceLoadedSettings.settings.skin,
+          importedSettings.settings.presentation().skin == sourceLoadedSettings.settings.presentation().skin,
       "selected skin configuration and viewport round-trip through archives");
+  expect(importedSettings.settings.presentation(
+             AppSettings::PresentationOrientation::Portrait).laneLength == 27,
+         "inactive portrait presentation survives profile export and import");
   expect(readFile(importedPaths.practiceDirectory /
                   (std::string(kPracticeHash) + ".json")) ==
              readFile(sourcePaths.practiceDirectory /

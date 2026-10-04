@@ -522,6 +522,45 @@ void readSkinProfileSettings(const json &document,
   }
 }
 
+json presentationToJson(const AppSettings::PresentationSettings &settings) {
+  return {
+      {"laneAngleDegrees", settings.laneAngleDegrees},
+      {"laneLength", settings.laneLength},
+      {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
+      {"noteStartPositionPercent", settings.noteStartPositionPercent},
+      {"laneCoverEnabled", settings.laneCoverEnabled},
+      {"liftEnabled", settings.liftEnabled},
+      {"liftRatio", settings.liftRatio},
+      {"hiddenEnabled", settings.hiddenEnabled},
+      {"hiddenRatio", settings.hiddenRatio},
+      {"playAreaWidth4K", settings.playAreaWidth4K},
+      {"playAreaWidth5K", settings.playAreaWidth5K},
+      {"playAreaWidth6K", settings.playAreaWidth6K},
+      {"playAreaWidth7K", settings.playAreaWidth7K},
+      {"playAreaWidth8K", settings.playAreaWidth8K},
+      {"playAreaWidth10K", settings.playAreaWidth10K},
+      {"playAreaWidth14K", settings.playAreaWidth14K},
+      {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
+      {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
+      {"judgementIndicatorY", settings.judgementIndicatorY},
+      {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorRangeMilliseconds",
+       settings.judgementIndicatorRangeMilliseconds},
+      {"judgementTextY", settings.judgementTextY},
+      {"judgementIndicatorRenderMode",
+       static_cast<int>(settings.judgementIndicatorRenderMode)},
+      {"judgementCounterEnabled", settings.judgementCounterEnabled},
+      {"judgementCounterPosition",
+       static_cast<int>(settings.judgementCounterPosition)},
+      {"judgementTimingFastSlowCriteria",
+       static_cast<int>(settings.judgementTimingFastSlowCriteria)},
+      {"judgementTimingMillisecondsCriteria",
+       static_cast<int>(settings.judgementTimingMillisecondsCriteria)},
+      {"gaugeBarPosition", static_cast<int>(settings.gaugeBarPosition)},
+      {"skin", skinProfileSettingsToJson(settings.skin)},
+  };
+}
+
 json settingsToJson(const AppSettings &settings) {
   json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
@@ -563,40 +602,7 @@ json settingsToJson(const AppSettings &settings) {
       {"bgaBrightnessPercent", settings.bgaBrightnessPercent},
       {"bgaBlurStrength", settings.bgaBlurStrength},
       {"bgaDisplayMode", static_cast<int>(settings.bgaDisplayMode)},
-      {"laneAngleDegrees", settings.laneAngleDegrees},
-      {"laneLength", settings.laneLength},
-      {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
-      {"noteStartPositionPercent", settings.noteStartPositionPercent},
-      {"laneCoverEnabled", settings.laneCoverEnabled},
-      {"liftEnabled", settings.liftEnabled},
-      {"liftRatio", settings.liftRatio},
-      {"hiddenEnabled", settings.hiddenEnabled},
-      {"hiddenRatio", settings.hiddenRatio},
       {"hispeedAutoAdjust", settings.hispeedAutoAdjust},
-      {"playAreaWidth4K", settings.playAreaWidth4K},
-      {"playAreaWidth5K", settings.playAreaWidth5K},
-      {"playAreaWidth6K", settings.playAreaWidth6K},
-      {"playAreaWidth7K", settings.playAreaWidth7K},
-      {"playAreaWidth8K", settings.playAreaWidth8K},
-      {"playAreaWidth10K", settings.playAreaWidth10K},
-      {"playAreaWidth14K", settings.playAreaWidth14K},
-      {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
-      {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
-      {"judgementIndicatorY", settings.judgementIndicatorY},
-      {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
-      {"judgementIndicatorRangeMilliseconds",
-       settings.judgementIndicatorRangeMilliseconds},
-      {"judgementTextY", settings.judgementTextY},
-      {"judgementIndicatorRenderMode",
-       static_cast<int>(settings.judgementIndicatorRenderMode)},
-      {"judgementCounterEnabled", settings.judgementCounterEnabled},
-      {"judgementCounterPosition",
-       static_cast<int>(settings.judgementCounterPosition)},
-      {"judgementTimingFastSlowCriteria",
-       static_cast<int>(settings.judgementTimingFastSlowCriteria)},
-      {"judgementTimingMillisecondsCriteria",
-       static_cast<int>(settings.judgementTimingMillisecondsCriteria)},
-      {"gaugeBarPosition", static_cast<int>(settings.gaugeBarPosition)},
       {"uiThemeMode", static_cast<int>(settings.uiThemeMode)},
       {"screenOrientation", static_cast<int>(settings.screenOrientation)},
       {"systemPlaybackShowJacket", settings.systemPlaybackShowJacket},
@@ -641,7 +647,6 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
-      {"skin", skinProfileSettingsToJson(settings.skin)},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
         {"requestedSampleRate", settings.audioVideo.audio.requestedSampleRate},
@@ -667,7 +672,62 @@ json settingsToJson(const AppSettings &settings) {
     };
   }
   document["ir"] = {{"providers", std::move(providers)}};
+  document["skinSafetyLevel"] = static_cast<int>(settings.skinSafetyLevel);
+  for (auto orientation : player_settings::kPresentationOrientations) {
+    document["presentations"][player_settings::presentationOrientationName(orientation)] =
+        presentationToJson(settings.presentation(orientation));
+  }
   return document;
+}
+
+void readPresentation(const json &document, AppSettings::PresentationSettings &settings,
+                      std::vector<std::string> &diagnostics) {
+  readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
+            diagnostics);
+  readValue(document, "laneLength", settings.laneLength, diagnostics);
+  readValue(document, "laneBeamLengthPercent", settings.laneBeamLengthPercent,
+            diagnostics);
+  readValue(document, "noteStartPositionPercent",
+            settings.noteStartPositionPercent, diagnostics);
+  readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
+            diagnostics);
+  readValue(document, "liftEnabled", settings.liftEnabled, diagnostics);
+  readValue(document, "liftRatio", settings.liftRatio, diagnostics);
+  readValue(document, "hiddenEnabled", settings.hiddenEnabled, diagnostics);
+  readValue(document, "hiddenRatio", settings.hiddenRatio, diagnostics);
+  readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);
+  readValue(document, "playAreaWidth5K", settings.playAreaWidth5K, diagnostics);
+  readValue(document, "playAreaWidth6K", settings.playAreaWidth6K, diagnostics);
+  readValue(document, "playAreaWidth7K", settings.playAreaWidth7K, diagnostics);
+  readValue(document, "playAreaWidth8K", settings.playAreaWidth8K, diagnostics);
+  readValue(document, "playAreaWidth10K", settings.playAreaWidth10K,
+            diagnostics);
+  readValue(document, "playAreaWidth14K", settings.playAreaWidth14K,
+            diagnostics);
+  readEnum(document, "notePriorityMode", settings.notePriorityMode,
+           diagnostics);
+  readValue(document, "judgementIndicatorEnabled",
+            settings.judgementIndicatorEnabled, diagnostics);
+  readValue(document, "judgementIndicatorY", settings.judgementIndicatorY,
+            diagnostics);
+  readValue(document, "judgementIndicatorWidthScale",
+            settings.judgementIndicatorWidthScale, diagnostics);
+  readValue(document, "judgementIndicatorRangeMilliseconds",
+            settings.judgementIndicatorRangeMilliseconds, diagnostics);
+  readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
+  readEnum(document, "judgementIndicatorRenderMode",
+           settings.judgementIndicatorRenderMode, diagnostics);
+  readValue(document, "judgementCounterEnabled",
+            settings.judgementCounterEnabled, diagnostics);
+  readEnum(document, "judgementCounterPosition",
+           settings.judgementCounterPosition, diagnostics);
+  readEnum(document, "judgementTimingFastSlowCriteria",
+           settings.judgementTimingFastSlowCriteria, diagnostics);
+  readEnum(document, "judgementTimingMillisecondsCriteria",
+           settings.judgementTimingMillisecondsCriteria, diagnostics);
+  readEnum(document, "gaugeBarPosition", settings.gaugeBarPosition,
+           diagnostics);
+  readSkinProfileSettings(document, settings.skin, diagnostics);
 }
 
 AppSettings settingsFromJson(const json &document,
@@ -745,53 +805,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "bgaBlurStrength", settings.bgaBlurStrength, diagnostics);
   readEnum(document, "bgaDisplayMode", settings.bgaDisplayMode, diagnostics);
-  readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
-            diagnostics);
-  readValue(document, "laneLength", settings.laneLength, diagnostics);
-  readValue(document, "laneBeamLengthPercent", settings.laneBeamLengthPercent,
-            diagnostics);
-  readValue(document, "noteStartPositionPercent",
-            settings.noteStartPositionPercent, diagnostics);
-  readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
-            diagnostics);
-  readValue(document, "liftEnabled", settings.liftEnabled, diagnostics);
-  readValue(document, "liftRatio", settings.liftRatio, diagnostics);
-  readValue(document, "hiddenEnabled", settings.hiddenEnabled, diagnostics);
-  readValue(document, "hiddenRatio", settings.hiddenRatio, diagnostics);
   readValue(document, "hispeedAutoAdjust", settings.hispeedAutoAdjust,
             diagnostics);
-  readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);
-  readValue(document, "playAreaWidth5K", settings.playAreaWidth5K, diagnostics);
-  readValue(document, "playAreaWidth6K", settings.playAreaWidth6K, diagnostics);
-  readValue(document, "playAreaWidth7K", settings.playAreaWidth7K, diagnostics);
-  readValue(document, "playAreaWidth8K", settings.playAreaWidth8K, diagnostics);
-  readValue(document, "playAreaWidth10K", settings.playAreaWidth10K,
-            diagnostics);
-  readValue(document, "playAreaWidth14K", settings.playAreaWidth14K,
-            diagnostics);
-  readEnum(document, "notePriorityMode", settings.notePriorityMode,
-           diagnostics);
-  readValue(document, "judgementIndicatorEnabled",
-            settings.judgementIndicatorEnabled, diagnostics);
-  readValue(document, "judgementIndicatorY", settings.judgementIndicatorY,
-            diagnostics);
-  readValue(document, "judgementIndicatorWidthScale",
-            settings.judgementIndicatorWidthScale, diagnostics);
-  readValue(document, "judgementIndicatorRangeMilliseconds",
-            settings.judgementIndicatorRangeMilliseconds, diagnostics);
-  readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
-  readEnum(document, "judgementIndicatorRenderMode",
-           settings.judgementIndicatorRenderMode, diagnostics);
-  readValue(document, "judgementCounterEnabled",
-            settings.judgementCounterEnabled, diagnostics);
-  readEnum(document, "judgementCounterPosition",
-           settings.judgementCounterPosition, diagnostics);
-  readEnum(document, "judgementTimingFastSlowCriteria",
-           settings.judgementTimingFastSlowCriteria, diagnostics);
-  readEnum(document, "judgementTimingMillisecondsCriteria",
-           settings.judgementTimingMillisecondsCriteria, diagnostics);
-  readEnum(document, "gaugeBarPosition", settings.gaugeBarPosition,
-           diagnostics);
   readEnum(document, "uiThemeMode", settings.uiThemeMode, diagnostics);
   readEnum(document, "screenOrientation", settings.screenOrientation, diagnostics);
   readValue(document, "systemPlaybackShowJacket",
@@ -890,7 +905,6 @@ AppSettings settingsFromJson(const json &document,
            diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
-  readSkinProfileSettings(document, settings.skin, diagnostics);
 
   const auto irObject = document.find("ir");
   if (irObject != document.end()) {
@@ -964,6 +978,28 @@ AppSettings settingsFromJson(const json &document,
     }
   }
 
+  const auto presentations = document.find("presentations");
+  if (presentations == document.end()) {
+    readPresentation(document, settings.presentation(), diagnostics);
+    settings.presentation(AppSettings::PresentationOrientation::Portrait).skin =
+        settings.presentation().skin;
+    settings.skinSafetyLevel = settings.presentation().skin.safetyLevel;
+  } else if (!presentations->is_object()) {
+    invalidValue("presentations", "expected object", diagnostics);
+  } else {
+    for (auto orientation : player_settings::kPresentationOrientations) {
+      const auto name = player_settings::presentationOrientationName(orientation);
+      const auto block = presentations->find(name);
+      if (block == presentations->end()) continue;
+      if (!block->is_object()) {
+        invalidValue(std::string("presentations.") + name, "expected object", diagnostics);
+        continue;
+      }
+      readPresentation(*block, settings.presentation(orientation), diagnostics);
+    }
+  }
+  readEnum(document, "skinSafetyLevel", settings.skinSafetyLevel, diagnostics);
+
   const json beforeSanitize = settingsToJson(settings);
   settings.sanitize();
   if (settingsToJson(settings) != beforeSanitize) {
@@ -986,7 +1022,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 7> migrations = {
+  const std::array<versioned_json::Migration, 8> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -1081,6 +1117,11 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
           document["skin"]["safetyLevel"] =
               static_cast<int>(skin::SkinSafetyLevel::Standard);
         }
+        return true;
+      },
+      [](json &, std::string &) {
+        // The decoder initializes missing presentation blocks from legacy
+        // fields once; subsequent saves write both named blocks.
         return true;
       }};
   auto loaded = versioned_json::loadAndMigrate(

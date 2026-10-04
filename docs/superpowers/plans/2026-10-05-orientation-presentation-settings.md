@@ -42,12 +42,12 @@
 - `AppSettings::activePresentationOrientation() const` and `void setActivePresentationOrientation(PresentationOrientation)` select the runtime block. The selector is not persisted or part of persisted-value equality. Store the blocks directly; do not maintain a second mutable copy of active values.
 - Retain `playAreaWidthForKeyMode(int)` and `setPlayAreaWidthForKeyMode(int, float)` as active-presentation convenience methods.
 
-- [ ] Add failing migration/round-trip tests: legacy length 11 remains landscape 11, portrait length becomes 16 and angle 0; changing portrait width to 15 retains landscape width 8 after reload; custom skin options initially copy by value and later remain independent. Assert shared calibration and hispeed are unchanged.
-- [ ] Add failing validation tests: portrait length 32 and width 16 survive save/load; landscape values clamp to 12; nonfinite input receives orientation defaults; a malformed portrait block leaves valid landscape settings intact. Profile copy/export/import must carry both blocks.
-- [ ] Build and run the affected existing test targets; record the expected failing assertions before implementing.
-- [ ] Move presentation fields into the nested type, initialize both blocks from the policy, and update consumers to use the accessors. Keep skin safety authoritative at player level; snapshots expose it to existing skin APIs without allowing the two stored blocks to diverge in policy.
-- [ ] Increment settings schema from 7 to 8. Serialize `presentations.landscape` and `presentations.portrait`; migrate legacy JSON and CFG through the same initialization path. Validate each block against its own policy and retain diagnostics for malformed values.
-- [ ] Run the migration, settings, profile-switch, and archive tests to passing; commit the independently working storage change.
+- [x] Add failing migration/round-trip tests: legacy length 11 remains landscape 11, portrait length becomes 16 and angle 0; changing portrait width to 15 retains landscape width 8 after reload; custom skin options initially copy by value and later remain independent. Assert shared calibration and hispeed are unchanged.
+- [x] Add failing validation tests: portrait length 32 and width 16 survive save/load; landscape values clamp to 12; nonfinite input receives orientation defaults; a malformed portrait block leaves valid landscape settings intact. Profile copy/export/import must carry both blocks.
+- [x] Build and run the affected existing test targets; record the expected failing assertions before implementing.
+- [x] Move presentation fields into the nested type, initialize both blocks from the policy, and update consumers to use the accessors. Keep skin safety authoritative at player level; snapshots expose it to existing skin APIs without allowing the two stored blocks to diverge in policy.
+- [x] Increment settings schema from 7 to 8. Serialize `presentations.landscape` and `presentations.portrait`; migrate legacy JSON and CFG through the same initialization path. Validate each block against its own policy and retain diagnostics for malformed values.
+- [x] Run the migration, settings, profile-switch, and archive tests to passing; commit the independently working storage change.
 
 ### Task 2: Orientation-aware skin persistence and transactions
 

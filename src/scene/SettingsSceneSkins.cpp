@@ -595,41 +595,41 @@ void SettingsScene::appendSelectedSkinHudSettings(
 
   appendHeading(i18n::message("settings.skins.application_judgement_hud.label"));
   appendToggle(i18n::message("settings.skins.judgement_indicator.label"),
-               context.settings.judgementIndicatorEnabled,
+               context.settings.presentation().judgementIndicatorEnabled,
                [this](bool enabled) {
-                 context.settings.judgementIndicatorEnabled = enabled;
+                 context.settings.presentation().judgementIndicatorEnabled = enabled;
                  persistSettings();
                });
   appendNumeric(
       i18n::message("settings.skins.indicator_y.percent_label"),
       std::to_string(
-          judgementIndicatorYToPercent(context.settings.judgementIndicatorY)),
+          judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY)),
       [this](const std::string &text) {
-        context.settings.judgementIndicatorY = judgementIndicatorPercentToY(
+        context.settings.presentation().judgementIndicatorY = judgementIndicatorPercentToY(
             std::clamp(sanitizeOffsetComponent(
                            text, judgementIndicatorYToPercent(
-                                     context.settings.judgementIndicatorY)),
+                                     context.settings.presentation().judgementIndicatorY)),
                        0, 100));
         persistSettings();
       });
   appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
                 std::to_string(judgementIndicatorWidthScaleToPercent(
-                    context.settings.judgementIndicatorWidthScale)),
+                    context.settings.presentation().judgementIndicatorWidthScale)),
                 [this](const std::string &text) {
                   const int current = judgementIndicatorWidthScaleToPercent(
-                      context.settings.judgementIndicatorWidthScale);
-                  context.settings.judgementIndicatorWidthScale =
+                      context.settings.presentation().judgementIndicatorWidthScale);
+                  context.settings.presentation().judgementIndicatorWidthScale =
                       judgementIndicatorWidthPercentToScale(std::clamp(
                           sanitizeOffsetComponent(text, current), 50, 200));
                   persistSettings();
                 });
   appendNumeric(
       i18n::message("settings.skins.indicator_range_ms.label"),
-      std::to_string(context.settings.judgementIndicatorRangeMilliseconds),
+      std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds),
       [this](const std::string &text) {
-        context.settings.judgementIndicatorRangeMilliseconds =
+        context.settings.presentation().judgementIndicatorRangeMilliseconds =
             clampJudgementIndicatorRangeMilliseconds(sanitizeOffsetComponent(
-                text, context.settings.judgementIndicatorRangeMilliseconds));
+                text, context.settings.presentation().judgementIndicatorRangeMilliseconds));
         persistSettings();
       });
 
@@ -637,57 +637,57 @@ void SettingsScene::appendSelectedSkinHudSettings(
     appendChoices(
         i18n::message("settings.skins.indicator_layout.label"),
         {{.label = i18n::message("settings.skins.hud.position.world.label"),
-          .selected = context.settings.judgementIndicatorRenderMode ==
+          .selected = context.settings.presentation().judgementIndicatorRenderMode ==
                       AppSettings::JudgementIndicatorRenderMode::World3D,
           .action =
               [this]() {
-                context.settings.judgementIndicatorRenderMode =
+                context.settings.presentation().judgementIndicatorRenderMode =
                     AppSettings::JudgementIndicatorRenderMode::World3D;
                 persistSettings();
                 lastLayoutWidth = -1;
               }},
          {.label = i18n::message("settings.skins.hud.position.overlay.label"),
-          .selected = context.settings.judgementIndicatorRenderMode ==
+          .selected = context.settings.presentation().judgementIndicatorRenderMode ==
                       AppSettings::JudgementIndicatorRenderMode::Hud2D,
           .action = [this]() {
-            context.settings.judgementIndicatorRenderMode =
+            context.settings.presentation().judgementIndicatorRenderMode =
                 AppSettings::JudgementIndicatorRenderMode::Hud2D;
             persistSettings();
             lastLayoutWidth = -1;
           }}});
   }
 
-  appendToggle(i18n::message("settings.skins.judgement_counter.label"), context.settings.judgementCounterEnabled,
+  appendToggle(i18n::message("settings.skins.judgement_counter.label"), context.settings.presentation().judgementCounterEnabled,
                [this](bool enabled) {
-                 context.settings.judgementCounterEnabled = enabled;
+                 context.settings.presentation().judgementCounterEnabled = enabled;
                  persistSettings();
                });
   appendChoices(i18n::message("settings.skins.counter_position.label"),
                 {{.label = i18n::message("settings.skins.top.label"),
-                  .selected = context.settings.judgementCounterPosition ==
+                  .selected = context.settings.presentation().judgementCounterPosition ==
                               AppSettings::JudgementCounterPosition::Top,
                   .action =
                       [this]() {
-                        context.settings.judgementCounterPosition =
+                        context.settings.presentation().judgementCounterPosition =
                             AppSettings::JudgementCounterPosition::Top;
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
                  {.label = i18n::message("settings.skins.left.label"),
-                  .selected = context.settings.judgementCounterPosition ==
+                  .selected = context.settings.presentation().judgementCounterPosition ==
                               AppSettings::JudgementCounterPosition::Left,
                   .action =
                       [this]() {
-                        context.settings.judgementCounterPosition =
+                        context.settings.presentation().judgementCounterPosition =
                             AppSettings::JudgementCounterPosition::Left;
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
                  {.label = i18n::message("settings.skins.right.label"),
-                  .selected = context.settings.judgementCounterPosition ==
+                  .selected = context.settings.presentation().judgementCounterPosition ==
                               AppSettings::JudgementCounterPosition::Right,
                   .action = [this]() {
-                    context.settings.judgementCounterPosition =
+                    context.settings.presentation().judgementCounterPosition =
                         AppSettings::JudgementCounterPosition::Right;
                     persistSettings();
                     lastLayoutWidth = -1;
@@ -700,11 +700,11 @@ void SettingsScene::appendSelectedSkinHudSettings(
   appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
   appendNumeric(
       i18n::message("settings.skins.judge_text_y.percent_label"),
-      std::to_string(judgementTextYToPercent(context.settings.judgementTextY)),
+      std::to_string(judgementTextYToPercent(context.settings.presentation().judgementTextY)),
       [this](const std::string &text) {
-        context.settings.judgementTextY = judgementTextPercentToY(std::clamp(
+        context.settings.presentation().judgementTextY = judgementTextPercentToY(std::clamp(
             sanitizeOffsetComponent(
-                text, judgementTextYToPercent(context.settings.judgementTextY)),
+                text, judgementTextYToPercent(context.settings.presentation().judgementTextY)),
             0, 100));
         persistSettings();
       });
@@ -731,45 +731,45 @@ void SettingsScene::appendSelectedSkinHudSettings(
   appendChoices(
       "FAST/SLOW",
       timingChoices(
-          context.settings.judgementTimingFastSlowCriteria,
+          context.settings.presentation().judgementTimingFastSlowCriteria,
           [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
-            context.settings.judgementTimingFastSlowCriteria = criteria;
+            context.settings.presentation().judgementTimingFastSlowCriteria = criteria;
           }));
   appendChoices(
       "+/- ms",
       timingChoices(
-          context.settings.judgementTimingMillisecondsCriteria,
+          context.settings.presentation().judgementTimingMillisecondsCriteria,
           [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
-            context.settings.judgementTimingMillisecondsCriteria = criteria;
+            context.settings.presentation().judgementTimingMillisecondsCriteria = criteria;
           }));
 
   appendHeading(i18n::message("settings.skins.gauge.label"));
   appendChoices(i18n::message("settings.skins.gauge_position.label"),
                 {{.label = i18n::message("settings.skins.world.label"),
-                  .selected = context.settings.gaugeBarPosition ==
+                  .selected = context.settings.presentation().gaugeBarPosition ==
                               AppSettings::GaugeBarPosition::World,
                   .action =
                       [this]() {
-                        context.settings.gaugeBarPosition =
+                        context.settings.presentation().gaugeBarPosition =
                             AppSettings::GaugeBarPosition::World;
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
                  {.label = i18n::message("settings.skins.left_hud.label"),
-                  .selected = context.settings.gaugeBarPosition ==
+                  .selected = context.settings.presentation().gaugeBarPosition ==
                               AppSettings::GaugeBarPosition::Left,
                   .action =
                       [this]() {
-                        context.settings.gaugeBarPosition =
+                        context.settings.presentation().gaugeBarPosition =
                             AppSettings::GaugeBarPosition::Left;
                         persistSettings();
                         lastLayoutWidth = -1;
                       }},
                  {.label = i18n::message("settings.skins.right_hud.label"),
-                  .selected = context.settings.gaugeBarPosition ==
+                  .selected = context.settings.presentation().gaugeBarPosition ==
                               AppSettings::GaugeBarPosition::Right,
                   .action = [this]() {
-                    context.settings.gaugeBarPosition =
+                    context.settings.presentation().gaugeBarPosition =
                         AppSettings::GaugeBarPosition::Right;
                     persistSettings();
                     lastLayoutWidth = -1;
@@ -806,27 +806,27 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
       };
 
   appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
-                formatFloatValue(context.settings.laneAngleDegrees, 1),
+                formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
                 [this](const std::string &text) {
-                  context.settings.laneAngleDegrees = sanitizeViewportComponent(
-                      text, context.settings.laneAngleDegrees,
+                  context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
+                      text, context.settings.presentation().laneAngleDegrees,
                       AppSettings::kMinLaneAngleDegrees,
                       AppSettings::kMaxLaneAngleDegrees);
                   persistSettings();
                 });
-  appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.laneLength, 1),
+  appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
                 [this](const std::string &text) {
-                  context.settings.laneLength = sanitizeViewportComponent(
-                      text, context.settings.laneLength,
+                  context.settings.presentation().laneLength = sanitizeViewportComponent(
+                      text, context.settings.presentation().laneLength,
                       AppSettings::kMinLaneLength, AppSettings::kMaxLaneLength);
                   persistSettings();
                 });
   appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
-                std::to_string(context.settings.laneBeamLengthPercent),
+                std::to_string(context.settings.presentation().laneBeamLengthPercent),
                 [this](const std::string &text) {
-                  context.settings.laneBeamLengthPercent =
+                  context.settings.presentation().laneBeamLengthPercent =
                       clampLaneBeamLengthPercent(sanitizeOffsetComponent(
-                          text, context.settings.laneBeamLengthPercent));
+                          text, context.settings.presentation().laneBeamLengthPercent));
                   persistSettings();
                 });
   appendNumeric(i18n::message("settings.skins.play_area_width.key_mode", {{"keys", std::to_string(keyMode)}}),

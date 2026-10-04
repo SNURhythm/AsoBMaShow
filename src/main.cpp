@@ -881,8 +881,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   // counting the current frame in the next window.
   std::optional<std::chrono::steady_clock::time_point> fpsWindowStart;
   int renderedFramesInWindow = 0;
-  float appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
-  float appliedLaneLength = context.settings.laneLength;
+  float appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
+  float appliedLaneLength = context.settings.presentation().laneLength;
   bool hasDeferredRenderResize = false;
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
@@ -1350,17 +1350,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
     const bool laneTransformChanged =
-        std::abs(appliedLaneAngleDegrees - context.settings.laneAngleDegrees) >
+        std::abs(appliedLaneAngleDegrees - context.settings.presentation().laneAngleDegrees) >
             0.001f ||
-        std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f;
+        std::abs(appliedLaneLength - context.settings.presentation().laneLength) > 0.001f;
     if (laneTransformChanged &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                             std::try_to_lock);
       if (bgfxLock.owns_lock()) {
-        appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
-        appliedLaneLength = context.settings.laneLength;
+        appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
+        appliedLaneLength = context.settings.presentation().laneLength;
         context.restoreGameplayRenderViews();
       }
     }
@@ -1695,8 +1695,8 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
   // Keeping the landscape camera distance would crop the outside lanes.
   const float kCameraDepth = 2.1f *
       (aspect < 1.0f ? (16.0f / 9.0f) / aspect : 1.0f);
-  const float laneLookAtY = settings.laneLength * 0.25f;
-  const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
+  const float laneLookAtY = settings.presentation().laneLength * 0.25f;
+  const float laneAngleRad = bx::toRad(settings.presentation().laneAngleDegrees);
   bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0f};
   bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
                   laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,

@@ -46,8 +46,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       settings.visibleTimeDurationMilliseconds;
   const int noteStartPositionPercent =
       noSpeed ? AppSettings::kDefaultNoteStartPositionPercent
-              : settings.noteStartPositionPercent;
-  const bool laneCoverEnabled = settings.laneCoverEnabled;
+              : settings.presentation().noteStartPositionPercent;
+  const bool laneCoverEnabled = settings.presentation().laneCoverEnabled;
   const gameplay_hispeed::State hispeed(
       {.mode = noSpeed ? gameplay_hispeed::FixMode::Off
                        : gameplay_hispeed::fixModeFromEncoded(
@@ -69,7 +69,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = laneCoverEnabled,
-      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
+      .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
@@ -96,24 +96,24 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .sevenToNineType = settings.sevenToNineType,
       .constantScroll = !noSpeed && settings.constantScroll,
       .constantFadeInMilliseconds = settings.constantFadeInMilliseconds,
-      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
-      .judgementIndicatorY = settings.judgementIndicatorY,
-      .judgementIndicatorWidthScale = settings.judgementIndicatorWidthScale,
+      .judgementIndicatorEnabled = settings.presentation().judgementIndicatorEnabled,
+      .judgementIndicatorY = settings.presentation().judgementIndicatorY,
+      .judgementIndicatorWidthScale = settings.presentation().judgementIndicatorWidthScale,
       .judgementIndicatorHudMode =
-          settings.judgementIndicatorRenderMode ==
+          settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
-          settings.judgementIndicatorRangeMilliseconds,
-      .judgementTextY = settings.judgementTextY,
-      .judgementCounterEnabled = settings.judgementCounterEnabled,
-      .judgementCounterPosition = settings.judgementCounterPosition,
-      .fastSlowCriteria = settings.judgementTimingFastSlowCriteria,
-      .millisecondsCriteria = settings.judgementTimingMillisecondsCriteria,
-      .gaugeBarPosition = settings.gaugeBarPosition,
+          settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextY = settings.presentation().judgementTextY,
+      .judgementCounterEnabled = settings.presentation().judgementCounterEnabled,
+      .judgementCounterPosition = settings.presentation().judgementCounterPosition,
+      .fastSlowCriteria = settings.presentation().judgementTimingFastSlowCriteria,
+      .millisecondsCriteria = settings.presentation().judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = settings.presentation().gaugeBarPosition,
       .touchVisualizationEnabled = touchVisualizationEnabled,
       .replayGhostRenderingEnabled = replayGhostRenderingEnabled,
       .judgeAlgorithmImageIndex =
-          beatorajaJudgeAlgorithmImageIndex(settings.notePriorityMode),
+          beatorajaJudgeAlgorithmImageIndex(settings.presentation().notePriorityMode),
   };
 }
 
@@ -347,10 +347,10 @@ ReplayLaneCoverInitialState replayLaneCoverInitialState(
     bool noSpeed) noexcept {
   if (noSpeed) {
     return {.percent = AppSettings::kDefaultNoteStartPositionPercent,
-            .enabled = settings.laneCoverEnabled};
+            .enabled = settings.presentation().laneCoverEnabled};
   }
   const auto state = replayInitialLaneCoverState(
-      replay, settings.noteStartPositionPercent, settings.laneCoverEnabled);
+      replay, settings.presentation().noteStartPositionPercent, settings.presentation().laneCoverEnabled);
   return {.percent = state.percent, .enabled = state.enabled};
 }
 

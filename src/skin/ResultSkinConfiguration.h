@@ -13,11 +13,11 @@
 inline ResultSkinConfigurationData
 makeResultSkinConfiguration(const AppSettings &settings) {
   const int judgeAlgorithmImageIndex =
-      settings.notePriorityMode == AppSettings::NotePriorityMode::Combo
+      settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Combo
           ? 0
-      : settings.notePriorityMode == AppSettings::NotePriorityMode::Duration
+      : settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Duration
           ? 1
-      : settings.notePriorityMode == AppSettings::NotePriorityMode::Lowest
+      : settings.presentation().notePriorityMode == AppSettings::NotePriorityMode::Lowest
           ? 2
           : std::numeric_limits<int>::min();
   const int gaugeAutoShiftImageIndex =
@@ -56,9 +56,9 @@ makeResultSkinConfiguration(const AppSettings &settings) {
       .longNoteModifierMode = settings.longNoteModifierMode,
       .sevenToNinePattern = settings.sevenToNinePattern,
       .sevenToNineType = settings.sevenToNineType,
-      .laneCoverEnabled = settings.laneCoverEnabled,
-      .liftEnabled = settings.liftEnabled,
-      .hiddenEnabled = settings.hiddenEnabled,
+      .laneCoverEnabled = settings.presentation().laneCoverEnabled,
+      .liftEnabled = settings.presentation().liftEnabled,
+      .hiddenEnabled = settings.presentation().hiddenEnabled,
       .hispeedAutoAdjust = settings.hispeedAutoAdjust,
       .judgeAlgorithmImageIndex = judgeAlgorithmImageIndex,
       .gaugeAutoShiftImageIndex = gaugeAutoShiftImageIndex,

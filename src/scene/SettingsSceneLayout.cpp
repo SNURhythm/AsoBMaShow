@@ -541,8 +541,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     noteStartControls->setWidthPercent(100.0f);
     noteStartControls->setJustifyContent(YGJustifyCenter);
     auto updateNoteStartPosition = [this](int deltaPercent) {
-      context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
-          context.settings.noteStartPositionPercent + deltaPercent);
+      context.settings.presentation().noteStartPositionPercent = clampNoteStartPositionPercent(
+          context.settings.presentation().noteStartPositionPercent + deltaPercent);
       persistSettings();
     };
     auto *minusNoteStart =
@@ -557,7 +557,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     noteStartControls->addView(plusNoteStart);
     auto *resetNoteStart = makeResetButton(metrics);
     resetNoteStart->setOnClickListener([this]() {
-      context.settings.noteStartPositionPercent =
+      context.settings.presentation().noteStartPositionPercent =
           AppSettings::kDefaultNoteStartPositionPercent;
       persistSettings();
     });
@@ -574,8 +574,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->setWidthPercent(100.0f);
     angleControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneAngle = [this](float delta) {
-      context.settings.laneAngleDegrees =
-          clampLaneAngle(context.settings.laneAngleDegrees + delta);
+      context.settings.presentation().laneAngleDegrees =
+          clampLaneAngle(context.settings.presentation().laneAngleDegrees + delta);
       persistSettings();
     };
     auto *minusAngle =
@@ -590,7 +590,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->addView(plusAngle);
     auto *resetAngle = makeResetButton(metrics);
     resetAngle->setOnClickListener([this]() {
-      context.settings.laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
+      context.settings.presentation().laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
       persistSettings();
     });
     angleControls->addView(resetAngle);
@@ -606,8 +606,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->setWidthPercent(100.0f);
     lengthControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneLength = [this](float delta) {
-      context.settings.laneLength =
-          clampLaneLength(context.settings.laneLength + delta);
+      context.settings.presentation().laneLength =
+          clampLaneLength(context.settings.presentation().laneLength + delta);
       persistSettings();
     };
     auto *minusLength =
@@ -622,7 +622,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->addView(plusLength);
     auto *resetLength = makeResetButton(metrics);
     resetLength->setOnClickListener([this]() {
-      context.settings.laneLength = AppSettings::kDefaultLaneLength;
+      context.settings.presentation().laneLength = AppSettings::kDefaultLaneLength;
       persistSettings();
     });
     lengthControls->addView(resetLength);
@@ -638,8 +638,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     beamControls->setWidthPercent(100.0f);
     beamControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneBeamLength = [this](int deltaPercent) {
-      context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
-          context.settings.laneBeamLengthPercent + deltaPercent);
+      context.settings.presentation().laneBeamLengthPercent = clampLaneBeamLengthPercent(
+          context.settings.presentation().laneBeamLengthPercent + deltaPercent);
       persistSettings();
     };
     auto *minusBeam =
@@ -654,7 +654,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     beamControls->addView(plusBeam);
     auto *resetBeam = makeResetButton(metrics);
     resetBeam->setOnClickListener([this]() {
-      context.settings.laneBeamLengthPercent =
+      context.settings.presentation().laneBeamLengthPercent =
           AppSettings::kDefaultLaneBeamLengthPercent;
       persistSettings();
     });
@@ -717,9 +717,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
                                             &summaryJudgementTextYValueText));
     auto updateJudgementTextY = [this](int deltaPercent) {
       const int currentPercent =
-          judgementTextYToPercent(context.settings.judgementTextY);
+          judgementTextYToPercent(context.settings.presentation().judgementTextY);
       const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-      context.settings.judgementTextY = judgementTextPercentToY(nextPercent);
+      context.settings.presentation().judgementTextY = judgementTextPercentToY(nextPercent);
       persistSettings();
     };
     auto *minusJudgementTextY =
@@ -732,7 +732,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         [updateJudgementTextY]() { updateJudgementTextY(10); });
     auto *resetJudgementTextY = makeResetButton(metrics);
     resetJudgementTextY->setOnClickListener([this]() {
-      context.settings.judgementTextY = AppSettings::kDefaultJudgementTextY;
+      context.settings.presentation().judgementTextY = AppSettings::kDefaultJudgementTextY;
       persistSettings();
     });
     previewControls->addView(makePreviewStepRow(
@@ -754,9 +754,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementTimingFastSlowCriteriaText);
     judgementTimingFastSlowCriteriaButton->setOnClickListener([this]() {
-      context.settings.judgementTimingFastSlowCriteria =
+      context.settings.presentation().judgementTimingFastSlowCriteria =
           nextJudgementTimingDisplayCriteria(
-              context.settings.judgementTimingFastSlowCriteria);
+              context.settings.presentation().judgementTimingFastSlowCriteria);
       persistSettings();
     });
     timingFastSlowControls->addView(judgementTimingFastSlowCriteriaButton);
@@ -778,9 +778,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementTimingMillisecondsCriteriaText);
     judgementTimingMillisecondsCriteriaButton->setOnClickListener([this]() {
-      context.settings.judgementTimingMillisecondsCriteria =
+      context.settings.presentation().judgementTimingMillisecondsCriteria =
           nextJudgementTimingDisplayCriteria(
-              context.settings.judgementTimingMillisecondsCriteria);
+              context.settings.presentation().judgementTimingMillisecondsCriteria);
       persistSettings();
     });
     timingMillisecondsControls->addView(
@@ -803,8 +803,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                          judgementIndicatorModeText, ui_theme::lime());
     judgementIndicatorModeButton->setOnClickListener([this]() {
-      context.settings.judgementIndicatorEnabled =
-          !context.settings.judgementIndicatorEnabled;
+      context.settings.presentation().judgementIndicatorEnabled =
+          !context.settings.presentation().judgementIndicatorEnabled;
       persistSettings();
     });
     indicatorModeControls->addView(judgementIndicatorModeButton);
@@ -815,9 +815,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementIndicatorRenderModeText);
     judgementIndicatorRenderModeButton->setOnClickListener([this]() {
-      context.settings.judgementIndicatorRenderMode =
+      context.settings.presentation().judgementIndicatorRenderMode =
           nextJudgementIndicatorRenderMode(
-              context.settings.judgementIndicatorRenderMode);
+              context.settings.presentation().judgementIndicatorRenderMode);
       persistSettings();
     });
     indicatorModeControls->addView(judgementIndicatorRenderModeButton);
@@ -827,9 +827,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         metrics, i18n::message("settings.preview_layout.indicator_y.label"), &summaryJudgementIndicatorYValueText));
     auto updateIndicatorY = [this](int deltaPercent) {
       const int currentPercent =
-          judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
+          judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY);
       const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-      context.settings.judgementIndicatorY =
+      context.settings.presentation().judgementIndicatorY =
           judgementIndicatorPercentToY(nextPercent);
       persistSettings();
     };
@@ -843,7 +843,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         [updateIndicatorY]() { updateIndicatorY(10); });
     auto *resetIndicatorY = makeResetButton(metrics);
     resetIndicatorY->setOnClickListener([this]() {
-      context.settings.judgementIndicatorY =
+      context.settings.presentation().judgementIndicatorY =
           AppSettings::kDefaultJudgementIndicatorY;
       persistSettings();
     });
@@ -854,14 +854,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         metrics, i18n::message("settings.preview_layout.indicator_width.label"), &summaryJudgementIndicatorWidthValueText));
     auto updateIndicatorWidth = [this](int deltaPercent) {
       const int currentPercent = judgementIndicatorWidthScaleToPercent(
-          context.settings.judgementIndicatorWidthScale);
+          context.settings.presentation().judgementIndicatorWidthScale);
       const int minPercent = judgementIndicatorWidthScaleToPercent(
           AppSettings::kMinJudgementIndicatorWidthScale);
       const int maxPercent = judgementIndicatorWidthScaleToPercent(
           AppSettings::kMaxJudgementIndicatorWidthScale);
       const int nextPercent =
           std::clamp(currentPercent + deltaPercent, minPercent, maxPercent);
-      context.settings.judgementIndicatorWidthScale =
+      context.settings.presentation().judgementIndicatorWidthScale =
           judgementIndicatorWidthPercentToScale(nextPercent);
       persistSettings();
     };
@@ -875,7 +875,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         [updateIndicatorWidth]() { updateIndicatorWidth(10); });
     auto *resetIndicatorWidth = makeResetButton(metrics);
     resetIndicatorWidth->setOnClickListener([this]() {
-      context.settings.judgementIndicatorWidthScale =
+      context.settings.presentation().judgementIndicatorWidthScale =
           AppSettings::kDefaultJudgementIndicatorWidthScale;
       persistSettings();
     });
@@ -886,9 +886,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         metrics, i18n::message("settings.preview_layout.indicator_range.label"),
         &summaryJudgementIndicatorRangeValueText));
     auto updateIndicatorRange = [this](int deltaMilliseconds) {
-      context.settings.judgementIndicatorRangeMilliseconds =
+      context.settings.presentation().judgementIndicatorRangeMilliseconds =
           clampJudgementIndicatorRangeMilliseconds(
-              context.settings.judgementIndicatorRangeMilliseconds +
+              context.settings.presentation().judgementIndicatorRangeMilliseconds +
               deltaMilliseconds);
       persistSettings();
     };
@@ -902,7 +902,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         [updateIndicatorRange]() { updateIndicatorRange(10); });
     auto *resetIndicatorRange = makeResetButton(metrics);
     resetIndicatorRange->setOnClickListener([this]() {
-      context.settings.judgementIndicatorRangeMilliseconds =
+      context.settings.presentation().judgementIndicatorRangeMilliseconds =
           AppSettings::kDefaultJudgementIndicatorRangeMilliseconds;
       persistSettings();
     });
@@ -925,8 +925,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                          judgementCounterModeText, ui_theme::lime());
     judgementCounterModeButton->setOnClickListener([this]() {
-      context.settings.judgementCounterEnabled =
-          !context.settings.judgementCounterEnabled;
+      context.settings.presentation().judgementCounterEnabled =
+          !context.settings.presentation().judgementCounterEnabled;
       persistSettings();
     });
     counterControls->addView(judgementCounterModeButton);
@@ -937,8 +937,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementCounterPositionText);
     judgementCounterPositionButton->setOnClickListener([this]() {
-      context.settings.judgementCounterPosition = nextJudgementCounterPosition(
-          context.settings.judgementCounterPosition);
+      context.settings.presentation().judgementCounterPosition = nextJudgementCounterPosition(
+          context.settings.presentation().judgementCounterPosition);
       persistSettings();
     });
     counterControls->addView(judgementCounterPositionButton);
@@ -960,8 +960,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           gaugeBarPositionText);
     gaugeBarPositionButton->setOnClickListener([this]() {
-      context.settings.gaugeBarPosition =
-          nextGaugeBarPosition(context.settings.gaugeBarPosition);
+      context.settings.presentation().gaugeBarPosition =
+          nextGaugeBarPosition(context.settings.presentation().gaugeBarPosition);
       persistSettings();
     });
     gaugeControls->addView(gaugeBarPositionButton);
@@ -1158,9 +1158,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementTextYControls->setAlignItems(YGAlignFlexStart);
   auto updateJudgementTextY = [this](int deltaPercent) {
     const int currentPercent =
-        judgementTextYToPercent(context.settings.judgementTextY);
+        judgementTextYToPercent(context.settings.presentation().judgementTextY);
     const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-    context.settings.judgementTextY = judgementTextPercentToY(nextPercent);
+    context.settings.presentation().judgementTextY = judgementTextPercentToY(nextPercent);
     persistSettings();
   };
   auto *minusJudgementTextYLarge =
@@ -1185,7 +1185,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementTextYControls->addView(plusJudgementTextYLarge);
   auto *resetJudgementTextY = makeResetButton(metrics);
   resetJudgementTextY->setOnClickListener([this]() {
-    context.settings.judgementTextY = AppSettings::kDefaultJudgementTextY;
+    context.settings.presentation().judgementTextY = AppSettings::kDefaultJudgementTextY;
     persistSettings();
   });
   judgementTextYControls->addView(resetJudgementTextY);
@@ -1209,9 +1209,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         judgementTimingFastSlowCriteriaText);
   judgementTimingFastSlowCriteriaButton->setOnClickListener([this]() {
-    context.settings.judgementTimingFastSlowCriteria =
+    context.settings.presentation().judgementTimingFastSlowCriteria =
         nextJudgementTimingDisplayCriteria(
-            context.settings.judgementTimingFastSlowCriteria);
+            context.settings.presentation().judgementTimingFastSlowCriteria);
     persistSettings();
   });
   timingFastSlowGroup->addView(judgementTimingFastSlowCriteriaButton);
@@ -1229,9 +1229,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         judgementTimingMillisecondsCriteriaText);
   judgementTimingMillisecondsCriteriaButton->setOnClickListener([this]() {
-    context.settings.judgementTimingMillisecondsCriteria =
+    context.settings.presentation().judgementTimingMillisecondsCriteria =
         nextJudgementTimingDisplayCriteria(
-            context.settings.judgementTimingMillisecondsCriteria);
+            context.settings.presentation().judgementTimingMillisecondsCriteria);
     persistSettings();
   });
   timingMillisecondsGroup->addView(judgementTimingMillisecondsCriteriaButton);
@@ -1261,8 +1261,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                        judgementIndicatorModeText, ui_theme::lime());
   judgementIndicatorModeButton->setOnClickListener([this]() {
-    context.settings.judgementIndicatorEnabled =
-        !context.settings.judgementIndicatorEnabled;
+    context.settings.presentation().judgementIndicatorEnabled =
+        !context.settings.presentation().judgementIndicatorEnabled;
     persistSettings();
   });
   judgementIndicatorModeControls->addView(judgementIndicatorModeButton);
@@ -1274,9 +1274,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         judgementIndicatorRenderModeText);
   judgementIndicatorRenderModeButton->setOnClickListener([this]() {
-    context.settings.judgementIndicatorRenderMode =
+    context.settings.presentation().judgementIndicatorRenderMode =
         nextJudgementIndicatorRenderMode(
-            context.settings.judgementIndicatorRenderMode);
+            context.settings.presentation().judgementIndicatorRenderMode);
     persistSettings();
   });
   judgementIndicatorModeControls->addView(judgementIndicatorRenderModeButton);
@@ -1291,9 +1291,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorYControls->setAlignItems(YGAlignFlexStart);
   auto updateJudgementIndicatorY = [this](int deltaPercent) {
     const int currentPercent =
-        judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
+        judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY);
     const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-    context.settings.judgementIndicatorY =
+    context.settings.presentation().judgementIndicatorY =
         judgementIndicatorPercentToY(nextPercent);
     persistSettings();
     syncJudgementIndicatorYInputText(true);
@@ -1326,7 +1326,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorYControls->addView(plusIndicatorYLarge);
   auto *resetIndicatorY = makeResetButton(metrics);
   resetIndicatorY->setOnClickListener([this]() {
-    context.settings.judgementIndicatorY =
+    context.settings.presentation().judgementIndicatorY =
         AppSettings::kDefaultJudgementIndicatorY;
     persistSettings();
     syncJudgementIndicatorYInputText(true);
@@ -1343,14 +1343,14 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorWidthControls->setAlignItems(YGAlignFlexStart);
   auto updateJudgementIndicatorWidth = [this](int deltaPercent) {
     const int currentPercent = judgementIndicatorWidthScaleToPercent(
-        context.settings.judgementIndicatorWidthScale);
+        context.settings.presentation().judgementIndicatorWidthScale);
     const int minPercent = judgementIndicatorWidthScaleToPercent(
         AppSettings::kMinJudgementIndicatorWidthScale);
     const int maxPercent = judgementIndicatorWidthScaleToPercent(
         AppSettings::kMaxJudgementIndicatorWidthScale);
     const int nextPercent =
         std::clamp(currentPercent + deltaPercent, minPercent, maxPercent);
-    context.settings.judgementIndicatorWidthScale =
+    context.settings.presentation().judgementIndicatorWidthScale =
         judgementIndicatorWidthPercentToScale(nextPercent);
     persistSettings();
     syncJudgementIndicatorWidthInputText(true);
@@ -1385,7 +1385,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorWidthControls->addView(plusIndicatorWidthLarge);
   auto *resetIndicatorWidth = makeResetButton(metrics);
   resetIndicatorWidth->setOnClickListener([this]() {
-    context.settings.judgementIndicatorWidthScale =
+    context.settings.presentation().judgementIndicatorWidthScale =
         AppSettings::kDefaultJudgementIndicatorWidthScale;
     persistSettings();
     syncJudgementIndicatorWidthInputText(true);
@@ -1401,9 +1401,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorRangeControls->setGap(metrics.compact ? 8.0f : 12.0f);
   judgementIndicatorRangeControls->setAlignItems(YGAlignFlexStart);
   auto updateJudgementIndicatorRange = [this](int deltaMilliseconds) {
-    context.settings.judgementIndicatorRangeMilliseconds =
+    context.settings.presentation().judgementIndicatorRangeMilliseconds =
         clampJudgementIndicatorRangeMilliseconds(
-            context.settings.judgementIndicatorRangeMilliseconds +
+            context.settings.presentation().judgementIndicatorRangeMilliseconds +
             deltaMilliseconds);
     persistSettings();
     syncJudgementIndicatorRangeInputText(true);
@@ -1444,7 +1444,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorRangeControls->addView(plusIndicatorRangeLarge);
   auto *resetIndicatorRange = makeResetButton(metrics);
   resetIndicatorRange->setOnClickListener([this]() {
-    context.settings.judgementIndicatorRangeMilliseconds =
+    context.settings.presentation().judgementIndicatorRangeMilliseconds =
         AppSettings::kDefaultJudgementIndicatorRangeMilliseconds;
     persistSettings();
     syncJudgementIndicatorRangeInputText(true);
@@ -1507,8 +1507,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         notePriorityModeText);
   notePriorityModeButton->setOnClickListener([this]() {
-    context.settings.notePriorityMode =
-        nextNotePriorityMode(context.settings.notePriorityMode);
+    context.settings.presentation().notePriorityMode =
+        nextNotePriorityMode(context.settings.presentation().notePriorityMode);
     persistSettings();
   });
   notePriorityControls->addView(notePriorityModeButton);
@@ -1666,8 +1666,8 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                        judgementCounterModeText, ui_theme::lime());
   judgementCounterModeButton->setOnClickListener([this]() {
-    context.settings.judgementCounterEnabled =
-        !context.settings.judgementCounterEnabled;
+    context.settings.presentation().judgementCounterEnabled =
+        !context.settings.presentation().judgementCounterEnabled;
     persistSettings();
   });
   judgementCounterModeControls->addView(judgementCounterModeButton);
@@ -1678,8 +1678,8 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         judgementCounterPositionText);
   judgementCounterPositionButton->setOnClickListener([this]() {
-    context.settings.judgementCounterPosition =
-        nextJudgementCounterPosition(context.settings.judgementCounterPosition);
+    context.settings.presentation().judgementCounterPosition =
+        nextJudgementCounterPosition(context.settings.presentation().judgementCounterPosition);
     persistSettings();
   });
   judgementCounterModeControls->addView(judgementCounterPositionButton);
@@ -1707,8 +1707,8 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                         gaugeBarPositionText);
   gaugeBarPositionButton->setOnClickListener([this]() {
-    context.settings.gaugeBarPosition =
-        nextGaugeBarPosition(context.settings.gaugeBarPosition);
+    context.settings.presentation().gaugeBarPosition =
+        nextGaugeBarPosition(context.settings.presentation().gaugeBarPosition);
     persistSettings();
   });
   gaugePositionControls->addView(gaugeBarPositionButton);
@@ -1875,8 +1875,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   noteStartControls->setGap(metrics.compact ? 8.0f : 12.0f);
   noteStartControls->setAlignItems(YGAlignFlexStart);
   auto updateNoteStartPosition = [this](int deltaPercent) {
-    context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
-        context.settings.noteStartPositionPercent + deltaPercent);
+    context.settings.presentation().noteStartPositionPercent = clampNoteStartPositionPercent(
+        context.settings.presentation().noteStartPositionPercent + deltaPercent);
     persistSettings();
     syncNoteStartPositionInputText(true);
   };
@@ -1906,7 +1906,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   noteStartControls->addView(plusNoteStartLarge);
   auto *resetNoteStart = makeResetButton(metrics);
   resetNoteStart->setOnClickListener([this]() {
-    context.settings.noteStartPositionPercent =
+    context.settings.presentation().noteStartPositionPercent =
         AppSettings::kDefaultNoteStartPositionPercent;
     persistSettings();
     syncNoteStartPositionInputText(true);
@@ -1943,8 +1943,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   angleControls->setGap(metrics.compact ? 8.0f : 12.0f);
   angleControls->setAlignItems(YGAlignFlexStart);
   auto updateLaneAngle = [this](float delta) {
-    context.settings.laneAngleDegrees =
-        clampLaneAngle(context.settings.laneAngleDegrees + delta);
+    context.settings.presentation().laneAngleDegrees =
+        clampLaneAngle(context.settings.presentation().laneAngleDegrees + delta);
     persistSettings();
     syncLaneAngleInputText(true);
   };
@@ -1974,7 +1974,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   angleControls->addView(plusAngleLarge);
   auto *resetAngle = makeResetButton(metrics);
   resetAngle->setOnClickListener([this]() {
-    context.settings.laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
+    context.settings.presentation().laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
     persistSettings();
     syncLaneAngleInputText(true);
   });
@@ -1989,8 +1989,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   lengthControls->setGap(metrics.compact ? 8.0f : 12.0f);
   lengthControls->setAlignItems(YGAlignFlexStart);
   auto updateLaneLength = [this](float delta) {
-    context.settings.laneLength =
-        clampLaneLength(context.settings.laneLength + delta);
+    context.settings.presentation().laneLength =
+        clampLaneLength(context.settings.presentation().laneLength + delta);
     persistSettings();
     syncLaneLengthInputText(true);
   };
@@ -2020,7 +2020,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   lengthControls->addView(plusLengthLarge);
   auto *resetLength = makeResetButton(metrics);
   resetLength->setOnClickListener([this]() {
-    context.settings.laneLength = AppSettings::kDefaultLaneLength;
+    context.settings.presentation().laneLength = AppSettings::kDefaultLaneLength;
     persistSettings();
     syncLaneLengthInputText(true);
   });
@@ -2115,8 +2115,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   beamControls->setGap(metrics.compact ? 8.0f : 12.0f);
   beamControls->setAlignItems(YGAlignFlexStart);
   auto updateLaneBeamLength = [this](int deltaPercent) {
-    context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
-        context.settings.laneBeamLengthPercent + deltaPercent);
+    context.settings.presentation().laneBeamLengthPercent = clampLaneBeamLengthPercent(
+        context.settings.presentation().laneBeamLengthPercent + deltaPercent);
     persistSettings();
     syncLaneBeamLengthInputText(true);
   };
@@ -2146,7 +2146,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   beamControls->addView(plusBeamLarge);
   auto *resetBeam = makeResetButton(metrics);
   resetBeam->setOnClickListener([this]() {
-    context.settings.laneBeamLengthPercent =
+    context.settings.presentation().laneBeamLengthPercent =
         AppSettings::kDefaultLaneBeamLengthPercent;
     persistSettings();
     syncLaneBeamLengthInputText(true);

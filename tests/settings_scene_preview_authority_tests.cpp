@@ -16,8 +16,8 @@ void expect(bool value, std::string_view message) {
 
 void testPreviewLaneCoverAuthorityMirrorsConfiguredEnablement() {
   AppSettings enabled;
-  enabled.noteStartPositionPercent = 63;
-  enabled.laneCoverEnabled = true;
+  enabled.presentation().noteStartPositionPercent = 63;
+  enabled.presentation().laneCoverEnabled = true;
   const auto enabledAuthority =
       settings_scene::previewLaneCoverAuthority(enabled);
   expect(enabledAuthority.percent == 63 && enabledAuthority.enabled,
@@ -25,8 +25,8 @@ void testPreviewLaneCoverAuthorityMirrorsConfiguredEnablement() {
          "position");
 
   AppSettings disabled;
-  disabled.noteStartPositionPercent = 37;
-  disabled.laneCoverEnabled = false;
+  disabled.presentation().noteStartPositionPercent = 37;
+  disabled.presentation().laneCoverEnabled = false;
   const auto disabledAuthority =
       settings_scene::previewLaneCoverAuthority(disabled);
   expect(disabledAuthority.percent == 37 && !disabledAuthority.enabled,
