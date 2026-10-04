@@ -3434,6 +3434,122 @@ void testCurrentCourseBadPointsSchemaFailsClosed(const std::filesystem::path &ro
   }
 }
 
+void testParityUpdateKeepsPreviousBestScores(const std::filesystem::path &root) {
+  for (const auto selection : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    const auto current = RulesetDescriptor::For(selection);
+    const auto name = "parity-update-best-" + current.id;
+    const auto path = root / name / "score.db";
+    const auto meta = sampleMeta(root, name);
+    auto previous = sampleProvenance(name);
+    previous.ruleset = current;
+    previous.ruleset.version = selection == GameplayRuleset::LR2 ? 4 : 3;
+    previous.stages.front().candidateSelection =
+        selection == GameplayRuleset::LR2 ? gameplay::CandidateSelectionMode::Combo
+                                         : gameplay::CandidateSelectionMode::Lowest;
+    CoursePlaySession session;
+    session.courseId = 94;
+    session.courseName = name;
+    session.constraintJson = "{}";
+    session.longNoteMode = meta.LnMode;
+    session.entries.push_back({.meta = meta});
+    session.courseKey = course_identity::makeCourseKey(session);
+    ScoreRepository initial(path);
+    auto historicalState = sampleState(30, 5);
+    historicalState.gaugeType = GaugeType::Hard;
+    assert(initial.SaveScore(meta, historicalState, previous));
+    assert(initial.SaveCourseScore(session, historicalState, 1, 1, previous));
+    // A lower current score must not displace the grandfathered best.
+    auto fresh = previous;
+    fresh.ruleset = current;
+    assert(initial.SaveScore(meta, sampleState(20, 5), fresh));
+    // Higher scores outside this exact transition must still be excluded.
+    for (int variant = 0; variant < 6; ++variant) {
+      auto excluded = previous;
+      if (variant == 0) --excluded.ruleset.version;
+      if (variant == 1) excluded.ruleset.version = current.version + 1;
+      if (variant == 2) excluded.ruleset.scoringModel = "custom-scoring";
+      if (variant == 3) excluded.ruleset.judgementModel = "custom-judgement";
+      if (variant == 4) excluded.ruleset.gaugeModel = "custom-gauge";
+      if (variant == 5) {
+        excluded.autoPlay = true;
+        excluded.eligibility = ScoreEligibility::Modified;
+      }
+      auto excludedState = sampleState(50, 5);
+      excludedState.gaugeType = GaugeType::ExHard;
+      assert(initial.SaveScore(meta, excludedState, excluded));
+      assert(initial.SaveCourseScore(session, excludedState, 1, 1, excluded));
+    }
+    initial.Shutdown();
+
+    std::string chartEvidence, courseEvidence;
+    {
+      auto db = openDatabase(path);
+      chartEvidence = queryText(db.get(),
+          "SELECT provenance_json FROM scores WHERE id=1");
+      courseEvidence = queryText(db.get(),
+          "SELECT provenance_json FROM course_scores WHERE id=1");
+      // Reproduce the shipped v14 cache policy, including a populated cache
+      // that the empty-cache repair path cannot restore.
+      std::vector<std::string> indexes;
+      SqliteStatementHandle stmt;
+      assert(prepareSqliteStatement(db.get(), "SELECT name FROM sqlite_master "
+          "WHERE name LIKE 'idx_scores_best_eligible_%'", stmt) == SQLITE_OK);
+      while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        indexes.push_back(sqliteColumnString(stmt.get(), 0));
+      }
+      stmt.reset();
+      for (const auto &index : indexes) {
+        execOrAbort(db.get(), "DROP INDEX " + index);
+      }
+      execOrAbort(db.get(), "CREATE INDEX idx_scores_best_eligible_5_4 "
+          "ON scores(chart_sha256) WHERE ruleset_version=5");
+      execOrAbort(db.get(), "UPDATE score_sha256_best_score_cache "
+          "SET score_id=2,score=45");
+      execOrAbort(db.get(), "UPDATE score_sha256_clear_rank_cache SET rank=" +
+          std::to_string(kClearTypeNormalClearRank));
+    }
+    if (selection == GameplayRuleset::Beatoraja) {
+      // Menu queries can encounter the profile first via an attached database.
+      auto charts = openDatabase(root / name / "chart.db");
+      assert(!score_cache_queries::prepareScoreQueryDatabase(charts.get(), path));
+      assert(queryInt(charts.get(), "SELECT score FROM "
+          "score_db.score_sha256_best_score_cache") == 65);
+    }
+    ScoreRepository reopened(path);
+    assert(reopened.EnsureSchema());
+    const auto best = reopened.LoadBestScore(meta, std::nullopt, std::nullopt, 2);
+    assert(best && best->score == 65);
+    const auto filtered = reopened.LoadBestScoreForRuleset(meta, current, 2);
+    assert(filtered && filtered->score == 65);
+    const auto course = reopened.LoadBestCourseScore(session);
+    assert(course && course->score == 65);
+    const auto cached = reopened.LoadBestScores().bestForHash(meta.SHA256, 2);
+    assert(cached && cached->score == 65);
+    const auto ranks = reopened.LoadBestClearRanks();
+    assert(ranks.bestRankFor(meta) == kClearTypeHardClearRank);
+    assert(ranks.bestCourseRankFor(session.courseKey, session.courseId, 2) ==
+           kClearTypeHardClearRank);
+    const auto lamp = reopened.LoadBestClearScore(
+        meta, std::nullopt, std::nullopt, 2);
+    assert(lamp && lamp->score == 65 && lamp->clearType == kClearTypeHardClearRank);
+    const auto other = RulesetDescriptor::For(selection == GameplayRuleset::LR2
+        ? GameplayRuleset::Beatoraja : GameplayRuleset::LR2);
+    assert(!reopened.LoadBestScoreForRuleset(meta, other, 2));
+    auto future = current;
+    ++future.version;
+    assert(!reopened.LoadBestScoreForRuleset(meta, future, 2));
+    reopened.Shutdown();
+    auto db = openDatabase(path);
+    assert(queryText(db.get(), "SELECT provenance_json FROM scores WHERE id=1") ==
+           chartEvidence);
+    assert(queryText(db.get(),
+        "SELECT provenance_json FROM course_scores WHERE id=1") == courseEvidence);
+    SqliteInitializationTrace trace(db.get());
+    assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+    assert(!trace.contains("DELETE FROM score_sha256_best_score_cache"));
+  }
+}
+
 void testPreviousRulesetScoresRemainHistoryButNotBest(
     const std::filesystem::path &root) {
   const auto path = root / "previous-ruleset-best" / "score.db";
@@ -4171,6 +4287,7 @@ int main() {
   testCourseSelectorOptionScoresMatchBeatorajaBuckets(root);
   testVersion14CourseBadPointsMigration(root);
   testCurrentCourseBadPointsSchemaFailsClosed(root);
+  testParityUpdateKeepsPreviousBestScores(root);
   testPreviousRulesetScoresRemainHistoryButNotBest(root);
   testModifiedPlaybackDoesNotUpdateBestScores(root);
   testVersion8MigrationReclassifiesBeatorajaValidScores(root);

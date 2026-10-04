@@ -1607,7 +1607,7 @@ score_repository_detail::LoadBestScoreOnConnection(
     query += "AND (attempt_id IS NULL OR attempt_id <> ?) ";
   }
   if (requiredRuleset != nullptr) {
-    query += "AND ruleset_version = ? ";
+    query += "AND ruleset_version IN (?, ?) ";
   }
   query +=
       "ORDER BY CASE WHEN ln_mode = ? OR ln_mode = -1 THEN 0 ELSE 1 END, " +
@@ -1636,6 +1636,9 @@ score_repository_detail::LoadBestScoreOnConnection(
   }
   if (requiredRuleset != nullptr) {
     sqlite3_bind_int(stmt.get(), bindIndex++, requiredRuleset->version);
+    const auto previous = previousBestScoreCompatibleRuleset(*requiredRuleset);
+    sqlite3_bind_int(stmt.get(), bindIndex++, previous ? previous->version
+                                                    : requiredRuleset->version);
   }
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
 
@@ -1644,7 +1647,9 @@ score_repository_detail::LoadBestScoreOnConnection(
       std::string provenanceError;
       const auto provenance = deserializeScoreProvenance(
           sqliteColumnString(stmt.get(), 10), provenanceError);
-      if (!provenance.has_value() || provenance->ruleset != *requiredRuleset) {
+      const auto previous = previousBestScoreCompatibleRuleset(*requiredRuleset);
+      if (!provenance || (provenance->ruleset != *requiredRuleset &&
+                          (!previous || provenance->ruleset != *previous))) {
         continue;
       }
     }

@@ -37,6 +37,13 @@ canonical v4 windows, candidate policy, and TOTAL calculation; v3 and unknown or
 modified proofs remain unsupported. New plays carry v5. Replay rejudging never
 rewrites a saved score or upgrades its IR proof.
 
+Best scores and clear lamps make a one-time compatibility exception for LR2 v4
+under v5 and Beatoraja v3 under v4. Chart and course selections retain these
+previously eligible results, including ruleset-specific local comparisons.
+Modified scores and altered model identifiers remain excluded. Existing profiles
+refresh derived summaries once; saved provenance and replay identities are not
+rewritten. The explicit version pairs do not extend to earlier or future updates.
+
 ## Repeating the comparison
 
 From the repository root with the pinned reference checkout alongside it:
