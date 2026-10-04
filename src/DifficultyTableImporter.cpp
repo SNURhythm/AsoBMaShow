@@ -164,7 +164,9 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   (void)pauseRequested;
   std::string body;
   std::string iosError;
-  if (!DownloadURLTextIOS(url, body, iosError, checkpoint)) {
+  // Legacy HTML may be Shift_JIS: its ASCII bmstable link can be read directly.
+  // Header/data JSON still receives strict UTF-8 validation in the JSON parser.
+  if (!DownloadURLBytesIOS(url, body, iosError, checkpoint)) {
     if (errorMessage != nullptr) {
       *errorMessage = iosError.empty() ? "Failed to download " + url : iosError;
     }

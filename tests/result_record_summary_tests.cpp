@@ -318,14 +318,14 @@ void testOldRulesetRecordIsExplicitlyObsolete() {
   expect(summary.replayState == replay::ReplayState::Obsolete &&
              summary.modern->result == record.result &&
              summary.capabilities.resultRecall && summary.capabilities.shareOrCopy &&
-             !summary.capabilities.watch && !summary.capabilities.irUpload,
-         "old ruleset row is obsolete without modifying its saved result");
+             summary.capabilities.watch && !summary.capabilities.irUpload,
+         "old ruleset row allows rejudged playback without modifying its saved result");
   expect(result_record_ui::detailLabel(summary).find("Obsolete replay") !=
              std::string::npos,
          "Records visibly labels an obsolete replay");
 }
 
-void testObsoleteRulesetHidesIrIndependentlyOfReplayFileState() {
+void testHistoricalRulesetIrStateIsIndependentOfReplayFileState() {
   using replay::ReplayState;
   struct ReplayCase {
     ReplayState probed;
@@ -360,17 +360,19 @@ void testObsoleteRulesetHidesIrIndependentlyOfReplayFileState() {
                                 ir::IrRecordState::Failed}) {
         const auto summary = makeModernChartResultRecord(chart, entry.probed,
                                                          irState);
-        expect(summary.irState == ir::IrRecordState::Hidden &&
-                   !summary.capabilities.irUpload &&
-                   resultRecordActionTarget(summary, ResultRecordAction::IrUpload) ==
-                       ResultRecordActionTarget::None,
-               "obsolete chart provenance hides IR regardless of replay file or pending upload state");
+        const bool preservedV4 = ruleset == GameplayRuleset::LR2 &&
+                                 obsoleteRuleset.version == 4;
+        expect(summary.irState == (preservedV4 ? irState : ir::IrRecordState::Hidden) &&
+                   summary.capabilities.irUpload == preservedV4 &&
+                   (resultRecordActionTarget(summary, ResultRecordAction::IrUpload) !=
+                    ResultRecordActionTarget::None) == preservedV4,
+               "verified LR2 v4 retains provider IR state while unsupported revisions hide it");
         expect(summary.replayState == entry.displayed &&
                    summary.capabilities.shareOrCopy == entry.share &&
                    summary.capabilities.deleteReplayFile == entry.remove &&
                    summary.capabilities.resultRecall &&
                    summary.modern->result == chart.result,
-               "hiding obsolete chart IR preserves probed file actions and saved result");
+               "historical chart IR policy preserves probed file actions and saved result");
       }
       const auto summary = makeModernCourseResultRecord(course, entry.probed);
       expect(summary.irState == ir::IrRecordState::Hidden &&
@@ -383,6 +385,14 @@ void testObsoleteRulesetHidesIrIndependentlyOfReplayFileState() {
              "obsolete course retains file state and result while keeping IR hidden");
     }
   }
+  ModernChartResultRecord altered{.result = validModernResult()};
+  altered.result.score.provenance.ruleset.version = 4;
+  altered.result.score.provenance.ruleset.gaugeModel = "altered-model";
+  const auto alteredSummary = makeModernChartResultRecord(
+      altered, ReplayState::Verified, ir::IrRecordState::Eligible);
+  expect(alteredSummary.irState == ir::IrRecordState::Hidden &&
+             !alteredSummary.capabilities.irUpload,
+         "v4 compatibility requires the exact historical model identity");
   ModernChartResultRecord current{.result = validModernResult()};
   for (const auto state : {ReplayState::Missing, ReplayState::Corrupt,
                            ReplayState::UserDeleted}) {
@@ -906,7 +916,7 @@ int main() {
   testReplayDeleteConfirmationOwnsTheExactRequestedAttempt();
   testAutoPlayIsTheOnlyReplaySummaryBackedRecord();
   testOldRulesetRecordIsExplicitlyObsolete();
-  testObsoleteRulesetHidesIrIndependentlyOfReplayFileState();
+  testHistoricalRulesetIrStateIsIndependentOfReplayFileState();
   testModernConversionUsesSharedReplayCapabilities();
   testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions();
   testModernCourseConversionKeepsResultWithoutReplay();

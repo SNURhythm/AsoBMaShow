@@ -69,6 +69,10 @@ def main():
         extract(source, signature).replace("SDL_GetTicks64()", "reminderTicks")
         if signature == "void GamePlayScene::update(float dt)" else extract(source, signature)
         for signature in signatures)
+    methods += "\n" + extract(source, "bool laneIsPressed(")
+    methods += "\n" + extract(source, "void GamePlayScene::resetHellChargeGaugeTracking(")
+    methods += "\n" + extract(source, "void GamePlayScene::updateHellChargeGauge(").replace(
+        "GamePlayScene::updateHellChargeGauge(", "GamePlayScene::updateHellChargeGaugeForTest(", 1)
     native_reminder_pump = extract(source, "void GamePlayScene::discardGuidedAccessReminderTouches()")
     # Exercise the native iPad queue on the host without enabling iOS-only reset setup.
     methods += "\n" + native_reminder_pump.replace(

@@ -150,6 +150,11 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height);
 bool ProbeDownloadURLIOS(const std::string &url, std::string &errorMessage,
                          IOSDownloadCheckpoint checkpoint);
+// Bounded response bytes for callers that interpret the document encoding.
+bool DownloadURLBytesIOS(const std::string &url, std::string &body,
+                         std::string &errorMessage,
+                         IOSDownloadCheckpoint checkpoint = nullptr,
+                         std::size_t maximumResponseBytes = 16ULL * 1024 * 1024);
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage,
                         IOSDownloadCheckpoint checkpoint = nullptr,

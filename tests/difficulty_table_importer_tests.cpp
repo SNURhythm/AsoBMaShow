@@ -263,6 +263,43 @@ void testDesktopDownloadsEnforceIncrementalResponseBudget() {
 }
 #endif
 
+void testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  Fixture fixture;
+  const std::string pageUrl = "http://example.test/legacy/pms.html";
+  const std::string headerUrl = "https://example.test/table/header.json";
+  // Shift_JIS title, as served by stellawingroad.web.fc2.com/new/pms.html.
+  const std::string page =
+      "<html><head><title>\x94\xad\x8b\xb6PMS\x93\xef\x88\xd5\x93x</title>"
+      "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=Shift_JIS\">"
+      "<meta name=\"bmstable\" content=\"" + headerUrl + "\"></head></html>";
+  auto header = nlohmann::json::parse(fixture.headerJson);
+  header["name"] = "発狂PMS難易度";
+  fixture.headerJson = header.dump();
+  DifficultyTableImporter importer(
+      [&](const std::string &url, std::string *) -> std::optional<std::string> {
+        if (url == pageUrl) return page;
+        if (url == headerUrl) return fixture.headerJson;
+        if (url == "https://example.test/table/data.json") return fixture.dataJson;
+        return std::nullopt;
+      });
+  std::string error;
+  assert(importer.ImportFromUrl(*session, pageUrl, &error));
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  assert(tables.front().name == "発狂PMS難易度");
+  assert(tables.front().chartCount == 1);
+  const auto before = snapshotDifficultyTables(repository.DatabasePath());
+  fixture.dataJson = "[{\"title\":\"\xc0\xaf\"}]";
+  assert(!importer.ImportFromUrl(*session, pageUrl, &error));
+  assert(!error.empty());
+  assert(snapshotDifficultyTables(repository.DatabasePath()) == before);
+}
+
 void testParseAndReplacementRollback() {
   const Fixture fixture;
   std::string error;
@@ -558,6 +595,7 @@ void testPackagedDefaultsImportWithoutNetwork() {
 }
 
 int main() {
+  testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson();
   testBundledDefaultsSurviveOfflineAndYieldToUpdates();
   testPackagedDefaultsImportWithoutNetwork();
 #if !defined(_WIN32)

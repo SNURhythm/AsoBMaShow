@@ -94,7 +94,7 @@ void testLr2RankTablesAndSemantics() {
 
   const auto rules =
       gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2);
-  assert(rules.candidateSelection == CandidateSelectionMode::LR2);
+  assert(rules.candidateSelection == CandidateSelectionMode::Combo);
   assert(rules.automaticPoorLateMicros == 200000);
   assert(rules.repeatedKpoor);
   assert(rules.multiBad);

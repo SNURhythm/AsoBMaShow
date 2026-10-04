@@ -62,6 +62,8 @@ struct ReplayPlaybackCarryState {
   std::optional<GaugeStateSnapshot> gauge;
   int combo = 0;
   int maximumCombo = 0;
+  CourseJudgementConstraint courseJudgement = CourseJudgementConstraint::None;
+  std::optional<GaugeProfile> courseGaugeProfile;
 };
 
 class ReplayPlaybackMaterializer {
@@ -72,9 +74,8 @@ public:
       const ReplayJudgingSink &judge,
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
 
-  // Builds a judged, in-memory track and retains result disagreement for
-  // diagnostics. ChartReplayConsumer and CourseReplayConsumer require matched
-  // facts before exposing this track to saved-replay actions.
+  // Builds a judged, in-memory track and marks differing saved facts as stale.
+  // Authenticated historical provenance and the original input remain intact.
   [[nodiscard]] static ReplayPlaybackMaterializationOutcome
   materializeForConsumers(
       const ReplayChartDocument &document,

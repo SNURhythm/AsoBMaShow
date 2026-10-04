@@ -199,6 +199,11 @@ struct GameplaySearchStats {
   std::size_t notesExamined = 0;
 };
 
+struct GameplayLaneInputState {
+  int lane = -1;
+  bool pressed = false;
+};
+
 class GameplaySimulation {
 public:
   GameplaySimulation(const GameplayDefinition &definition,
@@ -209,6 +214,12 @@ public:
                                const GameplayInputContext &context);
   GameplayInputBatch releaseLane(int lane, const GameplayInputContext &context,
                                  bool isBackSpin = false);
+  GameplayInputBatch pressScratchKey(int lane, bool clockwise,
+                                     const GameplayInputContext &context);
+  GameplayInputBatch releaseScratchKey(int lane, bool clockwise,
+                                       const GameplayInputContext &context);
+  [[nodiscard]] NoteId previewScratchPressSoundNote(
+      int lane, const GameplayInputContext &context);
   [[nodiscard]] NoteId previewPreparationPressSoundNote(
       int mainLane, int compensateLane,
       const GameplayInputContext &context) const;
@@ -219,6 +230,14 @@ public:
       int lane, const GameplayInputContext &context);
   GameplayAdvanceResult advanceTo(std::int64_t songTimeMicros,
                                   std::int64_t visualTimeMicros);
+  // LR2 updates pass notes/mines and HCN before input, then resolve held LN
+  // endings and overdue misses after input. The incoming physical state is
+  // already visible to mines/HCN, as in JudgeManager's input snapshot.
+  GameplayAdvanceResult beginInputUpdate(int lane, bool pressed,
+                                         const GameplayInputContext &context);
+  GameplayAdvanceResult beginInputUpdate(std::span<const GameplayLaneInputState> states,
+                                         const GameplayInputContext &context);
+  GameplayAdvanceResult finishInputUpdate(const GameplayInputContext &context);
   GameplayInputResult applyPressAt(int mainLane, int compensateLane,
                                    const GameplayInputContext &context);
   GameplayInputResult applyReleaseAt(int lane,
@@ -268,6 +287,12 @@ private:
     NoteId pendingReleaseTailId = kInvalidNoteId;
     std::int64_t pendingReleaseDeadline = 0;
     JudgeResult pendingReleaseJudge = JudgeResult(None, 0);
+    NoteId passingHellChargeHeadId = kInvalidNoteId;
+    std::int64_t hellChargeBalanceMicros = 0;
+    std::size_t missCursor = 0;
+    std::optional<std::int64_t> suppressedBackspinPressMicros;
+    std::array<bool, 2> scratchKeysPressed{};
+    int scratchProcessingKey = -1;
   };
 
   [[nodiscard]] LaneRuntimeState *findLane(int lane) noexcept;
@@ -316,6 +341,12 @@ private:
                                         std::int64_t timeMicros) const;
   void integrateHellChargeInterval(std::int64_t fromMicros,
                                    std::int64_t toMicros);
+  void beginLr2Update(std::int64_t songTimeMicros,
+                       std::int64_t visualTimeMicros,
+                       std::span<const GameplayLaneInputState> states = {});
+  void finishLr2Update(std::int64_t songTimeMicros,
+                        std::int64_t visualTimeMicros);
+  [[nodiscard]] bool lanePressedAtUpdate(int lane) const noexcept;
   void commitGaugeTick(Judgement judgement,
                        std::int64_t songTimeMicros);
 
@@ -332,6 +363,9 @@ private:
   std::vector<GameplayInputResult> inputTransactions_;
   std::vector<JudgeCandidateDescriptor> pressCandidates_;
   std::vector<std::size_t> multiBadSourceIndices_;
+  std::vector<NoteId> passingUpdateNotes_;
+  bool lr2UpdateOpen_ = false;
+  std::vector<GameplayLaneInputState> updateInputStates_;
   bool replayOverflowed_ = false;
   bool automaticResultOverflowed_ = false;
   bool transactionSurvivalFailed_ = false;

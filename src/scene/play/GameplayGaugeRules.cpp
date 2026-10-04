@@ -9,9 +9,10 @@
 namespace {
 double lr2DefaultTotal(int noteCount) noexcept {
   const int notes = std::max(0, noteCount);
-  return std::floor(
-      160.0 +
-      (notes + std::clamp(notes - 400, 0, 200)) * 0.16);
+  // Java rounds the product before adding the initial TOTAL.
+  const volatile double increment =
+      (notes + std::clamp(notes - 400, 0, 200)) * 0.16;
+  return 160.0 + increment;
 }
 
 float lr2TotalFactor(double total) noexcept {
@@ -50,10 +51,6 @@ float lr2NoteFactor(int noteCount) noexcept {
     return 1.0F + increment;
   }
   return 1.0F;
-}
-
-float lr2DamageMultiplier(double total, int totalNotes) noexcept {
-  return std::max(lr2TotalFactor(total), lr2NoteFactor(totalNotes));
 }
 
 CompiledGaugeDefinition lr2GrooveDefinition(
@@ -134,17 +131,25 @@ void compileBeatoraja(GameplayGaugeRules &rules) {
     for (const Judgement judgement :
          {PGreat, Great, Good, Bad, Poor, Kpoor}) {
       definition.baseDelta[gaugeJudgementIndex(judgement)] =
-          gaugeBaseDeltaForJudgement(type, judgement, rules.resolvedProfile);
+          gaugeProfileIsCourse(rules.resolvedProfile)
+              ? courseGaugeBaseDeltaForJudgement(rules.resolvedProfile, type,
+                                                 judgement)
+              : gaugeBaseDeltaForJudgement(type, judgement,
+                                           rules.resolvedProfile);
     }
   }
 }
 } // namespace
 
+float lr2GaugeDamageMultiplier(double total, int totalNotes) noexcept {
+  return std::max(lr2TotalFactor(total), lr2NoteFactor(totalNotes));
+}
+
 double resolveEffectiveGaugeTotal(
     GameplayRuleset ruleset, const bms_parser::ChartMeta &meta) noexcept {
   if (ruleset == GameplayRuleset::LR2) {
     if (meta.HasTotal && meta.Total > 0.0) {
-      return std::floor(meta.Total);
+      return meta.Total;
     }
     return lr2DefaultTotal(meta.TotalNotes);
   }
@@ -157,35 +162,26 @@ double resolveEffectiveGaugeTotal(
 float gaugeReducedDamageZoneUpperBound(
     GameplayRuleset ruleset, GaugeType gaugeType,
     GaugeProfile profile) noexcept {
-  if (ruleset == GameplayRuleset::LR2) {
-    if (!gaugeProfileIsCourse(profile)) {
-      return gaugeType == GaugeType::Hard ? 32.0F : 0.0F;
+  const bool course = gaugeProfileIsCourse(profile);
+  const bool lr2 = profile == GaugeProfile::CourseLR2 ||
+                   profile == GaugeProfile::StandardLr2 ||
+                   (ruleset == GameplayRuleset::LR2 && !course);
+  if (lr2) {
+    if (course) {
+      return courseGaugeClassIndexForType(gaugeType) <= 1 ? 32.0F : 0.0F;
     }
-    return courseGaugeClassIndexForType(gaugeType) <= 1 ? 32.0F : 0.0F;
+    return gaugeType == GaugeType::Hard || gaugeType == GaugeType::Grade ||
+                   gaugeType == GaugeType::ExGrade
+               ? 32.0F : 0.0F;
   }
-
-  if (!gaugeProfileIsCourse(profile)) {
-    if (profile == GaugeProfile::StandardLr2) {
-      return gaugeType == GaugeType::Hard || gaugeType == GaugeType::Grade ||
-                     gaugeType == GaugeType::ExGrade
-                 ? 30.0F
-                 : 0.0F;
-    }
+  if (!course) {
     return gaugeType == GaugeType::Hard &&
                    profile != GaugeProfile::Standard5Keys
-               ? 50.0F
-               : 0.0F;
+               ? 50.0F : 0.0F;
   }
-
-  const int classIndex = courseGaugeClassIndexForType(gaugeType);
-  if (profile == GaugeProfile::CourseLR2 && classIndex <= 1) {
-    return 30.0F;
-  }
-  if (profile != GaugeProfile::Course5Keys &&
-      profile != GaugeProfile::CourseLR2 && classIndex == 0) {
-    return 25.0F;
-  }
-  return 0.0F;
+  return profile != GaugeProfile::Course5Keys &&
+                 courseGaugeClassIndexForType(gaugeType) == 0
+             ? 25.0F : 0.0F;
 }
 
 GameplayGaugeRules compileGameplayGaugeRules(
@@ -194,22 +190,28 @@ GameplayGaugeRules compileGameplayGaugeRules(
   GameplayGaugeRules result;
   result.ruleset = ruleset;
   if (ruleset == GameplayRuleset::LR2) {
-    result.resolvedProfile = gaugeProfileIsCourse(requestedProfile)
-                                 ? GaugeProfile::CourseLR2
-                                 : GaugeProfile::Standard;
+    result.resolvedProfile = GaugeProfile::Standard;
+    if (requestedProfile == GaugeProfile::CourseDefault) {
+      result.resolvedProfile = GaugeProfile::CourseLR2;
+    } else if (gaugeProfileIsCourse(requestedProfile)) {
+      result.resolvedProfile = requestedProfile;
+    }
   } else {
     result.resolvedProfile =
         resolveGaugeProfile(requestedProfile, meta.KeyMode);
   }
   result.totalNotes = std::max(0, meta.TotalNotes);
-  result.effectiveTotal = resolveEffectiveGaugeTotal(ruleset, meta);
+  const bool namedLr2 = result.resolvedProfile == GaugeProfile::StandardLr2 ||
+                        result.resolvedProfile == GaugeProfile::CourseLR2;
+  result.effectiveTotal = resolveEffectiveGaugeTotal(
+      namedLr2 ? GameplayRuleset::LR2 : ruleset, meta);
   result.compiled = true;
-  if (ruleset == GameplayRuleset::LR2) {
-    if (gaugeProfileIsCourse(result.resolvedProfile)) {
-      compileLr2Course(result);
-    } else {
-      compileLr2Standard(result);
-    }
+  if (result.resolvedProfile == GaugeProfile::CourseLR2) {
+    compileLr2Course(result);
+  } else if ((ruleset == GameplayRuleset::LR2 &&
+              !gaugeProfileIsCourse(result.resolvedProfile)) ||
+             result.resolvedProfile == GaugeProfile::StandardLr2) {
+    compileLr2Standard(result);
   } else {
     compileBeatoraja(result);
   }
@@ -219,10 +221,13 @@ GameplayGaugeRules compileGameplayGaugeRules(
 float GameplayGaugeRules::delta(GaugeType type, Judgement judgement,
                                 float currentGauge,
                                 float rate) const noexcept {
-  if (ruleset == GameplayRuleset::Beatoraja) {
+  const bool lr2 = resolvedProfile == GaugeProfile::CourseLR2 ||
+                   resolvedProfile == GaugeProfile::StandardLr2 ||
+                   (ruleset == GameplayRuleset::LR2 &&
+                    !gaugeProfileIsCourse(resolvedProfile));
+  if (!lr2) {
     return gaugeDeltaForJudgement(type, judgement, totalNotes, effectiveTotal,
-                                  currentGauge, resolvedProfile) *
-           rate;
+                                  currentGauge, resolvedProfile, rate);
   }
   const int judgementIndex = gaugeJudgementIndex(judgement);
   if (judgementIndex < 0) {
@@ -235,14 +240,14 @@ float GameplayGaugeRules::delta(GaugeType type, Judgement judgement,
                                 std::max(1, totalNotes));
   }
   if (result < 0.0F && definition.scaleNegativeByLr2Damage) {
-    result *= static_cast<float>(
-        lr2DamageMultiplier(effectiveTotal, totalNotes));
+    result *= lr2GaugeDamageMultiplier(effectiveTotal, totalNotes);
   }
+  result *= rate;
   const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
       ruleset, type, resolvedProfile);
   if (result < 0.0F && reducedDamageZone > 0.0F &&
       currentGauge < reducedDamageZone) {
     result *= 0.6F;
   }
-  return result * rate;
+  return result;
 }

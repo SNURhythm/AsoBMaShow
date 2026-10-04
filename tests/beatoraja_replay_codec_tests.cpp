@@ -542,10 +542,11 @@ void testOldRulesetIsExplicitlyObsolete() {
   auto previous = outerJson(*encoded);
   previous["asobmashow"]["setup"]["ruleset"]["version"] = 3;
   const auto decoded = codec.decode(encodeJson(previous), context(source));
-  expect(decoded.obsoleteRuleset && !decoded.chart && !decoded.course &&
-             decoded.diagnostic.find("obsolete") != std::string::npos &&
+  expect(decoded.obsoleteRuleset && decoded.chart && !decoded.course &&
+             decoded.chart->playback.input == source.playback.input &&
+             decoded.chart->playback.setup.ruleset.version == 3 &&
              !decoded.stockOnly,
-         "old Aso rules are explicitly obsolete without stock fallback");
+         "old Aso input retains its recorded identity for current-rules playback");
 }
 
 void testSupportedAsoExtensionIsAuthoritative() {

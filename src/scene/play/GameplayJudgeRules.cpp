@@ -134,7 +134,7 @@ JudgeWindowContext windowContextForRole(NoteJudgeRole role) noexcept {
 GameplayJudgeRules compileGameplayJudgeRules(
     GameplayRuleset ruleset, int sourceRank, int playbackRatePercent,
     int judgeScalePercent, CourseJudgementConstraint constraint,
-    CandidateSelectionMode beatorajaSelection, int keyMode,
+    CandidateSelectionMode selection, int keyMode,
     std::optional<int> rankPercentOverride) {
 
   GameplayJudgeRules result;
@@ -184,7 +184,9 @@ GameplayJudgeRules compileGameplayJudgeRules(
                   playbackRatePercent, judgeScalePercent, pms, lr2);
     applyConstraint(context, constraint);
   }
-  result.candidateSelection = lr2 ? CandidateSelectionMode::LR2 : beatorajaSelection;
+  result.candidateSelection = selection == CandidateSelectionMode::LR2
+      ? (lr2 ? CandidateSelectionMode::Combo : CandidateSelectionMode::Lowest)
+      : selection;
   result.automaticPoorLateMicros = normal.windows[3].lateMicros;
   result.comboKpoor = !fiveKeys && !pms;
   result.singleMiss = pms;

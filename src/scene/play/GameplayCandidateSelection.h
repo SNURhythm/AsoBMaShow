@@ -21,13 +21,13 @@ candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
 [[nodiscard]] inline AppSettings::NotePriorityMode
 notePriorityForCandidateSelection(gameplay::CandidateSelectionMode mode) {
   switch (mode) {
+  case gameplay::CandidateSelectionMode::LR2:
   case gameplay::CandidateSelectionMode::Combo:
     return AppSettings::NotePriorityMode::Combo;
   case gameplay::CandidateSelectionMode::Duration:
     return AppSettings::NotePriorityMode::Duration;
   case gameplay::CandidateSelectionMode::Score:
     return AppSettings::NotePriorityMode::Score;
-  case gameplay::CandidateSelectionMode::LR2:
   case gameplay::CandidateSelectionMode::Lowest:
     return AppSettings::NotePriorityMode::Lowest;
   }

@@ -6,6 +6,7 @@
 #include "../../scene/play/GameplayGaugeRules.h"
 #include "../../scene/play/GameplayJudgeRules.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <ranges>
@@ -101,7 +102,10 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
       return rejected(SubmissionEligibilityReason::RulesetMismatch,
                       "Only LR2 ruleset scores can be submitted.");
     }
-    if (provenance.ruleset != RulesetDescriptor::For(GameplayRuleset::LR2)) {
+    auto expectedDescriptor = RulesetDescriptor::For(GameplayRuleset::LR2);
+    expectedDescriptor.version = provenance.ruleset.version;
+    if (!supportsVerifiedLr2Revision(provenance.ruleset.version) ||
+        provenance.ruleset != expectedDescriptor) {
       return rejected(SubmissionEligibilityReason::UnsupportedRulesetRevision,
                       "This ruleset revision is not supported by Bokutachi.");
     }
@@ -130,7 +134,10 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
       return rejected(SubmissionEligibilityReason::ModifiedJudgePolicy,
                       "Modified judge windows cannot be submitted.");
     }
-    if (stage.candidateSelection != gameplay::CandidateSelectionMode::LR2) {
+    const bool historicalV4 = provenance.ruleset.version == 4;
+    if (stage.candidateSelection != gameplay::CandidateSelectionMode::LR2 &&
+        (historicalV4 ||
+         stage.candidateSelection != gameplay::CandidateSelectionMode::Combo)) {
       return rejected(SubmissionEligibilityReason::ModifiedJudgePolicy,
                       "Modified judge policy cannot be submitted.");
     }
@@ -146,8 +153,17 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
       meta.HasTotal = true;
       meta.Total = *stage.authoredGaugeTotal;
     }
-    const double canonicalTotal =
+    double canonicalTotal =
         resolveEffectiveGaugeTotal(GameplayRuleset::LR2, meta);
+    if (historicalV4) {
+      // Validate the recorded policy; never reinterpret an old IR score using
+      // the new fractional TOTAL rule or replace its authenticated provenance.
+      const int notes = std::max(0, meta.TotalNotes);
+      canonicalTotal = meta.HasTotal && meta.Total > 0.0
+          ? std::floor(meta.Total)
+          : std::floor(160.0 +
+                       (notes + std::clamp(notes - 400, 0, 200)) * 0.16);
+    }
     if (!std::isfinite(stage.effectiveGaugeTotal) ||
         stage.effectiveGaugeTotal != canonicalTotal) {
       return rejected(SubmissionEligibilityReason::ModifiedGaugeTotal,

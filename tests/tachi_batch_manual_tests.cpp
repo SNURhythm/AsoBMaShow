@@ -141,12 +141,12 @@ ir::IrOutboxEntry outboxEntry(ir::IrSubmission submission, std::int64_t id) {
 
 void refreshProof(ir::IrOutboxEntry &entry) {
   const std::string input =
-      "tachi-lr2-proof-v1\n3:lr2\n4\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n5\n" +
       std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
       std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
       "\n" + std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
   entry.rulesetProof = {.rulesetId = "lr2",
-                        .rulesetRevision = 4,
+                        .rulesetRevision = 5,
                         .validationFingerprint = file_checksum::sha256(input)};
 }
 
@@ -322,10 +322,10 @@ void testBuildsOneScoreBatchManual() {
   expect(outcome.reason == ir::SubmissionEligibilityReason::Eligible,
          "built draft is eligibility-normalized");
   expect(outcome.draft->rulesetProof.rulesetId == "lr2" &&
-             outcome.draft->rulesetProof.rulesetRevision == 4,
+             outcome.draft->rulesetProof.rulesetRevision == 5,
          "draft contains the canonical LR2 proof identity");
   std::string fingerprintInput =
-      "tachi-lr2-proof-v1\n3:lr2\n4\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n5\n" +
       std::to_string(submission.attemptId.size()) + ":" + submission.attemptId +
       "\n" + std::to_string(submission.chartSha256.size()) + ":" +
       submission.chartSha256 + "\n" +
@@ -417,11 +417,15 @@ void testExtendedChartRankEligibility() {
 
 void testCanonicalLr2EligibilityMatrix() {
   for (const int keyMode : {7, 14}) {
-    auto submission = validSubmission();
-    submission.keyMode = keyMode;
-    const auto built = ir::tachi::buildBatchManualDraft(submission);
-    expect(built.status == ir::BuildDraftStatus::Built,
-           "canonical LR2 7K and 14K submissions build");
+    for (const auto selection : {gameplay::CandidateSelectionMode::Combo,
+                                 gameplay::CandidateSelectionMode::LR2}) {
+      auto submission = validSubmission();
+      submission.keyMode = keyMode;
+      submission.provenance.stages.front().candidateSelection = selection;
+      const auto built = ir::tachi::buildBatchManualDraft(submission);
+      expect(built.status == ir::BuildDraftStatus::Built,
+             "canonical Combo and legacy LR2 priority accept 7K and 14K submissions");
+    }
   }
   for (const int keyMode : {1, 4, 5, 6, 8, 9, 10, 11, 24, 48, 127}) {
     auto submission = validSubmission();
@@ -529,6 +533,45 @@ void testReplayEligibilityAndMarkerCompatibility() {
          "compatibility marker hides a successful outbox result");
 }
 
+void testPreservesPreviouslyVerifiedLr2V4Results() {
+  for (const bool authored : {false, true}) {
+    auto submission = validSubmission();
+    submission.provenance.ruleset.version = 4;
+    auto &stage = submission.provenance.stages.front();
+    stage.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+    if (authored) {
+      stage.authoredGaugeTotal = 200.5;
+      stage.effectiveGaugeTotal = 200.0;
+    } else {
+      stage.authoredGaugeTotal.reset();
+      const int notes = stage.totalNotes;
+      stage.effectiveGaugeTotal = std::floor(
+          160.0 + (notes + std::clamp(notes - 400, 0, 200)) * 0.16);
+    }
+    const auto original = submission.provenance;
+    const auto eligibility = ir::tachi::validateBokutachiEligibility(submission);
+    expect(eligibility.eligible(),
+           "previously verified v4 result retains its original eligibility: " +
+               eligibility.diagnostic);
+    const auto draft = ir::tachi::buildBatchManualDraft(submission);
+    expect(draft.draft && draft.draft->rulesetProof.rulesetRevision == 4 &&
+               submission.provenance == original,
+           "v4 result builds an original-version proof without rewriting provenance");
+    if (draft.draft) {
+      const auto entry = outboxEntry(submission, 1);
+      const auto batch = ir::tachi::buildBatchManualOutboxDocument(std::span(&entry, 1));
+      expect(batch.document.has_value(), "frozen v4 proof remains eligible for batching");
+    }
+    stage.effectiveGaugeTotal += 0.25;
+    expect(!ir::tachi::validateBokutachiEligibility(submission).eligible(),
+           "v4 compatibility still rejects a modified historical TOTAL");
+    submission.provenance = original;
+    submission.provenance.ruleset.gaugeModel = "unknown";
+    expect(!ir::tachi::validateBokutachiEligibility(submission).eligible(),
+           "v4 compatibility requires the exact recorded model identifiers");
+  }
+}
+
 void testRejectsNonCanonicalLr2Proof() {
   auto submission = validSubmission();
   submission.provenance.ruleset =
@@ -571,11 +614,14 @@ void testRejectsNonCanonicalLr2Proof() {
   expectIneligible(submission,
                    ir::SubmissionEligibilityReason::ModifiedGaugeTotal, {});
 
-  submission = validSubmission();
-  submission.provenance.stages.front().candidateSelection =
-      gameplay::CandidateSelectionMode::Lowest;
-  expectIneligible(submission,
-                   ir::SubmissionEligibilityReason::ModifiedJudgePolicy, {});
+  for (const auto selection : {gameplay::CandidateSelectionMode::Lowest,
+                               gameplay::CandidateSelectionMode::Duration,
+                               gameplay::CandidateSelectionMode::Score}) {
+    submission = validSubmission();
+    submission.provenance.stages.front().candidateSelection = selection;
+    expectIneligible(submission,
+                     ir::SubmissionEligibilityReason::ModifiedJudgePolicy, {});
+  }
 
   const auto expectModifiedAttempt = [](auto mutate) {
     auto value = validSubmission();
@@ -793,6 +839,7 @@ void testPayloadNeverContainsCredentialMaterial() {
 } // namespace
 
 int main() {
+  testPreservesPreviouslyVerifiedLr2V4Results();
   testFailedAttemptIncludesUnplayedNotesInBadPoints();
   testComposesCompatibleOutboxRows();
   testOutboxCompositionGroupsAndBoundsRows();

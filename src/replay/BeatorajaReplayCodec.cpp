@@ -1083,9 +1083,9 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
   }
   if (isObsoleteRulesetDescriptor(output.playback.setup.ruleset)) {
     output.obsoleteRuleset = true;
-    return fail(diagnostic,
-                "Replay uses an obsolete ruleset; original input is preserved "
-                "but faithful playback is unavailable.");
+    if (!replayRulesetCanBeRejudged(output.playback.setup.ruleset)) {
+      return fail(diagnostic, "Replay uses an unknown historical ruleset model.");
+    }
   }
   const auto validation =
       validateReplayPlayback(output.playback, ReplaySetupSource::AsoExtension,
@@ -1311,6 +1311,7 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
     outcome.stageSources.push_back(stage.source);
     outcome.stockOnly &= stage.source == ReplayStageDecodeSource::Stock;
     outcome.unsupportedAsoExtension |= stage.unsupportedExtension;
+    outcome.obsoleteRuleset |= stage.obsoleteRuleset;
   }
   if (!course) {
     outcome.chart = ReplayChartDocument{

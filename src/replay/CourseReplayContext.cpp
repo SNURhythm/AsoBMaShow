@@ -124,14 +124,6 @@ CourseReplayContextOutcome CourseReplayContext::load(
     }
     preservedResult = stored;
 
-    if (loaded.record->replayFile && !loaded.record->replayFile->userDeleted &&
-        isObsoleteRulesetDescriptor(stored.provenance.ruleset)) {
-      return failure(CourseReplayContextState::ObsoleteRuleset,
-                     "This course replay uses an obsolete ruleset. The saved "
-                     "result and original replay are preserved; faithful "
-                     "playback is unavailable.",
-                     preservedResult, loaded.record->replayFile);
-    }
 
     if (parsedCourse.stages.size() != stored.stages.size()) {
       return failure(
@@ -224,7 +216,7 @@ CourseReplayContextOutcome CourseReplayContext::load(
                      "Course replay decoding failed.", preservedResult,
                      std::move(reference));
     }
-    if (decoded.obsoleteRuleset) {
+    if (decoded.obsoleteRuleset && !decoded.course) {
       return failure(CourseReplayContextState::ObsoleteRuleset,
                      decoded.diagnostic, preservedResult, std::move(reference));
     }

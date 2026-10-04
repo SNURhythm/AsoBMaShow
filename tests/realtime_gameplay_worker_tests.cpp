@@ -582,6 +582,129 @@ void testRealtimeWorkerJudgesPhysicalLanesBeyondLegacyCapacity() {
   worker.stop();
 }
 
+void testLr2SameKeyBatchUsesLatestEdgeAndRetainsReplayHistory() {
+  for (const bool scratch : {false, true}) {
+    for (const bool endPressed : {false, true}) {
+      FakeClock clock;
+      FakeAudio audio;
+      auto config = makeConfig(clock, audio);
+      config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+      const int lane = scratch ? 7 : 1;
+      const replay::LogicalControl control = scratch
+          ? replay::LogicalControl{.kind = replay::LogicalControlKind::ScratchClockwise, .player = 1}
+          : replay::LogicalControl{.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 2};
+      gameplay::RealtimeGameplayWorker worker(
+          scratch ? makeScratchLongDefinition() : makeRapidDefinition(), config);
+      const int count = endPressed ? 3 : 2;
+      for (int edge = 0; edge < count; ++edge) {
+        require(worker.enqueueInput({.epoch = 7,
+                    .type = edge % 2 == 0 ? gameplay::RealtimeGameplayInputType::Press
+                                         : gameplay::RealtimeGameplayInputType::Release,
+                    .source = gameplay::RealtimeGameplayInputSource::Physical, .lane = lane,
+                    .steadyTimestampMicros = 1'000'000, .hasReplayControl = true,
+                    .replayControl = control}),
+                "same-key edges enqueue before worker start");
+      }
+      const auto generation = worker.acquireLatestSnapshot()->generation;
+      require(worker.start(), "same-key batch worker starts");
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        return snapshot && snapshot->generation > generation;
+      }), "same-key latest edge is processed");
+      const auto snapshot = worker.acquireLatestSnapshot();
+      require(snapshot->attempt.judgeCounts[PGreat] == (endPressed ? 1 : 0) &&
+                  snapshot->attempt.judgeCounts[Kpoor] == 0 &&
+                  snapshot->lanePressed[lane] == endPressed,
+              "one physical key judges only its latest same-time state");
+      worker.stop();
+      const auto raw = worker.copyAcceptedReplayInputAfterStop();
+      require(raw && raw->size() == static_cast<std::size_t>(count),
+              "same-key snapshot coalescing preserves every raw replay edge");
+    }
+  }
+}
+
+void testLr2ScratchBatchKeepsLatestKeyAndProcessingDirection() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(), config);
+  const auto edge = [&](long long time, bool clockwise, bool pressed) {
+    require(worker.enqueueInput({.epoch = 7,
+        .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                        : gameplay::RealtimeGameplayInputType::Release,
+        .lane = 7, .steadyTimestampMicros = time, .hasReplayControl = true,
+        .replayControl = {.kind = clockwise ? replay::LogicalControlKind::ScratchClockwise
+                                            : replay::LogicalControlKind::ScratchCounterClockwise,
+                          .player = 1}}), "scratch key edge enqueues");
+  };
+  edge(1'000'000, true, true);
+  edge(1'000'000, false, true);
+  edge(1'000'000, true, false);
+  edge(2'000'000, true, true);
+  edge(2'010'000, false, false);
+  edge(2'020'000, true, false);
+  require(worker.start(), "scratch snapshot worker starts");
+  require(waitUntil([&] {
+    const auto snapshot = worker.acquireLatestSnapshot();
+    return snapshot && snapshot->attempt.judgeCounts[PGreat] >= 2;
+  }), "scratch latest-key head owner survives until opposite-key tail press");
+  const auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot->attempt.judgeCounts[PGreat] == 2 &&
+              snapshot->attempt.judgeCounts[Bad] == 0 &&
+              snapshot->attempt.score == 4 && !snapshot->lanePressed[7],
+          "scratch latest states judge only CCW head then CW charge tail");
+  worker.stop();
+  const auto raw = worker.copyAcceptedReplayInputAfterStop();
+  require(raw && raw->size() == 6,
+          "scratch snapshot judgement retains the entire raw key history");
+}
+
+void testLr2SimultaneousInputsUseLaneOrderAndOneUpdate() {
+  for (const auto source : {gameplay::RealtimeGameplayInputSource::Independent,
+                            gameplay::RealtimeGameplayInputSource::Physical}) {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 3;
+    chart.Meta.KeyMode = 7;
+    auto *measure = new bms_parser::Measure();
+    addTimeline(*measure, 850'000)->SetNote(0, new bms_parser::Note(1));
+    addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(2));
+    addTimeline(*measure, 3'000'000)->SetNote(2, new bms_parser::Note(3));
+    chart.Measures.push_back(measure);
+    FakeClock clock;
+    FakeAudio audio;
+    auto config = makeConfig(clock, audio);
+    config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+    gameplay::RealtimeGameplayWorker worker(gameplay::buildGameplayDefinition(chart, 0), config);
+    for (const int lane : {1, 0}) {
+      require(worker.enqueueInput({.epoch = 7, .source = source, .lane = lane,
+                  .steadyTimestampMicros = 1'000'000,
+                  .hasReplayControl = true,
+                  .replayControl = {.kind = replay::LogicalControlKind::Lane,
+                                    .player = 1, .lane = lane + 1}}),
+              "simultaneous inputs enqueue before the worker starts");
+    }
+    require(worker.start(), "simultaneous input worker starts");
+    require(waitUntil([&] {
+      auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->transactionSequence >= 2;
+    }), "simultaneous lane inputs are processed");
+    const auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot->attempt.judgeCounts[Bad] == 1 &&
+                snapshot->attempt.judgeCounts[PGreat] == 1 && snapshot->attempt.combo == 1,
+            "simultaneous LR2 keys judge BAD on lower lane before PGREAT on higher lane");
+    worker.stop();
+    const auto raw = worker.copyAcceptedReplayInputAfterStop();
+    require(raw && raw->size() == 2 && raw->front().control.lane == 2 &&
+                raw->back().control.lane == 1,
+            "lane normalization retains every original replay ingress transition");
+  }
+}
+
 void testWorkerTransfersAcceptedRawReplayInputInOrder() {
   FakeClock clock;
   FakeAudio audio;
@@ -1892,6 +2015,9 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+  testLr2SameKeyBatchUsesLatestEdgeAndRetainsReplayHistory();
+  testLr2ScratchBatchKeepsLatestKeyAndProcessingDirection();
+  testLr2SimultaneousInputsUseLaneOrderAndOneUpdate();
   testProducerSuspensionProtectsHeldNotesDuringMainThreadStall();
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   testWorkerRecordsMeasuredIngressAndSoundStages();

@@ -489,7 +489,13 @@ makeModernChartResultRecord(ModernChartResultRecord record,
     if (replayState == replay::ReplayState::Verified) {
       replayState = replay::ReplayState::Obsolete;
     }
-    irState = ir::IrRecordState::Hidden;
+    auto preservedRuleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+    preservedRuleset.version = 4;
+    // The provider has already validated this IR state against the saved proof.
+    // Rejudging its replay must not hide an eligible historical v4 score.
+    if (record.result.score.provenance.ruleset != preservedRuleset) {
+      irState = ir::IrRecordState::Hidden;
+    }
   }
   const auto capabilities = replay::capabilitiesFor({
       .origin = replay::RecordOrigin::ModernChartResult,

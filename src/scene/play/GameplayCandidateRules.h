@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Judgement.h"
+#include "GameplayJudgeRules.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +25,8 @@ struct Lr2CandidateResolution {
 
 [[nodiscard]] Lr2CandidateResolution resolveLr2Candidates(
     std::span<const JudgeCandidateDescriptor> candidates,
-    std::span<std::size_t> multiBadSourceIndices) noexcept;
+    std::span<std::size_t> multiBadSourceIndices,
+    const JudgeWindowSet &windows,
+    CandidateSelectionMode selection = CandidateSelectionMode::Combo) noexcept;
 
 } // namespace gameplay

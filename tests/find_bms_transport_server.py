@@ -173,6 +173,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = "가나다".encode()
         elif route == "/invalid-utf8":
             payload = b"\xc0\xaf"
+        elif route == "/legacy-table":
+            payload = ('<html><head><title>発狂PMS難易度</title>'
+                       '<meta http-equiv="Content-Type" '
+                       'content="text/html; charset=Shift_JIS">'
+                       '<meta name="bmstable" content="header.json">'
+                       '</head></html>').encode("shift_jis")
         elif route == "/nul":
             payload = b"a\0b"
         elif route == "/error":

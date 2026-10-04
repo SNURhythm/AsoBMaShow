@@ -4413,7 +4413,8 @@ std::vector<std::string> ListDocumentFilesRecursively() {
 static bool RequestURLTextIOS(const std::string &url, std::string &body,
                                std::string &errorMessage, NSString *method,
                                IOSDownloadCheckpoint checkpoint,
-                               std::size_t maximumResponseBytes) {
+                               std::size_t maximumResponseBytes,
+                               bool requireUtf8 = true) {
   @autoreleasepool {
     errorMessage.clear();
     if (checkpoint && !checkpoint()) {
@@ -4523,14 +4524,16 @@ static bool RequestURLTextIOS(const std::string &url, std::string &body,
       return false;
     }
 
-    NSString *text = [[NSString alloc]
-        initWithBytesNoCopy:delegate->responseBody.data()
-                     length:delegate->responseBody.size()
-                   encoding:NSUTF8StringEncoding
-               freeWhenDone:NO];
-    if (text == nil) {
-      errorMessage = "Downloaded response is not UTF-8: " + url;
-      return false;
+    if (requireUtf8) {
+      NSString *text = [[NSString alloc]
+          initWithBytesNoCopy:delegate->responseBody.data()
+                       length:delegate->responseBody.size()
+                     encoding:NSUTF8StringEncoding
+                 freeWhenDone:NO];
+      if (text == nil) {
+        errorMessage = "Downloaded response is not UTF-8: " + url;
+        return false;
+      }
     }
 
     body = std::move(delegate->responseBody);
@@ -4545,6 +4548,14 @@ bool ProbeDownloadURLIOS(const std::string &url, std::string &errorMessage,
   return RequestURLTextIOS(url, ignored, errorMessage, @"HEAD",
                            std::move(checkpoint),
                            std::numeric_limits<std::size_t>::max());
+}
+
+bool DownloadURLBytesIOS(const std::string &url, std::string &body,
+                         std::string &errorMessage,
+                         IOSDownloadCheckpoint checkpoint,
+                         std::size_t maximumResponseBytes) {
+  return RequestURLTextIOS(url, body, errorMessage, @"GET",
+                           std::move(checkpoint), maximumResponseBytes, false);
 }
 
 bool DownloadURLTextIOS(const std::string &url, std::string &body,

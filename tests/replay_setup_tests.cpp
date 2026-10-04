@@ -214,6 +214,32 @@ void testAttemptSetupPercentagesMatchExistingCaptureContract() {
          "gauge start above the shared maximum is replay-invalid");
 }
 
+void testKnownOlderRulesRetainPlayableInput() {
+  for (const auto descriptor : {
+           RulesetDescriptor{.id = "lr2", .version = 3,
+                             .scoringModel = "asobmashow-v1",
+                             .judgementModel = "lr2-v1",
+                             .gaugeModel = "lr2-gauge-v1"},
+           RulesetDescriptor{.id = "lr2", .version = 4,
+                             .scoringModel = "asobmashow-v1",
+                             .judgementModel = "lr2-v1",
+                             .gaugeModel = "lr2-gauge-v1"},
+           RulesetDescriptor{.id = "beatoraja", .version = 2,
+                             .scoringModel = "asobmashow-v1",
+                             .judgementModel = "bms-rank-v1",
+                             .gaugeModel = "beatoraja-profile-gauge-v2"}}) {
+    auto setup = validSetup();
+    setup.ruleset = descriptor;
+    expect(replay::validateReplaySetup(setup, replay::ReplaySetupSource::AsoExtension).valid(),
+           "known historical rules preserve structurally valid raw replay input");
+    expect(!replay::validateReplaySetup(setup, replay::ReplaySetupSource::LocalCapture).valid(),
+           "new captures cannot claim retired gameplay semantics");
+    setup.ruleset.gaugeModel = "unknown-old-model";
+    expect(!replay::validateReplaySetup(setup, replay::ReplaySetupSource::AsoExtension).valid(),
+           "an old version number does not authorize an unknown model");
+  }
+}
+
 void testInvalidFieldMatrix() {
   struct Case {
     replay::ReplaySetupIssue issue;
@@ -318,6 +344,7 @@ int main() {
   testExactLaneShufflePatterns();
   testUndefinedLongNoteContract();
   testAttemptSetupPercentagesMatchExistingCaptureContract();
+  testKnownOlderRulesRetainPlayableInput();
   testInvalidFieldMatrix();
   testChartIdentityAgreementUsesParsedIdentity();
   if (failures != 0) {

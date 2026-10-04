@@ -369,6 +369,7 @@ private:
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   std::unordered_map<bms_parser::LongNote *, long long>
       hellChargeGaugeBalanceMicros;
+  long long initialHellChargeGaugeUpdateMicros = 0;
   long long lastHellChargeGaugeUpdateMicros = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;

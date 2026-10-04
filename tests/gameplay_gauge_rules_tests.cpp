@@ -63,21 +63,76 @@ double expectedTotalFactor(double total) {
   return 10.0 / denominator;
 }
 
+void testLr2ReferenceRecoveryAndCourseConstraints() {
+  const auto fractional = compileGameplayGaugeRules(
+      GameplayRuleset::LR2, meta(1000, 239.9), GaugeProfile::Standard);
+  GameplayScoreState normal({.gaugeRules = fractional, .keyMode = 7});
+  for (int i = 0; i < 251; ++i) normal.applyGaugeJudgement(PGreat);
+  require(normal.currentGauge == 80.21466827392578125F &&
+              normal.getClearType() == ClearType::NormalClear,
+          "fractional LR2 TOTAL crosses the same qualification border as Java");
+  const auto absent = compileGameplayGaugeRules(
+      GameplayRuleset::LR2, meta(101, 0.0, false), GaugeProfile::Standard);
+  require(absent.effectiveTotal == 176.16 &&
+              absent.delta(GaugeType::Normal, PGreat, 20.0F) ==
+                  1.74415838718414306640625F,
+          "LR2 absent TOTAL retains the fractional reference fallback");
+  for (const auto sample : {
+           std::pair{GaugeProfile::Course5Keys, -0.5F},
+           std::pair{GaugeProfile::Course7Keys, -1.5F},
+           std::pair{GaugeProfile::Course9Keys, -1.5F},
+           std::pair{GaugeProfile::Course24Keys, -1.5F}}) {
+    const auto course = compileGameplayGaugeRules(
+        GameplayRuleset::LR2, meta(1000, 240.0), sample.first);
+    require(course.resolvedProfile == sample.first &&
+                course.gauges[gaugeTypeIndex(GaugeType::Normal)]
+                        .baseDelta[gaugeJudgementIndex(Bad)] == sample.second &&
+                course.delta(GaugeType::Normal, Bad, 100.0F) == sample.second,
+            "explicit course gauge constraints override the LR2 default");
+    GameplayScoreState state({.gaugeRules = course, .keyMode = 7});
+    state.applyGaugeDelta(-100.0F);
+    state.applyGaugeJudgement(PGreat);
+    require(state.currentGauge == 0.0F && state.activeGaugeFailed(),
+            "explicit course survival gauges cannot recover after reaching zero");
+  }
+}
+
+void testNamedLr2GaugesAndDirectGradeUseReferenceDamage() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    const auto rules = compileGameplayGaugeRules(
+        ruleset, meta(1000, 239.9), GaugeProfile::StandardLr2);
+    require(rules.delta(GaugeType::Hard, Bad, 31.0F) ==
+                -4.000000476837158203125F &&
+                rules.delta(GaugeType::Grade, Bad, 31.0F) == -1.2F &&
+                rules.delta(GaugeType::ExGrade, Bad, 31.0F) ==
+                    -3.6000001430511474609375F,
+            "named LR2 and direct grade gauges use the fork damage and guts");
+    require(gaugeReducedDamageZoneUpperBound(
+                ruleset, GaugeType::Grade, rules.resolvedProfile) == 32.0F,
+            "grade damage presentation follows its thirty-two-percent guts");
+  }
+}
+
 void testLr2EffectiveTotalRules() {
   require(resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
                                      meta(1000, 200.0)) == 200.0 &&
               resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
-                                         meta(1000, 200.5)) == 200.0,
-          "LR2 floors positive authored TOTAL");
+                                         meta(1000, 200.5)) == 200.5,
+          "LR2 preserves positive authored TOTAL");
   require(resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
-                                     meta(399, 0.0)) == 223.0 &&
+                                     meta(399, 0.0)) == 223.84 &&
               resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
                                          meta(400, 0.0)) == 224.0 &&
               resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
-                                         meta(599, -1.0)) == 287.0 &&
+                                         meta(599, -1.0)) == 287.68 &&
               resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
                                          meta(600, 0.0, false)) == 288.0,
           "LR2 default TOTAL is exact at 400/600-note boundaries");
+
+  require(resolveEffectiveGaugeTotal(GameplayRuleset::LR2,
+                                     meta(253, 0.0, false)) ==
+              200.48000000000001818989403545856475830078125,
+          "LR2 default TOTAL preserves Java multiplication before addition");
 
   const auto beatoraja = meta(432, 200.5);
   require(resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja,
@@ -372,8 +427,8 @@ void testUpstreamDamageModifiersAndLr2Practice() {
   require(close(practice.delta(GaugeType::Hard, PGreat, 50.0F), 0.1F),
           "LR2 practice recovery is not restricted by LIMIT_INCREMENT");
   require(close(practice.delta(GaugeType::Hard, Bad, 29.0F), -7.2F) &&
-              close(practice.delta(GaugeType::Hard, Bad, 30.0F), -12.0F),
-          "Beatoraja LR2 category retains its thirty-percent guts");
+              close(practice.delta(GaugeType::Hard, Bad, 32.0F), -12.0F),
+          "named LR2 gauge profiles use the fork thirty-two-percent guts");
   for (const auto profile : {GaugeProfile::StandardLr2, GaugeProfile::CourseLR2}) {
     const auto rules = compileGameplayGaugeRules(
         GameplayRuleset::Beatoraja, meta(1000, 240.0), profile);
@@ -381,8 +436,8 @@ void testUpstreamDamageModifiersAndLr2Practice() {
     state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None, profile);
     state.setStartingGaugePercent(2);
     state.applyGaugeDelta(-0.001F);
-    require(state.currentGauge > 0.0F && !state.activeGaugeFailed(),
-            "Beatoraja LR2 category has no fork-specific two-percent death");
+    require(state.currentGauge == 0.0F && state.activeGaugeFailed(),
+            "named LR2 gauge profiles die below two percent");
   }
 }
 
@@ -422,17 +477,19 @@ void testPracticeLr2CategoryUsesPinnedGradeGaugeTable() {
               grade.maximum == 100.0F && grade.clearBorder == 0.0F &&
               grade.survival &&
               close(rules.delta(GaugeType::Grade, Bad, 29.999F), -1.2F) &&
-              close(rules.delta(GaugeType::Grade, Bad, 30.0F), -2.0F) &&
+              close(rules.delta(GaugeType::Grade, Bad, 32.0F), -2.0F) &&
               close(rules.delta(GaugeType::ExGrade, Poor, 29.999F), -6.0F) &&
               close(rules.delta(GaugeType::ExHardGrade, Bad, 29.999F),
                     -12.0F) &&
               exGrade.initial == 100.0F && exHardGrade.initial == 100.0F,
           "practice LR2 category retains the pinned CLASS/EXCLASS/EXHARDCLASS "
-          "gauge definitions and thirty-percent guts");
+          "gauge definitions and thirty-two-percent guts");
 }
 } // namespace
 
 int main() {
+  testLr2ReferenceRecoveryAndCourseConstraints();
+  testNamedLr2GaugesAndDirectGradeUseReferenceDamage();
   testLr2DamageUsesJavaFloatArithmetic();
   testUpstreamDamageModifiersAndLr2Practice();
   testTotalRecoveryRoundsAfterDoubleArithmetic();

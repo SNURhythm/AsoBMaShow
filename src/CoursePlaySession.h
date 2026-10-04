@@ -414,12 +414,14 @@ struct CoursePlaySession {
   }
 
   void snapshotRulesetFromReplay(const ReplayData &replay) {
-    if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+    const auto playbackRuleset =
+        replay.playbackRuleset.value_or(replay.provenance.ruleset);
+    if (playbackRuleset == RulesetDescriptor::Legacy()) {
       ruleset = GameplayRuleset::Beatoraja;
       rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
       return;
     }
-    rulesetDescriptor = replay.provenance.ruleset;
+    rulesetDescriptor = playbackRuleset;
     if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
       ruleset = *recorded;
     }

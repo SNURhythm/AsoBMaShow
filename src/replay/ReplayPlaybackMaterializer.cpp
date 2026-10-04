@@ -13,7 +13,10 @@
 #include "../scene/play/GameplaySimulation.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <map>
+#include <tuple>
 #include <utility>
 
 namespace replay {
@@ -164,20 +167,28 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   const auto selectedRuleset = rulesetFor(setup);
   const auto *stage = score_provenance::uniqueStageForChart(
       savedResult.score.provenance, chart.Meta);
-  if (!selectedRuleset || stage == nullptr) {
+  if (!selectedRuleset || stage == nullptr ||
+      !replayRulesetCanBeRejudged(setup.ruleset)) {
     return {.state = ReplayPlaybackMaterializationState::JudgingFailed,
             .diagnostic = "Replay gameplay policy is unavailable."};
   }
+  const bool historicalRules = isObsoleteRulesetDescriptor(setup.ruleset);
+  const GaugeProfile gaugeProfile =
+      carry.courseGaugeProfile.value_or(setup.gaugeProfile);
   auto policy = gameplay::buildGameplayRulesetPolicy(
       chart.Meta,
       {.ruleset = *selectedRuleset,
-       .gaugeProfile = setup.gaugeProfile,
+       .gaugeProfile = gaugeProfile,
        .sourceRank = stage->sourceJudgeRank.value_or(chart.Meta.Rank),
        .playbackRatePercent = setup.playback.percent,
        .judgeScalePercent = setup.judgeWindowScalePercent,
+       .courseJudgement = carry.courseJudgement,
        .beatorajaCandidateSelection = setup.candidateSelection,
-       .requiredDescriptor = setup.ruleset,
-       .replaySnapshot = *stage});
+       .requiredDescriptor = historicalRules
+                                 ? RulesetDescriptor::For(*selectedRuleset)
+                                 : setup.ruleset,
+       .replaySnapshot = historicalRules ? std::nullopt
+                                         : std::optional(*stage)});
   if (!policy.built()) {
     return {.state = ReplayPlaybackMaterializationState::JudgingFailed,
             .diagnostic = policy.diagnostic.empty()
@@ -211,7 +222,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
        .attempt =
            {.initialGaugeType = setup.initialGaugeType,
             .gaugeAutoShift = setup.gaugeAutoShift,
-            .gaugeProfile = setup.gaugeProfile,
+            .gaugeProfile = gaugeProfile,
             .gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound,
             .startingGaugePercent =
                 savedResult.score.provenance.startingGaugePercent.has_value()
@@ -233,34 +244,41 @@ ReplayPlaybackMaterializer::materializeForConsumers(
       simulation.scoreState().gaugeSnapshot();
 
   std::int64_t currentSongTime = kReplayLimits.minimumSongTimeMicros;
+  struct GameplayEdge {
+    int lane;
+    std::int64_t delayMicros;
+    bool pressed;
+    bool backSpin;
+    LogicalControl control;
+    std::size_t sequence;
+  };
+  std::vector<GameplayEdge> edges;
+  std::optional<std::int64_t> lastSimulatedTime;
+  LogicalControl currentControl;
+  std::size_t currentSequence = 0;
+  std::map<int, std::array<bool, 2>> scratchHeldKeys;
   ReplayLogicalGameplayAdapter adapter(
       setup.chart.keyMode,
       {.pressLane = [&](int physicalLane, double inputDelaySeconds) {
          const auto delay = static_cast<std::int64_t>(
              std::llround(std::max(0.0, inputDelaySeconds) * 1'000'000.0));
-         simulation.applyPressAt(
-             physicalLane, physicalLane,
-             {.songTimeMicros = currentSongTime,
-              .laneBeamTimeMicros = currentSongTime,
-              .inputDelayMicros = delay});
+         edges.push_back({physicalLane, delay, true, false, currentControl, currentSequence});
        },
        .releaseLane = [&](int physicalLane, double inputDelaySeconds,
                           bool backSpin) {
          const auto delay = static_cast<std::int64_t>(
              std::llround(std::max(0.0, inputDelaySeconds) * 1'000'000.0));
-         simulation.applyReleaseAt(
-             physicalLane,
-             {.songTimeMicros = currentSongTime,
-              .laneBeamTimeMicros = currentSongTime,
-              .inputDelayMicros = delay},
-             backSpin);
+         edges.push_back({physicalLane, delay, false, backSpin, currentControl, currentSequence});
+       },
+       .beforeTransition = [&](const InputTransition &transition, std::size_t sequence) {
+         currentControl = transition.control;
+         currentSequence = sequence;
        }});
 
   ReplayJudgingSink judge;
   judge.advanceTo = [&](std::int64_t songTimeMicros,
                         std::string &diagnostic) {
     currentSongTime = songTimeMicros;
-    simulation.advanceTo(songTimeMicros, songTimeMicros);
     if (simulation.replayOverflowed() ||
         simulation.automaticResultOverflowed() ||
         simulation.scoreState().gaugeHistoryOverflowed()) {
@@ -271,11 +289,90 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   };
   judge.applyInputBatch = [&](std::span<const InputTransition> transitions,
                               std::string &diagnostic) {
-    return adapter.applyBatch(transitions, currentSongTime, diagnostic);
+    edges.clear();
+    if (!adapter.applyBatch(transitions, currentSongTime, diagnostic)) return false;
+    if (*selectedRuleset == GameplayRuleset::LR2) {
+      using PhysicalKey = std::tuple<int, int, int>;
+      const auto physicalKey = [](const LogicalControl &control) {
+        return PhysicalKey{control.player, static_cast<int>(control.kind), control.lane};
+      };
+      std::map<PhysicalKey, std::size_t> latestSequence;
+      for (std::size_t index = 0; index < transitions.size(); ++index) {
+        latestSequence[physicalKey(transitions[index].control)] = index;
+      }
+      std::erase_if(edges, [&](const auto &edge) {
+        return isDirectionalScratchControl(edge.control.kind) ||
+               latestSequence[physicalKey(edge.control)] != edge.sequence;
+      });
+      // Scratch ownership validation consumes every raw edge above. Judging
+      // samples the latest state of each directional key, including handoffs.
+      for (const auto &[key, index] : latestSequence) {
+        const auto &transition = transitions[index];
+        if (!isDirectionalScratchControl(transition.control.kind)) continue;
+        const auto lane = physicalChartLaneForLogicalControl(setup.chart.keyMode,
+                                                             transition.control);
+        if (!lane) return false;
+        const auto direction = transition.control.kind == LogicalControlKind::ScratchClockwise
+                                   ? 0U : 1U;
+        scratchHeldKeys[*lane][direction] = transition.pressed;
+        edges.push_back({*lane, 0, transition.pressed, false, transition.control, index});
+      }
+    }
+    if (*selectedRuleset == GameplayRuleset::Beatoraja) {
+      simulation.advanceTo(currentSongTime, currentSongTime);
+      for (const auto &edge : edges) {
+        const gameplay::GameplayInputContext context{
+            .songTimeMicros = currentSongTime, .laneBeamTimeMicros = currentSongTime,
+            .inputDelayMicros = edge.delayMicros};
+        if (edge.pressed) simulation.applyPressAt(edge.lane, edge.lane, context);
+        else simulation.applyReleaseAt(edge.lane, context, edge.backSpin);
+      }
+      lastSimulatedTime = currentSongTime;
+      return !simulation.replayOverflowed() && !simulation.automaticResultOverflowed() &&
+             !simulation.scoreState().gaugeHistoryOverflowed();
+    }
+    std::stable_sort(edges.begin(), edges.end(), [](const auto &left, const auto &right) {
+      return std::tuple{left.lane, static_cast<int>(left.control.kind), left.sequence} <
+             std::tuple{right.lane, static_cast<int>(right.control.kind), right.sequence};
+    });
+    std::vector<gameplay::GameplayLaneInputState> physicalStates;
+    for (const auto &edge : edges) {
+      const bool pressed = isDirectionalScratchControl(edge.control.kind)
+          ? scratchHeldKeys[edge.lane][0] || scratchHeldKeys[edge.lane][1]
+          : edge.pressed || edge.backSpin;
+      if (!physicalStates.empty() && physicalStates.back().lane == edge.lane) {
+        physicalStates.back().pressed = pressed;
+      } else {
+        physicalStates.push_back({edge.lane, pressed});
+      }
+    }
+    const gameplay::GameplayInputContext context{
+        .songTimeMicros = currentSongTime, .laneBeamTimeMicros = currentSongTime};
+    simulation.beginInputUpdate(physicalStates, context);
+    for (const auto &edge : edges) {
+      auto edgeContext = context;
+      edgeContext.inputDelayMicros = edge.delayMicros;
+      if (isDirectionalScratchControl(edge.control.kind)) {
+        const bool clockwise = edge.control.kind == LogicalControlKind::ScratchClockwise;
+        if (edge.pressed) simulation.pressScratchKey(edge.lane, clockwise, edgeContext);
+        else simulation.releaseScratchKey(edge.lane, clockwise, edgeContext);
+      } else if (edge.pressed) {
+        simulation.pressLane(edge.lane, edge.lane, edgeContext);
+      } else {
+        simulation.releaseLane(edge.lane, edgeContext, edge.backSpin);
+      }
+    }
+    simulation.finishInputUpdate(context);
+    lastSimulatedTime = currentSongTime;
+    return !simulation.replayOverflowed() && !simulation.automaticResultOverflowed() &&
+           !simulation.scoreState().gaugeHistoryOverflowed();
   };
   std::size_t acceptedReplayEventCount = 0;
   judge.finish = [&](std::string &diagnostic)
       -> std::optional<result_persistence::ModernChartResult> {
+    if (!lastSimulatedTime || *lastSimulatedTime != currentSongTime) {
+      simulation.advanceTo(currentSongTime, currentSongTime);
+    }
     acceptedReplayEventCount = simulation.replayEvents().size();
     if (document.timeBounds.aborted.value_or(false)) {
       simulation.finalizeAbortedAttempt(document.timeBounds.completionSongTimeMicros);
@@ -321,12 +418,6 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   if (!outcome.judgedResult.has_value()) {
     return outcome;
   }
-  if (document.timeBounds.aborted.has_value() && !outcome.matched()) {
-    outcome.state = ReplayPlaybackMaterializationState::JudgingFailed;
-    outcome.diagnostic = "Replay terminal evidence disagrees with the saved result: " +
-                         outcome.diagnostic;
-    return outcome;
-  }
 
   std::string setupDiagnostic;
   auto replayValue = makeReplayDataFromSetup(
@@ -347,16 +438,37 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   replay.chartMeta.Title = savedResult.score.chartTitle;
   replay.chartMeta.Artist = savedResult.score.chartArtist;
   replay.chartMeta.LnMode = setup.longNoteMode;
-  replay.finalScore = savedResult.score.score;
-  replay.maxCombo = savedResult.score.maxCombo;
-  replay.finalGauge = savedResult.score.finalGauge;
-  replay.clearType = savedResult.score.clearType;
+  replay.staleResult = !outcome.matched();
+  replay.finalScore = outcome.judgedResult->score.score;
+  replay.maxCombo = outcome.judgedResult->score.maxCombo;
+  replay.finalGauge = outcome.judgedResult->score.finalGauge;
+  replay.clearType = outcome.judgedResult->score.clearType;
+  if (historicalRules) {
+    replay.playbackRuleset = policy.policy->descriptor;
+    replay.playbackGaugeProfile = policy.policy->gauge.resolvedProfile;
+    ScoreStageProvenance runtimePolicy = *stage;
+    runtimePolicy.totalNotes = policy.policy->gauge.totalNotes;
+    runtimePolicy.authoredGaugeTotal = chart.Meta.HasTotal
+                                         ? std::optional(chart.Meta.Total)
+                                         : std::nullopt;
+    runtimePolicy.effectiveGaugeTotal = policy.policy->gauge.effectiveTotal;
+    runtimePolicy.candidateSelection = policy.policy->judge.rules().candidateSelection;
+    runtimePolicy.effectiveJudgeRankPercent =
+        policy.policy->judge.rules().effectiveJudgeRankPercent;
+    runtimePolicy.effectiveJudgeWindows.clear();
+    const auto &contexts = policy.policy->judge.rules().contexts;
+    for (std::size_t index = 0; index < contexts.size(); ++index) {
+      for (const auto &window : contexts[index].windows) {
+        runtimePolicy.effectiveJudgeWindows.push_back({
+            .context = static_cast<gameplay::JudgeWindowContext>(index),
+            .judgement = window.judgement, .earlyMicros = window.earlyMicros,
+            .lateMicros = window.lateMicros});
+      }
+    }
+    replay.playbackPolicy = std::move(runtimePolicy);
+  }
   if (document.timeBounds.aborted.value_or(false)) {
     replay.abortedAtSongTimeMicros = document.timeBounds.completionSongTimeMicros;
-    replay.finalScore = outcome.judgedResult->score.score;
-    replay.maxCombo = outcome.judgedResult->score.maxCombo;
-    replay.finalGauge = outcome.judgedResult->score.finalGauge;
-    replay.clearType = outcome.judgedResult->score.clearType;
   }
   const auto events = simulation.replayEvents().first(acceptedReplayEventCount);
   replay.events.reserve(events.size());

@@ -10,6 +10,13 @@ namespace ir::tachi {
 
 inline constexpr std::string_view kProviderId = "tachi";
 
+// Preserve already verified v4 scores and frozen payloads under their own
+// identity. This does not revive older, previously unsupported revisions.
+[[nodiscard]] inline constexpr bool
+supportsVerifiedLr2Revision(int revision) noexcept {
+  return revision == 4 || revision == RulesetDescriptor::kCurrentVersion;
+}
+
 struct SubmissionEligibilityOutcome {
   SubmissionEligibilityReason reason =
       SubmissionEligibilityReason::InvalidSubmission;

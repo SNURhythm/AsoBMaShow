@@ -110,6 +110,19 @@ void exerciseIOSMetadataTransport(const std::string &origin) {
     std::string error;
     expect(DownloadURLTextIOS(origin + "/normal", body, error, [] { return true; }) && body == "GET",
            "DifficultyTableImporter checkpoint signature remains callable");
+    expect(DownloadURLBytesIOS(origin + "/legacy-table", body, error),
+           "legacy difficulty table HTML downloads without UTF-8 validation");
+    expect(body == "<html><head><title>\x94\xad\x8b\xb6PMS\x93\xef\x88\xd5\x93x</title>"
+                   "<meta http-equiv=\"Content-Type\" "
+                   "content=\"text/html; charset=Shift_JIS\">"
+                   "<meta name=\"bmstable\" content=\"header.json\">"
+                   "</head></html>",
+           "legacy HTML retains exact bytes and the bmstable link");
+    expect(!DownloadURLBytesIOS(origin + "/legacy-table", body, error, nullptr, 16),
+           "raw difficulty table download keeps the response size limit");
+    expect(!DownloadURLBytesIOS(origin + "/legacy-table", body, error,
+                               [] { return false; }),
+           "raw difficulty table download keeps cancellation");
     int checkpoints = 0;
     expect(DownloadURLTextIOS(origin + "/cancel", body, error, [&] {
       if (++checkpoints == 2)

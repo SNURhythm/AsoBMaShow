@@ -31,6 +31,8 @@ struct ReplayLogicalGameplayCallbacks {
                      bool backSpin)>
       releaseLane;
   std::function<void(const LogicalControl &, bool pressed)> command;
+  // Identifies the raw edge that produces any physical gameplay callbacks.
+  std::function<void(const InputTransition &, std::size_t)> beforeTransition;
 };
 
 class ReplayLogicalGameplayAdapter {

@@ -127,7 +127,10 @@ std::optional<GameplayJudgeRules> compileJudge(
     return std::nullopt;
   }
   rules.contexts = *windows;
-  rules.candidateSelection = snapshot.candidateSelection;
+  rules.candidateSelection = snapshot.candidateSelection == CandidateSelectionMode::LR2
+      ? (input.ruleset == GameplayRuleset::LR2 ? CandidateSelectionMode::Combo
+                                             : CandidateSelectionMode::Lowest)
+      : snapshot.candidateSelection;
   const auto &normal =
       windows->at(static_cast<std::size_t>(JudgeWindowContext::Normal));
   const auto bad = std::ranges::find_if(
@@ -173,8 +176,9 @@ GameplayPolicyBuildOutcome buildGameplayRulesetPolicy(
   const GameplayJudgeRules canonicalJudge = compileGameplayJudgeRules(
       input.ruleset, input.sourceRank, input.playbackRatePercent,
       input.judgeScalePercent, input.courseJudgement,
-      input.beatorajaCandidateSelection, meta.KeyMode,
-      chartRankPercent(meta, input.ruleset));
+      input.replaySnapshot.has_value() ? input.replaySnapshot->candidateSelection
+                                      : input.beatorajaCandidateSelection,
+      meta.KeyMode, chartRankPercent(meta, input.ruleset));
   std::string replayDiagnostic;
   const auto judgeRules = compileJudge(meta, input, replayDiagnostic);
   if (!judgeRules.has_value()) {
