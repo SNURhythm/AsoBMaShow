@@ -2,6 +2,7 @@
 #include "ReplaySetupAdapter.h"
 
 #include "../AssistOptionUtils.h"
+#include "../ChartTiming.h"
 #include "../ReplayData.h"
 #include "../ScoreHistoryTime.h"
 #include "../ResultContracts.h"
@@ -254,6 +255,18 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   };
   std::vector<GameplayEdge> edges;
   std::optional<std::int64_t> lastSimulatedTime;
+  std::vector<std::pair<std::int64_t, gameplay::NoteId>> classicReleaseDeadlines;
+  if (*selectedRuleset == GameplayRuleset::LR2) {
+    for (const auto id : definition.chronologicalNotes()) {
+      const auto &note = definition.note(id);
+      if (note.kind == gameplay::NoteKind::LongTail &&
+          note.longNoteRule == gameplay::LongNoteRule::Classic) {
+        classicReleaseDeadlines.emplace_back(
+            chart_timing::add(note.timingMicros, 1), id);
+      }
+    }
+  }
+  std::size_t nextClassicRelease = 0;
   LogicalControl currentControl;
   std::size_t currentSequence = 0;
   std::map<int, std::array<bool, 2>> scratchHeldKeys;
@@ -278,6 +291,18 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   ReplayJudgingSink judge;
   judge.advanceTo = [&](std::int64_t songTimeMicros,
                         std::string &diagnostic) {
+    // Raw replay input omits the live worker's intervening updates. A held LN
+    // must finish after its tail, before a later physical lift can judge it.
+    // Preserve input-first ordering when an edge lands exactly on the deadline.
+    while (nextClassicRelease < classicReleaseDeadlines.size() &&
+           classicReleaseDeadlines[nextClassicRelease].first < songTimeMicros) {
+      const auto [deadline, id] = classicReleaseDeadlines[nextClassicRelease++];
+      const auto &state = simulation.noteState(id);
+      if (state.holding && !state.played) {
+        simulation.advanceTo(deadline, deadline);
+        lastSimulatedTime = deadline;
+      }
+    }
     currentSongTime = songTimeMicros;
     if (simulation.replayOverflowed() ||
         simulation.automaticResultOverflowed() ||
