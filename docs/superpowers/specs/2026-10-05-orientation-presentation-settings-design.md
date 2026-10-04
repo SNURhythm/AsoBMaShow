@@ -1,8 +1,12 @@
 # Orientation-specific presentation settings
 
-Status: proposed design for review. Product code has not changed.
+Status: approved for implementation planning, including the subsequent song-selection layout request. Product code has not changed.
 
 Confirmed preference: portrait built-in lanes default to a flat 0-degree angle.
+
+## Song-selection layout
+
+In portrait, show Library and Songs side by side in an upper row, with a taller full-width Details pane below. Give Library approximately 30% of the upper row's width and Songs the remainder. Give Details approximately 40% of the usable content height instead of its current fixed 340-unit height. Account for safe areas and keep the primary actions reachable while detail content scrolls. Preserve selection, list scroll positions, and preview playback when resizing. Landscape retains its existing three-column arrangement.
 
 ## Intended behavior
 
