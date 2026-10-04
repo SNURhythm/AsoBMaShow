@@ -4436,6 +4436,10 @@ Parser::~Parser() = default;
 
 // http://www.zedwood.com/article/cpp-sha256-function
 #include <cstring>
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2) && \
+    defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#include <arm_neon.h>
+#endif
 
 namespace bms_parser {
 const unsigned int SHA256::sha256_k[64] = // UL = uint32
@@ -4452,6 +4456,38 @@ const unsigned int SHA256::sha256_k[64] = // UL = uint32
      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
 void SHA256::transform(const unsigned char *message, unsigned int block_nb) {
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2) && \
+    defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  // The target guarantees SHA2 instructions. Keep the existing update/final
+  // code, including its length encoding, identical on both compression paths.
+  uint32x4_t abcd = vld1q_u32(m_h);
+  uint32x4_t efgh = vld1q_u32(m_h + 4);
+  for (unsigned int block = 0; block < block_nb; ++block) {
+    const auto savedAbcd = abcd;
+    const auto savedEfgh = efgh;
+    uint32x4_t schedule[4];
+    for (unsigned int group = 0; group < 4; ++group)
+      schedule[group] = vreinterpretq_u32_u8(
+          vrev32q_u8(vld1q_u8(message + group * 16)));
+    for (unsigned int group = 0; group < 16; ++group) {
+      const unsigned int slot = group & 3;
+      if (group >= 4) {
+        schedule[slot] = vsha256su1q_u32(
+            vsha256su0q_u32(schedule[slot], schedule[(slot + 1) & 3]),
+            schedule[(slot + 2) & 3], schedule[(slot + 3) & 3]);
+      }
+      const auto words = vaddq_u32(schedule[slot], vld1q_u32(sha256_k + group * 4));
+      const auto priorAbcd = abcd;
+      abcd = vsha256hq_u32(abcd, efgh, words);
+      efgh = vsha256h2q_u32(efgh, priorAbcd, words);
+    }
+    abcd = vaddq_u32(abcd, savedAbcd);
+    efgh = vaddq_u32(efgh, savedEfgh);
+    message += SHA224_256_BLOCK_SIZE;
+  }
+  vst1q_u32(m_h, abcd);
+  vst1q_u32(m_h + 4, efgh);
+#else
   uint32 w[64];
   const unsigned char *sub_block;
   int i;
@@ -4490,6 +4526,7 @@ void SHA256::transform(const unsigned char *message, unsigned int block_nb) {
     m_h[0] += a; m_h[1] += b; m_h[2] += c; m_h[3] += d;
     m_h[4] += e; m_h[5] += f; m_h[6] += g; m_h[7] += h;
   }
+#endif
 }
 
 void SHA256::init() {

@@ -2,7 +2,7 @@
 
 ## Current selective malformed-LN policy
 
-The application adopts parser revision `33596fa855ec1b8fd92f12b719979c27bdce233a`, including both
+The application adopts parser revision `10ad6470e0204db4d982059db603f8c82a860b33`, including both
 amalgamated artifacts generated and tested upstream. This supersedes the
 unchanged-graph policy in the historical adoption notes below.
 
@@ -33,7 +33,7 @@ It removes duplicate tree allocations and combines timeline passes while
 preserving exact timestamps, note graphs and all existing consumer policy.
 Generic header matching uses a view after the leading ASCII `#`.
 Paired 517-chart CPU measurements improve Scan by 9%, Full parsing by 6%, and
-metadata parsing by 7% relative to `00f9fc7`. The remaining cost is still roughly
+metadata parsing by 7% relative to `00f9fc7`. At that timing-only revision the cost was roughly
 1.36–1.40x the earlier `2b964abd` parser. Full measurements and the discarded
 chronological prototype's out-of-bounds timing case are recorded upstream in
 `docs/performance/2026-10-04-timing-consolidation.md`.
@@ -45,6 +45,16 @@ time than `4c40a2d`; Scan/metadata differences are within noise. Header-heavy
 Full cases improve by 18–38%. Metadata trim views were not adopted because they
 can retain oversized buffers after short replacement values. Details and raw
 measurements are upstream in `docs/performance/2026-10-04-string-suffix-copy.md`.
+
+The SHA256 follow-up accelerates compression on little-endian AArch64 targets
+that already declare SHA2 support. Other targets retain the unchanged portable
+path; no target flags, dependencies, digest formats or public API are changed.
+On the tested Apple ARM64 target, 517-chart CPU measurements improve Full by
+16.8%, Scan by 23.6% and metadata parsing by 26.5% relative to `33596fa`.
+MD5 and existing SHA streaming/padding semantics remain unchanged. Measurements
+finished before application builds and pushes, with the self-hosted CI runner
+verified idle. Upstream details are in
+`docs/performance/2026-10-04-arm-sha256.md`.
 
 For undefined LNs whose player-selected mode becomes known later,
 `applyEffectiveLongNoteModeToChart` calls the parser library's
@@ -63,14 +73,18 @@ graphs and still report saved-result mismatches. Their archived JSON, BRD,
 SQLite data, chart bytes and immutable manifest were not changed. The user
 authorized pushing the application branch; no deployment is included.
 
-The current string-suffix adoption passes the full application build and all
-420 CTest tests with zero failures (133.29 seconds). Upstream clean Clang
-modular/resource/Python-comparison and regenerated-amalgamation suites pass.
-Fresh sanitized Java comparison passes all 4,192 chart/seed selections, and
-all 4,192 C++ snapshots are byte-identical to the preceding parser, including
-timestamps. Independent parser and application-adoption source reviews found
-no actionable issue.
+The current SHA256 adoption passes the full application build and all 420
+CTest tests with zero failures (134.43 seconds). Upstream clean modular/resource/
+Python-comparison and regenerated-amalgamation suites pass. Production hash
+vectors, streaming and unaligned buffers pass under native Clang sanitizers,
+portable Clang/GCC and SHA2-enabled GCC. Source compile checks pass for iOS
+ARM64, macOS x86 and Android ARM64 portable/SHA2 targets; these are not device
+runtime tests. The acceleration passes 11,075 sanitized equivalence checks and
+5,170 complete parser snapshots, including original-byte MD5/SHA256 metadata,
+with no differences. Independent parser and application reviews found no issue.
 
+The preceding string-suffix adoption passed 4,192 fresh sanitized Java
+comparisons and 4,192 byte-identical snapshots against its predecessor.
 The preceding timing adoption additionally passed GCC 15 unit/resource and
 ASan/UBSan plus float-cast-overflow modular suites. Its independent validation
 passed 4,800 sanitized Java comparisons and 19,200 byte-identical complete
@@ -79,7 +93,7 @@ The current generated files match upstream byte for byte; the public header
 is unchanged from the previous adoption:
 
 - `src/bms_parser.hpp`: `4339e276fd3f8f0a3693bafdd6a86dc1d667250811fb70eb2847e7bb776b703e`
-- `src/bms_parser.cpp`: `7b151496bed4ea55bfb14e081e894dd61c1e64d7d45579fbbbf898a97140e202`
+- `src/bms_parser.cpp`: `08a5692fd3d5986c3a46eccdb241423d214bd6ccd956e4024daac461fbea0d93`
 
 ## Historical application adoption and compatibility policy
 
