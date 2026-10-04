@@ -17,6 +17,7 @@ constexpr int kBottomGap = 8;
 constexpr int kArtworkFramePadding = 3;
 constexpr int kArtworkFrameBorderWidth = 1;
 constexpr int kBannerWidth = 368;
+constexpr int kDifficultyColumnWidth = 72;
 constexpr uint32_t kIconStar = 0xf005;
 constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
 
@@ -155,7 +156,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   detailsLayout->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignFlexEnd)
       ->setJustifyContent(YGJustifyCenter)
-      ->setWidth(112)
+      ->setWidth(kDifficultyColumnWidth)
       ->setHeight(84)
       ->setFlexShrink(0)
       ->setGap(6);
@@ -164,14 +165,14 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView->setName("chartListDifficulty");
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
   levelView->setOverflow(TextView::TextOverflow::Marquee);
-  levelView->setWidth(112)->setHeight(32);
+  levelView->setWidth(kDifficultyColumnWidth)->setHeight(32);
   detailsLayout->addView(levelView);
 
   keyModeView->setAlign(TextView::TextAlign::RIGHT);
   keyModeView->setName("chartListKeyMode");
   keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
   keyModeView->setOverflow(TextView::TextOverflow::Hidden);
-  keyModeView->setWidth(112)->setHeight(24);
+  keyModeView->setWidth(kDifficultyColumnWidth)->setHeight(24);
   detailsLayout->addView(keyModeView);
 
   scoreRankColumn->setName("chartListScoreRank");
@@ -212,8 +213,14 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankColumn->addView(scoreRankWeightView);
   scoreRankColumn->addView(scoreRankView);
   scoreRankColumn->addView(bestScoreView);
-  contentCard->addView(scoreRankColumn);
-  contentCard->addView(detailsLayout);
+  auto *scoreDetails = new View();
+  scoreDetails->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setFlexShrink(0)
+      ->setGap(6);
+  scoreDetails->addView(scoreRankColumn);
+  scoreDetails->addView(detailsLayout);
+  contentCard->addView(scoreDetails);
 
   favoriteButton->setWidth(84)
       ->setHeight(84)
