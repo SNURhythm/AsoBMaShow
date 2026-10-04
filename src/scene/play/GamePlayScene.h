@@ -287,7 +287,6 @@ private:
   bool handleTouchInputAtGameplayTime(
       SDL_FingerID fingerIndex, ReplayTouchAction action,
       Vector3 normalizedLocation, long long gameplayTimeMicros,
-      std::optional<long long> visualGameplayTimeMicros = std::nullopt,
       bool allowBuiltInControl = true);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
@@ -373,7 +372,6 @@ private:
   long long lastHellChargeGaugeUpdateMicros = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;
-  bool touchVisualizerLoaded = false;
   bool playbackInitializationFailed = false;
   bool practiceMenuActive = false;
   long long practiceMenuStartPressedMicros = 0;

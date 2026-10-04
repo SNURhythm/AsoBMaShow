@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct PlayfieldPlayTimerAuthority {
@@ -536,6 +537,8 @@ private:
   struct TouchLifecycle {
     std::unordered_map<long long, PresentationTouchPoint> active;
     std::vector<PresentationTouchPoint> released;
+    // Legacy Cancel/Move recordings may resume after the fade has expired.
+    std::unordered_set<long long> cancelled;
   };
 
   static void applyTouchSample(TouchLifecycle &lifecycle,

@@ -2658,6 +2658,7 @@ void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
 void BMSRenderer::applyTouchSample(
     std::unordered_map<long long, TouchPointVisual> &activeTouches,
     std::vector<TouchPointVisual> &releasedTouches,
+    std::unordered_set<long long> &cancelledTouches,
     const ReplayTouchSample &sample) {
   TouchPointVisual visual;
   visual.x = std::clamp(sample.x, 0.0f, 1.0f);
@@ -2665,14 +2666,25 @@ void BMSRenderer::applyTouchSample(
   visual.eventTimeMicros = sample.songTimeMicros;
 
   switch (sample.action) {
-  case ReplayTouchAction::Down:
   case ReplayTouchAction::Move:
+    if (!activeTouches.contains(sample.fingerId) &&
+        !cancelledTouches.contains(sample.fingerId)) {
+      return;
+    }
+    [[fallthrough]];
+  case ReplayTouchAction::Down:
+    cancelledTouches.erase(sample.fingerId);
     visual.releaseTimeMicros = 0;
     visual.released = false;
     activeTouches[sample.fingerId] = visual;
     break;
   case ReplayTouchAction::Up:
   case ReplayTouchAction::Cancel:
+    if (sample.action == ReplayTouchAction::Cancel) {
+      cancelledTouches.insert(sample.fingerId);
+    } else {
+      cancelledTouches.erase(sample.fingerId);
+    }
     if (auto it = activeTouches.find(sample.fingerId);
         it != activeTouches.end()) {
       visual = it->second;
@@ -2696,6 +2708,7 @@ void BMSRenderer::advanceReplayTouches(long long replayTouchTimeMicros) {
     replayTouchCursor = 0;
     replayActiveTouchSamples.clear();
     replayReleasedTouchSamples.clear();
+    replayCancelledTouchIds.clear();
   }
   lastReplayTouchTimeMicros = replayTouchTimeMicros;
 
@@ -2703,6 +2716,7 @@ void BMSRenderer::advanceReplayTouches(long long replayTouchTimeMicros) {
          replayTouchSamples[replayTouchCursor].songTimeMicros <=
              replayTouchTimeMicros) {
     applyTouchSample(replayActiveTouchSamples, replayReleasedTouchSamples,
+                     replayCancelledTouchIds,
                      replayTouchSamples[replayTouchCursor]);
     ++replayTouchCursor;
   }
@@ -4504,8 +4518,10 @@ void BMSRenderer::reset() {
   lastReplayTouchTimeMicros = -1;
   replayActiveTouchSamples.clear();
   replayReleasedTouchSamples.clear();
+  replayCancelledTouchIds.clear();
   liveTouchSamples.clear();
   liveReleasedTouchSamples.clear();
+  liveCancelledTouchIds.clear();
 
   for (auto &laneState : laneStatesByOrder) {
     laneState.lastPressedJudgement.store(None, std::memory_order_relaxed);
@@ -4982,6 +4998,7 @@ void BMSRenderer::setReplayData(const ReplayData *replayData,
   replayTouchSamples.clear();
   replayActiveTouchSamples.clear();
   replayReleasedTouchSamples.clear();
+  replayCancelledTouchIds.clear();
   replayTouchCursor = 0;
   lastReplayTouchTimeMicros = -1;
   if (replayData == nullptr) {
@@ -5046,12 +5063,14 @@ void BMSRenderer::setLiveTouchPoint(long long fingerId,
   sample.songTimeMicros = songTimeMicros;
   sample.x = x;
   sample.y = y;
-  applyTouchSample(liveTouchSamples, liveReleasedTouchSamples, sample);
+  applyTouchSample(liveTouchSamples, liveReleasedTouchSamples,
+                   liveCancelledTouchIds, sample);
 }
 
 void BMSRenderer::clearLiveTouchPoints() {
   liveTouchSamples.clear();
   liveReleasedTouchSamples.clear();
+  liveCancelledTouchIds.clear();
 }
 
 void BMSRenderer::drawRect(float width, float height, float x, float y,

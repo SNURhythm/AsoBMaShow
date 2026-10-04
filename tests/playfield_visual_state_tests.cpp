@@ -721,6 +721,132 @@ void testEventClockUsesSourceTimeAndIndependentOffsets() {
           "lane and judge events share the same visual-time domain");
 }
 
+void testLateMovesCannotReviveReleasedTouchVisuals() {
+  ChartFixture fixture;
+  for (const bool replay : {false, true}) {
+    for (const bool includeDown : {false, true}) {
+      PlayfieldVisualStateStore store(
+          buildPlayfieldChartVisualModel(fixture.chart, 0));
+      std::vector<ReplayTouchSample> samples{
+          {.action = ReplayTouchAction::Down, .fingerId = 13,
+           .songTimeMicros = 100'000, .x = 0.1F, .y = 0.2F},
+          {.action = ReplayTouchAction::Up, .fingerId = 13,
+           .songTimeMicros = 110'000, .x = 0.2F, .y = 0.3F},
+          {.action = ReplayTouchAction::Move, .fingerId = 13,
+           .songTimeMicros = 170'000, .x = 0.3F, .y = 0.4F}};
+      if (!includeDown) samples.erase(samples.begin(), samples.begin() + 2);
+      if (replay) store.setReplayTouchSamples(samples);
+      else {
+        for (const auto &sample : samples) {
+          store.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                  sample.y, sample.songTimeMicros);
+        }
+      }
+      require(store.capture({.replayTouchTimeMicros = 300'001}).touches.empty(),
+              "late moves cannot leave live or replay touches dangling after lift or without a contact");
+    }
+  }
+}
+
+void testCancelledTouchVisualCanContinueDuringGrace() {
+  ChartFixture fixture;
+  for (const bool replay : {false, true}) {
+    PlayfieldVisualStateStore store(
+        buildPlayfieldChartVisualModel(fixture.chart, 0));
+    const std::vector<ReplayTouchSample> samples{
+        {.action = ReplayTouchAction::Down, .fingerId = 14,
+         .songTimeMicros = 100'000, .x = 0.1F, .y = 0.2F},
+        {.action = ReplayTouchAction::Cancel, .fingerId = 14,
+         .songTimeMicros = 110'000, .x = 0.2F, .y = 0.3F},
+        {.action = ReplayTouchAction::Move, .fingerId = 14,
+         .songTimeMicros = 170'000, .x = 0.3F, .y = 0.4F},
+        {.action = ReplayTouchAction::Up, .fingerId = 14,
+         .songTimeMicros = 180'000, .x = 0.4F, .y = 0.5F}};
+    if (replay) store.setReplayTouchSamples(samples);
+    else {
+      for (std::size_t i = 0; i < 3; ++i) {
+        const auto &sample = samples[i];
+        store.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                sample.y, sample.songTimeMicros);
+      }
+    }
+    const auto resumed = store.capture({.replayTouchTimeMicros = 170'000});
+    require(touchFor(resumed.touches, 14, ReplayTouchAction::Move) != nullptr,
+            "a valid cancellation continuation retains its active touch visualization");
+    if (!replay) {
+      const auto &sample = samples.back();
+      store.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                              sample.y, sample.songTimeMicros);
+    }
+    require(store.capture({.replayTouchTimeMicros = 360'001}).touches.empty(),
+            "a resumed cancelled touch still closes on its real lift");
+  }
+}
+
+void testCancelledTouchContinuationIsIndependentOfVisualPruning() {
+  ChartFixture fixture;
+  for (const auto continuation : {ReplayTouchAction::Move, ReplayTouchAction::Down}) {
+    const std::vector<ReplayTouchSample> samples{
+        {.action = ReplayTouchAction::Down, .fingerId = 15,
+         .songTimeMicros = 100'000, .x = 0.1F, .y = 0.2F},
+        {.action = ReplayTouchAction::Cancel, .fingerId = 15,
+         .songTimeMicros = 110'000, .x = 0.2F, .y = 0.3F},
+        {.action = continuation, .fingerId = 15,
+         .songTimeMicros = 400'000, .x = 0.3F, .y = 0.4F},
+        {.action = ReplayTouchAction::Up, .fingerId = 15,
+         .songTimeMicros = 410'000, .x = 0.4F, .y = 0.5F},
+        {.action = ReplayTouchAction::Move, .fingerId = 15,
+         .songTimeMicros = 420'000, .x = 0.5F, .y = 0.6F}};
+    for (const bool replay : {false, true}) {
+      PlayfieldVisualStateStore stepped(
+          buildPlayfieldChartVisualModel(fixture.chart, 0));
+      PlayfieldVisualStateStore direct(
+          buildPlayfieldChartVisualModel(fixture.chart, 0));
+      if (replay) {
+        stepped.setReplayTouchSamples(samples);
+        direct.setReplayTouchSamples(samples);
+      } else {
+        for (std::size_t i = 0; i < 2; ++i) {
+          const auto &sample = samples[i];
+          stepped.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                    sample.y, sample.songTimeMicros);
+          direct.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                   sample.y, sample.songTimeMicros);
+        }
+      }
+      require(stepped.capture({.replayTouchTimeMicros = 300'001}).touches.empty(),
+              "cancelled visual finishes fading before delayed continuation");
+      if (!replay) {
+        const auto &sample = samples[2];
+        stepped.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                  sample.y, sample.songTimeMicros);
+        direct.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                 sample.y, sample.songTimeMicros);
+      }
+      require(touchFor(stepped.capture({.replayTouchTimeMicros = 400'000}).touches,
+                       15, continuation) != nullptr &&
+                  touchFor(direct.capture({.replayTouchTimeMicros = 400'000}).touches,
+                           15, continuation) != nullptr,
+              "continuation or a new contact is visible with or without intermediate pruning");
+      if (!replay) {
+        for (std::size_t i = 3; i < samples.size(); ++i) {
+          const auto &sample = samples[i];
+          stepped.setLiveTouchPoint(sample.fingerId, sample.action, sample.x,
+                                    sample.y, sample.songTimeMicros);
+        }
+      }
+      require(stepped.capture({.replayTouchTimeMicros = 600'001}).touches.empty(),
+              "real lift retires cancellation eligibility before a stale Move");
+      if (replay) {
+        require(stepped.capture({.replayTouchTimeMicros = 90'000}).touches.empty() &&
+                    touchFor(stepped.capture({.replayTouchTimeMicros = 400'000}).touches,
+                             15, continuation) != nullptr,
+                "backward seek reconstructs the same continuation ownership");
+      }
+    }
+  }
+}
+
 void testLiveReleasedTouchesLingerThenPrune() {
   ChartFixture fixture;
   PlayfieldVisualStateStore store(
@@ -968,6 +1094,9 @@ void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
 } // namespace
 
 int main() {
+  testLateMovesCannotReviveReleasedTouchVisuals();
+  testCancelledTouchVisualCanContinueDuringGrace();
+  testCancelledTouchContinuationIsIndependentOfVisualPruning();
   testLargeRealtimePresentationReusesStorageAfterFrameRelease();
   testRealtimeLongNoteActivityTracksClockAndLaneWithoutNoteCopies();
   testUnchangedNoteUpdateRetainsSharedStorage();

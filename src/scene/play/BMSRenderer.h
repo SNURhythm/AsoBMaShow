@@ -315,8 +315,10 @@ private:
   };
   std::unordered_map<long long, TouchPointVisual> replayActiveTouchSamples;
   std::vector<TouchPointVisual> replayReleasedTouchSamples;
+  std::unordered_set<long long> replayCancelledTouchIds;
   std::unordered_map<long long, TouchPointVisual> liveTouchSamples;
   std::vector<TouchPointVisual> liveReleasedTouchSamples;
+  std::unordered_set<long long> liveCancelledTouchIds;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
   std::optional<gameplay_scroll_geometry::ScrollPositionTimeline>
@@ -466,6 +468,7 @@ private:
   void applyTouchSample(
       std::unordered_map<long long, TouchPointVisual> &activeTouches,
       std::vector<TouchPointVisual> &releasedTouches,
+      std::unordered_set<long long> &cancelledTouches,
       const ReplayTouchSample &sample);
   void pruneReleasedTouchSamples(
       std::vector<TouchPointVisual> &releasedTouches,

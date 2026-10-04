@@ -2,6 +2,7 @@
 #include "ReplaySetupAdapter.h"
 
 #include "../AssistOptionUtils.h"
+#include "../ChartTiming.h"
 #include "../ReplayData.h"
 #include "../ScoreHistoryTime.h"
 #include "../ResultContracts.h"
@@ -254,6 +255,18 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   };
   std::vector<GameplayEdge> edges;
   std::optional<std::int64_t> lastSimulatedTime;
+  std::vector<std::pair<std::int64_t, gameplay::NoteId>> classicReleaseDeadlines;
+  if (*selectedRuleset == GameplayRuleset::LR2) {
+    for (const auto id : definition.chronologicalNotes()) {
+      const auto &note = definition.note(id);
+      if (note.kind == gameplay::NoteKind::LongTail &&
+          note.longNoteRule == gameplay::LongNoteRule::Classic) {
+        classicReleaseDeadlines.emplace_back(
+            chart_timing::add(note.timingMicros, 1), id);
+      }
+    }
+  }
+  std::size_t nextClassicRelease = 0;
   LogicalControl currentControl;
   std::size_t currentSequence = 0;
   std::map<int, std::array<bool, 2>> scratchHeldKeys;
@@ -274,6 +287,26 @@ ReplayPlaybackMaterializer::materializeForConsumers(
          currentControl = transition.control;
          currentSequence = sequence;
        }});
+
+  const auto completeClassicReleasesBefore = [&](std::int64_t songTimeMicros,
+      std::span<const gameplay::GameplayLaneInputState> physicalStates) {
+    // Raw replay input omits intervening updates. Catch up held classic tails
+    // with the incoming physical snapshot, just like the live worker's passing
+    // phase; using stale held keys here could insert or swallow mine hits.
+    // Keep input-first ordering when an edge lands exactly on the deadline.
+    while (nextClassicRelease < classicReleaseDeadlines.size() &&
+           classicReleaseDeadlines[nextClassicRelease].first < songTimeMicros) {
+      const auto [deadline, id] = classicReleaseDeadlines[nextClassicRelease++];
+      const auto &state = simulation.noteState(id);
+      if (state.holding && !state.played) {
+        const gameplay::GameplayInputContext context{
+            .songTimeMicros = deadline, .laneBeamTimeMicros = deadline};
+        simulation.beginInputUpdate(physicalStates, context);
+        simulation.finishInputUpdate(context);
+        lastSimulatedTime = deadline;
+      }
+    }
+  };
 
   ReplayJudgingSink judge;
   judge.advanceTo = [&](std::int64_t songTimeMicros,
@@ -348,6 +381,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     }
     const gameplay::GameplayInputContext context{
         .songTimeMicros = currentSongTime, .laneBeamTimeMicros = currentSongTime};
+    completeClassicReleasesBefore(currentSongTime, physicalStates);
     simulation.beginInputUpdate(physicalStates, context);
     for (const auto &edge : edges) {
       auto edgeContext = context;
@@ -370,6 +404,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   std::size_t acceptedReplayEventCount = 0;
   judge.finish = [&](std::string &diagnostic)
       -> std::optional<result_persistence::ModernChartResult> {
+    completeClassicReleasesBefore(currentSongTime, {});
     if (!lastSimulatedTime || *lastSimulatedTime != currentSongTime) {
       simulation.advanceTo(currentSongTime, currentSongTime);
     }

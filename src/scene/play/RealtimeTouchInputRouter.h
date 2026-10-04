@@ -264,6 +264,10 @@ public:
   bool consume(const RealtimeTouchSample &sample) noexcept;
   [[nodiscard]] RealtimeTouchRoutingDisposition
   consumeForPublication(const RealtimeTouchSample &sample) noexcept;
+  // Routed Up releases gameplay ownership immediately, but retains auxiliary
+  // ownership until publication succeeds so overflow recovery can close it.
+  [[nodiscard]] bool
+  acknowledgePublishedRelease(std::int64_t fingerId) noexcept;
   [[nodiscard]] bool
   acknowledgePublishedCancellation(std::int64_t fingerId) noexcept;
   bool cancelAll(std::int64_t steadyTimestampMicros) noexcept;
@@ -303,6 +307,7 @@ private:
     std::optional<UiLogicalPoint> presentationUiPoint;
     std::optional<RealtimeTouchPoint> presentationPoint;
     bool cancellationPublished = false;
+    bool releasePublicationPending = false;
     bool suppressedUntilLift = false;
   };
 

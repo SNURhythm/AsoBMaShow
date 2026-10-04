@@ -1609,6 +1609,15 @@ struct GamePlayScene::RealtimeGameplaySession {
       session.touchRoutingRecoveryRequested.store(true,
                                                   std::memory_order_release);
     }
+    if (phase == gameplay::RealtimeTouchPhase::Up && auxiliaryPublished) {
+      std::lock_guard lock(session.touchRouterMutex);
+      if (session.touchRouter == nullptr ||
+          !session.touchRouter->acknowledgePublishedRelease(sample.fingerId)) {
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+      }
+    }
     bool cancellationAcknowledged = false;
     if (phase == gameplay::RealtimeTouchPhase::Cancel &&
         auxiliaryPublished) {
@@ -2340,8 +2349,6 @@ void GamePlayScene::drainRealtimeTouchSamples(
     return;
   }
   auto &session = *realtimeGameplaySession;
-  const long long visualGameplayTimeMicros =
-      getGameplayTimeMicros(context.jukebox.getTimeMicros());
   const auto consumeSample = [&](const gameplay::RealtimeTouchSample &sample) {
     const auto gameplayTime = RealtimeGameplaySession::mapSteadyToSong(
         &session, sample.steadyTimestampMicros);
@@ -2391,7 +2398,6 @@ void GamePlayScene::drainRealtimeTouchSamples(
     (void)handleTouchInputAtGameplayTime(
         static_cast<SDL_FingerID>(sample.fingerId), action,
         Vector3(presentationPoint.x, presentationPoint.y, 0.0F), *gameplayTime,
-        visualGameplayTimeMicros,
         gameplay::realtimeTouchAllowsLegacyBuiltInControl(
             sample.presentationHit));
   };
@@ -3982,7 +3988,6 @@ bool GamePlayScene::startPreparedAttempt() {
   }
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
-  touchVisualizerLoaded = false;
   floatingLaneCoverDragActive = false;
   floatingLaneCoverDragChanged = false;
   floatingLaneCoverFinger = -1;
@@ -6499,7 +6504,6 @@ void GamePlayScene::update(float dt) {
     syncRealtimeGameplaySnapshot();
     updateRealtimeVisualTimeline(gameplayTimeMicros);
   }
-  touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
     processReplayEvents(gameplayTimeMicros);
     processReplayLaneCoverEvents(gameplayTimeMicros);
@@ -8006,7 +8010,6 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
 bool GamePlayScene::handleTouchInputAtGameplayTime(
     SDL_FingerID fingerIndex, ReplayTouchAction action,
     Vector3 normalizedLocation, long long gameplayTimeMicros,
-    std::optional<long long> visualGameplayTimeMicros,
     bool allowBuiltInControl) {
   if (!practiceInputAllowed(gameplayTimeMicros)) {
     return false;
@@ -8026,15 +8029,12 @@ bool GamePlayScene::handleTouchInputAtGameplayTime(
     return activeFloatingDrag;
   }
 
-  if (touchVisualizerLoaded) {
-    const long long touchTimeMicros =
-        visualGameplayTimeMicros.value_or(gameplayTimeMicros);
-    (void)touchTimeMicros;
-    if (playfieldVisualStateStore != nullptr) {
-      playfieldVisualStateStore->setLiveTouchPoint(
-          static_cast<long long>(fingerIndex), action, normalizedLocation.x,
-          normalizedLocation.y, gameplayTimeMicros);
-    }
+  // The state store exists before ingress opens. Keep the first Down even
+  // when it is drained before the first rendered gameplay frame.
+  if (playfieldVisualStateStore != nullptr) {
+    playfieldVisualStateStore->setLiveTouchPoint(
+        static_cast<long long>(fingerIndex), action, normalizedLocation.x,
+        normalizedLocation.y, gameplayTimeMicros);
   }
   appendReplayTouchSample(fingerIndex, action, normalizedLocation,
                           gameplayTimeMicros);
