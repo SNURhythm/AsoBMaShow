@@ -2142,6 +2142,9 @@ Note::~Note() { Timeline = nullptr; }
 #include <iterator>
 #include <random>
 
+#if defined(__APPLE__)
+#include <CommonCrypto/CommonDigest.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -2170,6 +2173,31 @@ Note::~Note() { Timeline = nullptr; }
 #endif
 
 namespace {
+
+std::string md5Fingerprint(const unsigned char *bytes, bms_parser::MD5::size_type length) {
+#if defined(__APPLE__)
+  static_assert(sizeof(CC_LONG) == sizeof(bms_parser::MD5::size_type));
+  unsigned char digest[CC_MD5_DIGEST_LENGTH];
+  // BMS identifies existing charts by their required legacy MD5 fingerprint.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  CC_MD5(bytes, static_cast<CC_LONG>(length), digest);
+#pragma GCC diagnostic pop
+  char result[CC_MD5_DIGEST_LENGTH * 2 + 1];
+  constexpr char hex[] = "0123456789abcdef";
+  for (unsigned int i = 0; i < CC_MD5_DIGEST_LENGTH; ++i) {
+    result[i * 2] = hex[digest[i] >> 4];
+    result[i * 2 + 1] = hex[digest[i] & 15];
+  }
+  result[CC_MD5_DIGEST_LENGTH * 2] = 0;
+  return result;
+#else
+  bms_parser::MD5 hash;
+  hash.update(bytes, length);
+  hash.finalize();
+  return hash.hexdigest();
+#endif
+}
 
 // Header offsets in BMSDecoder are Java UTF-16 code-unit offsets. Preserve
 // whole UTF-8 characters; a sliced surrogate has Java's UTF-8 replacement '?'.
@@ -3141,10 +3169,9 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
 #if BMS_PARSER_VERBOSE == 1
   auto md5StartTime = std::chrono::high_resolution_clock::now();
 #endif
-  MD5 md5;
-  md5.update(bytes.data(), bytes.size());
-  md5.finalize();
-  new_chart->Meta.MD5 = md5.hexdigest();
+  // Preserve the existing one-shot MD5 length conversion on every backend.
+  new_chart->Meta.MD5 = md5Fingerprint(
+      bytes.data(), static_cast<MD5::size_type>(bytes.size()));
 #if BMS_PARSER_VERBOSE == 1
   std::cout << "Hashing MD5 took "
             << std::chrono::duration_cast<std::chrono::microseconds>(

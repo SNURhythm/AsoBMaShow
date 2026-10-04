@@ -2,7 +2,7 @@
 
 ## Current selective malformed-LN policy
 
-The application adopts parser revision `10ad6470e0204db4d982059db603f8c82a860b33`, including both
+The application adopts parser revision `1d9956d647fff5ca594c98a707fe1a5e370053eb`, including both
 amalgamated artifacts generated and tested upstream. This supersedes the
 unchanged-graph policy in the historical adoption notes below.
 
@@ -56,6 +56,16 @@ finished before application builds and pushes, with the self-hosted CI runner
 verified idle. Upstream details are in
 `docs/performance/2026-10-04-arm-sha256.md`.
 
+The MD5 follow-up uses Apple's system CommonCrypto routine for parser
+fingerprints, retaining the existing backend on other platforms. Original bytes,
+32-bit one-shot length conversion, lowercase digest format and public MD5 API
+are unchanged. Paired 517-chart CPU measurements improve Full by 2.7%, Scan by
+4.3% and metadata parsing by 4.9% relative to `10ad647`. Empty/64-byte standalone
+calls are slower; 4 KiB/1 MiB calls use 27–29% less CPU. No external dependency
+or linker flag is added. Timings finished before production builds and pushes,
+with CI idle. Details are upstream in
+`docs/performance/2026-10-04-apple-md5.md`.
+
 For undefined LNs whose player-selected mode becomes known later,
 `applyEffectiveLongNoteModeToChart` calls the parser library's
 `TimeLine::DemoteUnusableLongNote` in the existing count pass. This happens before
@@ -73,7 +83,17 @@ graphs and still report saved-result mismatches. Their archived JSON, BRD,
 SQLite data, chart bytes and immutable manifest were not changed. The user
 authorized pushing the application branch; no deployment is included.
 
-The current SHA256 adoption passes the full application build and all 420
+The current MD5 adoption passes the full application build and all 420 CTest
+tests with zero failures (132.61 seconds). Clean upstream modular/resource/
+Python-comparison and regenerated-amalgamation suites pass. The exact helper
+passes 9,813 sanitized equivalence checks and all 5,170 parser snapshots match.
+New independent raw-byte MD5/SHA256 fixtures exercise Full/metadata/Scan and pass
+native Clang sanitizers and GCC 15. The complete generated parser compiles for
+macOS x86, iOS ARM64, and Android NDK 28.2 ARM64 default/SHA2 targets; these are
+compile checks, not device-runtime tests. Independent parser and application
+reviews found no issue. Both copied artifacts match the upstream outputs.
+
+The preceding SHA256 adoption passed the full application build and all 420
 CTest tests with zero failures (134.43 seconds). Upstream clean modular/resource/
 Python-comparison and regenerated-amalgamation suites pass. Production hash
 vectors, streaming and unaligned buffers pass under native Clang sanitizers,
@@ -93,7 +113,7 @@ The current generated files match upstream byte for byte; the public header
 is unchanged from the previous adoption:
 
 - `src/bms_parser.hpp`: `4339e276fd3f8f0a3693bafdd6a86dc1d667250811fb70eb2847e7bb776b703e`
-- `src/bms_parser.cpp`: `08a5692fd3d5986c3a46eccdb241423d214bd6ccd956e4024daac461fbea0d93`
+- `src/bms_parser.cpp`: `f79d4b4170369e2b5b32950ac4745da9f1920addc733aaa7ccc03bfb44058e37`
 
 ## Historical application adoption and compatibility policy
 
