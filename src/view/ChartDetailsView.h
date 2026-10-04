@@ -12,6 +12,7 @@ class TextView;
 class ChartDetailsView : public View {
 public:
   explicit ChartDetailsView(ImageView *artwork);
+  void setScoreContainer(View *container);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);

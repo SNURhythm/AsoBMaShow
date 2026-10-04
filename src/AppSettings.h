@@ -237,6 +237,11 @@ public:
       laneLength = policy.length.defaultValue;
       playAreaWidth4K = playAreaWidth5K = playAreaWidth6K = playAreaWidth7K =
           playAreaWidth8K = playAreaWidth10K = playAreaWidth14K = policy.width.defaultValue;
+      if (orientation == PresentationOrientation::Portrait) {
+        judgementIndicatorRenderMode = JudgementIndicatorRenderMode::Hud2D;
+        judgementCounterPosition = JudgementCounterPosition::Left;
+        gaugeBarPosition = GaugeBarPosition::Right;
+      }
     }
     void sanitize(PresentationOrientation orientation);
     bool operator==(const PresentationSettings &) const = default;

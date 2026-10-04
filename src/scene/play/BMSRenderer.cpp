@@ -1172,7 +1172,8 @@ void BMSRenderer::drawGameplayHudPanels() {
   const float metricsHeight = gameplayHudMetricsHeight(showPacemaker);
 
   if (titleWidth > 1.0f) {
-    drawHudRoundedPanel(safe.left + margin, safe.top + margin, titleWidth, 82.0f, radius,
+    const auto rect = gameplayHudTitleRect();
+    drawHudRoundedPanel(rect[0], rect[1], rect[2], rect[3], radius,
                         hudPanelFill(), hudPanelBorder());
   }
   drawHudRoundedPanel(safe.left + margin, gameplayHudMetricsY(showPacemaker), metricsWidth,
@@ -1454,9 +1455,10 @@ void BMSRenderer::layoutGameplayHud() {
   if (titleText != nullptr) {
     titleText->setVisible(titleVisible);
   }
-  placeText(titleText.get(), margin + 18, safe.top + 36,
+  const auto titleRect = gameplayHudTitleRect();
+  placeText(titleText.get(), static_cast<int>(titleRect[0]) + 18, static_cast<int>(titleRect[1]) + 8,
             std::max(1, titleWidth - 36), 34);
-  placeText(playOptionText.get(), margin + 18, safe.top + 72,
+  placeText(playOptionText.get(), static_cast<int>(titleRect[0]) + 18, static_cast<int>(titleRect[1]) + 44,
             std::max(1, titleWidth - 36), 26);
 
   const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
@@ -1705,6 +1707,10 @@ void BMSRenderer::refreshGaugeTextStyle() {
 
 float BMSRenderer::gameplayHudTitleWidth() const {
   const auto safe = rendering::uiSafeAreaInsets();
+  if (presentationOrientation == player_settings::PresentationOrientation::Portrait) {
+    return std::max(1.0F, std::min(baseGameplayHudTitleWidth(),
+        rendering::window_width - safe.left - safe.right - 3 * kHudMargin - gameplayHudMetricsWidth()));
+  }
   const float kTitleMargin = safe.left + 28.0f;
   constexpr float kLaneGap = 18.0f;
   const float kTitleTop = safe.top + 28.0f;
@@ -1718,6 +1724,16 @@ float BMSRenderer::gameplayHudTitleWidth() const {
 
   const float maxWidth = laneLeft - kTitleMargin - kLaneGap;
   return std::clamp(maxWidth, 0.0f, baseWidth);
+}
+
+std::array<float, 4> BMSRenderer::gameplayHudTitleRect() const {
+  const auto safe = rendering::uiSafeAreaInsets();
+  const float width = gameplayHudTitleWidth();
+  if (presentationOrientation == player_settings::PresentationOrientation::Portrait) {
+    return {rendering::window_width - safe.right - kHudMargin - width,
+            rendering::window_height - safe.bottom - kHudMargin - 82.0F, width, 82.0F};
+  }
+  return {safe.left + kHudMargin, safe.top + kHudMargin, width, 82.0F};
 }
 
 std::optional<std::pair<float, float>>
@@ -2807,34 +2823,26 @@ void BMSRenderer::drawTouchPoints(long long replayTouchTimeMicros) {
   }
 }
 
-float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
-  Camera &camera = rendering::game_camera;
-  constexpr float kFallbackLaneTop = 8.5f;
-
-  const float screenTopY = 0.0f;
-  const float screenCenterX = rendering::window_width / 2.0f;
-  const bx::Vec3 eye = camera.getEye();
-  const bx::Vec3 screenTopWorld =
-      camera.deproject(screenCenterX, screenTopY, 5.0f);
-
-  bx::Vec3 rayDir = {screenTopWorld.x - eye.x, screenTopWorld.y - eye.y,
-                     screenTopWorld.z - eye.z};
-  const float rayLength = bx::length(rayDir);
-  if (rayLength <= 0.0001f) {
-    return kFallbackLaneTop;
+std::pair<float, float> BMSRenderer::calculateLanePlaneScreenBounds() const {
+  float bottom = std::numeric_limits<float>::infinity();
+  float top = -std::numeric_limits<float>::infinity();
+  // Camera::deproject takes drawable pixels, not logical UI coordinates.
+  // Use every corner so the bounds remain conservative for tilted cameras.
+  const auto &camera = rendering::game_camera;
+  if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0)
+    return {lowerBound, upperBound};
+  const float left = camera.getViewX(), right = left + camera.getViewWidth();
+  const float screenTop = camera.getViewY(), screenBottom = screenTop + camera.getViewHeight();
+  for (float x : {left, right}) {
+    for (float y : {screenTop, screenBottom}) {
+      const auto point = lanePlanePointAtRenderPosition(x, y);
+      if (!point || !std::isfinite(point->y)) return {lowerBound, upperBound};
+      bottom = std::min(bottom, point->y);
+      top = std::max(top, point->y);
+    }
   }
-  rayDir = {rayDir.x / rayLength, rayDir.y / rayLength, rayDir.z / rayLength};
-
-  if (std::abs(rayDir.z) < 0.001f) {
-    return kFallbackLaneTop;
-  }
-
-  const float t = -eye.z / rayDir.z;
-  if (t < 0.0f) {
-    return kFallbackLaneTop;
-  }
-
-  return eye.y + t * rayDir.y;
+  if (bottom >= top) return {lowerBound, upperBound};
+  return {bottom, top};
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
@@ -3180,6 +3188,9 @@ void BMSRenderer::renderFrame(
   noteVisibleUpperBound = builtInTraversal.noteVisibleUpperBound;
   float rxhs = builtInTraversal.rxhs;
   float y = judgeY;
+  // Retained long notes need an off-screen head anchor. Keep the entire
+  // endpoint below the viewport now that lowerBound is the actual edge.
+  const float offscreenLongHeadY = lowerBound - noteRenderHeight;
   const double currentScrollPosition =
       projection != nullptr ? projection->currentScrollPosition
                             : scrollPositionAtTime(chartTimeMicros);
@@ -3480,7 +3491,7 @@ void BMSRenderer::renderFrame(
       const int lane = rendererLaneFor(longNote.lane);
       const float legacyHeadY =
           longNote.headTimeMicros < chart_timing::subtract(chartTimeMicros, latePoorTiming)
-              ? lowerBound
+              ? offscreenLongHeadY
               : headY;
       const float headRenderY =
           longNote.headPlayed && !longNote.headDead ? judgeY : legacyHeadY;
@@ -3675,7 +3686,7 @@ void BMSRenderer::renderFrame(
         }
       };
   for (auto *orphanLongNote : state.orphanLongNotes) {
-    rememberLongNoteHead(orphanLongNote, lowerBound,
+    rememberLongNoteHead(orphanLongNote, offscreenLongHeadY,
                          [&]() { return pastLongNoteOrder; });
   }
   double futureY = static_cast<double>(judgeY);
@@ -3795,7 +3806,7 @@ void BMSRenderer::renderFrame(
           return false;
         }
         state.orphanLongNotes.insert(longNote);
-        rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
+        rememberLongNoteHead(longNote, offscreenLongHeadY, ensureLongOrder);
         return true;
       };
       if (timeLine->Timing >= chart_timing::subtract(chartTimeMicros, latePoorTiming)) {
@@ -3834,7 +3845,7 @@ void BMSRenderer::renderFrame(
                   chartEntityRenderBudget.tryConsume(
                       gameplay_chart_entity_render_budget::
                           kLongNoteReservationCost);
-              drawLongNote(lowerBound, y, longNote->Head, pastLongNoteOrder,
+              drawLongNote(offscreenLongHeadY, y, longNote->Head, pastLongNoteOrder,
                            renderBudgetReserved);
             }
           } else {
@@ -3869,9 +3880,9 @@ void BMSRenderer::renderFrame(
             // add to orphan long note
             state.orphanLongNotes.insert(longNote);
 
-            // setting to lowerBound in all cases is OK because the played
+            // An off-screen anchor is safe here because the played
             // state will be correctly handled by drawLongNote
-            rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
+            rememberLongNoteHead(longNote, offscreenLongHeadY, ensureLongOrder);
           }
         }
       }
@@ -4581,17 +4592,17 @@ std::optional<PresentationFailure> BMSRenderer::lastFailure() const {
 }
 
 void BMSRenderer::refreshGeometry() {
-  const float nextUpperBound = presentationOrientation == player_settings::PresentationOrientation::Portrait
-                                   ? configuredLaneLength : calculateLanePlaneScreenTopIntersection();
+  const auto [nextLowerBound, nextUpperBound] = calculateLanePlaneScreenBounds();
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
   const float nextVisibleUpperBound =
       judgeY + std::max(0.0F, nextUpperBound - judgeY) * (1.0F - hiddenRatio);
-  if (nextUpperBound != upperBound ||
+  if (nextLowerBound != lowerBound || nextUpperBound != upperBound ||
       nextVisibleUpperBound != noteVisibleUpperBound) {
     advanceTouchRevision(touchLayoutRevision_);
     advanceTouchRevision(touchHitRegionsRevision_);
   }
+  lowerBound = nextLowerBound;
   upperBound = nextUpperBound;
   noteVisibleUpperBound = nextVisibleUpperBound;
 }

@@ -429,6 +429,7 @@ private:
   std::array<float, 4> hudGaugeRect() const;
   float gameplayHudRightReserveLeft() const;
   float gameplayHudTitleWidth() const;
+  std::array<float, 4> gameplayHudTitleRect() const;
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
   void updateJudgementCounterText();
@@ -520,7 +521,7 @@ private:
   void beginOrderedNoteBatches();
   void flushOrderedNoteBatches();
   void destroyNoteSheetTextures();
-  float calculateLanePlaneScreenTopIntersection();
+  std::pair<float, float> calculateLanePlaneScreenBounds() const;
   NoteSheet graySheet;
   NoteSheet blueSheet;
   NoteSheet scratchSheet;

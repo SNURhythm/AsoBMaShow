@@ -659,6 +659,29 @@ void testSiblingInsertionPreservesLayoutAndZOrders() {
          YGNodeGetChildCount(root.getNode()) == 0);
 }
 
+void testMovingAViewPreservesOwnershipAndLayout() {
+  View root(0, 0, 500, 300);
+  auto *left = new View();
+  auto *right = new View();
+  root.addView(left);
+  root.addView(right);
+  auto *card = new View();
+  card->setName("movingCard");
+  card->setHeight(60);
+  left->addView(card);
+  auto *nested = new View();
+  card->addView(nested);
+  assert(!card->moveTo(*nested));
+  assert(card->moveTo(*right));
+  assert(left->getChildren().empty() && YGNodeGetChildCount(left->getNode()) == 0);
+  assert(right->findViewByName("movingCard") == card);
+  assert(YGNodeGetParent(card->getNode()) == right->getNode());
+  assert(card->moveTo(*right) && right->getChildren().size() == 1);
+  assert(card->moveTo(*left));
+  assert(right->getChildren().empty() && left->findViewByName("movingCard") == card);
+  assert(!root.moveTo(*left));
+}
+
 void testCompactResultVisualRowFitsActions() {
   const auto metrics = result_layout::metricsFor(885.0f, true);
   View root(0, 0, 1920, 885);
@@ -1145,6 +1168,7 @@ int main() {
 
   testWrappedGridRowsKeepColumnMeasurements();
   testSiblingInsertionPreservesLayoutAndZOrders();
+  testMovingAViewPreservesOwnershipAndLayout();
   testCompactResultVisualRowFitsActions();
   testCompactIrFailureStatusPreservesResultActions();
 

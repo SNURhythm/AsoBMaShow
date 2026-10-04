@@ -199,6 +199,10 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
 }
 
+void ChartDetailsView::setScoreContainer(View *container) {
+  personalBest_->moveTo(container ? *container : *this);
+}
+
 void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                const std::optional<ScoreBestSnapshot> &best,
                                int clearRank, const std::string &total) {

@@ -1916,6 +1916,37 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+void verifyNoteBoundsReachScreenEdgesAfterRotation() {
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, false);
+  for (const auto size : {std::pair{1280, 720}, std::pair{1170, 2532},
+                          std::pair{1536, 2048}, std::pair{1280, 720}}) {
+    const bool portrait = size.second > size.first;
+    rendering::window_width = portrait ? 1080 : 1920;
+    rendering::window_height = size.second * rendering::window_width / size.first;
+    const float angle = portrait ? 0.0F : 13.4F;
+    const bx::Vec3 eye{4.0F, 2.0F - std::tan(bx::toRad(angle)) * 2.1F, -2.1F};
+    rendering::game_camera.edit().setPosition(eye).setLookAt({4, 2, 0})
+        .setFov(120).setAspectRatio(float(size.first) / size.second)
+        .setViewRect(13, 17, size.first, size.second).commit();
+    rendering::game_camera.render();
+    renderer.configure({.orientation = portrait ? player_settings::PresentationOrientation::Portrait
+                                                : player_settings::PresentationOrientation::Landscape,
+                        .laneLength = portrait ? 16.0F : 8.0F,
+                        .laneAngleDegrees = angle});
+    const auto traversal = renderer.projectionTraversal();
+    const auto top = rendering::game_camera.project({4, traversal.upperBound, 0});
+    const auto bottom = rendering::game_camera.project({4, traversal.lowerBound, 0});
+    expect(std::abs(top.y - 17) < 0.05F &&
+               std::abs(bottom.y - 17 - size.second) < 0.05F,
+           "note culling bounds project to the actual drawable viewport edges in both orientations");
+    expect(traversal.lowerBound < 0 && traversal.upperBound > 0,
+           "the visible note interval includes both sides of the judgement line");
+  }
+  rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
+}
+
 void verifyExplicitZeroConfiguredHispeedDoesNotFallBack() {
   SyntheticChartFixture fixture;
   Judge judge(fixture.chart->Meta.Rank);
@@ -1982,6 +2013,13 @@ int main() {
           renderScenario(target, kBeforeCoverPercent, false);
       const auto after = renderScenario(target, kAfterCoverPercent, true);
       verifyBehavioralCoverage(before, after);
+      for (const auto &submission : after.recorder.submissions) {
+        if (submission.kind == characterization::SubmissionKind::LongHead &&
+            submission.timelineMicros == 1'100'000) {
+          expect(submission.rect.y + submission.rect.height <= after.recorder.frames[0].lowerBound + 0.00001F,
+                 "retained expired long-note heads stay fully below the screen edge");
+        }
+      }
       verifyNoteTraceComparisonPreservesRenderSemantics(after);
       verifyOrUpdateJson(buildCharacterization(before, after));
       verifyOrUpdatePng(after.rgba);
@@ -2021,6 +2059,7 @@ int main() {
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
       verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();
+      verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

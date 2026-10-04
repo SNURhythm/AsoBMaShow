@@ -97,6 +97,9 @@ private:
   NewcomerTutorialView *tutorial_ = nullptr;
   Button *addFolderButton_ = nullptr;
   ScrollView *tutorialRightScroll_ = nullptr;
+  View *detailsContent_ = nullptr;
+  View *detailsControlsContent_ = nullptr;
+  ScrollView *detailsControlsScroll_ = nullptr;
   void buildTutorial();
   std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
@@ -356,6 +359,7 @@ private:
 
   void initView(ApplicationContext &context);
   void updatePanelLayout();
+  void updateMenuPresentation(bool portrait);
   void applyThemeChange();
   void reloadProfileSelectionsFromSettings();
   void reloadFolderItems(bool preserveViewState = false);

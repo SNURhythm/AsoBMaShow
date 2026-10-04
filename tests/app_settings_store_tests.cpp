@@ -1886,6 +1886,18 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
 void testPresentationValidationAndRuntimeSelection() {
   using Orientation = AppSettings::PresentationOrientation;
   AppSettings settings;
+  const auto &portraitDefaults = settings.presentation(Orientation::Portrait);
+  expect(portraitDefaults.playAreaWidth7K == 9.5F &&
+             portraitDefaults.judgementIndicatorRenderMode == AppSettings::JudgementIndicatorRenderMode::Hud2D &&
+             portraitDefaults.judgementCounterPosition == AppSettings::JudgementCounterPosition::Left &&
+             portraitDefaults.gaugeBarPosition == AppSettings::GaugeBarPosition::Right,
+         "portrait defaults use wider lanes and a left-counter/right-gauge 2D HUD");
+  const auto &landscapeDefaults = settings.presentation(Orientation::Landscape);
+  expect(landscapeDefaults.playAreaWidth7K == 8 &&
+             landscapeDefaults.judgementIndicatorRenderMode == AppSettings::JudgementIndicatorRenderMode::World3D &&
+             landscapeDefaults.judgementCounterPosition == AppSettings::JudgementCounterPosition::Right &&
+             landscapeDefaults.gaugeBarPosition == AppSettings::GaugeBarPosition::World,
+         "landscape presentation defaults stay unchanged");
   settings.presentation(Orientation::Landscape).laneLength = 11;
   settings.setActivePresentationOrientation(Orientation::Portrait);
   settings.presentation().laneAngleDegrees = std::numeric_limits<float>::quiet_NaN();

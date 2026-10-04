@@ -127,6 +127,11 @@ constexpr int kDetailsPanelWidth = 500;
 constexpr int kDetailsContentWidth = 460;
 // 84 design units give a 44.8-point target at 1024-point iPad width.
 constexpr int kMenuActionHeight = 84;
+constexpr int kPortraitMenuActionHeight = 64;
+int currentMenuActionHeight() {
+  return rendering::window_height > rendering::window_width
+             ? kPortraitMenuActionHeight : kMenuActionHeight;
+}
 constexpr int kLibraryPanelPadding = 14;
 constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
@@ -932,6 +937,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
+  detailsContent_ = nullptr;
+  detailsControlsContent_ = nullptr;
+  detailsControlsScroll_ = nullptr;
   findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
   findBmsModal_.reset();
@@ -1491,12 +1499,14 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   left->setBorderWidth(1);
 
   auto *libraryHeader = new View();
+  libraryHeader->setName("mainMenuToolbar");
   libraryHeader->setFlexDirection(FlexDirection::Row);
   libraryHeader->setAlignItems(YGAlignCenter);
   libraryHeader->setGap(12);
   libraryHeader->setHeight(kMenuActionHeight);
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
+  libraryTitle->setName("mainMenuTitle");
   libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
   libraryTitle->setThemedColor(ui_theme::textPrimary);
   libraryTitle->setVAlign(TextView::MIDDLE);
@@ -1687,6 +1697,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rightScroll->setFlexShrink(1);
   rightScroll->clearBackgroundColor();
   auto *rightContent = new View();
+  detailsContent_ = rightContent;
   rightContent->setWidth(kDetailsPanelWidth - 22);
   rightContent->setFlexDirection(FlexDirection::Column);
   rightContent->setAlignItems(YGAlignCenter);
@@ -1944,6 +1955,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rightContent->addView(replayStatusText);
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
+  settingsButton->setName("mainMenuSettings");
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   settingsText->setLocalizedText(i18n::message("menu.settings.label"));
   settingsText->setAlign(TextView::CENTER);
@@ -1971,12 +1983,27 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   right->addView(rightScroll);
   // Primary actions stay reachable while chart details and tools scroll.
   auto *primaryActions = new View();
+  primaryActions->setName("mainMenuPrimaryActions");
   primaryActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
   primaryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
   primaryActions->addView(startButton);
   primaryActions->addView(recordActions);
   primaryActions->addView(settingsButton);
   right->addView(primaryActions);
+  auto *controls = new View();
+  controls->setName("mainMenuControls");
+  controls->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
+  controls->setFlex(1)->setMinWidth(0)->setMinHeight(0)->setGap(8);
+  controls->setDisplay(YGDisplayNone);
+  detailsControlsScroll_ = new ScrollView();
+  detailsControlsScroll_->setWidthPercent(100)->setFlex(1)->setMinHeight(0);
+  detailsControlsScroll_->clearBackgroundColor();
+  detailsControlsContent_ = new View();
+  detailsControlsContent_->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
+  detailsControlsContent_->setGap(8)->setPadding(Edge::Bottom, 4);
+  detailsControlsScroll_->setContentView(detailsControlsContent_);
+  controls->addView(detailsControlsScroll_);
+  right->addView(controls);
   rootLayout->addView(right);
   buildPlayOptionsModal();
   recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
@@ -2007,6 +2034,7 @@ void MainMenuScene::updatePanelLayout() {
   auto *actions = rootLayout->findViewByName("mainMenuLibraryActions");
   auto *details = rootLayout->findViewByName("mainMenuDetails");
   auto *detailsScroll = rootLayout->findViewByName("mainMenuDetailsScroll");
+  auto *controls = rootLayout->findViewByName("mainMenuControls");
   rootLayout->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
   if (browser) {
     browser->setFlex(portrait ? 0.0F : 1.0F);
@@ -2026,6 +2054,7 @@ void MainMenuScene::updatePanelLayout() {
     details->setWidth(portrait ? YGUndefined : kDetailsPanelWidth);
     details->setHeight(portrait ? detailsHeight : YGUndefined)->setMinHeight(0);
     details->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
+    details->setAlignItems(portrait ? YGAlignStretch : YGAlignCenter);
     details->setPadding(Edge::Left, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Right, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Top, portrait ? 16.0F : 0.0F);
@@ -2034,6 +2063,80 @@ void MainMenuScene::updatePanelLayout() {
     detailsScroll->setWidth(portrait ? YGUndefined : kDetailsPanelWidth - 20);
     detailsScroll->setHeight(portrait ? std::max(0.0F, detailsHeight - 32) : YGUndefined);
   }
+  if (controls) {
+    controls->setWidth(YGUndefined);
+    controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 32) : YGUndefined);
+  }
+  updateMenuPresentation(portrait);
+}
+
+void MainMenuScene::updateMenuPresentation(bool portrait) {
+  if (!detailsContent_ || !detailsControlsContent_) return;
+  auto *details = rootLayout->findViewByName("mainMenuDetails");
+  auto *controls = rootLayout->findViewByName("mainMenuControls");
+  auto *primary = rootLayout->findViewByName("mainMenuPrimaryActions");
+  auto *records = rootLayout->findViewByName("mainMenuRecordActions");
+  auto *settings = static_cast<Button *>(rootLayout->findViewByName("mainMenuSettings"));
+  auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
+  auto *target = portrait ? detailsControlsContent_ : detailsContent_;
+  chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
+  for (auto *view : std::array<View *, 5>{readyPlayOptionsButton, chartActionsRow,
+           unzipButtonSlot, findBmsButtonSlot, replayStatusText}) {
+    view->moveTo(*target);
+  }
+  settings->moveTo(portrait ? *records : *primary);
+  primary->moveTo(portrait ? *controls : *details);
+  controls->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
+  controls->setVisible(portrait);
+  tutorialRightScroll_ = portrait ? detailsControlsScroll_ : detailsScroll;
+  primary->setGap(portrait ? 8 : 12);
+  records->setGap(portrait ? 8 : 12);
+  settings->setFlex(portrait ? 1 : 0)->setMinWidth(0);
+  settings->setWidth(portrait ? YGUndefined : kDetailsContentWidth);
+  settings->getContentView()->setAutoFitText(portrait);
+  replayButtonText->setAutoFitText(portrait);
+  rankingsButtonText->setAutoFitText(portrait);
+  for (auto *view : std::array<View *, 7>{primary, records, startButton,
+           readyPlayOptionsButton, chartActionsRow, unzipButtonSlot, findBmsButtonSlot}) {
+    if (portrait) view->setWidthPercent(100);
+    else view->setWidth(kDetailsContentWidth);
+  }
+  for (auto *button : {unzipButton, findBmsButton}) {
+    if (portrait) button->setWidthPercent(100);
+    else button->setWidth(kDetailsContentWidth);
+  }
+  const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
+  startButton->setHeight(portrait ? height : 88);
+  for (auto *view : std::array<View *, 8>{replayButtonSlot, replayButton, rankingsButton,
+           settings, chartActionsRow, unzipButton, findBmsButton, searchBox}) view->setHeight(height);
+  for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
+  for (auto *slot : {unzipButtonSlot, findBmsButtonSlot})
+    slot->setHeight(slot->getVisible() ? height : 0);
+  for (auto *button : {chartFilterButton, chartSortButton})
+    button->setWidth(height)->setHeight(height);
+  auto *toolbar = rootLayout->findViewByName("mainMenuToolbar");
+  auto *title = rootLayout->findViewByName("mainMenuTitle");
+  title->setVisible(!portrait);
+  title->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
+  toolbar->setHeight(height);
+  for (auto *view : toolbar->getChildren()) if (view != title) view->setHeight(height);
+  for (auto *view : rootLayout->findViewByName("mainMenuLibraryActions")->getChildren())
+    view->setHeight(height);
+  readyPlayOptionsButton->setHeight(portrait ? 96 : 122);
+  auto *summary = readyPlayOptionsButton->getContentView();
+  summary->setPadding(Edge::Top, portrait ? 8 : 10);
+  summary->setPadding(Edge::Bottom, portrait ? 8 : 10);
+  summary->setGap(portrait ? 4 : 6);
+  const int rowHeight = portrait ? 24 : 28;
+  for (auto *row : summary->getChildren()) {
+    row->setHeight(rowHeight);
+    for (auto *child : row->getChildren()) {
+      child->setHeight(rowHeight);
+      for (auto *label : child->getChildren()) label->setHeight(rowHeight);
+    }
+  }
+  detailsScroll->refreshContentLayout();
+  detailsControlsScroll_->refreshContentLayout();
 }
 
 void MainMenuScene::reloadFolderItems(bool preserveViewState) {
@@ -4472,7 +4575,7 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
 
   const bool show = visible || archiveUnzipInProgress();
   unzipButtonSlot->setVisible(show);
-  unzipButtonSlot->setHeight(show ? kMenuActionHeight : 0.0f);
+  unzipButtonSlot->setHeight(show ? currentMenuActionHeight() : 0.0f);
   if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
     unzipButtonText->setLocalizedText(i18n::message("library.archive.unzipping.progress"));
   }
@@ -4594,7 +4697,7 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   }
 
   findBmsButtonSlot->setVisible(visible);
-  findBmsButtonSlot->setHeight(visible ? kMenuActionHeight : 0.0f);
+  findBmsButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -7117,6 +7220,9 @@ void MainMenuScene::cleanupScene() {
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
+  detailsContent_ = nullptr;
+  detailsControlsContent_ = nullptr;
+  detailsControlsScroll_ = nullptr;
   // Cleanup resources when exiting the scene
   revealContextMenu.reset();
   rankingsModal.reset();

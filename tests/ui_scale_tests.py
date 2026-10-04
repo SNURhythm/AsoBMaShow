@@ -12,9 +12,12 @@ class UiScaleTests(unittest.TestCase):
     def test_main_menu_layout_uses_real_yoga_for_rotation(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
-                         "void MainMenuScene::updatePanelLayout()")
+                         "void MainMenuScene::updatePanelLayout()") + "\n" + extract(
+                             (root / "src/scene/MainMenuScene.cpp").read_text(),
+                             "void MainMenuScene::updateMenuPresentation(bool portrait)")
         source = r'''
 #include <yoga/Yoga.h>
+#include <array>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -27,6 +30,8 @@ struct View {
   YGNodeRef node=YGNodeNew();
   std::string name;
   std::vector<View*> children;
+  View* parent=nullptr;
+  bool visible=true;
   explicit View(std::string n): name(n) {}
   View* setWidth(float v) { YGNodeStyleSetWidth(node,v);return this; }
   View* setHeight(float v) { YGNodeStyleSetHeight(node,v);return this; }
@@ -39,27 +44,63 @@ struct View {
   View* setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v);return this; }
   View* setPadding(Edge e,float v) { YGNodeStyleSetPadding(node,YGEdge(e),v);return this; }
   View* setAlignItems(YGAlign v) { YGNodeStyleSetAlignItems(node,v);return this; }
-  void add(View& v) { children.push_back(&v);YGNodeInsertChild(node,v.node,children.size()-1); }
+  void setAutoFitText(bool) {}
+  void setVisible(bool v) { visible=v; }
+  bool getVisible() { return visible; }
+  void setDisplay(YGDisplay v) { YGNodeStyleSetDisplay(node,v); }
+  bool moveTo(View& target) { if(parent==&target)return true; if(parent) { YGNodeRemoveChild(parent->node,node); std::erase(parent->children,this); } target.add(*this); return true; }
+  void add(View& v) { v.parent=this; children.push_back(&v);YGNodeInsertChild(node,v.node,children.size()-1); }
   auto& getChildren() {return children;}
   View* findViewByName(const std::string &n) { if(name==n)return this; for(auto* c:children)if(auto* found=c->findViewByName(n))return found;return nullptr; }
 };
+struct Button:View { View content{"content"}; using View::View; View* getContentView() { return &content; } };
+struct ScrollView:View { using View::View; void refreshContentLayout() {} };
+struct ChartDetails:View { View best{"best"}; ChartDetails():View("chart") { add(best); } void setScoreContainer(View* v) { best.moveTo(v?*v:*this); } };
 namespace rendering { int window_width=1080,window_height=1920; }
 struct SafeAreaInsets { int top=30,right=0,bottom=20,left=0; };
 SafeAreaInsets getSafeAreaInsetsUi() { return {}; }
-constexpr int kRootPadding=28,kLibraryPanelWidth=320,kDetailsPanelWidth=500;
-struct MainMenuScene { View* rootLayout; void updatePanelLayout(); };
+constexpr int kRootPadding=28,kLibraryPanelWidth=320,kDetailsPanelWidth=500,kDetailsContentWidth=460;
+constexpr int kPortraitMenuActionHeight=64,kMenuActionHeight=84;
+struct MainMenuScene {
+  View* rootLayout;
+  View *detailsContent_, *detailsControlsContent_;
+  ScrollView *detailsControlsScroll_, *tutorialRightScroll_=nullptr;
+  ChartDetails* chartDetailsView_;
+  Button *readyPlayOptionsButton;
+  View *chartActionsRow,*unzipButtonSlot,*findBmsButtonSlot,*replayStatusText,*replayButtonSlot;
+  Button *replayButton,*rankingsButton,*startButton,*unzipButton,*findBmsButton;
+  View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
+  void updatePanelLayout(); void updateMenuPresentation(bool portrait);
+};
 PRODUCTION_METHOD
 int main() {
-  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),scroll("mainMenuDetailsScroll"),actions("mainMenuLibraryActions"),button("button"),primary("primary"),list("list");
+  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),title("mainMenuTitle"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),status("status"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
+  ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
+  ChartDetails chart;
+  Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
   root.setPadding(Edge::All,28)->setGap(24)->setAlignItems(YGAlignStretch);
   browser.setFlexDirection(FlexDirection::Row)->setGap(24)->setMinWidth(0)->setMinHeight(0);
   root.add(browser);root.add(details);browser.add(library);browser.add(songs);
   library.add(actions);actions.add(button);library.add(list);list.setFlex(1);
   library.setPadding(Edge::All,14);button.setWidth(292)->setHeight(84);
-  songs.setFlex(1)->setMinWidth(0)->setMinHeight(0);
-  details.setGap(12)->setPadding(Edge::Bottom,16);details.add(scroll);details.add(primary);
-  primary.setWidth(460)->setHeight(276)->setFlexShrink(0);scroll.setFlex(1)->setMinWidth(0)->setMinHeight(0);
-  MainMenuScene scene{&root};
+  songs.setFlex(1)->setMinWidth(0)->setMinHeight(0)->setPadding(Edge::All,16);
+  songs.add(toolbar);toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
+  toolbar.add(title);title.setMinWidth(280)->setFlex(1);
+  std::array<View,4> headerButtons={View("add"),View("refresh"),View("search"),View("tasks")};
+  int widths[]={112,122,154,142};
+  for(int i=0;i<4;++i){toolbar.add(headerButtons[i]);headerButtons[i].setWidth(widths[i]);}
+  details.setGap(12)->setPadding(Edge::Bottom,16);details.add(scroll);details.add(primary);details.add(controls);
+  controls.setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)->setGap(8);
+  controls.setFlex(1)->setMinWidth(0)->setMinHeight(0);controls.add(controlsScroll);
+  controlsScroll.setWidthPercent(100)->setFlex(1)->setMinHeight(0);
+  primary.setFlexShrink(0);scroll.setFlex(1)->setMinWidth(0)->setMinHeight(0);
+  primary.add(start);primary.add(records);primary.add(settings);
+  records.setFlexDirection(FlexDirection::Row);records.add(replaySlot);records.add(ranking);
+  replaySlot.setFlex(1)->setMinWidth(0);ranking.setFlex(1)->setMinWidth(0);
+  replaySlot.add(replay);replay.setWidthPercent(100);
+  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);content.add(findSlot);content.add(status);
+  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);
+  MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&status,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
   for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
@@ -73,12 +114,25 @@ int main() {
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
       assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
       assert(YGNodeLayoutGetTop(details.node)>=YGNodeLayoutGetTop(browser.node)+bh);
-      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==276);
+      assert(!title.visible && chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&controlsContent);
+      assert(primary.parent==&controls && settings.parent==&records);
+      assert(YGNodeLayoutGetLeft(headerButtons.back().node)+YGNodeLayoutGetWidth(headerButtons.back().node)<=YGNodeLayoutGetWidth(toolbar.node)+1);
+      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==136);
+      assert(YGNodeLayoutGetLeft(controls.node)>YGNodeLayoutGetLeft(scroll.node));
+      assert(std::abs(YGNodeLayoutGetWidth(controls.node)-YGNodeLayoutGetWidth(scroll.node))<1);
       assert(YGNodeLayoutGetWidth(button.node)<=YGNodeLayoutGetWidth(library.node)-28+1);
     } else {
       assert(YGNodeLayoutGetWidth(library.node)==320 && YGNodeLayoutGetWidth(details.node)==500);
       assert(std::abs(bh-dh)<1);
+      assert(title.visible && !controls.visible && chart.best.parent==&chart && options.parent==&content && tools.parent==&content);
+      assert(primary.parent==&details && settings.parent==&primary);
+      assert(YGNodeLayoutGetHeight(primary.node)==280 && YGNodeLayoutGetHeight(button.node)==84);
     }
+    if(dimensions.second<=dimensions.first)continue;
+    assert(YGNodeLayoutGetHeight(controlsScroll.node)>0);
+    assert(YGNodeLayoutGetTop(primary.node)>=YGNodeLayoutGetHeight(controlsScroll.node));
+    assert(YGNodeLayoutGetTop(primary.node)+YGNodeLayoutGetHeight(primary.node)<=YGNodeLayoutGetHeight(controls.node)+1);
+    assert(YGNodeLayoutGetLeft(controls.node)+YGNodeLayoutGetWidth(controls.node)<=YGNodeLayoutGetWidth(details.node)+1);
   }
 }
 '''.replace("PRODUCTION_METHOD", method)
@@ -88,6 +142,53 @@ int main() {
             path.write_text(source)
             subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), str(path),
                             os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_gameplay_title_uses_bottom_right_only_in_portrait(self):
+        root = Path(__file__).resolve().parents[1]
+        renderer = (root / "src/scene/play/BMSRenderer.cpp").read_text()
+        methods = extract(renderer, "float BMSRenderer::gameplayHudTitleWidth() const") + "\n" + extract(
+            renderer, "std::array<float, 4> BMSRenderer::gameplayHudTitleRect() const")
+        source = r'''
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cmath>
+#include "settings/PresentationOrientation.h"
+constexpr float kHudMargin=28;
+namespace rendering {
+int window_width=1080,window_height=1920;
+struct Insets { int top=30,right=10,bottom=40,left=20; };
+Insets uiSafeAreaInsets() { return {}; }
+}
+float baseGameplayHudTitleWidth() { return 430; }
+float gameplayHudMetricsWidth() { return 430; }
+struct BMSRenderer {
+  player_settings::PresentationOrientation presentationOrientation=player_settings::PresentationOrientation::Portrait;
+  float gameplayHudTitleWidth() const;
+  std::array<float,4> gameplayHudTitleRect() const;
+  float projectedLaneLeftUiInBand(float,float) const { return 200; }
+};
+PRODUCTION_METHODS
+int main() {
+  BMSRenderer renderer;
+  for (int height : {1100,1440,1920,2340}) {
+    rendering::window_height=height;
+    const auto rect=renderer.gameplayHudTitleRect();
+    assert(rect[0]+rect[2]==1080-10-28);
+    assert(rect[1]+rect[3]==height-40-28);
+    assert(rect[0]>=20+28+430+28 && rect[2]>=430);
+  }
+  renderer.presentationOrientation=player_settings::PresentationOrientation::Landscape;
+  const auto rect=renderer.gameplayHudTitleRect();
+  assert(rect[0]==20+28 && rect[1]==30+28 && rect[2]==200-48-18);
+}
+'''.replace("PRODUCTION_METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-title-hud-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
     def test_result_rotation_resizes_custom_controls_and_safe_area(self):

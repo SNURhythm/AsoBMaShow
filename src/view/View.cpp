@@ -569,6 +569,25 @@ View *View::addView(View *view) {
   return insertViewAtLayoutIndex(view, YGNodeGetChildCount(node));
 }
 
+bool View::moveTo(View &newParent) {
+  if (parent == nullptr) return false;
+  if (parent == &newParent) return true;
+  for (auto *ancestor = &newParent; ancestor != nullptr; ancestor = ancestor->parent) {
+    if (ancestor == this) return false;
+  }
+  newParent.children.reserve(newParent.children.size() + 1);
+  LayoutBatchScope batch;
+  auto *previous = parent;
+  std::erase(previous->children, this);
+  YGNodeRemoveChild(previous->node, node);
+  previous->refreshInsertionOrderFromLayout();
+  previous->childrenOrderDirty = true;
+  parent = nullptr;
+  newParent.addView(this);
+  previous->applyYogaLayout();
+  return true;
+}
+
 View *View::insertViewBefore(View *view, const View *sibling) {
   if (sibling == nullptr || sibling->parent != this) {
     return this;

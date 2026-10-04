@@ -439,7 +439,8 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   case JudgementIndicatorRenderMode::Hud2D:
     break;
   default:
-    judgementIndicatorRenderMode = JudgementIndicatorRenderMode::World3D;
+    judgementIndicatorRenderMode = orientation == PresentationOrientation::Portrait
+        ? JudgementIndicatorRenderMode::Hud2D : JudgementIndicatorRenderMode::World3D;
     break;
   }
   switch (judgementCounterPosition) {
@@ -448,7 +449,8 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   case JudgementCounterPosition::Right:
     break;
   default:
-    judgementCounterPosition = JudgementCounterPosition::Right;
+    judgementCounterPosition = orientation == PresentationOrientation::Portrait
+        ? JudgementCounterPosition::Left : JudgementCounterPosition::Right;
     break;
   }
   auto sanitizeTimingDisplayCriteria =
@@ -473,7 +475,8 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   case GaugeBarPosition::Right:
     break;
   default:
-    gaugeBarPosition = GaugeBarPosition::World;
+    gaugeBarPosition = orientation == PresentationOrientation::Portrait
+        ? GaugeBarPosition::Right : GaugeBarPosition::World;
     break;
   }
 }

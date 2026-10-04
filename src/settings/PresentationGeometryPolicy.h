@@ -12,7 +12,7 @@ struct PresentationGeometryPolicy {
 inline constexpr PresentationGeometryPolicy
 presentationGeometryPolicy(PresentationOrientation orientation) {
   if (orientation == PresentationOrientation::Portrait) {
-    return {{0.0F, 28.0F, 0.0F}, {4.0F, 32.0F, 16.0F}, {2.0F, 16.0F, 8.0F}};
+    return {{0.0F, 28.0F, 0.0F}, {4.0F, 32.0F, 16.0F}, {2.0F, 16.0F, 9.5F}};
   }
   return {{0.0F, 28.0F, 13.4F}, {5.0F, 12.0F, 8.0F}, {4.0F, 12.0F, 8.0F}};
 }

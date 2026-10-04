@@ -716,6 +716,8 @@ public:
   View *clearBorderColor();
   View *setBorderWidth(int width);
   View *addView(View *view);
+  // Transfer an attached view without replacing its state or ownership.
+  bool moveTo(View &newParent);
   View *insertViewBefore(View *view, const View *sibling);
   View *clearChildren();
   YGNodeRef getNode() const { return node; }
