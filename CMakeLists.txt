@@ -5702,6 +5702,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
 
+    add_executable(portrait_playfield_framing_tests tests/portrait_playfield_framing_tests.cpp)
+    target_compile_features(portrait_playfield_framing_tests PRIVATE cxx_std_23)
+    add_test(NAME portrait_playfield_framing_tests COMMAND portrait_playfield_framing_tests)
+
     add_executable(presentation_orientation_state_tests tests/presentation_orientation_state_tests.cpp src/settings/AudioVideoSettings.cpp)
     target_include_directories(presentation_orientation_state_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(presentation_orientation_state_tests PRIVATE cxx_std_23)

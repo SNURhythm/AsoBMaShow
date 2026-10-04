@@ -575,7 +575,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneAngle = [this](float delta) {
       context.settings.presentation().laneAngleDegrees =
-          clampLaneAngle(context.settings.presentation().laneAngleDegrees + delta);
+          clampLaneAngle(context.settings, context.settings.presentation().laneAngleDegrees + delta);
       persistSettings();
     };
     auto *minusAngle =
@@ -590,7 +590,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->addView(plusAngle);
     auto *resetAngle = makeResetButton(metrics);
     resetAngle->setOnClickListener([this]() {
-      context.settings.presentation().laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
+      context.settings.presentation().laneAngleDegrees = context.settings.geometryPolicy().angle.defaultValue;
       persistSettings();
     });
     angleControls->addView(resetAngle);
@@ -607,7 +607,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneLength = [this](float delta) {
       context.settings.presentation().laneLength =
-          clampLaneLength(context.settings.presentation().laneLength + delta);
+          clampLaneLength(context.settings, context.settings.presentation().laneLength + delta);
       persistSettings();
     };
     auto *minusLength =
@@ -622,7 +622,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->addView(plusLength);
     auto *resetLength = makeResetButton(metrics);
     resetLength->setOnClickListener([this]() {
-      context.settings.presentation().laneLength = AppSettings::kDefaultLaneLength;
+      context.settings.presentation().laneLength = context.settings.geometryPolicy().length.defaultValue;
       persistSettings();
     });
     lengthControls->addView(resetLength);
@@ -674,7 +674,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       constexpr int previewKeyMode = 7;
       context.settings.setPlayAreaWidthForKeyMode(
           previewKeyMode,
-          clampPlayAreaWidth(
+          clampPlayAreaWidth(context.settings,
               context.settings.playAreaWidthForKeyMode(previewKeyMode) +
               delta));
       persistSettings();
@@ -692,7 +692,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     auto *resetWidth = makeResetButton(metrics);
     resetWidth->setOnClickListener([this]() {
       context.settings.setPlayAreaWidthForKeyMode(
-          7, AppSettings::kDefaultPlayAreaWidth);
+          7, context.settings.geometryPolicy().width.defaultValue);
       persistSettings();
     });
     playAreaWidthControls->addView(resetWidth);
@@ -1944,7 +1944,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   angleControls->setAlignItems(YGAlignFlexStart);
   auto updateLaneAngle = [this](float delta) {
     context.settings.presentation().laneAngleDegrees =
-        clampLaneAngle(context.settings.presentation().laneAngleDegrees + delta);
+        clampLaneAngle(context.settings, context.settings.presentation().laneAngleDegrees + delta);
     persistSettings();
     syncLaneAngleInputText(true);
   };
@@ -1974,7 +1974,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   angleControls->addView(plusAngleLarge);
   auto *resetAngle = makeResetButton(metrics);
   resetAngle->setOnClickListener([this]() {
-    context.settings.presentation().laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
+    context.settings.presentation().laneAngleDegrees = context.settings.geometryPolicy().angle.defaultValue;
     persistSettings();
     syncLaneAngleInputText(true);
   });
@@ -1990,7 +1990,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   lengthControls->setAlignItems(YGAlignFlexStart);
   auto updateLaneLength = [this](float delta) {
     context.settings.presentation().laneLength =
-        clampLaneLength(context.settings.presentation().laneLength + delta);
+        clampLaneLength(context.settings, context.settings.presentation().laneLength + delta);
     persistSettings();
     syncLaneLengthInputText(true);
   };
@@ -2020,7 +2020,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   lengthControls->addView(plusLengthLarge);
   auto *resetLength = makeResetButton(metrics);
   resetLength->setOnClickListener([this]() {
-    context.settings.presentation().laneLength = AppSettings::kDefaultLaneLength;
+    context.settings.presentation().laneLength = context.settings.geometryPolicy().length.defaultValue;
     persistSettings();
     syncLaneLengthInputText(true);
   });
@@ -2055,7 +2055,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     };
     auto applyWidth = [this, keyMode, input](float width) {
       context.settings.setPlayAreaWidthForKeyMode(keyMode,
-                                                  clampPlayAreaWidth(width));
+                                                  clampPlayAreaWidth(context.settings, width));
       persistSettings();
       input->setEditingText(formatPlayAreaWidthLabel(
           context.settings.playAreaWidthForKeyMode(keyMode)));
@@ -2094,7 +2094,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
 
     auto *resetWidth = makeResetButton(metrics);
     resetWidth->setOnClickListener(
-        [applyWidth]() { applyWidth(AppSettings::kDefaultPlayAreaWidth); });
+        [this, applyWidth]() { applyWidth(context.settings.geometryPolicy().width.defaultValue); });
     row->addView(resetWidth);
 
     syncInput();

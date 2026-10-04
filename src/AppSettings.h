@@ -254,6 +254,9 @@ public:
   const PresentationSettings &presentation(PresentationOrientation orientation) const {
     return presentations_[orientation == PresentationOrientation::Portrait ? 1 : 0];
   }
+  auto geometryPolicy() const {
+    return player_settings::presentationGeometryPolicy(activePresentationOrientation());
+  }
   PresentationOrientation activePresentationOrientation() const {
     return activeOrientation_.value;
   }

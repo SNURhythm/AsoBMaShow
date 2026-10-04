@@ -1,3 +1,5 @@
+#include "rendering/PortraitPlayfieldFraming.h"
+#include "rendering/UiSafeArea.h"
 #include "settings/PresentationOrientationState.h"
 #include "perf/LatencyTelemetry.h"
 #include "targets.h"
@@ -1700,11 +1702,20 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
 
   const float aspect =
       float(rendering::window_width) / float(rendering::window_height);
-  // Preserve the landscape horizontal field of view in a tall viewport.
-  // Keeping the landscape camera distance would crop the outside lanes.
-  const float kCameraDepth = 2.1f *
-      (aspect < 1.0f ? (16.0f / 9.0f) / aspect : 1.0f);
-  const float laneLookAtY = settings.presentation().laneLength * 0.25f;
+  float kCameraDepth = 2.1f;
+  float laneLookAtY = settings.presentation().laneLength * 0.25f;
+  if (settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait) {
+    const auto safe = rendering::uiSafeAreaInsets();
+    const auto frame = rendering::framePortraitPlayfield(
+        settings.presentation().laneLength, settings.playAreaWidthForKeyMode(7),
+        settings.presentation().laneAngleDegrees, aspect,
+        {.top = float(safe.top) / rendering::window_height,
+         .right = float(safe.right) / rendering::window_width,
+         .bottom = float(safe.bottom) / rendering::window_height,
+         .left = float(safe.left) / rendering::window_width});
+    kCameraDepth = frame.cameraDepth;
+    laneLookAtY = frame.lookAtY;
+  }
   const float laneAngleRad = bx::toRad(settings.presentation().laneAngleDegrees);
   bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0f};
   bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
@@ -1713,6 +1724,7 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
 
   rendering::game_camera.edit()
       .setPosition(eye)
+      .setFov(rendering::kPlayfieldVerticalFovDegrees)
       .setLookAt(at)
       .setAspectRatio(aspect)
       .setViewRect(rendering::ui_offset_x, rendering::ui_offset_y,

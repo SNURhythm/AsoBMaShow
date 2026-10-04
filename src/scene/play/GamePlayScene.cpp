@@ -3096,6 +3096,9 @@ void GamePlayScene::init() {
       .hispeedFixMode = context.settings.hispeedFixMode,
       .playAreaWidth =
           context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+      .orientation = context.settings.activePresentationOrientation(),
+      .laneLength = context.settings.presentation().laneLength,
+      .laneAngleDegrees = context.settings.presentation().laneAngleDegrees,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,

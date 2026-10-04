@@ -90,11 +90,11 @@
 - `PortraitPlayfieldFrame framePortraitPlayfield(float laneLength, float playAreaWidth, float angleDegrees, float aspect, NormalizedSafeArea safeArea)` returns `cameraDepth` and `lookAtY` for the existing camera angle convention. Define both small input/output structures in the new header and reuse the renderer's actual perspective parameters.
 - All active lane inputs and renderer clamps use Task 1's policy. Skin-authored option domains remain unchanged.
 
-- [ ] Add failing tests asserting the default 0-degree, length-16, width-8 playfield fits portrait 9:16 and 3:4 viewports, including the judgement line and all playable lanes. Test combinations of each range endpoint, angles 0 and 28, and nonzero safe areas for finite coordinates and visible playable bounds.
-- [ ] Add tests mapping projected outer-lane centers back to the correct lanes, and assert landscape projection is unchanged. Verify reset and numeric-input acceptance against the same policy.
-- [ ] Run the geometry tests and confirm the expected clipping/range failures.
-- [ ] Implement portrait framing by fitting the actual projected playfield bounds within the usable viewport; compute matching rendering and touch transforms. Preserve the existing landscape camera branch. Replace fixed lane bounds/defaults in slider, typed-input, reset, sanitization, and renderer paths with the policy.
-- [ ] Run geometry and control tests to passing and inspect the default portrait playfield in the desktop app; commit.
+- [x] Add failing tests asserting the default 0-degree, length-16, width-8 playfield fits portrait 9:16 and 3:4 viewports, including the judgement line and all playable lanes. Test combinations of each range endpoint, angles 0 and 28, and nonzero safe areas for finite coordinates and visible playable bounds.
+- [x] Add tests mapping projected outer-lane centers back to the correct lanes, and assert landscape projection is unchanged. Verify reset and numeric-input acceptance against the same policy.
+- [x] Run the geometry tests and confirm the expected clipping/range failures.
+- [x] Implement portrait framing by fitting the actual projected playfield bounds within the usable viewport; compute matching rendering and touch transforms. Preserve the existing landscape camera branch. Replace fixed lane bounds/defaults in slider, typed-input, reset, sanitization, and renderer paths with the policy.
+- [x] Run geometry and control tests to passing and inspect the default portrait playfield in the desktop app; commit.
 
 ### Task 5: Side-by-side selection and taller details
 

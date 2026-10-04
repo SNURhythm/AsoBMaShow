@@ -5,6 +5,7 @@
 
 #include "BMSRenderer.h"
 #include "../../rendering/UiSafeArea.h"
+#include "../../rendering/PortraitPlayfieldFraming.h"
 
 #include "BeatorajaHiSpeedChart.h"
 
@@ -4373,7 +4374,39 @@ void BMSRenderer::configure(
   setHispeedMultiplier(configuration.hispeedMultiplier);
   setVisibleTimeUseMilliseconds(configuration.visibleTimeUseMilliseconds);
   setHiSpeedFixMode(configuration.hispeedFixMode);
+  presentationOrientation = configuration.orientation;
+  const auto geometryPolicy = player_settings::presentationGeometryPolicy(presentationOrientation);
+  configuredLaneLength = std::isfinite(configuration.laneLength)
+      ? std::clamp(configuration.laneLength, geometryPolicy.length.minimum, geometryPolicy.length.maximum)
+      : geometryPolicy.length.defaultValue;
   setPlayAreaWidth(configuration.playAreaWidth);
+  if (presentationOrientation == player_settings::PresentationOrientation::Portrait) {
+    const float angle = std::isfinite(configuration.laneAngleDegrees)
+        ? std::clamp(configuration.laneAngleDegrees, geometryPolicy.angle.minimum, geometryPolicy.angle.maximum)
+        : geometryPolicy.angle.defaultValue;
+    const auto safe = rendering::uiSafeAreaInsets();
+    const float aspect = float(rendering::window_width) / std::max(1, rendering::window_height);
+    const auto frame = rendering::framePortraitPlayfield(
+        configuredLaneLength, playAreaWidth, angle, aspect,
+        {.top = float(safe.top) / std::max(1, rendering::window_height),
+         .right = float(safe.right) / std::max(1, rendering::window_width),
+         .bottom = float(safe.bottom) / std::max(1, rendering::window_height),
+         .left = float(safe.left) / std::max(1, rendering::window_width)});
+    const bx::Vec3 eye{gameplay_geometry::kPlayAreaCenterX,
+                      frame.lookAtY - std::tan(bx::toRad(angle)) * frame.cameraDepth,
+                      -frame.cameraDepth};
+    const auto previous = rendering::game_camera.getEye();
+    const auto previousTarget = rendering::game_camera.getLookAt();
+    if (previous.x != eye.x || previous.y != eye.y || previous.z != eye.z ||
+        previousTarget.y != frame.lookAtY) {
+      rendering::game_camera.edit().setPosition(eye)
+          .setLookAt({gameplay_geometry::kPlayAreaCenterX, frame.lookAtY, 0})
+          .setFov(rendering::kPlayfieldVerticalFovDegrees).setAspectRatio(aspect).commit();
+      rendering::game_camera.render();
+      advanceTouchRevision(touchLayoutRevision_);
+      advanceTouchRevision(touchHitRegionsRevision_);
+    }
+  }
   setLaneBeamsEnabled(configuration.laneBeamsEnabled);
   setLaneCoverHispeedFactor(configuration.laneCoverHispeedFactor);
   laneCoverEnabled = configuration.laneCoverEnabled;
@@ -4396,6 +4429,7 @@ void BMSRenderer::configure(
   setGaugeBarPosition(configuration.gaugeBarPosition);
   setTouchVisualizationEnabled(configuration.touchVisualizationEnabled);
   setReplayGhostRenderingEnabled(configuration.replayGhostRenderingEnabled);
+  refreshGeometry();
 }
 
 gameplay::RealtimeTouchLayout BMSRenderer::touchLayout() const {
@@ -4547,7 +4581,8 @@ std::optional<PresentationFailure> BMSRenderer::lastFailure() const {
 }
 
 void BMSRenderer::refreshGeometry() {
-  const float nextUpperBound = calculateLanePlaneScreenTopIntersection();
+  const float nextUpperBound = presentationOrientation == player_settings::PresentationOrientation::Portrait
+                                   ? configuredLaneLength : calculateLanePlaneScreenTopIntersection();
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0F;
   const float nextVisibleUpperBound =
@@ -4588,12 +4623,9 @@ void BMSRenderer::setHiSpeedFixMode(AppSettings::HiSpeedFixMode mode) {
 }
 
 void BMSRenderer::setPlayAreaWidth(float width) {
-  if (!std::isfinite(width)) {
-    width = AppSettings::kDefaultPlayAreaWidth;
-  }
-  const float sanitized =
-      std::clamp(width, AppSettings::kMinPlayAreaWidth,
-                 AppSettings::kMaxPlayAreaWidth);
+  const auto range = player_settings::presentationGeometryPolicy(presentationOrientation).width;
+  const float sanitized = std::isfinite(width)
+      ? std::clamp(width, range.minimum, range.maximum) : range.defaultValue;
   if (std::abs(sanitized - playAreaWidth) <= 0.001f) {
     return;
   }

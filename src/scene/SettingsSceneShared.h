@@ -504,20 +504,16 @@ inline float clampBgaBlur(float value) {
                     AppSettings::kMaxBgaBlurStrength);
 }
 
-inline float clampLaneAngle(float value) {
-  if (!std::isfinite(value)) {
-    return AppSettings::kDefaultLaneAngleDegrees;
-  }
-  return std::clamp(value, AppSettings::kMinLaneAngleDegrees,
-                    AppSettings::kMaxLaneAngleDegrees);
+inline float clampLaneAngle(const AppSettings &settings, float value) {
+  const auto range = settings.geometryPolicy().angle;
+  return std::isfinite(value) ? std::clamp(value, range.minimum, range.maximum)
+                              : range.defaultValue;
 }
 
-inline float clampLaneLength(float value) {
-  if (!std::isfinite(value)) {
-    return AppSettings::kDefaultLaneLength;
-  }
-  return std::clamp(value, AppSettings::kMinLaneLength,
-                    AppSettings::kMaxLaneLength);
+inline float clampLaneLength(const AppSettings &settings, float value) {
+  const auto range = settings.geometryPolicy().length;
+  return std::isfinite(value) ? std::clamp(value, range.minimum, range.maximum)
+                              : range.defaultValue;
 }
 
 inline int clampLaneBeamLengthPercent(int value) {
@@ -530,12 +526,10 @@ inline int clampNoteStartPositionPercent(int value) {
                     AppSettings::kMaxNoteStartPositionPercent);
 }
 
-inline float clampPlayAreaWidth(float value) {
-  if (!std::isfinite(value)) {
-    return AppSettings::kDefaultPlayAreaWidth;
-  }
-  return std::clamp(value, AppSettings::kMinPlayAreaWidth,
-                    AppSettings::kMaxPlayAreaWidth);
+inline float clampPlayAreaWidth(const AppSettings &settings, float value) {
+  const auto range = settings.geometryPolicy().width;
+  return std::isfinite(value) ? std::clamp(value, range.minimum, range.maximum)
+                              : range.defaultValue;
 }
 
 inline float clampJudgementIndicatorY(float value) {
@@ -690,7 +684,7 @@ inline std::string formatJudgementPercentLabel(int percent) {
 }
 
 inline std::string formatPlayAreaWidthLabel(float width) {
-  return formatFloatValue(clampPlayAreaWidth(width), 1);
+  return formatFloatValue(width, 1);
 }
 
 inline i18n::Text formatJudgementIndicatorRenderModeLabel(

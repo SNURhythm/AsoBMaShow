@@ -334,6 +334,8 @@ private:
   BMSRendererState state;
   int scratchLaneCount = 0;
   float playAreaWidth = AppSettings::kDefaultPlayAreaWidth;
+  player_settings::PresentationOrientation presentationOrientation = player_settings::PresentationOrientation::Landscape;
+  float configuredLaneLength = AppSettings::kDefaultLaneLength;
   float playAreaLeftX = 0.0f;
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;

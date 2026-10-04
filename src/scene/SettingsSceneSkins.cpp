@@ -813,15 +813,15 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                 [this](const std::string &text) {
                   context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
                       text, context.settings.presentation().laneAngleDegrees,
-                      AppSettings::kMinLaneAngleDegrees,
-                      AppSettings::kMaxLaneAngleDegrees);
+                      context.settings.geometryPolicy().angle.minimum,
+                      context.settings.geometryPolicy().angle.maximum);
                   persistSettings();
                 });
   appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
                 [this](const std::string &text) {
                   context.settings.presentation().laneLength = sanitizeViewportComponent(
                       text, context.settings.presentation().laneLength,
-                      AppSettings::kMinLaneLength, AppSettings::kMaxLaneLength);
+                      context.settings.geometryPolicy().length.minimum, context.settings.geometryPolicy().length.maximum);
                   persistSettings();
                 });
   appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
@@ -841,8 +841,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                       sanitizeViewportComponent(
                           text,
                           context.settings.playAreaWidthForKeyMode(keyMode),
-                          AppSettings::kMinPlayAreaWidth,
-                          AppSettings::kMaxPlayAreaWidth));
+                          context.settings.geometryPolicy().width.minimum,
+                          context.settings.geometryPolicy().width.maximum));
                   persistSettings();
                 });
   appendSelectedSkinHudSettings(body, metrics, true);

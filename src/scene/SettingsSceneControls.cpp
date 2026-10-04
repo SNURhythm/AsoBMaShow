@@ -843,7 +843,7 @@ void SettingsScene::commitLaneAngleInput() {
   }
 
   try {
-    context.settings.presentation().laneAngleDegrees = clampLaneAngle(std::stof(rawText));
+    context.settings.presentation().laneAngleDegrees = clampLaneAngle(context.settings, std::stof(rawText));
     persistSettings();
     syncLaneAngleInputText(true);
   } catch (const std::exception &) {
@@ -863,7 +863,7 @@ void SettingsScene::commitLaneLengthInput() {
   }
 
   try {
-    context.settings.presentation().laneLength = clampLaneLength(std::stof(rawText));
+    context.settings.presentation().laneLength = clampLaneLength(context.settings, std::stof(rawText));
     persistSettings();
     syncLaneLengthInputText(true);
   } catch (const std::exception &) {

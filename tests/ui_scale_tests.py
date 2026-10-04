@@ -83,12 +83,48 @@ int main() {
             subprocess.run(["c++", "-std=c++20", str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
+    def test_orientation_numeric_controls_accept_their_own_ranges(self):
+        root = Path(__file__).resolve().parents[1]
+        shared = (root / "src/scene/SettingsSceneShared.h").read_text()
+        methods = "\n".join(extract(shared, "inline float " + name + "(")
+                            for name in ["clampLaneAngle", "clampLaneLength", "clampPlayAreaWidth"])
+        source = r'''
+#include "settings/PresentationGeometryPolicy.h"
+#include <algorithm>
+#include <cmath>
+#include <cassert>
+#include <limits>
+struct AppSettings {
+  player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+  auto geometryPolicy() const { return player_settings::presentationGeometryPolicy(orientation); }
+};
+PRODUCTION_METHODS
+int main() {
+  AppSettings settings;
+  assert(clampLaneLength(settings, 32) == 12);
+  assert(clampPlayAreaWidth(settings, 16) == 12);
+  settings.orientation = player_settings::PresentationOrientation::Portrait;
+  assert(clampLaneLength(settings, 32) == 32);
+  assert(clampPlayAreaWidth(settings, 15) == 15);
+  assert(clampPlayAreaWidth(settings, 1) == 2);
+  assert(clampLaneAngle(settings, std::numeric_limits<float>::quiet_NaN()) == 0);
+  assert(clampLaneLength(settings, std::numeric_limits<float>::infinity()) == 16);
+}
+'''.replace("PRODUCTION_METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-orientation-controls-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_portrait_camera_keeps_all_eight_lanes_in_view(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/main.cpp").read_text(),
                          "void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,")
         source = r'''
 #include <algorithm>
+#include "rendering/PortraitPlayfieldFraming.h"
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -108,6 +144,7 @@ struct Camera {
   bx::Vec3 eye{}, at{};
   float aspect = 0;
   Camera& edit() { return *this; }
+  Camera& setFov(float) { return *this; }
   Camera& setPosition(bx::Vec3 p) { eye = p; return *this; }
   Camera& setLookAt(bx::Vec3 p) { at = p; return *this; }
   Camera& setAspectRatio(float a) { aspect = a; return *this; }
@@ -119,11 +156,19 @@ namespace rendering {
 int window_width = 1920, window_height = 1080, render_width = 1920, render_height = 1080;
 int ui_offset_x = 0, ui_offset_y = 0, ui_view_width = 1920, ui_view_height = 1080;
 constexpr int ui_view = 0, bga_view = 1, bga_layer_view = 2, clear_view = 3;
+struct Insets { int top=0, right=0, bottom=0, left=0; };
+Insets uiSafeAreaInsets() { return {}; }
 Camera game_camera;
 Camera* main_camera = &game_camera;
 }
 namespace gameplay_geometry { constexpr float kPlayAreaCenterX = 4; }
-struct AppSettings { float laneLength = 8, laneAngleDegrees = 13.4; const AppSettings &presentation() const { return *this; } };
+struct AppSettings {
+  float laneLength = 8, laneAngleDegrees = 13.4;
+  player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+  const AppSettings &presentation() const { return *this; }
+  auto activePresentationOrientation() const { return orientation; }
+  float playAreaWidthForKeyMode(int) const { return 8; }
+};
 PRODUCTION_METHOD
 int main() {
   using namespace rendering;
@@ -131,6 +176,9 @@ int main() {
   resetViewTransform(1920,1080,4,5,6,settings);
   assert(std::abs(game_camera.eye.z + 2.1f) < .0001f);
   for (int height : {1440, 1920, 2340}) {
+    settings.orientation = player_settings::PresentationOrientation::Portrait;
+    settings.laneLength = 16;
+    settings.laneAngleDegrees = 0;
     window_width = 1080;
     window_height = height;
     resetViewTransform(1080,height,4,5,6,settings);
@@ -147,7 +195,7 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", str(path), "-o", str(binary)], check=True)
+            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
     def test_portrait_and_landscape_keep_readable_units_and_valid_coordinates(self):
