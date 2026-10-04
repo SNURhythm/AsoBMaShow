@@ -163,7 +163,8 @@ public:
   AcquireActivationResult
   acquireValidatedActivation(const SkinProfileId &profile,
                              const SkinEntryId &entry,
-                             std::string_view configurationDigest);
+                             std::string_view configurationDigest,
+                             PresentationOrientation orientation = PresentationOrientation::Landscape);
   std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
   RemovePackageResult removePackage(const SkinPackageId &package,
@@ -206,6 +207,7 @@ private:
     ValidatedSkinActivation terminalActivation;
     SkinPackageCatalogSnapshot catalogUpdate;
     bool catalogChanged = false;
+    PresentationOrientation orientation = PresentationOrientation::Landscape;
   };
   std::map<std::uint64_t, PendingActivationCommit> pendingActivationCommits_;
   std::uint64_t nextActivationCommitTicket_ = 0;

@@ -92,11 +92,12 @@ public:
   }
 
   VersionedSkinProfileSettings
-  snapshot(const SkinProfileId &profile) const override {
+  snapshot(const SkinProfileId &profile, PresentationOrientation orientation = PresentationOrientation::Landscape) const override {
     return snapshots_.at(profile.opaque);
   }
 
-  SkinProfileCommitResult beginCommit(const SkinProfileId &profile,
+  using ISkinProfileSettingsOwner::beginCommit;
+  SkinProfileCommitResult beginCommit(const SkinProfileId &profile, PresentationOrientation orientation,
                                       std::uint64_t expectedGeneration,
                                       SkinProfileSettings candidate) override {
     auto found = snapshots_.find(profile.opaque);

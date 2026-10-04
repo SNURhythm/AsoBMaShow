@@ -90,6 +90,7 @@ struct PlaySkinSessionContext {
   std::function<void(int)> applyPracticeVisibleItems;
   std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
+  player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
 };
 
 class PlaySkinSession;

@@ -19,6 +19,7 @@ struct GameplaySkinActivationRequest {
   ValidatedSkinActivation activation;
   ViewportSettings viewport;
   SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
+  PresentationOrientation orientation = PresentationOrientation::Landscape;
 };
 
 // Built-in gameplay is a deliberate selection only when the chart trait has

@@ -361,7 +361,7 @@ public:
               skinResourcePreparationService->dropTextAtlasCache();
             });
         gameplaySkinLifecycle->startAfterProfileInitialization(
-            *activeProfileId);
+            *activeProfileId, settings.activePresentationOrientation());
         acquireGameplaySkinForNextChart = [this](int keyMode) {
           return gameplaySkinLifecycle
                      ? gameplaySkinLifecycle->acquireForNextChart(keyMode)
@@ -867,7 +867,7 @@ public:
                         ->bindCommittedActiveProfile(*typedId, activeSettings);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
                     if (gameplaySkinLifecycle) {
-                      gameplaySkinLifecycle->profileChanged(*typedId);
+                      gameplaySkinLifecycle->profileChanged(*typedId, activeSettings.activePresentationOrientation());
                     }
 #endif
                   } catch (...) {

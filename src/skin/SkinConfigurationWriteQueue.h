@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../settings/PresentationOrientation.h"
+
 #include "SkinProfileSettings.h"
 #include "beatoraja/PlaySkinStateBridge.h"
 #include "package/SkinPackageTypes.h"
@@ -21,6 +23,7 @@ struct SkinConfigurationWriteRequest {
   std::string expectedConfigurationDigest;
   std::uint64_t frameSerial = 0;
   std::vector<PersistedSkinConfigurationWrite> orderedWrites;
+  player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
 };
 
 enum class SkinConfigurationEnqueueResult : std::uint8_t {

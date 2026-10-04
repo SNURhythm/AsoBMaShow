@@ -304,6 +304,7 @@ private:
   std::unique_ptr<skin::GameplaySkinSettingsController>
       gameplaySkinSettingsController;
   std::string gameplaySkinSettingsProfileId;
+  player_settings::PresentationOrientation gameplaySkinSettingsOrientation = player_settings::PresentationOrientation::Landscape;
   std::string gameplaySkinSettingsLayoutKey;
   i18n::Text gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;

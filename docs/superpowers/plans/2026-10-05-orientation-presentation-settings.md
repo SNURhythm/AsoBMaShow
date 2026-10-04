@@ -59,12 +59,12 @@
 - Track skin generations per `(profileId, orientation)`; each full-save job captures generations for both blocks. Inventory snapshots enumerate both orientations while retaining the same player identity.
 - Activation requests and prepared commit identity carry orientation independently of content digests. Identical content may keep identical digests.
 
-- [ ] Add failing tests that queue a portrait save, switch to landscape, complete the save, and assert only portrait changes. Repeat for save failure, rollback, and an interleaved full settings save; assert neither block is lost.
-- [ ] Add failing tests for a stale orientation activation and package removal/replacement whose only reference is in the inactive block. A reference in either orientation must participate in the existing package safety transaction.
-- [ ] Run the three named unit-test targets and the affected existing package lifecycle tests, confirming the new failures.
-- [ ] Carry orientation through coordinator jobs, optimistic state, rollback, poll results, queue draining, inventory fences, and activation identity. Merge only the intended block; apply results to a live scene only when player and orientation still match. Shared safety-policy changes invalidate both orientation generations through the existing transaction path.
-- [ ] Update all interface implementations, mocks, controller callers, and configuration-write producers. Ensure replay/export sessions capture their originating presentation and cannot write into the current menu orientation.
-- [ ] Run the affected persistence, commit, queue, and package tests to passing; commit.
+- [x] Add failing tests that queue a portrait save, switch to landscape, complete the save, and assert only portrait changes. Repeat for save failure, rollback, and an interleaved full settings save; assert neither block is lost.
+- [x] Add failing tests for a stale orientation activation and package removal/replacement whose only reference is in the inactive block. A reference in either orientation must participate in the existing package safety transaction.
+- [x] Run the three named unit-test targets and the affected existing package lifecycle tests, confirming the new failures.
+- [x] Carry orientation through coordinator jobs, optimistic state, rollback, poll results, queue draining, inventory fences, and activation identity. Merge only the intended block; apply results to a live scene only when player and orientation still match. Shared safety-policy changes invalidate both orientation generations through the existing transaction path.
+- [x] Update all interface implementations, mocks, controller callers, and configuration-write producers. Ensure replay/export sessions capture their originating presentation and cannot write into the current menu orientation.
+- [x] Run the affected persistence, commit, queue, and package tests to passing; commit.
 
 ### Task 3: Rotation, profile switches, and editing lifecycle
 

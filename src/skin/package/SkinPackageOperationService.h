@@ -175,7 +175,8 @@ public:
   AcquireActivationResult
   acquireValidatedActivation(const SkinProfileId &profile,
                              const SkinEntryId &entry,
-                             std::string_view configurationDigest);
+                             std::string_view configurationDigest,
+                             PresentationOrientation orientation = PresentationOrientation::Landscape);
   std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
   // Reservation admission is bounded but occurs before a caller can own a

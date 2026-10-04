@@ -35,6 +35,7 @@ SkinConfigurationWriteRequest requestWithFrame(std::uint64_t frameSerial) {
   request.expectedRevisionDigest = "revision-12";
   request.expectedConfigurationDigest = "configuration-12";
   request.frameSerial = frameSerial;
+  request.orientation = player_settings::PresentationOrientation::Portrait;
   return request;
 }
 
@@ -60,6 +61,8 @@ void testEnqueueDeepOwnsBatchesAndPreservesOrder() {
   expect(drained.size() == 2 && drained[0].frameSerial == 101 &&
              drained[1].frameSerial == 102,
          "drain preserves request FIFO order");
+  expect(drained.size() >= 1 && drained[0].orientation == player_settings::PresentationOrientation::Portrait,
+         "queued writes retain their originating orientation");
   expect(drained.size() >= 1 && drained[0].expectedRevisionDigest == "revision-12",
          "enqueued requests are deep-owned independently of caller mutation");
   expect(drained.size() >= 1 && drained[0].orderedWrites.size() == 2 &&

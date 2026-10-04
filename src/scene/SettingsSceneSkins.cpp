@@ -245,7 +245,8 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   }
 
   if (gameplaySkinSettingsController != nullptr &&
-      gameplaySkinSettingsProfileId == profileId->opaque) {
+      gameplaySkinSettingsProfileId == profileId->opaque &&
+      gameplaySkinSettingsOrientation == context.settings.activePresentationOrientation()) {
     return;
   }
 
@@ -312,11 +313,13 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
                 [this](PlatformDirectoryImportRequest request) {
                   return platform_document_handoff::ImportDirectoryAsync(
                       std::move(request), context.temporaryPathCleanupService);
-                }});
+                },
+            .orientation = context.settings.activePresentationOrientation()});
   } else {
-    gameplaySkinSettingsController->profileChanged(*profileId, clientId);
+    gameplaySkinSettingsController->profileChanged(*profileId, clientId, context.settings.activePresentationOrientation());
   }
   gameplaySkinSettingsProfileId = profileId->opaque;
+  gameplaySkinSettingsOrientation = context.settings.activePresentationOrientation();
   gameplaySkinSettingsLayoutKey.clear();
   gameplaySkinUiMessage = {};
   gameplaySkinSafetyDropdownOpen = false;

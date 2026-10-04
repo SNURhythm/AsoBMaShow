@@ -895,7 +895,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         .entry = activation.entry,
         .revisionDigest =
             activation.revision.revision().lowercaseSha256,
-        .configurationDigest = result.configurationDigest};
+        .configurationDigest = result.configurationDigest,
+        .orientation = context.orientation};
     auto owned = std::make_unique<OwnedActivation>(
         std::move(activation.revision), std::move(identity),
         context.chartModel, result.reconciledSettings,
@@ -1337,7 +1338,8 @@ PresentationFrameResult PlaySkinSession::render(
             .expectedRevisionDigest = identity().revisionDigest,
             .expectedConfigurationDigest = identity().configurationDigest,
             .frameSerial = transaction.frameSerial,
-            .orderedWrites = std::move(persistedWrites)});
+            .orderedWrites = std::move(persistedWrites),
+            .orientation = identity().orientation});
       } catch (...) {
         persistenceFailure = PersistencePreparationFailure::Request;
       }

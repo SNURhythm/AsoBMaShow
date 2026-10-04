@@ -96,6 +96,7 @@ struct GameplaySkinSettingsControllerDependencies {
   std::function<platform_document_handoff::PlatformDocumentHandoffOperation(
       PlatformDirectoryImportRequest)>
       beginFolderHandoff;
+  PresentationOrientation orientation = PresentationOrientation::Landscape;
 };
 
 class GameplaySkinSettingsController {
@@ -112,7 +113,8 @@ public:
   [[nodiscard]] const GameplaySkinSettingsSnapshot &snapshot() const noexcept;
   void poll();
   void setActiveTarget(int skinType);
-  void profileChanged(SkinProfileId profileId, SkinActivationClientId clientId);
+  void profileChanged(SkinProfileId profileId, SkinActivationClientId clientId,
+                      PresentationOrientation orientation = PresentationOrientation::Landscape);
 
   [[nodiscard]] ControllerActionResult beginArchiveImport();
   [[nodiscard]] ControllerActionResult beginFolderImport();

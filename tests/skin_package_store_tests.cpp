@@ -394,13 +394,16 @@ public:
   explicit FakeProfileOwner(VersionedSkinProfileSettings initial)
       : current(std::move(initial)) {}
 
-  VersionedSkinProfileSettings snapshot(const SkinProfileId &) const override {
+  VersionedSkinProfileSettings snapshot(const SkinProfileId &, PresentationOrientation orientation = PresentationOrientation::Landscape) const override {
+    expect(orientation == current.orientation, "activation reads its originating orientation");
     return current;
   }
 
-  SkinProfileCommitResult beginCommit(const SkinProfileId &,
+  using ISkinProfileSettingsOwner::beginCommit;
+  SkinProfileCommitResult beginCommit(const SkinProfileId &, PresentationOrientation orientation,
                                       std::uint64_t expectedGeneration,
                                       SkinProfileSettings candidate) override {
+    expect(orientation == current.orientation, "activation commits its originating orientation");
     if (throwBegin) {
       throw std::runtime_error("injected owner begin failure");
     }
@@ -1811,6 +1814,7 @@ void testConfiguredValidationFailureAndCancellationPreserveOldPackage() {
     selected.settings.selected7KeyEntry = initial.entries.front();
     selected.settings.entries.emplace(initial.entries.front(),
                                       EntryProfileSettings{});
+    selected.orientation = PresentationOrientation::Portrait;
     inventory.profiles.push_back(std::move(selected));
 
     const fs::path replacementSource = temp.root() / "configured-new";
@@ -1965,7 +1969,8 @@ void testConfiguredReplacementRejectsMismatchedValidatorDigest() {
       .generation = 7};
   selected.settings.selected7KeyEntry = entry;
   selected.settings.entries.emplace(entry, EntryProfileSettings{});
-  inventory.profiles.push_back(std::move(selected));
+  selected.orientation = PresentationOrientation::Portrait;
+    inventory.profiles.push_back(std::move(selected));
 
   const fs::path replacementSource = temp.root() / "configured-digest-new";
   writeNewTree(replacementSource);
@@ -2031,7 +2036,8 @@ void testRescanDigestMismatchRetainsExactLastKnownGoodEntry() {
           .generation = 11};
       selected.settings.selected7KeyEntry = entry;
       selected.settings.entries.emplace(entry, EntryProfileSettings{});
-      inventory.profiles.push_back(std::move(selected));
+      selected.orientation = PresentationOrientation::Portrait;
+    inventory.profiles.push_back(std::move(selected));
       validator.useConfiguredDigestOverride = true;
       validator.configuredReportedDigestOverride = std::string(64, 'c');
     } else {
@@ -2555,6 +2561,24 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
          "polling a terminal Store ticket again reports it as unknown");
   expect(owner.acknowledgements == 1,
          "polling a terminal Store ticket cannot acknowledge twice");
+
+  auto portraitBase = base;
+  portraitBase.orientation = PresentationOrientation::Portrait;
+  validator.setConfigurationVariant(9);
+  const auto portraitDigest = validator.currentConfigurationDigest();
+  auto portraitPrepared = store.prepareActivation(portraitBase, entry, candidateSettings, validator, {});
+  expect(portraitPrepared.prepared && portraitPrepared.prepared->orientation == PresentationOrientation::Portrait,
+         "prepared activation captures portrait independently of content digest");
+  if (portraitPrepared.prepared) {
+    FakeProfileOwner portraitOwner(portraitBase);
+    auto portraitCommit = store.beginPreparedActivationCommit(std::move(*portraitPrepared.prepared), portraitOwner);
+    portraitOwner.persisted = true;
+    store.pollPreparedActivationCommit(portraitCommit.ticket, portraitOwner);
+    expect(store.acquireValidatedActivation(base.profileId, entry, activationDigest).activation &&
+               store.acquireValidatedActivation(base.profileId, entry, portraitDigest, PresentationOrientation::Portrait).activation &&
+               !store.acquireValidatedActivation(base.profileId, entry, portraitDigest).activation,
+           "portrait activation retains landscape and cannot be acquired in the wrong orientation");
+  }
 
   const auto prepareDigest = [&](char digit) {
     validator.setConfigurationVariant(static_cast<unsigned char>(digit));

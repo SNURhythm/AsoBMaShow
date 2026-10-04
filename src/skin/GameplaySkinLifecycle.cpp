@@ -52,7 +52,7 @@ void shutdownWriterBackoff(std::size_t &attempt) {
 bool sameIdentity(const PlaySkinSessionIdentity &left,
                   const PlaySkinSessionIdentity &right) noexcept {
   return left.sessionSerial == right.sessionSerial &&
-         left.profileId == right.profileId && left.entry == right.entry &&
+         left.profileId == right.profileId && left.orientation == right.orientation && left.entry == right.entry &&
          left.revisionDigest == right.revisionDigest &&
          left.configurationDigest == right.configurationDigest;
 }
@@ -101,14 +101,14 @@ GameplaySkinLifecycleDependencies makeProductionDependencies(
             return !error;
           },
       .snapshotProfile =
-          [&owner](const SkinProfileId &profile) {
-            return owner.snapshot(profile);
+          [&owner](const SkinProfileId &profile, PresentationOrientation orientation) {
+            return owner.snapshot(profile, orientation);
           },
       .acquireActivation =
           [&operations](const SkinProfileId &profile, const SkinEntryId &entry,
-                        std::string_view digest) {
+                        std::string_view digest, PresentationOrientation orientation) {
             return operations.acquireValidatedActivation(profile, entry,
-                                                         digest);
+                                                         digest, orientation);
           },
       .submitPrepareActivation =
           [&operations](VersionedSkinProfileSettings base, SkinEntryId entry,
@@ -285,8 +285,8 @@ struct GameplaySkinLifecycle::Impl {
       // Failed admissions reserve and never reuse owner generations, so the
       // direct successor is the synchronously published snapshot rather than
       // necessarily base.generation + 1.
-      auto successor = deps.snapshotProfile(base.profileId);
-      if (successor.profileId != base.profileId ||
+      auto successor = deps.snapshotProfile(base.profileId, base.orientation);
+      if (successor.profileId != base.profileId || successor.orientation != base.orientation ||
           successor.generation <= base.generation ||
           successor.settings != candidate) {
         return std::nullopt;
@@ -303,7 +303,7 @@ struct GameplaySkinLifecycle::Impl {
       return false;
     }
     try {
-      return deps.snapshotProfile(expected.profileId) == expected;
+      return deps.snapshotProfile(expected.profileId, expected.orientation) == expected;
     } catch (...) {
       return false;
     }
@@ -375,6 +375,7 @@ struct GameplaySkinLifecycle::Impl {
                              const WriterChain &chain) const noexcept {
     return request.sessionSerial == chain.identity.sessionSerial &&
            request.profileId == chain.identity.profileId &&
+           request.orientation == chain.identity.orientation &&
            request.entry == chain.identity.entry &&
            request.expectedRevisionDigest == chain.identity.revisionDigest &&
            request.expectedConfigurationDigest ==
@@ -418,7 +419,7 @@ struct GameplaySkinLifecycle::Impl {
       return false;
     }
     try {
-      return deps.snapshotProfile(writer->identity.profileId) == writer->base;
+      return deps.snapshotProfile(writer->identity.profileId, writer->identity.orientation) == writer->base;
     } catch (...) {
       return false;
     }
@@ -529,7 +530,7 @@ struct GameplaySkinLifecycle::Impl {
       return;
     }
     try {
-      work.base = deps.snapshotProfile(work.base.profileId);
+      work.base = deps.snapshotProfile(work.base.profileId, work.base.orientation);
     } catch (...) {
       return;
     }
@@ -625,7 +626,7 @@ struct GameplaySkinLifecycle::Impl {
       rescanProgress.phase = SkinRescanProgressPhase::Succeeded;
       if (activeProfile && deps.snapshotProfile) {
         try {
-          const auto base = deps.snapshotProfile(*activeProfile);
+          const auto base = deps.snapshotProfile(*activeProfile, activeOrientation);
           for (const auto &[skinType, entry] :
                base.settings.selectedSkinEntries) {
             pendingRevalidations.push_back(
@@ -665,6 +666,7 @@ struct GameplaySkinLifecycle::Impl {
           successor.candidateProfileSettings.entriesForTarget(writer->targetSkinType).find(writer->identity.entry);
       const bool identityChanged =
           successor.profileId != writer->identity.profileId ||
+          successor.orientation != writer->identity.orientation ||
           successor.expectedProfileGeneration != writer->base.generation ||
           successor.activation.entry != writer->identity.entry ||
           successor.activation.revision.revision().lowercaseSha256 !=
@@ -786,12 +788,12 @@ struct GameplaySkinLifecycle::Impl {
   std::optional<VersionedSkinProfileSettings>
   validateCurrentIdentity(const PlaySkinSessionIdentity &identity) {
     if (!currentIdentity || !sameIdentity(*currentIdentity, identity) ||
-        !activeProfile || *activeProfile != identity.profileId ||
+        !activeProfile || *activeProfile != identity.profileId || activeOrientation != identity.orientation ||
         !deps.snapshotProfile || !deps.acquireActivation) {
       return std::nullopt;
     }
     try {
-      auto snapshot = deps.snapshotProfile(identity.profileId);
+      auto snapshot = deps.snapshotProfile(identity.profileId, identity.orientation);
       if (!selectsGameplayEntry(snapshot.settings, identity.entry, currentTargetSkinType)) {
         return std::nullopt;
       }
@@ -830,7 +832,7 @@ struct GameplaySkinLifecycle::Impl {
         return std::nullopt;
       }
       auto activation = deps.acquireActivation(
-          identity.profileId, identity.entry, expectedConfigurationDigest);
+          identity.profileId, identity.entry, expectedConfigurationDigest, identity.orientation);
       if (!activation.activation ||
           activation.activation->entry != identity.entry ||
           activation.activation->configurationDigest !=
@@ -1041,6 +1043,7 @@ struct GameplaySkinLifecycle::Impl {
 
   GameplaySkinLifecycleDependencies deps;
   std::optional<SkinProfileId> activeProfile;
+  PresentationOrientation activeOrientation = PresentationOrientation::Landscape;
   std::optional<PlaySkinSessionIdentity> currentIdentity;
   int currentTargetSkinType = 0;
   std::string lastSkinRevisionDigest;
@@ -1078,7 +1081,7 @@ GameplaySkinLifecycle::GameplaySkinLifecycle(
 GameplaySkinLifecycle::~GameplaySkinLifecycle() { shutdown(); }
 
 void GameplaySkinLifecycle::startAfterProfileInitialization(
-    SkinProfileId profile) {
+    SkinProfileId profile, PresentationOrientation orientation) {
   if (impl_->stopped || impl_->initialized) {
     return;
   }
@@ -1094,6 +1097,7 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
   // user initiated, so recovery is sufficient to serve the next chart.
   impl_->acquisitionReady = true;
   impl_->activeProfile = std::move(profile);
+  impl_->activeOrientation = orientation;
   // Activations own process-local revision leases.  The profile persists only
   // the user's selected entry/configuration, so a fresh process must rebuild
   // each selected activation from the recovered catalog before a chart can
@@ -1103,7 +1107,7 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
     return;
   }
   try {
-    const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
+    const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile, impl_->activeOrientation);
     for (const auto &[skinType, entry] :
          snapshot.settings.selectedSkinEntries) {
       const auto &targetEntries = snapshot.settings.entriesForTarget(skinType);
@@ -1116,7 +1120,7 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
       const auto digest = skinConfigurationDigest(configured->second);
       const auto acquired =
           impl_->deps.acquireActivation
-              ? impl_->deps.acquireActivation(snapshot.profileId, entry, digest)
+              ? impl_->deps.acquireActivation(snapshot.profileId, entry, digest, snapshot.orientation)
               : AcquireActivationResult{};
       if (!acquired.activation || acquired.activation->entry != entry ||
           acquired.activation->configurationDigest != digest) {
@@ -1128,11 +1132,12 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
   }
 }
 
-void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
+void GameplaySkinLifecycle::profileChanged(SkinProfileId profile, PresentationOrientation orientation) {
   if (impl_->stopped) {
     return;
   }
   impl_->activeProfile = std::move(profile);
+  impl_->activeOrientation = orientation;
   impl_->pendingRevalidations.clear();
   if (impl_->writer &&
       (!impl_->writer->pending.empty() || impl_->writer->prepareTicket != 0 ||
@@ -1158,7 +1163,7 @@ void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
     return;
   }
   try {
-    const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
+    const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile, impl_->activeOrientation);
     for (const auto &[skinType, entry] :
          snapshot.settings.selectedSkinEntries) {
       impl_->pendingRevalidations.push_back(
@@ -1211,7 +1216,7 @@ void GameplaySkinLifecycle::requestRevalidation(const SkinEntryId &entry) {
     return;
   }
   try {
-    const auto base = impl_->deps.snapshotProfile(*impl_->activeProfile);
+    const auto base = impl_->deps.snapshotProfile(*impl_->activeProfile, impl_->activeOrientation);
     for (const auto &[target, selected] : base.settings.selectedSkinEntries) {
       if (selected == entry) {
         impl_->pendingRevalidations.push_back(
@@ -1310,7 +1315,7 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
   std::optional<SkinEntryId> requestedEntry;
   std::string requestedConfigurationDigest;
   try {
-    auto base = impl_->deps.snapshotProfile(*impl_->activeProfile);
+    auto base = impl_->deps.snapshotProfile(*impl_->activeProfile, impl_->activeOrientation);
     base.settings.sanitize();
     if (!skinTargetTraitForType(skinType)) {
       return {};
@@ -1332,7 +1337,7 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
     }
     requestedConfigurationDigest = skinConfigurationDigest(selected->second);
     auto acquired = impl_->deps.acquireActivation(
-        base.profileId, *requestedEntry, requestedConfigurationDigest);
+        base.profileId, *requestedEntry, requestedConfigurationDigest, base.orientation);
     std::optional<SkinDiagnostic> acquisitionFailure;
     for (const auto &diagnostic : acquired.diagnostics) {
       if (!acquisitionFailure &&
@@ -1377,7 +1382,8 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
         .entry = *requestedEntry,
         .revisionDigest =
             acquired.activation->revision.revision().lowercaseSha256,
-        .configurationDigest = requestedConfigurationDigest};
+        .configurationDigest = requestedConfigurationDigest,
+        .orientation = base.orientation};
     if (chartBoundary) {
       const auto chainGeneration = ++impl_->nextChainGeneration;
       impl_->writer.emplace(Impl::WriterChain{
@@ -1398,7 +1404,8 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
                 .profileId = base.profileId,
                 .activation = std::move(*acquired.activation),
                 .viewport = selected->second.viewport,
-                .safetyLevel = base.settings.safetyLevel}};
+                .safetyLevel = base.settings.safetyLevel,
+                .orientation = base.orientation}};
   } catch (...) {
     auto diagnostic = lifecycleDiagnostic(
         "skin.lifecycle.acquire_failed",

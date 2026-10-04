@@ -1112,9 +1112,9 @@ SkinPackageOperationService::submitReconcileProfileActivations(
 
 AcquireActivationResult SkinPackageOperationService::acquireValidatedActivation(
     const SkinProfileId &profile, const SkinEntryId &entry,
-    std::string_view configurationDigest) {
+    std::string_view configurationDigest, PresentationOrientation orientation) {
   return impl_->store.acquireValidatedActivation(profile, entry,
-                                                 configurationDigest);
+                                                 configurationDigest, orientation);
 }
 
 std::shared_ptr<const SkinPackageCatalogSnapshot>
