@@ -390,12 +390,26 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
   }
 
   const long long inputTime = inputTimeMicros(context);
+  const auto suppressedPress = suppressedBackspinPressMicros.find(mainLane);
+  if (suppressedPress != suppressedBackspinPressMicros.end()) {
+    const bool continuation = suppressedPress->second == inputTime;
+    suppressedBackspinPressMicros.erase(suppressedPress);
+    if (continuation) {
+      mainLaneIt->second = true;
+      if (events != nullptr) {
+        events->onLanePressed(mainLane, JudgeResult(None, 0),
+                              context.laneBeamTimeMicros);
+      }
+      setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
+                     inputTime, inputTime, JudgeResult(None, 0));
+      inputTransactions.push_back(result);
+      return resultBatch(result);
+    }
+  }
   const long long futureCutoff = std::max(
       judge.latestHittableNoteTiming(gameplay::NoteJudgeRole::Normal, inputTime),
       judge.latestHittableNoteTiming(gameplay::NoteJudgeRole::Scratch, inputTime));
-  const bool lr2Selection =
-      judge.rules().candidateSelection ==
-      gameplay::CandidateSelectionMode::LR2;
+  const bool lr2Selection = judge.rules().multiBad;
   bool hasSelectedCandidate = false;
   bool stopScanning = false;
   PressLaneCandidate selectedCandidate;
@@ -480,8 +494,13 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
 
   if (lr2Selection) {
     multiBadSourceIndices.resize(judgeCandidates.size());
+    const auto windowContext = chartLaneIsScratch(chart->Meta, mainLane)
+                                   ? gameplay::JudgeWindowContext::Scratch
+                                   : gameplay::JudgeWindowContext::Normal;
     const auto resolution = gameplay::resolveLr2Candidates(
-        judgeCandidates, multiBadSourceIndices);
+        judgeCandidates, multiBadSourceIndices,
+        judge.rules().contexts[static_cast<std::size_t>(windowContext)],
+        judge.rules().candidateSelection);
     multiBadSourceIndices.resize(resolution.multiBadCount);
     if (resolution.selectedSourceIndex.has_value() &&
         *resolution.selectedSourceIndex < judgeCandidateNotes.size()) {
@@ -616,9 +635,19 @@ RhythmLaneInputController::releaseLane(int lane,
   return resultBatch(result);
 }
 
+bool RhythmLaneInputController::chargeTailJudgedSuccessfully(
+    const bms_parser::LongNote *tail) const {
+  const auto found = acceptedChargeTailJudges.find(tail);
+  return found != acceptedChargeTailJudges.end() &&
+         (found->second == PGreat || found->second == Great ||
+          found->second == Good);
+}
+
 void RhythmLaneInputController::resetLaneStates() {
   lanePressed.clear();
   acceptedLongHeadJudges.clear();
+  acceptedChargeTailJudges.clear();
+  suppressedBackspinPressMicros.clear();
   if (chart == nullptr) {
     return;
   }
@@ -773,6 +802,19 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
                                         longNoteModeOverride, longNote,
                                         releasedTime,
                                         acceptedLongHeadJudge(longNote));
+  if (judge.rules().ruleset == GameplayRuleset::LR2 && !chargeLongNote &&
+      appliedJudge.judgement == Bad && appliedJudge.Diff < 0) {
+    // LR2's deferred BAD release reports the release-to-tail duration after
+    // combining severity with the head, even when its release margin is zero.
+    appliedJudge = JudgeResult(Bad, releasedTime - noteTimingMicros(longNote));
+  }
+  if (chargeLongNote) {
+    acceptedChargeTailJudges[longNote] = appliedJudge.judgement;
+  }
+  if (judge.rules().ruleset == GameplayRuleset::LR2 && chargeLongNote &&
+      scratchLongNote && isBackSpin) {
+    suppressedBackspinPressMicros[note->Lane] = releasedTime;
+  }
   result.judge = appliedJudge;
   result.hasJudge = true;
   setReplayEvent(result, ReplayEventAction::Release, note->Lane, note,

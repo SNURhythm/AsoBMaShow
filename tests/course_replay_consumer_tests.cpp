@@ -103,7 +103,7 @@ result_persistence::ModernCourseResult savedResult() {
       .gaugeAutoShift = GaugeAutoShiftMode::Continue,
       .gaugeAutoShiftLowerBound = GaugeType::Easy,
       .longNoteMode = 1,
-      .clearType = kClearTypeHardClearRank,
+      .clearType = kClearTypeFailedRank,
       .stages = {stage(0, 'a', 7, 4, 76.0F),
                  stage(1, 'b', 14, 8, 62.5F)},
       .entryFacts = {{.totalNotes = 5, .playLengthMicros = 1'000'000},
@@ -207,6 +207,9 @@ struct ConsumerHarness {
   bool contextReady = true;
   bool disagreeingCarriedGauge = false;
   bool disagreeingStageResult = false;
+  bool perfectCourse = false;
+  CourseJudgementConstraint expectedJudgement = CourseJudgementConstraint::None;
+  std::optional<GaugeProfile> expectedCourseProfile;
 
   CourseReplayConsumer makeConsumer() {
     return CourseReplayConsumer({
@@ -282,9 +285,13 @@ struct ConsumerHarness {
           } else {
             expect(carry.gauge.has_value() &&
                        carry.gauge->currentGauge == 76.0F &&
-                       carry.combo == 3 && carry.maximumCombo == 4,
+                       carry.combo == (perfectCourse ? 5 : 3) &&
+                       carry.maximumCombo == (perfectCourse ? 5 : 4),
                    "second stage receives the shared continuation state");
           }
+          expect(carry.courseJudgement == expectedJudgement &&
+                     carry.courseGaugeProfile == expectedCourseProfile,
+                 "course judging preserves constraints while rejudging old rules");
           ReplayPlaybackMaterializationOutcome outcome{
               .state = disagreeingStageResult
                            ? ReplayPlaybackMaterializationState::ResultMismatch
@@ -296,9 +303,21 @@ struct ConsumerHarness {
               .finalGaugeState = gauge(
                   index == 0 ? 76.0F
                              : (disagreeingCarriedGauge ? 50.0F : 62.5F)),
-              .endingCombo = index == 0 ? 3 : 0,
+              .endingCombo = perfectCourse ? static_cast<int>((index + 1) * 5)
+                                           : (index == 0 ? 3 : 0),
               .replayData = std::make_shared<ReplayData>(),
           };
+          if (disagreeingStageResult) {
+            outcome.judgedResult->score.pGreat = 2;
+            outcome.judgedResult->score.great = 2;
+            outcome.judgedResult->score.score = 6;
+            outcome.judgedResult->resultFingerprint =
+                result_persistence::modernResultFingerprint(*outcome.judgedResult);
+          }
+          if (expectedCourseProfile) {
+            outcome.initialGaugeState->gaugeProfile = *expectedCourseProfile;
+            outcome.finalGaugeState->gaugeProfile = *expectedCourseProfile;
+          }
           return outcome;
         },
     });
@@ -318,7 +337,8 @@ void testConsumerOwnsOneVerifiedCoursePipelineAndContinuation() {
                  76.0F &&
              loaded.materializedStages[1].initialGaugeState.currentGauge ==
                  76.0F &&
-             loaded.replayData &&
+             loaded.replayData && !loaded.replayData->staleResult &&
+             loaded.replayData->clearType == kClearTypeFailedRank &&
              loaded.replayData->stages.size() == 2 && loaded.continuation &&
              loaded.continuation->complete() &&
              loaded.continuation->score == harness.listed.result.finalScore &&
@@ -372,7 +392,7 @@ void testMaterializedCarriedStateDriftRejectsPlayback() {
          "carried gauge disagreement rejects every course replay consumer");
 }
 
-void testStageResultDriftCannotProduceCourseLaunchAdapters() {
+void testStageResultDriftProducesStaleCourseLaunchAdapters() {
   for (const auto mode : {CourseReplayLaunchMode::Watch,
                           CourseReplayLaunchMode::RetrySame}) {
     ConsumerHarness harness;
@@ -382,13 +402,70 @@ void testStageResultDriftCannotProduceCourseLaunchAdapters() {
     const std::vector<std::filesystem::path> paths{
         "selected/stage-0.bms", "selected/stage-1.bms"};
     auto loaded = consumer.load(harness.listed, paths, cancelled);
-    expect(loaded.state == CourseReplayConsumerState::ResultMismatch &&
-               !loaded.ready() && !loaded.replayData &&
-               !loaded.diagnostic.empty(),
-           "stage drift is rejected before carrying a changed result forward");
-    expect(!makeCourseReplayLaunchSession(std::move(loaded), mode, true, true),
-           "Watch and Retry Same cannot launch a result-mismatched course");
+    expect(loaded.state == CourseReplayConsumerState::Ready &&
+               loaded.ready() && loaded.replayData,
+           "reproducible stage drift yields a course adapter");
+    expect(loaded.replayData && loaded.replayData->staleResult &&
+               loaded.replayData->finalScore == 12 &&
+               loaded.context.verified->result.finalScore == 14 &&
+               loaded.continuation->score == 12,
+           "stale course uses judged facts without replacing historical facts");
+    expect(makeCourseReplayLaunchSession(std::move(loaded), mode, true, true) != nullptr,
+           "Watch and Retry Same can launch reproducible historical course input");
   }
+}
+
+void testCompleteFullComboCourseRetainsDerivedClearRank() {
+  ConsumerHarness harness;
+  harness.perfectCourse = true;
+  auto &saved = harness.listed.result;
+  saved.entryFacts.resize(2);
+  saved.totalCharts = 2;
+  saved.maxScore = 20;
+  saved.finalScore = 20;
+  saved.maxCombo = 10;
+  saved.clearType = kClearTypeFullComboRank;
+  for (std::size_t index = 0; index < saved.stages.size(); ++index) {
+    auto &score = saved.stages[index].score;
+    score.pGreat = 5;
+    score.great = 0;
+    score.good = 0;
+    score.comboBreak = 0;
+    score.maxCombo = static_cast<int>((index + 1) * 5);
+    score.score = 10;
+  }
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+  harness.replay = document(saved);
+  auto consumer = harness.makeConsumer();
+  std::atomic_bool cancelled = false;
+  const auto loaded = consumer.load(harness.listed,
+      {"selected/stage-0.bms", "selected/stage-1.bms"}, cancelled);
+  expect(loaded.ready() && loaded.replayData && !loaded.replayData->staleResult &&
+             loaded.replayData->clearType == kClearTypeFullComboRank,
+         "matching full course derives its full-combo rank without stale drift");
+}
+
+void testHistoricalCourseRetainsCurrentConstraintPolicy() {
+  ConsumerHarness harness;
+  harness.expectedJudgement = CourseJudgementConstraint::NoGood;
+  harness.expectedCourseProfile = GaugeProfile::Course5Keys;
+  harness.listed.result.constraintJson = R"(["no_good","gauge_5k"])";
+  const RulesetDescriptor historical{"lr2", 3, "asobmashow-v1", "lr2-v1",
+                                      "lr2-gauge-v1"};
+  harness.listed.result.provenance.ruleset = historical;
+  for (auto &stage : harness.listed.result.stages) {
+    stage.score.provenance.ruleset = historical;
+  }
+  harness.listed.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(harness.listed.result);
+  harness.replay = document(harness.listed.result);
+  auto consumer = harness.makeConsumer();
+  std::atomic_bool cancelled = false;
+  const auto loaded = consumer.load(harness.listed,
+      {"selected/stage-0.bms", "selected/stage-1.bms"}, cancelled);
+  expect(loaded.ready() && loaded.replayData &&
+             loaded.replayData->gaugeProfile == GaugeProfile::Course5Keys,
+         "historical course profile is recovered from its recorded constraint");
 }
 
 void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
@@ -443,7 +520,9 @@ int main() {
   testConsumerOwnsOneVerifiedCoursePipelineAndContinuation();
   testReplayFailureStopsBeforeSetupAndProducesNoAdapter();
   testMaterializedCarriedStateDriftRejectsPlayback();
-  testStageResultDriftCannotProduceCourseLaunchAdapters();
+  testStageResultDriftProducesStaleCourseLaunchAdapters();
+  testCompleteFullComboCourseRetainsDerivedClearRank();
+  testHistoricalCourseRetainsCurrentConstraintPolicy();
   testVerifiedLaunchAdaptersSeparateWatchFromRetrySame();
 #else
   expect(false, "CourseReplayConsumer contract is not implemented");

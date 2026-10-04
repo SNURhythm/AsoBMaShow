@@ -31,19 +31,17 @@ ReplayCapabilities capabilitiesFor(ReplayCapabilityInput input) noexcept {
   case RecordOrigin::ModernCourseResult: {
     result.recordsList = true;
     result.viewResult = true;
-    result.irUpload = input.postponedIrSnapshotEligible &&
-                      input.replayState != ReplayState::Obsolete;
+    result.irUpload = input.postponedIrSnapshotEligible;
     result.profileDuplicateRecord = true;
     result.profileArchiveRecord = true;
     if (input.replayState == ReplayState::Verified) {
       addVerifiedOwnedReplayCapabilities(
           result, input.origin == RecordOrigin::ModernChartResult);
     } else if (input.replayState == ReplayState::Obsolete) {
-      // Keep byte-preserving actions available without reinterpreting input.
-      result.shareOrCopy = true;
-      result.deleteReplayFile = true;
-      result.profileDuplicateReplay = true;
-      result.profileArchiveReplay = true;
+      // Consumers verify historical input before rejudging it. IR eligibility
+      // is independently checked against the saved result's original proof.
+      addVerifiedOwnedReplayCapabilities(
+          result, input.origin == RecordOrigin::ModernChartResult);
     } else if (invalidFileIsPresent(input.replayState)) {
       result.deleteReplayFile = true;
     }

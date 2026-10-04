@@ -37,7 +37,7 @@ struct GameplayRulesetPolicyBuildInput {
   CourseJudgementConstraint courseJudgement =
       CourseJudgementConstraint::None;
   CandidateSelectionMode beatorajaCandidateSelection =
-      CandidateSelectionMode::Lowest;
+      CandidateSelectionMode::LR2;
   std::optional<RulesetDescriptor> requiredDescriptor;
   std::optional<ScoreStageProvenance> replaySnapshot;
 };

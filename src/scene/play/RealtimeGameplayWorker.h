@@ -264,6 +264,23 @@ private:
     std::size_t replayCount = 0;
   };
 
+  struct QueuedInput {
+    RealtimeGameplayInput input;
+    std::optional<std::int64_t> songTimeMicros;
+  };
+
+  struct GameplayInputWork {
+    RealtimeGameplayInput input;
+    std::int64_t songTimeMicros = 0;
+    std::size_t owner = 0;
+    std::size_t sequence = 0;
+  };
+
+  struct InputAdmission {
+    std::size_t remaining = 0;
+    bool accepted = true;
+  };
+
   struct SnapshotBuffer {
     RealtimeGameplaySnapshot snapshot;
     std::vector<std::size_t> holdingNoteCountsByLane;
@@ -272,11 +289,15 @@ private:
 
   void run();
   void signal() noexcept;
+  bool processQueuedInputs();
+  void processInputBatch(std::span<const QueuedInput> inputs);
+  void observeInputLatency(const RealtimeGameplayInput &input) noexcept;
   void processInput(const RealtimeGameplayInput &input);
   [[nodiscard]] OwnedInputDecision
   coalesceOwnedInput(const RealtimeGameplayInput &input) noexcept;
   [[nodiscard]] bool processGameplayInput(
-      const RealtimeGameplayInput &input, std::int64_t songTimeMicros);
+      const RealtimeGameplayInput &input, std::int64_t songTimeMicros,
+      bool sharedUpdate = false);
   void recordAcceptedReplayInput(const RealtimeGameplayInput &,
                                  std::int64_t songTimeMicros) noexcept;
   bool advanceAutomatic();
@@ -292,6 +313,13 @@ private:
   GameplaySimulation simulation_;
   std::vector<OwnedLaneState> ownedInputLanes_;
   std::uint64_t ownedInputClaimSequence_ = 0;
+  std::vector<QueuedInput> queuedInputs_;
+  std::vector<GameplayInputWork> gameplayInputWork_;
+  std::vector<GameplayInputWork> replayInputWork_;
+  std::vector<InputAdmission> inputAdmissions_;
+  std::vector<GameplayLaneInputState> sampledInputStates_;
+  std::vector<std::size_t> latestInputOwners_;
+  std::vector<std::array<bool, 2>> scratchInputStates_;
   BoundedMpscQueue<RealtimeGameplayInput, kRealtimeGameplayIngressSize>
       ingress_;
   std::array<SnapshotBuffer, 3> snapshots_{};

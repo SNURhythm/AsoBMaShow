@@ -292,14 +292,13 @@ void testOldRulesetIsObsoleteAndPreservesSavedResult() {
   }
   harness.result.resultFingerprint =
       result_persistence::modernResultFingerprint(harness.result);
+  harness.replay = document(harness.result);
   const auto loaded = harness.makeContext().load(
       kAttemptId, parsedFacts(harness.result));
-  expect(loaded.state == CourseReplayContextState::ObsoleteRuleset &&
-             loaded.replayState() == ReplayState::Obsolete &&
-             loaded.result == harness.result && !loaded.replayAvailable() &&
-             loaded.diagnostic.find("obsolete") != std::string::npos &&
-             harness.calls == std::vector<std::string>{"result"},
-         "old course replay preserves the saved result without new-rules playback");
+  expect(loaded.state == CourseReplayContextState::Ready &&
+             loaded.replayAvailable() && loaded.result == harness.result &&
+             harness.calls == std::vector<std::string>{"result", "file", "decode"},
+         "historical course input remains verified with its saved identity intact");
 }
 
 void testUserDeletedCourseReferenceNeverTouchesFilesystem() {

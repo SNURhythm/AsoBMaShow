@@ -70,6 +70,19 @@ ReplaySetupValidation invalid(ReplaySetupIssue issue) noexcept {
 
 } // namespace
 
+bool replayRulesetCanBeRejudged(const RulesetDescriptor &descriptor) noexcept {
+  if (isSupportedRulesetDescriptor(descriptor)) return true;
+  if (descriptor.scoringModel != "asobmashow-v1") return false;
+  return (descriptor.id == "lr2" &&
+          (descriptor.version == 3 || descriptor.version == 4) &&
+          descriptor.judgementModel == "lr2-v1" &&
+          descriptor.gaugeModel == "lr2-gauge-v1") ||
+         (descriptor.id == "beatoraja" &&
+          (descriptor.version == 2 || descriptor.version == 3) &&
+          descriptor.judgementModel == "bms-rank-v1" &&
+          descriptor.gaugeModel == "beatoraja-profile-gauge-v2");
+}
+
 ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
                                           ReplaySetupSource source,
                                           const ReplayLimits &limits) {
@@ -142,7 +155,10 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
   if (!result_contract::isKnownGaugeType(setup.gaugeAutoShiftLowerBound)) {
     return invalid(ReplaySetupIssue::GaugeAutoShiftLowerBound);
   }
-  if (!isSupportedRulesetDescriptor(setup.ruleset) ||
+  const bool validRuleset = source == ReplaySetupSource::AsoExtension
+                                ? replayRulesetCanBeRejudged(setup.ruleset)
+                                : isSupportedRulesetDescriptor(setup.ruleset);
+  if (!validRuleset ||
       (source == ReplaySetupSource::StockBeatoraja &&
        setup.ruleset != RulesetDescriptor::For(GameplayRuleset::Beatoraja))) {
     return invalid(ReplaySetupIssue::Ruleset);

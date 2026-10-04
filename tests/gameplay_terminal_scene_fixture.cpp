@@ -161,6 +161,11 @@ struct ReminderSceneManager {
   template <typename Destination> void changeScene(Destination, bool) { ++returns; }
 };
 
+constexpr long long kHellChargeGaugeTickMicros = 200'000;
+struct FixtureHcnController {
+  bool chargeTailJudgedSuccessfully(const bms_parser::LongNote *) const { return false; }
+};
+
 class GamePlayScene {
 public:
   bms_parser::Chart ownedChart;
@@ -405,6 +410,12 @@ public:
     require(false, "unexpected realtime failure");
   }
   void updateHellChargeGauge(long long) {}
+  void updateHellChargeGaugeForTest(long long);
+  void resetHellChargeGaugeTracking(long long);
+  std::unordered_map<bms_parser::LongNote *, long long> hellChargeGaugeBalanceMicros;
+  long long initialHellChargeGaugeUpdateMicros = 0;
+  long long lastHellChargeGaugeUpdateMicros = 0;
+  FixtureHcnController *laneInputController = nullptr;
   bool finishIfGaugeFailed();
   void updateSkinGameplayGraph(long long) {}
   void checkPassedTimeline(long long time) {
@@ -667,7 +678,7 @@ void testPauseAfterEarlyJudgmentDisqualifiesIr() {
       scene.options.ruleset = GameplayRuleset::LR2;
       scene.options.autoKeySound = true;
       scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
-          scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+          scene.options, *scene.chart, AppSettings::NotePriorityMode::Combo);
       require(scene.rulesetPolicyBuild.built(), "early-pause fixture has a canonical policy");
       scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
           scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
@@ -1793,7 +1804,84 @@ void testReminderSkipSession() {
   }
 }
 
+void testLegacyLr2HellChargeInitialPassingBound() {
+  for (const long long initialTime : {0LL, -1LL, 100LL}) {
+    GamePlayScene scene;
+    for (auto *measure : scene.chart->Measures) delete measure;
+    scene.chart->Measures.clear();
+    auto *measure = new bms_parser::Measure();
+    auto *start = new bms_parser::TimeLine(8, false);
+    auto *end = new bms_parser::TimeLine(8, false);
+    start->Timing = std::max(0LL, initialTime);
+    end->Timing = 1'000'000;
+    auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+    auto *tail = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+    head->Tail = tail;
+    tail->Head = head;
+    head->IsPlayed = true;
+    start->SetNote(0, head);
+    end->SetNote(0, tail);
+    measure->TimeLines = {start, end};
+    scene.chart->Measures.push_back(measure);
+    scene.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(
+        scene.chart->Meta, {.ruleset = GameplayRuleset::LR2});
+    scene.state = std::make_unique<RhythmState>(scene.chart, false, GameplayRuleset::LR2);
+    scene.state->isPlaying = true;
+    scene.lanePressed[0] = true;
+    scene.resetHellChargeGaugeTracking(initialTime);
+    scene.updateHellChargeGaugeForTest(300'001);
+    require(scene.state->gaugeHistory.size() == (initialTime < 0 ? 1U : 0U),
+            "legacy LR2 HCN passing excludes its initial sample, including time zero");
+  }
+}
+
+void testLegacyLr2HellChargeOrdering() {
+  for (const bool survival : {false, true}) {
+    GamePlayScene scene;
+    for (auto *measure : scene.chart->Measures) delete measure;
+    scene.chart->Measures.clear();
+    scene.chart->Meta.TotalNotes = 1000;
+    scene.chart->Meta.Total = 1000;
+    auto *measure = new bms_parser::Measure();
+    for (int lane : {1, 0}) {
+      auto *start = new bms_parser::TimeLine(8, false);
+      auto *end = new bms_parser::TimeLine(8, false);
+      start->Timing = lane == 1 ? 2'000'000 : 2'100'000;
+      end->Timing = 4'000'000;
+      auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+      auto *tail = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+      head->Tail = tail;
+      tail->Head = head;
+      head->IsPlayed = true;
+      start->SetNote(lane, head);
+      end->SetNote(lane, tail);
+      measure->TimeLines.push_back(start);
+      measure->TimeLines.push_back(end);
+    }
+    scene.chart->Measures.push_back(measure);
+    scene.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(
+        scene.chart->Meta, {.ruleset = GameplayRuleset::LR2});
+    scene.state = std::make_unique<RhythmState>(scene.chart, false, GameplayRuleset::LR2);
+    scene.state->isPlaying = true;
+    scene.state->configureGauge(survival ? GaugeType::Hard : GaugeType::Normal,
+                                GaugeAutoShiftMode::None);
+    scene.state->setStartingGaugePercent(survival ? 2 : 100);
+    scene.lanePressed[0] = !survival;
+    scene.lanePressed[1] = survival;
+    scene.lastHellChargeGaugeUpdateMicros = 2'100'000;
+    scene.updateHellChargeGaugeForTest(2'800'000);
+    require(scene.state->gaugeHistory.size() == 2 && !scene.state->isEnding,
+            "legacy LR2 HCN commits one tick per lane before observing failure");
+    if (!survival) {
+      require(scene.state->currentGauge == 98.0F,
+              "legacy LR2 HCN clips gain before higher-lane damage regardless of head order");
+    }
+  }
+}
+
 int main(int argc, char **argv) {
+  testLegacyLr2HellChargeInitialPassingBound();
+  testLegacyLr2HellChargeOrdering();
   if (argc > 1 && std::string_view(argv[1]) == "course-club-mode") {
     testCourseContinuationPreservesClubMode();
     return 0;

@@ -14,22 +14,24 @@ const JudgeCandidateDescriptor *findCandidate(
   return found == candidates.end() ? nullptr : &*found;
 }
 
-bool lr2ComboPrefers(const JudgeCandidateDescriptor &current,
-                     const JudgeCandidateDescriptor &next) noexcept {
-  if (current.judge.judgement != Bad || current.judge.Diff <= 0) {
+bool prefersCandidate(const JudgeCandidateDescriptor &current,
+                      const JudgeCandidateDescriptor &next,
+                      const JudgeWindowSet &windows,
+                      CandidateSelectionMode selection) noexcept {
+  if (next.played) {
     return false;
   }
-  switch (next.judge.judgement) {
-  case PGreat:
-  case Great:
-  case Good:
-    return true;
-  case Bad:
-    return next.judge.Diff >= 0;
-  case Kpoor:
-  case Poor:
-  case None:
-  case JudgementCount:
+  switch (selection) {
+  case CandidateSelectionMode::Duration:
+    return std::llabs(current.judge.Diff) > std::llabs(next.judge.Diff);
+  case CandidateSelectionMode::LR2:
+  case CandidateSelectionMode::Combo:
+    return current.judge.Diff > windows.windows[2].lateMicros &&
+           next.judge.Diff >= windows.windows[2].earlyMicros;
+  case CandidateSelectionMode::Score:
+    return current.judge.Diff > windows.windows[1].lateMicros &&
+           next.judge.Diff >= windows.windows[1].earlyMicros;
+  case CandidateSelectionMode::Lowest:
     return false;
   }
   return false;
@@ -39,17 +41,23 @@ bool lr2ComboPrefers(const JudgeCandidateDescriptor &current,
 
 Lr2CandidateResolution resolveLr2Candidates(
     std::span<const JudgeCandidateDescriptor> candidates,
-    std::span<std::size_t> multiBadSourceIndices) noexcept {
+    std::span<std::size_t> multiBadSourceIndices,
+    const JudgeWindowSet &windows, CandidateSelectionMode selection) noexcept {
   Lr2CandidateResolution result;
   const JudgeCandidateDescriptor *selected = nullptr;
   for (const auto &candidate : candidates) {
-    if (!candidate.selectable || candidate.judge.judgement == None) {
+    if (selected != nullptr && !selected->played &&
+        !prefersCandidate(*selected, candidate, windows, selection)) {
       continue;
     }
-    if ((selected == nullptr || selected->played ||
-         (!candidate.played && lr2ComboPrefers(*selected, candidate))) &&
-        (selected == nullptr || candidate.judge.judgement != Kpoor ||
-         std::llabs(selected->judge.Diff) > std::llabs(candidate.judge.Diff))) {
+    // JudgeManager clears the previous candidate when a replacement is
+    // rejected, including a long-note head in the late BAD region.
+    if (!candidate.selectable || candidate.judge.judgement == None) {
+      selected = nullptr;
+      continue;
+    }
+    if (candidate.judge.judgement != Kpoor || selected == nullptr ||
+        std::llabs(selected->judge.Diff) > std::llabs(candidate.judge.Diff)) {
       selected = &candidate;
     }
   }

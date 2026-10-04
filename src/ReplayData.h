@@ -91,6 +91,11 @@ struct ReplayData {
   bool autoPlay = false;
   // Runtime only: no schema/provenance claim is invented for stored replays.
   bool consumerIdentityCompatible = true;
+  // Runtime rejudging facts; the authenticated saved provenance is retained.
+  bool staleResult = false;
+  std::optional<RulesetDescriptor> playbackRuleset;
+  std::optional<ScoreStageProvenance> playbackPolicy;
+  std::optional<GaugeProfile> playbackGaugeProfile;
   bms_parser::ChartMeta chartMeta;
   std::optional<unsigned int> randomSeed;
   std::optional<std::string> randomPrng;
@@ -206,6 +211,7 @@ struct CourseReplayEntryFacts {
 
 struct CourseReplayData {
   int id = 0;
+  bool staleResult = false;
   int courseId = 0;
   std::string courseKey;
   std::string courseName;

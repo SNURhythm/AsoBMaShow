@@ -7165,6 +7165,18 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     }
     return result.note;
   }
+  const bool lr2 = rulesetPolicyBuild.policy->judge.rules().ruleset ==
+                   GameplayRuleset::LR2;
+  if (lr2) {
+    const auto physical = lanePressed.find(mainLane);
+    const bool previousPressed = physical != lanePressed.end() && physical->second;
+    if (physical != lanePressed.end()) physical->second = true;
+    const auto judgedTime = getJudgementTimeMicros(gameplayTimeMicros, inputDelay);
+    if (judgedTime > lastHellChargeGaugeUpdateMicros) {
+      updateHellChargeGauge(judgedTime);
+    }
+    if (physical != lanePressed.end()) physical->second = previousPressed;
+  }
   const auto result =
       laneInputController->pressLane(mainLane, compensateLane, inputContext);
   updateLaneStateText();
@@ -7185,9 +7197,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       const auto &event = transaction.replayEvent;
       appendReplayEvent(event.action, event.lane, event.note,
                         event.songTimeMicros, event.judgeTimeMicros,
-                        event.judge);
+                        event.judge, !lr2);
     }
   }
+  if (lr2) (void)finishIfGaugeFailed();
   return result.note;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
@@ -7232,6 +7245,18 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
     }
     return result.note;
   }
+  const bool lr2 = rulesetPolicyBuild.policy->judge.rules().ruleset ==
+                   GameplayRuleset::LR2;
+  if (lr2) {
+    const auto physical = lanePressed.find(lane);
+    const bool previousPressed = physical != lanePressed.end() && physical->second;
+    if (physical != lanePressed.end()) physical->second = isBackSpin;
+    const auto judgedTime = getJudgementTimeMicros(gameplayTimeMicros, inputDelay);
+    if (judgedTime > lastHellChargeGaugeUpdateMicros) {
+      updateHellChargeGauge(judgedTime);
+    }
+    if (physical != lanePressed.end()) physical->second = previousPressed;
+  }
   const auto result =
       laneInputController->releaseLane(lane, inputContext, isBackSpin);
   updateLaneStateText();
@@ -7247,9 +7272,10 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       const auto &event = transaction.replayEvent;
       appendReplayEvent(event.action, event.lane, event.note,
                         event.songTimeMicros, event.judgeTimeMicros,
-                        event.judge);
+                        event.judge, !lr2);
     }
   }
+  if (lr2) (void)finishIfGaugeFailed();
   return result.note;
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
@@ -7669,6 +7695,7 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
 
 void GamePlayScene::resetHellChargeGaugeTracking(long long gameplayTimeMicros) {
   hellChargeGaugeBalanceMicros.clear();
+  initialHellChargeGaugeUpdateMicros = gameplayTimeMicros;
   lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
 }
 
@@ -7679,16 +7706,19 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
   }
 
   const long long previousTime = lastHellChargeGaugeUpdateMicros;
-  lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
-  if (gameplayTimeMicros <= previousTime) {
+  const bool lr2 = rulesetPolicyBuild.policy->judge.rules().ruleset ==
+                   GameplayRuleset::LR2;
+  if (gameplayTimeMicros < previousTime ||
+      (!lr2 && gameplayTimeMicros == previousTime)) {
     return;
   }
+  lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
 
   const auto applyGaugeTick = [&](Judgement judgement) {
     state->applyGaugeJudgementRate(judgement, 0.5f);
     updateGaugeStatusText();
     appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr, gameplayTimeMicros,
-                      gameplayTimeMicros, JudgeResult(judgement, 0));
+                      gameplayTimeMicros, JudgeResult(judgement, 0), !lr2);
     return state->isEnding;
   };
   std::vector<bms_parser::LongNote *> activeHellChargeNotes;
@@ -7717,6 +7747,17 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
         const long long tailTime = longNote->Tail->Timeline->Timing;
         const bool tailJudgedBeforeTiming =
             longNote->Tail->IsPlayed && longNote->Tail->PlayedTime < tailTime;
+        if (lr2) {
+          // The reference clears the passing HCN at its tail before ticking,
+          // and starts counting only after its head has been judged.
+          if (headTime <= initialHellChargeGaugeUpdateMicros ||
+              tailTime <= headTime || gameplayTimeMicros < headTime ||
+              gameplayTimeMicros >= tailTime || !longNote->IsPlayed) {
+            continue;
+          }
+          activeHellChargeNotes.push_back(longNote);
+          continue;
+        }
         if (tailTime <= headTime || gameplayTimeMicros <= headTime ||
             previousTime >= tailTime ||
             (longNote->Tail->IsDead && !tailJudgedBeforeTiming)) {
@@ -7748,6 +7789,27 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
             return;
           }
         }
+      }
+    }
+  }
+
+  if (lr2) {
+    std::ranges::sort(activeHellChargeNotes, {},
+                       [](const auto *note) { return note->Lane; });
+    for (auto *longNote : activeHellChargeNotes) {
+      long long &balance = hellChargeGaugeBalanceMicros[longNote];
+      const bool gaining =
+          laneIsPressed(lanePressed, longNote->Lane) || options.autoPlay ||
+          (laneInputController != nullptr &&
+           laneInputController->chargeTailJudgedSuccessfully(longNote->Tail));
+      const long long delta = gameplayTimeMicros - previousTime;
+      balance += gaining ? delta : -delta;
+      if (gaining && balance > kHellChargeGaugeTickMicros) {
+        balance -= kHellChargeGaugeTickMicros;
+        if (applyGaugeTick(Great)) return;
+      } else if (!gaining && balance < -kHellChargeGaugeTickMicros) {
+        balance += kHellChargeGaugeTickMicros;
+        if (applyGaugeTick(Bad)) return;
       }
     }
   }

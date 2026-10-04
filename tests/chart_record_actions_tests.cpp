@@ -230,17 +230,18 @@ void testPreparedReplayReuseAndOwnership(bool mismatchingReplay = false) {
   if (mismatchingReplay) {
     const auto saved = repository.LoadModernChartResultByAttempt(fixture.result.attemptId);
     require(saved.record.has_value(), "mismatching replay keeps its saved result");
-    const auto rejected = replay::makeRuntimeChartReplayConsumer(repository).load(
+    const auto rejudged = replay::makeRuntimeChartReplayConsumer(repository).load(
         *saved.record, fixture.record.meta.BmsPath, cancelled);
-    require(rejected.state == replay::ChartReplayConsumerState::ResultMismatch &&
-                !rejected.ready() && !rejected.diagnostic.empty(),
-            "genuine saved score and empty replay receive a mismatch diagnostic");
-    require(prepared.completion && !prepared.completion->retryData &&
+    require(rejudged.ready() && rejudged.replayData->staleResult &&
+                !rejudged.diagnostic.empty(),
+            "genuine saved score and empty replay remain playable with a stale result diagnostic");
+    require(prepared.completion && prepared.completion->retryData &&
+                prepared.completion->retryData->staleResult &&
                 prepared.completion->view.state.getScore() == expectedScore &&
                 prepared.completion->view.result.resultFingerprint ==
                     fixture.result.resultFingerprint &&
                 saved.record->result.resultFingerprint == fixture.result.resultFingerprint,
-            "mismatching replay disables Retry Same while preserving durable saved facts");
+            "stale replay retains Retry Same while preserving durable saved facts");
     return;
   }
   require(prepared.completion && prepared.completion->retryData,

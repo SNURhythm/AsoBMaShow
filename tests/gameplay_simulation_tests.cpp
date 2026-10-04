@@ -651,6 +651,7 @@ void testPracticeRangeIsHalfOpenBeforeLaneMutation() {
   inside->SetNote(1, new bms_parser::Note(1));
   auto *atEnd = addTimeline(*measure, 1'000'000);
   atEnd->SetNote(2, new bms_parser::Note(2));
+  atEnd->SetNote(7, new bms_parser::Note(3));
   chart.Measures.push_back(measure);
 
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
@@ -669,6 +670,20 @@ void testPracticeRangeIsHalfOpenBeforeLaneMutation() {
   require(rejected.noteId == gameplay::kInvalidNoteId &&
               !simulation.lanePressed(2),
           "the exclusive end blocks selection before lane mutation");
+  for (const bool initiallyPressed : {false, true}) {
+    gameplay::GameplaySimulation scratch(
+        definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(
+             gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2)),
+         .allowedNoteRange = gameplay::GameplayTimeRange{
+             .startMicros = 500'000, .endMicros = 1'000'000}});
+    if (initiallyPressed) scratch.pressScratchKey(7, true, {.songTimeMicros = 999'999});
+    const auto released = scratch.releaseScratchKey(7, true, {.songTimeMicros = 1'000'000});
+    const auto pressed = scratch.pressScratchKey(7, false, {.songTimeMicros = 1'000'000});
+    require(!released.hasJudge && !pressed.hasJudge &&
+                scratch.lanePressed(7) == initiallyPressed,
+            "scratch direction edges at exclusive practice end preserve physical state");
+  }
 }
 
 void testEqualTimeLowestKeepsMainLanePrecedence() {
@@ -1320,6 +1335,87 @@ void testReferenceHellChargeStartsAfterHeadJudgement() {
   require(std::ranges::none_of(simulation.replayEvents(), [](const auto &event) {
             return event.action == gameplay::GameplayReplayAction::Gauge;
           }), "unjudged HCN head must not accumulate continuous damage");
+}
+
+void testReferenceHellChargeUpdateCadence() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1000;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 1000.0;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 3'000'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2))});
+  simulation.applyPressAt(1, 1, {.songTimeMicros = 1'000'000});
+  require(simulation.snapshot().gauge == 21.0F,
+          "HCN head contributes one ordinary recovery judgement");
+  simulation.advanceTo(1'700'000, 1'700'000);
+  require(simulation.snapshot().gauge == 21.5F,
+          "reference HCN applies at most one half-rate tick per update");
+  simulation.advanceTo(1'700'000, 1'700'000);
+  require(simulation.snapshot().gauge == 22.0F,
+          "reference HCN retains excess balance across zero-time updates");
+  simulation.advanceTo(1'700'000, 1'700'000);
+  require(simulation.snapshot().gauge == 22.5F,
+          "one remaining excess HCN tick is consumed per update");
+  simulation.advanceTo(1'700'000, 1'700'000);
+  require(simulation.snapshot().gauge == 22.5F,
+          "sub-threshold HCN balance does not recover without elapsed time");
+  simulation.advanceTo(3'000'000, 3'000'000);
+  require(simulation.snapshot().gauge == 22.5F,
+          "crossing the HCN tail clears passing state before gauge recovery");
+}
+
+void testReferenceHellChargeHeadCrossingUsesUpdateDelta() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1000;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 1000.0;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 3'000'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2))});
+  simulation.applyPressAt(1, 1, {.songTimeMicros = 900'000});
+  require(simulation.snapshot().gauge == 20.5F,
+          "early GOOD HCN head contributes half normal recovery");
+  simulation.advanceTo(1'100'000, 1'100'000);
+  require(simulation.snapshot().gauge == 20.5F,
+          "the HCN threshold is strictly greater than 200ms");
+  simulation.advanceTo(1'100'001, 1'100'001);
+  require(simulation.snapshot().gauge == 21.0F,
+          "reference includes the whole update delta when crossing an already judged head");
+}
+
+void testReferenceInputPrecedesAutomaticMisses() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 3;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(0, new bms_parser::Note(1));
+  addTimeline(*measure, 1'200'001)->SetNote(1, new bms_parser::Note(2));
+  addTimeline(*measure, 3'000'000)->SetNote(2, new bms_parser::Note(3));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2))});
+  simulation.advanceTo(1'200'000, 1'200'000);
+  const auto press = simulation.applyPressAt(
+      1, 1, {.songTimeMicros = 1'200'001});
+  require(press.hasJudge && press.judge.judgement == PGreat &&
+              simulation.snapshot().judgeCounts[Poor] == 1 &&
+              simulation.snapshot().combo == 0,
+          "reference processes the press before the other lane's overdue POOR");
 }
 
 void testClassicReleaseCommitsOneJudgeAndNoSound() {
@@ -2240,6 +2336,8 @@ void testSharedNoteRoleClassification() {
 
 void testLr2CandidateFilterGoldenClusters() {
   using gameplay::JudgeCandidateDescriptor;
+  const gameplay::JudgeWindowSet windows{.windows = {{{PGreat, -18, 18},
+      {Great, -40, 40}, {Good, -100, 100}, {Bad, -200, 200}, {Kpoor, -1000, 0}}}};
   std::array<std::size_t, 8> multiBad{};
 
   const std::array selectedGood{
@@ -2253,7 +2351,7 @@ void testLr2CandidateFilterGoldenClusters() {
                                .timingMicros = 1150,
                                .judge = JudgeResult(Bad, -150)},
   };
-  auto resolution = gameplay::resolveLr2Candidates(selectedGood, multiBad);
+  auto resolution = gameplay::resolveLr2Candidates(selectedGood, multiBad, windows);
   require(resolution.selectedSourceIndex == 11 &&
               resolution.multiBadCount == 1 && multiBad[0] == 10,
           "LR2 Combo selection keeps preceding late BAD before selected GOOD");
@@ -2269,7 +2367,7 @@ void testLr2CandidateFilterGoldenClusters() {
                                .timingMicros = 1150,
                                .judge = JudgeResult(Bad, -150)},
   };
-  resolution = gameplay::resolveLr2Candidates(selectedBad, multiBad);
+  resolution = gameplay::resolveLr2Candidates(selectedBad, multiBad, windows);
   require(resolution.selectedSourceIndex == 21 &&
               resolution.multiBadCount == 2 && multiBad[0] == 20 &&
               multiBad[1] == 22,
@@ -2284,7 +2382,7 @@ void testLr2CandidateFilterGoldenClusters() {
                                .timingMicros = 950,
                                .judge = JudgeResult(Good, 50)},
   };
-  resolution = gameplay::resolveLr2Candidates(precedingLongNote, multiBad);
+  resolution = gameplay::resolveLr2Candidates(precedingLongNote, multiBad, windows);
   require(resolution.selectedSourceIndex == 31 &&
               resolution.multiBadCount == 0,
           "leading LR2 long-note heads are removed from multi-BAD");
@@ -2382,7 +2480,7 @@ void testLr2MultiBadBatchAndFixedSelection() {
                           AppSettings::NotePriorityMode::Duration,
                           AppSettings::NotePriorityMode::Score}) {
     require(run(mode) == expected,
-            "application note-priority setting cannot alter LR2 selection");
+            "compiled LR2 priority governs selection independently of runtime settings");
   }
 }
 
@@ -2588,6 +2686,87 @@ Lr2LongReleaseSummary runLr2ControllerRelease(
   };
 }
 
+void testLr2HellChargeBackspinUsesOppositePressedState() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 3;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 7,
+              bms_parser::LongNoteType::HellChargeNote);
+  addTimeline(*measure, 3'000'000)->SetNote(1, new bms_parser::Note(9));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+  (void)simulation.applyPressAt(7, 7, {.songTimeMicros = 1'000'000});
+  (void)simulation.applyReleaseAt(7, {.songTimeMicros = 1'900'000}, true);
+  (void)simulation.applyPressAt(7, 7, {.songTimeMicros = 1'900'000});
+  int gains = 0;
+  int losses = 0;
+  for (const auto &event : simulation.replayEvents()) {
+    if (event.action != gameplay::GameplayReplayAction::Gauge) continue;
+    gains += event.judgement == Great;
+    losses += event.judgement == Bad;
+  }
+  require(gains == 1 && losses == 0,
+          "HCN backspin pass phase sees the opposite direction already pressed");
+}
+
+void testLr2ChargeBackspinConsumesSyntheticPress() {
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 4;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 7, type);
+    auto *following = new bms_parser::Note(9);
+    addTimeline(*measure, 2'050'000)->SetNote(7, following);
+    addTimeline(*measure, 3'000'000)->SetNote(1, new bms_parser::Note(10));
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+    (void)simulation.applyPressAt(7, 7, {.songTimeMicros = 1'000'000});
+    const auto tail = simulation.applyReleaseAt(
+        7, {.songTimeMicros = 2'000'000}, true);
+    require(tail.hasJudge && tail.judge.judgement == PGreat,
+            "charge backspin resolves its tail once");
+    require(simulation.previewPressSoundNote(
+                7, 7, {.songTimeMicros = 2'000'000}) == gameplay::kInvalidNoteId,
+            "backspin continuation does not reserve following-note audio");
+    const auto continuation = simulation.applyPressAt(
+        7, 7, {.songTimeMicros = 2'000'000});
+    require(!continuation.hasJudge && simulation.snapshot().combo == 2 &&
+                simulation.lanePressed(7),
+            "charge reversal press continues held input without a second judgement");
+    (void)simulation.applyReleaseAt(7, {.songTimeMicros = 2'000'001});
+    const auto next = simulation.applyPressAt(
+        7, 7, {.songTimeMicros = 2'050'000});
+    require(next.hasJudge && next.judge.judgement == PGreat &&
+                simulation.snapshot().combo == 3,
+            "independent later scratch press still judges the following note");
+
+    std::unordered_map<int, bool> lanes;
+    RhythmLaneInputController controller(&chart, nullptr, lanes, lr2Judge());
+    (void)controller.pressLane(7, {.songTimeMicros = 1'000'000});
+    const auto legacyTail = controller.releaseLane(
+        7, {.songTimeMicros = 2'000'000}, true);
+    require(legacyTail.hasJudge && controller.chargeTailJudgedSuccessfully(
+                static_cast<const bms_parser::LongNote *>(legacyTail.note)),
+            "legacy charge backspin retains its successful tail judgement");
+    const auto legacyContinuation = controller.pressLane(
+        7, {.songTimeMicros = 2'000'000});
+    require(!legacyContinuation.hasJudge && !following->IsPlayed && lanes[7],
+            "legacy charge reversal does not consume the following normal note");
+    (void)controller.releaseLane(7, {.songTimeMicros = 2'000'001});
+    require(controller.pressLane(7, {.songTimeMicros = 2'050'000}).hasJudge,
+            "legacy independent later press still consumes the following note");
+    controller.resetLaneStates();
+    require(!controller.chargeTailJudgedSuccessfully(
+                static_cast<const bms_parser::LongNote *>(legacyTail.note)),
+            "reset forgets successful tail judgements from the prior attempt");
+  }
+}
+
 void testLr2LongTailBoundaryTableAcrossAuthorities() {
   struct TailCase {
     long long diffMicros;
@@ -2654,7 +2833,10 @@ void testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge() {
                 accepted.judgement == press.judge.judgement &&
                 accepted.Diff == press.judge.Diff,
             "classic LR2 head stores its accepted judgement without scoring");
-    const auto advance = simulation.advanceTo(2'000'000, 2'000'000);
+    const auto atTail = simulation.advanceTo(2'000'000, 2'000'000);
+    require(atTail.transactions.empty(),
+            "reference classic LN remains pending at its exact tail timestamp");
+    const auto advance = simulation.advanceTo(2'000'001, 2'000'001);
     require(advance.transactions.size() == 1 &&
                 advance.transactions.front().hasJudge &&
                 advance.transactions.front().judge.judgement == Good,
@@ -2698,6 +2880,114 @@ void testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge() {
           "late BAD after LR2 GOOD is rejected for long-note heads");
 }
 
+void testLr2RejectedLongHeadClearsEarlierCandidate() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 800'000)->SetNote(1, new bms_parser::Note(1));
+  addLongNote(*measure, 850'000, 2'000'000, 1,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+  const auto batch = simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+  require(!batch.hasJudge && batch.noteId == gameplay::kInvalidNoteId &&
+              simulation.snapshot().judgeCounts[Bad] == 0 &&
+              !simulation.noteState(0).played && !simulation.noteState(1).played,
+          "rejected late-BAD LN replacement clears the prior normal candidate");
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, lr2Judge());
+  const auto legacy = controller.pressLane(1, {.songTimeMicros = 1'000'000});
+  require(!legacy.hasJudge && legacy.note == nullptr,
+          "legacy selection also clears the rejected LN replacement");
+}
+
+void testLr2ConfiguredAlgorithmsSelectDifferentCandidates() {
+  using gameplay::CandidateSelectionMode;
+  for (const auto selection : {CandidateSelectionMode::Lowest, CandidateSelectionMode::Combo,
+                               CandidateSelectionMode::Duration, CandidateSelectionMode::Score}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    auto *first = new bms_parser::Note(1);
+    auto *second = new bms_parser::Note(2);
+    addTimeline(*measure, 950'000)->SetNote(1, first);
+    addTimeline(*measure, 1'000'000)->SetNote(1, second);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    const auto judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+        GameplayRuleset::LR2, 2, 100, 100, CourseJudgementConstraint::None, selection));
+    const bool preferSecond = selection == CandidateSelectionMode::Duration ||
+                              selection == CandidateSelectionMode::Score;
+    gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+    const auto batch = simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+    require(batch.hasJudge && batch.noteId == (preferSecond ? 1 : 0) &&
+                batch.judge.judgement == (preferSecond ? PGreat : Good) &&
+                batch.transactions.size() == 1,
+            "LR2 compiled Lowest/Combo and Duration/Score retain their reference priorities");
+    std::unordered_map<int, bool> lanes;
+    RhythmLaneInputController controller(&chart, nullptr, lanes, judge);
+    const auto legacy = controller.pressLane(1, {.songTimeMicros = 1'000'000});
+    require(legacy.hasJudge && legacy.note == (preferSecond ? second : first) &&
+                legacy.judge.judgement == (preferSecond ? PGreat : Good),
+            "legacy input uses the same compiled LR2 algorithm");
+  }
+}
+
+void testLr2ScratchCandidatesUseScratchTimingEdges() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  auto *first = new bms_parser::Note(1);
+  auto *second = new bms_parser::Note(2);
+  addTimeline(*measure, 925'000)->SetNote(7, first);
+  addTimeline(*measure, 1'000'000)->SetNote(7, second);
+  chart.Measures.push_back(measure);
+  auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2);
+  auto &scratch = rules.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Scratch)];
+  scratch.windows[2].earlyMicros = -50'000;
+  scratch.windows[2].lateMicros = 50'000;
+  const auto judge = gameplay::CompiledGameplayJudge::from(rules);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+  const auto batch = simulation.pressLane(7, {.songTimeMicros = 1'000'000});
+  require(batch.hasJudge && batch.noteId == 1 && batch.judge.judgement == PGreat,
+          "scratch candidate priority uses its custom GOOD edge rather than the normal edge");
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, judge);
+  const auto legacy = controller.pressLane(7, {.songTimeMicros = 1'000'000});
+  require(legacy.hasJudge && legacy.note == second && legacy.judge.judgement == PGreat,
+          "legacy scratch candidate priority uses the same scratch GOOD edge");
+}
+
+void testLr2ClassicBadReleaseReportsReleaseTiming() {
+  for (const int lane : {1, 7}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, lane,
+                bms_parser::LongNoteType::LongNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+    simulation.applyPressAt(lane, lane, {.songTimeMicros = 800'000});
+    simulation.applyReleaseAt(lane, {.songTimeMicros = 2'000'001});
+    const auto timing = simulation.scoreState().judgementFastSlowCount.at(Bad);
+    require(simulation.snapshot().judgeCounts[Bad] == 1 && timing.fast == 0 && timing.slow == 1,
+            "LR2 classic BAD inherited from head reports the deferred tail release as SLOW");
+    std::unordered_map<int, bool> lanes;
+    RhythmLaneInputController controller(&chart, nullptr, lanes, lr2Judge());
+    controller.pressLane(lane, {.songTimeMicros = 800'000});
+    const auto released = controller.releaseLane(lane, {.songTimeMicros = 2'000'001});
+    require(released.hasJudge && released.judge.judgement == Bad && released.judge.Diff == 1,
+            "legacy explicit classic BAD release reports release duration rather than head duration");
+  }
+}
+
 void testLr2ChargeAndHellChargeCommitHeadAndTailSeparately() {
   for (const auto type : {bms_parser::LongNoteType::ChargeNote,
                           bms_parser::LongNoteType::HellChargeNote}) {
@@ -2712,6 +3002,7 @@ void testLr2ChargeAndHellChargeCommitHeadAndTailSeparately() {
                                             {.judge = lr2Judge()});
     const auto press =
         simulation.applyPressAt(1, 1, {.songTimeMicros = 1'050'000});
+    simulation.advanceTo(1'300'000, 1'300'000);
     const auto release =
         simulation.applyReleaseAt(1, {.songTimeMicros = 2'000'000});
     const auto snapshot = simulation.snapshot();
@@ -2742,7 +3033,7 @@ void testLr2AutoplayAndReplayStyleLongNoteSequences() {
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   gameplay::GameplaySimulation autoplay(
       definition, {.judge = lr2Judge(), .attempt = {.autoPlay = true}});
-  const auto automatic = autoplay.advanceTo(2'000'000, 2'000'000);
+  const auto automatic = autoplay.advanceTo(2'000'001, 2'000'001);
   require(automatic.transactions.size() == 2 &&
               autoplay.snapshot().judgeCounts[PGreat] == 1,
           "LR2 autoplay presses and resolves a classic LN once");
@@ -2960,19 +3251,47 @@ void testDetachedLongNotePartnersFollowReferenceTraversal() {
   }
 }
 
+void testLr2SkippedInitialMineStillAllowsCompletion() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 0)->SetLandmineNote(0, new bms_parser::LandmineNote(5));
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2))});
+  (void)simulation.applyPressAt(0, 0, {.songTimeMicros = 0});
+  (void)simulation.applyPressAt(1, 1, {.songTimeMicros = 1'000'000});
+  (void)simulation.advanceTo(1'200'001, 1'200'001);
+  require(simulation.terminalReason() == gameplay::GameplayTerminalReason::ChartComplete,
+          "reference-skipped initial mine cannot keep chart completion pending");
+  require(std::ranges::none_of(simulation.replayEvents(), [](const auto &event) {
+            return event.action == gameplay::GameplayReplayAction::Mine;
+          }), "reference-skipped initial mine does not damage gauge");
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     const std::string name = argv[1];
-    if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
+    if (name == "initial-mine-completion") testLr2SkippedInitialMineStillAllowsCompletion();
+    else if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
     else if (name == "early-cutoff") testReferenceEarlyCandidateCutoffIsExclusive();
     else if (name == "release-search") testReleaseSearchStopsAtPracticeEnd();
     else if (name == "closer-empty-poor") testReferenceEmptyPoorRetainsCloserPlayedNote();
     else if (name == "lr2-closer-empty-poor") testReferenceLr2EmptyPoorRetainsCloserPlayedNote();
     else if (name == "scratch-deadline") testReferenceScratchMissDeadlineIsIndependent();
     else if (name == "multi-bad-tail") testReferenceMultiBadRetainsChargeTailPenalty();
+    else if (name == "backspin-hcn-state") testLr2HellChargeBackspinUsesOppositePressedState();
+    else if (name == "backspin-continuation") testLr2ChargeBackspinConsumesSyntheticPress();
     else if (name == "scratch-release") testReferenceScratchReleaseAndChargeTailMiss();
     else if (name == "long-release") testReferenceLongNoteReleaseFairness();
     else if (name == "hcn-head") testReferenceHellChargeStartsAfterHeadJudgement();
+    else if (name == "hcn-cadence") testReferenceHellChargeUpdateCadence();
+    else if (name == "hcn-crossing") testReferenceHellChargeHeadCrossingUsesUpdateDelta();
+    else if (name == "input-before-miss") testReferenceInputPrecedesAutomaticMisses();
     else if (name == "played-poor") testReferencePlayedNotesCanReceiveEmptyPoor();
     else if (name == "pms-margin") testReferencePmsSingleMissAndReleaseMargin();
     else if (name == "recovery-capacity") testRecoveryTransactionsLatchReplayCapacityFailure();
@@ -2980,6 +3299,7 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
+  testLr2SkippedInitialMineStillAllowsCompletion();
   testDefinitionUsesDemotedNormalNote();
   testSelectedModeFinalizesMalformedHold();
   testParsedExtremeTimingRemainsSafeAfterNegativePreroll();
@@ -2997,6 +3317,9 @@ int main(int argc, char **argv) {
   testReferenceScratchReleaseAndChargeTailMiss();
   testReferenceLongNoteReleaseFairness();
   testReferenceHellChargeStartsAfterHeadJudgement();
+  testReferenceHellChargeUpdateCadence();
+  testReferenceHellChargeHeadCrossingUsesUpdateDelta();
+  testReferenceInputPrecedesAutomaticMisses();
   testCompiledJudgePreservesResolvedWindows();
   testReferenceEarlyCandidateCutoffIsExclusive();
   testGameplayGraphAuthorityUsesPinnedBucketsRingAndReplayOrder();
@@ -3041,8 +3364,14 @@ int main(int argc, char **argv) {
   testBeatorajaStillEmitsOnePrioritySelectedTransaction();
   testLegacyControllerUsesSharedLr2BatchResolution();
   testLegacyControllerLr2MultiBadLongHeadConsumesTail();
+  testLr2HellChargeBackspinUsesOppositePressedState();
+  testLr2ChargeBackspinConsumesSyntheticPress();
   testLr2LongTailBoundaryTableAcrossAuthorities();
   testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge();
+  testLr2RejectedLongHeadClearsEarlierCandidate();
+  testLr2ConfiguredAlgorithmsSelectDifferentCandidates();
+  testLr2ScratchCandidatesUseScratchTimingEdges();
+  testLr2ClassicBadReleaseReportsReleaseTiming();
   testLr2ChargeAndHellChargeCommitHeadAndTailSeparately();
   testLr2AutoplayAndReplayStyleLongNoteSequences();
   testAutoplayNormalReleaseCarriesSourceTimeWithoutReplay();

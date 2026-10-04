@@ -149,7 +149,7 @@ void testRulesetContract() {
   const RulesetDescriptor beatoraja =
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   assert(beatoraja.id == "beatoraja");
-  assert(beatoraja.version == 3);
+  assert(beatoraja.version == 4);
   assert(beatoraja.scoringModel == "asobmashow-v1");
   assert(beatoraja.judgementModel == "bms-rank-v1");
   assert(beatoraja.gaugeModel == "beatoraja-profile-gauge-v2");

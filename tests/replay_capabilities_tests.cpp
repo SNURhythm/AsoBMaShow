@@ -60,7 +60,7 @@ void testVerifiedModernMatrix() {
          "verified modern course excludes chart-only actions");
 }
 
-void testObsoleteReplayPreservesResultsAndOriginalBytesOnly() {
+void testHistoricalReplayKeepsIndependentlyVerifiedIrEligibility() {
   for (const auto origin : {RecordOrigin::ModernChartResult,
                            RecordOrigin::ModernCourseResult}) {
     const auto value = replay::capabilitiesFor({
@@ -68,9 +68,14 @@ void testObsoleteReplayPreservesResultsAndOriginalBytesOnly() {
         .postponedIrSnapshotEligible = true});
     expect(value.viewResult && value.shareOrCopy &&
                value.profileDuplicateReplay && value.profileArchiveReplay &&
-               !value.watch && !value.retrySame && !value.gBattle &&
-               !value.practiceGhost && !value.videoExport && !value.irUpload,
-           "obsolete replays retain results and byte-preserving actions only");
+               value.watch && value.retrySame && value.videoExport && value.irUpload &&
+               value.gBattle == (origin == RecordOrigin::ModernChartResult) &&
+               value.practiceGhost == (origin == RecordOrigin::ModernChartResult),
+           "historical playback and independently verified IR evidence remain available");
+    expect(!replay::capabilitiesFor({
+                .origin = origin, .replayState = ReplayState::Obsolete,
+                .postponedIrSnapshotEligible = false}).irUpload,
+           "historical playback never grants IR eligibility without a verified snapshot");
   }
 }
 
@@ -224,7 +229,7 @@ void testUnknownEnumValuesFailClosed() {
 } // namespace
 
 int main() {
-  testObsoleteReplayPreservesResultsAndOriginalBytesOnly();
+  testHistoricalReplayKeepsIndependentlyVerifiedIrEligibility();
   testVerifiedModernMatrix();
   testAbsentReplayKeepsModernResultAndIr();
   testInvalidReplayIsOnlyDeletable();

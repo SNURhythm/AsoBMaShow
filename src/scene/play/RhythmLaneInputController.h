@@ -66,6 +66,8 @@ public:
                           bool isBackSpin = false);
   Result releaseLaneForPreparation(int lane, const InputContext &context);
   void resetLaneStates();
+  [[nodiscard]] bool chargeTailJudgedSuccessfully(
+      const bms_parser::LongNote *tail) const;
 
 private:
   struct AcceptedLongHeadJudge {
@@ -87,6 +89,9 @@ private:
   std::vector<gameplay::JudgeCandidateDescriptor> judgeCandidates;
   std::vector<std::size_t> multiBadSourceIndices;
   std::vector<AcceptedLongHeadJudge> acceptedLongHeadJudges;
+  std::unordered_map<const bms_parser::LongNote *, Judgement>
+      acceptedChargeTailJudges;
+  std::unordered_map<int, long long> suppressedBackspinPressMicros;
 
   void indexKeysoundNotes();
   [[nodiscard]] bms_parser::Note *

@@ -111,6 +111,10 @@ struct ReplaySetupValidation {
   }
 };
 
+// Known historical inputs can be rejudged; this does not verify their old score.
+[[nodiscard]] bool replayRulesetCanBeRejudged(
+    const RulesetDescriptor &descriptor) noexcept;
+
 [[nodiscard]] ReplaySetupValidation
 validateReplaySetup(const ReplaySetup &setup, ReplaySetupSource source,
                     const ReplayLimits &limits = kReplayLimits);

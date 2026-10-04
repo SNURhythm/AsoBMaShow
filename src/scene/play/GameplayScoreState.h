@@ -450,7 +450,7 @@ inline float applyCourseGaugeGuts(GaugeProfile profile, GaugeType gaugeType,
        classIndex == 0)) {
     const std::array<float, 5> thresholds =
         profile == GaugeProfile::CourseLR2
-            ? std::array<float, 5>{30.0f, 0.0f, 0.0f, 0.0f, 0.0f}
+            ? std::array<float, 5>{32.0f, 0.0f, 0.0f, 0.0f, 0.0f}
             : std::array<float, 5>{5.0f, 10.0f, 15.0f, 20.0f, 25.0f};
     const std::array<float, 5> multipliers =
         profile == GaugeProfile::CourseLR2
@@ -470,10 +470,11 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
                                     int totalNotes, double total,
                                     float currentGauge,
                                     GaugeProfile profile =
-                                        GaugeProfile::Standard) {
+                                        GaugeProfile::Standard,
+                                    float rate = 1.0F) {
   if (gaugeProfileIsCourse(profile)) {
     const float delta =
-        courseGaugeBaseDeltaForJudgement(profile, gaugeType, judgement);
+        courseGaugeBaseDeltaForJudgement(profile, gaugeType, judgement) * rate;
     return applyCourseGaugeGuts(profile, gaugeType, currentGauge, delta);
   }
 
@@ -484,7 +485,9 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
       (profile == GaugeProfile::StandardLr2 &&
        (gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard))) {
     if (delta < 0.0f) {
-      delta *= beatorajaDamageMultiplier(total, totalNotes);
+      delta *= profile == GaugeProfile::StandardLr2
+                   ? lr2GaugeDamageMultiplier(total, totalNotes)
+                   : beatorajaDamageMultiplier(total, totalNotes);
     }
   }
   if (delta > 0.0f) {
@@ -496,6 +499,7 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
       delta = static_cast<float>(delta * total / std::max(1, totalNotes));
     }
   }
+  delta *= rate;
   if (gaugeType == GaugeType::Hard && profile != GaugeProfile::StandardLr2 &&
       gaugeReducedDamageZoneUpperBound(GameplayRuleset::Beatoraja, gaugeType,
                                        profile) > 0.0f) {
@@ -747,11 +751,16 @@ public:
     const float value = static_cast<float>(std::max(0, percent));
     const auto setStartingValue = [&](GaugeType type) {
       const int index = gaugeTypeIndex(type);
-      gaugeValues[index] =
-          std::clamp(value, 0.0f, gaugeDefinition(type).maximum);
+      const bool referenceLr2 = gaugeRules_.ruleset == GameplayRuleset::LR2 ||
+                               gaugeProfile == GaugeProfile::StandardLr2 ||
+                               gaugeProfile == GaugeProfile::CourseLR2;
+      gaugeValues[index] = std::clamp(
+          value, referenceLr2 ? gaugeDefinition(type).minimum : 0.0F,
+          gaugeDefinition(type).maximum);
       gaugeSurvivalFailed[index] =
           gaugeDefinition(type).survival &&
           survivalGaugeDies(type, gaugeValues[index]);
+      if (gaugeSurvivalFailed[index]) gaugeValues[index] = 0.0F;
     };
     if (gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
         gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
@@ -945,9 +954,7 @@ private:
     if (!definition.survival) {
       return false;
     }
-    return gaugeRules_.ruleset == GameplayRuleset::LR2
-               ? value < definition.deathBelow
-               : value <= definition.deathBelow;
+    return value <= 0.0F || value < definition.deathBelow;
   }
 
   [[nodiscard]] ClearType clearTypeForCompiledGauge(

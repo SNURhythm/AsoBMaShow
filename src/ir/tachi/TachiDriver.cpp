@@ -90,7 +90,7 @@ std::optional<DeliveryOutcome>
 invalidStoredRulesetProof(const IrOutboxEntry &entry) {
   const auto &proof = entry.rulesetProof;
   if (entry.providerId != kProviderId || proof.rulesetId != "lr2" ||
-      proof.rulesetRevision != RulesetDescriptor::kCurrentVersion ||
+      !supportsVerifiedLr2Revision(proof.rulesetRevision) ||
       proof.validationFingerprint !=
           file_checksum::sha256(proofFingerprintInput(entry))) {
     return permanent("ruleset_proof_mismatch",

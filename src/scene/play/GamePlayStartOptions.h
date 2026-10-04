@@ -409,24 +409,28 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
   options.startingGaugePercent = replay.provenance.startingGaugePercent;
   options.gaugeType = replay.provenance.gaugeType;
-  options.gaugeProfile = replay.provenance.gaugeProfile;
+  options.gaugeProfile =
+      replay.playbackGaugeProfile.value_or(replay.provenance.gaugeProfile);
   options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
   options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
   options.doublePlayFlip = replay.provenance.doublePlayFlip;
-  if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+  const RulesetDescriptor playbackRuleset =
+      replay.playbackRuleset.value_or(replay.provenance.ruleset);
+  if (playbackRuleset == RulesetDescriptor::Legacy()) {
     options.ruleset = GameplayRuleset::Beatoraja;
     options.requiredRulesetDescriptor =
         RulesetDescriptor::For(GameplayRuleset::Beatoraja);
     options.replayRulesetOverride.reset();
   } else {
-    options.requiredRulesetDescriptor = replay.provenance.ruleset;
+    options.requiredRulesetDescriptor = playbackRuleset;
     if (const auto recordedRuleset =
-            gameplayRulesetFromId(replay.provenance.ruleset.id)) {
+            gameplayRulesetFromId(playbackRuleset.id)) {
       options.ruleset = *recordedRuleset;
     }
-    options.replayRulesetOverride =
-        play_start_detail::replayJudgeOverrideForChart(replay.provenance,
-                                                       replay.chartMeta);
+    options.replayRulesetOverride = replay.playbackPolicy.has_value()
+        ? replay.playbackPolicy
+        : play_start_detail::replayJudgeOverrideForChart(replay.provenance,
+                                                        replay.chartMeta);
   }
 }
 

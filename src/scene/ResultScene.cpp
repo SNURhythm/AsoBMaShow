@@ -625,6 +625,17 @@ ResultScene::ResultScene(
         courseDisplay.mode.empty() ? "COURSE" : courseDisplay.mode;
     local.laneOrderLabel = courseDisplay.laneOrder;
   }
+  const bool staleChartReplay = local.replayResult &&
+      local.retryData.has_value() && local.retryData->staleResult;
+  const auto *courseSession = local.courseOptions.session.get();
+  const bool staleCourseReplay = courseSession != nullptr &&
+      courseSession->courseReplayPlayback &&
+      courseSession->courseReplayData != nullptr &&
+      courseSession->courseReplayData->staleResult;
+  if (staleChartReplay || staleCourseReplay) {
+    if (!local.playModeLabel.empty()) local.playModeLabel += " · ";
+    local.playModeLabel += i18n::tr("result.replay.stale_label");
+  }
   if (isCourseStageResult()) {
     const int clearRank = result_presentation::courseStageClearRank(
         local.resultState, local.meta, local.attemptProvenance.playback);

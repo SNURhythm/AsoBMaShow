@@ -363,18 +363,20 @@ void testVerifiedReplayOwnershipAndMissingFileFallback(bool mismatchedReplay = f
   require(prepared.session != nullptr, "attached replay result prepares");
   auto session = prepared.session;
   if (mismatchedReplay) {
-    require(!session->resultBrowseReplayData &&
-                !session->resultBrowseStageReplay(0) &&
-                !session->resultBrowseStageReplay(1) &&
+    require(session->resultBrowseReplayData &&
+                session->resultBrowseReplayData->staleResult &&
+                session->resultBrowseStageReplay(0) &&
+                session->resultBrowseStageReplay(1) &&
+                session->resultBrowseStageReplay(1)->staleResult &&
                 session->completedResults[0].gameplayGraph.chart &&
                 session->completedResults[1].state.getScore() == 10,
-            "a replay that disagrees in the second stage is rejected while saved "
+            "a replay that disagrees in the second stage is marked stale while saved "
             "course results and chart graphs remain available");
     const auto stored = repository.LoadModernCourseResultByAttempt(fixture.result.attemptId);
     require(stored.record &&
                 stored.record->result.resultFingerprint == fixture.result.resultFingerprint &&
                 stored.record->result.finalScore == 20,
-            "rejecting an optional mismatched replay does not rewrite the saved result");
+            "rejudging a stale replay does not rewrite the saved result");
     return;
   }
   require(session->resultBrowseStageReplay(0) && session->resultBrowseReplayChart(0) &&

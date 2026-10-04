@@ -11,7 +11,7 @@ inline constexpr GameplayRuleset kDefaultGameplayRuleset =
     GameplayRuleset::LR2;
 
 struct RulesetDescriptor {
-  static constexpr int kCurrentVersion = 4;
+  static constexpr int kCurrentVersion = 5;
 
   std::string id = "lr2";
   int version = kCurrentVersion;
@@ -71,7 +71,7 @@ inline RulesetDescriptor RulesetDescriptor::For(GameplayRuleset ruleset) {
   case GameplayRuleset::Beatoraja:
     return {
         .id = "beatoraja",
-        .version = 3,
+        .version = 4,
         .scoringModel = "asobmashow-v1",
         .judgementModel = "bms-rank-v1",
         .gaugeModel = "beatoraja-profile-gauge-v2",
@@ -100,8 +100,8 @@ isSupportedRulesetDescriptor(const RulesetDescriptor &descriptor) noexcept {
          descriptor == RulesetDescriptor::For(GameplayRuleset::Beatoraja);
 }
 
-// A recorded older algorithm cannot be replayed faithfully by the current one.
-// Keep its descriptor intact so stored results and original input remain useful.
+// Older results keep their recorded identity. Playback may rejudge their input
+// with the current rules and explicitly identify the saved result as stale.
 [[nodiscard]] inline bool
 isObsoleteRulesetDescriptor(const RulesetDescriptor &descriptor) noexcept {
   const auto ruleset = gameplayRulesetFromId(descriptor.id);

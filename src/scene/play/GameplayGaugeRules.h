@@ -39,6 +39,9 @@ struct GameplayGaugeRules {
                             float rate = 1.0F) const noexcept;
 };
 
+[[nodiscard]] float lr2GaugeDamageMultiplier(double total,
+                                              int totalNotes) noexcept;
+
 [[nodiscard]] double resolveEffectiveGaugeTotal(
     GameplayRuleset ruleset, const bms_parser::ChartMeta &meta) noexcept;
 

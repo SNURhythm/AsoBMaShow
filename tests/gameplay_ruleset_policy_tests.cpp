@@ -74,9 +74,9 @@ void testLr2PolicyIsCoherent() {
                   RulesetDescriptor::For(GameplayRuleset::LR2) &&
               policy.judge.rules().ruleset == GameplayRuleset::LR2 &&
               policy.judge.rules().candidateSelection ==
-                  gameplay::CandidateSelectionMode::LR2 &&
+                  gameplay::CandidateSelectionMode::Score &&
               policy.gauge.ruleset == GameplayRuleset::LR2 &&
-              policy.gauge.compiled && policy.gauge.effectiveTotal == 200.0 &&
+              policy.gauge.compiled && policy.gauge.effectiveTotal == 200.5 &&
               policy.canonical,
           "LR2 policy descriptor, judge, candidate, gauge, and TOTAL match");
 }
@@ -176,20 +176,21 @@ void testLr2FractionalTotalStartsAndPersists() {
     const auto live = buildGameplayRulesetPolicyAtPlayStart(
         options, *chart, AppSettings::NotePriorityMode::Lowest);
     require(live.built() && live.policy->canonical &&
-                live.policy->gauge.effectiveTotal == 0.0,
-            "LR2 starts with a fractional TOTAL rounded down to zero");
-    require(live.policy->gauge.delta(GaugeType::Normal, PGreat, 20.0F) == 0.0F &&
+                live.policy->gauge.effectiveTotal == chart->Meta.Total,
+            "LR2 starts with the original positive fractional TOTAL");
+    require(live.policy->gauge.delta(GaugeType::Normal, PGreat, 20.0F) ==
+                    static_cast<float>(chart->Meta.Total) &&
                 live.policy->gauge.delta(GaugeType::Normal, Poor, 20.0F) < 0.0F,
-            "zero LR2 TOTAL disables groove recovery but retains damage");
+            "fractional LR2 TOTAL supplies recovery and retains damage");
     const auto captured = captureScoreProvenanceAtPlayStart(
         options, chart->Meta, *live.policy);
     std::string error;
     const auto serialized = serializeValidatedScoreProvenance(captured, error);
     require(serialized.has_value() && error.empty(),
-            "zero effective TOTAL can be saved with score and replay provenance");
+            "fractional effective TOTAL can be saved with score and replay provenance");
     const auto restored = deserializeScoreProvenance(*serialized, error);
     require(restored.has_value() && error.empty() && *restored == captured,
-            "zero effective TOTAL round-trips without losing authored TOTAL");
+            "fractional effective TOTAL round-trips without losing authored TOTAL");
     auto replayData = std::make_shared<ReplayData>();
     replayData->chartMeta = chart->Meta;
     replayData->provenance = *restored;
@@ -199,7 +200,7 @@ void testLr2FractionalTotalStartsAndPersists() {
         replayOptions, *chart, AppSettings::NotePriorityMode::Lowest);
     require(replay.built() && replay.policy->canonical &&
                 replay.policy->gauge == live.policy->gauge,
-            "saved zero TOTAL replay uses the original LR2 gauge policy");
+            "saved fractional TOTAL replay uses the original LR2 gauge policy");
 
     auto invalid = restored->stages.front();
     invalid.effectiveGaugeTotal = -1.0;
@@ -336,6 +337,41 @@ void testValidatedReplayAndCourseConsistency() {
           "a course rejects a stage with a different descriptor");
 }
 
+void testLr2ReplayUsesRecordedCandidatePriority() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  for (const auto selection : {gameplay::CandidateSelectionMode::Lowest,
+                               gameplay::CandidateSelectionMode::Combo,
+                               gameplay::CandidateSelectionMode::Duration,
+                               gameplay::CandidateSelectionMode::Score}) {
+    const auto live = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::LR2, .sourceRank = meta.Rank,
+               .beatorajaCandidateSelection = selection});
+    require(live.built(), "configured LR2 priority builds");
+    StartOptions options;
+    options.ruleset = GameplayRuleset::LR2;
+    const auto captured = captureScoreProvenanceAtPlayStart(options, meta, *live.policy);
+    const auto replay = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::LR2, .sourceRank = meta.Rank,
+               .beatorajaCandidateSelection = gameplay::CandidateSelectionMode::Score,
+               .requiredDescriptor = captured.ruleset,
+               .replaySnapshot = captured.stages.front()});
+    require(replay.built() && replay.policy->canonical &&
+                replay.policy->judge.rules().candidateSelection == selection,
+            "replay priority survives different live settings without becoming modified");
+    if (selection == gameplay::CandidateSelectionMode::Combo) {
+      auto oldSnapshot = captured.stages.front();
+      oldSnapshot.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+      const auto legacyName = gameplay::buildGameplayRulesetPolicy(
+          meta, {.ruleset = GameplayRuleset::LR2, .sourceRank = meta.Rank,
+                 .replaySnapshot = oldSnapshot});
+      require(legacyName.built() && legacyName.policy->canonical &&
+                  legacyName.policy->judge.rules().candidateSelection ==
+                      gameplay::CandidateSelectionMode::Combo,
+              "legacy LR2 candidate marker normalizes to recorded Combo semantics");
+    }
+  }
+}
+
 void testCanonicalReplaySnapshotStaysCanonical() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
   const auto live = gameplay::buildGameplayRulesetPolicy(
@@ -363,6 +399,32 @@ void testCanonicalReplaySnapshotStaysCanonical() {
       options, meta, *replay.policy);
   require(replayCapture.eligibility == ScoreEligibility::Verified,
           "an exact canonical replay snapshot remains verified");
+}
+
+void testReplayRuntimePolicyOverridesStaleSavedIdentity() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  const auto live = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::LR2, .sourceRank = meta.Rank,
+             .beatorajaCandidateSelection = gameplay::CandidateSelectionMode::Duration});
+  require(live.built(), "current replay runtime policy builds");
+  StartOptions originalOptions;
+  const auto runtime = captureScoreProvenanceAtPlayStart(originalOptions, meta, *live.policy);
+  auto replay = std::make_shared<ReplayData>();
+  replay->chartMeta = meta;
+  replay->provenance = runtime;
+  replay->provenance.ruleset.version -= 1;
+  replay->provenance.stages.front().candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  const auto originalProof = replay->provenance;
+  replay->playbackRuleset = runtime.ruleset;
+  replay->playbackPolicy = runtime.stages.front();
+  StartOptions options{.replayData = replay};
+  applyReplayProvenanceToStartOptions(options, *replay);
+  const auto current = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+  require(current.built() && current.policy->descriptor == runtime.ruleset &&
+              current.policy->judge.rules().candidateSelection == gameplay::CandidateSelectionMode::Duration &&
+              replay->provenance == originalProof,
+          "rejudged runtime identity and priority win without rewriting stale saved proof");
 }
 
 void testReplayStartRequiresValidatedSnapshot() {
@@ -525,6 +587,8 @@ void testLargeExtendedRankSurvivesPersistenceAndReplay() {
 } // namespace
 
 int main() {
+  testReplayRuntimePolicyOverridesStaleSavedIdentity();
+  testLr2ReplayUsesRecordedCandidatePriority();
   testLargeExtendedRankSurvivesPersistenceAndReplay();
   testExtendedRankPolicyCaptureAndReplay();
   testPolicyUsesChartKeyMode();

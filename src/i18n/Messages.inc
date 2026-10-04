@@ -1004,6 +1004,7 @@
 {"result.read_only_synchronized_result.label", "Read-only synchronized result", "동기화된 결과 (읽기 전용)", "読み取り専用の同期リザルト"},
 {"result.reason.label", "Reason\n", "사유\n", "理由\n"},
 {"result.replay.label", "Replay", "리플레이", "リプレイ"},
+{"result.replay.stale_label", "Replay · saved result is stale", "리플레이 · 저장된 결과와 다름", "リプレイ · 保存結果と相違あり"},
 {"result.result_failed_added_submission_queue.message", "This result could not be added to the submission queue.", "이 결과를 제출 대기열에 추가하지 못했습니다.", "このリザルトを送信キューに追加できませんでした。"},
 {"result.result_failed_prepared_ir.message", "This result could not be prepared for IR.", "이 결과의 IR 제출을 준비하지 못했습니다.", "このリザルトのIR送信を準備できませんでした。"},
 {"result.result_skin_failed_start_application_controls_available.message", "Result skin could not start. Application controls are available.", "결과 스킨을 시작하지 못했습니다. 앱의 기본 컨트롤을 사용할 수 있습니다.", "リザルトスキンを起動できませんでした。アプリ標準の操作が利用できます。"},

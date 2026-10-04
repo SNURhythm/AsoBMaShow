@@ -195,15 +195,15 @@ void testOldRulesetIsObsoleteAndPreservesSavedResult() {
   harness.result.score.provenance.ruleset.version = 3;
   harness.result.resultFingerprint =
       result_persistence::modernResultFingerprint(harness.result);
+  harness.replay = replayDocument(harness.result);
   auto context = harness.makeContext();
   const auto loaded = context.load(kAttemptId);
-  expect(loaded.state == ChartReplayContextState::ObsoleteRuleset &&
-             loaded.replayState() == ReplayState::Obsolete &&
-             loaded.result == harness.result && !loaded.verified &&
-             loaded.diagnostic.find("obsolete") != std::string::npos,
-         "retired rules retain the original result with an explicit obsolete status");
-  expect(harness.calls == std::vector<std::string>{"result"},
-         "obsolete replay is never decoded under current algorithms");
+  expect(loaded.state == ChartReplayContextState::Ready &&
+             loaded.replayAvailable() && loaded.result == harness.result &&
+             loaded.verified && loaded.verified->document == harness.replay,
+         "historical replay is verified without changing saved result or setup");
+  expect(harness.calls == std::vector<std::string>{"result", "file", "decode"},
+         "historical input still requires verified bytes and decoded shared facts");
 }
 
 void testUserDeletedReferenceNeverTouchesFilesystem() {

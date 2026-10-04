@@ -44,7 +44,7 @@ enum class NoteJudgeRole : std::uint8_t {
 };
 
 enum class CandidateSelectionMode : std::uint8_t {
-  LR2,
+  LR2, // Legacy LR2 candidate marker; compiled LR2 uses Combo.
   Lowest,
   Combo,
   Duration,
@@ -83,8 +83,7 @@ windowContextForRole(NoteJudgeRole role) noexcept;
     GameplayRuleset ruleset, int sourceRank, int playbackRatePercent = 100,
     int judgeScalePercent = 100,
     CourseJudgementConstraint constraint = CourseJudgementConstraint::None,
-    CandidateSelectionMode beatorajaSelection =
-        CandidateSelectionMode::Lowest,
+    CandidateSelectionMode selection = CandidateSelectionMode::LR2,
     int keyMode = 7,
     std::optional<int> rankPercentOverride = std::nullopt);
 

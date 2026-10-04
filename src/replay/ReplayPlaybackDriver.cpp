@@ -211,6 +211,9 @@ bool ReplayLogicalGameplayAdapter::applyBatch(
     }
   }
   for (std::size_t index = 0; index < transitions.size(); ++index) {
+    if (callbacks_.beforeTransition) {
+      callbacks_.beforeTransition(transitions[index], index);
+    }
     if (!apply(transitions[index], reversesScratchAt(transitions, index),
                dispatchSongTimeMicros, diagnostic)) {
       return false;

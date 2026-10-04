@@ -72,6 +72,19 @@ rebuildJudgedCourseResult(
     const result_persistence::ModernCourseResult &saved,
     std::vector<result_persistence::ModernCourseStageResult> stages,
     std::string &diagnostic) {
+  const bool completeCourse = stages.size() == saved.entryFacts.size();
+  const auto totalNotes = std::accumulate(
+      saved.entryFacts.begin(), saved.entryFacts.end(), std::int64_t{0},
+      [](std::int64_t sum, const auto &entry) { return sum + entry.totalNotes; });
+  const bool fullCombo = completeCourse && totalNotes > 0 &&
+      stages.back().score.maxCombo >= totalNotes &&
+      std::all_of(stages.begin(), stages.end(), [](const auto &stage) {
+        return stage.score.comboBreak == 0;
+      });
+  const int clearType = completeCourse
+      ? clear_policy::fullComboRankForPlayback(stages.back().score.clearType,
+                                               fullCombo, saved.provenance.playback)
+      : kClearTypeFailedRank;
   result_persistence::ModernCourseResultCapture capture{
       .attemptId = saved.attemptId,
       .courseKey = saved.courseKey,
@@ -86,7 +99,7 @@ rebuildJudgedCourseResult(
       .gaugeAutoShift = saved.gaugeAutoShift,
       .gaugeAutoShiftLowerBound = saved.gaugeAutoShiftLowerBound,
       .longNoteMode = saved.longNoteMode,
-      .clearType = saved.clearType,
+      .clearType = clearType,
       .stages = std::move(stages),
       .entryFacts = saved.entryFacts,
       .playedAtUnixMillis = saved.playedAtUnixMillis,
@@ -289,6 +302,10 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     judgedStages.reserve(parsedCharts.size());
     std::optional<CourseContinuationState> continuation;
     ReplayPlaybackCarryState carry;
+    const auto constraintSettings =
+        courseConstraintSettingsFromJson(verified.result.constraintJson);
+    carry.courseJudgement = constraintSettings.rules.judgement;
+    bool staleResult = false;
 
     for (std::size_t index = 0; index < parsedCharts.size(); ++index) {
       const auto &savedStage = verified.result.stages[index];
@@ -334,15 +351,11 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
       };
       const auto savedChartResult =
           chartResultForStage(verified.result, index);
+      carry.courseGaugeProfile = isObsoleteRulesetDescriptor(stagePlayback.setup.ruleset)
+                                     ? std::optional(constraintSettings.gaugeProfile)
+                                     : std::nullopt;
       auto materialized = dependencies_.materializeStage(
           stageDocument, savedChartResult, *prepared, carry);
-      if (materialized.state == ReplayPlaybackMaterializationState::ResultMismatch) {
-        return failure(CourseReplayConsumerState::ResultMismatch,
-                       materialized.diagnostic.empty()
-                           ? "Course replay stage no longer reproduces the saved result."
-                           : std::move(materialized.diagnostic),
-                       std::move(context));
-      }
       if (!materialized.playable() || !materialized.consumerIdentityCompatible ||
           !materialized.judgedResult ||
           !materialized.initialGaugeState || !materialized.finalGaugeState) {
@@ -352,6 +365,9 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
                            : std::move(materialized.diagnostic),
                        std::move(context));
       }
+      const bool stageStale = !materialized.matched();
+      staleResult = staleResult || stageStale;
+      materialized.replayData->staleResult = stageStale;
       if (!finalGaugeAgrees(materialized)) {
         return failure(CourseReplayConsumerState::ResultMismatch,
                        "Course replay stage gauge differs from its judged result.",
@@ -376,6 +392,8 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
         continuation = *started.state;
       }
 
+      auto playbackSetup = stagePlayback.setup;
+      playbackSetup.gaugeProfile = materialized.initialGaugeState->gaugeProfile;
       const auto advanced = advanceCourseContinuation(
           *continuation,
           {.stageIndex = index,
@@ -387,16 +405,16 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
            .adoptedGauge = materialized.judgedResult->adoptedGaugeType,
            .restMicrosAfterStage =
                verified.document.playback.restMicrosAfterStage[index],
-           .setup = stagePlayback.setup});
+           .setup = playbackSetup});
       if (!advanced.advanced()) {
         return failure(CourseReplayConsumerState::ContinuationFailed,
                        "Course replay carried state is inconsistent.",
                        std::move(context));
       }
       continuation = *advanced.state;
-      carry = {.gauge = continuation->gauge,
-               .combo = continuation->combo,
-               .maximumCombo = continuation->maximumCombo};
+      carry.gauge = continuation->gauge;
+      carry.combo = continuation->combo;
+      carry.maximumCombo = continuation->maximumCombo;
       judgedStages.push_back(stageResultForChart(
           static_cast<int>(index), *materialized.judgedResult));
       materializedStages.push_back(
@@ -421,9 +439,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
             completedPrefixMaximumScore(verified.result) ||
         continuation->maximumCombo != verified.result.maxCombo ||
         continuation->gauge.currentGauge != verified.result.finalGauge) {
-      return failure(CourseReplayConsumerState::ResultMismatch,
-                     "Materialized course aggregate differs from its saved result.",
-                     std::move(context));
+      staleResult = true;
     }
 
     auto judgedCourse = rebuildJudgedCourseResult(
@@ -439,18 +455,25 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
         result_persistence::compareModernCourseResultFacts(
             verified.result, *judgedCourse);
     if (!courseAgreement.agrees()) {
-      return failure(CourseReplayConsumerState::ResultMismatch,
-                     courseAgreement.diagnostic, std::move(context));
+      staleResult = true;
     }
 
     auto replayData =
         makeCompatibilityCourse(verified, std::move(compatibilityStages));
+    replayData->staleResult = staleResult;
+    replayData->gaugeProfile = continuation->gauge.gaugeProfile;
+    replayData->finalScore = judgedCourse->finalScore;
+    replayData->maxCombo = judgedCourse->maxCombo;
+    replayData->finalGauge = judgedCourse->finalGauge;
+    replayData->clearType = judgedCourse->clearType;
     return {.state = CourseReplayConsumerState::Ready,
             .context = std::move(context),
             .charts = std::move(preparedCharts),
             .materializedStages = std::move(materializedStages),
             .replayData = std::move(replayData),
-            .continuation = std::move(continuation)};
+            .continuation = std::move(continuation),
+            .diagnostic = staleResult ? "Saved course result differs from replay judging."
+                                      : std::string{}};
   } catch (...) {
     return failure(CourseReplayConsumerState::MaterializationFailed,
                    "Course replay preparation failed.");

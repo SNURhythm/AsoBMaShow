@@ -78,7 +78,8 @@ private:
   std::filesystem::path path_;
 };
 
-ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
+ir::IrOutboxEntry pendingEntry(bool userIntent = false,
+                                int revision = RulesetDescriptor::kCurrentVersion) {
   ir::IrOutboxEntry entry{
       .id = 1,
       .providerId = "tachi",
@@ -96,13 +97,13 @@ ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
   };
   const std::string proofInput =
       "tachi-lr2-proof-v1\n3:lr2\n" +
-      std::to_string(RulesetDescriptor::kCurrentVersion) + "\n" +
+      std::to_string(revision) + "\n" +
       std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
       std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
       "\n" + std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
   entry.rulesetProof = {
       .rulesetId = "lr2",
-      .rulesetRevision = RulesetDescriptor::kCurrentVersion,
+      .rulesetRevision = revision,
       .validationFingerprint = file_checksum::sha256(proofInput),
   };
   return entry;
@@ -295,6 +296,23 @@ void testAutomaticSubmissionOmitsUserIntent() {
   expect(http.requests.size() == 1 &&
              !hasHeaderNamed(http.requests.front(), "X-User-Intent"),
          "automatic submission omits X-User-Intent");
+}
+
+void testPreviouslyVerifiedV4OutboxProofStillSends() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200, .body = immediate(R"(["score-v4"])")});
+  const auto entry = pendingEntry(false, 4);
+  const auto result = driver.submit(entry, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::Succeeded && http.requests.size() == 1 &&
+             http.requests.front().body == entry.payloadJson,
+         "previously verified v4 queue sends its unchanged frozen payload");
+  auto invalid = entry;
+  invalid.payloadJson.push_back(' ');
+  const auto rejected = driver.submit(invalid, runtimeConfig(), http, {});
+  expect(rejected.code == "ruleset_proof_mismatch" && http.requests.size() == 1,
+         "v4 compatibility still rejects altered frozen payloads before HTTP");
 }
 
 void testBlocksLegacyAndMismatchedRulesetProofsBeforeHttp() {
@@ -1810,6 +1828,7 @@ void testBeatorajaSongUrlContract() {
 } // namespace
 
 int main() {
+  testPreviouslyVerifiedV4OutboxProofStillSends();
   testCapabilitiesAndDraftDelegation();
   testAuthenticatedAccountUsesTachiUserName();
   testImmediateSubmissionRequestAndAcceptedResponse();

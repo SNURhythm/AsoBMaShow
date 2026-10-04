@@ -2096,7 +2096,9 @@ void testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails() {
                                             {.judge = lr2Judge});
     const auto press =
         simulation.pressLane(1, {.songTimeMicros = 1'050'000});
-    const auto tail = simulation.advanceTo(2'000'000, 2'000'000);
+    require(simulation.advanceTo(2'000'000, 2'000'000).transactions.empty(),
+            "LR2 held classic tail waits until strictly after its timestamp");
+    const auto tail = simulation.advanceTo(2'000'001, 2'000'001);
     require(press.judge.judgement == Good && !press.hasJudge &&
                 tail.transactions.size() == 1 &&
                 tail.transactions.front().judge.judgement == Good &&
@@ -2125,7 +2127,24 @@ void testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails() {
     require(oneShot.snapshot().judgeCounts[PGreat] == 2 &&
                 chunked.snapshot().judgeCounts[PGreat] == 2,
             "LR2 autoplay CN/HCN commits head and tail separately");
-    requireSameHellChargeOutcome(oneShot, chunked);
+    if (type == bms_parser::LongNoteType::HellChargeNote) {
+      const auto ticks = [](const auto &simulation) {
+        return std::ranges::count_if(simulation.replayEvents(), [](const auto &event) {
+          return event.action == gameplay::GameplayReplayAction::Gauge;
+        });
+      };
+      require(ticks(oneShot) == 0 && ticks(chunked) == 3,
+              "LR2 HCN ticks follow update cadence and stop before the tail update");
+    } else {
+      require(oneShot.snapshot().judgeCounts == chunked.snapshot().judgeCounts &&
+                  oneShot.snapshot().maxCombo == chunked.snapshot().maxCombo &&
+                  oneShot.scoreState().gaugeValues == chunked.scoreState().gaugeValues &&
+                  oneShot.replayEvents().size() == 2 &&
+                  chunked.replayEvents().size() == 2 &&
+                  oneShot.replayEvents().front().songTimeMicros == 2'000'000 &&
+                  chunked.replayEvents().front().songTimeMicros == 1'000'000,
+              "LR2 CN autoplay preserves judged facts while recording its host update time");
+    }
   }
 }
 } // namespace

@@ -646,7 +646,7 @@ void validateStageProof(const ScoreStageProvenance &stage,
     throw std::runtime_error(
         "Score provenance authored gauge TOTAL is not finite.");
   }
-  // LR2 floors positive fractional authored TOTAL, which can yield zero.
+  // Historical LR2 versions floored fractional TOTAL, which could yield zero.
   if (!std::isfinite(stage.effectiveGaugeTotal) ||
       stage.effectiveGaugeTotal < 0.0 ||
       (stage.effectiveGaugeTotal == 0.0 &&

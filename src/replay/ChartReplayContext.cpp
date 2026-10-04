@@ -147,13 +147,6 @@ ChartReplayContextOutcome ChartReplayContext::load(
                      preservedResult, loaded.record->replayFile);
     }
 
-    if (isObsoleteRulesetDescriptor(stored.score.provenance.ruleset)) {
-      return failure(ChartReplayContextState::ObsoleteRuleset,
-                     "This replay uses an obsolete ruleset. The saved result "
-                     "and original replay are preserved; faithful playback "
-                     "is unavailable.",
-                     preservedResult, loaded.record->replayFile);
-    }
 
     std::optional<ModernReplayFileReference> reference =
         *loaded.record->replayFile;
@@ -196,7 +189,7 @@ ChartReplayContextOutcome ChartReplayContext::load(
                      "Replay decoding failed.", preservedResult,
                      std::move(reference));
     }
-    if (decoded.obsoleteRuleset) {
+    if (decoded.obsoleteRuleset && !decoded.chart) {
       return failure(ChartReplayContextState::ObsoleteRuleset,
                      decoded.diagnostic, preservedResult, std::move(reference));
     }

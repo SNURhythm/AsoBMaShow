@@ -1,10 +1,12 @@
 #include "RealtimeGameplayWorker.h"
 
 #include "../../bms_parser.hpp"
+#include "../../ChartTiming.h"
 #include "../../targets.h"
 
 #include <algorithm>
 #include <chrono>
+#include <tuple>
 #include <utility>
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -84,6 +86,13 @@ RealtimeGameplayWorker::RealtimeGameplayWorker(
     }
   }
   ownedInputLanes_.resize(laneStorageSize);
+  queuedInputs_.reserve(kRealtimeGameplayIngressSize);
+  gameplayInputWork_.reserve(kRealtimeGameplayIngressSize * 2);
+  replayInputWork_.reserve(kRealtimeGameplayIngressSize * 2);
+  inputAdmissions_.reserve(kRealtimeGameplayIngressSize);
+  sampledInputStates_.reserve(laneStorageSize);
+  latestInputOwners_.resize(laneStorageSize * 3);
+  scratchInputStates_.resize(laneStorageSize);
   for (auto &buffer : snapshots_) {
     buffer.snapshot.noteStates.resize(definition_.noteCount());
     buffer.snapshot.noteChanges.revision = 0;
@@ -262,15 +271,7 @@ void RealtimeGameplayWorker::run() {
     (void)wake_.try_acquire_for(1ms);
     wakePending_.store(false, std::memory_order_release);
 
-    bool changed = false;
-    RealtimeGameplayInput input;
-    while (ingress_.tryPop(input)) {
-      processInput(input);
-      changed = true;
-      if (fault() != RealtimeGameplayFault::None) {
-        break;
-      }
-    }
+    bool changed = processQueuedInputs();
     if (suspendRequested_.load(std::memory_order_acquire)) {
       if (changed || fault() != RealtimeGameplayFault::None) {
         publishSnapshot();
@@ -301,8 +302,7 @@ void RealtimeGameplayWorker::run() {
     }
 
     while (!suspendRequested_.load(std::memory_order_acquire) &&
-           ingress_.tryPop(input)) {
-      processInput(input);
+           processQueuedInputs()) {
       publishSnapshot();
       if (fault() != RealtimeGameplayFault::None) {
         stopRequested_.store(true, std::memory_order_release);
@@ -318,8 +318,200 @@ void RealtimeGameplayWorker::signal() noexcept {
   }
 }
 
-void RealtimeGameplayWorker::processInput(
-    const RealtimeGameplayInput &input) {
+bool RealtimeGameplayWorker::processQueuedInputs() {
+  queuedInputs_.clear();
+  RealtimeGameplayInput input;
+  while (queuedInputs_.size() < kRealtimeGameplayIngressSize && ingress_.tryPop(input)) {
+    queuedInputs_.push_back({input, std::nullopt});
+  }
+  if (queuedInputs_.empty()) return false;
+  if (config_.simulation.judge.rules().ruleset != GameplayRuleset::LR2) {
+    for (const auto &queued : queuedInputs_) {
+      processInput(queued.input);
+      if (fault() != RealtimeGameplayFault::None) break;
+    }
+    return true;
+  }
+  for (auto &queued : queuedInputs_) {
+    if (queued.input.epoch == config_.epoch && config_.clock.mapSteadyToSong != nullptr) {
+      queued.songTimeMicros = config_.clock.mapSteadyToSong(
+          config_.clock.context, queued.input.steadyTimestampMicros);
+    }
+  }
+  for (std::size_t first = 0; first < queuedInputs_.size();) {
+    const auto &queued = queuedInputs_[first];
+    if (queued.input.epoch != config_.epoch || config_.clock.mapSteadyToSong == nullptr) {
+      ++first;
+      continue;
+    }
+    if (!queued.songTimeMicros.has_value()) {
+      latchFault(RealtimeGameplayFault::ClockUnavailable);
+      break;
+    }
+    const auto effectiveTime = chart_timing::subtract(*queued.songTimeMicros,
+                                                      queued.input.inputDelayMicros);
+    const bool preparation = config_.activationSongTimeMicros.has_value() &&
+                             *queued.songTimeMicros < *config_.activationSongTimeMicros;
+    std::size_t end = first + 1;
+    while (end < queuedInputs_.size()) {
+      const auto &next = queuedInputs_[end];
+      if (next.input.epoch != config_.epoch || !next.songTimeMicros.has_value() ||
+          chart_timing::subtract(*next.songTimeMicros, next.input.inputDelayMicros) != effectiveTime ||
+          (config_.activationSongTimeMicros.has_value() &&
+           *next.songTimeMicros < *config_.activationSongTimeMicros) != preparation) break;
+      ++end;
+    }
+    processInputBatch(std::span<const QueuedInput>(queuedInputs_).subspan(first, end - first));
+    if (fault() != RealtimeGameplayFault::None) break;
+    first = end;
+  }
+  return true;
+}
+
+void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inputs) {
+  gameplayInputWork_.clear();
+  replayInputWork_.clear();
+  inputAdmissions_.clear();
+  sampledInputStates_.clear();
+  for (std::size_t index = 0; index < inputs.size(); ++index) {
+    const auto &queued = inputs[index];
+    observeInputLatency(queued.input);
+    const auto &input = queued.input;
+    OwnedInputDecision decision;
+    const bool command = input.hasReplayControl &&
+        (input.replayControl.kind == replay::LogicalControlKind::Start ||
+         input.replayControl.kind == replay::LogicalControlKind::Select);
+    if (command || input.source == RealtimeGameplayInputSource::Independent) {
+      if (!command && !input.replayOnly) {
+        decision.gameplay[decision.gameplayCount++] = input;
+      }
+      if (input.hasReplayControl) {
+        decision.replay[decision.replayCount++] = input;
+        if (command) {
+          auto &replay = decision.replay[0];
+          replay.source = RealtimeGameplayInputSource::Independent;
+          replay.lane = -1;
+          replay.compensateLane = -1;
+          replay.replayOnly = false;
+        }
+      }
+    } else {
+      decision = coalesceOwnedInput(input);
+    }
+    inputAdmissions_.push_back({decision.gameplayCount, true});
+    for (std::size_t edge = 0; edge < decision.gameplayCount; ++edge) {
+      if (input.hasReplayControl && replay::isDirectionalScratchControl(input.replayControl.kind)) {
+        --inputAdmissions_.back().remaining;
+        continue;
+      }
+      gameplayInputWork_.push_back({decision.gameplay[edge], *queued.songTimeMicros,
+                                   index, gameplayInputWork_.size()});
+      const auto &effective = decision.gameplay[edge];
+      const bool pressed = effective.type == RealtimeGameplayInputType::Press || effective.backSpin;
+      const auto found = std::ranges::find(sampledInputStates_, effective.lane,
+                                           &GameplayLaneInputState::lane);
+      if (found == sampledInputStates_.end()) {
+        sampledInputStates_.push_back({effective.lane, pressed});
+      } else {
+        found->pressed = pressed;
+      }
+    }
+    for (std::size_t edge = 0; edge < decision.replayCount; ++edge) {
+      replayInputWork_.push_back({decision.replay[edge], *queued.songTimeMicros, index, 0});
+      const auto &raw = decision.replay[edge];
+      if (!raw.hasReplayControl || !replay::isDirectionalScratchControl(raw.replayControl.kind)) continue;
+      const auto lane = replay::physicalChartLaneForLogicalControl(
+          definition_.metadata().keyMode, raw.replayControl);
+      if (!lane || static_cast<std::size_t>(*lane) >= scratchInputStates_.size()) continue;
+      auto effective = raw;
+      effective.lane = *lane;
+      effective.replayOnly = false;
+      effective.backSpin = false;
+      gameplayInputWork_.push_back({effective, *queued.songTimeMicros, index,
+                                   gameplayInputWork_.size()});
+      ++inputAdmissions_.back().remaining;
+      auto &keys = scratchInputStates_[*lane];
+      keys[raw.replayControl.kind == replay::LogicalControlKind::ScratchClockwise ? 0 : 1] =
+          raw.type == RealtimeGameplayInputType::Press;
+      const auto found = std::ranges::find(sampledInputStates_, *lane,
+                                           &GameplayLaneInputState::lane);
+      if (found == sampledInputStates_.end()) sampledInputStates_.push_back({*lane, keys[0] || keys[1]});
+      else found->pressed = keys[0] || keys[1];
+    }
+  }
+  const auto &first = inputs.front();
+  const GameplayInputContext context{.songTimeMicros = *first.songTimeMicros,
+      .laneBeamTimeMicros = first.input.steadyTimestampMicros,
+      .inputDelayMicros = first.input.inputDelayMicros};
+  const bool preparation = config_.activationSongTimeMicros.has_value() &&
+                           context.songTimeMicros < *config_.activationSongTimeMicros;
+  // JudgeManager samples the latest changed state once per physical key. Keep
+  // raw replay edges, but discard earlier gameplay edges for that same key.
+  // Directionless scratch inputs cannot identify which of its two keys changed.
+  const auto layout = replay::replayKeyModeLayout(definition_.metadata().keyMode);
+  const auto keyIndex = [&](const GameplayInputWork &work) -> std::optional<std::size_t> {
+    const int lane = work.input.lane;
+    if (lane < 0 || static_cast<std::size_t>(lane) >= ownedInputLanes_.size()) {
+      return std::nullopt;
+    }
+    std::size_t direction = 0;
+    if (layout && layout->hasDirectionalScratch && (lane == 7 || lane == 15)) {
+      const auto &raw = work.input.hasReplayControl ? work.input : inputs[work.owner].input;
+      if (!raw.hasReplayControl || !replay::isDirectionalScratchControl(raw.replayControl.kind)) {
+        return std::nullopt;
+      }
+      direction = raw.replayControl.kind == replay::LogicalControlKind::ScratchClockwise ? 1 : 2;
+    }
+    return static_cast<std::size_t>(lane) * 3 + direction;
+  };
+  for (const auto &work : gameplayInputWork_) {
+    if (const auto key = keyIndex(work)) latestInputOwners_[*key] = work.owner;
+  }
+  std::erase_if(gameplayInputWork_, [&](const auto &work) {
+    const auto key = keyIndex(work);
+    if (!key || latestInputOwners_[*key] == work.owner) return false;
+    --inputAdmissions_[work.owner].remaining;
+    return true;
+  });
+  bool accepted = true;
+  if (!gameplayInputWork_.empty()) {
+    std::ranges::sort(gameplayInputWork_, {}, [](const auto &work) {
+      const int key = work.input.hasReplayControl &&
+              replay::isDirectionalScratchControl(work.input.replayControl.kind)
+          ? (work.input.replayControl.kind == replay::LogicalControlKind::ScratchClockwise ? 0 : 1)
+          : 0;
+      return std::tuple{work.input.lane, key, work.sequence};
+    });
+    if (!preparation) {
+      accepted = commitAutomaticTransactions(
+          simulation_.beginInputUpdate(sampledInputStates_, context).transactions) &&
+          !simulation_.terminal();
+    }
+    for (const auto &work : gameplayInputWork_) {
+      if (!accepted || fault() != RealtimeGameplayFault::None) break;
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+      processingStartedMicros_ = perf::latency::nowMicros();
+#endif
+      const bool edgeAccepted = processGameplayInput(work.input, work.songTimeMicros, true);
+      auto &admission = inputAdmissions_[work.owner];
+      --admission.remaining;
+      admission.accepted = admission.accepted && edgeAccepted;
+      accepted = edgeAccepted;
+    }
+    if (!preparation && fault() == RealtimeGameplayFault::None) {
+      (void)commitAutomaticTransactions(simulation_.finishInputUpdate(context).transactions);
+    }
+  }
+  for (const auto &work : replayInputWork_) {
+    const auto &admission = inputAdmissions_[work.owner];
+    if (admission.accepted && admission.remaining == 0) {
+      recordAcceptedReplayInput(work.input, work.songTimeMicros);
+    }
+  }
+}
+
+void RealtimeGameplayWorker::observeInputLatency(
+    const RealtimeGameplayInput &input) noexcept {
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   processingStartedMicros_ = perf::latency::nowMicros();
   if (input.ingressTimestampMicros > 0 &&
@@ -327,7 +519,14 @@ void RealtimeGameplayWorker::processInput(
     perf::latency::record(perf::latency::Stage::IngressToWorker,
                          processingStartedMicros_ - input.ingressTimestampMicros);
   }
+#else
+  (void)input;
 #endif
+}
+
+void RealtimeGameplayWorker::processInput(
+    const RealtimeGameplayInput &input) {
+  observeInputLatency(input);
   if (input.epoch != config_.epoch || config_.clock.mapSteadyToSong == nullptr) {
     return;
   }
@@ -504,7 +703,8 @@ RealtimeGameplayWorker::coalesceOwnedInput(
 }
 
 bool RealtimeGameplayWorker::processGameplayInput(
-    const RealtimeGameplayInput &input, std::int64_t songTimeMicros) {
+    const RealtimeGameplayInput &input, std::int64_t songTimeMicros,
+    bool sharedUpdate) {
   const bool preparationInput =
       config_.activationSongTimeMicros.has_value() &&
       songTimeMicros < *config_.activationSongTimeMicros;
@@ -513,11 +713,13 @@ bool RealtimeGameplayWorker::processGameplayInput(
       .laneBeamTimeMicros = input.steadyTimestampMicros,
       .inputDelayMicros = input.inputDelayMicros,
   };
+  const bool scratchKey = sharedUpdate && input.hasReplayControl &&
+      replay::isDirectionalScratchControl(input.replayControl.kind);
+  const bool clockwise = input.replayControl.kind == replay::LogicalControlKind::ScratchClockwise;
 
-  if (!preparationInput) {
-    const auto advanced = simulation_.advanceTo(
-        songTimeMicros - input.inputDelayMicros,
-        input.steadyTimestampMicros);
+  if (!preparationInput && !sharedUpdate) {
+    const auto advanced = simulation_.beginInputUpdate(
+        input.lane, input.type == RealtimeGameplayInputType::Press || input.backSpin, context);
     if (!commitAutomaticTransactions(advanced.transactions)) {
       return false;
     }
@@ -532,9 +734,14 @@ bool RealtimeGameplayWorker::processGameplayInput(
           simulation_.releaseLaneForPreparation(input.lane, context));
     } else {
       const auto batch =
-          simulation_.releaseLane(input.lane, context, input.backSpin);
+          scratchKey ? simulation_.releaseScratchKey(input.lane, clockwise, context)
+                     : simulation_.releaseLane(input.lane, context, input.backSpin);
       for (const auto &transaction : batch.transactions) {
         recordTransaction(transaction);
+      }
+      if (!sharedUpdate && !commitAutomaticTransactions(
+              simulation_.finishInputUpdate(context).transactions)) {
+        return false;
       }
     }
     return true;
@@ -546,8 +753,8 @@ bool RealtimeGameplayWorker::processGameplayInput(
       preparationInput
           ? simulation_.previewPreparationPressSoundNote(
                 input.lane, compensateLane, context)
-          : simulation_.previewPressSoundNote(input.lane, compensateLane,
-                                              context);
+          : (scratchKey ? simulation_.previewScratchPressSoundNote(input.lane, context)
+                        : simulation_.previewPressSoundNote(input.lane, compensateLane, context));
   const bool requiresSound =
       config_.inputTriggeredKeysounds && preview != kInvalidNoteId &&
       definition_.keysoundSource(preview).wav !=
@@ -571,7 +778,8 @@ bool RealtimeGameplayWorker::processGameplayInput(
     recordTransaction(transaction);
   } else {
     const auto batch =
-        simulation_.pressLane(input.lane, compensateLane, context);
+        scratchKey ? simulation_.pressScratchKey(input.lane, clockwise, context)
+                   : simulation_.pressLane(input.lane, compensateLane, context);
     for (const auto &transaction : batch.transactions) {
       if (transaction.soundNoteId == preview) {
         ++previewMatchCount;
@@ -579,6 +787,10 @@ bool RealtimeGameplayWorker::processGameplayInput(
         unexpectedSound = true;
       }
       recordTransaction(transaction);
+    }
+    if (!sharedUpdate && !commitAutomaticTransactions(
+            simulation_.finishInputUpdate(context).transactions)) {
+      return false;
     }
   }
   if (!requiresSound) {

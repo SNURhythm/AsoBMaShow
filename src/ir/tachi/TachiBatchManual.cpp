@@ -84,7 +84,7 @@ bool hasValidStoredProof(const IrOutboxEntry &entry) {
   const auto &proof = entry.rulesetProof;
   return entry.id > 0 && entry.providerId == kProviderId &&
          proof.rulesetId == "lr2" &&
-         proof.rulesetRevision == RulesetDescriptor::kCurrentVersion &&
+         supportsVerifiedLr2Revision(proof.rulesetRevision) &&
          proof.validationFingerprint ==
              file_checksum::sha256(proofFingerprintInput(entry));
 }

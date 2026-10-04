@@ -197,6 +197,171 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
              matched.replayData->resultAttemptId == saved.attemptId,
          "consumer track retains the historical play time for BEST comparisons");
 
+  // Beatoraja keeps arrival order for simultaneous edges. PG then BAD ends
+  // at combo zero; sorting these edges by lane would leave combo one.
+  auto beatoChart = oneNoteChart();
+  auto *beatoTimeline = beatoChart.Measures.front()->TimeLines.front();
+  delete beatoTimeline->Notes[0];
+  beatoTimeline->Notes[0] = nullptr;
+  beatoTimeline->SetNote(1, new bms_parser::Note(1));
+  auto *earlyTimeline = new bms_parser::TimeLine(8, false);
+  earlyTimeline->Timing = 350'000;
+  earlyTimeline->SetNote(0, new bms_parser::Note(1));
+  beatoChart.Measures.front()->TimeLines.insert(
+      beatoChart.Measures.front()->TimeLines.begin(), earlyTimeline);
+  beatoChart.Meta.TotalNotes = 2;
+  auto beatoSaved = saved;
+  auto beatoProof = provenance;
+  beatoProof.chartMeta = beatoChart.Meta;
+  beatoProof.totalNotes = 2;
+  beatoProof.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  beatoProof.effectiveJudgeWindows.clear();
+  beatoProof.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(
+      GameplayRuleset::Beatoraja, beatoChart.Meta.Rank).contexts;
+  beatoSaved.score.provenance = makeScoreProvenance(beatoProof);
+  beatoSaved.score.maxScore = 4;
+  auto beatoReplay = replay;
+  beatoReplay.playback.setup.ruleset = beatoProof.ruleset;
+  beatoReplay.playback.setup.candidateSelection =
+      beatoSaved.score.provenance.stages.front().candidateSelection;
+  beatoReplay.playback.input = {
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1},
+       .pressed = true},
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+       .pressed = true}};
+  const auto beatoTrack = ReplayPlaybackMaterializer::materializeForConsumers(
+      beatoReplay, beatoSaved, beatoChart);
+  expect(beatoTrack.judgedResult && beatoTrack.judgedResult->score.pGreat == 1 &&
+             beatoTrack.judgedResult->score.bad == 1 && beatoTrack.endingCombo == 0,
+         "Beatoraja equal-time inputs retain their recorded arrival order");
+
+  auto scratchChart = oneNoteChart();
+  auto *scratchTimeline = scratchChart.Measures.front()->TimeLines.front();
+  delete scratchTimeline->Notes[0];
+  scratchTimeline->Notes[0] = nullptr;
+  auto *scratchHead = new bms_parser::LongNote(1, bms_parser::LongNoteType::ChargeNote);
+  auto *scratchTail = new bms_parser::LongNote(1, bms_parser::LongNoteType::ChargeNote);
+  scratchHead->Tail = scratchTail;
+  scratchTail->Head = scratchHead;
+  scratchTimeline->SetNote(7, scratchHead);
+  auto *scratchTailTimeline = new bms_parser::TimeLine(8, false);
+  scratchTailTimeline->Timing = 750'000;
+  scratchTailTimeline->SetNote(7, scratchTail);
+  scratchChart.Measures.front()->TimeLines.push_back(scratchTailTimeline);
+  scratchChart.Meta.TotalNotes = 2;
+  auto scratchSaved = saved;
+  auto scratchProof = provenance;
+  scratchProof.chartMeta = scratchChart.Meta;
+  scratchProof.totalNotes = 2;
+  scratchSaved.score.provenance = makeScoreProvenance(scratchProof);
+  scratchSaved.score.maxScore = 4;
+  auto scratchReplay = replay;
+  scratchReplay.playback.input = {
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1, .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1, .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1, .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 750'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1, .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 760'000,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1, .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 770'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1, .lane = -1},
+       .pressed = false}};
+  const auto scratchTrack = ReplayPlaybackMaterializer::materializeForConsumers(
+      scratchReplay, scratchSaved, scratchChart);
+  expect(scratchTrack.judgedResult && scratchTrack.judgedResult->score.pGreat == 2 &&
+             scratchTrack.judgedResult->score.bad == 0,
+         "LR2 latest raw scratch key snapshots ignore transient opposite-key presses");
+
+  scratchHead->SetType(bms_parser::LongNoteType::LongNote);
+  scratchTail->SetType(bms_parser::LongNoteType::LongNote);
+  scratchChart.Meta.TotalNotes = 1;
+  scratchProof.chartMeta = scratchChart.Meta;
+  scratchProof.totalNotes = 1;
+  scratchSaved.score.provenance = makeScoreProvenance(scratchProof);
+  scratchSaved.score.maxScore = 2;
+  scratchReplay.playback.input = {
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1, .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 600'000,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1, .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 760'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1, .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 770'000,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1, .lane = -1},
+       .pressed = false}};
+  const auto classicScratch = ReplayPlaybackMaterializer::materializeForConsumers(
+      scratchReplay, scratchSaved, scratchChart);
+  expect(classicScratch.judgedResult && classicScratch.judgedResult->score.pGreat == 1 &&
+             classicScratch.judgedResult->score.bad == 0,
+         "classic scratch opposite press keeps the held tail pending");
+
+  auto sameKeyBatch = replay;
+  sameKeyBatch.playback.input[1].songTimeMicros = 500'000;
+  const auto latestKey = ReplayPlaybackMaterializer::materializeForConsumers(
+      sameKeyBatch, saved, chart);
+  expect(latestKey.judgedResult && latestKey.judgedResult->score.pGreat == 0 &&
+             latestKey.judgedResult->score.poor == 1,
+         "LR2 equal-time same-key transitions judge only the latest physical state");
+
+  auto historical = replay;
+  auto historicalSaved = saved;
+  historicalSaved.score.provenance.ruleset = {
+      .id = "lr2", .version = 3, .scoringModel = "asobmashow-v1",
+      .judgementModel = "lr2-v1", .gaugeModel = "lr2-gauge-v1"};
+  auto &historicalStage = historicalSaved.score.provenance.stages.front();
+  historicalStage.effectiveGaugeTotal = 0.0;
+  for (auto &window : historicalStage.effectiveJudgeWindows) {
+    if (window.judgement == PGreat) {
+      window.earlyMicros = -1;
+      window.lateMicros = 1;
+    }
+  }
+  historicalStage.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  historical.playback.setup.ruleset = historicalSaved.score.provenance.ruleset;
+  historical.playback.setup.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  historicalSaved.resultFingerprint = result_persistence::modernResultFingerprint(historicalSaved);
+  const auto oldTrack = ReplayPlaybackMaterializer::materializeForConsumers(
+      historical, historicalSaved, chart);
+  expect(oldTrack.playable() && oldTrack.judgedResult && oldTrack.replayData &&
+             oldTrack.judgedResult->score.score == saved.score.score &&
+             oldTrack.replayData->finalGauge == saved.score.finalGauge &&
+             oldTrack.replayData->provenance == historicalSaved.score.provenance &&
+             oldTrack.replayData->playbackRuleset == RulesetDescriptor::Current() &&
+             oldTrack.replayData->playbackPolicy.has_value() &&
+             oldTrack.replayData->playbackPolicy->effectiveGaugeTotal == 200.0 &&
+             oldTrack.replayData->playbackPolicy->candidateSelection ==
+                 gameplay::CandidateSelectionMode::Combo &&
+             oldTrack.replayData->playbackGaugeProfile.has_value(),
+         "historical raw input uses current rules without changing saved provenance");
+
+  auto historicalCourseInput = historical;
+  historicalCourseInput.playback.input.front().songTimeMicros = 580'000;
+  historicalCourseInput.playback.input.back().songTimeMicros = 590'000;
+  const auto historicalCourse = ReplayPlaybackMaterializer::materializeForConsumers(
+      historicalCourseInput, historicalSaved, chart,
+      {.courseJudgement = CourseJudgementConstraint::NoGood,
+       .courseGaugeProfile = GaugeProfile::Course5Keys});
+  expect(historicalCourse.playable() && historicalCourse.judgedResult &&
+             historicalCourse.judgedResult->score.good == 0 &&
+             historicalCourse.judgedResult->score.bad == 1 &&
+             historicalCourse.replayData->playbackGaugeProfile == GaugeProfile::Course5Keys &&
+             historicalCourse.replayData->staleResult,
+         "historical rejudging applies current course judgement and explicit gauge constraints");
+
   auto alteredRateReplay = replay;
   alteredRateReplay.playback.setup.playback = {.percent = 90};
   auto alteredRateSaved = saved;
@@ -315,7 +480,7 @@ void testConcreteMaterializerSettlesExactTimeMineInput() {
     }
     expect(mines == (initiallyPressed ? 0 : 1) &&
                outcome.judgedResult->score.pGreat == 1 &&
-               outcome.judgedResult->score.finalGauge == (initiallyPressed ? 100.0F : 96.0F),
+               outcome.judgedResult->score.finalGauge == 100.0F,
            "materialized replay applies exact-time mine press/release after settling its entire input batch");
   }
 }
@@ -458,13 +623,13 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
 
   std::atomic_bool cancelled = false;
   auto loaded = consumer.load(listed, "selected/chart.bms", cancelled);
-  expect(!loaded.ready() && !loaded.chart && !loaded.replayData &&
-             loaded.state == ChartReplayConsumerState::ResultMismatch &&
+  expect(loaded.ready() && loaded.chart && loaded.replayData &&
+             loaded.state == ChartReplayConsumerState::Ready &&
              loaded.diagnostic ==
                  "Saved result differs from replay judging." &&
              calls == std::vector<std::string>{"context", "prepare",
                                                "materialize"},
-         "saved replay actions reject result drift after one parse and preserve the diagnostic");
+         "saved replay actions accept reproducible result drift and preserve the diagnostic");
 
   incompatibleIdentity = true;
   loaded = consumer.load(listed, "selected/chart.bms", cancelled);
@@ -905,8 +1070,8 @@ void testAbortedRawReplayReconstructsFailureWithoutTrustingSummary() {
                    outcome.judgedResult->score.poor == (midway ? 1 : 2) &&
                    outcome.judgedResult->score.comboBreak == (midway ? 1 : 2),
                "COR02: reconstructed abort accounts every remaining note exactly once");
-        expect(!outcome.playable(),
-               "COR02: forged terminal outcome cannot become an accepted consumer track");
+        expect(outcome.playable() && outcome.replayData->staleResult,
+               "COR02: reproducible terminal drift is playable with a stale result");
         if (outcome.judgedResult) {
           const auto accepted = ReplayPlaybackMaterializer::materializeForConsumers(
               raw, *outcome.judgedResult, chart, 128);
@@ -916,8 +1081,8 @@ void testAbortedRawReplayReconstructsFailureWithoutTrustingSummary() {
           raw.timeBounds.aborted = false;
           const auto forgedFlag = ReplayPlaybackMaterializer::materializeForConsumers(
               raw, *outcome.judgedResult, chart, 128);
-          expect(!forgedFlag.playable(),
-                 "COR02: removing abort evidence cannot admit a different terminal outcome");
+          expect(forgedFlag.playable() && forgedFlag.replayData->staleResult,
+                 "COR02: changed terminal evidence exposes recomputed stale facts");
         }
       }
     }
