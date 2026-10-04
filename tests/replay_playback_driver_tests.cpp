@@ -542,6 +542,101 @@ void testHeldClassicReplayMatchesLiveJudgementAndBestGhost() {
   }
 }
 
+void testClassicReplayCompletionPreservesOtherLaneMineInput() {
+  for (const bool initiallyPressed : {false, true}) {
+    auto chart = oneNoteChart();
+    chart.Meta.TotalLongNotes = 1;
+    auto *headTimeline = chart.Measures.front()->TimeLines.front();
+    delete headTimeline->Notes[0];
+    auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote);
+    auto *tail = new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote);
+    head->Tail = tail;
+    tail->Head = head;
+    headTimeline->SetNote(0, head);
+    auto *tailTimeline = new bms_parser::TimeLine(8, false);
+    tailTimeline->Timing = 750'000;
+    tailTimeline->SetNote(0, tail);
+    chart.Measures.front()->TimeLines.push_back(tailTimeline);
+    auto *mineTimeline = new bms_parser::TimeLine(8, false);
+    mineTimeline->Timing = 750'001;
+    mineTimeline->SetLandmineNote(1, new bms_parser::LandmineNote(10.0F));
+    chart.Measures.front()->TimeLines.push_back(mineTimeline);
+
+    ScoreProvenanceBuildInput input;
+    input.chartMeta = chart.Meta;
+    input.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+    input.gaugeType = GaugeType::Hard;
+    input.longNoteMode = 1;
+    input.sourceJudgeRank = chart.Meta.Rank;
+    input.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(
+        GameplayRuleset::LR2, chart.Meta.Rank).contexts;
+    input.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+    input.totalNotes = 1;
+    input.authoredGaugeTotal = 200.0;
+    input.effectiveGaugeTotal = 200.0;
+    input.inputDevices = {InputDeviceCategory::Keyboard};
+    const auto provenance = makeScoreProvenance(input);
+    const auto policy = gameplay::buildGameplayRulesetPolicy(
+        chart.Meta, {.ruleset = GameplayRuleset::LR2});
+    expect(policy.built(), "mine interaction fixture has a valid live policy");
+    if (!policy.built()) continue;
+    const auto definition = gameplay::buildGameplayDefinition(chart, 1);
+    gameplay::GameplaySimulation live(definition,
+        {.judge = policy.policy->judge, .gaugeRules = policy.policy->gauge,
+         .attempt = {.initialGaugeType = GaugeType::Hard}});
+    auto replay = document();
+    replay.timeBounds = {.completionSongTimeMicros = 2'000'000};
+    replay.playback.setup.ruleset = provenance.ruleset;
+    replay.playback.setup.candidateSelection = input.candidateSelection;
+    replay.playback.setup.initialGaugeType = GaugeType::Hard;
+    replay.playback.input.clear();
+    if (initiallyPressed) {
+      live.applyPressAt(1, 1, {.songTimeMicros = 400'000,
+                              .laneBeamTimeMicros = 400'000});
+      replay.playback.input.push_back({.songTimeMicros = 400'000,
+          .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1},
+          .pressed = true});
+    }
+    live.applyPressAt(0, 0, {.songTimeMicros = 500'000,
+                            .laneBeamTimeMicros = 500'000});
+    replay.playback.input.push_back({.songTimeMicros = 500'000,
+        .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+        .pressed = true});
+    // The next live update samples the new physical state before the mine
+    // passes. Catching up the LN must not insert a mine update before this.
+    live.advanceTo(750'000, 750'000);
+    const gameplay::GameplayInputContext nextUpdate{
+        .songTimeMicros = 750'002, .laneBeamTimeMicros = 750'002};
+    if (initiallyPressed) live.applyReleaseAt(1, nextUpdate);
+    else live.applyPressAt(1, 1, nextUpdate);
+    replay.playback.input.push_back({.songTimeMicros = 750'002,
+        .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1},
+        .pressed = !initiallyPressed});
+    live.advanceTo(2'000'000, 2'000'000);
+    RhythmState state(&chart, false, GameplayRuleset::LR2);
+    static_cast<GameplayScoreState &>(state) = live.scoreState();
+    std::string diagnostic;
+    const auto saved = result_persistence::captureModernChartResult(
+        "123e4567-e89b-42d3-a456-426614174000", chart.Meta, state,
+        provenance, 1, 1'700'000'000'123LL, diagnostic);
+    expect(saved && saved->score.score == 2 &&
+               (initiallyPressed ? saved->score.finalGauge == 100.0F
+                                 : saved->score.finalGauge < 91.0F),
+           "live mine judges the incoming physical state while the LN completes");
+    if (!saved) continue;
+    const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(
+        replay, *saved, chart);
+    expect(loaded.matched() && loaded.replayData &&
+               loaded.replayData->finalGauge == saved->score.finalGauge,
+           "classic tail catch-up preserves live mine judgement and gauge");
+    if (!loaded.replayData) continue;
+    const auto mines = std::ranges::count_if(loaded.replayData->events,
+        [](const auto &event) { return event.action == ReplayEventAction::Mine; });
+    expect(mines == (initiallyPressed ? 0 : 1),
+           "classic tail catch-up neither inserts nor swallows other-lane mines");
+  }
+}
+
 void testConcreteMaterializerSettlesExactTimeMineInput() {
   for (bool initiallyPressed : {false, true}) {
     auto chart = oneNoteChart();
@@ -1252,6 +1347,7 @@ void testEmptyAbortDriverUsesConfiguredPreRoll() {
 }
 
 int main() {
+  testClassicReplayCompletionPreservesOtherLaneMineInput();
   testHeldClassicReplayMatchesLiveJudgementAndBestGhost();
   testConcreteMaterializerSettlesExactTimeMineInput();
   testEmptyAbortDriverUsesConfiguredPreRoll();
