@@ -6340,6 +6340,9 @@ void MainMenuScene::stopReplayLoadWorker() {
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
+  // Mode finalization can demote malformed holds. A later launch with another
+  // LN mode must reparse, including while the resume preview is still loading.
+  selectedChartReusableForStart.store(false);
   if (options.replayData == nullptr) {
     options.clubMode = context.settings.gameplayClubModeEnabled;
   }

@@ -1793,12 +1793,17 @@ void testDetachedPartnerCannotReplaceActiveReplayPresentationIdentity() {
   bms_parser::Parser parser;
   std::atomic_bool cancelled = false;
   bms_parser::Chart *raw = nullptr;
-  const std::string text = "#BPM 120\n#00051:0101\n#00011:02\n";
+  const std::string text = "#BPM 120\n#00051:0101\n";
   parser.Parse(std::vector<unsigned char>(text.begin(), text.end()),
                &raw, false, false, cancelled);
   std::unique_ptr<bms_parser::Chart> parsed(raw);
-  expect(parsed && !parsed->DetachedNotes.empty(), "fixture has a detached head");
+  expect(parsed != nullptr, "legacy pair fixture parses");
   if (!parsed) return;
+  // Preserve coverage of externally constructed legacy graphs independently
+  // of the parser's new orphan-tail demotion policy.
+  auto *timeline = parsed->Measures.front()->TimeLines.front();
+  parsed->DetachedNotes.emplace_back(timeline->Notes[0]);
+  timeline->SetNote(0, new bms_parser::Note(2));
   parsed->Meta.LnMode = 1;
   AppSettings settings;
   PlayfieldPresentationConfig configuration;

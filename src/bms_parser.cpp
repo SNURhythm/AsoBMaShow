@@ -3979,6 +3979,7 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
     // predecessor and any timeline rounded onto the next bar, not the chart.
     auto futureState = javaTimelines.lower_bound(measureBeatPosition);
     for (auto it = javaTimelines.begin(); it != futureState; ++it) {
+      parsedNotes.observeTimeline(it->first, javaLong(it->second.time));
       minBpm = std::min(minBpm, it->second.bpm);
       maxBpm = std::max(maxBpm, it->second.bpm);
     }
@@ -4005,6 +4006,8 @@ void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **char
                    .count()
             << "\n";
 #endif
+  for (const auto &[section, state] : javaTimelines)
+    parsedNotes.observeTimeline(section, javaLong(state.time));
   parsedNotes.finish(*new_chart, materialize);
   for (const auto &[section, state] : javaTimelines) {
     minBpm = std::min(minBpm, state.bpm);
@@ -4592,6 +4595,29 @@ TimeLine *TimeLine::SetNote(int lane, Note *note) {
   note->Lane = lane;
   note->Timeline = this;
   return this;
+}
+
+Note *TimeLine::DemoteUnusableLongNote(int lane, LongNoteType resolvedType) {
+  auto *ln = dynamic_cast<LongNote *>(Notes.at(lane));
+  if (!ln) return Notes[lane];
+  auto *partner = ln->IsTail() ? ln->Head : ln->Tail;
+  const bool reciprocal = partner &&
+      (ln->IsTail() ? partner->Tail == ln : partner->Head == ln);
+  const bool active = partner && partner->Timeline && partner->Lane >= 0 &&
+      static_cast<size_t>(partner->Lane) < partner->Timeline->Notes.size() &&
+      partner->Timeline->Notes[partner->Lane] == partner;
+  if (reciprocal && (active || (!ln->IsTail() &&
+      (resolvedType == LongNoteType::LongNote || resolvedType == LongNoteType::Undefined))))
+    return ln;
+  // Allocate before mutating ownership so allocation failure leaves the graph intact.
+  auto *normal = new Note(*ln);
+  if (partner) {
+    if (partner->Head == ln) partner->Head = nullptr;
+    if (partner->Tail == ln) partner->Tail = nullptr;
+  }
+  Notes[lane] = normal;
+  delete ln;
+  return normal;
 }
 
 TimeLine *TimeLine::SetInvisibleNote(int lane, Note *note) {

@@ -2841,7 +2841,7 @@ void testExtremeTimelineDeadlinesDoNotWrapIntoThePast() {
   }
 }
 
-void testDefinitionPreservesReferenceUnpairedHead() {
+void testDefinitionUsesDemotedNormalNote() {
   const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
   bms_parser::Parser parser;
   bms_parser::Chart *raw = nullptr;
@@ -2849,12 +2849,40 @@ void testDefinitionPreservesReferenceUnpairedHead() {
   parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
                &raw, false, false, cancelled);
   const std::unique_ptr<bms_parser::Chart> chart(raw);
-  require(chart && chart->Meta.TotalNotes == 1, "reference decoder accepts an unpaired head");
+  require(chart && chart->Meta.TotalNotes == 1, "parser demotes an unpaired head");
   const auto definition = gameplay::buildGameplayDefinition(*chart, 1);
   require(definition.noteCount() == 1 &&
-              definition.note(0).kind == gameplay::NoteKind::LongHead &&
+              definition.note(0).kind == gameplay::NoteKind::Normal &&
               definition.note(0).pairId == gameplay::kInvalidNoteId,
-          "definition retains the reference graph without a graph admission policy");
+          "definition sees a normal note with no pair");
+  gameplay::GameplaySimulation simulation(definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+       .attempt = {.autoPlay = true}});
+  (void)simulation.advanceTo(2'000'000, 2'000'000);
+  require(simulation.snapshot().judgeCounts[PGreat] == 1,
+          "demoted normal note receives an ordinary autoplay judgement");
+}
+
+void testSelectedModeFinalizesMalformedHold() {
+  for (const int mode : {1, 2, 3}) {
+    const std::string input = "#BPM 120\n#00151:0101\n#00111:0002\n";
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(std::vector<unsigned char>(input.begin(), input.end()),
+                 &raw, false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> chart(raw);
+    applyEffectiveLongNoteModeToChart(*chart, mode);
+    require(chart->Meta.TotalNotes == 2 && chart->Meta.TotalLongNotes == (mode == 1 ? 1 : 0),
+            "chosen mode preserves healthy classic hold and demotes unusable CN/HCN");
+    const auto definition = gameplay::buildGameplayDefinition(*chart, mode);
+    gameplay::GameplaySimulation simulation(definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
+         .attempt = {.autoPlay = true}});
+    (void)simulation.advanceTo(4'000'000, 4'000'000);
+    require(simulation.snapshot().judgeCounts[PGreat] == 2,
+            "both active scoring notes remain legally judgeable after finalization");
+  }
 }
 
 void testParsedExtremeTimingRemainsSafeAfterNegativePreroll() {
@@ -2952,7 +2980,8 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
-  testDefinitionPreservesReferenceUnpairedHead();
+  testDefinitionUsesDemotedNormalNote();
+  testSelectedModeFinalizesMalformedHold();
   testParsedExtremeTimingRemainsSafeAfterNegativePreroll();
   testExtremeTimelineDeadlinesDoNotWrapIntoThePast();
   testDetachedLongNotePartnersFollowReferenceTraversal();

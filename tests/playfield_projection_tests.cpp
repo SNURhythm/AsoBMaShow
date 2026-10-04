@@ -964,7 +964,7 @@ bool testConstantOpacityDoesNotWrapNearMaximumTime() {
   return result.notes.size() == 1 && result.notes.front().opacity == 1.0;
 }
 
-bool testDetachedPairsRenderOnlyFromActiveHeads() {
+bool testMalformedLongNotesRenderAsNormal() {
   for (const bool detachHead : {false, true}) {
     const std::string input = std::string("#BPM 120\n#00051:0101\n#00011:") +
                               (detachHead ? "02\n" : "0002\n");
@@ -974,17 +974,15 @@ bool testDetachedPairsRenderOnlyFromActiveHeads() {
     std::atomic_bool cancelled{false};
     parser.Parse(bytes, &raw, false, false, cancelled);
     std::unique_ptr<bms_parser::Chart> chart(raw);
-    if (!chart || chart->DetachedNotes.size() != 1) return false;
+    if (!chart || !chart->DetachedNotes.empty()) return false;
     const auto model = buildPlayfieldChartVisualModel(*chart, 1);
     PlayfieldVisualState state;
     state.clock = {.serial = 1, .visualTimeMicros = 0};
     PlayfieldProjection projection;
     const auto result = projection.project(model, state,
         {.visibleScrollBefore = 2.0, .visibleScrollAfter = 2.0});
-    if (result.longNotes.size() != (detachHead ? 0U : 1U) ||
-        result.builtInPlan.longNotes.size() != (detachHead ? 0U : 1U) ||
-        result.notes.size() != 1) return false;
-    if (!detachHead && result.longNotes.front().tailTimeMicros != 1'000'000) return false;
+    if (!result.longNotes.empty() || !result.builtInPlan.longNotes.empty() ||
+        result.notes.size() != 2) return false;
   }
   return true;
 }
@@ -994,8 +992,8 @@ int main() {
     std::cerr << "constant visibility offsets must saturate near maximum time\n";
     return EXIT_FAILURE;
   }
-  if (!testDetachedPairsRenderOnlyFromActiveHeads()) {
-    std::cerr << "detached LN rendering must follow direct Java head-pair traversal\n";
+  if (!testMalformedLongNotesRenderAsNormal()) {
+    std::cerr << "malformed LN endpoints must render as normal notes\n";
     return EXIT_FAILURE;
   }
   if (!testRealtimeHcnProjectionDerivesActivityFromClockAndLane()) {

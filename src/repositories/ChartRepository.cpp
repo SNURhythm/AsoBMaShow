@@ -30,7 +30,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 13;
+constexpr int kChartDatabaseSchemaVersion = 14;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -801,6 +801,9 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {13, "refresh parser semantic metadata", [](sqlite3 *db, bool &completed) {
          // Ordinary files and unchanged archives otherwise keep counts, key
          // modes and timing produced by an older parser indefinitely.
+         return invalidateChartMetadataForNormalScan(db, completed, true);
+       }},
+      {14, "refresh malformed long-note counts", [](sqlite3 *db, bool &completed) {
          return invalidateChartMetadataForNormalScan(db, completed, true);
        }},
   };

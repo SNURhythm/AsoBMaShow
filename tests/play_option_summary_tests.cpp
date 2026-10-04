@@ -49,7 +49,7 @@ void testSyntheticChartOwnership() {
   }
 }
 
-void testDetachedPairsFollowModifiedActiveLane() {
+void testDemotedNotesFollowModifiedActiveLane() {
   for (const std::string option : {"MIRROR", "RANDOM"}) {
     for (const bool detachHead : {false, true}) {
       const std::string input = std::string("#BPM 120\n#00051:0101\n#00011:") +
@@ -60,25 +60,26 @@ void testDetachedPairsFollowModifiedActiveLane() {
       std::atomic_bool cancelled{false};
       parser.Parse(bytes, &raw, false, false, cancelled);
       std::unique_ptr<bms_parser::Chart> chart(raw);
-      assert(chart && chart->DetachedNotes.size() == 1);
-      auto *detached = static_cast<bms_parser::LongNote *>(chart->DetachedNotes.front().get());
-      auto *active = detachHead ? detached->Tail : detached->Head;
-      const auto *timeline = detached->Timeline;
-      const int count = chart->Meta.TotalNotes;
+      assert(chart && chart->DetachedNotes.empty() && chart->Meta.TotalNotes == 2);
       std::optional<std::string> applied;
       std::optional<long long> seed;
       assert(play_options::applyPlayOptionModifier(*chart, option, 123, 0, applied, seed));
-      assert(detached->Lane == active->Lane && detached->Timeline == timeline &&
-             chart->Meta.TotalNotes == count);
-      assert(detachHead ? detached->Tail == active && active->Head == detached
-                        : detached->Head == active && active->Tail == detached);
-      if (option == "MIRROR") assert(active->Lane != 0);
+      int notes = 0;
+      for (const auto *measure : chart->Measures)
+        for (const auto *timeline : measure->TimeLines)
+          for (const auto *note : timeline->Notes) if (note) {
+            assert(dynamic_cast<const bms_parser::LongNote *>(note) == nullptr);
+            if (option == "MIRROR") assert(note->Lane != 0);
+            ++notes;
+          }
+      assert(notes == 2 && chart->Meta.TotalNotes == 2);
+
     }
   }
 }
 
 int main() {
-  testDetachedPairsFollowModifiedActiveLane();
+  testDemotedNotesFollowModifiedActiveLane();
   for (int keyMode : {7, 14}) {
     bms_parser::ChartMeta meta;
     meta.KeyMode = keyMode;

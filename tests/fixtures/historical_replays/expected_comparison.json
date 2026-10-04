@@ -699,20 +699,15 @@
   },
   {
     "case": "orphan",
-    "admitted": false,
-    "diagnostic": "Invalid long-note chart: an endpoint has no partner."
-  },
-  {
-    "case": "detached_head",
     "admitted": true,
     "identityMatch": true,
     "randomSetupMatch": true,
     "lookup": [
-      2,
-      2
+      1,
+      1
     ],
     "notesEqual": false,
-    "ghostEqual": true,
+    "ghostEqual": false,
     "keysoundsEqual": true,
     "resultMatched": false,
     "fingerprintEqual": false,
@@ -723,30 +718,26 @@
         [
           0,
           0,
-          2,
+          1,
           0,
           4294967295
-        ],
-        [
-          0,
-          1000000,
-          -1,
-          2,
-          2
         ]
       ],
-      "lookupAddressed": 2,
-      "lookupMatched": 2,
-      "ghost": [],
+      "lookupAddressed": 1,
+      "lookupMatched": 1,
+      "ghost": [
+        0,
+        0
+      ],
       "keysounds": [
         [
           0,
-          2
+          1
         ]
       ]
     },
     "diagnostic": "score outcome facts differ",
-    "judgedFingerprint": "00115a97790e27a30538048cb785e3f84922dbe36883d981950c0e9cd6ac5fa0",
+    "judgedFingerprint": "f44550020da8a94741f6c4f424d01a53b6df1b4c3002b02e48f056b0d7a669cd",
     "judgedFacts": [
       2,
       2,
@@ -766,6 +757,73 @@
     "savedPlaybackReady": false
   },
   {
+    "case": "detached_head",
+    "admitted": true,
+    "identityMatch": true,
+    "randomSetupMatch": true,
+    "lookup": [
+      2,
+      2
+    ],
+    "notesEqual": false,
+    "ghostEqual": false,
+    "keysoundsEqual": true,
+    "resultMatched": false,
+    "fingerprintEqual": false,
+    "currentObservations": {
+      "keyMode": 5,
+      "totalNotes": 2,
+      "notes": [
+        [
+          0,
+          0,
+          2,
+          0,
+          4294967295
+        ],
+        [
+          0,
+          1000000,
+          -1,
+          0,
+          4294967295
+        ]
+      ],
+      "lookupAddressed": 2,
+      "lookupMatched": 2,
+      "ghost": [
+        0,
+        2,
+        2
+      ],
+      "keysounds": [
+        [
+          0,
+          2
+        ]
+      ]
+    },
+    "diagnostic": "score outcome facts differ",
+    "judgedFingerprint": "a98bdc193632b079175d47f80cf025a108d93186d53b839cc2832e3b42ffb1fa",
+    "judgedFacts": [
+      2,
+      4,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      300
+    ],
+    "consumerIdentityCompatible": true,
+    "savedPlaybackReady": false
+  },
+  {
     "case": "detached_tail",
     "admitted": true,
     "identityMatch": true,
@@ -775,7 +833,7 @@
       2
     ],
     "notesEqual": false,
-    "ghostEqual": true,
+    "ghostEqual": false,
     "keysoundsEqual": true,
     "resultMatched": false,
     "fingerprintEqual": false,
@@ -787,8 +845,8 @@
           0,
           0,
           1,
-          1,
-          2
+          0,
+          4294967295
         ],
         [
           0,
@@ -800,7 +858,11 @@
       ],
       "lookupAddressed": 2,
       "lookupMatched": 2,
-      "ghost": [],
+      "ghost": [
+        0,
+        0,
+        2
+      ],
       "keysounds": [
         [
           0,
@@ -812,24 +874,24 @@
         ]
       ]
     },
-    "diagnostic": "Replay playback cannot represent a detached long-note endpoint. The original replay and saved result are unchanged.",
-    "judgedFingerprint": "47bdcf821eeccc2ee6a492903c367e8cda54145efdc110f8628e1b78ecdf3423",
+    "diagnostic": "score outcome facts differ",
+    "judgedFingerprint": "9e33cf39dafceeebeabcf2fada0e74c814f9570a02395a0919b110727f1aee56",
     "judgedFacts": [
-      2,
       4,
-      1,
-      1,
-      1,
+      4,
+      2,
+      0,
+      2,
       0,
       0,
-      1,
       0,
       0,
-      1,
+      0,
+      0,
       0,
       300
     ],
-    "consumerIdentityCompatible": false,
+    "consumerIdentityCompatible": true,
     "savedPlaybackReady": false
   },
   {

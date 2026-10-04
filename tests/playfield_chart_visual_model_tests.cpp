@@ -421,7 +421,10 @@ bool testLongNoteGraphsPreserveReferencePairTraversal() {
     }
     return false;
   };
-  if (!rejects(*chart) || chart->Meta.TotalNotes != 1) return false;
+  const auto normalized = buildPlayfieldChartVisualModel(*chart, 1);
+  if (normalized.notes.size() != 1 ||
+      normalized.notes.front().kind != ChartVisualNoteKind::Normal ||
+      normalized.staticMetadata.longKeyNotes != 0) return false;
 
   bms_parser::Chart paired;
   auto *measure = new bms_parser::Measure();

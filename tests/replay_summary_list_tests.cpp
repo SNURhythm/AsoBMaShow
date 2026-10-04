@@ -131,31 +131,26 @@ bool testContinuingAutoShiftReplayHasNoGaugeCutoff() {
   return passed;
 }
 
-bool testAutoPlayDetachedLongNoteTraversal() {
-  for (const int mode : {1, 2, 3}) {
+bool testAutoPlaySelectiveLongNotes() {
+  for (const int startMeasure : {0, 1}) for (const int mode : {1, 2, 3}) {
     for (const bool detachHead : {false, true}) {
       bms_parser::Parser parser;
       bms_parser::Chart *raw = nullptr;
       std::atomic_bool cancelled = false;
-      const std::string text = std::string("#BPM 120\n#00051:0101\n#00011:") +
+      const std::string measure = startMeasure == 0 ? "000" : "001";
+      const std::string text = "#BPM 120\n#" + measure + "51:0101\n#" + measure + "11:" +
           (detachHead ? "02\n" : "0002\n");
       parser.Parse(std::vector<unsigned char>(text.begin(), text.end()),
                    &raw, false, false, cancelled);
       std::unique_ptr<bms_parser::Chart> chart(raw);
-      if (!chart || chart->DetachedNotes.empty()) return false;
+      if (!chart) return false;
       applyEffectiveLongNoteModeToChart(*chart, mode);
       const auto replay = replay_autoplay::BuildReplayData(
           *chart, GaugeType::Normal, GaugeAutoShiftMode::None);
-      const bool classic = mode == 1;
-      const int expectedScore = classic && detachHead ? 2 : 4;
-      const std::size_t expectedEvents = classic ? (detachHead ? 2 : 4) : 3;
-      const bool representable = !(classic && !detachHead);
-      if (replay.finalScore != expectedScore ||
-          replay.events.size() != expectedEvents ||
+      const bool representable = !(startMeasure == 1 && mode == 1 && !detachHead);
+      if (replay.finalScore != 4 || replay.events.size() != 4 ||
           replay.consumerIdentityCompatible != representable) {
-        std::cerr << "synthetic autoplay follows active CN endpoints and the "
-                     "held classic pair, preserving detached event admission "
-                  << "(mode " << mode << ", detached head " << detachHead << ")\n";
+        std::cerr << "demoted notes must produce ordinary, replayable judgements\n";
         return false;
       }
       if (!std::is_sorted(replay.events.begin(), replay.events.end(),
@@ -165,6 +160,7 @@ bool testAutoPlayDetachedLongNoteTraversal() {
         std::cerr << "synthetic autoplay applies scoring in event time order\n";
         return false;
       }
+
       if (!representable) {
         auto liveState = replay_result::BuildInitialGaugeState(*chart, replay);
         liveState.gaugeHistory = {20.0f, 40.0f, 60.0f};
@@ -196,9 +192,8 @@ bool testAutoPlayDetachedLongNoteTraversal() {
 }
 } // namespace
 
-bool testAutoPlayUnpairedHeadKeepsReferenceHeadEvent() {
-  // JudgeManager.java:258-270 emits the head press and assigns getPair()
-  // to processing. A null pair cannot create a later release event.
+bool testAutoPlayDemotedUnpairedHead() {
+  // The parser now exposes this surviving endpoint as an ordinary normal note.
   const std::string input = "#BPM 120\n#00002:5e-324\n#00151:01\n";
   bms_parser::Parser parser;
   bms_parser::Chart *raw = nullptr;
@@ -209,16 +204,16 @@ bool testAutoPlayUnpairedHeadKeepsReferenceHeadEvent() {
   if (!chart || chart->Meta.TotalNotes != 1) return false;
   const auto replay = replay_autoplay::BuildReplayData(
       *chart, GaugeType::Normal, GaugeAutoShiftMode::None);
-  return replay.events.size() == 1 &&
+  return replay.events.size() == 2 &&
          replay.events.front().action == ReplayEventAction::Press &&
-         replay.finalScore == 0 && chart->Meta.TotalNotes == 1;
+         replay.finalScore == 2 && chart->Meta.TotalNotes == 1;
 }
 
 int main() {
-  if (!testAutoPlayUnpairedHeadKeepsReferenceHeadEvent()) return 1;
+  if (!testAutoPlayDemotedUnpairedHead()) return 1;
   const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
   const bool continuingAutoShift = testContinuingAutoShiftReplayHasNoGaugeCutoff();
-  const bool detachedAutoPlay = testAutoPlayDetachedLongNoteTraversal();
+  const bool detachedAutoPlay = testAutoPlaySelectiveLongNotes();
   if (!recoveredPmsResult || !continuingAutoShift || !detachedAutoPlay) return 1;
 
   ReplaySummary summary;
@@ -985,7 +980,7 @@ int main() {
   detachedParser.Parse(std::vector<unsigned char>(detachedText.begin(), detachedText.end()),
                        &rawDetached, false, false, cancelled);
   std::unique_ptr<bms_parser::Chart> detached(rawDetached);
-  if (!detached || detached->DetachedNotes.empty()) return 1;
+  if (!detached || !detached->DetachedNotes.empty()) return 1;
   detached->Meta.LnMode = 1;
   ReplayData detachedReplay;
   detachedReplay.events = {{.action = ReplayEventAction::Press,

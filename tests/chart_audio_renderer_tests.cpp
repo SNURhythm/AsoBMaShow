@@ -333,19 +333,19 @@ void testReferenceChartAdmission(const std::filesystem::path &root) {
   std::atomic_bool cancelled{false};
   std::string diagnostic;
   const auto fromPath = play_options::parseChart(source, cancelled, "reference fixture", &diagnostic);
-  expect(fromPath && fromPath->Meta.TotalNotes == 1 && diagnostic.empty(),
-         "filesystem parser adapter retains the reference's accepted unpaired LN");
+  expect(fromPath && fromPath->Meta.TotalNotes == 1 && fromPath->Meta.TotalLongNotes == 0 && diagnostic.empty(),
+         "filesystem parser adapter accepts the demoted normal note");
   const auto fromBytes = play_options::parseChartBytes(source, bytes, std::nullopt,
               std::nullopt, std::nullopt, cancelled, "reference fixture", &diagnostic);
-  expect(fromBytes && fromBytes->Meta.TotalNotes == 1 && diagnostic.empty(),
-         "buffered parser adapter retains the reference's accepted unpaired LN");
+  expect(fromBytes && fromBytes->Meta.TotalNotes == 1 && fromBytes->Meta.TotalLongNotes == 0 && diagnostic.empty(),
+         "buffered parser adapter accepts the demoted normal note");
 
   bms_parser::Parser parser;
   bms_parser::Chart *raw = nullptr;
   parser.Parse(bytes, &raw, false, false, cancelled);
   const std::unique_ptr<bms_parser::Chart> chart(raw);
   expect(chart && chart->Meta.TotalNotes == 1,
-         "raw parser retains the accepted unmatched head and its metadata");
+         "raw parser demotes the unmatched head and retains its metadata");
   if (!chart) return;
   for (const int mode : {1, 2, 3}) {
     try {
@@ -355,11 +355,25 @@ void testReferenceChartAdmission(const std::filesystem::path &root) {
       expect(modeChart != nullptr, "each LN mode starts with the reference graph");
       if (!modeChart) continue;
       applyEffectiveLongNoteModeToChart(*modeChart, mode);
-      expect(modeChart->Meta.LnMode == mode && modeChart->Meta.TotalNotes == 1,
-             "reference note counting does not require an LN partner");
+      expect(modeChart->Meta.TotalNotes == 1 && modeChart->Meta.TotalLongNotes == 0,
+             "demoted normal note counts are independent of selected LN mode");
     } catch (const std::exception &) {
       expect(false, "LN mode preparation must not add graph admission rules");
     }
+  }
+  for (const int mode : {1, 2, 3}) {
+    const std::string late = "#BPM 120\n#00151:0101\n#00111:0002\n";
+    auto selected = play_options::parseChartBytes(source, {late.begin(), late.end()},
+        std::nullopt, std::nullopt, std::nullopt, cancelled, "selected LN mode");
+    expect(selected && selected->Meta.TotalLongNotes == 1,
+           "undefined mode initially retains healthy classic detached-tail head");
+    if (!selected) continue;
+    applyEffectiveLongNoteModeToChart(*selected, mode);
+    expect(selected->Meta.TotalNotes == 2 && selected->Meta.TotalLongNotes == (mode == 1 ? 1 : 0),
+           "selected CN/HCN mode finalizes unusable hold as normal in parser library");
+    applyEffectiveLongNoteModeToChart(*selected, mode);
+    expect(selected->Meta.TotalNotes == 2 && selected->Meta.TotalLongNotes == (mode == 1 ? 1 : 0),
+           "repeated mode finalization is idempotent");
   }
   const auto output = root / "unsupported-chart.wav";
   writeText(output, "preserved output");
@@ -391,16 +405,16 @@ void testReferenceChartAdmission(const std::filesystem::path &root) {
         {detached.begin(), detached.end()}, std::nullopt, std::nullopt,
         std::nullopt, cancelled, "detached fixture", &diagnostic);
     expect(fromPath && fromBytes && diagnostic.empty() &&
-               fromPath->DetachedNotes.size() == 1 &&
-               fromBytes->DetachedNotes.size() == 1,
-           "path and buffered preparation preserve detached LN partners");
+               fromPath->DetachedNotes.empty() &&
+               fromBytes->DetachedNotes.empty(),
+           "path and buffered preparation demote malformed LN endpoints");
     if (fromPath) {
       const auto notes = fromPath->Meta.TotalNotes;
       const auto rendered = guardedRender(*fromPath,
           audioFixture->Meta.Folder / "detached.wav");
       expect(rendered.success && fromPath->Meta.TotalNotes == notes &&
-                 fromPath->DetachedNotes.size() == 1,
-             "audio export supports detached partners without changing the graph");
+                 fromPath->DetachedNotes.empty(),
+             "audio export preserves parser-demoted normal notes");
     }
   }
 }

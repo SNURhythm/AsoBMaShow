@@ -1,8 +1,53 @@
 # BMS parser consumer contract handoff — 2026-10-04
 
-## Application adoption and final compatibility policy
+## Current selective malformed-LN policy
 
-This section supersedes the historical status below. The application adopts
+The application adopts parser revision `fc7f84f0ecb94be7a7b17bf20e1dd52346029d58`, including both
+amalgamated artifacts generated and tested upstream. This supersedes the
+unchanged-graph policy in the historical adoption notes below.
+
+Beatoraja's discards remain unchanged. Surviving null-pair heads and tails with
+no active head become normal notes. CN/HCN heads with detached tails also become
+normal notes because reference autoplay/miss processing cannot finish normally;
+HCN additionally misses its passage-state reset. A healthy classic head retains
+its detached tail. Classic holds corrupted by beatoraja's standard startup
+shift, or having no positive time/section span, become normal notes.
+
+Demotion preserves decoded lane, timing and WAV, and costs O(1) per endpoint.
+Full/Scan/metadata-only results agree. There is no blanket chart rejection or
+extra chart-wide repair scan. The complete source evidence and parser checks
+are recorded in upstream `docs/audits/2026-10-04-malformed-long-note-policy.md`.
+
+For undefined LNs whose player-selected mode becomes known later,
+`applyEffectiveLongNoteModeToChart` calls the parser library's
+`TimeLine::DemoteUnusableLongNote` in the existing count pass. This happens before
+building gameplay/visual models. The slot can be replaced/deleted, so callers
+use the returned pointer; detached ownership is retained with its link cleared.
+Changing modes requires a fresh parse. MainMenu clears its reusable-chart flag
+on gameplay handoff so a fast return/relaunch cannot reuse an already-demoted
+chart while the replacement preview is still loading.
+
+Schema 14 invalidates old ordinary/archive metadata for the normal resumable
+rescan, preserving added dates. Historical replay payloads and mismatch guards
+remain intact. Only the current comparison expectations changed for the three
+malformed fixtures: orphan, detached head and detached tail now use normal-note
+graphs and still report saved-result mismatches. Their archived JSON, BRD,
+SQLite data, chart bytes and immutable manifest were not changed. The user's
+application push hold still applies; no deployment is included.
+
+Validation: the full application build and all 420 CTest tests pass. Visual,
+projection and gameplay consumer suites also pass with ASan/UBSan. Upstream
+parser tests and amalgamation checks pass, and the selective-policy comparison
+against Java passes all 4,160 chart/seed selections without unexpected
+differences. The generated files match upstream byte for byte:
+
+- `src/bms_parser.hpp`: `7cda3db3f9e526249d34caa0159866b6a1ef0809090d892a0b3a072749f90278`
+- `src/bms_parser.cpp`: `3a2d0d9a946d3f780e4337d158efca084e72b0e9485dc4dd511b7da959c60841`
+
+## Historical application adoption and compatibility policy
+
+This section records the earlier adoption and is superseded by the current
+selective policy above. At that stage, the application adopted
 upstream `5c3bb2faf5d08aa19cc689273e5b107487bf8a5b`, based on the verified
 `bb8658a3d68f06c11b4ce4ff0d6c9b91055f2961` handoff. The new upstream commit
 adds source-filename overloads for buffered Parse/Scan; the old signatures
