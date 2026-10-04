@@ -3792,7 +3792,7 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 40, TextView::FontWeight::Bold);
     guidedAccessReminderTitle = title;
     title->setWidthPercent(100);
-    title->setHeight(72);
+    title->setMinHeight(72);
     title->setWrap(true);
     title->setAlign(TextView::CENTER);
     title->setVAlign(TextView::MIDDLE);
@@ -3812,7 +3812,7 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *why = new TextView("assets/fonts/notosanscjkjp.ttf", 26, TextView::FontWeight::Bold);
     guidedAccessReminderWhy = why;
     why->setWidthPercent(100);
-    why->setHeight(60);
+    why->setMinHeight(60);
     why->setWrap(true);
     why->setAlign(TextView::CENTER);
     why->setVAlign(TextView::MIDDLE);
@@ -3822,12 +3822,12 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *help = new GuidedAccessInstructionView();
     guidedAccessReminderHelp = help;
     help->setWidthPercent(100);
-    help->setHeight(140);
+    help->setMinHeight(140);
     overlay->addView(help);
     auto *disableHelp = new GuidedAccessInstructionView();
     guidedAccessReminderDisableHelp = disableHelp;
     disableHelp->setWidthPercent(100);
-    disableHelp->setHeight(60);
+    disableHelp->setMinHeight(60);
     disableHelp->setMargin(Edge::Top, 6);
     overlay->addView(disableHelp);
     auto *controls = new View();
