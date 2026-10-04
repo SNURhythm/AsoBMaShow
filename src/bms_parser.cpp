@@ -2202,7 +2202,15 @@ std::string javaSubstring(std::string_view value, size_t first,
   for (size_t i = 0; i < value.size();) {
     const size_t width = utf8CharacterBytes(value, i);
     const size_t units = width == 4 ? 2 : 1;
-    if (unit >= first && unit + units <= last) result.append(value.substr(i, width));
+    if (unit >= first && unit + units <= last) {
+      // Once the UTF-16 start is resolved, an unbounded suffix needs no more
+      // character-by-character decoding or appending.
+      if (count == std::string_view::npos) {
+        result.append(value.substr(i));
+        break;
+      }
+      result.append(value.substr(i, width));
+    }
     else if (unit < last && unit + units > first) result.push_back('?');
     i += width;
     unit += units;

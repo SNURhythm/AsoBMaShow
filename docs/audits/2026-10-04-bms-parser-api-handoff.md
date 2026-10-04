@@ -2,7 +2,7 @@
 
 ## Current selective malformed-LN policy
 
-The application adopts parser revision `4c40a2d6bae8adab30f80eae0347e05740d8eaef`, including both
+The application adopts parser revision `33596fa855ec1b8fd92f12b719979c27bdce233a`, including both
 amalgamated artifacts generated and tested upstream. This supersedes the
 unchanged-graph policy in the historical adoption notes below.
 
@@ -38,6 +38,14 @@ metadata parsing by 7% relative to `00f9fc7`. The remaining cost is still roughl
 chronological prototype's out-of-bounds timing case are recorded upstream in
 `docs/performance/2026-10-04-timing-consolidation.md`.
 
+The string follow-up copies an unbounded header suffix in bulk after resolving
+its UTF-16 starting position. Finite slices and split-surrogate replacements
+remain unchanged. Paired 517-chart measurements show 3.1% less Full parsing CPU
+time than `4c40a2d`; Scan/metadata differences are within noise. Header-heavy
+Full cases improve by 18–38%. Metadata trim views were not adopted because they
+can retain oversized buffers after short replacement values. Details and raw
+measurements are upstream in `docs/performance/2026-10-04-string-suffix-copy.md`.
+
 For undefined LNs whose player-selected mode becomes known later,
 `applyEffectiveLongNoteModeToChart` calls the parser library's
 `TimeLine::DemoteUnusableLongNote` in the existing count pass. This happens before
@@ -55,19 +63,23 @@ graphs and still report saved-result mismatches. Their archived JSON, BRD,
 SQLite data, chart bytes and immutable manifest were not changed. The user
 authorized pushing the application branch; no deployment is included.
 
-The application build and all 420 CTest tests pass with zero failures
-(235.39 seconds). Upstream clean Clang
-modular/amalgamated suites, GCC 15 unit/resource suites and ASan/UBSan plus
-float-cast-overflow modular suites pass. Fresh selective-policy Java comparison
-passes all 4,168 chart/seed selections. Independent timing validation passes
-4,800 sanitized Java comparisons and 19,200 byte-identical complete snapshots.
-The initial exact prototype also passed 8,170 real/generated chart snapshots.
-Final correctness, performance and application-adoption source reviews found
-no remaining actionable issue. The generated files match upstream byte for byte;
-the public header is unchanged from the previous adoption:
+The current string-suffix adoption passes the full application build and all
+420 CTest tests with zero failures (133.29 seconds). Upstream clean Clang
+modular/resource/Python-comparison and regenerated-amalgamation suites pass.
+Fresh sanitized Java comparison passes all 4,192 chart/seed selections, and
+all 4,192 C++ snapshots are byte-identical to the preceding parser, including
+timestamps. Independent parser and application-adoption source reviews found
+no actionable issue.
+
+The preceding timing adoption additionally passed GCC 15 unit/resource and
+ASan/UBSan plus float-cast-overflow modular suites. Its independent validation
+passed 4,800 sanitized Java comparisons and 19,200 byte-identical complete
+snapshots; the initial exact prototype passed 8,170 real/generated snapshots.
+The current generated files match upstream byte for byte; the public header
+is unchanged from the previous adoption:
 
 - `src/bms_parser.hpp`: `4339e276fd3f8f0a3693bafdd6a86dc1d667250811fb70eb2847e7bb776b703e`
-- `src/bms_parser.cpp`: `25a74031bee26f931ba62a2f4c7e7ba2dc96e103d9f44834d2822beebe01ed78`
+- `src/bms_parser.cpp`: `7b151496bed4ea55bfb14e081e894dd61c1e64d7d45579fbbbf898a97140e202`
 
 ## Historical application adoption and compatibility policy
 
