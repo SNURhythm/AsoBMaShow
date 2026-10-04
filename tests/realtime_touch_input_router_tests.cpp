@@ -2005,6 +2005,165 @@ void testRejectedInitialDownSuppressesStaleMoveUntilLift() {
           "physical lift clears the rejected-contact tombstone for the next Down");
 }
 
+void testContinuedCancelledTouchPublishesAnotherCancellation() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      92, makeLayout(),
+      {.context = &capture, .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 98,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F, .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 100'000}) &&
+              router.consume({.fingerId = 98,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F, .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 110'000}) &&
+              router.acknowledgePublishedCancellation(98) &&
+              router.consume({.fingerId = 98,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.32F, .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 120'000}) &&
+              router.cancelAll(130'000),
+          "a cancelled touch can resume before a later global cancellation");
+  require(capture.cancelledTouches.size() == 1 &&
+              capture.cancelledTouches.front().fingerId == 98 &&
+              capture.cancelledTouches.front().steadyTimestampMicros == 130'000 &&
+              capture.events.size() == 2,
+          "continued cancellation closes the resumed visual/replay lifecycle exactly once");
+}
+
+void testCancellationContinuationRetainsGameplayOwnership() {
+  // The main-queue expiry can be delayed; the router remains authoritative
+  // even when song time or callback delay exceeds the visual release linger.
+  for (const auto moveTime : {140'000LL, 400'000LL}) {
+    InputCapture capture;
+    gameplay::RealtimeTouchInputRouter router(
+        92, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+    require(router.consume({.fingerId = 98,
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = 0.31F, .normalizedY = 0.5F,
+                            .steadyTimestampMicros = 100'000}) &&
+                router.consume({.fingerId = 98,
+                                .phase = gameplay::RealtimeTouchPhase::Cancel,
+                                .normalizedX = 0.31F, .normalizedY = 0.5F,
+                                .steadyTimestampMicros = 110'000}) &&
+                router.acknowledgePublishedCancellation(98),
+            "contact cancellation is published before its continuation");
+    const auto resumed = router.consumeForPublication(
+        {.fingerId = 98, .phase = gameplay::RealtimeTouchPhase::Move,
+         .normalizedX = 0.32F, .normalizedY = 0.5F,
+         .steadyTimestampMicros = moveTime});
+    require(gameplay::realtimeTouchRoutingPublishesAuxiliary(resumed) &&
+                capture.events.size() == 1,
+            "accepted continuation publishes without a duplicate gameplay press");
+    require(router.consume({.fingerId = 98,
+                            .phase = gameplay::RealtimeTouchPhase::Up,
+                            .steadyTimestampMicros = moveTime + 10'000}) &&
+                capture.events.size() == 2,
+            "resumed contact releases its original gameplay press");
+  }
+}
+
+void testOutsideLaneTouchRemainsCancellable() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      93, makeLayout(true),
+      {.context = &capture, .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 99,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.0F, .normalizedY = 0.0F,
+                          .steadyTimestampMicros = 100'000}) &&
+              router.consume({.fingerId = 99,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.01F, .normalizedY = 0.01F,
+                              .steadyTimestampMicros = 110'000}) &&
+              router.cancelAll(120'000),
+          "an outside-lane contact remains available for lifecycle cancellation");
+  require(capture.events.empty() && capture.cancelledTouches.size() == 1 &&
+              capture.cancelledTouches.front().fingerId == 99 &&
+              capture.cancelledTouches.front().normalizedX == 0.01F,
+          "outside-lane visualization gets its terminal without gameplay lane events");
+}
+
+void testUnpublishedLiftCanBeClosedByRecovery() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      94, makeLayout(),
+      {.context = &capture, .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 100,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F, .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 100'000}),
+          "publication-failure fixture starts a visible held contact");
+  const auto lift = router.consumeForPublication(
+      {.fingerId = 100, .phase = gameplay::RealtimeTouchPhase::Up,
+       .normalizedX = 0.32F, .normalizedY = 0.51F,
+       .steadyTimestampMicros = 110'000});
+  // The lane release succeeds, but the caller cannot enqueue its auxiliary Up.
+  // No publication acknowledgment arrives before overflow recovery.
+  capture.failedCancelAttemptsRemaining = 1;
+  require(!router.cancelAll(115'000) && capture.cancelledTouches.empty(),
+          "an unpublished lift remains recoverable when its first cancellation also fails");
+  require(lift == gameplay::RealtimeTouchRoutingDisposition::Accepted &&
+              capture.events.size() == 2 && router.cancelAll(120'000),
+          "recovery runs after a routed release loses auxiliary publication");
+  require(capture.cancelledTouches.size() == 1 &&
+              capture.cancelledTouches.front().fingerId == 100 &&
+              capture.events.size() == 2 && router.cancelAll(130'000) &&
+              capture.cancelledTouches.size() == 1,
+          "recovery closes an unpublished lift once without another gameplay release");
+}
+
+void testPublishedLiftsRetireAuxiliaryOwnership() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      96, makeLayout(),
+      {.context = &capture, .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  for (int contact = 0; contact < 64; ++contact) {
+    // Reusing an ID must not retain a retired contact or exhaust the 32 slots.
+    require(router.consume({.fingerId = 102,
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = 0.31F, .normalizedY = 0.5F,
+                            .steadyTimestampMicros = contact * 10}) &&
+                router.consumeForPublication(
+                    {.fingerId = 102, .phase = gameplay::RealtimeTouchPhase::Up,
+                     .normalizedX = 0.31F, .normalizedY = 0.5F,
+                     .steadyTimestampMicros = contact * 10 + 1}) ==
+                    gameplay::RealtimeTouchRoutingDisposition::Accepted &&
+                router.acknowledgePublishedRelease(102),
+            "successful publication retires each ordinary lift");
+  }
+  require(router.cancelAll(1'000) && capture.cancelledTouches.empty() &&
+              capture.events.size() == 128,
+          "published lifts leave no phantom recovery cancellation or retained slot");
+}
+
+void testUnknownMoveCannotPublishAPhantomTouch() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      95, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 101,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F, .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 100'000}) &&
+              router.consume({.fingerId = 101,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = 0.31F, .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 110'000}),
+          "phantom-move fixture completes an ordinary contact");
+  const auto stale = router.consumeForPublication(
+      {.fingerId = 101, .phase = gameplay::RealtimeTouchPhase::Move,
+       .normalizedX = 0.32F, .normalizedY = 0.51F,
+       .steadyTimestampMicros = 120'000});
+  require(stale == gameplay::RealtimeTouchRoutingDisposition::Inert &&
+              capture.events.size() == 2,
+          "a move without physical ownership cannot resurrect recorded or live touch visuals");
+}
+
 void testPublishedNativeCancelIsNotSynthesizedAgain() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -2370,6 +2529,12 @@ void testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise() {
 } // namespace
 
 int main() {
+  testUnpublishedLiftCanBeClosedByRecovery();
+  testContinuedCancelledTouchPublishesAnotherCancellation();
+  testCancellationContinuationRetainsGameplayOwnership();
+  testOutsideLaneTouchRemainsCancellable();
+  testUnknownMoveCannotPublishAPhantomTouch();
+  testPublishedLiftsRetireAuxiliaryOwnership();
   testPresentationFrameContractCarriesExactSerialOnFailure();
   testTouchPresentationUsesUiNormalizedCoordinates();
   testLegacyBuiltInTouchFallbackRequiresExplicitOwnership();

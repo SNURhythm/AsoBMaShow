@@ -527,7 +527,7 @@ RealtimeTouchInputRouter::allocateFinger(std::int64_t fingerId) noexcept {
     return existing;
   }
   for (auto &finger : fingers_) {
-    if (!finger.active) {
+    if (!finger.active && !finger.releasePublicationPending) {
       finger = {};
       finger.active = true;
       finger.fingerId = fingerId;
@@ -795,8 +795,12 @@ bool RealtimeTouchInputRouter::handleSpinScratchMove(
 
 bool RealtimeTouchInputRouter::consume(
     const RealtimeTouchSample &sample) noexcept {
-  return consumeForPublication(sample) !=
-         RealtimeTouchRoutingDisposition::RetryRequired;
+  const auto disposition = consumeForPublication(sample);
+  if (disposition == RealtimeTouchRoutingDisposition::Accepted &&
+      sample.phase == RealtimeTouchPhase::Up) {
+    (void)acknowledgePublishedRelease(sample.fingerId);
+  }
+  return disposition != RealtimeTouchRoutingDisposition::RetryRequired;
 }
 
 RealtimeTouchRoutingDisposition
@@ -853,7 +857,8 @@ bool RealtimeTouchInputRouter::consumeImpl(
     const auto lane = laneIndexAt(sample.normalizedX, sample.normalizedY,
                                   layout_.dragMode);
     if (!lane.has_value()) {
-      finger->active = false;
+      // Visualization still owns this physical contact outside the lanes.
+      finger->excluded = true;
       return true;
     }
     if (*lane < layout_.laneRegions.size() &&
@@ -880,6 +885,7 @@ bool RealtimeTouchInputRouter::consumeImpl(
   case RealtimeTouchPhase::Move: {
     auto *finger = findFinger(sample.fingerId);
     if (finger == nullptr) {
+      publishAuxiliary = false;
       return true;
     }
     if (finger->suppressedUntilLift) {
@@ -889,6 +895,7 @@ bool RealtimeTouchInputRouter::consumeImpl(
       return true;
     }
     finger->cancelDeadlineMicros = 0;
+    finger->cancellationPublished = false;
     if (finger->excluded) {
       finger->lastX = sample.normalizedX;
       finger->lastY = sample.normalizedY;
@@ -951,6 +958,7 @@ bool RealtimeTouchInputRouter::consumeImpl(
   case RealtimeTouchPhase::Up: {
     auto *finger = findFinger(sample.fingerId);
     if (finger == nullptr) {
+      publishAuxiliary = false;
       return true;
     }
     if (finger->suppressedUntilLift) {
@@ -963,13 +971,19 @@ bool RealtimeTouchInputRouter::consumeImpl(
             ? true
             : releaseLane(*finger, sample.steadyTimestampMicros);
     if (released) {
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
+      if (sample.presentationUiPoint) finger->presentationUiPoint = sample.presentationUiPoint;
+      if (sample.presentationPoint) finger->presentationPoint = sample.presentationPoint;
       finger->active = false;
+      finger->releasePublicationPending = true;
     }
     return released;
   }
   case RealtimeTouchPhase::Cancel: {
     auto *finger = findFinger(sample.fingerId);
     if (finger == nullptr) {
+      publishAuxiliary = false;
       return true;
     }
     if (finger->suppressedUntilLift) {
@@ -1009,6 +1023,17 @@ bool RealtimeTouchInputRouter::consumeImpl(
     }
     return released;
   }
+  }
+  return false;
+}
+
+bool RealtimeTouchInputRouter::acknowledgePublishedRelease(
+    std::int64_t fingerId) noexcept {
+  for (auto &finger : fingers_) {
+    if (finger.fingerId == fingerId && finger.releasePublicationPending) {
+      finger = {};
+      return true;
+    }
   }
   return false;
 }
@@ -1081,7 +1106,7 @@ bool RealtimeTouchInputRouter::cancelAll(
     std::int64_t steadyTimestampMicros) noexcept {
   bool success = true;
   for (auto &finger : fingers_) {
-    if (!finger.active) {
+    if (!finger.active && !finger.releasePublicationPending) {
       continue;
     }
     if (finger.suppressedUntilLift) {
@@ -1107,6 +1132,10 @@ bool RealtimeTouchInputRouter::cancelAll(
     }
     if (!releaseLane(finger, steadyTimestampMicros)) {
       success = false;
+      continue;
+    }
+    if (finger.releasePublicationPending) {
+      finger = {};
       continue;
     }
     finger.excluded = true;

@@ -278,12 +278,23 @@ void PlayfieldVisualStateStore::applyTouchSample(
   };
 
   switch (sample.action) {
-  case ReplayTouchAction::Down:
   case ReplayTouchAction::Move:
+    if (!lifecycle.active.contains(sample.fingerId) &&
+        !lifecycle.cancelled.contains(sample.fingerId)) {
+      return;
+    }
+    [[fallthrough]];
+  case ReplayTouchAction::Down:
+    lifecycle.cancelled.erase(sample.fingerId);
     lifecycle.active[sample.fingerId] = point;
     break;
   case ReplayTouchAction::Up:
   case ReplayTouchAction::Cancel:
+    if (sample.action == ReplayTouchAction::Cancel) {
+      lifecycle.cancelled.insert(sample.fingerId);
+    } else {
+      lifecycle.cancelled.erase(sample.fingerId);
+    }
     lifecycle.active.erase(sample.fingerId);
     lifecycle.released.push_back(point);
     break;
