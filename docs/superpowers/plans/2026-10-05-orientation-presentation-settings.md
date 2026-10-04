@@ -102,10 +102,10 @@
 
 **Interfaces:** Keep `MainMenuScene::updatePanelLayout()` as the single resize entry point. Name the Library/Songs wrapper `mainMenuBrowser`; maintain one instance of each list and the Details view.
 
-- [ ] Add the browser wrapper containing Library and Songs. In portrait, place it above Details; set Library to approximately 30% of browser width and Songs to the remaining width. Keep Library actions vertical so they fit its narrower column.
-- [ ] Allocate approximately 60% of usable content height to the browser and 40% to Details, accounting for the gap and safe-area padding. Keep detail content scrollable with primary actions pinned. Use flexible/minimum sizes so short portrait windows remain usable; restore existing three-column widths in landscape through the wrapper's row layout.
-- [ ] Inspect portrait phone and tablet proportions, short portrait windows, and landscape using the real app. Verify long labels, empty library, selected chart, scrolled lists, modal opening, and rotation without selection/preview resets. Check Start and Settings remain reachable.
-- [ ] Run `python3 tests/ui_scale_tests.py` and the existing main-menu lifecycle checks; commit the verified layout change. Do not add source-text-only tests that merely repeat constants.
+- [x] Add the browser wrapper containing Library and Songs. In portrait, place it above Details; set Library to approximately 30% of browser width and Songs to the remaining width. Keep Library actions vertical so they fit its narrower column.
+- [x] Allocate approximately 60% of usable content height to the browser and 40% to Details, accounting for the gap and safe-area padding. Keep detail content scrollable with primary actions pinned. Use flexible/minimum sizes so short portrait windows remain usable; restore existing three-column widths in landscape through the wrapper's row layout.
+- [x] Inspect portrait phone and tablet proportions, short portrait windows, and landscape using the real app. Verify long labels, empty library, selected chart, scrolled lists, modal opening, and rotation without selection/preview resets. Check Start and Settings remain reachable.
+- [x] Run `python3 tests/ui_scale_tests.py` and the existing main-menu lifecycle checks; commit the verified layout change. Do not add source-text-only tests that merely repeat constants.
 
 ### Task 6: Integrated verification and handoff
 

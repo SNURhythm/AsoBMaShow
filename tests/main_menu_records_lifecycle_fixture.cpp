@@ -308,6 +308,7 @@ struct MainMenuScene {
   void applyReplayExportResult();
   void onPause();
   void onResume();
+  void queueSelectedSkinHandoff();
 };
 OWNER_METHODS
 

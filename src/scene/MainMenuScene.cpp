@@ -1312,6 +1312,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+  auto *browser = new View();
+  browser->setName("mainMenuBrowser");
+  browser->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
+  browser->setFlex(1)->setMinWidth(0)->setMinHeight(0)->setGap(24);
+  rootLayout->addView(browser);
 
 overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                                      rendering::window_height);
@@ -1463,9 +1468,10 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   folderRecyclerView->setBorderWidth(0);
   folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
-  rootLayout->addView(nav);
+  browser->addView(nav);
 
   auto left = new View();
+  left->setName("mainMenuSongs");
   left->setMinWidth(0)->setMinHeight(0);
   left->setFlexDirection(FlexDirection::Column);
   left->setAlignItems(YGAlignStretch);
@@ -1650,7 +1656,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   recyclerView->setBorderWidth(0);
   recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
-  rootLayout->addView(left);
+  browser->addView(left);
 
   auto right = new View();
   right->setName("mainMenuDetails");
@@ -1986,22 +1992,33 @@ void MainMenuScene::updatePanelLayout() {
   if (!rootLayout) return;
   View::LayoutBatchScope batch;
   const bool portrait = rendering::window_height > rendering::window_width;
+  const auto safe = getSafeAreaInsetsUi();
+  const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - 24);
+  const float detailsHeight = contentHeight * 0.4F;
+  auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *actions = rootLayout->findViewByName("mainMenuLibraryActions");
   auto *details = rootLayout->findViewByName("mainMenuDetails");
   auto *detailsScroll = rootLayout->findViewByName("mainMenuDetailsScroll");
   rootLayout->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+  if (browser) {
+    browser->setFlex(portrait ? 0.0F : 1.0F);
+    browser->setWidth(portrait ? contentWidth : YGUndefined);
+    browser->setHeight(portrait ? contentHeight - detailsHeight : YGUndefined);
+  }
   if (library) {
-    library->setWidth(portrait ? YGUndefined : kLibraryPanelWidth);
-    library->setHeight(portrait ? 280.0F : YGUndefined);
+    library->setWidth(portrait ? std::max(0.0F, contentWidth - 24) * 0.3F : kLibraryPanelWidth);
+    library->setHeight(YGUndefined)->setMinHeight(0);
     library->setFlexShrink(0);
   }
   if (actions) {
-    actions->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
+    actions->setFlexDirection(FlexDirection::Column);
+    for (auto *action : actions->getChildren()) action->setWidthPercent(100);
   }
   if (details) {
     details->setWidth(portrait ? YGUndefined : kDetailsPanelWidth);
-    details->setHeight(portrait ? 340.0F : YGUndefined);
+    details->setHeight(portrait ? detailsHeight : YGUndefined)->setMinHeight(0);
     details->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
     details->setPadding(Edge::Left, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Right, portrait ? 12.0F : 0.0F);
@@ -2009,7 +2026,7 @@ void MainMenuScene::updatePanelLayout() {
   }
   if (detailsScroll) {
     detailsScroll->setWidth(portrait ? YGUndefined : kDetailsPanelWidth - 20);
-    detailsScroll->setHeight(portrait ? 308.0F : YGUndefined);
+    detailsScroll->setHeight(portrait ? std::max(0.0F, detailsHeight - 32) : YGUndefined);
   }
 }
 

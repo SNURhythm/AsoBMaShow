@@ -1,5 +1,6 @@
 """Exercise the production drawable-to-UI transform without a graphics device."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +9,87 @@ from gameplay_terminal_scene_extract import extract
 
 
 class UiScaleTests(unittest.TestCase):
+    def test_main_menu_layout_uses_real_yoga_for_rotation(self):
+        root = Path(__file__).resolve().parents[1]
+        method = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
+                         "void MainMenuScene::updatePanelLayout()")
+        source = r'''
+#include <yoga/Yoga.h>
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <string>
+#include <vector>
+enum class FlexDirection { Column=YGFlexDirectionColumn, Row=YGFlexDirectionRow };
+enum class Edge { Left=YGEdgeLeft, Right=YGEdgeRight, Top=YGEdgeTop, Bottom=YGEdgeBottom, All=YGEdgeAll };
+struct View {
+  struct LayoutBatchScope {};
+  YGNodeRef node=YGNodeNew();
+  std::string name;
+  std::vector<View*> children;
+  explicit View(std::string n): name(n) {}
+  View* setWidth(float v) { YGNodeStyleSetWidth(node,v);return this; }
+  View* setHeight(float v) { YGNodeStyleSetHeight(node,v);return this; }
+  View* setWidthPercent(float v) { YGNodeStyleSetWidthPercent(node,v);return this; }
+  View* setMinWidth(float v) { YGNodeStyleSetMinWidth(node,v);return this; }
+  View* setMinHeight(float v) { YGNodeStyleSetMinHeight(node,v);return this; }
+  View* setFlex(float v) { YGNodeStyleSetFlex(node,v);return this; }
+  View* setFlexShrink(float v) { YGNodeStyleSetFlexShrink(node,v);return this; }
+  View* setFlexDirection(FlexDirection v) { YGNodeStyleSetFlexDirection(node,YGFlexDirection(v));return this; }
+  View* setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v);return this; }
+  View* setPadding(Edge e,float v) { YGNodeStyleSetPadding(node,YGEdge(e),v);return this; }
+  View* setAlignItems(YGAlign v) { YGNodeStyleSetAlignItems(node,v);return this; }
+  void add(View& v) { children.push_back(&v);YGNodeInsertChild(node,v.node,children.size()-1); }
+  auto& getChildren() {return children;}
+  View* findViewByName(const std::string &n) { if(name==n)return this; for(auto* c:children)if(auto* found=c->findViewByName(n))return found;return nullptr; }
+};
+namespace rendering { int window_width=1080,window_height=1920; }
+struct SafeAreaInsets { int top=30,right=0,bottom=20,left=0; };
+SafeAreaInsets getSafeAreaInsetsUi() { return {}; }
+constexpr int kRootPadding=28,kLibraryPanelWidth=320,kDetailsPanelWidth=500;
+struct MainMenuScene { View* rootLayout; void updatePanelLayout(); };
+PRODUCTION_METHOD
+int main() {
+  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),scroll("mainMenuDetailsScroll"),actions("mainMenuLibraryActions"),button("button"),primary("primary"),list("list");
+  root.setPadding(Edge::All,28)->setGap(24)->setAlignItems(YGAlignStretch);
+  browser.setFlexDirection(FlexDirection::Row)->setGap(24)->setMinWidth(0)->setMinHeight(0);
+  root.add(browser);root.add(details);browser.add(library);browser.add(songs);
+  library.add(actions);actions.add(button);library.add(list);list.setFlex(1);
+  library.setPadding(Edge::All,14);button.setWidth(292)->setHeight(84);
+  songs.setFlex(1)->setMinWidth(0)->setMinHeight(0);
+  details.setGap(12)->setPadding(Edge::Bottom,16);details.add(scroll);details.add(primary);
+  primary.setWidth(460)->setHeight(276)->setFlexShrink(0);scroll.setFlex(1)->setMinWidth(0)->setMinHeight(0);
+  MainMenuScene scene{&root};
+  for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1080,1920}}) {
+    rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
+    root.setWidth(dimensions.first)->setHeight(dimensions.second);
+    root.setPadding(Edge::Top,58)->setPadding(Edge::Bottom,48);
+    scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
+    float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
+    if(dimensions.second>dimensions.first) {
+      const float usable=dimensions.second-106-24;
+      assert(std::abs(bh/usable-.6)<.01 && std::abs(dh/usable-.4)<.01);
+      assert(YGNodeLayoutGetLeft(songs.node)>YGNodeLayoutGetLeft(library.node));
+      assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
+      assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
+      assert(YGNodeLayoutGetTop(details.node)>=YGNodeLayoutGetTop(browser.node)+bh);
+      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==276);
+      assert(YGNodeLayoutGetWidth(button.node)<=YGNodeLayoutGetWidth(library.node)-28+1);
+    } else {
+      assert(YGNodeLayoutGetWidth(library.node)==320 && YGNodeLayoutGetWidth(details.node)==500);
+      assert(std::abs(bh-dh)<1);
+    }
+  }
+}
+'''.replace("PRODUCTION_METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-menu-yoga-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), str(path),
+                            os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_result_rotation_resizes_custom_controls_and_safe_area(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/scene/ResultScene.cpp").read_text(),

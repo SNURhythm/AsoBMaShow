@@ -65,7 +65,7 @@ struct Lifecycle {
 struct MainMenuScene {
   struct Context {
     struct { int scene = 0, background = 1; } profileSwitchBlockers;
-    struct { struct { std::set<int> selectedSkinEntries; } skin; } settings;
+    struct Settings { struct { std::set<int> selectedSkinEntries; } skin; Settings &presentation() { return *this; } } settings;
     Lifecycle *gameplaySkinLifecycle = nullptr;
     SceneManager *sceneManager = nullptr;
   } context;
@@ -85,6 +85,7 @@ struct MainMenuScene {
   void refreshLibraryIfNeeded() { ++refreshed; }
   void reselectCurrentChart() {}
   void onResume() RESUME_BODY
+  void queueSelectedSkinHandoff() HANDOFF_BODY
 };
 
 int main() {

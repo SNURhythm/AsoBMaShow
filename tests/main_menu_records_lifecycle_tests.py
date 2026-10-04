@@ -32,6 +32,7 @@ def records_fixture():
         "void MainMenuScene::startRemoteResultRecall(",
         "void MainMenuScene::onPause()",
         "void MainMenuScene::onResume()",
+        "void MainMenuScene::queueSelectedSkinHandoff()",
     )]
     for signature, success, prepared in (
         ("void MainMenuScene::startModernReplayResultRecall(",
@@ -85,6 +86,7 @@ class MainMenuRecordsLifecycleTests(unittest.TestCase):
         fixture = (ROOT / "tests/main_menu_skin_resume_fixture.cpp").read_text()
         fixture = fixture.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace(
             "RESUME_BODY", fixture_tools.function_body(source, "void MainMenuScene::onResume()"))
+        fixture = fixture.replace("HANDOFF_BODY", fixture_tools.function_body(source, "void MainMenuScene::queueSelectedSkinHandoff()"))
         for enabled in (0, 1):
             with self.subTest(skins_enabled=enabled):
                 try:

@@ -8909,6 +8909,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(result_layout_geometry_tests)
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
+    set_tests_properties(ui_scale_tests PROPERTIES
+        ENVIRONMENT "ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")
     asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(result_presentation_model_tests)
     asobmashow_register_test(remote_result_scene_tests)
