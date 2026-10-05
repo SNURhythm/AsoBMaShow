@@ -467,7 +467,7 @@ void SettingsScene::refreshPreviewKeyModeDropdown() {
 
 void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->setFlexDirection(FlexDirection::Row);
-  rootLayout->setJustifyContent(YGJustifyFlexEnd);
+  rootLayout->setJustifyContent(previewPanelOnLeft ? YGJustifyFlexStart : YGJustifyFlexEnd);
   rootLayout->setAlignItems(YGAlignFlexStart);
 
   bool previewHasSelectedSkin = false;
@@ -538,7 +538,21 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->addView(
       makeText(i18n::message("settings.preview_layout.preview.label"), metrics.sectionTitleSize, ui_theme::textPrimary()));
 
-  previewHeader->addView(makeFoldButton(i18n::message("settings.preview_layout.hide.label")));
+  auto *headerActions = new View();
+  headerActions->setFlexDirection(FlexDirection::Row);
+  headerActions->setAlignItems(YGAlignCenter);
+  headerActions->setGap(metrics.compact ? 8.0F : 10.0F);
+  auto *movePanel = makeControlButton(metrics.compact ? 108 : 120, foldButtonSize,
+      makeText(i18n::message(previewPanelOnLeft
+          ? "settings.preview_layout.move_right.label" : "settings.preview_layout.move_left.label"),
+          metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  movePanel->setOnClickListener([this]() {
+    previewPanelOnLeft = !previewPanelOnLeft;
+    lastLayoutWidth = -1;
+  });
+  headerActions->addView(movePanel);
+  headerActions->addView(makeFoldButton(i18n::message("settings.preview_layout.hide.label")));
+  previewHeader->addView(headerActions);
   previewPanel->addView(previewHeader);
   auto *previewSelectionRow = new View();
   previewSelectionRow->setFlexDirection(FlexDirection::Row);

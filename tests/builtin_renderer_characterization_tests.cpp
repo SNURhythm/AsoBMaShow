@@ -2332,7 +2332,7 @@ void verifyPreviewNotesMoveThroughoutOpening() {
 void verifyPreviewScoreUsesRealJudgements() {
   const auto chart = settings_scene::makePreviewChart(7);
   const auto model = buildPlayfieldChartVisualModel(*chart, 0);
-  expect(model.text.artist == "SNURhythm" &&
+  expect(model.text.artist == "AsoBMaShow" &&
              model.text.subartist == "AsoBMaShow Preview" &&
              model.text.subtitle == "Sample Chart" &&
              model.text.genre == "PRACTICE" && model.staticMetadata.playLevel == 5 &&

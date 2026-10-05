@@ -42,7 +42,7 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
   auto chart = std::make_unique<bms_parser::Chart>();
   chart->Meta.Title = "Settings Preview";
   chart->Meta.SubTitle = "Sample Chart";
-  chart->Meta.Artist = "SNURhythm";
+  chart->Meta.Artist = "AsoBMaShow";
   chart->Meta.SubArtist = "AsoBMaShow Preview";
   chart->Meta.Genre = "PRACTICE";
   chart->Meta.PlayLevelText = "5";

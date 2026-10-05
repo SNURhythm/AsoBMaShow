@@ -1571,6 +1571,8 @@
 {"settings.preview_layout.lane.label", "Lane", "레인", "レーン"},
 {"settings.preview_layout.lane_angle.label", "Lane Angle", "레인 각도", "レーン角度"},
 {"settings.preview_layout.lane_length.label", "Lane Length", "레인 길이", "レーンの長さ"},
+{"settings.preview_layout.move_left.label", "Move left", "왼쪽으로", "左へ"},
+{"settings.preview_layout.move_right.label", "Move right", "오른쪽으로", "右へ"},
 {"settings.preview_layout.note_start.label", "Note Start", "노트 시작", "ノーツ出現位置"},
 {"settings.preview_layout.open.label", "Open", "열기", "開く"},
 {"settings.preview_layout.play_width_mode.label", "Play Width {mode}", "{mode} 영역 너비", "{mode}プレイ領域の幅"},
