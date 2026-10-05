@@ -282,7 +282,7 @@ public:
   // reference BPM.
   bool hispeedAutoAdjust = false;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
-  screen_orientation::Mode screenOrientation = screen_orientation::Mode::Auto;
+  screen_orientation::Mode screenOrientation = screen_orientation::Mode::Landscape;
   bool systemPlaybackShowJacket = true;
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;

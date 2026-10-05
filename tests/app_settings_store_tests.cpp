@@ -1132,10 +1132,14 @@ void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
 void testScreenOrientationRoundTripAndDefaults() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
+  expect(AppSettings{}.screenOrientation == screen_orientation::Mode::Landscape,
+         "new settings default to landscape");
+  expect(AppSettingsStore::Load(path).settings.screenOrientation == screen_orientation::Mode::Landscape,
+         "a first launch without saved settings defaults to landscape");
   for (const auto &[input, expected] :
        {std::pair{nlohmann::json(0), 0}, {nlohmann::json(1), 1},
-        {nlohmann::json(2), 2}, {nlohmann::json(99), 0},
-        {nlohmann::json("portrait"), 0}, {nlohmann::json(nullptr), 0}}) {
+        {nlohmann::json(2), 2}, {nlohmann::json(99), 1},
+        {nlohmann::json("portrait"), 1}, {nlohmann::json(nullptr), 1}}) {
     nlohmann::json document = {{"schemaVersion", AppSettingsStore::kCurrentSchemaVersion}};
     if (!input.is_null()) document["screenOrientation"] = input;
     writeFile(path, document.dump());
@@ -1144,7 +1148,7 @@ void testScreenOrientationRoundTripAndDefaults() {
     expect(AppSettingsStore::Save(path, loaded.settings, error), "save orientation setting");
     const auto saved = nlohmann::json::parse(readFile(path));
     expect(saved.value("screenOrientation", -1) == expected,
-           "orientation survives restart; old and invalid settings default to Auto");
+           "orientation survives restart; missing and invalid settings default to Landscape");
   }
 }
 

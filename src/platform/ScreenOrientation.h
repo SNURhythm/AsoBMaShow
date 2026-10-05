@@ -14,7 +14,7 @@ inline Mode sanitize(Mode mode) {
   case Mode::Portrait:
     return mode;
   }
-  return Mode::Auto;
+  return Mode::Landscape;
 }
 
 // The native implementation captures the interface orientation on the first
