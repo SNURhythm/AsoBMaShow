@@ -1,5 +1,7 @@
 #include "SettingsPreviewChart.h"
 #include "../bms_parser.hpp"
+#include <algorithm>
+#include <stdexcept>
 
 namespace settings_scene {
 namespace {
@@ -34,14 +36,16 @@ void addPreviewLongNote(bms_parser::TimeLine *headTimeline,
 
 } // namespace
 
-std::unique_ptr<bms_parser::Chart> makePreviewChart() {
+std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
+  if (std::ranges::find(kPreviewKeyModes, keyMode) == kPreviewKeyModes.end())
+    throw std::invalid_argument("Unsupported preview key mode");
   auto chart = std::make_unique<bms_parser::Chart>();
   chart->Meta.Title = "Settings Preview";
   chart->Meta.Bpm = kPreviewBpm;
   chart->Meta.MinBpm = kPreviewBpm;
   chart->Meta.MaxBpm = kPreviewBpm;
-  chart->Meta.KeyMode = 7;
-  chart->Meta.IsDP = false;
+  chart->Meta.KeyMode = std::abs(keyMode);
+  chart->Meta.IsDP = keyMode == 10 || keyMode == 14;
   chart->Meta.Rank = 3;
   chart->Meta.PlayLength = kPreviewLoopMicros;
   chart->Meta.TotalLength = kPreviewLoopMicros;
@@ -60,23 +64,46 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
     return timelinePtr;
   };
 
-  addPreviewNote(appendTimeline(500000, true), 0);
-  addPreviewNote(appendTimeline(850000), 2);
-  addPreviewNote(appendTimeline(1200000), 4);
-  addPreviewNote(appendTimeline(1550000), 6);
-  addPreviewNote(appendTimeline(1900000), 7);
+  // Keep the original 7K1S pattern, and map other modes onto their real parser lanes.
+  const auto lanes = keyMode < 0 ? chart->Meta.GetKeyLaneIndices()
+                                 : chart->Meta.GetTotalLaneIndices();
+  const auto laneFor = [&](int legacyLane) {
+    return keyMode == 7 ? legacyLane : lanes[legacyLane % lanes.size()];
+  };
+  addPreviewNote(appendTimeline(500000, true), laneFor(0));
+  addPreviewNote(appendTimeline(850000), laneFor(2));
+  addPreviewNote(appendTimeline(1200000), laneFor(4));
+  addPreviewNote(appendTimeline(1550000), laneFor(6));
+  addPreviewNote(appendTimeline(1900000), laneFor(7));
 
   auto *longHead = appendTimeline(2400000);
   auto *longTail = appendTimeline(3900000);
-  addPreviewLongNote(longHead, longTail, 3);
+  addPreviewLongNote(longHead, longTail, laneFor(3));
 
-  addPreviewNote(appendTimeline(4300000), 1);
-  addPreviewNote(appendTimeline(4700000), 5);
-  addPreviewNote(appendTimeline(5200000), 0);
-  addPreviewNote(appendTimeline(5650000), 7);
-  addPreviewNote(appendTimeline(6100000), 2);
-  addPreviewNote(appendTimeline(6550000), 4);
-  addPreviewNote(appendTimeline(7000000), 6);
+  addPreviewNote(appendTimeline(4300000), laneFor(1));
+  addPreviewNote(appendTimeline(4700000), laneFor(5));
+  addPreviewNote(appendTimeline(5200000), laneFor(0));
+  addPreviewNote(appendTimeline(5650000), laneFor(7));
+  addPreviewNote(appendTimeline(6100000), laneFor(2));
+  addPreviewNote(appendTimeline(6550000), laneFor(4));
+  addPreviewNote(appendTimeline(7000000), laneFor(6));
+  for (std::size_t index = 8; index < lanes.size(); ++index)
+    addPreviewNote(measure->TimeLines[((index - 8) * 2) % measure->TimeLines.size()], lanes[index]);
+
+  const auto scratches = chart->Meta.GetScratchLaneIndices();
+  for (const auto *timeline : measure->TimeLines) {
+    for (const auto *note : timeline->Notes) {
+      if (note == nullptr) continue;
+      const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+      if (longNote && longNote->IsTail()) continue;
+      ++chart->Meta.TotalNotes;
+      const bool scratch = std::ranges::find(scratches, note->Lane) != scratches.end();
+      if (longNote) {
+        if (scratch) ++chart->Meta.TotalBackSpinNotes;
+        else ++chart->Meta.TotalLongNotes;
+      } else if (scratch) ++chart->Meta.TotalScratchNotes;
+    }
+  }
 
   chart->Measures.push_back(measure.get());
   (void)measure.release();

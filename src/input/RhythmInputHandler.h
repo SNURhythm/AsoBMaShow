@@ -63,11 +63,11 @@ private:
                         Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
+public:
+  // Authored skin geometry routes into the same logical touch ownership as built-in lanes.
   [[nodiscard]] bms_parser::Note *
   applyTouchLane(int lane, bool pressed,
                  std::optional<int> scratchDirection);
-
-public:
   IRhythmControl *control;
   RhythmInputHandler(
       IRhythmControl *control, const bms_parser::ChartMeta &meta,

@@ -15,6 +15,8 @@
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
 #include <cstdint>
+#include <array>
+#include <stop_token>
 #include <map>
 #include <memory>
 #include <optional>
@@ -30,6 +32,10 @@ class ScrollView;
 class DropdownView;
 class OverlayPortal;
 class BMSRenderer;
+class PlayfieldPresentation;
+class PlayfieldProjection;
+struct PlayfieldProjectionResult;
+namespace gameplay { class RealtimeTouchInputRouter; }
 struct GameplayGaugeRules;
 class RhythmInputHandler;
 class RhythmLaneInputController;
@@ -278,6 +284,15 @@ private:
   bool previewActive = false;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
+  int previewKeyMode = 7;
+  bool previewRendererDirty = false;
+  std::string previewError;
+  DropdownView *previewKeyModeDropdown = nullptr;
+  bool previewKeyModeDropdownOpen = false;
+  std::stop_source previewSkinStop;
+  std::array<double, 4> previewSkinBounds{};
+  std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
+  std::uint64_t previewTouchLayoutRevision = 0;
   std::unique_ptr<bms_parser::Chart> previewChart;
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
@@ -285,7 +300,9 @@ private:
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   std::uint64_t previewFrameSerial = 0;
-  std::unique_ptr<BMSRenderer> previewRenderer;
+  std::unique_ptr<PlayfieldPresentation> previewPresentation;
+  std::unique_ptr<PlayfieldProjection> previewProjection;
+  BMSRenderer *previewRenderer = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
   std::unique_ptr<RhythmLaneInputController> previewLaneController;
@@ -425,6 +442,10 @@ private:
   void syncPreviewPresentationConfiguration();
   void syncPreviewAuthority();
   void capturePreviewVisualState();
+  PlayfieldProjectionResult projectPreviewFrame();
+  void renderPreview();
+  void syncPreviewTouchLayout();
+  void refreshPreviewKeyModeDropdown();
   void ensurePreviewInputHandler();
   void destroyPreviewInputHandler();
   void ensureInputCaptureController();

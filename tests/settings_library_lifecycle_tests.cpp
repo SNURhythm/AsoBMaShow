@@ -29,6 +29,7 @@ struct NoopOwner {
 
 class SettingsScene {
 public:
+  std::stop_source previewSkinStop;
   explicit SettingsScene(Lifetime &lifetime) : dependencies{lifetime} {}
   ~SettingsScene();
   struct {

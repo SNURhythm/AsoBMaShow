@@ -1,17 +1,21 @@
 #include "scene/SettingsPreviewChart.h"
 #include "bms_parser.hpp"
+#include "GameplayKeyMode.h"
 
 #include "support/AllocationLifetimeProbe.h"
 
 #include <array>
 #include <cassert>
 #include <iostream>
+#include <set>
 
 void testRecipe() {
   const auto chart = settings_scene::makePreviewChart();
   assert(chart->Meta.Title == "Settings Preview");
   assert(chart->Meta.Bpm == 120 && chart->Meta.MinBpm == 120 && chart->Meta.MaxBpm == 120);
   assert(chart->Meta.KeyMode == 7 && !chart->Meta.IsDP && chart->Meta.Rank == 3);
+  assert(chart->Meta.TotalNotes == 13 && chart->Meta.TotalLongNotes == 1 &&
+         chart->Meta.TotalScratchNotes == 2);
   assert(chart->Meta.PlayLength == 8'000'000 && chart->Meta.TotalLength == 8'000'000);
   assert(chart->Measures.size() == 1);
   const auto &measure = *chart->Measures.front();
@@ -45,8 +49,32 @@ void testEveryConstructionAllocation() {
   std::cout << "Preview construction passed " << allocations << " allocation failures\n";
 }
 
+void testKeyModes() {
+  for (const int mode : settings_scene::kPreviewKeyModes) {
+    const auto chart = settings_scene::makePreviewChart(mode);
+    assert(gameplay::presentationKeyMode(*chart) == mode);
+    assert(chart->Meta.IsDP == (mode == 10 || mode == 14));
+    const auto expected = mode < 0 ? chart->Meta.GetKeyLaneIndices()
+                                   : chart->Meta.GetTotalLaneIndices();
+    std::set<int> seen;
+    int countedNotes = 0;
+    for (const auto *timeline : chart->Measures.front()->TimeLines) {
+      for (const auto *note : timeline->Notes) {
+        if (!note) continue;
+        assert(note->Lane < 16 && note->Timeline == timeline);
+        seen.insert(note->Lane);
+        const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+        if (!longNote || !longNote->IsTail()) ++countedNotes;
+      }
+    }
+    assert(seen == std::set<int>(expected.begin(), expected.end()));
+    assert(countedNotes == chart->Meta.TotalNotes);
+  }
+}
+
 int main() {
   testRecipe();
   testEveryConstructionAllocation();
+  testKeyModes();
   testRecipe();
 }

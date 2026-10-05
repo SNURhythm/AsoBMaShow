@@ -53,6 +53,7 @@ int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
 } // namespace
 
 void SettingsScene::resetViewState() {
+  previewKeyModeDropdown = nullptr;
   for (auto *view : views) {
     delete view;
   }
@@ -441,6 +442,18 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   return visibleTimeControls;
 }
 
+void SettingsScene::refreshPreviewKeyModeDropdown() {
+  if (!previewKeyModeDropdown) return;
+  std::vector<DropdownView::Option> options;
+  for (const auto mode : kPreviewKeyModes)
+    options.push_back({.id = std::to_string(mode), .label = gameplay::keyModeLabel(mode)});
+  previewKeyModeDropdown->refresh({
+      .label = i18n::message("settings.input.mode.label"),
+      .selectedId = std::to_string(previewKeyMode),
+      .options = std::move(options), .open = previewKeyModeDropdownOpen,
+      .maxVisibleItems = 9});
+}
+
 void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->setFlexDirection(FlexDirection::Row);
   rootLayout->setJustifyContent(YGJustifyFlexEnd);
@@ -502,6 +515,30 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
   previewHeader->addView(makeFoldButton(i18n::message("settings.preview_layout.hide.label")));
   previewPanel->addView(previewHeader);
+  previewKeyModeDropdown = new DropdownView({
+      .onOpenChanged = [this](bool open) {
+        previewKeyModeDropdownOpen = open;
+        refreshPreviewKeyModeDropdown();
+      },
+      .onOptionSelected = [this](const std::string &id) {
+        const auto mode = std::stoi(id);
+        previewKeyModeDropdownOpen = false;
+        if (previewKeyMode != mode) {
+          previewKeyMode = mode;
+          previewRendererDirty = true;
+          lastLayoutWidth = -1;
+        }
+        refreshPreviewKeyModeDropdown();
+      }}, overlayPortal);
+  previewKeyModeDropdown->setWidthPercent(100);
+  refreshPreviewKeyModeDropdown();
+  previewPanel->addView(previewKeyModeDropdown);
+  previewPanel->addView(makeWrappedText(
+      previewError.empty()
+          ? i18n::message(previewPresentation && previewPresentation->activeMode() == PresentationMode::Skin
+                ? "settings.preview_layout.skin_selected.label" : "settings.preview_layout.skin_builtin.label")
+          : i18n::message("settings.preview_layout.skin_error.message", {{"error", previewError}}),
+      metrics.smallTextSize, ui_theme::textSecondary()));
 
   auto *previewTabs = new View();
   previewTabs->setFlexDirection(FlexDirection::Row);
@@ -690,7 +727,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     previewControls->addView(beamControls);
 
     previewControls->addView(makeSummaryRow(
-        metrics, i18n::message("settings.preview_layout.play_width_7_k.label"), &summaryPreviewPlayAreaWidthValueText));
+        metrics, i18n::message("settings.preview_layout.play_width_mode.label",
+            {{"mode", gameplay::keyModeLabel(previewKeyMode)}}), &summaryPreviewPlayAreaWidthValueText));
     auto *playAreaWidthControls = new View();
     playAreaWidthControls->setFlexDirection(FlexDirection::Row);
     playAreaWidthControls->setFlexWrap(YGWrapWrap);
@@ -699,7 +737,6 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     playAreaWidthControls->setWidthPercent(100.0f);
     playAreaWidthControls->setJustifyContent(YGJustifyCenter);
     auto updatePreviewPlayAreaWidth = [this](float delta) {
-      constexpr int previewKeyMode = 7;
       context.settings.setPlayAreaWidthForKeyMode(
           previewKeyMode,
           clampPlayAreaWidth(context.settings,
@@ -720,7 +757,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     auto *resetWidth = makeResetButton(metrics);
     resetWidth->setOnClickListener([this]() {
       context.settings.setPlayAreaWidthForKeyMode(
-          7, context.settings.geometryPolicy().width.defaultValue);
+          previewKeyMode, context.settings.geometryPolicy().width.defaultValue);
       persistSettings();
     });
     playAreaWidthControls->addView(resetWidth);

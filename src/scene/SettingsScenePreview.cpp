@@ -5,7 +5,16 @@
 #include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
+#include "../GameplayKeyMode.h"
 #include "play/BMSRenderer.h"
+#include "play/PlayfieldProjection.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "../ArchiveFile.h"
+#include "play/GameplaySkinSessionFactory.h"
+#include "play/PlayfieldPresentationCoordinator.h"
+#include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
+#include "../skin/beatoraja/LuaSkinCurlHttpTransport.h"
+#endif
 #include "play/BeatorajaHiSpeedChart.h"
 #include "play/PlayfieldChartVisualModel.h"
 #include "play/PlayfieldVisualState.h"
@@ -16,6 +25,24 @@ using namespace settings_scene;
 namespace {
 constexpr int kPreviewSampleCombo = 24;
 constexpr int kPreviewSampleScore = 123456;
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+// The synthetic chart has no BGA; never borrow the song selector's media state.
+class PreviewBga final : public IGameplayBgaSubmitter {
+public:
+  PreparedGameplayBgaFrame prepareVisualFrameAt(std::uint64_t serial, std::int64_t,
+                                                const GameplayBgaMissState &) override {
+    return {.sequence = serial};
+  }
+  BgaPreflightResult preflight(const PreparedGameplayBgaFrame &,
+                               std::span<const BgaDrawTarget>) override { return {.ready = true}; }
+  void commitPrepared(const PreparedGameplayBgaFrame &) noexcept override {}
+  void submitPrepared(const PreparedGameplayBgaFrame &, const BgaDrawTarget &) noexcept override {}
+  void finalizePrepared(const PreparedGameplayBgaFrame &) noexcept override {}
+  void submitFullscreen(const PreparedGameplayBgaFrame &) noexcept override {}
+};
+PreviewBga previewBga;
+#endif
 
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
@@ -35,11 +62,14 @@ previewPresentationConfiguration(const AppSettings &settings,
       .configuredHispeed = hispeed.hispeed(),
       .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = settings.hispeedFixMode,
-      .playAreaWidth = settings.playAreaWidthForKeyMode(chart.Meta.KeyMode),
+      .playAreaWidth = settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(chart)),
       .orientation = settings.activePresentationOrientation(),
       .laneLength = settings.presentation().laneLength,
       .laneAngleDegrees = settings.presentation().laneAngleDegrees,
       .scratchLaneOnRight = settings.presentation().scratchLaneOnRight,
+      .hideEmptyScratchLane = chart.Meta.KeyMode == 5
+          ? settings.presentation().hideEmptyScratchLane5K
+          : settings.presentation().hideEmptyScratchLane7K,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = settings.presentation().laneCoverEnabled,
@@ -115,6 +145,7 @@ previewNoteSources(const bms_parser::Chart &chart) {
 } // namespace
 
 SettingsScene::~SettingsScene() {
+  previewSkinStop.request_stop();
   context.profileSwitchBlockers.scene = nullptr;
   libraryTask.stopAndWait();
   archiveCacheMaintenance.stopAndWait();
@@ -140,8 +171,12 @@ void SettingsScene::stopLanePreview() {
 }
 
 void SettingsScene::ensurePreviewRenderer() {
+  if (previewRendererDirty) {
+    destroyPreviewRenderer();
+    previewRendererDirty = false;
+  }
   if (previewChart == nullptr) {
-    previewChart = makePreviewChart();
+    previewChart = makePreviewChart(previewKeyMode);
   }
   if (previewRenderer == nullptr && previewChart != nullptr) {
     previewChartVisualModel = std::make_unique<PlayfieldChartVisualModel>(
@@ -154,14 +189,67 @@ void SettingsScene::ensurePreviewRenderer() {
       previewVisualNoteSources.clear();
     }
     Judge previewJudge(previewChart->Meta.Rank);
-    previewRenderer = std::make_unique<BMSRenderer>(
+    auto builtIn = std::make_unique<BMSRenderer>(
         previewChart.get(), previewJudge.timingWindows,
         context.settings.visibleTimeDurationMilliseconds, true);
+    previewRenderer = builtIn.get();
+    previewProjection = std::make_unique<PlayfieldProjection>();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    previewPresentation = std::make_unique<PlayfieldPresentationCoordinator>(
+        PlayfieldPresentationCoordinatorDependencies{
+            .builtIn = std::move(builtIn), .skin = {}, .bga = previewBga});
+#else
+    previewPresentation = std::move(builtIn);
+#endif
     syncPreviewPresentationConfiguration();
     previewPresentationEvents =
         std::make_unique<PlayfieldPresentationEventFanout>(
-            *previewVisualStateStore, *previewRenderer);
+            *previewVisualStateStore, *previewPresentation);
     resetPreviewHudSample();
+    capturePreviewVisualState();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    previewSkinStop = std::stop_source{};
+    const auto safe = getSafeAreaInsetsUi();
+    const skin::UiLogicalRect bounds{
+        .x = static_cast<float>(safe.left), .y = static_cast<float>(safe.top),
+        .width = static_cast<float>(rendering::window_width - safe.left - safe.right),
+        .height = static_cast<float>(rendering::window_height - safe.top - safe.bottom)};
+    previewSkinBounds = {bounds.x, bounds.y, bounds.width, bounds.height};
+    const auto projection = projectPreviewFrame();
+    auto session = createGameplaySkinSession({
+        .acquire = context.acquireGameplaySkinForNextChart,
+        .storageRoots = context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
+        .resourcePreparation = context.skinResourcePreparationService.get(),
+        .builtinImageReader = archive_file::readFileBounded,
+        .liveResourceCounters = context.skinLiveResourceCounters,
+        .createHttpTransport = [](std::stop_token stop) {
+          return skin::createLuaSkinProductionHttpTransport(stop);
+        },
+        .audioBackend = skin::createLuaSkinApplicationAudioBackend(
+            context.jukebox.audioRuntime(), [this] {
+              return context.settings.audioVideo.audio.masterVolume;
+            }, {}, context.skinLiveResourceCounters),
+        .captureLegacyInputGeneration = [this] {
+          return context.inputDeviceRegistry.legacyInputGeneration(
+              rendering::render_width, rendering::render_height);
+        },
+        .configurationWrites = context.skinConfigurationWriteQueue.get(),
+        .diagnosticHistory = context.skinDiagnosticHistory.get(),
+        .stop = previewSkinStop.get_token()}, {
+        .keyMode = previewKeyMode,
+        .chartModel = previewChartVisualModel.get(),
+        .initialState = previewCapturedVisualState.get(),
+        .initialProjection = &projection,
+        .safeUiBounds = bounds});
+    if (session.disposition == GameplaySkinSessionDisposition::Ready) {
+      static_cast<PlayfieldPresentationCoordinator *>(previewPresentation.get())
+          ->installSkinSession(std::move(session.session));
+    } else if (session.disposition == GameplaySkinSessionDisposition::Failed) {
+      previewSkinStop.request_stop();
+      previewError = session.failure->diagnostic.message;
+    }
+#endif
+    lastLayoutWidth = -1;
   }
 }
 
@@ -173,8 +261,80 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
   const auto configuration =
       previewPresentationConfiguration(context.settings, *previewChart);
   previewVisualStateStore->setConfiguration(configuration);
-  previewRenderer->configure(configuration);
+  previewPresentation->configure(configuration);
   syncPreviewInputLayout();
+}
+
+PlayfieldProjectionResult SettingsScene::projectPreviewFrame() {
+  const auto &state = *previewCapturedVisualState;
+  return previewProjection->project(*previewChartVisualModel, state,
+      {.includeInvisibleNotes = state.configuration.showInvisibleNotes,
+       .latePoorTimingMicros = previewRenderer->projectionLatePoorTimingMicros(),
+       .pmsPoorDestination = previewPresentation->pmsPoorDestinationGeometry(),
+       .buildBuiltInPlan = previewPresentation->activeMode() == PresentationMode::BuiltIn,
+       .builtInTraversal = previewRenderer->projectionTraversal()});
+}
+
+void SettingsScene::renderPreview() {
+  if (!previewPresentation || !previewError.empty()) return;
+  syncPreviewPresentationConfiguration();
+  previewPresentation->refreshGeometry();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  const auto safe = getSafeAreaInsetsUi();
+  const std::array<double, 4> bounds{static_cast<float>(safe.left), static_cast<float>(safe.top),
+      static_cast<float>(rendering::window_width - safe.left - safe.right),
+      static_cast<float>(rendering::window_height - safe.top - safe.bottom)};
+  if (previewSkinBounds != bounds) {
+    static_cast<PlayfieldPresentationCoordinator *>(previewPresentation.get())
+        ->updateSkinViewportGeometry({bounds[0], bounds[1], bounds[2], bounds[3]});
+    previewSkinBounds = bounds;
+  }
+#endif
+  capturePreviewVisualState();
+  const auto projection = projectPreviewFrame();
+  (void)previewPresentation->prepareFrame(*previewCapturedVisualState, projection);
+  RenderContext renderContext(context.uiBatchRenderer);
+  RenderContext::UiBatchScope uiBatchScope(renderContext);
+  const auto result = previewPresentation->render(renderContext);
+  if (result.failure) {
+    previewError = result.failure->diagnostic.message;
+    lastLayoutWidth = -1;
+  }
+  syncPreviewInputLayout();
+  syncPreviewTouchLayout();
+}
+
+void SettingsScene::syncPreviewTouchLayout() {
+  if (!previewInputHandler || !previewPresentation) return;
+  auto layout = previewPresentation->touchLayout();
+  if (layout.lanes.empty() && layout.laneRegions.empty()) return;
+  const auto revision = previewPresentation->touchLayoutRevision();
+  if (previewTouchRouter && previewTouchLayoutRevision == revision) return;
+  previewTouchLayoutRevision = revision;
+  const auto now = static_cast<std::int64_t>(SDL_GetTicks64()) * 1000;
+  if (previewTouchRouter) {
+    (void)previewTouchRouter->updateLayout(std::move(layout), now);
+    return;
+  }
+  previewTouchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(0, std::move(layout),
+      gameplay::RealtimeTouchInputSink{
+          .context = this,
+          .emit = [](void *opaque, const gameplay::RealtimeGameplayInput &input) {
+            auto &scene = *static_cast<SettingsScene *>(opaque);
+            const auto scratches = scene.previewChart->Meta.GetScratchLaneIndices();
+            const bool scratch = std::ranges::find(scratches, input.lane) != scratches.end();
+            (void)scene.previewInputHandler->applyTouchLane(input.lane,
+                input.type == gameplay::RealtimeGameplayInputType::Press,
+                scratch ? std::optional<int>(input.backSpin ? -1 : 1) : std::nullopt);
+            return true;
+          },
+          .scratchLongNoteHeld = [](void *opaque, int lane) {
+            auto &scene = *static_cast<SettingsScene *>(opaque);
+            return std::ranges::any_of(scene.previewVisualNoteSources, [lane](const auto *note) {
+              const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+              return longNote && longNote->Lane == lane && longNote->IsHolding;
+            });
+          }});
 }
 
 void SettingsScene::syncPreviewAuthority() {
@@ -262,7 +422,11 @@ void SettingsScene::capturePreviewVisualState() {
 void SettingsScene::destroyPreviewRenderer() {
   destroyPreviewInputHandler();
   previewPresentationEvents.reset();
-  previewRenderer.reset();
+  previewSkinStop.request_stop();
+  previewRenderer = nullptr;
+  previewPresentation.reset();
+  previewProjection.reset();
+  previewError.clear();
   previewCapturedVisualState.reset();
   previewGaugeRules.reset();
   previewVisualStateStore.reset();
@@ -278,7 +442,7 @@ void SettingsScene::ensurePreviewInputHandler() {
     return;
   }
   ensurePreviewRenderer();
-  if (previewChart == nullptr || previewRenderer == nullptr ||
+  if (!previewError.empty() || previewChart == nullptr || previewRenderer == nullptr ||
       previewPresentationEvents == nullptr) {
     return;
   }
@@ -292,17 +456,39 @@ void SettingsScene::ensurePreviewInputHandler() {
     previewInputHandler = std::make_unique<RhythmInputHandler>(
         this, previewChart->Meta, context.inputDeviceRegistry,
         context.inputProfile,
-        makeGameplayInputScopes(previewChart->Meta.KeyMode),
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*previewChart)),
         LogicalGameplayInputAdapter::CommandCallback{},
-        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode),
+        context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*previewChart)),
         LogicalGameplayRegistryPolicy{.acceptKeyboardFromRegistry = false});
     previewInputHandler->discardPendingTouchEvents();
+    previewInputHandler->setTouchEventCallback(
+        [this](SDL_FingerID finger, ReplayTouchAction action, Vector3 position) {
+          if (!previewPresentation) return false;
+          if (!previewTouchRouter) return true;
+          const auto phase = action == ReplayTouchAction::Down ? gameplay::RealtimeTouchPhase::Down
+              : (action == ReplayTouchAction::Up || action == ReplayTouchAction::Cancel)
+                  ? gameplay::RealtimeTouchPhase::Up
+              : gameplay::RealtimeTouchPhase::Move;
+          if (rendering::render_width <= 0 || rendering::render_height <= 0) return true;
+          (void)previewTouchRouter->consume({.fingerId = finger, .phase = phase,
+              .normalizedX = (position.x * rendering::window_width * rendering::ui_scale_x +
+                             rendering::ui_offset_x) / rendering::render_width,
+              .normalizedY = (position.y * rendering::window_height * rendering::ui_scale_y +
+                             rendering::ui_offset_y) / rendering::render_height,
+              .steadyTimestampMicros = static_cast<std::int64_t>(SDL_GetTicks64()) * 1000});
+          return true;
+        });
     previewInputHandler->startListenSDL();
   }
   syncPreviewInputLayout();
 }
 
 void SettingsScene::destroyPreviewInputHandler() {
+  if (previewTouchRouter) {
+    (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks64()) * 1000);
+    previewTouchRouter.reset();
+  }
+  previewTouchLayoutRevision = 0;
   if (previewInputHandler != nullptr) {
     previewInputHandler->stopListen();
     previewInputHandler.reset();
@@ -321,8 +507,9 @@ void SettingsScene::syncPreviewInputLayout() {
     return;
   }
   previewInputHandler->setPlayAreaWidth(
-      context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
-  previewInputHandler->setTouchLaneOrder(previewRenderer->touchLayout().lanes);
+      context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*previewChart)));
+  previewInputHandler->setTouchLaneOrder(
+      (previewPresentation ? previewPresentation.get() : previewRenderer)->touchLayout().lanes);
 }
 
 void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {
@@ -504,13 +691,15 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
 }
 
 void SettingsScene::resetPreviewSimulation() {
+  if (previewTouchRouter)
+    (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks64()) * 1000);
   previewElapsedMicros = 0;
   previewFrameSerial = 0;
   if (previewLaneController != nullptr) {
     previewLaneController->resetLaneStates();
   }
-  if (previewRenderer != nullptr) {
-    previewRenderer->reset();
+  if (previewPresentation != nullptr) {
+    previewPresentation->reset();
   }
   if (previewVisualStateStore != nullptr &&
       previewChartVisualModel != nullptr) {

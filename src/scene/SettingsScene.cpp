@@ -203,6 +203,7 @@ void SettingsScene::onPresentationOrientationWillChange() {
 
 void SettingsScene::onPresentationOrientationChanged() {
   lastLayoutWidth = -1;
+  previewRendererDirty = previewActive;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   ensureGameplaySkinSettingsController();
 #endif
@@ -293,12 +294,7 @@ void SettingsScene::renderScene() {
   }
 #endif
   if (previewActive && previewRenderer != nullptr) {
-    syncPreviewPresentationConfiguration();
-    capturePreviewVisualState();
-    previewRenderer->refreshGeometry();
-    RenderContext renderContext(context.uiBatchRenderer);
-    RenderContext::UiBatchScope uiBatchScope(renderContext);
-    previewRenderer->render(renderContext, previewElapsedMicros);
+    renderPreview();
   }
 }
 
@@ -306,9 +302,10 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
   const bool losesFocus = event.type == SDL_APP_WILLENTERBACKGROUND ||
                           event.type == SDL_APP_DIDENTERBACKGROUND ||
                           (event.type == SDL_WINDOWEVENT &&
-                           (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                            (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
                             event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
                             event.window.event == SDL_WINDOWEVENT_HIDDEN));
+  if (losesFocus && previewActive) destroyPreviewInputHandler();
   if (losesFocus && audioVideoSession != nullptr &&
       audioVideoSession->hasDisplayPreview()) {
     const auto result = audioVideoSession->onFocusLost();

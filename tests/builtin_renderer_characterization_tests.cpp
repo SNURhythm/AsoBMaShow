@@ -2029,12 +2029,17 @@ struct SettingsScene {
   } context;
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
+  std::unique_ptr<PlayfieldPresentation> previewPresentation;
+  std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
+  std::uint64_t previewTouchLayoutRevision = 0;
+  std::vector<const bms_parser::Note *> previewVisualNoteSources;
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::map<Judgement, int> previewJudgeCount;
   int previewComboBreak = 0;
   void syncPreviewInputLayout();
+  void syncPreviewTouchLayout();
   void syncPreviewAuthority();
 };
 using settings_scene::kPreviewBpm;
@@ -2193,6 +2198,55 @@ void verifyScratchLanePosition(const RenderTarget &target) {
              "scratch note rendering follows the same lane order as touch input");
       renderer.setCharacterizationRecorder(nullptr);
       bgfx::frame();
+    }
+  }
+}
+
+void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  const auto profile = makeDefaultInputProfile();
+  for (const auto mode : settings_scene::kPreviewKeyModes) {
+    const auto chart = settings_scene::makePreviewChart(mode);
+    Judge judge(chart->Meta.Rank);
+    auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+    auto config = presentationConfig(0);
+    config.hideEmptyScratchLane = true;
+    renderer->configure(config);
+    PreviewRecordingControl control;
+    RhythmInputHandler handler(&control, chart->Meta, registry, profile,
+                                makeGameplayInputScopes(mode));
+    SettingsScene scene;
+    scene.previewChart = chart.get();
+    scene.previewRenderer = renderer.get();
+    scene.previewPresentation = std::move(renderer);
+    scene.previewInputHandler = &handler;
+    scene.syncPreviewTouchLayout();
+    const auto layout = scene.previewPresentation->touchLayout();
+    expect(scene.previewTouchRouter != nullptr && layout.lanes.size() ==
+               static_cast<std::size_t>(mode < 0 ? -mode : chart->Meta.GetTotalLaneCount()),
+           "preview routes the displayed lane count for each key mode");
+    if (!scene.previewTouchRouter) continue;
+    for (std::size_t index = 0; index < layout.lanes.size(); ++index) {
+      if (layout.scratch[index]) continue;
+      const float fraction = (static_cast<float>(index) + 0.5f) / layout.lanes.size();
+      const float leftX = (layout.bottomLeft.x + layout.topLeft.x) * 0.5f;
+      const float rightX = (layout.bottomRight.x + layout.topRight.x) * 0.5f;
+      const float leftY = (layout.bottomLeft.y + layout.topLeft.y) * 0.5f;
+      const float rightY = (layout.bottomRight.y + layout.topRight.y) * 0.5f;
+      const gameplay::RealtimeTouchSample down{
+          .fingerId = static_cast<std::int64_t>(index), .phase = gameplay::RealtimeTouchPhase::Down,
+          .normalizedX = leftX + (rightX - leftX) * fraction,
+          .normalizedY = leftY + (rightY - leftY) * fraction, .steadyTimestampMicros = 100'000};
+      expect(scene.previewTouchRouter->consume(down), "preview touch press is accepted");
+      expect(!control.presses.empty() && control.presses.back() == layout.lanes[index],
+             "preview touch reaches the displayed raw lane, including scratchless and DP modes");
+      auto up = down;
+      up.phase = gameplay::RealtimeTouchPhase::Up;
+      up.steadyTimestampMicros = 200'000;
+      expect(scene.previewTouchRouter->consume(up), "preview touch release is accepted");
+      expect(!control.releases.empty() && control.releases.back() == layout.lanes[index],
+             "preview release clears the same displayed lane");
     }
   }
 }
@@ -2692,6 +2746,7 @@ int main() {
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);
+      verifyPreviewKeyModeTouchRouting(target);
       verifyPreviewPacemakerDiff(target);
       verifyIndividualJudgementLabelVisibility(target);
       verifySeparatedJudgementCombo(target);

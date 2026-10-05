@@ -11,5 +11,6 @@ source = (args.root / 'src/scene/SettingsScenePreview.cpp').read_text()
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text('\n'.join(extract(source, signature) for signature in (
     'void SettingsScene::syncPreviewInputLayout()',
+    'void SettingsScene::syncPreviewTouchLayout()',
     'void SettingsScene::syncPreviewAuthority()',
 )))

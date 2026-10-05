@@ -184,7 +184,7 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   const i18n::Text noteStartPositionLabel =
       formatNoteStartPositionLabel(context.settings.presentation().noteStartPositionPercent);
   const i18n::Text previewPlayAreaWidthLabel =
-      formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(7));
+      formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(previewKeyMode));
   const i18n::Text judgementIndicatorYLabel = formatJudgementPercentLabel(
       judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY));
   const i18n::Text judgementIndicatorWidthLabel =
