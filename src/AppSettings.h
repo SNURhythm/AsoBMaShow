@@ -125,9 +125,12 @@ public:
   static constexpr float kMinJudgementTextY = 0.0f;
   static constexpr float kMaxJudgementTextY = 1.0f;
   static constexpr float kDefaultJudgementTextY = 0.55f;
-  static constexpr float kDefaultJudgementTimingY = 0.65f;
-  static constexpr float kDefaultPacemakerDiffY = 0.72f;
-  static constexpr int kDefaultJudgementFeedbackSizePercent = 100;
+  // Restore the former two-pixel gaps with the regular font's 68/31/47-pixel
+  // rows, expressed as independent positions in the reference viewport.
+  static constexpr float kDefaultJudgementTimingY = kDefaultJudgementTextY + 52.0f / 1080.0f;
+  static constexpr float kDefaultPacemakerDiffY = kDefaultJudgementTextY + 93.0f / 1080.0f;
+  static constexpr int kDefaultJudgementFeedbackSizePercent = 50;
+  static constexpr int kDefaultPacemakerDiffSizePercent = 100;
   static constexpr int kMinJudgementFeedbackSizePercent = 25;
   static constexpr int kMaxJudgementFeedbackSizePercent = 500;
   static constexpr const char *kDefaultGaugeType = "normal";
@@ -231,12 +234,12 @@ public:
     float judgementTextY = kDefaultJudgementTextY;
     float judgementTimingY = kDefaultJudgementTimingY;
     int judgementTextSizePercent = kDefaultJudgementFeedbackSizePercent;
-    bool judgementTextBold = true;
+    bool judgementTextBold = false;
     int judgementTimingSizePercent = kDefaultJudgementFeedbackSizePercent;
-    bool judgementTimingBold = true;
+    bool judgementTimingBold = false;
     float pacemakerDiffY = kDefaultPacemakerDiffY;
-    int pacemakerDiffSizePercent = kDefaultJudgementFeedbackSizePercent;
-    bool pacemakerDiffBold = true;
+    int pacemakerDiffSizePercent = kDefaultPacemakerDiffSizePercent;
+    bool pacemakerDiffBold = false;
     JudgementIndicatorRenderMode judgementIndicatorRenderMode =
         JudgementIndicatorRenderMode::World3D;
     bool judgementCounterEnabled = true;
@@ -257,6 +260,8 @@ public:
       playAreaWidth4K = playAreaWidth5K = playAreaWidth6K = playAreaWidth7K =
           playAreaWidth8K = playAreaWidth10K = playAreaWidth14K = policy.width.defaultValue;
       if (orientation == PresentationOrientation::Portrait) {
+        judgementTimingY = kDefaultJudgementTextY + 52.0f / 1920.0f;
+        pacemakerDiffY = kDefaultJudgementTextY + 93.0f / 1920.0f;
         judgementIndicatorRenderMode = JudgementIndicatorRenderMode::Hud2D;
         judgementCounterPosition = JudgementCounterPosition::Left;
         gaugeBarPosition = GaugeBarPosition::Right;

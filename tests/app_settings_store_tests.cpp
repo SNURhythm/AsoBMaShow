@@ -1549,7 +1549,8 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.presentation().hiddenEnabled = false;
   expectedV0.presentation().hiddenRatio = 0.1F;
   expectedV0.skinSafetyLevel = skin::SkinSafetyLevel::Standard;
-  expectedV0.presentation().judgementTimingY = 0.83f;
+  expectedV0.presentation().judgementTimingY = 0.73f +
+      (AppSettings::kDefaultJudgementTimingY - AppSettings::kDefaultJudgementTextY);
   expectedV0.sanitize();
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
@@ -1892,7 +1893,7 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
              document["presentations"]["portrait"]["judgementTimingBold"] == false,
          "judgement and timing text styles persist independently");
   expect(document["presentations"]["landscape"]["judgementTextSizePercent"] == 25 &&
-             document["presentations"]["landscape"]["judgementTextBold"] == true &&
+             document["presentations"]["landscape"]["judgementTextBold"] == false &&
              document["presentations"]["landscape"]["judgementTimingSizePercent"] == 500 &&
              document["presentations"]["landscape"]["judgementTimingBold"] == true,
          "feedback styles use independent orientation values and clamp invalid sizes");
@@ -1959,8 +1960,13 @@ void testFeedbackDefaultsAndScaleMigration() {
   expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
   auto document = nlohmann::json::parse(readFile(path));
   const auto &defaults = document["presentations"]["landscape"];
-  expect(defaults["judgementTextBold"] == true && defaults["judgementTimingBold"] == true,
-         "new feedback defaults are bold");
+  expect(defaults["judgementTextSizePercent"] == 50 &&
+             defaults["judgementTimingSizePercent"] == 50 &&
+             defaults["pacemakerDiffSizePercent"] == 100 &&
+             defaults["judgementTextBold"] == false &&
+             defaults["judgementTimingBold"] == false &&
+             defaults["pacemakerDiffBold"] == false,
+         "feedback defaults retain the original sizes and regular weight");
   writeFile(path, R"({"schemaVersion":7,"judgementTextY":0.4,
       "judgementTextSizePercent":200,"judgementTimingSizePercent":50,
       "judgementTextBold":false})");

@@ -452,6 +452,15 @@ PlayfieldPresentationConfig presentationConfig(int coverPercent) {
       .judgementIndicatorHudMode = false,
       .judgementIndicatorRangeMilliseconds = 180,
       .judgementTextY = 0.34F,
+      // Keep the characterized custom style independent of application defaults.
+      .judgementTimingY = 0.65F,
+      .judgementTextSizePercent = 100,
+      .judgementTextBold = true,
+      .judgementTimingSizePercent = 100,
+      .judgementTimingBold = true,
+      .pacemakerDiffY = 0.72F,
+      .pacemakerDiffSizePercent = 100,
+      .pacemakerDiffBold = true,
       .judgementCounterEnabled = true,
       .judgementCounterPosition =
           AppSettings::JudgementCounterPosition::Right,
@@ -2255,6 +2264,35 @@ void verifyJudgementFeedbackStyles(const RenderTarget &target) {
     bgfx::frame();
     return renderer.judgementFeedbackTextViewsForTesting();
   };
+  for (const auto orientation : {AppSettings::PresentationOrientation::Landscape,
+                                 AppSettings::PresentationOrientation::Portrait}) {
+    const AppSettings::PresentationSettings defaults(orientation);
+    const bool portrait = orientation == AppSettings::PresentationOrientation::Portrait;
+    rendering::window_width = portrait ? 1080 : 1920;
+    rendering::window_height = portrait ? 1920 : 1080;
+    config.judgementTextY = defaults.judgementTextY;
+    config.judgementTimingY = defaults.judgementTimingY;
+    config.pacemakerDiffY = defaults.pacemakerDiffY;
+    config.judgementTextSizePercent = defaults.judgementTextSizePercent;
+    config.judgementTextBold = defaults.judgementTextBold;
+    config.judgementTimingSizePercent = defaults.judgementTimingSizePercent;
+    config.judgementTimingBold = defaults.judgementTimingBold;
+    config.pacemakerDiffSizePercent = defaults.pacemakerDiffSizePercent;
+    config.pacemakerDiffBold = defaults.pacemakerDiffBold;
+    const auto views = render();
+    expect(views[0]->pointSize() == 38 && views[1]->pointSize() == 21 &&
+               views[2]->pointSize() == 21 && views[3]->pointSize() == 32,
+           "default feedback retains the original point sizes");
+    expect(std::ranges::all_of(views, [](const auto *view) {
+             return view->fontWeight() == TextView::FontWeight::Regular;
+           }), "default feedback uses regular weight");
+    expect(views[1]->getY() + views[1]->getHeight() + 2 == views[0]->getY() &&
+               views[3]->getY() + views[3]->getHeight() + 2 == views[1]->getY(),
+           "default positions retain two-pixel gaps: judge=" +
+               std::to_string(views[0]->getY()) + "/" + std::to_string(views[0]->getHeight()) +
+               ", timing=" + std::to_string(views[1]->getY()) + "/" + std::to_string(views[1]->getHeight()) +
+               ", pacemaker=" + std::to_string(views[3]->getY()) + "/" + std::to_string(views[3]->getHeight()));
+  }
   for (const auto textPercent : {25, 50, 100, 200, 500, 100}) {
     config.judgementTextSizePercent = textPercent;
     config.judgementTextBold = textPercent != 100;

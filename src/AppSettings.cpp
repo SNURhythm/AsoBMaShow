@@ -403,6 +403,7 @@ std::string parsePacemakerTargetId(const std::string &value,
 
 void AppSettings::PresentationSettings::sanitize(PresentationOrientation orientation) {
   const auto policy = player_settings::presentationGeometryPolicy(orientation);
+  const PresentationSettings defaults(orientation);
   skin.sanitize();
   laneAngleDegrees = sanitizeFloat(laneAngleDegrees, policy.angle.defaultValue,
                                    policy.angle.minimum, policy.angle.maximum);
@@ -436,9 +437,9 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
           judgementIndicatorRangeMilliseconds);
   judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
-  judgementTimingY = sanitizeFloat(judgementTimingY, kDefaultJudgementTimingY,
+  judgementTimingY = sanitizeFloat(judgementTimingY, defaults.judgementTimingY,
                                    kMinJudgementTextY, kMaxJudgementTextY);
-  pacemakerDiffY = sanitizeFloat(pacemakerDiffY, kDefaultPacemakerDiffY,
+  pacemakerDiffY = sanitizeFloat(pacemakerDiffY, defaults.pacemakerDiffY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
   pacemakerDiffSizePercent = std::clamp(pacemakerDiffSizePercent,
       kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);

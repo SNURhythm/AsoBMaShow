@@ -372,12 +372,12 @@ private:
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool judgementTextBold = true;
+  bool judgementTextBold = false;
   int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool judgementTimingBold = true;
+  bool judgementTimingBold = false;
   float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
-  int pacemakerDiffSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool pacemakerDiffBold = true;
+  int pacemakerDiffSizePercent = AppSettings::kDefaultPacemakerDiffSizePercent;
+  bool pacemakerDiffBold = false;
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;

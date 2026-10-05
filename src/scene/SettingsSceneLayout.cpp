@@ -1045,7 +1045,7 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
   body->setWidthPercent(100);
   body->setGap(metrics.compact ? 12.0f : 16.0f);
   const auto appendPosition = [this, body, &metrics, previewStyle](const i18n::Text &label,
-      float AppSettings::PresentationSettings::*member, float defaultValue) {
+      float AppSettings::PresentationSettings::*member) {
     TextView *valueText = nullptr;
     body->addView(makeSummaryRow(metrics, label, &valueText));
     auto *row = new View();
@@ -1089,8 +1089,9 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
       row->addView(input);
     }
     auto *reset = makeResetButton(metrics);
-    reset->setOnClickListener([this, member, defaultValue, refresh]() {
-      context.settings.presentation().*member = defaultValue;
+    reset->setOnClickListener([this, member, refresh]() {
+      const AppSettings::PresentationSettings defaults(context.settings.activePresentationOrientation());
+      context.settings.presentation().*member = defaults.*member;
       refresh();
       persistSettings();
     });
@@ -1098,11 +1099,11 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
     body->addView(row);
   };
   appendPosition(i18n::message("settings.preview_layout.judge_text_y.label"),
-                 &AppSettings::PresentationSettings::judgementTextY, AppSettings::kDefaultJudgementTextY);
+                 &AppSettings::PresentationSettings::judgementTextY);
   appendPosition(i18n::message("settings.feedback.timing_y.label"),
-                 &AppSettings::PresentationSettings::judgementTimingY, AppSettings::kDefaultJudgementTimingY);
+                 &AppSettings::PresentationSettings::judgementTimingY);
   appendPosition(i18n::message("settings.feedback.pacemaker_y.label"),
-                 &AppSettings::PresentationSettings::pacemakerDiffY, AppSettings::kDefaultPacemakerDiffY);
+                 &AppSettings::PresentationSettings::pacemakerDiffY);
   return body;
 }
 
@@ -1187,8 +1188,9 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
     if (!previewStyle) row->addView(weight);
     auto *reset = makeResetButton(metrics);
     reset->setOnClickListener([this, sizeMember, boldMember, refreshSize, refreshWeight]() {
-      context.settings.presentation().*sizeMember = AppSettings::kDefaultJudgementFeedbackSizePercent;
-      context.settings.presentation().*boldMember = true;
+      const AppSettings::PresentationSettings defaults;
+      context.settings.presentation().*sizeMember = defaults.*sizeMember;
+      context.settings.presentation().*boldMember = defaults.*boldMember;
       refreshSize();
       refreshWeight();
       persistSettings();

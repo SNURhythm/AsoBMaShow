@@ -699,7 +699,9 @@ json settingsToJson(const AppSettings &settings) {
 }
 
 void readPresentation(const json &document, AppSettings::PresentationSettings &settings,
-                      std::vector<std::string> &diagnostics) {
+                      std::vector<std::string> &diagnostics,
+                      AppSettings::PresentationOrientation orientation =
+                          AppSettings::PresentationOrientation::Landscape) {
   readValue(document, "scratchLaneOnRight", settings.scratchLaneOnRight, diagnostics);
   readValue(document, "hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K, diagnostics);
   readValue(document, "hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K, diagnostics);
@@ -737,7 +739,8 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
   readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
   settings.judgementTimingY = std::clamp(settings.judgementTextY +
-      (AppSettings::kDefaultJudgementTimingY - AppSettings::kDefaultJudgementTextY), 0.0f, 1.0f);
+      (AppSettings::PresentationSettings(orientation).judgementTimingY -
+       AppSettings::kDefaultJudgementTextY), 0.0f, 1.0f);
   readValue(document, "judgementTimingY", settings.judgementTimingY, diagnostics);
   readValue(document, "judgementTextSizePercent", settings.judgementTextSizePercent, diagnostics);
   readValue(document, "judgementTextBold", settings.judgementTextBold, diagnostics);
@@ -1038,7 +1041,7 @@ AppSettings settingsFromJson(const json &document,
         invalidValue(std::string("presentations.") + name, "expected object", diagnostics);
         continue;
       }
-      readPresentation(*block, settings.presentation(orientation), diagnostics);
+      readPresentation(*block, settings.presentation(orientation), diagnostics, orientation);
     }
   }
   readEnum(document, "skinSafetyLevel", settings.skinSafetyLevel, diagnostics);
