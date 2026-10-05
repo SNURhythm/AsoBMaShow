@@ -4440,18 +4440,31 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         bool followsPlayArea = std::holds_alternative<SkinNoteObject>(object->payload) ||
                                std::holds_alternative<SkinCoverObject>(object->payload) ||
                                std::holds_alternative<SkinJudgeObject>(object->payload) ||
-                               laneEffectTimer(lookupIndex, destination.presentation);
+                               laneEffectTimer(lookupIndex, destination.presentation) ||
+                               std::ranges::any_of(destination.presentation.offsetIds,
+                                                   pinnedLaneCoverRuntimeOffset);
+        // Lane covers are ordinary rate sliders authored above the lanes;
+        // their attached labels use the reserved live cover/lift offsets.
+        if (const auto *slider = std::get_if<SkinSliderObject>(&object->payload)) {
+          followsPlayArea = followsPlayArea ||
+                            laneCoverRateProperty(inputs.model, *slider);
+        }
         // Skins have no universal HUD grouping. Move lane-local artwork with
         // the lanes, retaining the original camera for surrounding objects.
         if (!followsPlayArea && !destination.presentation.frames.empty()) {
           followsPlayArea = std::ranges::all_of(
               destination.presentation.frames, [&](const auto &frame) {
                 const double margin = playArea->width * 0.05;
-                return frame.width > 0.0 && frame.height >= 0.0 &&
-                       frame.x >= playArea->x - margin &&
-                       frame.x + frame.width <= playArea->x + playArea->width + margin &&
-                       frame.y >= playArea->y - playArea->height * 0.1 &&
-                       frame.y + frame.height <= playArea->y + playArea->height * 1.1;
+                // Mirrored backgrounds use signed sizes, and their entrance
+                // animation may begin collapsed. Classify their visible bounds.
+                const auto [left, right] =
+                    std::minmax({frame.x, frame.x + frame.width});
+                const auto [bottom, top] =
+                    std::minmax({frame.y, frame.y + frame.height});
+                return left >= playArea->x - margin &&
+                       right <= playArea->x + playArea->width + margin &&
+                       bottom >= playArea->y - playArea->height * 0.1 &&
+                       top <= playArea->y + playArea->height * 1.1;
               });
         }
         if (!followsPlayArea) {

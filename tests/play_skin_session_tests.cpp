@@ -5363,7 +5363,7 @@ return {
   void addTouchGeometry(
       SkinFloatWriterId writer = SkinFloatWriterId{1},
       std::optional<double> firstLaneSecondaryDestinationY = std::nullopt,
-      double destinationX = 100.0) {
+      double destinationX = 100.0, int valueSelector = 4) {
     resources_.addImage(80);
     const bool dynamicValue = writer == SkinFloatWriterId{4} ||
                               writer == SkinFloatWriterId{6};
@@ -5376,7 +5376,7 @@ return {
                    ? std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
                          *writerDragValue_}
                    : std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
-                         SkinBuiltinPropertySelector{.value = 4}});
+                         SkinBuiltinPropertySelector{.value = valueSelector}});
     model_.model.floatProperties.push_back(
         {.id = valueProperty,
          .domain = SkinFloatPropertyDomain::Rate,
@@ -5518,6 +5518,36 @@ return {
                                       .width = 40.0,
                                       .height = 20.0}},
                           .authoredOrdinal = 820}});
+  }
+
+  void configureLaneCover(bool namedSelector, bool interactive) {
+    auto &slider = std::get<SkinSliderObject>(model_.model.objects[
+        model_.model.objects.size() - 2].payload);
+    slider.direction = 2;
+    slider.range = 500.0;
+    if (!interactive) slider.writer.reset();
+    model_.model.floatProperties.back().source = namedSelector
+        ? SkinBuiltinPropertySelector{.value = std::string{"lanecover"}}
+        : SkinBuiltinPropertySelector{.value = 4};
+    model_.model.destinations.back().presentation.frames = {
+        {.timeMillis = 0, .x = 100.0, .y = 520.0, .width = 200.0, .height = 500.0}};
+    addClickableImage();
+    auto &label = model_.model.destinations.back().presentation;
+    label.frames.front().x = 110.0;
+    label.frames.front().y = 600.0;
+    label.offsetIds = {4};
+  }
+
+  void configureLaneBackground(bool flipX, bool flipY) {
+    auto &destination = model_.model.destinations.back().presentation;
+    const double x = flipX ? 300.0 : 100.0;
+    const double y = flipY ? 520.0 : 20.0;
+    const double width = flipX ? -200.0 : 200.0;
+    destination.loop = 1000;
+    destination.frames = {
+        {.timeMillis = 0, .x = x, .y = y, .width = width, .height = 0.0},
+        {.timeMillis = 1000, .x = x, .y = y, .width = width,
+         .height = flipY ? -500.0 : 500.0}};
   }
 
   void configureLaneEffect(int timer, bool bomb) {
@@ -7358,6 +7388,92 @@ void testImageActTouchQueuesPinnedEventOnDown() {
          "the queued Image act event reaches the next frame transaction");
 }
 
+void testFocusedMirroredLaneBackgrounds() {
+  for (const bool flipX : {false, true}) {
+    for (const bool flipY : {false, true}) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      fixture.addTouchGeometry();
+      fixture.addClickableImage();
+      fixture.configureLaneBackground(flipX, flipY);
+      fixture.addOrderedClickableImage(900.0);
+      ViewportSettings settings;
+      settings.centerPlayArea = true;
+      settings.keepHudFixed = true;
+      fixture.session().setViewport(settings);
+      const auto frame = fixture.session().prepareFrame(stateAt(100), projectionAt(100), {});
+      expect(frame.ready() && frame.evaluation.submitReady,
+             "mirrored lane background frame prepares");
+      if (!frame.evaluation.submitReady) continue;
+      bool moved = false;
+      for (const auto &command : frame.evaluation.submitReady->commands) {
+        const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        if (command.sourceObject != 82 || !quad) continue;
+        float left = quad->vertices[0].x, right = left;
+        float top = quad->vertices[0].y, bottom = top;
+        for (const auto &vertex : quad->vertices) {
+          left = std::min(left, vertex.x);
+          right = std::max(right, vertex.x);
+          top = std::min(top, vertex.y);
+          bottom = std::max(bottom, vertex.y);
+        }
+        moved = std::abs(left - 496.0F) < 0.001F &&
+                std::abs(right - 784.0F) < 0.001F &&
+                std::abs(top) < 0.001F && std::abs(bottom - 720.0F) < 0.001F;
+      }
+      expect(moved && frame.evaluation.submitReady->commands.back().sourceObject == 82,
+             "mirrored and growing lane backgrounds follow the foreground play area");
+    }
+  }
+}
+
+void testFocusedLaneCoverAndAttachedArtwork() {
+  for (const bool namedSelector : {false, true}) {
+    for (const bool interactive : {false, true}) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      fixture.addTouchGeometry();
+      fixture.configureLaneCover(namedSelector, interactive);
+      fixture.addOrderedClickableImage(900.0);
+      ViewportSettings settings;
+      settings.centerPlayArea = true;
+      settings.keepHudFixed = true;
+      fixture.session().setViewport(settings);
+      auto state = stateAt(1);
+      state.authority.laneCoverEnabled = true;
+      state.authority.laneCoverPercent = 50;
+      const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+      expect(frame.ready() && frame.evaluation.submitReady &&
+                 frame.evaluation.interactionLayout,
+             "focused lane cover frame prepares");
+      if (!frame.evaluation.submitReady || !frame.evaluation.interactionLayout) continue;
+      bool movedCover = false;
+      bool movedLabel = false;
+      const auto &commands = frame.evaluation.submitReady->commands;
+      for (const auto &command : commands) {
+        const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        if (!quad) continue;
+        if (command.sourceObject == 80) {
+          movedCover = std::abs(quad->vertices[0].x - 496.0F) < 0.001F &&
+                       std::abs(quad->vertices[0].y - 360.0F) < 0.001F;
+        }
+        if (command.sourceObject == 82) {
+          movedLabel = std::abs(quad->vertices[0].x - 510.4F) < 0.001F &&
+                       std::abs(quad->vertices[0].y - 244.8F) < 0.001F;
+        }
+      }
+      expect(movedCover && movedLabel && commands.back().sourceObject == 82,
+             "lane cover and offset-attached artwork follow the foreground play area");
+      if (interactive) {
+        expect(frame.evaluation.interactionLayout->hitTestUiControl({600.0F, 180.0F}).sourceObject == 80,
+               "lane cover touch target follows its moved drawing");
+      }
+      expect(frame.evaluation.interactionLayout->hitTestUiControl({920.0F, 610.0F}).sourceObject == 86,
+             "unrelated HUD retains its original camera");
+    }
+  }
+}
+
 void testFocusedLaneEffectsFollowTimers() {
   for (const int timer : {121, 51}) {
     SessionFixture fixture;
@@ -7394,7 +7510,7 @@ void testPlayAreaFramingKeepsDrawingAndInteractionTogether() {
   for (const bool keepHudFixed : {false, true}) {
     SessionFixture fixture;
     if (!fixture.ready()) return;
-    fixture.addTouchGeometry(SkinFloatWriterId{1}, std::nullopt, 900.0);
+    fixture.addTouchGeometry(SkinFloatWriterId{1}, std::nullopt, 900.0, 17);
     fixture.addClickableImage();
     fixture.addOrderedClickableImage(500.0);
     ViewportSettings settings;
@@ -10812,6 +10928,8 @@ int main(int argc, char **argv) {
   testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
+  testFocusedMirroredLaneBackgrounds();
+  testFocusedLaneCoverAndAttachedArtwork();
   testFocusedLaneEffectsFollowTimers();
   testPlayAreaFramingKeepsDrawingAndInteractionTogether();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
