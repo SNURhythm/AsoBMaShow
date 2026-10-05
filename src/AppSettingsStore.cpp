@@ -531,6 +531,7 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
   for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
     judgementVisibility[option.label] = settings.judgementTextVisibility.*option.member;
   }
+  judgementVisibility["COMBO"] = settings.judgementTextVisibility.combo;
   return {
       {"scratchLaneOnRight", settings.scratchLaneOnRight},
       {"hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K},
@@ -748,6 +749,7 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
         readValue(*found, option.label, settings.judgementTextVisibility.*option.member,
                   diagnostics);
       }
+      readValue(*found, "COMBO", settings.judgementTextVisibility.combo, diagnostics);
     } else {
       invalidValue("judgementTextVisibility", "expected object", diagnostics);
     }

@@ -2288,6 +2288,29 @@ void verifyIndividualJudgementLabelVisibility(const RenderTarget &target) {
     expect(views[0]->getVisible() && views[0]->getText() == hidden.label,
            "live visibility changes refresh the current label without another judgement");
   }
+  config.judgementTextVisibility = {};
+  config.judgementTextVisibility.combo = false;
+  renderer.onJudge(JudgeResult(Great, -15'000), 123, 456,
+                   {.songTimeMicros = kRenderMicros,
+                    .visualTimeMicros = kRenderMicros,
+                    .bgaTimeMicros = kRenderMicros});
+  auto views = render();
+  expect(views[0]->getVisible() && views[0]->getText() == "GREAT" &&
+             !renderer.comboTextViewForTesting()->getVisible(),
+         "hiding combo removes both combo readouts while preserving the judgement label");
+  config.judgementTextVisibility.great = false;
+  views = render();
+  expect(!views[0]->getVisible() && views[0]->getText().empty() &&
+             !renderer.comboTextViewForTesting()->getVisible() &&
+             views[1]->getVisible() && views[1]->getText() == "FAST" &&
+             views[2]->getVisible() && !views[2]->getText().empty(),
+         "hiding judgement and combo together preserves timing feedback");
+  config.judgementTextVisibility.combo = true;
+  views = render();
+  expect(views[0]->getVisible() && views[0]->getText() == "123" &&
+             renderer.comboTextViewForTesting()->getVisible() &&
+             renderer.comboTextViewForTesting()->getText() == "COMBO 123",
+         "live combo visibility restores both current values without another judgement");
 }
 
 void verifyJudgementFeedbackStyles(const RenderTarget &target) {

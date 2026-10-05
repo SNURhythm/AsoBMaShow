@@ -4249,7 +4249,7 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
     if (hasJudgement && judgementTextVisibility.isVisible(judgement)) {
       judgeLine = JudgeResult(judgement, 0).toString();
     }
-    if (hasJudgement && combo > 0) {
+    if (hasJudgement && combo > 0 && judgementTextVisibility.combo) {
       if (!judgeLine.empty()) judgeLine.push_back(' ');
       judgeLine += std::to_string(combo);
     }
@@ -4296,6 +4296,7 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
 
   scoreText->setText("SCORE " + std::to_string(score));
   if (comboText != nullptr) {
+    comboText->setVisible(judgementTextVisibility.combo);
     comboText->setText("COMBO " + std::to_string(combo));
     comboText->setColor(
         ui_theme::sdl(hasJudgement ? hudJudgementComboColor(judgement)

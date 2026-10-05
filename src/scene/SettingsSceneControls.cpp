@@ -148,6 +148,11 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 }
 } // namespace
 
+void SettingsScene::styleVisibilityButton(Button *button, TextView *text, bool visible) {
+  applySemanticButtonStyle(button, text,
+      visible ? SettingsButtonTone::Success : SettingsButtonTone::Danger);
+}
+
 void SettingsScene::refreshSettingsText(bool syncInputs) {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;

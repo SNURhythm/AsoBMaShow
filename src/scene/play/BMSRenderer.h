@@ -703,6 +703,9 @@ public:
     return {judgeText.get(), judgementTimingDirectionText.get(),
             judgementTimingMsText.get(), pacemakerDeltaText.get()};
   }
+  [[nodiscard]] const TextView *comboTextViewForTesting() const {
+    return comboText.get();
+  }
   void setCharacterizationRecorder(
       bms_renderer_characterization::Recorder *recorder) {
     characterizationRecorder = recorder;

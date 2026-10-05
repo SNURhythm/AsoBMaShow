@@ -1216,27 +1216,34 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   visibilityControls->setFlexWrap(YGWrapWrap);
   visibilityControls->setGap(8.0F);
   if (previewStyle) visibilityControls->setJustifyContent(YGJustifyCenter);
-  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+  const auto appendVisibility = [this, visibilityControls, &metrics](
+      const i18n::Text &label, bool player_settings::JudgementTextVisibility::*member) {
     auto *text = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
                           TextView::CENTER, TextView::MIDDLE);
-    const auto refresh = [this, text, option]() {
-      const bool visible = context.settings.presentation().judgementTextVisibility.*option.member;
-      text->setLocalizedText(i18n::message("settings.skins.feedback.judgement_visibility.value",
-          {{"judgement", option.label},
-           {"state", i18n::message(visible ? "settings.skins.visible.label"
-                                         : "settings.skins.hidden.label")}}));
-    };
-    refresh();
     auto *toggle = makeControlButton(metrics.compact ? 180 : 200,
                                      metrics.actionButtonHeight, text);
-    toggle->setOnClickListener([this, option, refresh]() {
-      auto &visible = context.settings.presentation().judgementTextVisibility.*option.member;
+    const auto refresh = [this, text, toggle, label, member]() {
+      const bool visible = context.settings.presentation().judgementTextVisibility.*member;
+      text->setLocalizedText(i18n::message("settings.skins.feedback.judgement_visibility.value",
+          {{"judgement", label},
+           {"state", i18n::message(visible ? "settings.skins.visible.label"
+                                         : "settings.skins.hidden.label")}}));
+      styleVisibilityButton(toggle, text, visible);
+    };
+    refresh();
+    toggle->setOnClickListener([this, member, refresh]() {
+      auto &visible = context.settings.presentation().judgementTextVisibility.*member;
       visible = !visible;
       refresh();
       persistSettings();
     });
     visibilityControls->addView(toggle);
+  };
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+    appendVisibility(option.label, option.member);
   }
+  appendVisibility(i18n::message("settings.skins.feedback.combo.label"),
+                   &player_settings::JudgementTextVisibility::combo);
   body->addView(visibilityControls);
   appendStyle(i18n::message("settings.skins.feedback.judgement_size.percent_label"),
               &AppSettings::PresentationSettings::judgementTextSizePercent,

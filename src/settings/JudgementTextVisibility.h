@@ -13,6 +13,7 @@ struct JudgementTextVisibility {
   bool bad = true;
   bool poor = true;
   bool kpoor = true;
+  bool combo = true;
 
   [[nodiscard]] bool isVisible(Judgement judgement) const;
   bool operator==(const JudgementTextVisibility &) const = default;

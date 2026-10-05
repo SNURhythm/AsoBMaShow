@@ -389,6 +389,7 @@ private:
   void initView();
   void resetViewState();
   void ensureLayoutUpToDate();
+  void styleVisibilityButton(Button *button, TextView *text, bool visible);
   View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
   View *buildJudgementFeedbackPositionControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);

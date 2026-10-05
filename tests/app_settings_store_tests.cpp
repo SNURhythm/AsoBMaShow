@@ -2007,7 +2007,7 @@ void testJudgementLabelVisibilityRoundTrip() {
   expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
   auto document = nlohmann::json::parse(readFile(path));
   const nlohmann::json selected = {{"PGREAT", false}, {"GREAT", true},
-      {"GOOD", false}, {"BAD", true}, {"POOR", false}, {"KPOOR", true}};
+      {"GOOD", false}, {"BAD", true}, {"POOR", false}, {"KPOOR", true}, {"COMBO", false}};
   document["presentations"]["landscape"]["judgementTextVisibility"] = selected;
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
@@ -2016,7 +2016,7 @@ void testJudgementLabelVisibilityRoundTrip() {
   expect(document["presentations"]["landscape"]["judgementTextVisibility"] == selected,
          "individual judgement visibility survives save and reload");
   const nlohmann::json allVisible = {{"PGREAT", true}, {"GREAT", true},
-      {"GOOD", true}, {"BAD", true}, {"POOR", true}, {"KPOOR", true}};
+      {"GOOD", true}, {"BAD", true}, {"POOR", true}, {"KPOOR", true}, {"COMBO", true}};
   expect(document["presentations"]["portrait"]["judgementTextVisibility"] == allVisible,
          "judgement visibility is independent by orientation and defaults to visible");
 
