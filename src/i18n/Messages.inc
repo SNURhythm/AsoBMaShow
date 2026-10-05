@@ -1772,6 +1772,8 @@
 {"settings.skins.existing_package.prefix", "Existing package: ", "기존 패키지: ", "既存のパッケージ: "},
 {"settings.skins.feedback.bold.label", "Bold", "굵게", "太字"},
 {"settings.skins.feedback.judgement_size.percent_label", "Judgement Text Size (%)", "판정 문구 크기 (%)", "判定文字サイズ (%)"},
+{"settings.skins.feedback.judgement_visibility.label", "Judgement labels (combo and timing stay visible)", "판정 문구 표시 (콤보와 타이밍은 유지)", "判定文字の表示（コンボ・タイミングは表示を維持）"},
+{"settings.skins.feedback.judgement_visibility.value", "{judgement}: {state}", "{judgement}: {state}", "{judgement}: {state}"},
 {"settings.skins.feedback.pacemaker_size.percent_label", "Pacemaker Diff Size (%)", "페이스메이커 점수 차이 크기 (%)", "ペースメーカー差分のサイズ (%)"},
 {"settings.skins.feedback.regular.label", "Regular", "보통", "標準"},
 {"settings.skins.feedback.timing_size.percent_label", "FAST/SLOW & ms Size (%)", "FAST/SLOW 및 ms 크기 (%)", "FAST/SLOW・ms サイズ (%)"},

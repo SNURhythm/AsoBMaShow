@@ -3158,6 +3158,7 @@ void GamePlayScene::init() {
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           context.settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextVisibility = context.settings.presentation().judgementTextVisibility,
       .judgementTextY = context.settings.presentation().judgementTextY,
       .judgementTimingY = context.settings.presentation().judgementTimingY,
       .judgementTextSizePercent = context.settings.presentation().judgementTextSizePercent,

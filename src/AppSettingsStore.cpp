@@ -527,6 +527,10 @@ void readSkinProfileSettings(const json &document,
 }
 
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
+  json judgementVisibility = json::object();
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+    judgementVisibility[option.label] = settings.judgementTextVisibility.*option.member;
+  }
   return {
       {"scratchLaneOnRight", settings.scratchLaneOnRight},
       {"hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K},
@@ -554,6 +558,7 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
       {"judgementIndicatorRangeMilliseconds",
        settings.judgementIndicatorRangeMilliseconds},
+      {"judgementTextVisibility", std::move(judgementVisibility)},
       {"judgementTextY", settings.judgementTextY},
       {"judgementTimingY", settings.judgementTimingY},
       {"judgementFeedbackSizeVersion", 2},
@@ -737,6 +742,16 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             settings.judgementIndicatorWidthScale, diagnostics);
   readValue(document, "judgementIndicatorRangeMilliseconds",
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
+  if (const auto found = document.find("judgementTextVisibility"); found != document.end()) {
+    if (found->is_object()) {
+      for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+        readValue(*found, option.label, settings.judgementTextVisibility.*option.member,
+                  diagnostics);
+      }
+    } else {
+      invalidValue("judgementTextVisibility", "expected object", diagnostics);
+    }
+  }
   readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
   settings.judgementTimingY = std::clamp(settings.judgementTextY +
       (AppSettings::PresentationSettings(orientation).judgementTimingY -

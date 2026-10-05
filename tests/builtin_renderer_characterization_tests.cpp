@@ -2238,6 +2238,58 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
 }
 
+void verifyIndividualJudgementLabelVisibility(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  rendering::UiBatchRenderer batch;
+  auto config = presentationConfig(0);
+  config.fastSlowCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+  config.millisecondsCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+  const auto render = [&]() {
+    renderer.configure(config);
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    bgfx::frame();
+    return renderer.judgementFeedbackTextViewsForTesting();
+  };
+  for (const auto &hidden : player_settings::kJudgementTextVisibilityOptions) {
+    config.judgementTextVisibility = {};
+    config.judgementTextVisibility.*hidden.member = false;
+    for (const auto judgement : {PGreat, Great, Good, Bad, Poor, Kpoor}) {
+      renderer.onJudge(JudgeResult(judgement, -15'000), 123, 456,
+                       {.songTimeMicros = kRenderMicros,
+                        .visualTimeMicros = kRenderMicros,
+                        .bgaTimeMicros = kRenderMicros});
+      const auto views = render();
+      expect(views[0]->getVisible() && views[0]->getText() ==
+                 (judgement == hidden.judgement ? "123"
+                     : JudgeResult(judgement, 0).toString() + " 123"),
+             "only the selected judgement label disappears while combo stays visible");
+      expect(views[1]->getVisible() && views[1]->getText() == "FAST" &&
+                 views[2]->getVisible() && !views[2]->getText().empty(),
+             "hiding a judgement label preserves FAST/SLOW and millisecond feedback");
+    }
+    renderer.onJudge(JudgeResult(hidden.judgement, 15'000), 0, 456,
+                     {.songTimeMicros = kRenderMicros,
+                      .visualTimeMicros = kRenderMicros,
+                      .bgaTimeMicros = kRenderMicros});
+    auto views = render();
+    expect(!views[0]->getVisible() && views[0]->getText().empty() &&
+               views[1]->getVisible() && views[1]->getText() == "SLOW",
+           "hidden zero-combo judgement clears stale text but retains timing");
+    config.judgementTextVisibility.*hidden.member = true;
+    views = render();
+    expect(views[0]->getVisible() && views[0]->getText() == hidden.label,
+           "live visibility changes refresh the current label without another judgement");
+  }
+}
+
 void verifyJudgementFeedbackStyles(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -2514,6 +2566,7 @@ int main() {
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);
       verifyPreviewPacemakerDiff(target);
+      verifyIndividualJudgementLabelVisibility(target);
       verifyJudgementFeedbackStyles(target);
       verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {

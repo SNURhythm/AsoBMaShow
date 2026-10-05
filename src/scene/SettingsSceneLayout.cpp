@@ -1206,6 +1206,38 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
       body->addView(weightRow);
     }
   };
+  auto *visibilityLabel = makeWrappedText(
+      i18n::message("settings.skins.feedback.judgement_visibility.label"),
+      metrics.smallTextSize, ui_theme::textSecondary());
+  body->addView(visibilityLabel);
+  auto *visibilityControls = new View();
+  visibilityControls->setWidthPercent(100);
+  visibilityControls->setFlexDirection(FlexDirection::Row);
+  visibilityControls->setFlexWrap(YGWrapWrap);
+  visibilityControls->setGap(8.0F);
+  if (previewStyle) visibilityControls->setJustifyContent(YGJustifyCenter);
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+    auto *text = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+                          TextView::CENTER, TextView::MIDDLE);
+    const auto refresh = [this, text, option]() {
+      const bool visible = context.settings.presentation().judgementTextVisibility.*option.member;
+      text->setLocalizedText(i18n::message("settings.skins.feedback.judgement_visibility.value",
+          {{"judgement", option.label},
+           {"state", i18n::message(visible ? "settings.skins.visible.label"
+                                         : "settings.skins.hidden.label")}}));
+    };
+    refresh();
+    auto *toggle = makeControlButton(metrics.compact ? 180 : 200,
+                                     metrics.actionButtonHeight, text);
+    toggle->setOnClickListener([this, option, refresh]() {
+      auto &visible = context.settings.presentation().judgementTextVisibility.*option.member;
+      visible = !visible;
+      refresh();
+      persistSettings();
+    });
+    visibilityControls->addView(toggle);
+  }
+  body->addView(visibilityControls);
   appendStyle(i18n::message("settings.skins.feedback.judgement_size.percent_label"),
               &AppSettings::PresentationSettings::judgementTextSizePercent,
               &AppSettings::PresentationSettings::judgementTextBold);

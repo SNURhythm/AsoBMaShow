@@ -57,6 +57,7 @@ previewPresentationConfiguration(const AppSettings &settings,
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextVisibility = settings.presentation().judgementTextVisibility,
       .judgementTextY = settings.presentation().judgementTextY,
       .judgementTimingY = settings.presentation().judgementTimingY,
       .judgementTextSizePercent = settings.presentation().judgementTextSizePercent,

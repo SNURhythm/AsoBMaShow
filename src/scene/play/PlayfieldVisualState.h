@@ -115,6 +115,7 @@ struct PlayfieldPresentationConfig {
   float judgementIndicatorWidthScale = 1.0F;
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
+  player_settings::JudgementTextVisibility judgementTextVisibility;
   float judgementTextY = 0.0F;
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;

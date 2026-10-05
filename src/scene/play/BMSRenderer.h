@@ -369,6 +369,7 @@ private:
       AppSettings::HiSpeedFixMode::Main;
   double mainBpm = 0.0;
   bool renderHud = true;
+  player_settings::JudgementTextVisibility judgementTextVisibility;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;

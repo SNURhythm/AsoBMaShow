@@ -4245,15 +4245,15 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   renderedTimingFastShown = showTimingFeedback && diffMicros < 0;
   renderedTimingSlowShown = showTimingFeedback && diffMicros > 0;
   if (judgeText != nullptr) {
-    judgeText->setVisible(hasJudgement);
     std::string judgeLine;
-    if (hasJudgement) {
+    if (hasJudgement && judgementTextVisibility.isVisible(judgement)) {
       judgeLine = JudgeResult(judgement, 0).toString();
-      if (combo > 0) {
-        judgeLine.push_back(' ');
-        judgeLine += std::to_string(combo);
-      }
     }
+    if (hasJudgement && combo > 0) {
+      if (!judgeLine.empty()) judgeLine.push_back(' ');
+      judgeLine += std::to_string(combo);
+    }
+    judgeText->setVisible(!judgeLine.empty());
     judgeText->setText(judgeLine);
     judgeText->setColor(ui_theme::sdl(hasJudgement
                                           ? hudJudgementTextColor(judgement)
@@ -4467,6 +4467,10 @@ void BMSRenderer::configure(
       configuration.judgementIndicatorWidthScale,
       configuration.judgementIndicatorHudMode,
       configuration.judgementIndicatorRangeMilliseconds);
+  if (judgementTextVisibility != configuration.judgementTextVisibility) {
+    judgementTextVisibility = configuration.judgementTextVisibility;
+    hudRevision.fetch_add(1, std::memory_order_release);
+  }
   setJudgementTextY(configuration.judgementTextY);
   setJudgementTimingY(configuration.judgementTimingY);
   setPacemakerDiffStyle(configuration.pacemakerDiffY, configuration.pacemakerDiffSizePercent,

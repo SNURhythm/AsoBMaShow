@@ -2000,6 +2000,44 @@ void testFeedbackDefaultsAndScaleMigration() {
          "new feedback scale supports both endpoints without repeated migration");
 }
 
+void testJudgementLabelVisibilityRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "judgement-visibility.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  const nlohmann::json selected = {{"PGREAT", false}, {"GREAT", true},
+      {"GOOD", false}, {"BAD", true}, {"POOR", false}, {"KPOOR", true}};
+  document["presentations"]["landscape"]["judgementTextVisibility"] = selected;
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"]["judgementTextVisibility"] == selected,
+         "individual judgement visibility survives save and reload");
+  const nlohmann::json allVisible = {{"PGREAT", true}, {"GREAT", true},
+      {"GOOD", true}, {"BAD", true}, {"POOR", true}, {"KPOOR", true}};
+  expect(document["presentations"]["portrait"]["judgementTextVisibility"] == allVisible,
+         "judgement visibility is independent by orientation and defaults to visible");
+
+  writeFile(path, R"({"schemaVersion":7,"judgementTextY":0.4})");
+  expect(AppSettingsStore::Save(path, AppSettingsStore::Load(path).settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"]["judgementTextVisibility"] == allVisible,
+         "older profiles retain visible judgement labels");
+  document["presentations"]["landscape"]["judgementTextVisibility"] =
+      {{"PGREAT", "hidden"}, {"GOOD", false}, {"POOR", 0}};
+  writeFile(path, document.dump());
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(!invalid.diagnostics.empty(), "invalid visibility values produce diagnostics");
+  expect(AppSettingsStore::Save(path, invalid.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  auto expected = allVisible;
+  expected["GOOD"] = false;
+  expect(document["presentations"]["landscape"]["judgementTextVisibility"] == expected,
+         "missing or invalid flags remain visible while valid flags load independently");
+}
+
 void testScratchlessBuiltInPreferencesRoundTrip() {
   TempDirectory temp;
   const auto path = temp.path() / "scratchless.json";
@@ -2033,6 +2071,7 @@ void testScratchlessBuiltInPreferencesRoundTrip() {
 }
 
 int main() {
+  testJudgementLabelVisibilityRoundTrip();
   testScratchlessBuiltInPreferencesRoundTrip();
   testFeedbackDefaultsAndScaleMigration();
   testOrientationPresentationMigrationAndIndependentRoundTrip();
