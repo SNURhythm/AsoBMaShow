@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -99,7 +100,7 @@ public:
                                 bool isBackSpin = false) override;
 
 private:
-  int builtInNoteLane = 0;
+  std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
   std::string builtInNoteDropdown;
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);

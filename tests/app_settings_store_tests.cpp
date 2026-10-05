@@ -1,6 +1,7 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
+#include "../src/settings/BuiltInNoteEditing.h"
 #include "../src/skin/GameplaySkinTraits.h"
 #include "../src/skin/SkinTargetTraits.h"
 #include "../src/skin/SkinProfileSettings.h"
@@ -2231,7 +2232,73 @@ void testBuiltInNoteGeometryAndIsolation() {
          "invalid style dimensions and identities are bounded");
 }
 
+void testBuiltInNoteBulkEditing() {
+  using namespace built_in_notes;
+  AppSettings settings;
+  auto &mode = settings.presentation().builtInNotes[7];
+  mode[0][Type::Normal] = {0x123456, 150};
+  mode[1][Type::Normal] = {0x654321, 200};
+  mode[2][Type::Normal] = {0xABCDEF, 75};
+  mode[0][Type::LongHead] = {0x112233, 125};
+  const std::array<LaneTarget, 3> selected{{
+      {0, Palette::Gray}, {1, Palette::Blue}, {7, Palette::Scratch}}};
+  expect(!commonStyle(mode, selected, Type::Normal).color &&
+             !commonStyle(mode, selected, Type::Normal).thickness,
+         "bulk editor reports mixed properties independently");
+  editSelected(mode, selected, Type::Normal, EditKind::Color, 0xFF9524);
+  expect(mode[0][Type::Normal] == Style{0xFF9524, 150} &&
+             mode[1][Type::Normal] == Style{0xFF9524, 200} &&
+             mode[7][Type::Normal] == Style{0xFF9524, 100},
+         "bulk colors preserve each selected lane's own thickness");
+  expect(commonStyle(mode, selected, Type::Normal).color == 0xFF9524 &&
+             !commonStyle(mode, selected, Type::Normal).thickness,
+         "shared color is displayed even when thickness is mixed");
+  editSelected(mode, selected, Type::Normal, EditKind::AdjustThickness, 10);
+  expect(mode[0][Type::Normal].thickness == 160 &&
+             mode[1][Type::Normal].thickness == 210 &&
+             mode[7][Type::Normal].thickness == 110,
+         "bulk thickness steps adjust each selected lane relatively");
+  editSelected(mode, selected, Type::Normal, EditKind::ResetColor);
+  expect(mode[0][Type::Normal] == Style{0xCCCCCC, 160} &&
+             mode[1][Type::Normal] == Style{0x3399CC, 210} &&
+             mode[7][Type::Normal] == Style{0xDB3625, 110},
+         "color reset restores lane-specific defaults without changing thickness");
+  mode[1][Type::Normal].color = 0x123456;
+  editSelected(mode, selected, Type::Normal, EditKind::ResetThickness);
+  expect(mode[0][Type::Normal] == Style{0xCCCCCC, 100} &&
+             mode[1][Type::Normal] == Style{0x123456, 100} &&
+             mode[7][Type::Normal] == Style{0xDB3625, 100},
+         "thickness reset preserves custom lane colors");
+  editSelected(mode, selected, Type::Normal, EditKind::ResetColor);
+  expect(!commonStyle(mode, selected, Type::Normal).color &&
+             commonStyle(mode, selected, Type::Normal).thickness == 100,
+         "shared thickness is displayed even when colors are mixed");
+  editSelected(mode, selected, Type::Normal, EditKind::Thickness, 999);
+  editSelected(mode, selected, Type::LongBodyOn, EditKind::Thickness, 999);
+  expect(mode[1][Type::Normal] == Style{0x3399CC, 300} &&
+             mode[1][Type::LongBodyOn] == Style{0x3399CC, 100},
+         "bulk absolute thickness respects endpoint and body bounds");
+  editSelected(mode, selected, Type::Normal, EditKind::Thickness, -10);
+  expect(mode[1][Type::Normal] == Style{0x3399CC, 25},
+         "bulk thickness respects the minimum");
+  const auto beforeEmptyEdit = mode;
+  editSelected(mode, {}, Type::Normal, EditKind::Color, 0);
+  expect(mode == beforeEmptyEdit && !commonStyle(mode, {}, Type::Normal).color &&
+             !commonStyle(mode, {}, Type::Normal).thickness,
+         "an empty selection cannot change settings or display a shared value");
+  expect(mode[2][Type::Normal] == Style{0xABCDEF, 75} &&
+             mode[0][Type::LongHead] == Style{0x112233, 125},
+         "bulk edits leave unselected lanes and note types untouched");
+  TempDirectory temporary;
+  const auto path = temporary.path() / "bulk-notes.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save bulk note edits");
+  expect(AppSettingsStore::Load(path).settings.builtInNotesForKeyMode(7) == mode,
+         "bulk note edits survive save and reload");
+}
+
 int main() {
+  testBuiltInNoteBulkEditing();
   testBuiltInNoteAppearancePersists();
   testBuiltInNoteGeometryAndIsolation();
   testJudgementLabelVisibilityRoundTrip();
