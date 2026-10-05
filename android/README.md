@@ -59,7 +59,10 @@ runs both use a compact UTC timestamp version code. `firebaseRelease` and
 `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
 `ANDROID_KEY_PASSWORD`. The same signing config is used for Firebase and Google
 Play release builds. In GitHub Actions, these values are supplied by secrets on
-the Android beta deploy job. The script builds first, then uploads the APK with
+the manual **Build & Deploy Android Beta (Manual)** workflow in
+`.github/workflows/android-beta-deploy.yml`. Start it from GitHub Actions using
+**Run workflow** and select the branch to build; pushes do not deploy Android.
+The script builds first, then uploads the APK with
 `firebase appdistribution:distribute`.
 
 Before building after shader changes, generate all shader profiles:
