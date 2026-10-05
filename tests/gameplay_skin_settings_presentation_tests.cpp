@@ -600,9 +600,40 @@ void testViewportModeChangesPreserveEveryOtherField() {
           "custom-base switch preserves all numeric fields");
 }
 
+void testPreviewSkinChoicesRespectModeAndFollowSelection() {
+  auto snapshot = snapshotWithEntry();
+  auto incompatible = entryRow();
+  incompatible.entry = entryId("-dp");
+  incompatible.metadata.skinType = 2;
+  auto invalid = entryRow();
+  invalid.entry = entryId("-invalid");
+  invalid.validation = skin::SkinValidationDisposition::Invalid;
+  snapshot.entries.push_back(incompatible);
+  snapshot.entries.push_back(invalid);
+  snapshot.follow7K1S = true;
+  const auto target = *skin::gameplaySkinTargetForKeyMode(-7);
+  auto selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(selection.entries.size() == 1 && selection.selectedRow == &snapshot.entries[0] &&
+              selection.followsOriginal && selection.hasSelectedEntry,
+          "scratchless preview offers compatible valid skins and shows its followed selection");
+  snapshot.follow7K1S = false;
+  selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(!selection.followsOriginal && !selection.hasSelectedEntry && !selection.selectedRow,
+          "independent scratchless Built-in does not inherit the original skin selection");
+  snapshot.selectedSkinEntries[-7] = entryId();
+  selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(selection.selectedRow == &snapshot.entries[0],
+          "an explicit scratchless selection resolves to the installed skin");
+  snapshot.selectedSkinEntries[-7] = entryId("-missing");
+  selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(selection.hasSelectedEntry && !selection.selectedRow,
+          "a missing selection remains distinguishable from Built-in");
+}
+
 } // namespace
 
 int main() {
+  testPreviewSkinChoicesRespectModeAndFollowSelection();
   testPreparedImportAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();

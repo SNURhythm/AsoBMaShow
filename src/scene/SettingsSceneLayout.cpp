@@ -540,6 +540,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
   previewHeader->addView(makeFoldButton(i18n::message("settings.preview_layout.hide.label")));
   previewPanel->addView(previewHeader);
+  auto *previewSelectionRow = new View();
+  previewSelectionRow->setFlexDirection(FlexDirection::Row);
+  previewSelectionRow->setAlignItems(YGAlignCenter);
+  const float selectionGap = metrics.compact ? 8.0F : 10.0F;
+  const float selectionWidth = static_cast<float>(panelWidth - metrics.cardPadding * 2);
+  previewSelectionRow->setGap(selectionGap);
   previewKeyModeDropdown = new DropdownView({
       .onOpenChanged = [this](bool open) {
         previewKeyModeDropdownOpen = open;
@@ -555,9 +561,25 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         }
         refreshPreviewKeyModeDropdown();
       }}, overlayPortal);
-  previewKeyModeDropdown->setWidthPercent(100);
+  previewKeyModeDropdown->setTriggerWidth(selectionWidth);
   refreshPreviewKeyModeDropdown();
-  previewPanel->addView(previewKeyModeDropdown);
+  previewSelectionRow->addView(previewKeyModeDropdown);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinTraitsRuntimeAvailable()) {
+    if (const auto target = skin::gameplaySkinTargetForKeyMode(previewKeyMode)) {
+      const auto selection = skin::gameplaySkinSelectionForTarget(
+          gameplaySkinSettingsController->snapshot(), *target);
+      const float keyModeWidth = std::min(220.0F, selectionWidth * 0.4F);
+      previewKeyModeDropdown->setTriggerWidth(keyModeWidth);
+      const float dropdownWidth = selectionWidth - keyModeWidth - selectionGap;
+      auto *skinDropdown = buildGameplaySkinSelectionDropdown(
+          metrics, target->skinType, selection, previewSkinActionsEnabled, dropdownWidth);
+      skinDropdown->setTriggerWidth(dropdownWidth);
+      previewSelectionRow->addView(skinDropdown);
+    }
+  }
+#endif
+  previewPanel->addView(previewSelectionRow);
   previewPanel->addView(makeWrappedText(
       previewError.empty()
           ? i18n::message(previewPresentation && previewPresentation->activeMode() == PresentationMode::Skin

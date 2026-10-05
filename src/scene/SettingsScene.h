@@ -68,6 +68,7 @@ class SoundSetFolderPicker;
 #include "SettingsSceneInputRebuild.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "GameplaySkinSettingsController.h"
+namespace skin { struct GameplaySkinSelection; }
 #endif
 
 enum class SettingsDestination { Profile, Ir };
@@ -513,6 +514,10 @@ private:
   [[nodiscard]] skin::ViewportSettings
   gameplaySkinViewportForEntry(const skin::SkinEntryId &entry) const;
   [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
+  DropdownView *buildGameplaySkinSelectionDropdown(
+      const settings_scene::LayoutMetrics &metrics, int skinType,
+      const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
+      float menuWidth);
   void appendGameplaySkinCatalogSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);

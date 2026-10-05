@@ -84,6 +84,7 @@ struct SettingsScene : Scene {
   int displayDraft = 0;
   bool previewActive = false;
   int previewEvents = 0;
+  int previewInputCleanups = 0;
   int *destructions = nullptr;
   std::string displayStatus;
   int displayPreviewUpdates = 0;
@@ -91,6 +92,7 @@ struct SettingsScene : Scene {
   void setDisplayStatus(const std::string &status, Color) { displayStatus = status; }
   void updateDisplayPreviewUi() { ++displayPreviewUpdates; }
   void forwardPreviewInputEvent(SDL_Event &) { ++previewEvents; }
+  void destroyPreviewInputHandler() { ++previewInputCleanups; }
   void init() override { addView(new View); }
   void update(float) override {}
   void renderScene() override {}
@@ -127,6 +129,7 @@ int main() {
     assert(display.focusLosses == 1 && active->displayDraft == 42);
     assert(active->displayStatus == "Display restored");
     assert(active->displayPreviewUpdates == 1);
+    assert(active->previewInputCleanups == (previewActive ? 1 : 0));
     assert(active->previewEvents == (previewActive ? 1 : 0));
     event.type = SDL_MOUSEBUTTONUP;
     active->views.front()->eventCallback = [&manager] {

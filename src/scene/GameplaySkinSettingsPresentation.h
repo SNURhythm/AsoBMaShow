@@ -20,6 +20,16 @@ struct GameplaySkinSettingsActionAvailability {
   bool canInstallPrepared = false;
 };
 
+struct GameplaySkinSelection {
+  std::vector<const GameplaySkinEntryRow *> entries;
+  const GameplaySkinEntryRow *selectedRow = nullptr;
+  bool followsOriginal = false;
+  bool hasSelectedEntry = false;
+};
+
+[[nodiscard]] GameplaySkinSelection gameplaySkinSelectionForTarget(
+    const GameplaySkinSettingsSnapshot &snapshot, const SkinTargetTrait &target);
+
 // The native settings screen consumes this projection in the same sequence as
 // Beatoraja's SkinConfigurationView: declared category heading, its resolved
 // items, a separator, then ungrouped declarations under Other.  Declaration

@@ -249,6 +249,34 @@ bool gameplaySkinEntrySelectableForTarget(
          GameplaySkinSourceFormat::Lua;
 }
 
+GameplaySkinSelection gameplaySkinSelectionForTarget(
+    const GameplaySkinSettingsSnapshot &snapshot, const SkinTargetTrait &target) {
+  GameplaySkinSelection result;
+  for (const auto &candidate : snapshot.entries) {
+    if (gameplaySkinEntrySelectableForTarget(candidate, target)) {
+      result.entries.push_back(&candidate);
+    }
+  }
+  result.followsOriginal = (target.skinType == -5 && snapshot.follow5K1S) ||
+                           (target.skinType == -7 && snapshot.follow7K1S);
+  const int effectiveTarget = result.followsOriginal
+      ? skinSourceTypeForTarget(target.skinType)
+      : target.skinType;
+  const auto selected = snapshot.selectedSkinEntries.find(effectiveTarget);
+  result.hasSelectedEntry = selected != snapshot.selectedSkinEntries.end();
+  if (result.hasSelectedEntry) {
+    const auto selectedCandidate = std::ranges::find_if(
+        result.entries, [&selected](const auto *candidate) {
+          return candidate->entry == selected->second;
+        });
+    if (selectedCandidate != result.entries.end()) {
+      result.selectedRow = *selectedCandidate;
+    }
+  }
+
+  return result;
+}
+
 std::optional<SkinTargetTrait> gameplaySkinSettingsTargetForKeyMode(
     const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept {
   auto target = gameplaySkinTargetForKeyMode(keyMode);

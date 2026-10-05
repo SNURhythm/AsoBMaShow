@@ -457,6 +457,75 @@ bool SettingsScene::gameplaySkinTraitsRuntimeAvailable() const noexcept {
       gameplaySkinSettingsController != nullptr);
 }
 
+DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
+    const LayoutMetrics &metrics, int skinType,
+    const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
+    float menuWidth) {
+  const auto &selectableRows = selection.entries;
+  const auto *selectedRow = selection.selectedRow;
+  const bool followsOriginal = selection.followsOriginal;
+  std::vector<skin::SkinEntryId> dropdownEntries;
+  std::vector<DropdownView::Option> dropdownOptions = {
+      {.id = "", .label = i18n::message("settings.skins.built_in.label"), .available = ordinaryActionsEnabled},
+  };
+  if (skinType == -5 || skinType == -7) {
+    dropdownOptions.push_back({.id = "@follow-original",
+        .label = i18n::message("settings.skins.follow_original.label",
+            {{"mode", skinType == -5 ? "5K1S" : "7K1S"}}),
+        .available = ordinaryActionsEnabled});
+  }
+  dropdownEntries.reserve(selectableRows.size());
+  for (const auto *candidate : selectableRows) {
+    dropdownEntries.push_back(candidate->entry);
+    const std::string displayName = candidate->metadata.displayName.empty()
+                                        ? candidate->entry.packageRelativePath
+                                        : candidate->metadata.displayName;
+    dropdownOptions.push_back(
+        {.id = candidate->entry.collisionKey,
+         .label = displayName + " — " + candidate->entry.package.directoryName,
+         .available = ordinaryActionsEnabled});
+  }
+  auto *skinDropdown = new DropdownView(
+      {.onOpenChanged =
+           [this](bool open) {
+             gameplaySkinTraitDropdownOpen = open;
+           },
+       .onOptionSelectedResult =
+           [this, skinType,
+            entries = std::move(dropdownEntries)](const std::string &id) {
+             gameplaySkinTraitDropdownOpen = false;
+             gameplaySkinConfigurationDropdownOpenKey.clear();
+             if (id == "@follow-original") {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->followGameplayTrait(skinType));
+             }
+             if (id.empty()) {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->clearGameplayTrait(skinType));
+             }
+             const auto selectedEntry = std::ranges::find_if(
+                 entries, [&id](const auto &entry) {
+                   return entry.collisionKey == id;
+                 });
+             if (selectedEntry != entries.end()) {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->selectGameplayTrait(
+                       skinType, *selectedEntry));
+             }
+             return false;
+           }},
+      overlayPortal);
+  skinDropdown->refresh(
+      {.label = "",
+       .selectedId = followsOriginal ? "@follow-original" : selectedRow ? selectedRow->entry.collisionKey : "",
+       .options = std::move(dropdownOptions),
+       .open = gameplaySkinTraitDropdownOpen,
+       .enabled = ordinaryActionsEnabled,
+       .maxVisibleItems = metrics.compact ? 5 : 7,
+       .menuWidth = menuWidth});
+  return skinDropdown;
+}
+
 void SettingsScene::appendBuiltInGameplayTraitSettings(
     View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
   body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
@@ -1306,90 +1375,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       traitLabel + " skin", metrics.bodyTextSize,
       ui_theme::textPrimary()));
 
-  std::vector<const skin::GameplaySkinEntryRow *> selectableRows;
-  for (const auto &candidate : snapshot.entries) {
-    if (skin::gameplaySkinEntrySelectableForTarget(candidate, *activeTrait)) {
-      selectableRows.push_back(&candidate);
-    }
-  }
-  const bool followsOriginal = (gameplaySkinActiveTraitSkinType == -5 && snapshot.follow5K1S) ||
-                               (gameplaySkinActiveTraitSkinType == -7 && snapshot.follow7K1S);
-  const int effectiveTarget = followsOriginal
-      ? skin::skinSourceTypeForTarget(gameplaySkinActiveTraitSkinType)
-      : gameplaySkinActiveTraitSkinType;
-  const auto selected = snapshot.selectedSkinEntries.find(effectiveTarget);
-  const skin::GameplaySkinEntryRow *selectedRow = nullptr;
-  if (selected != snapshot.selectedSkinEntries.end()) {
-    const auto selectedCandidate = std::ranges::find_if(
-        selectableRows, [&selected](const auto *candidate) {
-          return candidate->entry == selected->second;
-        });
-    if (selectedCandidate != selectableRows.end()) {
-      selectedRow = *selectedCandidate;
-    }
-  }
-
-  std::vector<skin::SkinEntryId> dropdownEntries;
-  std::vector<DropdownView::Option> dropdownOptions = {
-      {.id = "", .label = i18n::message("settings.skins.built_in.label"), .available = ordinaryActionsEnabled},
-  };
-  if (gameplaySkinActiveTraitSkinType == -5 || gameplaySkinActiveTraitSkinType == -7) {
-    dropdownOptions.push_back({.id = "@follow-original",
-        .label = i18n::message("settings.skins.follow_original.label",
-            {{"mode", gameplaySkinActiveTraitSkinType == -5 ? "5K1S" : "7K1S"}}),
-        .available = ordinaryActionsEnabled});
-  }
-  dropdownEntries.reserve(selectableRows.size());
-  for (const auto *candidate : selectableRows) {
-    dropdownEntries.push_back(candidate->entry);
-    const std::string displayName = candidate->metadata.displayName.empty()
-                                        ? candidate->entry.packageRelativePath
-                                        : candidate->metadata.displayName;
-    dropdownOptions.push_back(
-        {.id = candidate->entry.collisionKey,
-         .label = displayName + " — " + candidate->entry.package.directoryName,
-         .available = ordinaryActionsEnabled});
-  }
-  auto *skinDropdown = new DropdownView(
-      {.onOpenChanged =
-           [this](bool open) {
-             gameplaySkinTraitDropdownOpen = open;
-           },
-       .onOptionSelectedResult =
-           [this, skinType = gameplaySkinActiveTraitSkinType,
-            entries = std::move(dropdownEntries)](const std::string &id) {
-             gameplaySkinTraitDropdownOpen = false;
-             gameplaySkinConfigurationDropdownOpenKey.clear();
-             if (id == "@follow-original") {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->followGameplayTrait(skinType));
-             }
-             if (id.empty()) {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->clearGameplayTrait(skinType));
-             }
-             const auto selectedEntry = std::ranges::find_if(
-                 entries, [&id](const auto &entry) {
-                   return entry.collisionKey == id;
-                 });
-             if (selectedEntry != entries.end()) {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->selectGameplayTrait(
-                       skinType, *selectedEntry));
-             }
-             return false;
-           }},
-      overlayPortal);
-  skinDropdown->refresh(
-      {.label = "",
-       .selectedId = followsOriginal ? "@follow-original" : selectedRow ? selectedRow->entry.collisionKey : "",
-       .options = std::move(dropdownOptions),
-       .open = gameplaySkinTraitDropdownOpen,
-       .enabled = ordinaryActionsEnabled,
-       .maxVisibleItems = metrics.compact ? 5 : 7,
-       .menuWidth = static_cast<float>(
-           std::max(220, metrics.cardsWidth - traitTabWidth -
-                             metrics.secondaryGap - metrics.cardPadding * 2))});
+  const auto selection = skin::gameplaySkinSelectionForTarget(snapshot, *activeTrait);
+  const auto &selectableRows = selection.entries;
+  const auto *selectedRow = selection.selectedRow;
+  const bool followsOriginal = selection.followsOriginal;
+  auto *skinDropdown = buildGameplaySkinSelectionDropdown(
+      metrics, activeTrait->skinType, selection, ordinaryActionsEnabled,
+      static_cast<float>(std::max(220, metrics.cardsWidth - traitTabWidth -
+                                         metrics.secondaryGap - metrics.cardPadding * 2)));
   auto *skinDropdownRow = new View();
   skinDropdownRow->setFlexDirection(FlexDirection::Row);
   skinDropdownRow->setFlexWrap(YGWrapWrap);
@@ -1403,8 +1396,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   skinDropdownRow->addView(skinDropdownLabel);
   skinDropdownRow->addView(skinDropdown);
   traitPanel->addView(skinDropdownRow);
-  if (selected != snapshot.selectedSkinEntries.end() &&
-      selectedRow == nullptr) {
+  if (selection.hasSelectedEntry && selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
         i18n::message("settings.skins.selection.missing_skin_notice"),
         metrics.smallTextSize, ui_theme::coral()));
@@ -1415,7 +1407,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         metrics.smallTextSize, ui_theme::textSecondary()));
   }
 
-  if (followsOriginal && selected != snapshot.selectedSkinEntries.end()) {
+  if (followsOriginal && selection.hasSelectedEntry) {
     traitPanel->addView(makeWrappedText(
         i18n::message("settings.skins.follow_original.description",
             {{"mode", gameplaySkinActiveTraitSkinType == -5 ? "5K1S" : "7K1S"}}),
@@ -1498,7 +1490,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::coral()));
     entryBody->addView(actions);
     traitPanel->addView(entryBody);
-  } else if (selected == snapshot.selectedSkinEntries.end() &&
+  } else if (!selection.hasSelectedEntry &&
              activeTrait->kind == skin::SkinTargetKind::Gameplay) {
     auto *builtInBody = new View();
     builtInBody->setFlexDirection(FlexDirection::Column);
