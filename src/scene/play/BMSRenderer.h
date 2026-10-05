@@ -150,6 +150,7 @@ enum class SubmissionKind {
   JudgementIndicatorPass,
   GaugePass,
   HudPass,
+  JudgementAccentBar,
   TouchPass,
 };
 
@@ -244,6 +245,7 @@ private:
   std::unique_ptr<TextView> judgementTimingMsText;
   std::unique_ptr<TextView> scoreText;
   std::unique_ptr<TextView> comboText;
+  std::unique_ptr<TextView> judgementComboText;
   std::unique_ptr<TextView> pacemakerText;
   std::unique_ptr<TextView> gaugeText;
   std::unique_ptr<View> gaugeTypeBadge;
@@ -374,6 +376,10 @@ private:
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
   bool judgementTextBold = false;
+  bool judgementComboSeparated = false;
+  float comboTextY = AppSettings::kDefaultComboTextY;
+  int comboTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool comboTextBold = false;
   int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
   bool judgementTimingBold = false;
   float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
@@ -705,6 +711,9 @@ public:
   }
   [[nodiscard]] const TextView *comboTextViewForTesting() const {
     return comboText.get();
+  }
+  [[nodiscard]] const TextView *separatedComboTextViewForTesting() const {
+    return judgementComboText.get();
   }
   void setCharacterizationRecorder(
       bms_renderer_characterization::Recorder *recorder) {

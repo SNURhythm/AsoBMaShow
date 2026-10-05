@@ -120,6 +120,10 @@ struct PlayfieldPresentationConfig {
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
   bool judgementTextBold = false;
+  bool judgementComboSeparated = false;
+  float comboTextY = AppSettings::kDefaultComboTextY;
+  int comboTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool comboTextBold = false;
   int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
   bool judgementTimingBold = false;
   float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;

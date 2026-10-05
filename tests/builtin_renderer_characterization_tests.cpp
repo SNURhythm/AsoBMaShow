@@ -166,6 +166,8 @@ std::string submissionKindName(characterization::SubmissionKind kind) {
     return "gaugePass";
   case Kind::HudPass:
     return "hudPass";
+  case Kind::JudgementAccentBar:
+    return "judgementAccentBar";
   case Kind::TouchPass:
     return "touchPass";
   }
@@ -1541,8 +1543,11 @@ Json scenarioJson(const ScenarioResult &scenario) {
   for (std::size_t sequence = 0;
        sequence < scenario.recorder.submissions.size(); ++sequence) {
     const auto &submission = scenario.recorder.submissions[sequence];
+    // The v1 golden records HUD passes; accent geometry is checked separately.
+    if (submission.kind == characterization::SubmissionKind::JudgementAccentBar)
+      continue;
     Json item = {
-        {"sequence", sequence},
+        {"sequence", submissions.size()},
         {"kind", submissionKindName(submission.kind)},
         {"view", surfaceName(submission.surface)},
         {"depth", submission.depth},
@@ -2313,6 +2318,105 @@ void verifyIndividualJudgementLabelVisibility(const RenderTarget &target) {
          "live combo visibility restores both current values without another judgement");
 }
 
+void verifySeparatedJudgementCombo(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  rendering::UiBatchRenderer batch;
+  Recorder recorder;
+  renderer.setCharacterizationRecorder(&recorder);
+  auto config = presentationConfig(0);
+  config.judgementTextY = 0.7f;
+  config.judgementTextSizePercent = 50;
+  config.judgementTextBold = false;
+  config.comboTextY = 0.3f;
+  config.comboTextSizePercent = 100;
+  config.comboTextBold = true;
+  const auto render = [&]() {
+    recorder.submissions.clear();
+    renderer.configure(config);
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    bgfx::frame();
+    return renderer.judgementFeedbackTextViewsForTesting()[0];
+  };
+  const auto accents = [&]() {
+    std::vector<characterization::Rect> result;
+    for (const auto &submission : recorder.submissions) {
+      if (submission.kind == characterization::SubmissionKind::JudgementAccentBar)
+        result.push_back(submission.rect);
+    }
+    return result;
+  };
+  renderer.onJudge(JudgeResult(Great, -15'000), 123, 456,
+                   {.songTimeMicros = kRenderMicros,
+                    .visualTimeMicros = kRenderMicros,
+                    .bgaTimeMicros = kRenderMicros});
+  expect(render()->getText() == "GREAT 123" &&
+             !renderer.separatedComboTextViewForTesting()->getVisible(),
+         "combined mode retains the inline combo and ignores separate styling");
+  config.judgementComboSeparated = true;
+  const auto *label = render();
+  const auto *combo = renderer.separatedComboTextViewForTesting();
+  expect(label->getText() == "GREAT" && combo->getVisible() && combo->getText() == "123",
+         "separating live feedback gives judgement and combo distinct text elements");
+  expect(label->pointSize() == 38 && label->fontWeight() == TextView::FontWeight::Regular &&
+             combo->pointSize() == 76 && combo->fontWeight() == TextView::FontWeight::Bold,
+         "separated combo has independent size and weight");
+  expect(std::abs(combo->getY() + combo->getHeight() / 2 -
+                 rendering::window_height * 0.7f) <= 1 &&
+             std::abs(combo->getX() + combo->getWidth() / 2 - rendering::window_width / 2) <= 1,
+         "separated combo uses its own centered vertical position");
+  const auto originalAccents = accents();
+  expect(originalAccents.size() == 1 &&
+             originalAccents[0].x + originalAccents[0].width < label->getX() &&
+             std::abs(originalAccents[0].y + originalAccents[0].height / 2 -
+                      label->getY() - label->getHeight() / 2.0f) <= 1,
+         "FAST accent is beside the judgement label");
+  config.comboTextY = 0.2f;
+  config.comboTextSizePercent = 150;
+  config.comboTextBold = false;
+  render();
+  const auto movedAccents = accents();
+  expect(originalAccents.size() == 1 && movedAccents.size() == 1 &&
+             originalAccents[0].x == movedAccents[0].x &&
+             originalAccents[0].y == movedAccents[0].y &&
+             originalAccents[0].width == movedAccents[0].width &&
+             originalAccents[0].height == movedAccents[0].height,
+         "moving and restyling combo cannot move or resize judgement accents");
+  combo = renderer.separatedComboTextViewForTesting();
+  expect(combo->pointSize() == 114 && combo->fontWeight() == TextView::FontWeight::Regular &&
+             std::abs(combo->getY() + combo->getHeight() / 2 -
+                      rendering::window_height * 0.8f) <= 1,
+         "separated combo style and position update without a new judgement");
+  config.judgementTextVisibility.great = false;
+  expect(!render()->getVisible() && renderer.separatedComboTextViewForTesting()->getVisible() &&
+             accents().empty(),
+         "hidden judgement removes its accent bars while separated combo stays visible");
+  config.judgementTextVisibility.great = true;
+  config.judgementTextVisibility.combo = false;
+  expect(render()->getVisible() && !renderer.separatedComboTextViewForTesting()->getVisible() &&
+             !accents().empty(),
+         "hidden separated combo preserves judgement and accent bars");
+  config.judgementTextVisibility.combo = true;
+  config.judgementComboSeparated = false;
+  expect(render()->getText() == "GREAT 123" &&
+             !renderer.separatedComboTextViewForTesting()->getVisible(),
+         "returning to combined mode restores inline combo without stale separate text");
+  config.judgementComboSeparated = true;
+  renderer.onJudge(JudgeResult(Bad, 15'000), 0, 456,
+                   {.songTimeMicros = kRenderMicros,
+                    .visualTimeMicros = kRenderMicros,
+                    .bgaTimeMicros = kRenderMicros});
+  expect(render()->getText() == "BAD" && !renderer.separatedComboTextViewForTesting()->getVisible(),
+         "combo breaks clear the separated combo text");
+}
+
 void verifyJudgementFeedbackStyles(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -2590,6 +2694,7 @@ int main() {
       verifyPreviewInputLanePosition(target);
       verifyPreviewPacemakerDiff(target);
       verifyIndividualJudgementLabelVisibility(target);
+      verifySeparatedJudgementCombo(target);
       verifyJudgementFeedbackStyles(target);
       verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {

@@ -1100,6 +1100,10 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
   };
   appendPosition(i18n::message("settings.preview_layout.judge_text_y.label"),
                  &AppSettings::PresentationSettings::judgementTextY);
+  if (context.settings.presentation().judgementComboSeparated) {
+    appendPosition(i18n::message("settings.feedback.combo_y.label"),
+                   &AppSettings::PresentationSettings::comboTextY);
+  }
   appendPosition(i18n::message("settings.feedback.timing_y.label"),
                  &AppSettings::PresentationSettings::judgementTimingY);
   appendPosition(i18n::message("settings.feedback.pacemaker_y.label"),
@@ -1206,6 +1210,31 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
       body->addView(weightRow);
     }
   };
+  auto *separationRow = new View();
+  separationRow->setWidthPercent(100);
+  separationRow->setFlexDirection(FlexDirection::Row);
+  separationRow->setAlignItems(YGAlignCenter);
+  separationRow->setGap(8.0F);
+  auto *separationLabel = makeWrappedText(
+      i18n::message("settings.skins.feedback.combo_layout.label"),
+      metrics.bodyTextSize, ui_theme::textPrimary());
+  separationLabel->setFlex(1)->setMinWidth(0);
+  separationRow->addView(separationLabel);
+  auto *separationText = makeText(i18n::message(
+      context.settings.presentation().judgementComboSeparated
+          ? "settings.skins.feedback.combo_layout.separated.label"
+          : "settings.skins.feedback.combo_layout.combined.label"),
+      metrics.bodyTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+  auto *separationToggle = makeControlButton(metrics.compact ? 132 : 156,
+                                              metrics.actionButtonHeight, separationText);
+  separationToggle->setOnClickListener([this]() {
+    auto &separated = context.settings.presentation().judgementComboSeparated;
+    separated = !separated;
+    persistSettings();
+    lastLayoutWidth = -1;
+  });
+  separationRow->addView(separationToggle);
+  body->addView(separationRow);
   auto *visibilityLabel = makeWrappedText(
       i18n::message("settings.skins.feedback.judgement_visibility.label"),
       metrics.smallTextSize, ui_theme::textSecondary());
@@ -1248,6 +1277,11 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   appendStyle(i18n::message("settings.skins.feedback.judgement_size.percent_label"),
               &AppSettings::PresentationSettings::judgementTextSizePercent,
               &AppSettings::PresentationSettings::judgementTextBold);
+  if (context.settings.presentation().judgementComboSeparated) {
+    appendStyle(i18n::message("settings.skins.feedback.combo_size.percent_label"),
+                &AppSettings::PresentationSettings::comboTextSizePercent,
+                &AppSettings::PresentationSettings::comboTextBold);
+  }
   appendStyle(i18n::message("settings.skins.feedback.timing_size.percent_label"),
               &AppSettings::PresentationSettings::judgementTimingSizePercent,
               &AppSettings::PresentationSettings::judgementTimingBold);

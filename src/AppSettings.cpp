@@ -445,6 +445,10 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
       kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
   judgementTextSizePercent = std::clamp(judgementTextSizePercent,
       kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
+  comboTextY = sanitizeFloat(comboTextY, defaults.comboTextY,
+                             kMinJudgementTextY, kMaxJudgementTextY);
+  comboTextSizePercent = std::clamp(comboTextSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
   judgementTimingSizePercent = std::clamp(judgementTimingSizePercent,
       kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
   switch (judgementIndicatorRenderMode) {

@@ -932,6 +932,12 @@ BMSRenderer::BMSRenderer(
   judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
+  judgementComboText = std::make_unique<TextView>(kHudFontPath, 38);
+  judgementComboText->setAlign(TextView::CENTER);
+  judgementComboText->setVAlign(TextView::MIDDLE);
+  judgementComboText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  judgementComboText->setOverflow(TextView::TextOverflow::Hidden);
+  judgementComboText->setVisible(false);
   pacemakerDeltaText = std::make_unique<TextView>(kHudFontPath, 32);
   pacemakerDeltaText->setAlign(TextView::CENTER);
   pacemakerDeltaText->setVAlign(TextView::MIDDLE);
@@ -1116,6 +1122,7 @@ void BMSRenderer::drawJudgement(RenderContext context) const {
     judgementTimingMsText->render(context);
   }
   judgeText->render(context);
+  judgementComboText->render(context);
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
@@ -1394,6 +1401,16 @@ void BMSRenderer::drawJudgementAccentBar() {
                   (static_cast<float>(judgeText->getHeight()) - height) * 0.5f;
   const Color accent = hudJudgementAccent(renderedJudgement);
   const uint32_t color = Color(accent.r, accent.g, accent.b, 210).toABGR();
+  const auto drawAccent = [&](float x) {
+    simpleBatchRenderer.addRoundedRect(x, y, width, height, width * 0.5f, color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::JudgementAccentBar,
+        bms_renderer_characterization::Surface::Ui, 0, nullptr, nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = x, .y = y, .width = width, .height = height});
+#endif
+  };
   const bool showLeft =
       renderedTimingFastShown ||
       (!renderedTimingFastShown && !renderedTimingSlowShown);
@@ -1403,8 +1420,7 @@ void BMSRenderer::drawJudgementAccentBar() {
   if (showLeft) {
     const float x =
         std::max(0.0f, static_cast<float>(judgeText->getX()) - width - 9.0f);
-    simpleBatchRenderer.addRoundedRect(x, y, width, height, width * 0.5f,
-                                       color);
+    drawAccent(x);
   }
   if (showRight) {
     const float rightX = static_cast<float>(judgeText->getX() +
@@ -1413,8 +1429,7 @@ void BMSRenderer::drawJudgementAccentBar() {
     const float x = std::min(
         static_cast<float>(std::max(0, rendering::window_width)) - width,
         rightX);
-    simpleBatchRenderer.addRoundedRect(std::max(0.0f, x), y, width, height,
-                                       width * 0.5f, color);
+    drawAccent(std::max(0.0f, x));
   }
 }
 
@@ -1864,6 +1879,20 @@ void BMSRenderer::layoutCenteredJudgementText() {
   if (judgeText != nullptr) {
     judgeText->setPosition(judgeX, judgeY);
     judgeText->setSize(judgeWidth, judgeLineHeight);
+  }
+
+  if (judgementComboText != nullptr) {
+    const float comboScale = comboTextSizePercent / 50.0f;
+    const int comboLineHeight = std::max(static_cast<int>(std::lround(68 * comboScale)),
+                                         judgementComboText->textureHeight());
+    const int comboWidth = std::min(maxAvailableWidth, std::max(1,
+        judgementComboText->textureWidth() + static_cast<int>(std::lround(28 * comboScale))));
+    const int comboY = std::clamp(
+        static_cast<int>(std::lround(judgementLayoutHeight * (1.0f - comboTextY))) -
+            comboLineHeight / 2,
+        0, std::max(0, judgementLayoutHeight - comboLineHeight));
+    judgementComboText->setPosition((judgementLayoutWidth - comboWidth) / 2, comboY);
+    judgementComboText->setSize(comboWidth, comboLineHeight);
   }
 
   constexpr int kTimingDirectionMaxWidth = 104;
@@ -4249,7 +4278,7 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
     if (hasJudgement && judgementTextVisibility.isVisible(judgement)) {
       judgeLine = JudgeResult(judgement, 0).toString();
     }
-    if (hasJudgement && combo > 0 && judgementTextVisibility.combo) {
+    if (hasJudgement && combo > 0 && judgementTextVisibility.combo && !judgementComboSeparated) {
       if (!judgeLine.empty()) judgeLine.push_back(' ');
       judgeLine += std::to_string(combo);
     }
@@ -4258,6 +4287,14 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
     judgeText->setColor(ui_theme::sdl(hasJudgement
                                           ? hudJudgementTextColor(judgement)
                                           : ui_theme::textPrimary()));
+  }
+  if (judgementComboText != nullptr) {
+    const bool showCombo = judgementComboSeparated && judgementTextVisibility.combo &&
+                           hasJudgement && combo > 0;
+    judgementComboText->setVisible(showCombo);
+    judgementComboText->setText(showCombo ? std::to_string(combo) : "");
+    judgementComboText->setColor(ui_theme::sdl(hasJudgement
+        ? hudJudgementComboColor(judgement) : ui_theme::textPrimary()));
   }
   const Color timingColor = hudTimingColor(diffMicros);
   const bool refreshedTimingText = showTimingDirection || showTimingMs;
@@ -4473,6 +4510,21 @@ void BMSRenderer::configure(
     hudRevision.fetch_add(1, std::memory_order_release);
   }
   setJudgementTextY(configuration.judgementTextY);
+  if (judgementComboSeparated != configuration.judgementComboSeparated) {
+    judgementComboSeparated = configuration.judgementComboSeparated;
+    hudRevision.fetch_add(1, std::memory_order_release);
+  }
+  const float configuredComboY = std::isfinite(configuration.comboTextY)
+      ? std::clamp(configuration.comboTextY, 0.0f, 1.0f) : AppSettings::kDefaultComboTextY;
+  const int configuredComboSize = std::clamp(configuration.comboTextSizePercent,
+      AppSettings::kMinJudgementFeedbackSizePercent, AppSettings::kMaxJudgementFeedbackSizePercent);
+  if (comboTextY != configuredComboY || comboTextSizePercent != configuredComboSize ||
+      comboTextBold != configuration.comboTextBold) {
+    comboTextY = configuredComboY;
+    comboTextSizePercent = configuredComboSize;
+    comboTextBold = configuration.comboTextBold;
+    refreshJudgementFeedbackTextStyle();
+  }
   setJudgementTimingY(configuration.judgementTimingY);
   setPacemakerDiffStyle(configuration.pacemakerDiffY, configuration.pacemakerDiffSizePercent,
                        configuration.pacemakerDiffBold);
@@ -5011,6 +5063,7 @@ void BMSRenderer::refreshJudgementFeedbackTextStyle() {
   };
   restyle(pacemakerDeltaText, 32, pacemakerDiffSizePercent, pacemakerDiffBold, TextView::CENTER);
   restyle(judgeText, 76, judgementTextSizePercent, judgementTextBold, TextView::CENTER);
+  restyle(judgementComboText, 76, comboTextSizePercent, comboTextBold, TextView::CENTER);
   restyle(judgementTimingDirectionText, 42, judgementTimingSizePercent,
           judgementTimingBold, TextView::LEFT);
   restyle(judgementTimingMsText, 42, judgementTimingSizePercent,

@@ -2000,6 +2000,41 @@ void testFeedbackDefaultsAndScaleMigration() {
          "new feedback scale supports both endpoints without repeated migration");
 }
 
+void testSeparatedComboSettingsRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "combo-layout.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &landscape = document["presentations"]["landscape"];
+  expect(landscape.value("judgementComboSeparated", true) == false,
+         "existing profiles keep combined judgement and combo by default");
+  landscape["judgementComboSeparated"] = true;
+  landscape["comboTextY"] = 0.3;
+  landscape["comboTextSizePercent"] = 125;
+  landscape["comboTextBold"] = true;
+  writeFile(path, document.dump());
+  expect(AppSettingsStore::Save(path, AppSettingsStore::Load(path).settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  const auto &saved = document["presentations"]["landscape"];
+  expect(saved.value("judgementComboSeparated", false) &&
+             saved.value("comboTextY", -1.0f) == 0.3f &&
+             saved.value("comboTextSizePercent", 0) == 125 &&
+             saved.value("comboTextBold", false),
+         "separated combo layout and styling survive reload independently of judgement settings");
+  expect(!document["presentations"]["portrait"].value("judgementComboSeparated", true) &&
+             !document["presentations"]["portrait"].value("comboTextBold", true),
+         "landscape combo changes leave portrait defaults intact");
+  document["presentations"]["landscape"]["comboTextY"] = -2.0;
+  document["presentations"]["landscape"]["comboTextSizePercent"] = 900;
+  writeFile(path, document.dump());
+  expect(AppSettingsStore::Save(path, AppSettingsStore::Load(path).settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"].value("comboTextY", -1.0f) == 0.0f &&
+             document["presentations"]["landscape"].value("comboTextSizePercent", 0) == 500,
+         "combo position and size are clamped to supported bounds");
+}
+
 void testJudgementLabelVisibilityRoundTrip() {
   TempDirectory temp;
   const auto path = temp.path() / "judgement-visibility.json";
@@ -2074,6 +2109,7 @@ int main() {
   testJudgementLabelVisibilityRoundTrip();
   testScratchlessBuiltInPreferencesRoundTrip();
   testFeedbackDefaultsAndScaleMigration();
+  testSeparatedComboSettingsRoundTrip();
   testOrientationPresentationMigrationAndIndependentRoundTrip();
   testPresentationValidationAndRuntimeSelection();
   testLegacyFixtureLoadsEverySetting();

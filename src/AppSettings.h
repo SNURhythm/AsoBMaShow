@@ -126,6 +126,7 @@ public:
   static constexpr float kMinJudgementTextY = 0.0f;
   static constexpr float kMaxJudgementTextY = 1.0f;
   static constexpr float kDefaultJudgementTextY = 0.55f;
+  static constexpr float kDefaultComboTextY = kDefaultJudgementTextY - 70.0f / 1080.0f;
   // Restore the former two-pixel gaps with the regular font's 68/31/47-pixel
   // rows, expressed as independent positions in the reference viewport.
   static constexpr float kDefaultJudgementTimingY = kDefaultJudgementTextY + 52.0f / 1080.0f;
@@ -237,6 +238,10 @@ public:
     float judgementTimingY = kDefaultJudgementTimingY;
     int judgementTextSizePercent = kDefaultJudgementFeedbackSizePercent;
     bool judgementTextBold = false;
+    bool judgementComboSeparated = false;
+    float comboTextY = kDefaultComboTextY;
+    int comboTextSizePercent = kDefaultJudgementFeedbackSizePercent;
+    bool comboTextBold = false;
     int judgementTimingSizePercent = kDefaultJudgementFeedbackSizePercent;
     bool judgementTimingBold = false;
     float pacemakerDiffY = kDefaultPacemakerDiffY;
@@ -262,6 +267,7 @@ public:
       playAreaWidth4K = playAreaWidth5K = playAreaWidth6K = playAreaWidth7K =
           playAreaWidth8K = playAreaWidth10K = playAreaWidth14K = policy.width.defaultValue;
       if (orientation == PresentationOrientation::Portrait) {
+        comboTextY = kDefaultJudgementTextY - 70.0f / 1920.0f;
         judgementTimingY = kDefaultJudgementTextY + 52.0f / 1920.0f;
         pacemakerDiffY = kDefaultJudgementTextY + 93.0f / 1920.0f;
         judgementIndicatorRenderMode = JudgementIndicatorRenderMode::Hud2D;

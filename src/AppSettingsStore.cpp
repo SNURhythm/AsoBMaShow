@@ -565,6 +565,10 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementFeedbackSizeVersion", 2},
       {"judgementTextSizePercent", settings.judgementTextSizePercent},
       {"judgementTextBold", settings.judgementTextBold},
+      {"judgementComboSeparated", settings.judgementComboSeparated},
+      {"comboTextY", settings.comboTextY},
+      {"comboTextSizePercent", settings.comboTextSizePercent},
+      {"comboTextBold", settings.comboTextBold},
       {"judgementTimingSizePercent", settings.judgementTimingSizePercent},
       {"judgementTimingBold", settings.judgementTimingBold},
       {"pacemakerDiffY", settings.pacemakerDiffY},
@@ -761,6 +765,10 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
   readValue(document, "judgementTimingY", settings.judgementTimingY, diagnostics);
   readValue(document, "judgementTextSizePercent", settings.judgementTextSizePercent, diagnostics);
   readValue(document, "judgementTextBold", settings.judgementTextBold, diagnostics);
+  readValue(document, "judgementComboSeparated", settings.judgementComboSeparated, diagnostics);
+  readValue(document, "comboTextY", settings.comboTextY, diagnostics);
+  readValue(document, "comboTextSizePercent", settings.comboTextSizePercent, diagnostics);
+  readValue(document, "comboTextBold", settings.comboTextBold, diagnostics);
   readValue(document, "judgementTimingSizePercent", settings.judgementTimingSizePercent, diagnostics);
   readValue(document, "judgementTimingBold", settings.judgementTimingBold, diagnostics);
   readValue(document, "pacemakerDiffY", settings.pacemakerDiffY, diagnostics);
