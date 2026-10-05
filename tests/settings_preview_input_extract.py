@@ -17,6 +17,7 @@ signatures = ('void SettingsScene::resetPreviewSimulation()',) if args.restart_o
     'void SettingsScene::resetPreviewHudSample()',
     'void SettingsScene::publishPreviewJudgement(',
     'void SettingsScene::consumePreviewTransactions(',
+    'void SettingsScene::advancePreviewPlayback(float dt)',
     'void SettingsScene::advancePreviewSimulation()',
     'void SettingsScene::capturePreviewVisualState()',
     'bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay)',

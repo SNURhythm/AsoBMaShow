@@ -253,15 +253,7 @@ void SettingsScene::update(float dt) {
     ensurePreviewRenderer();
     ensurePreviewInputHandler();
     syncPreviewInputLayout();
-    previewElapsedMicros +=
-        static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
-    advancePreviewSimulation();
-    const bool skinEnding = previewPresentation &&
-                            previewPresentation->selectedSkinGameplayTiming().has_value();
-    if (skinEnding ? previewEndAnimation.complete
-                   : previewElapsedMicros >= kPreviewLoopMicros) {
-      resetPreviewSimulation();
-    }
+    advancePreviewPlayback(dt);
   }
   applyPendingDifficultyTableUpdates();
   applyPendingArchiveCacheCleanupStatus();

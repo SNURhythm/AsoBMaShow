@@ -8,6 +8,7 @@
 #include "scene/play/BMSRenderer.h"
 #include "scene/SettingsPreviewChart.h"
 #include "scene/SettingsPreviewAutoPlay.h"
+#include "scene/SettingsPreviewPlayback.h"
 #include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
@@ -2170,6 +2171,7 @@ struct SettingsScene {
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::uint64_t previewFrameSerial = 0;
   bool previewActive = true;
+  bool previewPaused = false;
   bool previewAutoPlay = false;
   bool previewRandomTiming = false;
   std::mt19937 previewAutoPlayRandom{42};
@@ -2189,6 +2191,10 @@ struct SettingsScene {
   void syncPreviewAuthority();
   void resetPreviewHudSample();
   void capturePreviewVisualState();
+  settings_scene::PreviewEndAnimation previewEndAnimation;
+  int previewRestartCount = 0;
+  void resetPreviewSimulation() { ++previewRestartCount; previewElapsedMicros = 0; }
+  void advancePreviewPlayback(float dt);
   void advancePreviewSimulation();
   void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult>);
   bms_parser::Note *pressLane(int, double);
@@ -2197,6 +2203,7 @@ struct SettingsScene {
   void publishPreviewJudgement(const JudgeResult &, long long);
 };
 using settings_scene::kPreviewBpm;
+using settings_scene::kPreviewLoopMicros;
 using settings_scene::previewLaneCoverAuthority;
 using settings_scene::previewFrameClock;
 #include "settings_preview_input.inc"
@@ -2537,6 +2544,54 @@ void verifyPreviewScoreUsesRealJudgements() {
              scene.previewJudgeCount.at(PGreat) == 0 &&
              scene.previewJudgeFastSlowCount.empty(),
          "restarting clears preview score, note progression, and timing counters");
+}
+
+void verifyPreviewPause() {
+  const auto chart = settings_scene::makePreviewChart(7);
+  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = &renderer;
+  scene.previewVisualStateStore = &store;
+  scene.previewChartVisualModel = &model;
+  scene.previewPresentationEvents =
+      std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+  scene.previewAutoPlay = true;
+  scene.resetPreviewHudSample();
+  scene.advancePreviewPlayback(1.0F);
+  scene.capturePreviewVisualState();
+  const auto serial = scene.previewFrameSerial;
+  scene.previewPaused = true;
+  scene.advancePreviewPlayback(40.0F);
+  expect(scene.previewElapsedMicros == 1'000'000 && scene.previewPassedNotes == 0 &&
+             scene.previewAutoPlayNextEvent == 0 && scene.previewRestartCount == 0,
+         "pausing freezes chart time, autoplay, and looping even across a long pause");
+  auto config = presentationConfig(0);
+  config.builtInJudgeLine.color = 0x123456;
+  config.builtInJudgeLine.heightPercent = 250;
+  store.setConfiguration(config);
+  renderer.configure(config);
+  scene.capturePreviewVisualState();
+  expect(scene.previewFrameSerial > serial &&
+             scene.previewCapturedVisualState->configuration.builtInJudgeLine == config.builtInJudgeLine,
+         "paused frames still capture live appearance changes without advancing chart time");
+  scene.previewPaused = false;
+  scene.advancePreviewPlayback(0.5F);
+  expect(scene.previewElapsedMicros == 1'500'000 && scene.previewPassedNotes == 8 &&
+             scene.previewRestartCount == 0,
+         "resuming continues from the paused time and hits the next chord without catching up");
+  scene.previewPaused = true;
+  scene.previewElapsedMicros = kPreviewLoopMicros;
+  scene.advancePreviewPlayback(1.0F);
+  expect(scene.previewRestartCount == 0 && scene.previewElapsedMicros == kPreviewLoopMicros,
+         "pause preserves the final chart frame instead of restarting the loop");
+  scene.previewPaused = false;
+  scene.advancePreviewPlayback(0.0F);
+  expect(scene.previewRestartCount == 1,
+         "resuming at the end restores the normal preview loop");
 }
 
 void verifyPreviewAutoPlay() {
@@ -3221,6 +3276,7 @@ int main() {
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyPreviewPause();
   verifyPreviewAutoPlay();
   verifyPreviewMissesAndFullCombo();
       verifyIndividualJudgementLabelVisibility(target);

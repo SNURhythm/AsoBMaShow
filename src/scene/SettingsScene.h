@@ -323,6 +323,7 @@ private:
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
   long long previewElapsedMicros = 0;
+  bool previewPaused = false;
   bool previewAutoPlay = false;
   bool previewRandomTiming = false;
   std::mt19937 previewAutoPlayRandom{std::random_device{}()};
@@ -484,6 +485,7 @@ private:
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();
   void resetPreviewHudSample();
+  void advancePreviewPlayback(float dt);
   void advancePreviewSimulation();
   void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult> transactions);
   void publishPreviewJudgement(const JudgeResult &judgeResult,

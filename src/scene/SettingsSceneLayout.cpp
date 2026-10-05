@@ -619,6 +619,18 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   addPlaybackToggle("settings.preview_layout.random_timing.label", previewRandomTiming,
                      previewAutoPlay, [this]() { previewRandomTiming = !previewRandomTiming; });
   previewPanel->addView(playbackControls);
+  auto *pauseLabel = makeText(i18n::message(previewPaused
+      ? "settings.preview_layout.resume.label" : "settings.preview_layout.pause.label"),
+      metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+  auto *pauseButton = previewPaused
+      ? makeAccentButton(static_cast<int>(selectionWidth), metrics.actionButtonHeight,
+                         pauseLabel, ui_theme::cyan())
+      : makeControlButton(static_cast<int>(selectionWidth), metrics.actionButtonHeight, pauseLabel);
+  pauseButton->setOnClickListener([this]() {
+    previewPaused = !previewPaused;
+    lastLayoutWidth = -1;
+  });
+  previewPanel->addView(pauseButton);
   if (previewAutoPlay && previewRandomTiming)
     previewPanel->addView(makeWrappedText(
         i18n::message("settings.preview_layout.random_timing.description"),

@@ -158,6 +158,7 @@ SettingsScene::~SettingsScene() {
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
   previewActive = true;
+  previewPaused = false;
   previewPanelPage = 0;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();
@@ -321,7 +322,7 @@ void SettingsScene::renderPreview() {
     previewError = result.failure->diagnostic.message;
     lastLayoutWidth = -1;
   }
-  if (result.outcome == PresentationFrameOutcome::Ready) {
+  if (!previewPaused && result.outcome == PresentationFrameOutcome::Ready) {
     if (const auto timing = previewPresentation->selectedSkinGameplayTiming())
       previewEndAnimation.observeRenderedFrame(
           previewElapsedMicros, previewChart->Meta.PlayLength, *timing);
@@ -707,6 +708,19 @@ void SettingsScene::consumePreviewTransactions(
     if (transaction.hasJudge)
       publishPreviewJudgement(transaction.judge,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : previewElapsedMicros);
+  }
+}
+
+void SettingsScene::advancePreviewPlayback(float dt) {
+  if (previewPaused) return;
+  previewElapsedMicros +=
+      static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
+  advancePreviewSimulation();
+  const bool skinEnding = previewPresentation &&
+                          previewPresentation->selectedSkinGameplayTiming().has_value();
+  if (skinEnding ? previewEndAnimation.complete
+                 : previewElapsedMicros >= kPreviewLoopMicros) {
+    resetPreviewSimulation();
   }
 }
 
