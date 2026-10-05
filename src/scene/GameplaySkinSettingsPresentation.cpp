@@ -561,6 +561,9 @@ std::string gameplaySkinSettingsLayoutKey(
     encodeMetadata(encoder, row.metadata);
     encoder.text(row.revisionDigest);
     encodeEnum(encoder, row.validation);
+    // Viewport labels, framing selection and button availability are built
+    // from the committed snapshot rather than updated by the live UI path.
+    encodeViewport(encoder, row.settings.viewport);
     encoder.unsignedNumber(row.diagnostics.size());
     for (const auto &diagnostic : row.diagnostics) {
       encodeDiagnostic(encoder, diagnostic);

@@ -296,6 +296,26 @@ void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
           "diagnostic history changes rebuild the gameplay skins tab");
 }
 
+void testCommittedViewportChangesRefreshSettingsControls() {
+  const auto base = snapshotWithEntry();
+  const auto key = skin::gameplaySkinSettingsLayoutKey(base);
+  const auto expectRefresh = [&](auto changeViewport, const char *message) {
+    auto changed = base;
+    changeViewport(changed.entries.front().settings.viewport);
+    require(skin::gameplaySkinSettingsLayoutKey(changed) != key, message);
+  };
+  expectRefresh([](auto &viewport) { viewport.centerPlayArea = true; },
+                "committed framing changes refresh selection and enable zoom controls");
+  expectRefresh([](auto &viewport) { viewport.keepHudFixed = true; },
+                "committed HUD framing changes refresh the selected framing button");
+  expectRefresh([](auto &viewport) { viewport.playAreaZoom = 1.1F; },
+                "committed zoom changes refresh the displayed percentage");
+  expectRefresh([](auto &viewport) { viewport.playAreaBottomPaddingPercent = 1.0F; },
+                "committed bottom padding changes refresh the displayed percentage");
+  expectRefresh([](auto &viewport) { viewport = {}; },
+                "resetting the viewport refreshes the displayed controls");
+}
+
 void testConfigurationInputSanitization() {
   require(skin::gameplaySkinSanitizedOffsetComponent("-12", 3) == -12,
           "valid skin offset input is preserved");
@@ -657,6 +677,7 @@ int main() {
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
   testLayoutKeyIgnoresLiveOperationAndConfigurationValues();
+  testCommittedViewportChangesRefreshSettingsControls();
   testConfigurationInputSanitization();
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();

@@ -27,7 +27,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         cls.luajit_overlay = read("vcpkg-overlays/luajit/portfile.cmake")
         cls.root_gradle = read("android/build.gradle")
         cls.lint_config = read("android/app/lint.xml")
-        cls.workflow = read(".github/workflows/mobile-beta-deploy.yml")
+        cls.workflow = read(".github/workflows/android-beta-deploy.yml")
         cls.deploy_script = read("scripts/android_firebase_deploy.sh")
         cls.android_readme = read("android/README.md")
         cls.manifest = read("android/app/src/main/AndroidManifest.xml")

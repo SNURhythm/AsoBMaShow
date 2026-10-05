@@ -189,24 +189,9 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
                 self.assertIn("build_identity_xcargs", lane)
                 self.assertIn("audit_distribution_artifact", lane)
 
-    def test_firebase_pr_bypasses_release_verification_but_testflight_does_not(self):
-        verify = self.workflow.split("  ios-verify:", 1)[1].split(
-            "  ios-firebase:", 1
-        )[0]
-        firebase = self.workflow.split("  ios-firebase:", 1)[1].split(
-            "  ios-testflight:", 1
-        )[0]
-        testflight = self.workflow.split("  ios-testflight:", 1)[1].split(
-            "  android-firebase:", 1
-        )[0]
-
-        self.assertIn("./scripts/ios_release_verify.sh", verify)
-        self.assertIn(
-            "github.event_name != 'pull_request' || github.base_ref != 'develop'",
-            verify,
-        )
-        self.assertNotIn("needs: ios-verify", firebase)
-        self.assertIn("needs: ios-verify", testflight)
+    def test_distribution_workflow_has_no_separate_release_verification(self):
+        self.assertNotIn("ios-verify", self.workflow)
+        self.assertNotIn("./scripts/ios_release_verify.sh", self.workflow)
 
     def test_testflight_distribution_is_non_canceling_and_globally_serialized(self):
         section = self.workflow.split("  ios-testflight:", 1)[1]
@@ -217,9 +202,7 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         firebase = self.workflow.split("  ios-firebase:", 1)[1].split(
             "  ios-testflight:", 1
         )[0]
-        testflight = self.workflow.split("  ios-testflight:", 1)[1].split(
-            "  android-firebase:", 1
-        )[0]
+        testflight = self.workflow.split("  ios-testflight:", 1)[1]
         self.assertIn("github.event_name == 'pull_request'", firebase)
         self.assertIn("github.base_ref == 'develop'", firebase)
         self.assertNotIn("pull_request", testflight)
