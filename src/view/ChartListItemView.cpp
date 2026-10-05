@@ -69,7 +69,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankView = new TextView(kUiFont, 34);
   bestScoreView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
   favoriteButton = new Button();
-  favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+  favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 20);
 
   this->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -222,8 +222,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreDetails->addView(detailsLayout);
   contentCard->addView(scoreDetails);
 
-  favoriteButton->setWidth(84)
-      ->setHeight(84)
+  favoriteButton->setWidth(56)
+      ->setHeight(56)
       ->setFlexShrink(0)
       ->setCornerRadius(ui_theme::controlRadius());
   favoriteButton
