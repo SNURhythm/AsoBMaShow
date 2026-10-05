@@ -194,6 +194,11 @@ void SettingsScene::onPresentationOrientationWillChange() {
       input->endEditing();
       return true;
     }
+    if (auto *scroll = dynamic_cast<ScrollView *>(view)) {
+      if (auto *content = scroll->getContentView(); content && self(self, content)) {
+        return true;
+      }
+    }
     for (auto *child : view->getChildren()) if (self(self, child)) return true;
     return false;
   };

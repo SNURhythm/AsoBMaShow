@@ -26,11 +26,13 @@ skin::UiLogicalRect replayGameplayLogicalUiBounds(int exportWidth,
   if (exportWidth <= 0 || exportHeight <= 0) {
     return {};
   }
-  const double scale = static_cast<double>(exportWidth) /
-                       static_cast<double>(rendering::design_width);
+  const double logicalWidth = exportHeight > exportWidth
+                                  ? rendering::design_height
+                                  : rendering::design_width;
+  const double scale = static_cast<double>(exportWidth) / logicalWidth;
   return {.x = 0.0,
           .y = 0.0,
-          .width = static_cast<double>(rendering::design_width),
+          .width = logicalWidth,
           .height = static_cast<double>(exportHeight) / scale};
 }
 

@@ -922,7 +922,7 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
 void SettingsScene::appendGameplaySkinViewportSettings(
     View *entryBody, const LayoutMetrics &metrics,
     const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled) {
-  const auto target = skin::skinTargetTraitForType(gameplaySkinActiveTraitSkinType);
+  const auto target = skin::skinTargetTraitForType(row.metadata.skinType);
   if (target && target->kind == skin::SkinTargetKind::Gameplay) {
     entryBody->addView(makeWrappedText(
         i18n::message("settings.skins.play_area.label"), metrics.smallTextSize,

@@ -8964,6 +8964,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_launch_tests)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
+    add_test(NAME settings_rotation_edit_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_rotation_edit_tests.py)
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES

@@ -2239,6 +2239,47 @@ void verifyScratchLanePosition(const RenderTarget &target) {
   }
 }
 
+void verifyLegacyScratchlessTouchLayout(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  const auto profile = makeDefaultInputProfile();
+  for (const int mode : {5, 7}) {
+    const auto chart = settings_scene::makePreviewChart(-mode);
+    Judge judge(chart->Meta.Rank);
+    BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+    PreviewRecordingControl control;
+    RhythmInputHandler handler(&control, chart->Meta, registry, profile,
+                                makeGameplayInputScopes(-mode));
+    for (const bool hidden : {true, false, true, false}) {
+      auto config = presentationConfig(0);
+      config.hideEmptyScratchLane = hidden;
+      config.scratchLaneOnRight = true;
+      renderer.configure(config);
+      handler.setPlayAreaWidth(config.playAreaWidth);
+      const auto displayed = renderer.touchLayout().lanes;
+      handler.setTouchLaneOrder(displayed);
+      expect(displayed.size() == static_cast<std::size_t>(mode + !hidden),
+             "legacy touch fixture toggles scratchless and full layouts");
+      for (std::size_t index = 0; index < displayed.size(); ++index) {
+        const float x = gameplay_geometry::playAreaLeft(config.playAreaWidth) +
+            (float(index) + 0.5F) * config.playAreaWidth / displayed.size();
+        const auto screen = rendering::game_camera.project({x, 0.0F, 0.0F});
+        expect(handler.touchToLane({screen.x, screen.y, 0}) == displayed[index],
+               "legacy hit testing uses the displayed count and supports restoring scratch");
+      }
+      // Malformed layouts must not replace a valid displayed layout.
+      auto invalid = displayed;
+      invalid.front() = 99;
+      handler.setTouchLaneOrder(invalid);
+      const float left = gameplay_geometry::playAreaLeft(config.playAreaWidth);
+      const auto screen = rendering::game_camera.project(
+          {left + config.playAreaWidth * 0.5F / displayed.size(), 0.0F, 0.0F});
+      expect(handler.touchToLane({screen.x, screen.y, 0}) == displayed.front(),
+             "legacy touch rejects lanes absent from the chart");
+    }
+  }
+}
+
 void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
@@ -3048,7 +3089,8 @@ int main() {
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);
-      verifyPreviewKeyModeTouchRouting(target);
+      verifyLegacyScratchlessTouchLayout(target);
+  verifyPreviewKeyModeTouchRouting(target);
       verifyPreviewPacemakerDiff(target);
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();

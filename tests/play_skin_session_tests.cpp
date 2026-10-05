@@ -5520,6 +5520,24 @@ return {
                           .authoredOrdinal = 820}});
   }
 
+  void configureLaneEffect(int timer, bool bomb) {
+    model_.model.timerProperties.push_back(
+        {.id = SkinTimerPropertyId{500},
+         .source = SkinBuiltinPropertySelector{.value = timer},
+         .authoredOrdinal = 500});
+    auto &destination = model_.model.destinations.back().presentation;
+    destination.timer = SkinTimerPropertyId{500};
+    if (bomb) {
+      destination.frames = {{.timeMillis = 0, .x = 60.0, .y = -92.0,
+                             .width = 180.0, .height = 192.0}};
+    } else {
+      auto terminal = destination.frames.front();
+      terminal.timeMillis = 1000;
+      terminal.width = 0.0;
+      destination.frames.push_back(terminal);
+    }
+  }
+
   void addOrderedClickableImage(double destinationX) {
     resources_.addImage(86);
     model_.model.events.push_back(
@@ -7340,12 +7358,45 @@ void testImageActTouchQueuesPinnedEventOnDown() {
          "the queued Image act event reaches the next frame transaction");
 }
 
+void testFocusedLaneEffectsFollowTimers() {
+  for (const int timer : {121, 51}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.addClickableImage();
+    fixture.configureLaneEffect(timer, timer == 51);
+    ViewportSettings settings;
+    settings.centerPlayArea = true;
+    settings.keepHudFixed = true;
+    fixture.session().setViewport(settings);
+    auto state = stateAt(1);
+    state.lanes.resize(2);
+    state.lanes[1].releaseMicros = 0;
+    state.lanes[1].bombMicros = 0;
+    const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+    expect(frame.ready() && frame.evaluation.submitReady,
+           "lane effect frame prepares");
+    bool moved = false;
+    if (frame.evaluation.submitReady) {
+      for (const auto &command : frame.evaluation.submitReady->commands) {
+        const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        if (command.sourceObject == 82 && quad) {
+          moved = std::abs(quad->vertices[0].x - (timer == 51 ? 438.4F : 496.0F)) < 0.001F &&
+                  std::abs(quad->vertices[0].y - (timer == 51 ? 881.28F : 604.8F)) < 0.001F;
+        }
+      }
+    }
+    expect(moved, "release beams and oversized bombs follow the lane camera");
+  }
+}
+
 void testPlayAreaFramingKeepsDrawingAndInteractionTogether() {
   for (const bool keepHudFixed : {false, true}) {
     SessionFixture fixture;
     if (!fixture.ready()) return;
     fixture.addTouchGeometry(SkinFloatWriterId{1}, std::nullopt, 900.0);
     fixture.addClickableImage();
+    fixture.addOrderedClickableImage(500.0);
     ViewportSettings settings;
     settings.centerPlayArea = true;
     settings.keepHudFixed = keepHudFixed;
@@ -7372,6 +7423,9 @@ void testPlayAreaFramingKeepsDrawingAndInteractionTogether() {
     const UiLogicalPoint hudPoint{950.0F, 610.0F};
     const auto hudHit = layout.hitTestUiControl(hudPoint);
     if (keepHudFixed) {
+      expect(frame.evaluation.submitReady->commands.back().sourceObject == 82 &&
+                 layout.hitTestUiControl({510.0F, 602.0F}).sourceObject == 82,
+             "focused play area draws and receives touches above later HUD artwork");
       const auto writer = layout.writerInvocationFor(hudHit, hudPoint, 1);
       expect(hudHit.sourceObject == 80 && writer &&
                  std::abs(writer->normalizedValue - 0.5F) < 0.001F,
@@ -7413,7 +7467,7 @@ void testPlayAreaFramingKeepsDrawingAndInteractionTogether() {
     touch = fixture.session().touchLayout();
     expect(touch.laneRegions.size() == 2 &&
                std::abs(touch.laneRegions[0].bottomLeft.x - normalize(-28.0, true)) < 0.0001 &&
-               std::abs(touch.laneRegions[0].bottomLeft.y - normalize(990.0, false)) < 0.0001,
+               std::abs(touch.laneRegions[0].bottomLeft.y - normalize(800.0, false)) < 0.0001,
            "zoomed portrait touch bounds use the exact visible lane transform");
   }
 }
@@ -10758,6 +10812,7 @@ int main(int argc, char **argv) {
   testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
+  testFocusedLaneEffectsFollowTimers();
   testPlayAreaFramingKeepsDrawingAndInteractionTogether();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
   testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();

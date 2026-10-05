@@ -415,6 +415,22 @@ const Binding *findBinding(const std::vector<const Binding *> &bindings,
   return found == bindings.end() || (*found)->id != id ? nullptr : *found;
 }
 
+bool laneEffectTimer(const FrameLookupIndex &index,
+                     const SkinDestinationBody &destination) {
+  if (!destination.timer) return false;
+  const auto *binding = findBinding(index.timers, *destination.timer);
+  const auto *builtin = binding
+                            ? std::get_if<SkinBuiltinPropertySelector>(&binding->source)
+                            : nullptr;
+  const auto *id = builtin ? std::get_if<int>(&builtin->value) : nullptr;
+  if (!id) return false;
+  // Bomb, hold, key-on/off and HCN effect timers identify lane artwork even
+  // when its animation collapses or extends beyond the authored lane bounds.
+  if ((*id >= 50 && *id <= 89) || (*id >= 100 && *id <= 139) ||
+      (*id >= 250 && *id <= 289)) return true;
+  return *id >= 1010 && *id <= 2199 && *id % 100 >= 10;
+}
+
 bool disabledOptionalObject(const FrameLookupIndex &index,
                             SkinObjectId id) noexcept {
   const auto found =
@@ -4423,7 +4439,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       if (playArea && inputs.fixedHudViewport) {
         bool followsPlayArea = std::holds_alternative<SkinNoteObject>(object->payload) ||
                                std::holds_alternative<SkinCoverObject>(object->payload) ||
-                               std::holds_alternative<SkinJudgeObject>(object->payload);
+                               std::holds_alternative<SkinJudgeObject>(object->payload) ||
+                               laneEffectTimer(lookupIndex, destination.presentation);
         // Skins have no universal HUD grouping. Move lane-local artwork with
         // the lanes, retaining the original camera for surrounding objects.
         if (!followsPlayArea && !destination.presentation.frames.empty()) {
@@ -6246,6 +6263,24 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
     }
 
+    const auto isFixedHud = [&](const auto &item) {
+      return fixedHudOrdinals.contains(item.authoredOrdinal);
+    };
+    if (inputs.fixedHudViewport) {
+      // Keep authored order within each layer, promoting the entire focused
+      // play area above surrounding artwork. Hit testing uses the same order.
+      std::stable_partition(buffer.commands.begin(), buffer.commands.end(), isFixedHud);
+      std::stable_partition(interactionLayout.slidersTopmostFirst.begin(),
+                            interactionLayout.slidersTopmostFirst.end(), isFixedHud);
+      std::stable_partition(interactionLayout.imagesTopmostFirst.begin(),
+                            interactionLayout.imagesTopmostFirst.end(), isFixedHud);
+      std::stable_partition(interactionLayout.textsTopmostFirst.begin(),
+                            interactionLayout.textsTopmostFirst.end(), isFixedHud);
+      std::stable_partition(interactionLayout.controlsTopmostFirst.begin(),
+                            interactionLayout.controlsTopmostFirst.end(),
+                            [&](const auto &control) { return std::visit(isFixedHud, control); });
+    }
+
     SkinBlendMode nextRetainedBlend =
         retainedBlendSessionSerial_ == inputs.sessionSerial &&
                 retainedBlendModelIdentity_ == &inputs.model
@@ -6257,7 +6292,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       // Resolve this after deferred notes so it follows draw, not prepare,
       // order. LR2 image fonts still use the ordinary image draw overload.
       std::size_t commandIndex = 0;
-      for (const auto &destination : inputs.model.model.destinations) {
+      const auto resolveDestinationBlend = [&](const SkinDestination &destination) {
         while (commandIndex < buffer.commands.size() &&
                buffer.commands[commandIndex].authoredOrdinal ==
                    destination.presentation.authoredOrdinal) {
@@ -6284,6 +6319,19 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         if (const auto found = blendAfterDestination.find(&destination);
             found != blendAfterDestination.end()) {
           nextRetainedBlend = found->second;
+        }
+      };
+      if (inputs.fixedHudViewport) {
+        for (const bool fixed : {true, false}) {
+          for (const auto &destination : inputs.model.model.destinations) {
+            if (isFixedHud(destination.presentation) == fixed) {
+              resolveDestinationBlend(destination);
+            }
+          }
+        }
+      } else {
+        for (const auto &destination : inputs.model.model.destinations) {
+          resolveDestinationBlend(destination);
         }
       }
     }

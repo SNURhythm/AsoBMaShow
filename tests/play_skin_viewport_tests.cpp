@@ -84,8 +84,12 @@ void testFocusedPlayAreaUsesSafeAreaAndSharedInverse() {
   const auto zoomed = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
   const auto zoomCenter = apply(zoomed.authoredToUi, 300.0, 480.0);
   expect(near(zoomed.authoredToUi.m00, 1.35) &&
-             near(zoomCenter[0], 200.0) && near(zoomCenter[1], 420.0),
-         "additional zoom stays centered on the play area");
+             near(zoomCenter[0], 200.0) &&
+             near(apply(zoomed.authoredToUi, 300.0, 80.0)[1], 800.0),
+         "oversized play area keeps its judgment line at the safe bottom");
+  const auto zoomTouch = apply(zoomed.uiToAuthored, 200.0, 800.0);
+  expect(near(zoomTouch[0], 300.0) && near(zoomTouch[1], 80.0),
+         "anchored judgment line preserves inverse touch mapping");
   settings.playAreaZoom = std::numeric_limits<float>::quiet_NaN();
   const auto invalidZoom = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
   expect(invalidZoom.valid && near(invalidZoom.authoredToUi.m00, 0.9),

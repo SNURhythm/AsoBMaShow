@@ -395,6 +395,10 @@ void testExportPixelSizesMapToLogicalGameplayBounds() {
   expect(default4k.x == 0.0 && default4k.y == 0.0 &&
              default4k.width == 1920.0 && default4k.height == 1080.0,
          "default 4K export uses the 1920x1080 logical gameplay viewport");
+  const auto portrait =
+      replay_video_export::replayGameplayLogicalUiBounds(2160, 3840);
+  expect(portrait.width == 1080.0 && portrait.height == 1920.0,
+         "portrait export uses the same logical bounds as live rendering");
   const auto wide4k =
       replay_video_export::replayGameplayLogicalUiBounds(3840, 1600);
   expect(wide4k.x == 0.0 && wide4k.y == 0.0 && wide4k.width == 1920.0 &&

@@ -1997,6 +1997,62 @@ void testConfiguredReplacementRejectsMismatchedValidatorDigest() {
          "catalog identity");
 }
 
+void testRescanAcceptsSharedOrientationConfiguration() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("FixtureSkin");
+  const auto source = temp.root() / "shared-orientation-old";
+  writeOldTree(source);
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  auto prepared = importer.prepareFolder(source, *package.package, {}, {});
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition == SkinRecoveryDisposition::Recovered,
+         "shared orientation rescan fixture recovers");
+  auto initial = store.publish(std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  if (!initial.published || initial.entries.empty()) {
+    expect(false, "shared orientation rescan fixture publishes");
+    return;
+  }
+  const auto before = store.catalogSnapshot();
+  const auto entry = initial.entries.front();
+  EntryProfileSettings configured;
+  configured.options["Fixture Variant"] = 7;
+  validator.configuredReconciledSettings = configured;
+  ProfileInventorySnapshot inventory{.inventoryGeneration = 2};
+  for (const auto orientation : {PresentationOrientation::Landscape,
+                                 PresentationOrientation::Portrait}) {
+    VersionedSkinProfileSettings selected{
+        .profileId = SkinProfileId{.opaque = "12345678-1234-1234-1234-123456789abc"},
+        .generation = 11};
+    selected.settings.selected7KeyEntry = entry;
+    selected.settings.entries.emplace(entry, configured);
+    selected.orientation = orientation;
+    inventory.profiles.push_back(std::move(selected));
+  }
+  fs::remove_all(roots.visiblePackages / "FixtureSkin");
+  writeNewTree(roots.visiblePackages / "FixtureSkin");
+  const auto scanned = store.rescanVisibleSources({}, {}, std::move(inventory), validator);
+  const auto after = store.catalogSnapshot();
+  expect(!scanned.cancelled && after->entries.size() == 1,
+         "shared orientation configuration rescans");
+  if (after->entries.empty()) return;
+  const auto &updated = after->entries.front();
+  expect(updated.revisionDigest != before->entries.front().revisionDigest &&
+             !hasDiagnostic(updated.diagnostics, "skin_package_last_known_good_retained"),
+         "a repeated valid orientation configuration advances the edited skin revision");
+  expect(updated.validatedConfigurationDigests.size() == 2 &&
+             std::ranges::count(updated.validatedConfigurationDigests,
+                                skinConfigurationDigest(configured)) == 1 &&
+             std::ranges::count(updated.validatedConfigurationDigests,
+                                validator.currentConfigurationDigest()) == 1,
+         "default and shared orientation digests are retained exactly once");
+}
+
 void testRescanDigestMismatchRetainsExactLastKnownGoodEntry() {
   for (const bool configuredValidation : {false, true}) {
     TempDirectory temp;
@@ -2853,6 +2909,7 @@ int main(int argc, char **argv) {
   testMismatchedValidatorDigestCannotPublishSelectableOrPrepareActivation();
   testConfiguredReplacementRejectsMismatchedValidatorDigest();
   testRescanDigestMismatchRetainsExactLastKnownGoodEntry();
+  testRescanAcceptsSharedOrientationConfiguration();
   testTransactionFailureRetainsJournalForRestartRecovery();
   testGarbageCollectionRejectsLinksAndRetriesQuarantine();
   testGarbageCollectionNeverUnlinksAnExchangedQuarantinePath();

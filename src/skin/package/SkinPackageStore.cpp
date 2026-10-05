@@ -3832,12 +3832,13 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
             std::make_move_iterator(validation.diagnostics.end()));
         if (validatesGameplayTrait(validation, skinType) &&
             validation.reconciledSettings &&
-            lowercaseSha256(validation.configurationDigest) &&
-            std::ranges::find(selectedEntry->validatedConfigurationDigests,
-                              validation.configurationDigest) ==
-                selectedEntry->validatedConfigurationDigests.end()) {
-          selectedEntry->validatedConfigurationDigests.push_back(
-              std::move(validation.configurationDigest));
+            lowercaseSha256(validation.configurationDigest)) {
+          if (std::ranges::find(selectedEntry->validatedConfigurationDigests,
+                                validation.configurationDigest) ==
+              selectedEntry->validatedConfigurationDigests.end()) {
+            selectedEntry->validatedConfigurationDigests.push_back(
+                std::move(validation.configurationDigest));
+          }
         } else {
           const auto previous = std::ranges::find_if(
               oldCatalog->entries,

@@ -802,6 +802,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool orientationLocked = false;
   auto appliedOrientation = context.settings.screenOrientation;
   context.setGameplayOrientationLocked = [&](bool locked) {
+    if (locked && !orientationLocked) {
+      int logicalWidth = 0;
+      int logicalHeight = 0;
+      SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
+      presentationOrientation.updateViewport(logicalWidth, logicalHeight);
+    }
     orientationLocked = locked;
     presentationOrientation.setGameplayLocked(locked);
     if (context.sceneManager)
@@ -1250,6 +1256,18 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
     };
 
+    auto flushPendingResize = [&]() {
+      if (!hasPendingResize) return;
+      processEvent(pendingResizeEvent);
+      if (pendingResizeCount > 1) {
+        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+          coalescedResizeInWindow += (pendingResizeCount - 1);
+        }
+      }
+      hasPendingResize = false;
+      pendingResizeCount = 0;
+    };
+
     auto waitForBackgroundEvent = [&]() {
       SDL_Event waitEvent{};
       if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
@@ -1265,6 +1283,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
         ++rawEventsInWindow;
       }
+      // A later Start/touch callback may enter gameplay and lock orientation.
+      // Apply earlier viewport changes before either input dispatch path.
+      const bool resizeEvent = e.type == SDL_WINDOWEVENT &&
+          (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+           e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED);
+      if (!resizeEvent) flushPendingResize();
       context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
       if (e.type == SDL_MOUSEMOTION) {
@@ -1300,14 +1324,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       processEvent(e);
     }
 
-    if (hasPendingResize) {
-      processEvent(pendingResizeEvent);
-      if (pendingResizeCount > 1) {
-        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-          coalescedResizeInWindow += (pendingResizeCount - 1);
-        }
-      }
-    }
+    flushPendingResize();
     if (!pendingFingerMotions.empty()) {
       for (const auto &pendingFingerMotion : pendingFingerMotions) {
         processEvent(pendingFingerMotion);

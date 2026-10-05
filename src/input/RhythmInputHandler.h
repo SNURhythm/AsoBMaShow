@@ -41,6 +41,7 @@ private:
   float playAreaLeftX = 0.0f;
   bool dragModeEnabled = false;
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
+  std::vector<int> chartLaneOrder;
   std::vector<int> laneOrder;
   std::map<SDL_FingerID, int> fingerToLane;
   std::map<SDL_FingerID, bool> fingerLanePressed;

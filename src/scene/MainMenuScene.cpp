@@ -3989,6 +3989,12 @@ void MainMenuScene::startCourseDirect(
 
   defer(
       [this, session, selectedLongNoteMode]() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+        if (context.gameplaySkinLifecycle &&
+            !context.gameplaySkinLifecycle->presentationReady()) {
+          return false;
+        }
+#endif
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -4164,6 +4170,12 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
        pacemakerTarget, playback,
        canReusePreviewForStart, chartRandomInfo, tableName = std::move(tableName),
        tableLevel = std::move(tableLevel)]() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+        if (context.gameplaySkinLifecycle &&
+            !context.gameplaySkinLifecycle->presentationReady()) {
+          return false;
+        }
+#endif
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -6464,6 +6476,12 @@ void MainMenuScene::queueReplayLoadCompletion(
 
 void MainMenuScene::applyReplayLoadCompletion() {
   if (context.appInBackground.load()) return;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (context.gameplaySkinLifecycle &&
+      !context.gameplaySkinLifecycle->presentationReady()) {
+    return;
+  }
+#endif
   if (auto completion = replayLoadTask_.takeCompletion()) {
     resetReplayWatchLoadingUi();
     replayResultRecallInProgress = false;

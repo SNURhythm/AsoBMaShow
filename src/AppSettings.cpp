@@ -686,6 +686,8 @@ float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
 }
 
 void AppSettings::setPlayAreaWidthForKeyMode(int keyMode, float width) {
+  if (keyMode == -5 && presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && presentation().skin.follow7K1S) keyMode = 7;
   const auto bounds = player_settings::presentationGeometryPolicy(activePresentationOrientation()).width;
   const float sanitized = sanitizeFloat(width, bounds.defaultValue, bounds.minimum, bounds.maximum);
   switch (keyMode) {

@@ -1924,6 +1924,11 @@ void GamePlayScene::applySkinAudioVolume(
 #endif
 
 void GamePlayScene::refreshGameplayPresentationGeometry() {
+  if (inputHandler != nullptr && presentation != nullptr &&
+      presentation->activeMode() == PresentationMode::BuiltIn) {
+    inputHandler->setPlayAreaWidth(playfieldPresentationConfiguration.playAreaWidth);
+    inputHandler->setTouchLaneOrder(presentation->touchLayout().lanes);
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
@@ -3254,6 +3259,7 @@ void GamePlayScene::init() {
       return handleTouchInput(fingerIndex, action, normalizedLocation);
     });
     inputHandler->discardPendingTouchEvents();
+    refreshGameplayPresentationGeometry();
     if (!guidedAccessReminderPending) {
       inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)

@@ -45,4 +45,5 @@ private:
   std::uint64_t inputDeviceSubscription_ = 0;
   int layoutWidth_ = -1;
   int layoutHeight_ = -1;
+  bool pendingStart_ = false;
 };

@@ -135,6 +135,7 @@ void assertRetainedState(const ObservedScene &scene, const View *originalLabel) 
 using MainMenuScene = ObservedScene;
 struct IntroScene {
   ApplicationContext &context;
+  bool pendingStart_ = false;
   void startTutorial();
 };
 PRODUCTION_TUTORIAL_LAUNCH

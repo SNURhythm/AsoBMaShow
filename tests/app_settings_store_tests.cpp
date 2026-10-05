@@ -2084,11 +2084,11 @@ void testScratchlessBuiltInPreferencesRoundTrip() {
              settings.presentation().hideEmptyScratchLane7K,
          "empty scratch lanes are hidden by default in built-in 5K and 7K");
   settings.presentation().hideEmptyScratchLane5K = false;
-  settings.presentation().skin.follow5K1S = true;
   settings.setPlayAreaWidthForKeyMode(-5, 6.0F);
   settings.setPlayAreaWidthForKeyMode(-7, 7.0F);
   settings.setPlayAreaWidthForKeyMode(5, 9.0F);
   settings.setPlayAreaWidthForKeyMode(7, 10.0F);
+  settings.presentation().skin.follow5K1S = true;
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "scratchless preferences save");
   auto loaded = AppSettingsStore::Load(path).settings;
@@ -2103,6 +2103,18 @@ void testScratchlessBuiltInPreferencesRoundTrip() {
              loaded.playAreaWidthForKeyMode(5) == 9.0F &&
              loaded.playAreaWidthForKeyMode(7) == 10.0F,
          "followed width comes from original mode while independent mode retains its width");
+  loaded.setPlayAreaWidthForKeyMode(-5, 11.0F);
+  expect(loaded.playAreaWidthForKeyMode(-5) == 11.0F &&
+             loaded.playAreaWidthForKeyMode(5) == 11.0F,
+         "followed scratchless width controls update the visible source mode");
+  loaded.presentation().skin.follow7K1S = true;
+  loaded.setPlayAreaWidthForKeyMode(-7, 12.0F);
+  expect(loaded.playAreaWidthForKeyMode(-7) == 12.0F &&
+             loaded.playAreaWidthForKeyMode(7) == 12.0F,
+         "7K follow writes use the same effective mode as reads");
+  loaded.presentation().skin.follow7K1S = false;
+  expect(loaded.playAreaWidthForKeyMode(-7) == 7.0F,
+         "follow writes preserve the dormant independent 7K width");
   loaded.presentation().skin.follow5K1S = false;
   expect(loaded.playAreaWidthForKeyMode(-5) == 6.0F,
          "leaving Follow restores the child width without overwriting its parent");

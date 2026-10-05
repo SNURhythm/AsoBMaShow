@@ -4648,6 +4648,7 @@ void ResultScene::cleanupScene() {
   resultTouchControlsOverlay = nullptr;
   resultTouchControlsPanel = nullptr;
   resultTouchControlsRestore = nullptr;
+  resultTouchExportPhotoText = nullptr;
   resultSkinFailureNotice = nullptr;
   resultTouchControlsHidden = false;
   normalResultActions = nullptr;

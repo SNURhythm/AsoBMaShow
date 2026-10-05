@@ -1108,6 +1108,32 @@ void testDefaultSkinLegacyNullPresentationParity() {
          "legacy null presentation retains the zero-note grade panel");
 }
 
+void testLegacyPortraitResultMetricsFitWithoutDividers() {
+  const auto root = buildLegacyLayout(localMeta(), localState());
+  for (const auto dimensions : {std::pair{720, 1920}, std::pair{1920, 1080},
+                                std::pair{1080, 1920}}) {
+    root->setSize(dimensions.first, dimensions.second);
+    DefaultSkin::resizeResultLayout(root.get(), dimensions.first, dimensions.second);
+    root->applyYogaLayout();
+    auto *grid = root->findViewByName("detailsGrid");
+    expect(grid != nullptr, "legacy export has a statistics grid");
+    if (!grid) continue;
+    const bool portrait = dimensions.second > dimensions.first;
+    for (auto *child : grid->getChildren()) {
+      const bool metric = child->getName().starts_with("resultMetricTile:") ||
+                          child->getName().starts_with("resultJudgementTile:");
+      if (!metric) {
+        expect(portrait ? child->getWidth() == 0 : child->getWidth() <= 1,
+               "legacy result separators never occupy metric-card columns");
+      } else {
+        expect(child->getHeight() > 0 &&
+                   child->getY() + child->getHeight() <= grid->getY() + grid->getHeight() + 1,
+               "every legacy export statistic fits its reserved rows after rotation");
+      }
+    }
+  }
+}
+
 void testDefaultSkinSparseRemoteOmitsUnsupportedViews() {
   auto remote = remoteScore();
   remote.game.clear();
@@ -1376,6 +1402,7 @@ int main() {
   testPortraitResultKeepsComparisonCardsReadable();
   testPortraitResultTimingAndActionsFit();
   testDefaultSkinLegacyNullPresentationParity();
+  testLegacyPortraitResultMetricsFitWithoutDividers();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();

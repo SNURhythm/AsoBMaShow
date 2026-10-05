@@ -143,10 +143,11 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
   // Frame the authored lanes with one camera transform, shared by all skin
   // rendering and interaction. Preserve base destination scaling for authored
   // operations that explicitly use the skin's original logical canvas.
-  if (effective.centerPlayArea && playArea &&
+  const bool focusPlayArea = effective.centerPlayArea && playArea &&
       finite(playArea->x) && finite(playArea->y) &&
       finite(playArea->width) && finite(playArea->height) &&
-      playArea->width > 0.0 && playArea->height > 0.0) {
+      playArea->width > 0.0 && playArea->height > 0.0;
+  if (focusPlayArea) {
     scaleX = scaleY = std::min(safeUiBounds.width / playArea->width,
                               safeUiBounds.height / playArea->height) *
                       effective.playAreaZoom;
@@ -163,6 +164,12 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
     scaleY *= effective.scaleY;
     tx = centerX + effective.scaleX * (tx - centerX) + effective.translateX;
     ty = centerY + effective.scaleY * (ty - centerY) + effective.translateY;
+  }
+
+  // Authored Y points upward. Once the lanes exceed the safe height, keep
+  // their judgment-line edge visible and let the top crop as zoom increases.
+  if (focusPlayArea && playArea->height * scaleY > safeUiBounds.height) {
+    ty = std::min(ty, safeUiBounds.y + safeUiBounds.height + playArea->y * scaleY);
   }
 
   result.authoredToUi = {.m00 = scaleX, .m01 = 0.0, .tx = tx,

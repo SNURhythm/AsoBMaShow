@@ -140,6 +140,11 @@ void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
     details->setHeight(portrait ? metrics.detailsHeight * 2 + 2 : metrics.detailsHeight);
     details->setFlexShrink(0);
     for (auto *tile : details->getChildren()) {
+      if (tile->getName() == "resultMetricDivider") {
+        tile->setVisible(!portrait);
+        tile->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
+        continue;
+      }
       tile->setHeight(portrait ? metrics.detailsHeight : YGUndefined);
       tile->setFlexBasis(portrait ? contentWidth / 4 - 1 : 0.0F);
     }
@@ -711,7 +716,9 @@ void DefaultSkin::buildPresentationResultLayout(
 
     const auto addSeparator = [&]() {
       if (!authoritativePresentation && !detailsGrid->getChildren().empty()) {
-        detailsGrid->addView(makeDivider());
+        auto *divider = makeDivider();
+        divider->setName("resultMetricDivider");
+        detailsGrid->addView(divider);
       }
     };
 

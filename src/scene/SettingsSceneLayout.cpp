@@ -732,7 +732,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
                                         *previewSkinRow, previewSkinActionsEnabled);
 #endif
   } else if (previewPanelPage == 1) {
-    previewControls->addView(buildScratchLanePositionControl(metrics));
+    if (previewKeyMode == 5 || previewKeyMode == 7 ||
+        previewKeyMode == -5 || previewKeyMode == -7) {
+      previewControls->addView(buildScratchLanePositionControl(metrics));
+    }
     previewControls->addView(
         makeSummaryRow(metrics, i18n::message("settings.preview_layout.lane_angle.label"), &summaryLaneAngleValueText));
     auto *angleControls = new View();

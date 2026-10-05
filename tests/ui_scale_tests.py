@@ -1,6 +1,7 @@
 """Exercise the production drawable-to-UI transform without a graphics device."""
 from pathlib import Path
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -302,6 +303,138 @@ int main() {
             binary = Path(temp) / "test"
             path.write_text(source)
             subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_queued_rotation_precedes_start_input(self):
+        root = Path(__file__).resolve().parents[1]
+        production = (root / "src/main.cpp").read_text()
+        loop = extract(production, "while (SDL_PollEvent(&e))")
+        signature = "auto flushPendingResize = [&]()"
+        flush = extract(production, signature) + ";" if signature in production else ""
+        source = r'''
+#include "settings/PresentationOrientationState.h"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <functional>
+#include <vector>
+constexpr bool ASOBMASHOW_ENABLE_PERF_TELEMETRY=true;
+constexpr int SDL_MOUSEMOTION=1, SDL_FINGERMOTION=2, SDL_WINDOWEVENT=3,
+              SDL_WINDOWEVENT_RESIZED=4, SDL_WINDOWEVENT_SIZE_CHANGED=5, SDL_KEYDOWN=6;
+struct SDL_Event {
+  int type=0;
+  struct { int event=0, data1=0, data2=0; } window;
+  struct { int touchId=0, fingerId=0; } tfinger;
+};
+struct Registry {
+  std::function<void(const SDL_Event&)> dispatch;
+  void handleSdlEventAndDispatch(const SDL_Event &event) { dispatch(event); }
+};
+struct Context { Registry inputDeviceRegistry; };
+int main() {
+  using namespace player_settings;
+  PresentationOrientationState orientation;
+  orientation.updateViewport(1920,1080);
+  PresentationOrientation locked = PresentationOrientation::Landscape;
+  Context context{{[&](const SDL_Event &event) {
+    if (event.type == SDL_KEYDOWN) {
+      orientation.setGameplayLocked(true);
+      locked=orientation.orientation();
+    }
+  }}};
+  std::vector<SDL_Event> events{
+      {.type=SDL_WINDOWEVENT,.window={SDL_WINDOWEVENT_RESIZED,1920,1080}},
+      {.type=SDL_WINDOWEVENT,.window={SDL_WINDOWEVENT_SIZE_CHANGED,1080,1920}},
+      {.type=SDL_KEYDOWN}};
+  std::size_t eventIndex=0;
+  auto SDL_PollEvent=[&](SDL_Event *event) {
+    if(eventIndex==events.size())return false;
+    *event=events[eventIndex++];return true;
+  };
+  SDL_Event e, pendingMouseMotion, pendingResizeEvent;
+  std::vector<SDL_Event> pendingFingerMotions;
+  bool hasPendingResize=false, hasPendingMouseMotion=false;
+  uint32_t pendingResizeCount=0, pendingMouseMotionCount=0, pendingFingerMotionCount=0;
+  uint64_t rawEventsInWindow=0, coalescedResizeInWindow=0;
+  auto processEvent=[&](const SDL_Event &event) {
+    if(event.type==SDL_WINDOWEVENT)orientation.updateViewport(event.window.data1,event.window.data2);
+  };
+FLUSH
+LOOP
+  if(hasPendingResize)processEvent(pendingResizeEvent);
+  assert(locked==PresentationOrientation::Portrait);
+  assert(orientation.orientation()==PresentationOrientation::Portrait);
+  assert(coalescedResizeInWindow==1);
+}
+'''.replace("FLUSH", flush).replace("LOOP", loop)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-rotation-start-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_result_rotation_discards_old_photo_status_labels(self):
+        root = Path(__file__).resolve().parents[1]
+        production = (root / "src/scene/ResultScene.cpp").read_text()
+        cleanup = extract(production, "void ResultScene::cleanupScene()")
+        update = extract(production, "void ResultScene::setResultPhotoExportPresentation(")
+        pointers = set(re.findall(r"^  (\w+) = nullptr;", cleanup, re.M))
+        pointers.add("resultTouchExportPhotoText")
+        resets = set(re.findall(r"^  (\w+)\.(?:reset|clear)\(", cleanup, re.M))
+        values = set(re.findall(r"^  (\w+) =", cleanup, re.M)) - pointers - resets
+        fields = "\n".join("  Label *" + name + " = nullptr;" for name in sorted(pointers))
+        fields += "\n" + "\n".join("  Resettable " + name + ";" for name in sorted(resets))
+        fields += "\n" + "\n".join("  int " + name + " = 0;" for name in sorted(values))
+        source = r'''
+#include <cassert>
+#include <string>
+#include <string_view>
+struct Label {
+  bool alive = true;
+  std::string text;
+  void setText(const std::string& value) { assert(alive); text=value; }
+};
+struct Resettable { void reset() {} void clear() {} };
+struct Rankings { void close(int) {} };
+struct Context { Rankings *irRankingService = nullptr; };
+struct Local {
+  bool irObservedSnapshotInitialized = true;
+  int irObservedSnapshotRevision = 1;
+  std::string irActionDiagnostic;
+};
+enum class ResultPhotoExportPresentation { Ready, Saved };
+std::string_view resultPhotoExportLabel(ResultPhotoExportPresentation value) {
+  return value == ResultPhotoExportPresentation::Ready ? "Ready" : "Saved";
+}
+struct ResultScene {
+  Context context;
+  Local local;
+FIELDS
+  Local *localSource() { return &local; }
+  void cleanupScene();
+  void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
+};
+METHODS
+int main() {
+  ResultScene scene;
+  Label oldCustomLabel, newBuiltInLabel;
+  scene.resultTouchExportPhotoText = &oldCustomLabel;
+  scene.cleanupScene();
+  oldCustomLabel.alive = false;
+  scene.exportPhotoButtonText = &newBuiltInLabel;
+  scene.setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saved);
+  assert(newBuiltInLabel.text == "Saved");
+  scene.setResultPhotoExportPresentation(ResultPhotoExportPresentation::Ready);
+  assert(newBuiltInLabel.text == "Ready");
+  assert(scene.resultTouchExportPhotoText == nullptr);
+}
+'''.replace("FIELDS", fields).replace("METHODS", cleanup + "\n" + update)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-result-photo-rotation-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
     def test_result_rotation_resizes_custom_controls_and_safe_area(self):
