@@ -1398,7 +1398,7 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   body->addView(steps);
 }
 
-void SettingsScene::appendBuiltInLaneControls(
+void SettingsScene::appendBuiltInMeasureLineControls(
     View *body, const LayoutMetrics &metrics, int keyMode) {
   if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
   if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
@@ -1442,45 +1442,67 @@ void SettingsScene::appendBuiltInLaneControls(
   resetColor->setOnClickListener([setColor] { setColor(built_in_lane::Style{}.measureLineColor); });
   body->addView(resetColor);
 
-  const auto addPercent = [this, body, &metrics, keyMode, apply, &makeReset](
-      const i18n::Text &label, int built_in_lane::Style::*property,
-      const i18n::Text &resetLabel) {
-    body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
-    auto *input = makeTextInput(metrics, 140);
-    input->setEditingText(std::to_string(context.settings.builtInLaneForKeyMode(keyMode).*property));
-    input->onEditingFinished([this, apply, property](const std::string &text) {
-      int value = 0;
-      const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-      if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
-        apply([property, value](auto &next) { next.*property = value; });
-      else lastLayoutWidth = -1;
-    });
-    body->addView(input);
-    auto *steps = new View();
-    steps->setFlexDirection(FlexDirection::Row);
-    steps->setFlexWrap(YGWrapWrap);
-    steps->setGap(8.0F);
-    for (const int delta : {-10, 10}) {
-      auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
-                                    delta < 0 ? "-10%" : "+10%");
-      button->setOnClickListener([apply, property, delta] {
-        apply([property, delta](auto &next) { next.*property += delta; });
-      });
-      steps->addView(button);
-    }
-    auto *reset = makeReset(resetLabel);
-    reset->setOnClickListener([apply, property] {
-      apply([property](auto &next) { next.*property = built_in_lane::Style{}.*property; });
-    });
-    steps->addView(reset);
-    body->addView(steps);
-  };
-  addPercent(i18n::message("settings.measure_line.thickness"),
-             &built_in_lane::Style::measureLineThicknessPercent,
-             i18n::message("settings.notes.reset_thickness"));
+  appendBuiltInLanePercentControl(body, metrics, keyMode,
+      i18n::message("settings.measure_line.thickness"),
+      &built_in_lane::Style::measureLineThicknessPercent,
+      i18n::message("settings.notes.reset_thickness"));
+}
+
+void SettingsScene::appendBuiltInLaneOpacityControls(
+    View *body, const LayoutMetrics &metrics, int keyMode) {
   body->addView(makeWrappedText(i18n::message("settings.lane_background.title"),
                                metrics.bodyTextSize, ui_theme::textPrimary()));
-  addPercent(i18n::message("settings.lane_background.opacity"),
-             &built_in_lane::Style::backgroundOpacityPercent,
-             i18n::message("settings.lane_background.reset_opacity"));
+  appendBuiltInLanePercentControl(body, metrics, keyMode,
+      i18n::message("settings.lane_background.opacity"),
+      &built_in_lane::Style::backgroundOpacityPercent,
+      i18n::message("settings.lane_background.reset_opacity"));
+}
+
+void SettingsScene::appendBuiltInLanePercentControl(
+    View *body, const LayoutMetrics &metrics, int keyMode, const i18n::Text &label,
+    int built_in_lane::Style::*property, const i18n::Text &resetLabel) {
+  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
+  const auto apply = [this, keyMode](std::function<void(built_in_lane::Style &)> edit) {
+    auto next = context.settings.builtInLaneForKeyMode(keyMode);
+    edit(next);
+    context.settings.presentation().builtInLanes[keyMode] = built_in_lane::sanitizeStyle(next);
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  };
+  const auto makeReset = [&metrics](const i18n::Text &label) {
+    return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE));
+  };
+  body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *input = makeTextInput(metrics, 140);
+  input->setEditingText(std::to_string(context.settings.builtInLaneForKeyMode(keyMode).*property));
+  input->onEditingFinished([this, apply, property](const std::string &text) {
+    int value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+      apply([property, value](auto &next) { next.*property = value; });
+    else lastLayoutWidth = -1;
+  });
+  body->addView(input);
+  auto *steps = new View();
+  steps->setFlexDirection(FlexDirection::Row);
+  steps->setFlexWrap(YGWrapWrap);
+  steps->setGap(8.0F);
+  for (const int delta : {-10, 10}) {
+    auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                  delta < 0 ? "-10%" : "+10%");
+    button->setOnClickListener([apply, property, delta] {
+      apply([property, delta](auto &next) { next.*property += delta; });
+    });
+    steps->addView(button);
+  }
+  auto *reset = makeReset(resetLabel);
+  reset->setOnClickListener([apply, property] {
+    apply([property](auto &next) { next.*property = built_in_lane::Style{}.*property; });
+  });
+  steps->addView(reset);
+  body->addView(steps);
 }

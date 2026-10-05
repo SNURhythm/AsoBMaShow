@@ -1535,7 +1535,7 @@
 {"settings.navigation.visual.label", "Visual", "화면 효과", "表示"},
 {"settings.notes.body_width", "Body width (25–100%)", "몸통 너비 (25–100%)", "ボディの幅 (25–100%)"},
 {"settings.notes.custom_color", "Custom color (#RRGGBB)", "사용자 색상 (#RRGGBB)", "カスタムカラー (#RRGGBB)"},
-{"settings.notes.help", "Edits apply to the selected lanes and note type. 100% is the default thickness.", "선택한 레인과 노트 종류에 변경 사항을 적용합니다. 100%는 기본 두께입니다.", "選択したレーンとノーツの種類に変更を適用します。100%は標準の厚さです。"},
+{"settings.notes.help", "Edits apply to the selected lanes and note type. Body width defaults to 80%; other note thickness defaults to 100%.", "선택한 레인과 노트 종류에 변경 사항을 적용합니다. 몸통 너비의 기본값은 80%, 다른 노트 두께의 기본값은 100%입니다.", "選択したレーンとノーツの種類に変更を適用します。ボディ幅の初期値は80%、その他のノーツの厚さは100%です。"},
 {"settings.notes.invert_selection", "Invert selection", "선택 반전", "選択を反転"},
 {"settings.notes.lanes", "Lanes", "레인", "レーン"},
 {"settings.notes.mixed", "Mixed", "혼합", "混在"},

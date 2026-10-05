@@ -51,7 +51,7 @@ inline void editSelected(ModeStyles &settings, std::span<const LaneTarget> targe
           std::int64_t(style.thickness) + value, kMinThickness, maximum));
       break;
     case EditKind::ResetColor: style.color = defaultStyle(target.palette, type).color; break;
-    case EditKind::ResetThickness: style.thickness = 100; break;
+    case EditKind::ResetThickness: style.thickness = defaultThickness(type); break;
     }
     settings[target.lane][type] = style;
   }

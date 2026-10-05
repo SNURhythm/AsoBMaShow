@@ -883,10 +883,11 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     playAreaWidthControls->addView(resetWidth);
     previewControls->addView(playAreaWidthControls);
+    appendBuiltInLaneOpacityControls(previewControls, metrics, previewKeyMode);
   } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
     appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
     appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInLaneControls(previewControls, metrics, previewKeyMode);
+    appendBuiltInMeasureLineControls(previewControls, metrics, previewKeyMode);
   } else {
     appendSelectedSkinHudSettings(previewControls, metrics, !previewHasSelectedSkin);
   }
@@ -2033,6 +2034,28 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.lane.gameplay_preview.label"), i18n::message("settings.lane.preview_current_lane_hud.message"),
       previewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *opacityControls = new View();
+  opacityControls->setFlexDirection(FlexDirection::Column);
+  opacityControls->setGap(metrics.compact ? 12.0F : 16.0F);
+  auto *opacityMode = new DropdownView({
+      .onOptionSelected = [this](const std::string &id) {
+        builtInLaneOpacityMode = std::stoi(id);
+        lastLayoutWidth = -1;
+      }}, overlayPortal);
+  std::vector<DropdownView::Option> opacityModes;
+  for (const int mode : built_in_notes::kModes)
+    opacityModes.push_back({.id = std::to_string(mode), .label = gameplay::keyModeLabel(mode)});
+  opacityMode->setWidthPercent(100.0F);
+  opacityMode->refresh({.label = i18n::message("settings.input.mode.label"),
+      .selectedId = std::to_string(builtInLaneOpacityMode), .options = std::move(opacityModes)});
+  opacityControls->addView(opacityMode);
+  appendBuiltInLanePercentControl(opacityControls, metrics, builtInLaneOpacityMode,
+      i18n::message("settings.lane_background.opacity"),
+      &built_in_lane::Style::backgroundOpacityPercent,
+      i18n::message("settings.lane_background.reset_opacity"));
+  cardsColumn->addView(makeCard(metrics, i18n::message("settings.lane_background.title"), "",
+      opacityControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *visibleTimeControls = buildVisibleTimeControls(metrics, true, false);
   cardsColumn->addView(makeCard(

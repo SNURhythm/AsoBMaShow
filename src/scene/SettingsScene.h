@@ -107,6 +107,7 @@ private:
   std::function<void(std::uint32_t)> appearanceColorApply;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
+  int builtInLaneOpacityMode = 7;
   std::string builtInNoteDropdown;
   void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
                                    const std::string &id, std::uint32_t color,
@@ -115,7 +116,11 @@ private:
   void closeAppearanceColorPopup();
   void syncAppearanceColorPopup();
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
-  void appendBuiltInLaneControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInMeasureLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInLaneOpacityControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInLanePercentControl(View *body, const settings_scene::LayoutMetrics &metrics,
+      int keyMode, const i18n::Text &label, int built_in_lane::Style::*property,
+      const i18n::Text &resetLabel);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {

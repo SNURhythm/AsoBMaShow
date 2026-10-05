@@ -2168,8 +2168,14 @@ void testBuiltInNoteAppearancePersists() {
   auto &notes = document["presentations"]["landscape"]["builtInNotes"];
   notes = {{"7", {{"0", {{"normal", {{"color", "12ABEF"}, {"thickness", 150}}}}}}}};
   notes["48"]["47"]["normal"] = {{"color", "AB1234"}, {"thickness", 175}};
+  notes["7"]["0"]["long_body_off"] = {{"color", "123456"}};
+  notes["7"]["0"]["long_body_on"] = {{"color", "123456"}, {"thickness", 100}};
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.builtInNotesForKeyMode(7).at(0).at(built_in_notes::Type::LongBodyOff).thickness == 80 &&
+             loaded.settings.builtInNotesForKeyMode(7).at(0).at(built_in_notes::Type::LongBodyOn).thickness == 100,
+         "missing body widths use 80 percent while explicit saved widths remain unchanged");
+  notes["7"]["0"]["long_body_off"]["thickness"] = 80;
   expect(AppSettingsStore::Save(path, loaded.settings, error), "save note overrides");
   const auto saved = nlohmann::json::parse(readFile(path));
   expect(saved["presentations"]["landscape"].contains("builtInNotes") &&
@@ -2213,6 +2219,25 @@ void testBuiltInNoteGeometryAndIsolation() {
   expect(settings.builtInNotesForKeyMode(-7).empty(), "independent scratchless notes stay independent");
   expect(settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInNotes.empty(),
          "portrait notes are independent from landscape");
+  for (const auto palette : {Palette::Gray, Palette::Blue, Palette::Scratch}) {
+    for (const auto type : {Type::LongBodyOff, Type::LongBodyOn, Type::HellBodyOff,
+                            Type::HellBodyOn, Type::HellDamage}) {
+      const auto body = defaultStyle(palette, type);
+      expect(body.thickness == 80 && std::abs(bodyWidth(100, body) - 80.0F) < 0.001F,
+             "all LN/CN/HCN body states default to 80 percent lane width");
+      ModeStyles custom;
+      const std::array<LaneTarget, 1> target{{{0, palette}}};
+      editSelected(custom, target, type, EditKind::Color, 0x123456);
+      expect(custom[0][type] == Style{0x123456, 80},
+             "color-only body edits retain the default 80 percent width");
+      editSelected(custom, target, type, EditKind::Thickness, 60);
+      expect(resolve(custom, 0, type, palette).thickness == 60,
+             "explicit custom body widths override the new default");
+      editSelected(custom, target, type, EditKind::ResetThickness);
+      expect(custom[0][type] == Style{0x123456, 80},
+             "body width reset restores 80 percent without changing custom color");
+    }
+  }
   expect(bodyWidth(128, {0, 50}) == 64 && bodyWidth(128, {0, 300}) == 128,
          "body width is adjustable without crossing lane boundaries");
   expect(parseColor("#12abEF") == 0x12ABEF && !parseColor("12ZZ34") &&

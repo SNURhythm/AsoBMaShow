@@ -39,6 +39,7 @@ inline bool isBody(Type type) {
          type == Type::HellBodyOff || type == Type::HellBodyOn ||
          type == Type::HellDamage;
 }
+inline int defaultThickness(Type type) { return isBody(type) ? 80 : 100; }
 inline Style defaultStyle(Palette palette, Type type) {
   // Raw RGB samples from simple_gray.png, simple_blue.png and orange.png.
   // Scratch gradients use representative colored pixels, excluding their
@@ -51,7 +52,7 @@ inline Style defaultStyle(Palette palette, Type type) {
       {0xDB3625, 0xDB3625, 0x6D5F5E, 0x8B5449, 0xDC7864,
        0xDB2551, 0x6D5E62, 0x8B4954, 0xDC6478, 0xDC3F2F, 0xBD1E1D, 0xFF9524},
   }};
-  return {colors[static_cast<int>(palette)][static_cast<int>(type)], 100};
+  return {colors[static_cast<int>(palette)][static_cast<int>(type)], defaultThickness(type)};
 }
 inline Style resolve(const ModeStyles &settings, int lane, Type type,
                      Palette palette) {

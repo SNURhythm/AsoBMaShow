@@ -575,7 +575,8 @@ void readBuiltInNotes(const json &document, built_in_notes::Settings &settings,
           invalidValue("builtInNotes.color", "expected six hexadecimal digits", diagnostics);
           continue;
         }
-        built_in_notes::Style style{*rgb, 100};
+        built_in_notes::Style style{*rgb, built_in_notes::defaultThickness(
+            static_cast<built_in_notes::Type>(t))};
         readValue(*value, "thickness", style.thickness, diagnostics);
         settings[mode][lane][static_cast<built_in_notes::Type>(t)] = style;
       }
