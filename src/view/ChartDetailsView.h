@@ -12,12 +12,22 @@ class TextView;
 class ChartDetailsView : public View {
 public:
   explicit ChartDetailsView(ImageView *artwork);
+  static constexpr float minimumChartHeight() {
+    return kIdentityHeight + kDifficultyHeight + 2 * kSectionGap +
+           3 * kFactRowHeight + 2 * kFactGap + 2 * kFactPadding;
+  }
   void setScoreContainer(View *container);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
 
 private:
+  static constexpr float kIdentityHeight = 132;
+  static constexpr float kDifficultyHeight = 34;
+  static constexpr float kSectionGap = 10;
+  static constexpr float kFactRowHeight = 60;
+  static constexpr float kFactGap = 8;
+  static constexpr float kFactPadding = 14;
   View *artworkFrame_ = nullptr;
   View *facts_ = nullptr;
   View *personalBest_ = nullptr;

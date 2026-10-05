@@ -58,7 +58,8 @@ struct View {
 };
 struct Button:View { View content{"content"}; using View::View; View* getContentView() { return &content; } };
 struct ScrollView:View { using View::View; void refreshContentLayout() {} };
-struct ChartDetails:View { View best{"best"}; ChartDetails():View("chart") { add(best); } void setScoreContainer(View* v) { best.moveTo(v?*v:*this); } };
+struct ChartDetails:View { static constexpr float minimumChartHeight() { return 410; } View best{"best"}; ChartDetails():View("chart") { add(best); } void setScoreContainer(View* v) { best.moveTo(v?*v:*this); } };
+using ChartDetailsView = ChartDetails;
 namespace rendering { int window_width=1080,window_height=1920; }
 struct SafeAreaInsets { int top=30,right=0,bottom=20,left=0; };
 SafeAreaInsets getSafeAreaInsetsUi() { return {}; }
@@ -117,13 +118,17 @@ int main() {
     float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
     if(dimensions.second>dimensions.first) {
       const float usable=dimensions.second-106-24;
-      assert(std::abs(dh-(260+136+8+34))<1 && std::abs(bh+dh-usable)<1);
+      assert(std::abs(dh-(410+34))<1 && std::abs(bh+dh-usable)<1);
       controlsContent.setHeight(400);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
       assert(scene.portraitDetailsHeight(usable)==std::min(578.0F,usable-320));
       assert(scene.portraitDetailsHeight(600)==280);
       controlsContent.setHeight(260);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
+      assert(scene.portraitDetailsHeight(usable)==444);
+      assert(YGNodeStyleGetMinHeight(chart.node).value == dh-34);
+      assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 0 &&
+             YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
       assert(YGNodeLayoutGetLeft(songs.node)>YGNodeLayoutGetLeft(library.node));
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
       assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
@@ -136,6 +141,9 @@ int main() {
       assert(std::abs(YGNodeLayoutGetWidth(controls.node)-YGNodeLayoutGetWidth(scroll.node))<1);
       assert(YGNodeLayoutGetWidth(button.node)<=YGNodeLayoutGetWidth(library.node)-28+1);
     } else {
+      assert(YGNodeStyleGetMinHeight(chart.node).value == 0);
+      assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 16 &&
+             YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 16);
       assert(YGNodeLayoutGetWidth(library.node)==320 && YGNodeLayoutGetWidth(details.node)==500);
       assert(std::abs(bh-dh)<1);
       assert(title.visible && !controls.visible && chart.best.parent==&chart && options.parent==&content && tools.parent==&content);

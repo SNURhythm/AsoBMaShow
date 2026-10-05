@@ -68,6 +68,20 @@ int main() {
             "split details keep chart facts and personal best in separate columns");
     require(text(scoreColumn, "chartDetailsScore") == "1800 / 2000",
             "the external score card receives selection updates");
+    const int naturalHeight = details.getHeight();
+    details.setMinHeight(520);
+    details.applyYogaLayout();
+    const auto *facts = details.findViewByName("chartDetailsFacts");
+    const auto *lastValue = details.findViewByName("chartDetailsTotal");
+    require(details.getHeight() == 520 &&
+                facts->getY() + facts->getHeight() == details.getY() + details.getHeight() &&
+                std::abs(lastValue->getY() + lastValue->getHeight() -
+                         (facts->getY() + facts->getHeight() - 14)) <= 1,
+            "portrait chart facts distribute content through the aligned column height");
+    details.setMinHeight(0);
+    details.applyYogaLayout();
+    require(details.getHeight() == naturalHeight,
+            "removing the portrait fill constraint restores natural chart height");
     details.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
     require(text(scoreColumn, "chartDetailsScore") == "—",
             "the external score card clears when the selection has no chart");

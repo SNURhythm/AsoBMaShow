@@ -2023,7 +2023,9 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
 float MainMenuScene::portraitDetailsHeight(float availableHeight) const {
   const auto *primary = rootLayout->findViewByName("mainMenuPrimaryActions");
-  const float detailsHeight = detailsContent_ ? detailsContent_->getHeight() : 0;
+  // Use the natural minimum, not the stretched left column's previous height,
+  // so hiding controls on the right can shrink the panel again.
+  const float detailsHeight = ChartDetailsView::minimumChartHeight();
   const float controlsHeight = detailsControlsContent_ ? detailsControlsContent_->getHeight() : 0;
   const float actionsHeight = primary ? primary->getHeight() : 0;
   // Match the two scroll columns, the action gap, and the panel's 16-unit
@@ -2079,6 +2081,9 @@ void MainMenuScene::updatePanelLayout() {
     controls->setWidth(YGUndefined);
     controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
   }
+  chartDetailsView_->setMinHeight(portrait ? std::max(0.0F, detailsHeight - 34) : 0);
+  detailsContent_->setPadding(Edge::Top, portrait ? 0 : 16);
+  detailsContent_->setPadding(Edge::Bottom, portrait ? 0 : 16);
   updateMenuPresentation(portrait);
 }
 
