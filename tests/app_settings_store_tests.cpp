@@ -2302,6 +2302,51 @@ void testBuiltInNoteBulkEditing() {
          "bulk note edits survive save and reload");
 }
 
+void testBuiltInLaneAppearance() {
+  using Style = built_in_lane::Style;
+  AppSettings settings;
+  expect(settings.builtInLaneForKeyMode(7) == Style{} &&
+             built_in_lane::measureLineHeight({}) == 0.05F &&
+             built_in_lane::backgroundAlpha({}) == 122,
+         "lane appearance retains the existing measure line and background defaults");
+  settings.presentation().builtInLanes[7] = {0x12ABEF, 500, 0};
+  settings.presentation().builtInLanes[-7] = {0x654321, 75, 100};
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInLanes[7] =
+      {0x112233, 125, 25};
+  expect(built_in_lane::measureLineHeight(settings.builtInLaneForKeyMode(7)) == 0.25F &&
+             built_in_lane::backgroundAlpha(settings.builtInLaneForKeyMode(7)) == 0 &&
+             built_in_lane::backgroundAlpha(settings.builtInLaneForKeyMode(-7)) == 255 &&
+             settings.builtInLaneForKeyMode(5) == Style{},
+         "lane appearance supports thick lines and transparent or opaque backgrounds by mode");
+  settings.presentation().skin.follow7K1S = true;
+  expect(settings.builtInLaneForKeyMode(-7) == settings.builtInLaneForKeyMode(7),
+         "scratchless follow uses the parent lane appearance");
+  settings.presentation().skin.follow7K1S = false;
+  TempDirectory temporary;
+  const auto path = temporary.path() / "lane-appearance.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save lane appearance");
+  const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.builtInLaneForKeyMode(7) == Style{0x12ABEF, 500, 0} &&
+             loaded.builtInLaneForKeyMode(-7) == Style{0x654321, 75, 100} &&
+             loaded.presentation(AppSettings::PresentationOrientation::Portrait).builtInLanes.at(7) ==
+                 Style{0x112233, 125, 25},
+         "measure line and lane opacity persist by mode and orientation");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &lanes = document["presentations"]["landscape"]["builtInLanes"];
+  lanes["7"] = {{"measureLineColor", "bad"}, {"measureLineThicknessPercent", 900},
+                 {"backgroundOpacityPercent", -10}};
+  lanes["5"] = {{"measureLineColor", "123456"}, {"measureLineThicknessPercent", -1},
+                 {"backgroundOpacityPercent", 150}};
+  lanes["999"] = {{"backgroundOpacityPercent", 50}};
+  writeFile(path, document.dump());
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(invalid.settings.builtInLaneForKeyMode(7) == Style{0xFFFFFF, 500, 0} &&
+             invalid.settings.builtInLaneForKeyMode(5) == Style{0x123456, 25, 100} &&
+             !invalid.settings.presentation().builtInLanes.contains(999),
+         "invalid lane colors fall back and thickness, opacity, and modes are bounded");
+}
+
 void testBuiltInJudgeLineAppearance() {
   using Style = built_in_judge_line::Style;
   AppSettings settings;
@@ -2386,6 +2431,7 @@ void testBuiltInAppearancePresetColors() {
 
 int main() {
   testBuiltInAppearancePresetColors();
+  testBuiltInLaneAppearance();
   testBuiltInJudgeLineAppearance();
   testBuiltInScratchGradient();
   testBuiltInNoteBulkEditing();

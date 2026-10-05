@@ -251,6 +251,10 @@ public:
   [[nodiscard]] PreparedGameplayBgaFrame prepareVisualFrameAt(
       std::uint64_t frameSerial, std::int64_t bgaTimeMicros,
       const GameplayBgaMissState &missState) override;
+  // Pin a caller-owned still image through the normal BGA renderer without
+  // changing the loaded chart, scheduled visuals, or playback cursor.
+  [[nodiscard]] PreparedGameplayBgaFrame
+  prepareImageFrame(std::shared_ptr<ImageData> image);
   [[nodiscard]] BgaPreflightResult
   preflight(const PreparedGameplayBgaFrame &frame,
             std::span<const BgaDrawTarget> targets) override;

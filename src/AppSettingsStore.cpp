@@ -616,6 +616,41 @@ void readBuiltInJudgeLines(const json &document, built_in_judge_line::Settings &
   }
 }
 
+json builtInLanesToJson(const built_in_lane::Settings &settings) {
+  auto result = json::object();
+  for (const auto &[mode, style] : settings)
+    result[std::to_string(mode)] = {
+        {"measureLineColor", built_in_notes::colorHex(style.measureLineColor)},
+        {"measureLineThicknessPercent", style.measureLineThicknessPercent},
+        {"backgroundOpacityPercent", style.backgroundOpacityPercent}};
+  return result;
+}
+
+void readBuiltInLanes(const json &document, built_in_lane::Settings &settings,
+                      std::vector<std::string> &diagnostics) {
+  const auto lanes = document.find("builtInLanes");
+  if (lanes == document.end()) return;
+  if (!lanes->is_object()) {
+    invalidValue("builtInLanes", "expected object", diagnostics);
+    return;
+  }
+  for (const int mode : built_in_notes::kModes) {
+    const auto value = lanes->find(std::to_string(mode));
+    if (value == lanes->end() || !value->is_object()) continue;
+    built_in_lane::Style style;
+    const auto color = value->find("measureLineColor");
+    if (color != value->end()) {
+      const auto rgb = color->is_string()
+          ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
+      if (rgb) style.measureLineColor = *rgb;
+      else invalidValue("builtInLanes.measureLineColor", "expected six hexadecimal digits", diagnostics);
+    }
+    readValue(*value, "measureLineThicknessPercent", style.measureLineThicknessPercent, diagnostics);
+    readValue(*value, "backgroundOpacityPercent", style.backgroundOpacityPercent, diagnostics);
+    settings[mode] = built_in_lane::sanitizeStyle(style);
+  }
+}
+
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
   json judgementVisibility = json::object();
   for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
@@ -633,6 +668,7 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
       {"builtInNotes", builtInNotesToJson(settings.builtInNotes)},
       {"builtInJudgeLines", builtInJudgeLinesToJson(settings.builtInJudgeLines)},
+      {"builtInLanes", builtInLanesToJson(settings.builtInLanes)},
       {"noteStartPositionPercent", settings.noteStartPositionPercent},
       {"laneCoverEnabled", settings.laneCoverEnabled},
       {"liftEnabled", settings.liftEnabled},
@@ -806,6 +842,7 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
                           AppSettings::PresentationOrientation::Landscape) {
   readBuiltInNotes(document, settings.builtInNotes, diagnostics);
   readBuiltInJudgeLines(document, settings.builtInJudgeLines, diagnostics);
+  readBuiltInLanes(document, settings.builtInLanes, diagnostics);
   readValue(document, "scratchLaneOnRight", settings.scratchLaneOnRight, diagnostics);
   readValue(document, "hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K, diagnostics);
   readValue(document, "hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K, diagnostics);

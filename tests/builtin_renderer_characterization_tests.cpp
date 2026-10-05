@@ -708,7 +708,8 @@ ScenarioResult renderScenario(
     bool seedPastInvisibleProbe = false,
     bool primeRendererTraversal = false, bool scratchOnRight = false,
     const built_in_notes::ModeStyles &noteStyles = {},
-    built_in_judge_line::Style judgeLineStyle = {}, bool scratchMineProbe = false) {
+    built_in_judge_line::Style judgeLineStyle = {}, bool scratchMineProbe = false,
+    built_in_lane::Style laneStyle = {}) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
@@ -734,6 +735,7 @@ ScenarioResult renderScenario(
   configuration.scratchLaneOnRight = scratchOnRight;
   configuration.builtInNotes = noteStyles;
   configuration.builtInJudgeLine = judgeLineStyle;
+  configuration.builtInLane = laneStyle;
   const auto authority = authorityFor(*fixture.chart, coverPercent);
   store.setConfiguration(configuration);
   store.applyAuthorityUpdate(authority);
@@ -1983,6 +1985,45 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
                std::to_string(countColor(legacy.rgba, rgb)) + ", " +
                std::to_string(countColor(captured.rgba, rgb)) + " pixels)");
   }
+}
+
+void verifyCustomLaneAppearance(const RenderTarget &target) {
+  using Kind = characterization::SubmissionKind;
+  const built_in_lane::Style style{0x44EE88, 500, 100};
+  const auto render = [&](ScenarioRenderPath path, built_in_lane::Style appearance) {
+    return renderScenario(target, 0, true, path, 2'200'000, 45, true, false, false,
+                           {}, {}, false, appearance);
+  };
+  const auto legacy = render(ScenarioRenderPath::Legacy, style);
+  const auto captured = render(ScenarioRenderPath::Captured, style);
+  verifyCapturedOverloadEquivalence(legacy, captured);
+  int lines = 0;
+  for (const auto &submission : legacy.recorder.submissions) {
+    if (submission.kind != Kind::MeasureLine) continue;
+    ++lines;
+    expect(std::abs(submission.rect.height - 0.25F) < 0.00001F,
+           "custom measure-line thickness reaches rendered geometry");
+  }
+  expect(lines > 0, "custom measure-line test contains visible bar lines");
+  auto recolored = style;
+  recolored.measureLineColor = 0xEE4488;
+  const auto pink = render(ScenarioRenderPath::Captured, recolored);
+  std::size_t lineColorPixels = 0;
+  for (std::size_t i = 0; i + 3 < captured.rgba.size(); i += 4)
+    if (pink.rgba[i] > captured.rgba[i] + 30 && captured.rgba[i + 1] > pink.rgba[i + 1] + 30)
+      ++lineColorPixels;
+  expect(lineColorPixels > 10, "measure-line color reaches rendered pixels");
+  auto transparentStyle = style;
+  transparentStyle.backgroundOpacityPercent = 0;
+  const auto transparent = render(ScenarioRenderPath::Legacy, transparentStyle);
+  const auto transparentCaptured = render(ScenarioRenderPath::Captured, transparentStyle);
+  verifyCapturedOverloadEquivalence(transparent, transparentCaptured);
+  std::size_t backgroundPixels = 0;
+  for (std::size_t i = 0; i + 3 < legacy.rgba.size(); i += 4)
+    if (legacy.rgba[i] == 20 && legacy.rgba[i + 1] == 20 && legacy.rgba[i + 2] == 20 &&
+        (transparent.rgba[i] != 20 || transparent.rgba[i + 1] != 20 || transparent.rgba[i + 2] != 20))
+      ++backgroundPixels;
+  expect(backgroundPixels > 1000, "lane background opacity changes only its fill behind gameplay");
 }
 
 void verifyScratchGradientAndPlainMines(const RenderTarget &target) {
@@ -3265,6 +3306,7 @@ int main() {
           kRenderMicros, 41, true, false, true);
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
       verifyCustomNoteAppearance(target);
+      verifyCustomLaneAppearance(target);
       verifyScratchGradientAndPlainMines(target);
       verifyScratchlessChartEligibility();
       verifyEmptyScratchLanePresentation(target);

@@ -6057,6 +6057,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
+        src/settings/AudioVideoSettings.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp

@@ -33,7 +33,18 @@ void testAllLaneChordCycles() {
     const auto chart = settings_scene::makePreviewChart(mode);
     const auto lanes = mode < 0 ? chart->Meta.GetKeyLaneIndices()
                                 : chart->Meta.GetTotalLaneIndices();
-    const auto &timelines = chart->Measures.front()->TimeLines;
+    auto timelines = chart->Measures.front()->TimeLines;
+    assert(timelines.size() == 33);
+    long long nextMeasure = 0;
+    for (const auto *timeline : timelines) {
+      if (!timeline->IsFirstInMeasure) continue;
+      assert(timeline->Timing == nextMeasure);
+      nextMeasure += 2'000'000;
+    }
+    assert(nextMeasure == 34'000'000);
+    std::erase_if(timelines, [](const auto *timeline) {
+      return timeline->IsFirstInMeasure && timeline->Timing != 0;
+    });
     assert(timelines.size() == 17);
     assert(chart->Meta.PlayLength == 32'500'000 && chart->Meta.TotalLength == 33'000'000);
     assert(chart->Meta.TotalNotes == 12 * lanes.size());

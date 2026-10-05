@@ -79,6 +79,7 @@ struct PlayfieldPresentationConfig {
   int noteStartPositionPercent = 0;
   built_in_notes::ModeStyles builtInNotes;
   built_in_judge_line::Style builtInJudgeLine;
+  built_in_lane::Style builtInLane;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
   bool showPastNotes = false;

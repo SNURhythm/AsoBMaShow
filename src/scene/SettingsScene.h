@@ -104,6 +104,7 @@ private:
   int builtInNoteType = 0;
   std::string builtInNoteDropdown;
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInLaneControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {
@@ -317,6 +318,7 @@ private:
   std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   std::uint64_t previewFrameSerial = 0;
+  std::unique_ptr<IGameplayBgaSubmitter> previewBga;
   std::unique_ptr<PlayfieldPresentation> previewPresentation;
   std::unique_ptr<PlayfieldProjection> previewProjection;
   BMSRenderer *previewRenderer = nullptr;

@@ -316,6 +316,7 @@ private:
 
   built_in_notes::ModeStyles builtInNotes;
   built_in_judge_line::Style builtInJudgeLine;
+  built_in_lane::Style builtInLane;
   long long currentRenderMicros = 0;
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection

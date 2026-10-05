@@ -95,8 +95,9 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
     }
   }
 
-  // A normal empty chart origin keeps all rows scrolling before the first note.
-  appendTimeline(0, true);
+  // Regular bar lines make measure-line appearance visible throughout the preview.
+  for (long long time = 0; time < kPreviewLoopMicros; time += 2'000'000)
+    appendTimeline(time, true);
   std::ranges::sort(measure->TimeLines, {}, &bms_parser::TimeLine::Timing);
   const auto scratches = chart->Meta.GetScratchLaneIndices();
   for (const auto *timeline : measure->TimeLines) {

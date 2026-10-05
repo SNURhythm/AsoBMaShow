@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
+#include "SettingsPreviewBga.h"
 #include "SettingsScenePreviewAuthority.h"
 #include "../library/ChartLibraryPlatform.h"
 #include "../input/InputCaptureController.h"
@@ -24,23 +25,6 @@ using namespace settings_scene;
 
 namespace {
 
-#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-// The synthetic chart has no BGA; never borrow the song selector's media state.
-class PreviewBga final : public IGameplayBgaSubmitter {
-public:
-  PreparedGameplayBgaFrame prepareVisualFrameAt(std::uint64_t serial, std::int64_t,
-                                                const GameplayBgaMissState &) override {
-    return {.sequence = serial};
-  }
-  BgaPreflightResult preflight(const PreparedGameplayBgaFrame &,
-                               std::span<const BgaDrawTarget>) override { return {.ready = true}; }
-  void commitPrepared(const PreparedGameplayBgaFrame &) noexcept override {}
-  void submitPrepared(const PreparedGameplayBgaFrame &, const BgaDrawTarget &) noexcept override {}
-  void finalizePrepared(const PreparedGameplayBgaFrame &) noexcept override {}
-  void submitFullscreen(const PreparedGameplayBgaFrame &) noexcept override {}
-};
-PreviewBga previewBga;
-#endif
 
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
@@ -75,6 +59,7 @@ previewPresentationConfiguration(const AppSettings &settings,
       .noteStartPositionPercent = settings.presentation().noteStartPositionPercent,
       .builtInNotes = settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)),
       .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
+      .builtInLane = settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(chart)),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .markProcessedNotes = settings.markProcessedNotes,
@@ -216,10 +201,11 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.visibleTimeDurationMilliseconds, true);
     previewRenderer = builtIn.get();
     previewProjection = std::make_unique<PlayfieldProjection>();
+    previewBga = std::make_unique<PreviewBga>(context.jukebox, context.settings);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     previewPresentation = std::make_unique<PlayfieldPresentationCoordinator>(
         PlayfieldPresentationCoordinatorDependencies{
-            .builtIn = std::move(builtIn), .skin = {}, .bga = previewBga});
+            .builtIn = std::move(builtIn), .skin = {}, .bga = *previewBga});
 #else
     previewPresentation = std::move(builtIn);
 #endif
@@ -317,7 +303,16 @@ void SettingsScene::renderPreview() {
   (void)previewPresentation->prepareFrame(*previewCapturedVisualState, projection);
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope uiBatchScope(renderContext);
-  const auto result = previewPresentation->render(renderContext);
+  auto result = previewPresentation->render(renderContext);
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  result.preparedBga = previewBga->prepareVisualFrameAt(
+      previewFrameSerial, previewElapsedMicros, {});
+#endif
+  context.gameplayBgaCompositeState = {
+      .frameSerial = previewFrameSerial,
+      .mode = result.bgaCompositeMode,
+      .prepared = result.preparedBga,
+  };
   if (result.failure) {
     previewError = result.failure->diagnostic.message;
     lastLayoutWidth = -1;
@@ -467,6 +462,7 @@ void SettingsScene::destroyPreviewRenderer() {
   previewSkinStop.request_stop();
   previewRenderer = nullptr;
   previewPresentation.reset();
+  previewBga.reset();
   previewProjection.reset();
   previewError.clear();
   previewCapturedVisualState.reset();

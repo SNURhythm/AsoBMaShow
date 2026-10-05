@@ -1115,7 +1115,24 @@ void SettingsScene::appendBuiltInNoteControls(
     builtInNoteLanes[keyMode].clear();
     lastLayoutWidth = -1;
   });
-  body->addView(unselectAll);
+  auto *selectionActions = new View();
+  selectionActions->setFlexDirection(FlexDirection::Row);
+  selectionActions->setFlexWrap(YGWrapWrap);
+  selectionActions->setGap(8.0F);
+  selectionActions->addView(unselectAll);
+  auto *invert = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.notes.invert_selection"), metrics.smallTextSize,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  invert->setOnClickListener([this, keyMode, lanes] {
+    auto &selection = builtInNoteLanes[keyMode];
+    std::set<int> inverted;
+    for (const int lane : lanes)
+      if (!selection.contains(lane)) inverted.insert(lane);
+    selection = std::move(inverted);
+    lastLayoutWidth = -1;
+  });
+  selectionActions->addView(invert);
+  body->addView(selectionActions);
   const auto addDropdown = [this, body](const std::string &id, const i18n::Text &label,
       std::string selected, std::vector<DropdownView::Option> options,
       std::function<void(int)> select) {
@@ -1317,4 +1334,87 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   resetHeight->setOnClickListener([apply] { apply(std::nullopt, 100); });
   steps->addView(resetHeight);
   body->addView(steps);
+}
+
+void SettingsScene::appendBuiltInLaneControls(
+    View *body, const LayoutMetrics &metrics, int keyMode) {
+  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
+  const auto style = context.settings.builtInLaneForKeyMode(keyMode);
+  const auto apply = [this, keyMode](std::function<void(built_in_lane::Style &)> edit) {
+    auto next = context.settings.builtInLaneForKeyMode(keyMode);
+    edit(next);
+    context.settings.presentation().builtInLanes[keyMode] = built_in_lane::sanitizeStyle(next);
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  };
+  const auto makeReset = [&metrics](const i18n::Text &label) {
+    return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE));
+  };
+  body->addView(makeWrappedText(i18n::message("settings.measure_line.title"),
+                               metrics.bodyTextSize, ui_theme::textPrimary()));
+  body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  const auto setColor = [apply](std::uint32_t color) {
+    apply([color](auto &next) { next.measureLineColor = color; });
+  };
+  body->addView(makeAppearanceColorPresets(metrics, built_in_lane::Style{}.measureLineColor,
+                                          style.measureLineColor, setColor));
+  body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *colorInput = makeTextInput(metrics, 140);
+  colorInput->setEditingText("#" + built_in_notes::colorHex(style.measureLineColor));
+  colorInput->onEditingFinished([this, setColor](const std::string &text) {
+    if (const auto color = built_in_notes::parseColor(text)) setColor(*color);
+    else lastLayoutWidth = -1;
+  });
+  body->addView(colorInput);
+  auto *resetColor = makeReset(i18n::message("settings.notes.reset_color"));
+  resetColor->setOnClickListener([setColor] { setColor(built_in_lane::Style{}.measureLineColor); });
+  body->addView(resetColor);
+
+  const auto addPercent = [this, body, &metrics, keyMode, apply, &makeReset](
+      const i18n::Text &label, int built_in_lane::Style::*property,
+      const i18n::Text &resetLabel) {
+    body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+    auto *input = makeTextInput(metrics, 140);
+    input->setEditingText(std::to_string(context.settings.builtInLaneForKeyMode(keyMode).*property));
+    input->onEditingFinished([this, apply, property](const std::string &text) {
+      int value = 0;
+      const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+      if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+        apply([property, value](auto &next) { next.*property = value; });
+      else lastLayoutWidth = -1;
+    });
+    body->addView(input);
+    auto *steps = new View();
+    steps->setFlexDirection(FlexDirection::Row);
+    steps->setFlexWrap(YGWrapWrap);
+    steps->setGap(8.0F);
+    for (const int delta : {-10, 10}) {
+      auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                    delta < 0 ? "-10%" : "+10%");
+      button->setOnClickListener([apply, property, delta] {
+        apply([property, delta](auto &next) { next.*property += delta; });
+      });
+      steps->addView(button);
+    }
+    auto *reset = makeReset(resetLabel);
+    reset->setOnClickListener([apply, property] {
+      apply([property](auto &next) { next.*property = built_in_lane::Style{}.*property; });
+    });
+    steps->addView(reset);
+    body->addView(steps);
+  };
+  addPercent(i18n::message("settings.measure_line.thickness"),
+             &built_in_lane::Style::measureLineThicknessPercent,
+             i18n::message("settings.notes.reset_thickness"));
+  body->addView(makeWrappedText(i18n::message("settings.lane_background.title"),
+                               metrics.bodyTextSize, ui_theme::textPrimary()));
+  addPercent(i18n::message("settings.lane_background.opacity"),
+             &built_in_lane::Style::backgroundOpacityPercent,
+             i18n::message("settings.lane_background.reset_opacity"));
 }

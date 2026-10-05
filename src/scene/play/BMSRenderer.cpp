@@ -2985,7 +2985,7 @@ void BMSRenderer::renderFrame(
   beginOrderedNoteBatches();
   // background
   drawRect(playAreaWidth, upperBound - judgeY, playAreaLeftX,
-           judgeY, Color(20, 20, 20, 122));
+           judgeY, Color(20, 20, 20, built_in_lane::backgroundAlpha(builtInLane)));
   // judge line
   const float judgeLineHeight = built_in_judge_line::height(noteRenderWidth, builtInJudgeLine);
   drawRect(playAreaWidth, judgeLineHeight, playAreaLeftX, judgeY,
@@ -3120,8 +3120,8 @@ void BMSRenderer::renderFrame(
                   kSingleRectangleEntityCost)) {
         return;
       }
-      drawRect(playAreaWidth, 0.05F, playAreaLeftX, lineY,
-               Color(255, 255, 255, 128));
+      drawRect(playAreaWidth, built_in_lane::measureLineHeight(builtInLane), playAreaLeftX, lineY,
+               Color(0x80000000U | builtInLane.measureLineColor));
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
       recordProjectedSubmission(
           bms_renderer_characterization::SubmissionKind::MeasureLine,
@@ -3131,7 +3131,7 @@ void BMSRenderer::renderFrame(
           {.x = playAreaLeftX,
            .y = lineY,
            .width = playAreaWidth,
-           .height = 0.05F});
+           .height = built_in_lane::measureLineHeight(builtInLane)});
 #endif
     };
 
@@ -3505,8 +3505,8 @@ void BMSRenderer::renderFrame(
         chartEntityRenderBudget.tryConsume(
             gameplay_chart_entity_render_budget::
                 kSingleRectangleEntityCost)) {
-      drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
-               Color(255, 255, 255, 128));
+      drawRect(playAreaWidth, built_in_lane::measureLineHeight(builtInLane), playAreaLeftX, y,
+               Color(0x80000000U | builtInLane.measureLineColor));
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
       recordCharacterizationSubmission(
           bms_renderer_characterization::SubmissionKind::MeasureLine,
@@ -3516,7 +3516,7 @@ void BMSRenderer::renderFrame(
           {.x = playAreaLeftX,
            .y = y,
            .width = playAreaWidth,
-           .height = 0.05F});
+           .height = built_in_lane::measureLineHeight(builtInLane)});
 #endif
     }
     if (timeLine->Timing < chart_timing::subtract(chartTimeMicros, latePoorTiming)) {
@@ -4150,6 +4150,7 @@ void BMSRenderer::configure(
   if (builtInNotes != configuration.builtInNotes)
     builtInNotes = configuration.builtInNotes;
   builtInJudgeLine = built_in_judge_line::sanitizeStyle(configuration.builtInJudgeLine);
+  builtInLane = built_in_lane::sanitizeStyle(configuration.builtInLane);
   setVisibleTimeDurationMilliseconds(
       configuration.visibleTimeDurationMilliseconds);
   if (configuration.configuredHispeed &&
