@@ -4,6 +4,8 @@
 #include "rendering/UniformCache.h"
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
+#include "scene/SettingsPreviewChart.h"
+#include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
 #include "scene/play/PlayfieldProjection.h"
@@ -1930,7 +1932,7 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
 // renderer, camera, input handler, and logical input pipeline are production code.
 struct SettingsScene {
   struct {
-    struct {
+    struct : AppSettings {
       float width = 8.0F;
       float playAreaWidthForKeyMode(int) const { return width; }
     } settings;
@@ -1938,8 +1940,15 @@ struct SettingsScene {
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
   RhythmInputHandler *previewInputHandler = nullptr;
+  PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
+  std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::map<Judgement, int> previewJudgeCount;
+  int previewComboBreak = 0;
   void syncPreviewInputLayout();
+  void syncPreviewAuthority();
 };
+using settings_scene::kPreviewBpm;
+using settings_scene::previewLaneCoverAuthority;
 #include "settings_preview_input.inc"
 
 struct PreviewRecordingControl : IRhythmControl {
@@ -2096,6 +2105,52 @@ void verifyScratchLanePosition(const RenderTarget &target) {
       bgfx::frame();
     }
   }
+}
+
+void verifyPreviewPacemakerDiff(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(*fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  SettingsScene scene;
+  scene.previewChart = fixture.chart.get();
+  scene.previewRenderer = &renderer;
+  scene.previewVisualStateStore = &store;
+  rendering::UiBatchRenderer batch;
+  for (const int height : {1080, 1920}) {
+    rendering::window_width = height == 1080 ? 1920 : 1080;
+    rendering::window_height = height;
+    auto config = presentationConfig(0);
+    config.pacemakerDiffY = height == 1080 ? 0.3F : 0.7F;
+    config.pacemakerDiffSizePercent = height == 1080 ? 75 : 150;
+    config.pacemakerDiffBold = height == 1920;
+    renderer.configure(config);
+    renderer.setPacemakerTarget({});
+    scene.syncPreviewAuthority();
+    const auto captured = store.capture({.serial = 1});
+    expect(captured.authority.pacemakerStatus.enabled &&
+               captured.authority.pacemakerStatus.delta == 12,
+           "preview capture retains its pacemaker sample");
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      // SettingsScene renders this timestamp overload, not the captured frame.
+      renderer.render(context, kRenderMicros);
+    }
+    const auto *diff = renderer.judgementFeedbackTextViewsForTesting()[3];
+    expect(diff->getVisible() && diff->getText() == "+12",
+           "settings preview renders its pacemaker difference through the live renderer");
+    expect(diff->pointSize() == (height == 1080 ? 24 : 48) &&
+               (diff->fontWeight() == TextView::FontWeight::Bold) == config.pacemakerDiffBold &&
+               std::abs(diff->getY() + diff->getHeight() / 2 -
+                        std::lround(height * (1.0F - config.pacemakerDiffY))) <= 1,
+           "preview pacemaker difference uses the selected size, weight, and position");
+    bgfx::frame();
+  }
+  rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
 }
 
 void verifyJudgementFeedbackStyles(const RenderTarget &target) {
@@ -2342,6 +2397,7 @@ int main() {
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);
+      verifyPreviewPacemakerDiff(target);
       verifyJudgementFeedbackStyles(target);
       verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {

@@ -183,7 +183,7 @@ void SettingsScene::syncPreviewAuthority() {
                                   GaugeProfile::Standard));
   }
   const auto laneCover = previewLaneCoverAuthority(context.settings);
-  previewVisualStateStore->applyAuthorityUpdate({
+  const PlayfieldAuthorityUpdate authority{
       .currentBpm = kPreviewBpm,
       .judgementCounters = previewJudgeCount,
       .comboBreak = previewComboBreak,
@@ -200,7 +200,14 @@ void SettingsScene::syncPreviewAuthority() {
       .playOptionLabel = i18n::tr("settings.preview.preview.badge"),
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
-  });
+  };
+  previewVisualStateStore->applyAuthorityUpdate(authority);
+  // The settings preview uses the timestamp renderer overload, which does not
+  // consume captured authority through prepareFrame().
+  if (previewRenderer != nullptr) {
+    previewRenderer->setPacemakerTarget(authority.pacemakerTarget);
+    previewRenderer->setPacemakerStatus(authority.pacemakerStatus);
+  }
 }
 
 void SettingsScene::capturePreviewVisualState() {

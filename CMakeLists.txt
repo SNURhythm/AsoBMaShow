@@ -713,6 +713,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
             ${settings_preview_input_source}
+            src/settings/AudioVideoSettings.cpp
             src/input/RhythmInputHandler.cpp
             src/input/SDLTouchInputSource.cpp
             src/input/LogicalGameplayInputAdapter.cpp
