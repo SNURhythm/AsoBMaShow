@@ -2284,6 +2284,12 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
 void verifyPreviewScoreUsesRealJudgements() {
   const auto chart = settings_scene::makePreviewChart(7);
   const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  expect(model.text.artist == "SNURhythm" &&
+             model.text.subartist == "AsoBMaShow Preview" &&
+             model.text.subtitle == "Sample Chart" &&
+             model.text.genre == "PRACTICE" && model.staticMetadata.playLevel == 5 &&
+             model.staticMetadata.difficulty == 2,
+         "the sample chart publishes artist credits, genre, and level to skins");
   PlayfieldVisualStateStore store(model);
   Judge judge(chart->Meta.Rank);
   BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
@@ -2294,6 +2300,12 @@ void verifyPreviewScoreUsesRealJudgements() {
   scene.previewPresentationEvents =
       std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
   scene.resetPreviewHudSample();
+  const auto initialState = store.capture({.serial = 1});
+  expect(initialState.authority.currentGauge == 74.0F &&
+             initialState.authority.gaugeRules.compiled &&
+             initialState.authority.gaugeRules.gauges[
+                 gaugeTypeIndex(initialState.authority.gaugeType)].maximum == 100.0F,
+         "preview starts with a supported nonempty custom-skin gauge");
   expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
              scene.previewCombo == 0 && scene.previewMaximumCombo == 0,
          "a fresh preview has no invented score or completed notes");

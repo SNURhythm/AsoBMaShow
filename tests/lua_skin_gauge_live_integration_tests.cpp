@@ -68,7 +68,8 @@ void writeText(const fs::path &path, std::string_view value) {
   output.write(value.data(), static_cast<std::streamsize>(value.size()));
 }
 
-BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
+BeatorajaSkinModelDecodeResult decodeInline(
+    std::string_view sourceText, SkinSafetyPolicy policy = SkinSafetyPolicy{}) {
   TempDirectory temp;
   const SkinStorageRoots roots{
       .visiblePackages = temp.root() / "visible",
@@ -105,7 +106,7 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
 
   auto created = LuaSkinRuntime::create(
       {.purpose = LuaRuntimePurpose::Validation,
-       .fileSystem = std::move(runtimeFiles)});
+       .fileSystem = std::move(runtimeFiles), .safetyPolicy = policy});
   expect(created.runtime != nullptr, "live-node runtime creates");
   if (!created.runtime) {
     return {};
@@ -115,7 +116,7 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
   if (!headerValue.value) {
     return {};
   }
-  LuaSkinTableDecoder decoder;
+  LuaSkinTableDecoder decoder(policy);
   const auto header = decoder.decodeHeader(*headerValue.value);
   expect(header.header.has_value(), "live-node header decodes");
   if (!header.header) {
@@ -137,7 +138,7 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
     return {};
   }
   return decoder.decodeGameplay(*configured.value,
-                                {.runtime = *created.runtime});
+                                {.runtime = *created.runtime, .safetyPolicy = policy});
 }
 
 const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
@@ -251,9 +252,32 @@ void testGaugeExpansionSharesTheCumulativeFrameBudget() {
          "expanded Gauge frames participate in the cumulative 200k model budget");
 }
 
+void testGaugeNodesFollowScreenTypeAcrossSafetyPolicies() {
+  for (const auto level : {SkinSafetyLevel::Standard,
+                           SkinSafetyLevel::BeatorajaCompatibility,
+                           SkinSafetyLevel::Unrestricted}) {
+    for (const int type : {0, 16, 7, 15, 5}) {
+      const auto decoded = decodeInline(
+          "return {type=" + std::to_string(type) +
+              ",w=1280,h=720,source={{id='atlas',path='atlas.png'}},"
+              "image={{id='node',src='atlas',w=10,h=30}},"
+              "gauge={id='gauge',parts=50,nodes={'node','node','node','node'}},"
+              "destination={{id='gauge',dst={{x=40,y=141,w=450,h=30}}}}}",
+          SkinSafetyPolicy(level));
+      expect(decoded.model.has_value(), "gauge fixture loads under each safety policy");
+      if (!decoded.model) continue;
+      const auto *object = objectNamed(*decoded.model, "gauge");
+      const auto *gauge = object ? std::get_if<SkinGaugeObject>(&object->payload) : nullptr;
+      expect(gauge && gauge->orderedNodes.size() == (type == 5 ? 0 : 36),
+             "gameplay and result bars retain their nodes; only selector gauges stay empty");
+    }
+  }
+}
+
 } // namespace
 
 int main() {
+  testGaugeNodesFollowScreenTypeAcrossSafetyPolicies();
   testLiveGaugeUsesEveryPinnedNodeLayout();
   testGaugeExpansionSharesTheCumulativeFrameBudget();
   if (failures != 0) {

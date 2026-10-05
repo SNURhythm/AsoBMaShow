@@ -83,6 +83,8 @@ struct SettingsScene {
   int lastSafeTop = 0, lastSafeLeft = 0, lastSafeBottom = 0, lastSafeRight = 0;
   int activeTab = 1, lastLaidOutTab = -1;
   bool previewActive = false, lastLaidOutPreviewActive = false;
+  bool previewPanelFolded = false;
+  float lastLayoutScrollOffset = 0.0F;
   int previewPanelPage = 0, lastLaidOutPreviewPanelPage = 0;
   View *visibleScroll = nullptr;
   int saves = 0;
@@ -91,6 +93,10 @@ struct SettingsScene {
     rootLayout = new View;
     views.push_back(rootLayout);
     if (previewActive) {
+      if (previewPanelFolded) {
+        visibleScroll = nullptr;
+        return;
+      }
       PREVIEW_SCROLL_BINDING
       visibleScroll = previewScroll;
       views.push_back(previewScroll);
@@ -131,6 +137,16 @@ int main() {
       expect(scene.visibleScroll->getScrollOffset() == 375,
              "preview session and catalog reloads preserve the displayed panel scroll");
     }
+    scene.previewPanelFolded = true;
+    for (int reload = 0; reload < 3; ++reload) {
+      scene.lastLayoutWidth = -1;
+      scene.ensureLayoutUpToDate();
+    }
+    scene.previewPanelFolded = false;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleScroll->getScrollOffset() == 375,
+           "hiding, rebuilding, and showing the preview panel retains its scroll");
     scene.previewPanelPage = 2;
     scene.lastLayoutWidth = -1;
     scene.ensureLayoutUpToDate();

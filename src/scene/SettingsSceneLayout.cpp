@@ -236,12 +236,16 @@ void SettingsScene::ensureLayoutUpToDate() {
     return;
   }
 
-  const bool preserveScroll = rootLayout != nullptr && scrollView != nullptr &&
+  const bool preserveScroll = rootLayout != nullptr &&
                               activeTab == lastLaidOutTab &&
                               previewActive == lastLaidOutPreviewActive &&
                               (!previewActive || previewPanelPage == lastLaidOutPreviewPanelPage);
-  const float preservedScrollOffset =
-      preserveScroll ? scrollView->getScrollOffset() : 0.0f;
+  if (!preserveScroll) {
+    lastLayoutScrollOffset = 0.0F;
+  } else if (scrollView != nullptr) {
+    lastLayoutScrollOffset = scrollView->getScrollOffset();
+  }
+  // A folded preview has no scroll view; retain the last expanded offset.
 
   resetViewState();
   lastLayoutWidth = rendering::window_width;
@@ -255,7 +259,7 @@ void SettingsScene::ensureLayoutUpToDate() {
   lastLaidOutPreviewActive = previewActive;
   lastLaidOutPreviewPanelPage = previewPanelPage;
   if (preserveScroll && scrollView != nullptr) {
-    scrollView->setScrollOffset(preservedScrollOffset);
+    scrollView->setScrollOffset(lastLayoutScrollOffset);
   }
 }
 

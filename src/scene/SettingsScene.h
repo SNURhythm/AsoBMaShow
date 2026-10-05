@@ -286,6 +286,7 @@ private:
   bool previewActive = false;
   bool lastLaidOutPreviewActive = false;
   int lastLaidOutPreviewPanelPage = 0;
+  float lastLayoutScrollOffset = 0.0F;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
   int previewKeyMode = 7;

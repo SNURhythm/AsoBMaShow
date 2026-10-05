@@ -41,6 +41,12 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
     throw std::invalid_argument("Unsupported preview key mode");
   auto chart = std::make_unique<bms_parser::Chart>();
   chart->Meta.Title = "Settings Preview";
+  chart->Meta.SubTitle = "Sample Chart";
+  chart->Meta.Artist = "SNURhythm";
+  chart->Meta.SubArtist = "AsoBMaShow Preview";
+  chart->Meta.Genre = "PRACTICE";
+  chart->Meta.PlayLevelText = "5";
+  chart->Meta.Difficulty = 2;
   chart->Meta.Bpm = kPreviewBpm;
   chart->Meta.MinBpm = kPreviewBpm;
   chart->Meta.MaxBpm = kPreviewBpm;

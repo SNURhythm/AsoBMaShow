@@ -6359,6 +6359,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
+            src/scene/SettingsPreviewChart.cpp
+            src/scene/play/PlayfieldVisualState.cpp
+            src/audio/GameplayBgaMissStateTracker.cpp
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp

@@ -1310,6 +1310,9 @@ end
       script += R"lua(
   local skin = { type = 0, w = 1280, h = 720,
     source = {{id = "atlas", path = "resources/fixture.png"}},
+    image = {{id = "gauge-node", src = "atlas", w = 10, h = 20}},
+    gauge = {id = "gauge", parts = 50,
+             nodes = {"gauge-node", "gauge-node", "gauge-node", "gauge-node"}},
     value = {}, destination = {},
     slider = {{id = "progress", src = "atlas", x = 0, y = 0,
                w = 40, h = 20, type = 6, range = 500, angle = 1}}
@@ -1322,6 +1325,8 @@ end
   end
   table.insert(skin.destination, {id = "progress",
       dst = {{time = 0, x = 0, y = 0, w = 40, h = 20}}})
+  table.insert(skin.destination, {id = "gauge", loop = 450,
+      dst = {{time = 450, x = 40, y = 141, w = 450, h = 30}}})
   return skin
 )lua";
     } else if (options.resourceBearing && options.customObjectCallbacks.empty()) {
@@ -2870,25 +2875,42 @@ void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
 }
 
 void testPreviewTimePropertiesPrepareCompleteSkinFrames() {
-  ActivationFixture fixture({.resourceBearing = true, .previewTimeProperties = true});
-  if (!fixture.ready()) return;
-  auto initialState = stateAt(1);
-  initialState.clock = settings_scene::previewFrameClock(1, 0, 31'500'000);
-  initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
-  auto context = fixture.context();
-  context.initialState = &initialState;
-  auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
-  expect(created.session != nullptr,
-         "preview clock is available during configured skin creation");
-  if (!created.session) return;
-  std::uint64_t serial = 1;
-  for (const auto elapsed : {0LL, 3'500'000LL, 7'999'999LL, 0LL}) {
-    auto state = initialState;
-    state.clock = settings_scene::previewFrameClock(++serial, elapsed, 31'500'000);
-    const auto frame = created.session->prepareFrame(state, projectionAt(serial), {});
-    expect(frame.ready() && frame.evaluation.submitReady &&
-               frame.evaluation.submitReady->commands.size() >= 5,
-           "preview renders elapsed/remaining numbers and progress at startup, during play, and after looping");
+  for (const auto level : {SkinSafetyLevel::Standard,
+                           SkinSafetyLevel::BeatorajaCompatibility,
+                           SkinSafetyLevel::Unrestricted}) {
+    ActivationFixture fixture({.resourceBearing = true, .previewTimeProperties = true});
+    if (!fixture.ready()) return;
+    auto initialState = stateAt(1);
+    initialState.clock = settings_scene::previewFrameClock(1, 0, 31'500'000);
+    initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+    const auto chart = settings_scene::makePreviewChart();
+    initialState.authority.currentGauge = 74.0F;
+    initialState.authority.gaugeRules = compileGameplayGaugeRules(
+        kDefaultGameplayRuleset, chart->Meta, GaugeProfile::Standard);
+    auto context = fixture.context();
+    context.safetyPolicy = SkinSafetyPolicy(level);
+    context.initialState = &initialState;
+    auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+    expect(created.session != nullptr,
+           "preview clock is available during configured skin creation");
+    if (!created.session) return;
+    std::uint64_t serial = 1;
+    for (const auto elapsed : {0LL, 3'500'000LL, 7'999'999LL, 0LL}) {
+      auto state = initialState;
+      state.clock = settings_scene::previewFrameClock(++serial, elapsed, 31'500'000);
+      const auto frame = created.session->prepareFrame(state, projectionAt(serial), {});
+      expect(frame.ready() && frame.evaluation.submitReady &&
+                 frame.evaluation.submitReady->commands.size() >= 5,
+             "preview renders elapsed/remaining numbers and progress at startup, during play, and after looping");
+      if (elapsed >= 450'000 && frame.evaluation.submitReady) {
+        const auto &objects = created.session->modelForTesting().model.objects;
+        const auto gauge = std::ranges::find(objects, "gauge", &SkinObjectDefinition::authoredName);
+        expect(gauge != objects.end() && std::ranges::count(
+                   frame.evaluation.submitReady->commands, gauge->id,
+                   &SkinDrawCommand::sourceObject) == 50,
+               "preview renders all gauge bar segments under every safety policy");
+      }
+    }
   }
 }
 
@@ -3026,7 +3048,7 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
       .privateCatalog = temp.root() / "catalog",
       .profileOverlays = temp.root() / "overlays",
   };
-  const auto package = normalizePackageId("ExternalGameplaySkin").package;
+  const auto package = normalizePackageId(source.filename().string()).package;
   const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
                              : std::nullopt;
   const auto profile =
@@ -3036,6 +3058,16 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
   if (!package || !entry || !profile) {
     return;
   }
+
+  // Authored skins may update player-data files during configuration. Keep
+  // those writes in a disposable visible package, separate from the source.
+  std::error_code copyError;
+  fs::create_directories(roots.visiblePackages, copyError);
+  if (!copyError)
+    fs::copy(source, roots.visiblePackages / package->directoryName,
+             fs::copy_options::recursive, copyError);
+  expect(!copyError, "external gameplay package stages a writable test copy");
+  if (copyError) return;
 
   AcceptFiles aliases;
   SkinTreeSnapshotter snapshotter(roots, aliases);
@@ -3065,13 +3097,17 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
     return;
   }
 
-  PlayfieldChartVisualModel chart;
-  chart.keyCount = 7;
-  chart.text = {.title = "external title",
-                .artist = "external artist",
-                .fullArtist = "external artist"};
-  PlayfieldVisualState initialState = stateAt(1);
+  const auto sampleChart = settings_scene::makePreviewChart(7);
+  const auto chart = buildPlayfieldChartVisualModel(*sampleChart, 0);
+  PlayfieldVisualStateStore sampleStore(chart);
+  sampleStore.setSceneStartMicros(0);
+  sampleStore.setPlayStartMicros(0);
+  PlayfieldVisualState initialState = sampleStore.capture(
+      settings_scene::previewFrameClock(1, 0, sampleChart->Meta.PlayLength));
   initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+  initialState.authority.currentGauge = 74;
+  initialState.authority.gaugeRules = compileGameplayGaugeRules(
+      kDefaultGameplayRuleset, sampleChart->Meta, GaugeProfile::Standard);
   const PlayfieldProjectionResult initialProjection = projectionAt(1);
   SkinConfigurationWriteQueue configurationWrites;
   auto device = std::make_shared<SessionTextureDevice>();
@@ -3083,6 +3119,7 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
        .configurationDigest = validation.configurationDigest},
       {.sessionSerial = 92,
        .profileId = *profile,
+       .safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility),
        .chartModel = chart,
        .initialState = &initialState,
        .initialProjection = &initialProjection,
@@ -3090,6 +3127,7 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
        .storageRoots = roots,
        .resourcePreparation = resources,
        .textureDevice = std::move(device),
+       .movieDevice = std::make_shared<SessionMovieDevice>(),
        .liveResourceCounters = std::move(counters),
        .configurationWrites = configurationWrites});
   if (!created.session) {
@@ -3106,6 +3144,28 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
   expect(created.session != nullptr && !created.cancelled && !hasError,
          "requested external gameplay skin creates a full configured session; "
          "unsupported optional visuals may remain visible as warnings");
+  if (created.session) {
+    std::vector<SkinObjectId> gaugeIds;
+    for (const auto &object : created.session->modelForTesting().model.objects) {
+      if (const auto *gauge = std::get_if<SkinGaugeObject>(&object.payload)) {
+        gaugeIds.push_back(object.id);
+        expect(gauge->orderedNodes.size() == 36,
+               "authored gauge keeps its sprite nodes in compatibility mode");
+      }
+    }
+    initialState.clock = settings_scene::previewFrameClock(
+        2, 4'000'000, sampleChart->Meta.PlayLength);
+    const auto frame = created.session->prepareFrame(initialState, projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady,
+           "external gameplay skin prepares a frame with real preview chart data");
+    if (!gaugeIds.empty()) {
+      expect(frame.evaluation.submitReady && std::ranges::any_of(
+                 frame.evaluation.submitReady->commands, [&](const auto &command) {
+                   return std::ranges::find(gaugeIds, command.sourceObject) != gaugeIds.end();
+                 }),
+             "external gameplay skin emits its gauge bar, not only its percentage");
+    }
+  }
 }
 
 void testMusicSelectSourceResolutionMatchesPinnedEnumLookup() {
