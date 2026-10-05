@@ -14,6 +14,7 @@ struct PreviewAutoPlayEvent {
   std::int64_t timeMicros = 0;
   int lane = -1;
   bool press = false;
+  bool backSpin = false;
 };
 
 [[nodiscard]] inline std::vector<PreviewAutoPlayEvent> makePreviewAutoPlayEvents(
@@ -46,7 +47,10 @@ struct PreviewAutoPlayEvent {
         ? std::max(pressTime + 1, definition.note(note.pairId).timingMicros + timingOffset)
         : tapReleaseTime;
     events.push_back({pressTime, note.lane, true});
-    events.push_back({releaseTime, note.lane, false});
+    const bool backSpin = note.kind == gameplay::NoteKind::LongHead && note.scratchLane &&
+        (note.longNoteRule == gameplay::LongNoteRule::Charge ||
+         note.longNoteRule == gameplay::LongNoteRule::HellCharge);
+    events.push_back({releaseTime, note.lane, false, backSpin});
     laneAvailableAt[note.lane] = releaseTime + 1;
   }
   std::stable_sort(events.begin(), events.end(), [](const auto &left, const auto &right) {

@@ -720,7 +720,7 @@ void SettingsScene::advancePreviewSimulation() {
     const gameplay::GameplayInputContext clock{
         .songTimeMicros = event.timeMicros, .laneBeamTimeMicros = event.timeMicros};
     const auto result = event.press ? previewSimulation->pressLane(event.lane, clock)
-                                    : previewSimulation->releaseLane(event.lane, clock);
+                                    : previewSimulation->releaseLane(event.lane, clock, event.backSpin);
     consumePreviewTransactions(result.transactions);
   }
   consumePreviewTransactions(previewSimulation->advanceTo(

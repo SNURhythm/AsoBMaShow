@@ -2518,8 +2518,8 @@ void verifyPreviewScoreUsesRealJudgements() {
              scene.previewCombo == 0 && scene.previewMaximumCombo == 0,
          "a fresh preview has no invented score or completed notes");
   for (const auto [lane, time] : {std::pair{0, 1'500'000LL},
-                                  std::pair{2, 1'890'000LL},
-                                  std::pair{4, 2'300'000LL}}) {
+                                  std::pair{2, 1'540'000LL},
+                                  std::pair{4, 1'600'000LL}}) {
     scene.previewElapsedMicros = time;
     scene.pressLane(lane, 0);
     scene.releaseLane(lane, 0);
@@ -2527,11 +2527,11 @@ void verifyPreviewScoreUsesRealJudgements() {
   scene.previewElapsedMicros = 2'800'000;
   scene.advancePreviewSimulation();
   const auto state = store.capture({.serial = 1});
-  expect(scene.previewScore == 3 && scene.previewPassedNotes == 4 &&
-             scene.previewJudgeCount.at(Poor) == 1 && scene.previewCombo == 0 &&
+  expect(scene.previewScore == 3 && scene.previewPassedNotes == 8 &&
+             scene.previewJudgeCount.at(Poor) == 5 && scene.previewCombo == 0 &&
              state.authority.pacemakerStatus.currentScore == 3 &&
-             state.authority.pacemakerStatus.playedNotes == 4,
-         "preview scores real inputs and breaks combo when the next note is missed");
+             state.authority.pacemakerStatus.playedNotes == 8,
+         "preview scores real chord inputs and breaks combo for the unplayed lanes");
   scene.resetPreviewHudSample();
   expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
              scene.previewJudgeCount.at(PGreat) == 0 &&
@@ -2654,6 +2654,7 @@ void verifyPreviewMissesAndFullCombo() {
     expect(scene.previewJudgeCount.at(Poor) == chart->Meta.TotalNotes,
            "repeated preview frames do not count the same miss twice");
     scene.resetPreviewHudSample();
+    const auto scratches = chart->Meta.GetScratchLaneIndices();
     for (const auto *timeline : chart->Measures.front()->TimeLines) {
       scene.previewElapsedMicros = timeline->Timing;
       scene.advancePreviewSimulation();
@@ -2661,7 +2662,11 @@ void verifyPreviewMissesAndFullCombo() {
         if (!note) continue;
         const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
         if (!longNote || !longNote->IsTail()) scene.pressLane(note->Lane, 0);
-        if (!longNote || longNote->IsTail()) scene.releaseLane(note->Lane, 0);
+        if (!longNote || longNote->IsTail()) {
+          const bool backSpin = longNote && longNote->Type != bms_parser::LongNoteType::LongNote &&
+              std::ranges::find(scratches, note->Lane) != scratches.end();
+          scene.releaseLane(note->Lane, 0, backSpin);
+        }
       }
     }
     scene.previewElapsedMicros = 33'000'000;
