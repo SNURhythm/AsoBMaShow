@@ -3388,6 +3388,9 @@ void MusicSelectScene::update(float) {
     modalOverlayPortal_->setSize(rendering::window_width,
                                  rendering::window_height);
   }
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setSize(rendering::window_width, rendering::window_height);
+  }
   if (revealContextMenu_) {
     revealContextMenu_->setViewportSize(rendering::window_width,
                                         rendering::window_height);

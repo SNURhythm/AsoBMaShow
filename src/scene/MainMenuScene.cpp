@@ -7118,6 +7118,9 @@ void MainMenuScene::renderScene() {
   if (overlayPortal != nullptr) {
     overlayPortal->setSize(rendering::window_width, rendering::window_height);
   }
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setSize(rendering::window_width, rendering::window_height);
+  }
   if (revealContextMenu != nullptr) {
     revealContextMenu->setViewportSize(rendering::window_width,
                                        rendering::window_height);

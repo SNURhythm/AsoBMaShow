@@ -1,10 +1,14 @@
 #include "../src/scene/DecideLoadingOverlay.h"
 #include "../src/view/OverlayPortal.h"
 #include "../src/view/UiTheme.h"
+#include "../src/view/ImageView.h"
+#include "../src/view/TextView.h"
 #include "../src/rendering/UniformCache.h"
 
 #include <bgfx/bgfx.h>
 #include <cstdio>
+#include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -98,6 +102,51 @@ void testOverlayReuseAcrossCharts() {
   expect(overlay.titleText() == "Black Wings [Another]",
          "overlay re-renders cleanly when chart switches back");
 }
+void testOverlayReflowsForPortraitAndRotation() {
+  auto record = makeRecord();
+  record.meta.Title = "A deliberately long chart title that needs wrapping in portrait";
+  record.meta.SubTitle.clear();
+  record.meta.BmsPath = std::filesystem::path(__FILE__).parent_path() /
+      "fixtures/beatoraja_skin/charts/preview.bms";
+  record.meta.StageFile = "acceptance_bga_base.png";
+  DecideLoadingOverlay overlay(0, 0, 1920, 1080, record);
+  for (const auto size : {std::pair{1080, 1920}, std::pair{320, 900},
+                          std::pair{720, 1280}, std::pair{1920, 1080}}) {
+    overlay.setSize(size.first, size.second);
+    auto *panel = overlay.getChildren().front();
+    expect(panel->getX() >= 24 && panel->getX() + panel->getWidth() <= size.first - 24,
+           "decide panel fits the current viewport width after rotation");
+    expect(std::abs(panel->getX() + panel->getWidth() / 2 - size.first / 2) <= 1 &&
+               std::abs(panel->getY() + panel->getHeight() / 2 - size.second / 2) <= 1,
+           "decide panel remains centered in the current orientation");
+    bool foundStage = false;
+    for (auto *child : panel->getChildren()) {
+      expect(child->getX() >= panel->getContentX() &&
+                 child->getX() + child->getWidth() <= panel->getContentX() + panel->getContentWidth(),
+             "decide image and metadata fit inside the portrait card");
+      auto *image = dynamic_cast<ImageView *>(child);
+      if (!image && !child->getChildren().empty())
+        image = dynamic_cast<ImageView *>(child->getChildren().front());
+      if (image) {
+        foundStage = true;
+        expect(image->getWidth() <= panel->getContentWidth(),
+               "stage image stays inside the portrait card");
+        expect(std::abs(image->getWidth() * 9 - image->getHeight() * 16) <= 16,
+               "decide stage image preserves its frame aspect ratio when resized");
+      }
+      if (auto *text = dynamic_cast<TextView *>(child)) {
+        expect(text->textureWidth() <= text->getContentWidth(),
+               "decide metadata wraps instead of extending beyond the viewport");
+      }
+    }
+    expect(foundStage, "decide stage image remains present after rotation");
+  }
+  overlay.setSize(1080, 1920);
+  overlay.setChart(makeRecord());
+  auto *panel = overlay.getChildren().front();
+  expect(panel->getX() >= 24 && panel->getX() + panel->getWidth() <= 1056,
+         "changing the chart keeps the current portrait layout");
+}
 }  // namespace
 
 int main() {
@@ -114,6 +163,7 @@ int main() {
   testOverlayBindsChartMetadata();
   testOverlayBlocksInput();
   testOverlayReuseAcrossCharts();
+  testOverlayReflowsForPortraitAndRotation();
 
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
