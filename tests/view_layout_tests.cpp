@@ -991,6 +991,31 @@ void testLegacyDigitalScratchBindingsRemainManageable() {
   }));
 }
 
+void testScratchlessInputModesShareCanonicalKeyBindings() {
+  for (const int mode : {5, 7}) {
+    assert(std::ranges::find(settings_scene::kInputKeyModes, -mode) !=
+           settings_scene::kInputKeyModes.end());
+    for (const int player : {1, 2}) {
+      const input::InputScope canonical{player, mode};
+      assert(settings_scene::inputScopeForSelection(player, -mode) == canonical);
+      const input::InputBinding legacy{
+          .scope = canonical,
+          .action = {input::LogicalActionKind::Lane, player == 1 ? 7 : 15}};
+      const auto actions = settings_scene::inputActionsForScope(
+          {player, -mode}, std::span<const input::InputBinding>(&legacy, 1));
+      assert(std::ranges::count_if(actions, [](const auto &row) {
+        return row.action.kind == input::LogicalActionKind::Lane;
+      }) == mode);
+      assert(std::ranges::none_of(actions, [](const auto &row) {
+        return row.action.kind == input::LogicalActionKind::ScratchClockwise ||
+               row.action.kind == input::LogicalActionKind::ScratchCounterClockwise ||
+               (row.action.kind == input::LogicalActionKind::Lane &&
+                (row.action.lane == 7 || row.action.lane == 15));
+      }));
+    }
+  }
+}
+
 void testGyroscopeSettingsLayoutAndPresentation() {
   const auto wide = settings_scene::resolveGyroscopeSettingsLayout(900, false);
   assert(!wide.stackEditors);
@@ -1126,6 +1151,7 @@ int main() {
   testInputBindingEditorCapabilitiesMatchControlSemantics();
   testInputBindingEditorStaysInsidePaddedActionGroup();
   testLegacyDigitalScratchBindingsRemainManageable();
+  testScratchlessInputModesShareCanonicalKeyBindings();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

@@ -205,15 +205,18 @@ void InputCaptureController::toggleBindingInversion(
   updateBinding(bindingId, {.inverted = !current->inverted});
 }
 
-void InputCaptureController::resetScopeToDefaults(input::InputScope scope) {
+void InputCaptureController::resetScopeToDefaults(
+    input::InputScope scope, std::span<const input::LogicalAction> actions) {
+  const auto selected = [scope, actions](const input::InputBinding &binding) {
+    return binding.scope == scope &&
+           (actions.empty() || std::ranges::find(actions, binding.action) != actions.end());
+  };
   InputProfile next = profile_;
-  std::erase_if(next.bindings, [scope](const input::InputBinding &binding) {
-    return binding.scope == scope;
-  });
+  std::erase_if(next.bindings, selected);
 
   const InputProfile defaults = makeDefaultInputProfile();
   for (const auto &binding : defaults.bindings) {
-    if (binding.scope == scope) {
+    if (selected(binding)) {
       next.bindings.push_back(binding);
     }
   }

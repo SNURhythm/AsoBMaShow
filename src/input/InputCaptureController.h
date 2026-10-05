@@ -38,7 +38,8 @@ public:
   void updateBinding(std::string_view bindingId, const BindingEdit &edit);
   void removeBinding(std::string_view bindingId);
   void toggleBindingInversion(std::string_view bindingId);
-  void resetScopeToDefaults(input::InputScope);
+  void resetScopeToDefaults(input::InputScope,
+                            std::span<const input::LogicalAction> actions = {});
   bool updateGyroscopeTurntableConfig(input::GyroscopeTurntableConfig config);
   bool updateVirtualControllerConfig(input::VirtualControllerConfig config);
 

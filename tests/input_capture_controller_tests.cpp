@@ -604,6 +604,25 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
               profile.bindings,
               [&](const auto &value) { return sameBinding(value, untouched); }),
           "scoped reset preserves every binding in other scopes");
+
+  const auto scratch = binding("custom-scratch", {1, 7}, lane(7),
+                               buttonControl("scratch-controller", 3));
+  const auto scratchSpin = binding("custom-spin", {1, 7},
+      {input::LogicalActionKind::ScratchClockwise, 0}, buttonControl("scratch-controller", 4));
+  profile.bindings.push_back(scratch);
+  profile.bindings.push_back(scratchSpin);
+  profile.bindings.push_back(binding("custom-key", {1, 7}, lane(0),
+                                     buttonControl("key-controller", 5)));
+  const std::vector<input::LogicalAction> visibleActions{lane(0), lane(1)};
+  controller.resetScopeToDefaults({1, 7}, visibleActions);
+  require(saves == 3 && std::ranges::none_of(profile.bindings, [](const auto &value) {
+            return value.id == "custom-key";
+          }), "resetting visible key rows removes their custom bindings");
+  for (const auto &preserved : {scratch, scratchSpin}) {
+    require(std::ranges::any_of(profile.bindings, [&](const auto &value) {
+              return sameBinding(value, preserved);
+            }), "resetting scratchless key rows preserves hidden scratch bindings");
+  }
 }
 
 void testPartialBindingEditsComposeAgainstCurrentProfileState() {

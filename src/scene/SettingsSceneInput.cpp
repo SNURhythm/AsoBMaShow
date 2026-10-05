@@ -28,7 +28,6 @@ using namespace settings_scene;
 
 namespace {
 
-constexpr std::array<int, 7> kInputKeyModes = {4, 5, 6, 7, 8, 10, 14};
 constexpr std::string_view kBlankStableIdFilter = "\x1fmissing-stable-id";
 
 View *makeInputCardsColumn(const LayoutMetrics &metrics) {
@@ -404,7 +403,7 @@ void SettingsScene::refreshInputDropdowns() {
     deviceOptions.push_back({.id = device.stableId, .label = std::move(label)});
     included.insert(device.stableId);
   }
-  const input::InputScope scope{inputSelectedPlayer, inputSelectedKeyMode};
+  const auto scope = inputScopeForSelection(inputSelectedPlayer, inputSelectedKeyMode);
   bool blankStableIdIncluded = false;
   for (const auto &binding : context.inputProfile.bindings) {
     if (binding.scope != scope) {
@@ -462,11 +461,14 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       resolveInputSettingsLayout(bodyWidth, metrics.compact);
 
   auto *selectorBody = new View();
-  selectorBody->setFlexDirection(layout.stackSelectors ? FlexDirection::Column
-                                                       : FlexDirection::Row);
-  selectorBody->setFlexWrap(YGWrapWrap);
+  selectorBody->setFlexDirection(FlexDirection::Column);
   selectorBody->setGap(static_cast<float>(layout.selectorGap));
-  selectorBody->setAlignItems(YGAlignStretch);
+  auto *selectorRow = new View();
+  selectorRow->setFlexDirection(layout.stackSelectors ? FlexDirection::Column
+                                                       : FlexDirection::Row);
+  selectorRow->setGap(static_cast<float>(layout.selectorGap));
+  selectorRow->setAlignItems(YGAlignStretch);
+  selectorBody->addView(selectorRow);
 
   inputPlayerDropdown =
       new DropdownView({
@@ -535,11 +537,18 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                        overlayPortal);
   for (auto *dropdown :
        {inputPlayerDropdown, inputKeyModeDropdown, inputDeviceDropdown}) {
-    dropdown->setWidth(static_cast<float>(layout.selectorWidth));
+    dropdown->setTriggerWidth(static_cast<float>(layout.selectorWidth));
     dropdown->setFlexGrow(layout.stackSelectors ? 0.0F : 1.0F);
-    selectorBody->addView(dropdown);
+    selectorRow->addView(dropdown);
   }
   refreshInputDropdowns();
+
+  if (isScratchlessInputSelection(inputSelectedKeyMode)) {
+    selectorBody->addView(makeWrappedText(
+        i18n::message("settings.input.shared_scratchless_bindings.message",
+            {{"mode", gameplay::keyModeLabel(-inputSelectedKeyMode)}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+  }
 
   auto *resetRow = new View();
   resetRow->setFlexDirection(FlexDirection::Row);
@@ -554,8 +563,15 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   resetButton->setOnClickListener([this]() {
     inputCaptureController->cancel();
     inputCaptureAction.reset();
+    std::vector<input::LogicalAction> actions;
+    if (isScratchlessInputSelection(inputSelectedKeyMode)) {
+      for (const auto &definition : inputActionsForScope(
+               {inputSelectedPlayer, inputSelectedKeyMode}, context.inputProfile.bindings)) {
+        actions.push_back(definition.action);
+      }
+    }
     inputCaptureController->resetScopeToDefaults(
-        {inputSelectedPlayer, inputSelectedKeyMode});
+        inputScopeForSelection(inputSelectedPlayer, inputSelectedKeyMode), actions);
     requestInputViewRebuild();
   });
   resetRow->addView(resetButton);
@@ -761,7 +777,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   auto *bindingsBody = new View();
   bindingsBody->setFlexDirection(FlexDirection::Column);
   bindingsBody->setGap(metrics.compact ? 16.0F : 20.0F);
-  const input::InputScope scope{inputSelectedPlayer, inputSelectedKeyMode};
+  const auto scope = inputScopeForSelection(inputSelectedPlayer, inputSelectedKeyMode);
   const std::map<std::string, input::InputDeviceSnapshot> devices = [&]() {
     std::map<std::string, input::InputDeviceSnapshot> result;
     for (const auto &device : context.inputDeviceRegistry.snapshot()) {
@@ -771,7 +787,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   }();
 
   for (const auto &definition :
-       inputActionsForScope(scope, context.inputProfile.bindings)) {
+       inputActionsForScope({inputSelectedPlayer, inputSelectedKeyMode}, context.inputProfile.bindings)) {
     auto *actionGroup = new View();
     actionGroup->setFlexDirection(FlexDirection::Column);
     actionGroup->setGap(metrics.compact ? 8.0F : 10.0F);
@@ -805,7 +821,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       bindButton->setOnClickListener([this, action = definition.action]() {
         inputCaptureAction = action;
         inputCaptureController->begin(
-            {inputSelectedPlayer, inputSelectedKeyMode}, action);
+            inputScopeForSelection(inputSelectedPlayer, inputSelectedKeyMode), action);
         requestInputViewRebuild();
       });
       actionHeader->addView(bindButton);

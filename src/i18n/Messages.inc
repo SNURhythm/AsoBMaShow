@@ -1359,6 +1359,7 @@
 {"settings.input.select.label", "Select", "선택", "選択"},
 {"settings.input.select_bind_then_press_control.message", "Select Bind, then press a control.", "등록을 선택한 후 키나 버튼을 누르세요.", "「割り当て」を選択してから、キーやボタンを押してください。"},
 {"settings.input.setting.error", "{prefix}{error}", "{prefix}{error}", "{prefix}{error}"},
+{"settings.input.shared_scratchless_bindings.message", "Key bindings are shared with {mode}. Scratch bindings are hidden.", "키 입력 설정은 {mode}와 공유합니다. 스크래치 입력 설정은 표시하지 않습니다.", "キー割り当ては {mode} と共通です。スクラッチの割り当ては表示されません。"},
 {"settings.input.start.label", "Start", "시작", "スタート"},
 {"settings.input.status.prefix", "Status · ", "상태 · ", "状態 · "},
 {"settings.input.step_angle_must_whole_number.message", "Step angle must be a whole number.", "단계 각도는 정수로 입력하세요.", "ステップ角度は整数で入力してください。"},

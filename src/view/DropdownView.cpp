@@ -220,10 +220,20 @@ void DropdownView::applyRefresh(State state) {
     scheduleOptionViewClear();
   }
   refreshVisualState();
-  resolvedWidth = std::max(current.menuWidth, preferredWidth());
-  setWidth(resolvedWidth);
-  setMinWidth(resolvedWidth);
+  refreshWidths();
   updateMenuPlacement();
+}
+
+void DropdownView::setTriggerWidth(float width) {
+  triggerWidth = std::isfinite(width) ? std::max(0.0f, width) : 0.0f;
+  refreshWidths();
+  updateMenuPlacement();
+}
+
+void DropdownView::refreshWidths() {
+  resolvedWidth = std::max({triggerWidth, current.menuWidth, preferredWidth()});
+  setWidth(triggerWidth > 0.0f ? triggerWidth : resolvedWidth);
+  setMinWidth(triggerWidth > 0.0f ? 0.0f : resolvedWidth);
 }
 
 void DropdownView::rebuildOptions() {
@@ -592,8 +602,6 @@ void DropdownView::onLanguageChanged() {
     menuScroll->propagateLanguageChange();
   }
   refreshVisualState();
-  resolvedWidth = std::max(current.menuWidth, preferredWidth());
-  setWidth(resolvedWidth);
-  setMinWidth(resolvedWidth);
+  refreshWidths();
   updateMenuPlacement();
 }
