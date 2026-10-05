@@ -2121,6 +2121,7 @@ void ResultScene::addRetryButtons() {
   retryRow->addView(exportPhotoButton);
 
   practiceSectionButton = new Button();
+  practiceSectionButton->setName("resultPracticeSectionButton");
   practiceSectionButtonText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   practiceSectionButtonText->setText(i18n::tr("result.select_section.label"));

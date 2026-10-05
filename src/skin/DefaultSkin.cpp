@@ -137,12 +137,37 @@ void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
   }
   if (auto *details = root->findViewByName("detailsGrid")) {
     details->setFlexWrap(portrait ? YGWrapWrap : YGWrapNoWrap);
-    details->setHeight(portrait ? metrics.detailsHeight * 2 : metrics.detailsHeight);
+    details->setHeight(portrait ? metrics.detailsHeight * 2 + 2 : metrics.detailsHeight);
     details->setFlexShrink(0);
     for (auto *tile : details->getChildren()) {
       tile->setHeight(portrait ? metrics.detailsHeight : YGUndefined);
       tile->setFlexBasis(portrait ? contentWidth / 4 - 1 : 0.0F);
     }
+  }
+  if (auto *actions = root->findViewByName("resultActions")) {
+    actions->setWidthPercent(100);
+    actions->setPadding(Edge::Right, portrait ? 1 : 0);
+    const auto sizeActions = [&](auto &&self, View *view) -> void {
+      if (auto *button = dynamic_cast<Button *>(view)) {
+        auto *text = dynamic_cast<TextView *>(button->getContentView());
+        const float regularWidth = button->getName() == "resultPracticeSectionButton" ? 280 : 232;
+        const float width = portrait && text
+            ? std::max(64.0F, static_cast<float>(text->textureWidth()) + 24.0F)
+            : regularWidth;
+        button->setWidth(width)->setHeight(portrait ? 56 : 64);
+        button->setMinWidth(portrait ? 64 : 0)->setFlexShrink(portrait ? 1 : 0);
+        if (text) {
+          text->setPadding(Edge::Left, portrait ? 12 : 0);
+          text->setPadding(Edge::Right, portrait ? 12 : 0);
+        }
+        return;
+      }
+      view->setFlexWrap(portrait ? YGWrapNoWrap : YGWrapWrap);
+      view->setGap(portrait ? 8 : 14);
+      view->setMinWidth(0)->setFlexShrink(portrait && view != actions ? 1 : 0);
+      for (auto *child : view->getChildren()) self(self, child);
+    };
+    sizeActions(sizeActions, actions);
   }
   if (auto *visuals = root->findViewByName("resultVisuals")) {
     visuals->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
@@ -779,11 +804,40 @@ void DefaultSkin::buildPresentationResultLayout(
       makeMetricTile("BREAK", *presentation.comboBreak, ui_theme::coral(),
                      "break");
     }
-    if (showFast) {
+    if (showFast && showSlow) {
+      addSeparator();
+      auto *tile = new View();
+      tile->setName("resultMetricTile:fast-slow");
+      tile->setFlexGrow(1)->setFlexBasis(0)->setFlexShrink(1)->setMinWidth(0);
+      tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
+      tile->setFlexDirection(FlexDirection::Column)->setJustifyContent(YGJustifyCenter);
+      auto *label = makeLabel("FAST / SLOW", 15, ui_theme::textSecondary());
+      label->setHeight(21);
+      label->setAlign(TextView::CENTER);
+      tile->addView(label);
+      auto *values = new View();
+      values->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+      values->setHeight(43);
+      auto *fast = makeLabel(std::to_string(*presentation.fast), 34, ui_theme::fastFeedback());
+      fast->setName("fast");
+      fast->setFlex(1)->setMinWidth(0)->setHeight(43)->setAutoFitText(true);
+      fast->setAlign(TextView::RIGHT);
+      values->addView(fast);
+      auto *slash = makeLabel(" / ", 24, ui_theme::textSecondary());
+      slash->setWidth(22)->setHeight(43);
+      slash->setAlign(TextView::CENTER);
+      values->addView(slash);
+      auto *slow = makeLabel(std::to_string(*presentation.slow), 34, ui_theme::slowFeedback());
+      slow->setName("slow");
+      slow->setFlex(1)->setMinWidth(0)->setHeight(43)->setAutoFitText(true);
+      slow->setAlign(TextView::LEFT);
+      values->addView(slow);
+      tile->addView(values);
+      detailsGrid->addView(tile);
+    } else if (showFast) {
       makeMetricTile("FAST", *presentation.fast, ui_theme::fastFeedback(),
                      "fast");
-    }
-    if (showSlow) {
+    } else if (showSlow) {
       makeMetricTile("SLOW", *presentation.slow, ui_theme::slowFeedback(),
                      "slow");
     }

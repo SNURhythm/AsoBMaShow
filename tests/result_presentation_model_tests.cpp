@@ -11,6 +11,7 @@
 #include "scene/ResultGaugeHistory.h"
 #include "scene/play/GameplayGaugeTypes.h"
 #include "skin/DefaultSkin.h"
+#include "view/Button.h"
 #include "view/ClearLampColors.h"
 #include "view/TextView.h"
 #include "view/UiTheme.h"
@@ -980,6 +981,69 @@ void testPortraitResultKeepsComparisonCardsReadable() {
   }
 }
 
+void testPortraitResultTimingAndActionsFit() {
+  const auto model = makeLocalResultPresentation(localMeta(), localState(), localOptions());
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean,
+                              i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    for (const int width : {720, 1080}) {
+      const auto root = buildPresentationLayout(model, width, 1920, true);
+      auto *details = root->findViewByName("detailsGrid");
+      auto *timing = root->findViewByName("resultMetricTile:fast-slow");
+      expect(timing && textView(timing, "fast") && textView(timing, "slow"),
+             "FAST and SLOW retain both counts in a single result tile");
+      if (timing) {
+        expect(textView(timing, "fast")->getText() == "452" &&
+                   textView(timing, "slow")->getText() == "528",
+               "combined timing tile preserves each total independently");
+      }
+      for (auto *tile : details->getChildren()) {
+        expect(tile->getY() + tile->getHeight() <= details->getY() + details->getHeight(),
+               "every judgement and timing tile fits the portrait grid");
+      }
+      auto *actions = root->findViewByName("resultActions");
+      auto *group = new View();
+      group->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)->setGap(14);
+      std::vector<Button *> buttons{dynamic_cast<Button *>(root->findViewByName("backButton"))};
+      for (const char *key : {"result.gameplay.retry.label", "result.retry_same.label",
+                              "result.rankings.label", "result.export_photo.label",
+                              "result.select_section.label"}) {
+        auto *button = new Button(0, 0, 232, 64);
+        auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+        label->setText(i18n::tr(key));
+        button->setContentView(label);
+        group->addView(button);
+        buttons.push_back(button);
+      }
+      actions->addView(group);
+      DefaultSkin::resizeResultLayout(root.get(), width, 1920);
+      root->applyYogaLayout();
+      for (const auto *button : buttons) {
+        expect(button->getY() == buttons.front()->getY() && button->getWidth() >= 64,
+               "all portrait result actions share one row with usable widths");
+        if (button->getX() < actions->getX() ||
+            button->getX() + button->getWidth() > actions->getX() + actions->getWidth()) {
+          std::cerr << "Action overflow: language " << static_cast<int>(language)
+                    << " viewport " << width << " button " << button->getX() << "+" << button->getWidth()
+                    << " host " << actions->getX() << "+" << actions->getWidth() << '\n';
+        }
+        expect(button->getX() >= actions->getX() &&
+                   button->getX() + button->getWidth() <= actions->getX() + actions->getWidth(),
+               "autosized result buttons stay inside the portrait viewport");
+      }
+      expect(buttons[1]->getWidth() < buttons.back()->getWidth(),
+             "button widths follow label length rather than a fixed equal width");
+      root->setSize(1920, 1080);
+      DefaultSkin::resizeResultLayout(root.get(), 1920, 1080);
+      root->applyYogaLayout();
+      expect(buttons.front()->getWidth() == 232 && buttons.front()->getHeight() == 64,
+             "returning to landscape restores the regular action dimensions");
+      bgfx::frame();
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testDefaultSkinLegacyNullPresentationParity() {
   const auto meta = localMeta();
   const auto state = localState();
@@ -1289,6 +1353,7 @@ int main() {
   testLocalizedResultsKeepSemanticLayoutAndColors();
   testDefaultSkinLocalPresentationContract();
   testPortraitResultKeepsComparisonCardsReadable();
+  testPortraitResultTimingAndActionsFit();
   testDefaultSkinLegacyNullPresentationParity();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();

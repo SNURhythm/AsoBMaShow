@@ -418,7 +418,6 @@ IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
   }
   const auto &entry = presentation_.ranking->entries[index];
   const bool compact = useCompactIrRankingColumns(width);
-  const bool showDetails = !compact;
   IrRankingRowPresentation value{
       .rankText = rankText(entry.rank),
       .playerText = playerText(entry),
@@ -432,9 +431,9 @@ IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
       .clearType = entry.clearType,
       .highlighted = entry.currentUser,
       .compact = compact,
-      .showBadPoints = showDetails,
-      .showMaxCombo = showDetails,
-      .showAchievementTime = showDetails,
+      .showBadPoints = true,
+      .showMaxCombo = true,
+      .showAchievementTime = true,
   };
   return value;
 }

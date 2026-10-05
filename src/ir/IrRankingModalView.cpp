@@ -2,6 +2,7 @@
 #include "IrRankingModal.h"
 
 #include "IrRankingService.h"
+#include "IrRankingTableViewport.h"
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
@@ -39,7 +40,7 @@ constexpr float kRankColumnWidth = 58.0F;
 constexpr float kScoreColumnWidth = 152.0F;
 constexpr float kRateColumnWidth = 86.0F;
 constexpr float kLampColumnWidth = 174.0F;
-constexpr float kCompactLampColumnWidth = 144.0F;
+constexpr float kCompactLampColumnWidth = 92.0F;
 constexpr float kBadPointsColumnWidth = 62.0F;
 constexpr float kMaxComboColumnWidth = 88.0F;
 constexpr float kAchievedColumnWidth = 172.0F;
@@ -218,7 +219,10 @@ public:
     player_->setText(row.playerText);
     score_->setText(row.scoreText);
     rate_->setText(row.rateText);
-    lamp_->setText(row.lampText);
+    std::string lampLabel = row.lampText;
+    if (row.compact && lampLabel.ends_with(" CLEAR")) lampLabel.resize(lampLabel.size() - 6);
+    lamp_->setText(lampLabel);
+    lamp_->setAutoFitText(true);
     badPoints_->setText(row.badPointsText);
     combo_->setText(row.maxComboText);
     time_->setText(row.achievementTimeText);
@@ -233,15 +237,13 @@ public:
     player_->setThemedColor(row.highlighted ? ui_theme::cyan
                                             : ui_theme::textPrimary);
 
-    score_->setDisplay(row.compact ? YGDisplayNone : YGDisplayFlex);
-    badPoints_->setDisplay(row.showBadPoints && !row.compact ? YGDisplayFlex
-                                                             : YGDisplayNone);
-    combo_->setDisplay(row.showMaxCombo && !row.compact ? YGDisplayFlex
-                                                        : YGDisplayNone);
-    time_->setDisplay(row.showAchievementTime && !row.compact ? YGDisplayFlex
-                                                              : YGDisplayNone);
-    lamp_->setWidth(row.compact ? kCompactLampColumnWidth
-                                : kLampColumnWidth);
+    primary_->setGap(row.compact ? 8 : kRankingColumnGap);
+    score_->setWidth(row.compact ? 120 : kScoreColumnWidth);
+    rate_->setWidth(row.compact ? 70 : kRateColumnWidth);
+    badPoints_->setWidth(row.compact ? 44 : kBadPointsColumnWidth);
+    combo_->setWidth(row.compact ? 68 : kMaxComboColumnWidth);
+    time_->setWidth(row.compact ? 140 : kAchievedColumnWidth);
+    lamp_->setWidth(row.compact ? kCompactLampColumnWidth : kLampColumnWidth);
     applyYogaLayout();
   }
 
@@ -306,10 +308,12 @@ public:
 
   void bind(int width) {
     const bool compact = useCompactIrRankingColumns(width);
-    score_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
-    badPoints_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
-    combo_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
-    time_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
+    setGap(compact ? 8 : kRankingColumnGap);
+    score_->setWidth(compact ? 120 : kScoreColumnWidth);
+    rate_->setWidth(compact ? 70 : kRateColumnWidth);
+    badPoints_->setWidth(compact ? 44 : kBadPointsColumnWidth);
+    combo_->setWidth(compact ? 68 : kMaxComboColumnWidth);
+    time_->setWidth(compact ? 140 : kAchievedColumnWidth);
     lamp_->setWidth(compact ? kCompactLampColumnWidth : kLampColumnWidth);
     applyYogaLayout();
   }
@@ -348,7 +352,7 @@ struct IrRankingModal::Impl {
   Button *nearbyTab = nullptr;
   std::array<float, 2> tabScrollOffsets{};
   std::array<bool, 2> tabVisited{};
-  View *rankingTable = nullptr;
+  RankingTableViewport *rankingTable = nullptr;
   RankingTableHeaderView *tableHeader = nullptr;
   RecyclerView<IrChartRankingEntry> *list = nullptr;
   TextView *paginationStatus = nullptr;
@@ -486,16 +490,20 @@ struct IrRankingModal::Impl {
     }
     panel->addView(rankingTabs);
 
-    rankingTable = new View();
+    rankingTable = new RankingTableViewport();
     rankingTable->setFlexDirection(FlexDirection::Column);
     rankingTable->setAlignItems(YGAlignStretch);
     rankingTable->setFlexGrow(1);
     rankingTable->setFlexShrink(1);
     rankingTable->setFlexBasis(0);
     rankingTable->setMinHeight(0);
-    rankingTable->setGap(4);
+    auto *tableContent = new View();
+    tableContent->setFlexDirection(FlexDirection::Column);
+    tableContent->setAlignItems(YGAlignStretch);
+    tableContent->setGap(4);
+    rankingTable->setContentView(tableContent);
     tableHeader = new RankingTableHeaderView();
-    rankingTable->addView(tableHeader);
+    tableContent->addView(tableHeader);
 
     list = new RecyclerView<IrChartRankingEntry>(
         [](const auto &left, const auto &right) {
@@ -521,7 +529,7 @@ struct IrRankingModal::Impl {
     list->onSelected = [this](const auto &, int index) {
       showScoreDetails(index);
     };
-    rankingTable->addView(list);
+    tableContent->addView(list);
     panel->addView(rankingTable);
     paginationStatus = makeText(15, TextView::CENTER);
     paginationStatus->setThemedColor(ui_theme::textMuted);
@@ -831,7 +839,8 @@ struct IrRankingModal::Impl {
     root->setPadding(Edge::Right, safe.right + kPanelMargin);
     panel->setWidth(static_cast<float>(geometry.width));
     panel->setHeight(static_cast<float>(geometry.height));
-    list->itemHeight = geometry.compact ? 92 : 74;
+    list->itemHeight = 74;
+    fetchedAt->setVisible(!geometry.compact);
     fetchedAt->setDisplay(geometry.compact ? YGDisplayNone : YGDisplayFlex);
     root->applyYogaLayout();
     syncRankingHeader();
@@ -977,6 +986,7 @@ struct IrRankingModal::Impl {
   void openRequest(IrRankingRequest request, std::string title) {
     closeNow();
     refreshIrRankingModalLanguage(*root, *scoreDetailRoot, languageRevision);
+    rankingTable->resetScroll();
     tabScrollOffsets = {};
     tabVisited = {};
     const std::uint64_t generation = service.open(request);

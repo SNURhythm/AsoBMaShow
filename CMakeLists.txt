@@ -3337,8 +3337,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         cxx_std_23
     )
 
+    set(ir_ranking_view_source ${CMAKE_CURRENT_BINARY_DIR}/generated/ir_ranking_view.inc)
+    add_custom_command(
+        OUTPUT ${ir_ranking_view_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ir_ranking_view_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${ir_ranking_view_source}
+        DEPENDS tests/ir_ranking_view_extract.py src/ir/IrRankingModalView.cpp
+        VERBATIM
+    )
     add_executable(ir_ranking_modal_tests
         tests/ir_ranking_modal_tests.cpp
+        ${ir_ranking_view_source}
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
         src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -3346,6 +3358,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/View.cpp
     )
     target_include_directories(ir_ranking_modal_tests PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(ir_ranking_modal_tests PRIVATE cxx_std_23)
@@ -8963,6 +8976,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_button_layout_tests)
+    set_tests_properties(ir_ranking_modal_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(settings_button_layout_tests PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
