@@ -243,6 +243,44 @@ bool gameplaySkinEntrySelectableForTarget(
          GameplaySkinSourceFormat::Lua;
 }
 
+std::optional<SkinTargetTrait> gameplaySkinSettingsTargetForKeyMode(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept {
+  auto target = gameplaySkinTargetForKeyMode(keyMode);
+  if (target && ((keyMode == -5 && snapshot.follow5K1S) ||
+                 (keyMode == -7 && snapshot.follow7K1S))) {
+    target = skinTargetTraitForType(skinSourceTypeForTarget(target->skinType));
+  }
+  return target;
+}
+
+const GameplaySkinEntryRow *gameplaySkinSettingsEntryForKeyMode(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept {
+  const auto target = gameplaySkinSettingsTargetForKeyMode(snapshot, keyMode);
+  if (!target || !snapshot.featureAvailable || !snapshot.compatibilityEnabled)
+    return nullptr;
+  const auto selected = snapshot.selectedSkinEntries.find(target->skinType);
+  if (selected == snapshot.selectedSkinEntries.end()) return nullptr;
+  const auto row = std::ranges::find_if(snapshot.entries, [&](const auto &entry) {
+    return entry.entry == selected->second &&
+           gameplaySkinEntrySelectableForTarget(entry, *target);
+  });
+  return row == snapshot.entries.end() ? nullptr : &*row;
+}
+
+std::string gameplaySkinPreviewConfigurationKey(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) {
+  PresentationKeyEncoder encoder;
+  encoder.signedNumber(keyMode);
+  encodeEnum(encoder, snapshot.safetyLevel);
+  if (const auto *row = gameplaySkinSettingsEntryForKeyMode(snapshot, keyMode)) {
+    encodeEntry(encoder, row->entry);
+    encoder.text(row->revisionDigest);
+    encoder.text(row->configurationDigest);
+    encodeViewport(encoder, row->settings.viewport);
+  }
+  return std::move(encoder).finish();
+}
+
 std::vector<GameplaySkinCatalogItem>
 gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata) {
   std::vector<GameplaySkinCatalogItem> result;

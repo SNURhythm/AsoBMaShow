@@ -9,6 +9,9 @@
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "GameplaySkinSettingsPresentation.h"
+#endif
 #include <charconv>
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -459,6 +462,20 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->setJustifyContent(YGJustifyFlexEnd);
   rootLayout->setAlignItems(YGAlignFlexStart);
 
+  bool previewHasSelectedSkin = false;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  const skin::GameplaySkinEntryRow *previewSkinRow = nullptr;
+  bool previewSkinActionsEnabled = false;
+  if (gameplaySkinTraitsRuntimeAvailable()) {
+    const auto &snapshot = gameplaySkinSettingsController->snapshot();
+    previewSkinRow = skin::gameplaySkinSettingsEntryForKeyMode(snapshot, previewKeyMode);
+    previewHasSelectedSkin = previewSkinRow != nullptr;
+    previewSkinActionsEnabled =
+        skin::gameplaySkinSettingsActionAvailability(snapshot).ordinaryActions;
+    gameplaySkinControlsBuiltDisabled = !previewSkinActionsEnabled;
+  }
+#endif
+
   const int foldButtonSize = metrics.compact ? 54 : 58;
   constexpr int previewPanelPageCount = 3;
   if (previewPanelPage < 0 || previewPanelPage >= previewPanelPageCount) {
@@ -572,7 +589,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     return button;
   };
   previewTabs->addView(makePreviewTab(0, i18n::message("settings.preview_layout.scroll.label")));
-  previewTabs->addView(makePreviewTab(1, i18n::message("settings.preview_layout.lane.label")));
+  previewTabs->addView(makePreviewTab(1, i18n::message(previewHasSelectedSkin
+      ? "settings.skins.skin.label" : "settings.preview_layout.lane.label")));
   previewTabs->addView(makePreviewTab(2, "HUD"));
   previewPanel->addView(previewTabs);
 
@@ -627,6 +645,18 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     noteStartControls->addView(resetNoteStart);
     previewControls->addView(noteStartControls);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  } else if (previewPanelPage == 1 && previewSkinRow != nullptr) {
+    previewControls->addView(makeWrappedText(
+        previewSkinRow->metadata.displayName.empty()
+            ? previewSkinRow->entry.packageRelativePath
+            : previewSkinRow->metadata.displayName,
+        metrics.bodyTextSize, ui_theme::cyan()));
+    appendGameplaySkinCatalogSettings(previewControls, metrics,
+                                       *previewSkinRow, previewSkinActionsEnabled);
+    appendGameplaySkinViewportSettings(previewControls, metrics,
+                                        *previewSkinRow, previewSkinActionsEnabled);
+#endif
   } else if (previewPanelPage == 1) {
     previewControls->addView(buildScratchLanePositionControl(metrics));
     previewControls->addView(
@@ -762,6 +792,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     playAreaWidthControls->addView(resetWidth);
     previewControls->addView(playAreaWidthControls);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  } else if (gameplaySkinTraitsRuntimeAvailable()) {
+    appendSelectedSkinHudSettings(previewControls, metrics, !previewHasSelectedSkin);
+#endif
   } else {
     auto makePreviewStepRow = [&metrics](Button *minus, Button *plus,
                                          Button *reset) {
@@ -1010,6 +1044,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     gaugeControls->addView(gaugeBarPositionButton);
     previewControls->addView(gaugeControls);
   }
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinTraitsRuntimeAvailable()) {
+    gameplaySkinUiMessageText = makeWrappedText(gameplaySkinUiMessage,
+        metrics.smallTextSize, ui_theme::textSecondary());
+    previewControls->addView(gameplaySkinUiMessageText);
+  }
+#endif
 
   auto *restartButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,

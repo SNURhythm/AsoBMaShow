@@ -56,7 +56,7 @@ previewPresentationConfiguration(const AppSettings &settings,
        .laneCoverPercent = settings.presentation().noteStartPositionPercent,
        .laneCoverEnabled = settings.presentation().laneCoverEnabled},
       gameplay_hispeed::summarizeChartBpm(chart));
-  return {
+  PlayfieldPresentationConfig configuration{
       .visibleTimeDurationMilliseconds =
           settings.visibleTimeDurationMilliseconds,
       .configuredHispeed = hispeed.hispeed(),
@@ -110,6 +110,8 @@ previewPresentationConfiguration(const AppSettings &settings,
       .touchVisualizationEnabled = settings.touchVisualizationEnabled,
       .replayGhostRenderingEnabled = false,
   };
+  applyPreviewPlayerConfiguration(configuration, settings);
+  return configuration;
 }
 
 std::vector<const bms_parser::Note *>
@@ -157,6 +159,9 @@ void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
   previewActive = true;
   previewPanelPage = 0;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  updateGameplaySkinSettingsController();
+#endif
   resetPreviewSimulation();
   ensurePreviewRenderer();
   resetPreviewHudSample();
@@ -183,6 +188,8 @@ void SettingsScene::ensurePreviewRenderer() {
         buildPlayfieldChartVisualModel(*previewChart, 0));
     previewVisualStateStore = std::make_unique<PlayfieldVisualStateStore>(
         *previewChartVisualModel);
+    previewVisualStateStore->setSceneStartMicros(0);
+    previewVisualStateStore->setPlayStartMicros(0);
     previewVisualNoteSources = previewNoteSources(*previewChart);
     if (previewVisualNoteSources.size() !=
         previewChartVisualModel->notes.size()) {
@@ -351,7 +358,11 @@ void SettingsScene::syncPreviewAuthority() {
   const PlayfieldAuthorityUpdate authority{
       .currentBpm = kPreviewBpm,
       .judgementCounters = previewJudgeCount,
+      .judgementFastSlowCounters = previewJudgeFastSlowCount,
       .comboBreak = previewComboBreak,
+      .maximumCombo = previewMaximumCombo,
+      .stageCombo = previewCombo,
+      .stagePassedNotes = previewPassedNotes,
       .gaugeType = GaugeType::Normal,
       .gaugeAutoShift = GaugeAutoShiftMode::None,
       .currentGauge = 74.0F,
@@ -362,13 +373,27 @@ void SettingsScene::syncPreviewAuthority() {
                           .targetScore = 168, .finalTargetScore = 888,
                           .maxScore = 1000, .delta = 12, .playedNotes = 100,
                           .totalNotes = 500},
+      .playerName = context.profileManager.activeProfile().displayName,
+      .irProviderName = gameplaySkinFirstIrProviderName(context.settings.irProviders),
+      .irAccountName = context.irAccountNameSnapshot(),
+      .modeFilterName = context.settings.skinModeFilterName,
+      .sortId = context.settings.skinSortId,
+      .difficultyFilterName = context.settings.skinDifficultyFilterName,
+      .chartReplicationMode = context.settings.skinChartReplicationMode,
+      .skinTargetId = context.settings.skinTargetId,
+      .skinTargetList = context.settings.skinTargetList,
       .playOptionLabel = i18n::tr("settings.preview.preview.badge"),
+      .currentFramesPerSecond =
+          context.currentFramesPerSecond.load(std::memory_order_acquire),
+      .applicationUptimeMillis =
+          context.applicationUptimeMillis.load(std::memory_order_acquire),
+      .gameplayMode = PlayfieldGameplayMode::Play,
+      .loadingState = PlayfieldLoadingState::Loaded,
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
   };
   previewVisualStateStore->applyAuthorityUpdate(authority);
-  // The settings preview uses the timestamp renderer overload, which does not
-  // consume captured authority through prepareFrame().
+  // Keep the built-in HUD sample available before the first prepared frame.
   if (previewRenderer != nullptr) {
     previewRenderer->setPacemakerTarget(authority.pacemakerTarget);
     previewRenderer->setPacemakerStatus(authority.pacemakerStatus);
@@ -392,6 +417,8 @@ void SettingsScene::capturePreviewVisualState() {
         .id = previewChartVisualModel->notes[index].id,
         .judged = source->IsPlayed,
         .dead = source->IsDead,
+        .playedTimeMicros = source->IsPlayed ? source->PlayedTime
+                                             : kPlayfieldTimestampOff,
     };
     if (const auto *longNote =
             dynamic_cast<const bms_parser::LongNote *>(source);
@@ -404,13 +431,7 @@ void SettingsScene::capturePreviewVisualState() {
     noteStates.push_back(noteState);
   }
   previewVisualStateStore->setNoteStates(std::move(noteStates));
-  const PlayfieldFrameClock clock{
-      .serial = ++previewFrameSerial,
-      .visualTimeMicros = previewElapsedMicros,
-      .gameplayTimeMicros = previewElapsedMicros,
-      .replayTouchTimeMicros = previewElapsedMicros,
-      .bgaTimeMicros = previewElapsedMicros,
-  };
+  const auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros);
   if (previewCapturedVisualState == nullptr) {
     previewCapturedVisualState = std::make_unique<PlayfieldVisualState>(
         previewVisualStateStore->capture(clock));
@@ -586,6 +607,11 @@ void SettingsScene::resetPreviewHudSample() {
   previewCombo = kPreviewSampleCombo;
   previewScore = kPreviewSampleScore;
   previewComboBreak = 0;
+  previewMaximumCombo = previewCombo;
+  previewPassedNotes = 12;
+  previewJudgeFastSlowCount = {{PGreat, {.fast = 4, .slow = 4}},
+                              {Great, {.fast = 1, .slow = 2}},
+                              {Good, {.fast = 0, .slow = 1}}};
 
   if (previewRenderer == nullptr) {
     return;
@@ -623,6 +649,12 @@ void SettingsScene::publishPreviewJudgement(
     previewScore += 2;
   }
   previewJudgeCount[judgeResult.judgement]++;
+  previewMaximumCombo = std::max(previewMaximumCombo, previewCombo);
+  if (judgeResult.judgement != Kpoor && judgeResult.judgement != None)
+    ++previewPassedNotes;
+  auto &timingCount = previewJudgeFastSlowCount[judgeResult.judgement];
+  if (judgeResult.Diff <= 0) ++timingCount.fast;
+  else ++timingCount.slow;
   syncPreviewAuthority();
   if (previewPresentationEvents != nullptr) {
     const PlayfieldJudgeEventClock clock =

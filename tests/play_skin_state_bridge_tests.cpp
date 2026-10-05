@@ -1,4 +1,5 @@
 #include "skin/beatoraja/PlaySkinStateBridge.h"
+#include "scene/SettingsScenePreviewAuthority.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -2803,6 +2804,41 @@ void testScoreAndComboTimersUseCapturedGameplayState() {
   bridge.discardFrame();
 }
 
+void testSettingsPreviewSuppliesGameplayTimeProperties() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  // Include the initial frame, motion, loop boundary, and reset.
+  for (const auto elapsed : {0LL, 3'500'000LL, 7'999'999LL, 0LL}) {
+    auto state = stateAt(++serial);
+    state.clock = settings_scene::previewFrameClock(serial, elapsed);
+    bridge.beginFrame(state, projectionAt(serial));
+    for (const int id : {161, 162, 163, 164}) {
+      expect(bridge.integerProperty({id}).supported,
+             "preview elapsed and remaining time numbers never reject a skin frame");
+    }
+    expect(bridge.integerProperty({162}).value == elapsed / 1'000'000,
+           "preview elapsed time follows the simulation and resets with the loop");
+    expect(bridge.integerProperty({164}).value == (9000 - elapsed / 1000) / 1000,
+           "preview remaining time uses the loop duration and the gameplay time-left bias");
+    expect(bridge.floatProperty({101}).supported,
+           "both gameplay music-progress slider selectors are available in preview");
+    const auto progress = bridge.floatProperty({6});
+    expect(progress.supported && std::abs(progress.value -
+               static_cast<float>(elapsed / 1000) / 8000.0F) < 0.000001,
+           "preview music progress uses its own eight-second playback clock");
+    expect(bridge.timerProperty({41}) == 0,
+           "preview play timer is active from the first configured skin frame");
+    bridge.discardFrame();
+  }
+}
+
 void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -4160,6 +4196,7 @@ int main() {
   testIrTargetsUseCompleteRankingAndPinnedSelection();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
+  testSettingsPreviewSuppliesGameplayTimeProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testClearAndFullComboTimersFollowPinnedBmsPlayerState();

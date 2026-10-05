@@ -14,6 +14,7 @@
 #include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
+#include "play/PlayfieldVisualState.h"
 #include <cstdint>
 #include <array>
 #include <stop_token>
@@ -287,6 +288,7 @@ private:
   int previewKeyMode = 7;
   bool previewRendererDirty = false;
   std::string previewError;
+  std::string previewSkinConfigurationKey;
   DropdownView *previewKeyModeDropdown = nullptr;
   bool previewKeyModeDropdownOpen = false;
   std::stop_source previewSkinStop;
@@ -311,6 +313,9 @@ private:
   int previewCombo = 0;
   int previewScore = 0;
   int previewComboBreak = 0;
+  int previewMaximumCombo = 0;
+  int previewPassedNotes = 0;
+  std::map<Judgement, PlayfieldJudgementFastSlowCount> previewJudgeFastSlowCount;
   std::map<Judgement, int> previewJudgeCount;
   SettingsTab activeTab = SettingsTab::Profile;
   std::vector<DifficultyTableInfo> difficultyTables;
@@ -499,6 +504,12 @@ private:
   void appendSelectedSkinHudSettings(View *body,
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);
+  void appendGameplaySkinCatalogSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
+  void appendGameplaySkinViewportSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
   void appendBuiltInGameplayTraitSettings(
       View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
       bool followsOriginal = false);

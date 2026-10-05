@@ -41,6 +41,19 @@ struct GameplaySkinCatalogItem {
 [[nodiscard]] std::vector<GameplaySkinCatalogItem>
 gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata);
 
+[[nodiscard]] std::optional<SkinTargetTrait> gameplaySkinSettingsTargetForKeyMode(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept;
+
+// Changes only when the effective preview skin, its configuration, viewport,
+// or safety policy changes; progress/status updates do not restart playback.
+[[nodiscard]] std::string gameplaySkinPreviewConfigurationKey(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode);
+
+// Resolve the preview's effective gameplay selection, including scratchless
+// modes which follow their original skin. The returned row belongs to snapshot.
+[[nodiscard]] const GameplaySkinEntryRow *gameplaySkinSettingsEntryForKeyMode(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept;
+
 // Invalid and unavailable entries are not selectable gameplay skins, but they
 // must remain reachable for revalidation and removal.
 [[nodiscard]] std::vector<const GameplaySkinEntryRow *>

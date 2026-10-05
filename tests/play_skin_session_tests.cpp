@@ -9,6 +9,7 @@
 
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
+#include "scene/SettingsScenePreviewAuthority.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/ResultSkinConfiguration.h"
 #include "skin/SkinConfigurationWriteQueue.h"
@@ -754,6 +755,7 @@ struct ActivationFixtureOptions {
   int skinType = 0;
   int configuredSkinType = -1;
   bool resourceBearing = false;
+  bool previewTimeProperties = false;
   bool movieBearing = false;
   bool audioBearing = false;
   bool requireConfiguredState = false;
@@ -1303,6 +1305,24 @@ end
       script += R"lua(
     }
   }
+)lua";
+    } else if (options.previewTimeProperties) {
+      script += R"lua(
+  local skin = { type = 0, w = 1280, h = 720,
+    source = {{id = "atlas", path = "resources/fixture.png"}},
+    value = {}, destination = {},
+    slider = {{id = "progress", src = "atlas", x = 0, y = 0,
+               w = 40, h = 20, type = 6, range = 500, angle = 1}}
+  }
+  for _, ref in ipairs({161, 162, 163, 164}) do
+    table.insert(skin.value, {id = ref, src = "atlas", x = 0, y = 0,
+        w = 40, h = 20, divx = 10, digit = 2, ref = ref})
+    table.insert(skin.destination, {id = ref, timer = 41,
+        dst = {{time = 0, x = (ref - 161) * 100, y = 100, w = 4, h = 20}}})
+  end
+  table.insert(skin.destination, {id = "progress",
+      dst = {{time = 0, x = 0, y = 0, w = 40, h = 20}}})
+  return skin
 )lua";
     } else if (options.resourceBearing && options.customObjectCallbacks.empty()) {
       script += "\n  return {\n    type = " +
@@ -2847,6 +2867,29 @@ void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
              pomyuCycleParsesForTesting() == 0,
          "an oversized explicit CHP does not silently borrow a sibling's "
          "Pomyu timing metadata");
+}
+
+void testPreviewTimePropertiesPrepareCompleteSkinFrames() {
+  ActivationFixture fixture({.resourceBearing = true, .previewTimeProperties = true});
+  if (!fixture.ready()) return;
+  auto initialState = stateAt(1);
+  initialState.clock = settings_scene::previewFrameClock(1, 0);
+  initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+  auto context = fixture.context();
+  context.initialState = &initialState;
+  auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+  expect(created.session != nullptr,
+         "preview clock is available during configured skin creation");
+  if (!created.session) return;
+  std::uint64_t serial = 1;
+  for (const auto elapsed : {0LL, 3'500'000LL, 7'999'999LL, 0LL}) {
+    auto state = initialState;
+    state.clock = settings_scene::previewFrameClock(++serial, elapsed);
+    const auto frame = created.session->prepareFrame(state, projectionAt(serial), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() >= 5,
+           "preview renders elapsed/remaining numbers and progress at startup, during play, and after looping");
+  }
 }
 
 void testIncompletePomyuResourcesKeepDefaultCycles() {
@@ -10490,6 +10533,7 @@ int main(int argc, char **argv) {
   testRepeatedPomyuObjectsShareCyclePreparation();
   testMalformedPomyuNumericDirectivesAbortTheCp932Character();
   testExplicitOversizedPomyuDoesNotFallBackToSibling();
+  testPreviewTimePropertiesPrepareCompleteSkinFrames();
   testIncompletePomyuResourcesKeepDefaultCycles();
   testPomyuResourcesUseMs932AndWindowsSeparators();
   testPomyuRootedResourcePathIsRejected();

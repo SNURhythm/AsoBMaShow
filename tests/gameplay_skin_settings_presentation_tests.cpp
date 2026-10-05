@@ -502,6 +502,62 @@ void testSettingsTargetsIncludeCompatibleModesInNumericOrder() {
   }
 }
 
+void testPreviewSettingsResolveTheSelectedModeCatalog() {
+  auto snapshot = snapshotWithEntry();
+  const auto *original = &snapshot.entries.front();
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 7) == original,
+          "7K1S preview uses the selected 7K1S catalog");
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, -7) == nullptr,
+          "scratchless built-in preview does not borrow the original catalog");
+  snapshot.follow7K1S = true;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, -7) == original,
+          "follow-original preview exposes its effective skin's catalog");
+  snapshot.follow7K1S = false;
+  snapshot.selectedSkinEntries[-7] = original->entry;
+  snapshot.selectedSkinEntries[-6] = original->entry;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, -7) == original &&
+              skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 6) == original,
+          "explicit scratchless and compatible-mode selections resolve their own target");
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 14) == nullptr,
+          "DP preview does not edit another mode's selected skin");
+  snapshot.compatibilityEnabled = false;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 7) == nullptr,
+          "disabled skins show built-in preview settings");
+  snapshot.compatibilityEnabled = true;
+  snapshot.entries.front().validation = skin::SkinValidationDisposition::Invalid;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 7) == nullptr,
+          "invalid selections do not expose an unrelated settings catalog");
+}
+
+void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
+  const auto snapshot = snapshotWithEntry();
+  const auto key = skin::gameplaySkinPreviewConfigurationKey(snapshot, 7);
+  auto changed = snapshot;
+  changed.state = skin::GameplaySkinSettingsState::Busy;
+  changed.statusMessage = "Validating";
+  changed.progress.completedBytes++;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) == key,
+          "validation progress does not restart the active preview");
+  changed.entries.front().configurationDigest = "new-option-file-or-offset";
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "committed catalog settings reload the preview");
+  changed = snapshot;
+  changed.entries.front().settings.viewport.translateX += 10;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "viewport edits reload even though the skin configuration digest excludes viewport");
+  changed = snapshot;
+  changed.entries.front().revisionDigest = "new-revision";
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "skin revalidation reloads a changed installed revision");
+  changed = snapshot;
+  changed.follow7K1S = true;
+  require(skin::gameplaySkinSettingsTargetForKeyMode(changed, -7)->skinType == 0,
+          "follow-original edits target the same profile settings as the preview skin");
+  changed.follow7K1S = false;
+  require(skin::gameplaySkinSettingsTargetForKeyMode(changed, -7)->skinType == -7,
+          "independent scratchless settings keep their separate configuration target");
+}
+
 void testGameplaySkinTraitsRuntimeAvailabilityRequiresBothServices() {
   require(!skin::gameplaySkinTraitsRuntimeAvailable(false, false),
           "compiled-out skins do not own the traits panel");
@@ -554,6 +610,8 @@ int main() {
   testSkinPackageProgressUsesMeasuredWork();
   testSkinRescanProgressAvoidsInventedWorkTotals();
   testSettingsTargetsIncludeCompatibleModesInNumericOrder();
+  testPreviewSettingsResolveTheSelectedModeCatalog();
+  testPreviewReloadKeyTracksCommittedSkinSettingsOnly();
   testGameplaySkinTraitsRuntimeAvailabilityRequiresBothServices();
   testViewportModeChangesPreserveEveryOtherField();
   return 0;

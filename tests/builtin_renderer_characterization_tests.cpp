@@ -2026,6 +2026,13 @@ struct SettingsScene {
       float width = 8.0F;
       float playAreaWidthForKeyMode(int) const { return width; }
     } settings;
+    struct ProfileManager {
+      struct Profile { std::string displayName = "Preview player"; } profile;
+      const Profile &activeProfile() const { return profile; }
+    } profileManager;
+    std::atomic<int> currentFramesPerSecond{60};
+    std::atomic<std::int64_t> applicationUptimeMillis{1234};
+    std::string irAccountNameSnapshot() const { return {}; }
   } context;
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
@@ -2038,6 +2045,10 @@ struct SettingsScene {
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::map<Judgement, int> previewJudgeCount;
   int previewComboBreak = 0;
+  int previewMaximumCombo = 24;
+  int previewCombo = 24;
+  int previewPassedNotes = 12;
+  std::map<Judgement, PlayfieldJudgementFastSlowCount> previewJudgeFastSlowCount;
   void syncPreviewInputLayout();
   void syncPreviewTouchLayout();
   void syncPreviewAuthority();
@@ -2272,16 +2283,27 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
     config.pacemakerDiffBold = height == 1920;
     renderer.configure(config);
     renderer.setPacemakerTarget({});
+    scene.previewJudgeFastSlowCount[Great] = {.fast = 2, .slow = 3};
     scene.syncPreviewAuthority();
     const auto captured = store.capture({.serial = 1});
     expect(captured.authority.pacemakerStatus.enabled &&
                captured.authority.pacemakerStatus.delta == 12,
            "preview capture retains its pacemaker sample");
+    expect(captured.authority.loadingState == PlayfieldLoadingState::Loaded &&
+               captured.authority.gameplayMode == PlayfieldGameplayMode::Play &&
+               captured.authority.playerName == "Preview player" &&
+               captured.authority.currentFramesPerSecond == 60 &&
+               captured.authority.applicationUptimeMillis == 1234 &&
+               captured.authority.maximumCombo == 24 &&
+               captured.authority.stageCombo == 24 &&
+               captured.authority.stagePassedNotes == 12 &&
+               captured.authority.judgementFastSlowCounters.at(Great).slow == 3,
+           "preview capture provides loaded gameplay, profile, telemetry, and judgement authority");
     batch.beginFrame();
     RenderContext context(batch);
     {
       RenderContext::UiBatchScope scope(context);
-      // SettingsScene renders this timestamp overload, not the captured frame.
+      // Also preserve the legacy built-in timestamp rendering contract.
       renderer.render(context, kRenderMicros);
     }
     const auto *diff = renderer.judgementFeedbackTextViewsForTesting()[3];
