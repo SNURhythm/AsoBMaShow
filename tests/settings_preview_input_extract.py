@@ -16,5 +16,11 @@ signatures = ('void SettingsScene::resetPreviewSimulation()',) if args.restart_o
     'void SettingsScene::syncPreviewAuthority()',
     'void SettingsScene::resetPreviewHudSample()',
     'void SettingsScene::publishPreviewJudgement(',
+    'void SettingsScene::consumePreviewTransactions(',
+    'void SettingsScene::advancePreviewSimulation()',
+    'void SettingsScene::capturePreviewVisualState()',
+    'bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay)',
+    'bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,',
+    'bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,',
 )
 args.output.write_text('\n'.join(extract(source, signature) for signature in signatures))

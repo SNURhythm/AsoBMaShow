@@ -2873,7 +2873,7 @@ void testPreviewTimePropertiesPrepareCompleteSkinFrames() {
   ActivationFixture fixture({.resourceBearing = true, .previewTimeProperties = true});
   if (!fixture.ready()) return;
   auto initialState = stateAt(1);
-  initialState.clock = settings_scene::previewFrameClock(1, 0);
+  initialState.clock = settings_scene::previewFrameClock(1, 0, 31'500'000);
   initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
   auto context = fixture.context();
   context.initialState = &initialState;
@@ -2884,7 +2884,7 @@ void testPreviewTimePropertiesPrepareCompleteSkinFrames() {
   std::uint64_t serial = 1;
   for (const auto elapsed : {0LL, 3'500'000LL, 7'999'999LL, 0LL}) {
     auto state = initialState;
-    state.clock = settings_scene::previewFrameClock(++serial, elapsed);
+    state.clock = settings_scene::previewFrameClock(++serial, elapsed, 31'500'000);
     const auto frame = created.session->prepareFrame(state, projectionAt(serial), {});
     expect(frame.ready() && frame.evaluation.submitReady &&
                frame.evaluation.submitReady->commands.size() >= 5,

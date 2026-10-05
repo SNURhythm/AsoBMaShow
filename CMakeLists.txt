@@ -740,6 +740,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/BMSRenderer.cpp
             src/scene/play/BeatorajaHiSpeedChart.cpp
             src/scene/play/BuiltInPlayfieldPresentation.cpp
+            src/scene/play/CompiledGameplayJudge.cpp
+            src/scene/play/GameplayCandidateRules.cpp
+            src/scene/play/GameplayDefinition.cpp
+            src/scene/play/GameplayJudgeRules.cpp
+            src/scene/play/GameplayNoteJudgeRole.cpp
+            src/scene/play/GameplaySimulation.cpp
             src/scene/play/GameplayGaugeRules.cpp
             src/scene/play/Judge.cpp
             src/scene/play/JudgementIndicatorRenderer.cpp

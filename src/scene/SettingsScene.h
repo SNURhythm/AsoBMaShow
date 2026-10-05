@@ -9,11 +9,13 @@
 #include "SettingsAudioVideoModel.h"
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
+#include "SettingsPreviewPlayback.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
+#include "play/GameplaySimulation.h"
 #include "play/PlayfieldVisualState.h"
 #include <cstdint>
 #include <array>
@@ -39,7 +41,6 @@ struct PlayfieldProjectionResult;
 namespace gameplay { class RealtimeTouchInputRouter; }
 struct GameplayGaugeRules;
 class RhythmInputHandler;
-class RhythmLaneInputController;
 struct PlayfieldChartVisualModel;
 struct PlayfieldVisualState;
 class PlayfieldVisualStateStore;
@@ -283,6 +284,8 @@ private:
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
+  bool lastLaidOutPreviewActive = false;
+  int lastLaidOutPreviewPanelPage = 0;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
   int previewKeyMode = 7;
@@ -300,6 +303,8 @@ private:
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
+  std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   std::uint64_t previewFrameSerial = 0;
   std::unique_ptr<PlayfieldPresentation> previewPresentation;
@@ -307,9 +312,8 @@ private:
   BMSRenderer *previewRenderer = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
-  std::unique_ptr<RhythmLaneInputController> previewLaneController;
-  std::unordered_map<int, bool> previewLanePressed;
   long long previewElapsedMicros = 0;
+  settings_scene::PreviewEndAnimation previewEndAnimation;
   int previewCombo = 0;
   int previewScore = 0;
   int previewComboBreak = 0;
@@ -465,6 +469,8 @@ private:
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();
   void resetPreviewHudSample();
+  void advancePreviewSimulation();
+  void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult> transactions);
   void publishPreviewJudgement(const JudgeResult &judgeResult,
                                long long sourceSongTimeMicros);
   void resetPreviewSimulation();

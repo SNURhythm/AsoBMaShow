@@ -75,11 +75,44 @@ void testPreviewPublishesActivePlayerConfiguration() {
          "preview skins read the active player settings alongside the selected HUD layout");
 }
 
+void testPreviewWaitsForRenderedEndAnimation() {
+  settings_scene::PreviewEndAnimation animation;
+  skin::SkinGameplayTiming timing;
+  timing.finishMarginMillis = 500;
+  timing.fadeoutMillis = 250;
+  for (const auto elapsed : {27'500'000LL, 31'500'000LL, 36'500'000LL})
+    animation.observeRenderedFrame(elapsed, 31'500'000, timing);
+  expect(!animation.musicEndMicros && !animation.complete,
+         "the preview does not finish during notes or at the exact play deadline");
+  animation.observeRenderedFrame(37'000'000, 31'500'000, timing);
+  animation.observeRenderedFrame(37'500'000, 31'500'000, timing);
+  expect(!animation.fadeoutMicros && !animation.complete,
+         "a delayed finish frame still receives its complete authored finish margin");
+  animation.observeRenderedFrame(37'501'000, 31'500'000, timing);
+  animation.observeRenderedFrame(37'751'000, 31'500'000, timing);
+  expect(animation.fadeoutMicros == 37'501'000 && !animation.complete,
+         "the preview retains the exact final fadeout frame");
+  animation.observeRenderedFrame(37'752'000, 31'500'000, timing);
+  expect(animation.complete, "preview loops only after its fadeout has been shown");
+  animation = {};
+  timing.finishMarginMillis = 0;
+  timing.fadeoutMillis = 0;
+  animation.observeRenderedFrame(37'000'000, 31'500'000, timing);
+  expect(!animation.complete && !animation.fadeoutMicros,
+         "zero-length margins still render the finish frame");
+  animation.observeRenderedFrame(37'001'000, 31'500'000, timing);
+  expect(!animation.complete && animation.fadeoutMicros.has_value(),
+         "zero-length fadeout is shown before restarting");
+  animation.observeRenderedFrame(37'002'000, 31'500'000, timing);
+  expect(animation.complete, "zero-length end animations restart on the following frame");
+}
+
 } // namespace
 
 int main() {
   testPreviewLaneCoverAuthorityMirrorsConfiguredEnablement();
   testPreviewPublishesActivePlayerConfiguration();
+  testPreviewWaitsForRenderedEndAnimation();
   if (failures != 0) {
     std::cerr << failures << " settings scene preview authority test(s) failed\n";
     return 1;

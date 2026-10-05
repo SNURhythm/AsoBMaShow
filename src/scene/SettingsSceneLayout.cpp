@@ -237,7 +237,9 @@ void SettingsScene::ensureLayoutUpToDate() {
   }
 
   const bool preserveScroll = rootLayout != nullptr && scrollView != nullptr &&
-                              activeTab == lastLaidOutTab;
+                              activeTab == lastLaidOutTab &&
+                              previewActive == lastLaidOutPreviewActive &&
+                              (!previewActive || previewPanelPage == lastLaidOutPreviewPanelPage);
   const float preservedScrollOffset =
       preserveScroll ? scrollView->getScrollOffset() : 0.0f;
 
@@ -250,6 +252,8 @@ void SettingsScene::ensureLayoutUpToDate() {
   lastSafeRight = safe.right;
   initView();
   lastLaidOutTab = activeTab;
+  lastLaidOutPreviewActive = previewActive;
+  lastLaidOutPreviewPanelPage = previewPanelPage;
   if (preserveScroll && scrollView != nullptr) {
     scrollView->setScrollOffset(preservedScrollOffset);
   }
@@ -595,6 +599,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->addView(previewTabs);
 
   auto *previewScroll = new ScrollView();
+  scrollView = previewScroll;
   previewScroll->setFlex(1.0f);
   previewScroll->setFlexShrink(1.0f);
   previewScroll->setWidthPercent(100.0f);

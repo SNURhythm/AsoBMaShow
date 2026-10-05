@@ -2,6 +2,7 @@
 
 #include "../AppSettings.h"
 #include "SettingsPreviewChart.h"
+#include "SettingsPreviewPlayback.h"
 #include "play/PlayfieldVisualState.h"
 
 namespace settings_scene {
@@ -39,17 +40,18 @@ inline void applyPreviewPlayerConfiguration(PlayfieldPresentationConfig &config,
 }
 
 [[nodiscard]] inline PlayfieldFrameClock
-previewFrameClock(std::uint64_t serial, long long elapsedMicros) noexcept {
+previewFrameClock(std::uint64_t serial, long long elapsedMicros,
+                  long long lastNoteMicros) noexcept {
   return {.serial = serial,
           .visualTimeMicros = elapsedMicros,
           .gameplayTimeMicros = elapsedMicros,
           .replayTouchTimeMicros = elapsedMicros,
           .bgaTimeMicros = elapsedMicros,
-          // This simulation owns an exact clock and ends at its loop boundary.
+          // Beatoraja playtime includes five seconds after the final note.
           .playTimer = {.active = true,
                         .startMicros = 0,
                         .elapsedMillisExact = true,
-                        .playtimeMillis = kPreviewLoopMicros / 1000}};
+                        .playtimeMillis = previewPlaytimeMillis(lastNoteMicros)}};
 }
 
 } // namespace settings_scene

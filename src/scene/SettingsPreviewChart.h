@@ -6,7 +6,7 @@
 namespace bms_parser { class Chart; }
 
 namespace settings_scene {
-inline constexpr long long kPreviewLoopMicros = 8000000LL;
+inline constexpr long long kPreviewLoopMicros = 33'000'000LL;
 inline constexpr double kPreviewBpm = 120.0;
 inline constexpr std::array<int, 9> kPreviewKeyModes{4, -5, 5, 6, -7, 7, 8, 10, 14};
 

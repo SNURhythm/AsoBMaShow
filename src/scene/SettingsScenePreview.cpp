@@ -19,7 +19,6 @@
 #include "play/BeatorajaHiSpeedChart.h"
 #include "play/PlayfieldChartVisualModel.h"
 #include "play/PlayfieldVisualState.h"
-#include "play/RhythmLaneInputController.h"
 
 using namespace settings_scene;
 
@@ -320,6 +319,11 @@ void SettingsScene::renderPreview() {
     previewError = result.failure->diagnostic.message;
     lastLayoutWidth = -1;
   }
+  if (result.outcome == PresentationFrameOutcome::Ready) {
+    if (const auto timing = previewPresentation->selectedSkinGameplayTiming())
+      previewEndAnimation.observeRenderedFrame(
+          previewElapsedMicros, previewChart->Meta.PlayLength, *timing);
+  }
   syncPreviewInputLayout();
   syncPreviewTouchLayout();
 }
@@ -381,7 +385,7 @@ void SettingsScene::syncPreviewAuthority() {
       .stagePassedNotes = previewPassedNotes,
       .gaugeType = GaugeType::Normal,
       .gaugeAutoShift = GaugeAutoShiftMode::None,
-      .currentGauge = 74.0F,
+      .currentGauge = previewSimulation ? previewSimulation->scoreState().currentGauge : 74.0F,
       .gaugeRules = *previewGaugeRules,
       .pacemakerTarget = target,
       .pacemakerStatus = {.enabled = target.enabled, .label = target.label,
@@ -409,8 +413,12 @@ void SettingsScene::syncPreviewAuthority() {
       .laneCoverEnabled = laneCover.enabled,
   };
   previewVisualStateStore->applyAuthorityUpdate(authority);
+  if (previewSimulation)
+    previewVisualStateStore->applyGameplayGraphState(previewSimulation->skinGameplayGraphState());
   // Keep the built-in HUD sample available before the first prepared frame.
   if (previewRenderer != nullptr) {
+    previewRenderer->setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
+                                    authority.currentGauge, *previewGaugeRules);
     previewRenderer->setPacemakerTarget(authority.pacemakerTarget);
     previewRenderer->setPacemakerStatus(authority.pacemakerStatus);
   }
@@ -428,26 +436,20 @@ void SettingsScene::capturePreviewVisualState() {
   std::vector<NotePresentationState> noteStates;
   noteStates.reserve(noteCount);
   for (std::size_t index = 0; index < noteCount; ++index) {
-    const auto *source = previewVisualNoteSources[index];
+    const auto &runtime = previewSimulation->noteState(static_cast<gameplay::NoteId>(index));
     NotePresentationState noteState{
         .id = previewChartVisualModel->notes[index].id,
-        .judged = source->IsPlayed,
-        .dead = source->IsDead,
-        .playedTimeMicros = source->IsPlayed ? source->PlayedTime
-                                             : kPlayfieldTimestampOff,
+        .judged = runtime.played,
+        .dead = runtime.dead,
+        .playedTimeMicros = runtime.played ? runtime.playedTimeMicros
+                                          : kPlayfieldTimestampOff,
+        .longActive = runtime.holding,
     };
-    if (const auto *longNote =
-            dynamic_cast<const bms_parser::LongNote *>(source);
-        longNote != nullptr) {
-      const auto *head = longNote->IsTail() && longNote->Head != nullptr
-                             ? longNote->Head
-                             : longNote;
-      noteState.longActive = head->IsHolding;
-    }
     noteStates.push_back(noteState);
   }
   previewVisualStateStore->setNoteStates(std::move(noteStates));
-  const auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros);
+  const auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros,
+                                       previewChart->Meta.PlayLength);
   if (previewCapturedVisualState == nullptr) {
     previewCapturedVisualState = std::make_unique<PlayfieldVisualState>(
         previewVisualStateStore->capture(clock));
@@ -466,12 +468,15 @@ void SettingsScene::destroyPreviewRenderer() {
   previewError.clear();
   previewCapturedVisualState.reset();
   previewGaugeRules.reset();
+  previewSimulation.reset();
+  previewDefinition.reset();
   previewVisualStateStore.reset();
   previewChartVisualModel.reset();
   previewVisualNoteSources.clear();
   previewFrameSerial = 0;
   previewChart.reset();
   previewElapsedMicros = 0;
+  previewEndAnimation = {};
 }
 
 void SettingsScene::ensurePreviewInputHandler() {
@@ -482,12 +487,6 @@ void SettingsScene::ensurePreviewInputHandler() {
   if (!previewError.empty() || previewChart == nullptr || previewRenderer == nullptr ||
       previewPresentationEvents == nullptr) {
     return;
-  }
-  if (previewLaneController == nullptr) {
-    previewLaneController = std::make_unique<RhythmLaneInputController>(
-        previewChart.get(), previewPresentationEvents.get(),
-        previewLanePressed,
-        Judge(previewChart->Meta.Rank));
   }
   if (previewInputHandler == nullptr) {
     previewInputHandler = std::make_unique<RhythmInputHandler>(
@@ -530,12 +529,14 @@ void SettingsScene::destroyPreviewInputHandler() {
     previewInputHandler->stopListen();
     previewInputHandler.reset();
   }
-  previewLaneController.reset();
-  previewLanePressed.clear();
-  previewCombo = 0;
-  previewScore = 0;
-  previewComboBreak = 0;
-  previewJudgeCount.clear();
+  if (previewSimulation && previewDefinition) {
+    for (const auto &lane : previewDefinition->lanes()) {
+      if (previewSimulation->lanePressed(lane.lane))
+        consumePreviewTransactions(previewSimulation->releaseLane(
+            lane.lane, {.songTimeMicros = previewElapsedMicros,
+                         .laneBeamTimeMicros = previewElapsedMicros}).transactions);
+    }
+  }
 }
 
 void SettingsScene::syncPreviewInputLayout() {
@@ -632,6 +633,18 @@ void SettingsScene::resetPreviewHudSample() {
       compileGameplayGaugeRules(kDefaultGameplayRuleset,
                                 previewChart->Meta,
                                 GaugeProfile::Standard));
+  previewSimulation.reset();
+  previewDefinition = std::make_unique<gameplay::GameplayDefinition>(
+      gameplay::buildGameplayDefinition(*previewChart, 0));
+  previewSimulation = std::make_unique<gameplay::GameplaySimulation>(
+      *previewDefinition, gameplay::GameplaySimulationConfig{
+          .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+              kDefaultGameplayRuleset, previewChart->Meta.Rank, 100, 100,
+              CourseJudgementConstraint::None, gameplay::CandidateSelectionMode::Lowest,
+              previewChart->Meta.KeyMode)),
+          .gaugeRules = *previewGaugeRules,
+          .notePriorityMode = context.settings.notePriorityMode,
+          .attempt = {.startingGaugePercent = 74}});
   previewRenderer->setGaugeStatus(GaugeType::Normal,
                                   GaugeAutoShiftMode::None, 74.0f,
                                   *previewGaugeRules);
@@ -650,21 +663,16 @@ void SettingsScene::publishPreviewJudgement(
   if (previewRenderer == nullptr) {
     return;
   }
-  if (judgeResult.isComboBreak()) {
-    previewCombo = 0;
-    previewComboBreak++;
-  } else if (judgeResult.judgement != Kpoor) {
-    previewCombo++;
-  }
-  if (judgeResult.judgement == PGreat) previewScore += 2;
-  else if (judgeResult.judgement == Great) ++previewScore;
-  previewJudgeCount[judgeResult.judgement]++;
-  previewMaximumCombo = std::max(previewMaximumCombo, previewCombo);
-  if (judgeResult.judgement != Kpoor && judgeResult.judgement != None)
-    ++previewPassedNotes;
-  auto &timingCount = previewJudgeFastSlowCount[judgeResult.judgement];
-  if (judgeResult.Diff <= 0) ++timingCount.fast;
-  else ++timingCount.slow;
+  if (!previewSimulation || judgeResult.judgement == None) return;
+  const auto &score = previewSimulation->scoreState();
+  previewCombo = score.stageCombo;
+  previewScore = score.getScore();
+  previewComboBreak = score.comboBreak;
+  previewMaximumCombo = score.maxCombo;
+  previewPassedNotes = score.stagePassedNotes;
+  previewJudgeCount = score.judgeCount;
+  for (const auto &[judgement, count] : score.judgementFastSlowCount)
+    previewJudgeFastSlowCount[judgement] = {.fast = count.fast, .slow = count.slow};
   syncPreviewAuthority();
   if (previewPresentationEvents != nullptr) {
     const PlayfieldJudgeEventClock clock =
@@ -677,59 +685,54 @@ void SettingsScene::publishPreviewJudgement(
       previewComboBreak);
 }
 
-bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
-  if (!previewActive || previewLaneController == nullptr) {
-    return nullptr;
+void SettingsScene::consumePreviewTransactions(
+    std::span<const gameplay::GameplayInputResult> transactions) {
+  for (const auto &transaction : transactions) {
+    if (transaction.hasLaneVisual && previewPresentationEvents) {
+      const auto &event = transaction.laneVisual;
+      if (event.action == gameplay::LaneVisualAction::Press)
+        previewPresentationEvents->onLanePressed(event.lane, event.judge, event.visualTimeMicros);
+      else
+        previewPresentationEvents->onLaneReleased(event.lane, event.visualTimeMicros);
+    }
+    if (transaction.hasJudge)
+      publishPreviewJudgement(transaction.judge,
+          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : previewElapsedMicros);
   }
+}
+
+void SettingsScene::advancePreviewSimulation() {
+  if (previewSimulation)
+    consumePreviewTransactions(previewSimulation->advanceTo(
+        previewElapsedMicros, previewElapsedMicros).transactions);
+}
+
+bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
   return pressLane(lane, lane, inputDelay);
 }
 
 bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
-                                           double inputDelay) {
-  if (!previewActive || previewLaneController == nullptr) {
-    return nullptr;
-  }
-  const RhythmLaneInputController::InputContext inputContext{
-      .songTimeMicros = previewElapsedMicros,
-      .laneBeamTimeMicros = previewElapsedMicros,
-      .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
-  };
-  auto result =
-      previewLaneController->pressLane(mainLane, compensateLane, inputContext);
-  for (const auto &transaction : result.transactions) {
-    if (transaction.hasJudge && previewRenderer != nullptr) {
-      publishPreviewJudgement(
-          transaction.judge,
-          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
-                                     : previewElapsedMicros);
-    }
-  }
-  return result.note;
+                                          double inputDelay) {
+  if (!previewActive || !previewSimulation) return nullptr;
+  const auto result = previewSimulation->pressLane(mainLane, compensateLane,
+      {.songTimeMicros = previewElapsedMicros,
+       .laneBeamTimeMicros = previewElapsedMicros,
+       .inputDelayMicros = static_cast<std::int64_t>(inputDelay * 1'000'000)});
+  consumePreviewTransactions(result.transactions);
+  return result.noteId < previewVisualNoteSources.size()
+      ? const_cast<bms_parser::Note *>(previewVisualNoteSources[result.noteId]) : nullptr;
 }
 
 bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
-                                             bool isBackSpin) {
-  if (!previewActive || previewLaneController == nullptr) {
-    return nullptr;
-  }
-  const RhythmLaneInputController::InputContext inputContext{
-      .songTimeMicros = previewElapsedMicros,
-      .laneBeamTimeMicros = previewElapsedMicros,
-      .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
-  };
-  auto result =
-      previewLaneController->releaseLane(lane, inputContext, isBackSpin);
-  for (const auto &transaction : result.transactions) {
-    if (transaction.hasJudge && previewRenderer != nullptr) {
-      publishPreviewJudgement(
-          transaction.judge,
-          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
-                                     : previewElapsedMicros);
-    }
-  }
-  return result.note;
+                                            bool isBackSpin) {
+  if (!previewActive || !previewSimulation) return nullptr;
+  const auto result = previewSimulation->releaseLane(lane,
+      {.songTimeMicros = previewElapsedMicros,
+       .laneBeamTimeMicros = previewElapsedMicros,
+       .inputDelayMicros = static_cast<std::int64_t>(inputDelay * 1'000'000)}, isBackSpin);
+  consumePreviewTransactions(result.transactions);
+  return result.noteId < previewVisualNoteSources.size()
+      ? const_cast<bms_parser::Note *>(previewVisualNoteSources[result.noteId]) : nullptr;
 }
 
 void SettingsScene::resetPreviewSimulation() {

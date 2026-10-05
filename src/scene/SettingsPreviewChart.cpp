@@ -47,17 +47,18 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
   chart->Meta.KeyMode = std::abs(keyMode);
   chart->Meta.IsDP = keyMode == 10 || keyMode == 14;
   chart->Meta.Rank = 3;
-  chart->Meta.PlayLength = kPreviewLoopMicros;
+  chart->Meta.PlayLength = 0;
   chart->Meta.TotalLength = kPreviewLoopMicros;
 
   auto measure = std::make_unique<bms_parser::Measure>();
   measure->Timing = 0;
-  measure->Scale = 4.0;
+  measure->Scale = 16.0;
   measure->Pos = 0.0;
 
   auto appendTimeline = [&measure](long long timingMicros,
                                    bool firstInMeasure = false) {
-    auto timeline = makePreviewTimeline(timingMicros, firstInMeasure);
+    // The original first note is at 0.5 s; add half a second of lead-in.
+    auto timeline = makePreviewTimeline(timingMicros + 500'000, firstInMeasure);
     auto *timelinePtr = timeline.get();
     measure->TimeLines.push_back(timelinePtr);
     (void)timeline.release();
@@ -90,10 +91,60 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
   for (std::size_t index = 8; index < lanes.size(); ++index)
     addPreviewNote(measure->TimeLines[((index - 8) * 2) % measure->TimeLines.size()], lanes[index]);
 
+  const int laneCount = static_cast<int>(lanes.size());
+  const auto noteAt = [&](long long time, int laneIndex) {
+    addPreviewNote(appendTimeline(time), lanes[laneIndex % laneCount]);
+  };
+  const auto chordAt = [&](long long time, std::initializer_list<int> laneIndices) {
+    auto *timeline = appendTimeline(time);
+    for (const int index : laneIndices)
+      addPreviewNote(timeline, lanes[index % laneCount]);
+  };
+  const auto longAt = [&](long long head, long long tail, int laneIndex) {
+    addPreviewLongNote(appendTimeline(head), appendTimeline(tail),
+                      lanes[laneIndex % laneCount]);
+  };
+
+  // Ascending runs, two-note chords, and a sustained note.
+  for (int step = 0; step < 8; ++step)
+    noteAt(8'500'000 + step * 250'000, step);
+  chordAt(10'750'000, {0, laneCount / 2});
+  longAt(11'500'000, 13'000'000, 3);
+  chordAt(13'500'000, {1, laneCount - 1});
+  chordAt(14'000'000, {0, laneCount / 2});
+  chordAt(14'500'000, {1, laneCount - 1});
+  noteAt(15'250'000, laneCount - 1);
+
+  // Descending runs, repeated taps, then a pair of held notes.
+  for (int step = 0; step < 8; ++step)
+    noteAt(16'500'000 + step * 250'000, laneCount - 1 - step % laneCount);
+  for (int step = 0; step < 4; ++step)
+    noteAt(19'000'000 + step * 250'000, 0);
+  auto *dualHead = appendTimeline(20'250'000);
+  auto *dualTail = appendTimeline(21'750'000);
+  for (const int index : {0, laneCount / 2})
+    addPreviewLongNote(dualHead, dualTail, lanes[index]);
+  chordAt(22'250'000, {1, laneCount - 1});
+  noteAt(23'250'000, laneCount / 2);
+
+  // Alternate sides, play around a hold, and finish with a chord.
+  for (int step = 0; step < 8; ++step)
+    noteAt(24'500'000 + step * 250'000,
+           step % 2 == 0 ? step / 2 : laneCount - 1 - step / 2);
+  chordAt(27'000'000, {0, laneCount / 2});
+  longAt(27'500'000, 29'500'000, 0);
+  noteAt(28'000'000, 1);
+  noteAt(28'500'000, laneCount - 1);
+  for (int step = 0; step < 4; ++step)
+    noteAt(30'000'000 + step * 250'000, step);
+  chordAt(31'500'000, {0, laneCount / 2, laneCount - 1});
+
+  std::ranges::sort(measure->TimeLines, {}, &bms_parser::TimeLine::Timing);
   const auto scratches = chart->Meta.GetScratchLaneIndices();
   for (const auto *timeline : measure->TimeLines) {
     for (const auto *note : timeline->Notes) {
       if (note == nullptr) continue;
+      chart->Meta.PlayLength = std::max(chart->Meta.PlayLength, timeline->Timing);
       const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
       if (longNote && longNote->IsTail()) continue;
       ++chart->Meta.TotalNotes;

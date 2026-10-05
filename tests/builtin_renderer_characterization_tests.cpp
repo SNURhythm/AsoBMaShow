@@ -1,3 +1,4 @@
+#include "scene/play/GameplaySimulation.h"
 #include "GameplayKeyMode.h"
 #include "input/RhythmInputHandler.h"
 #include "rendering/RenderPlan.h"
@@ -2043,6 +2044,13 @@ struct SettingsScene {
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
+  std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
+  const PlayfieldChartVisualModel *previewChartVisualModel = nullptr;
+  std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
+  std::uint64_t previewFrameSerial = 0;
+  bool previewActive = true;
+  long long previewElapsedMicros = 0;
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::map<Judgement, int> previewJudgeCount;
   int previewComboBreak = 0;
@@ -2055,10 +2063,17 @@ struct SettingsScene {
   void syncPreviewTouchLayout();
   void syncPreviewAuthority();
   void resetPreviewHudSample();
+  void capturePreviewVisualState();
+  void advancePreviewSimulation();
+  void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult>);
+  bms_parser::Note *pressLane(int, double);
+  bms_parser::Note *pressLane(int, int, double);
+  bms_parser::Note *releaseLane(int, double, bool = false);
   void publishPreviewJudgement(const JudgeResult &, long long);
 };
 using settings_scene::kPreviewBpm;
 using settings_scene::previewLaneCoverAuthority;
+using settings_scene::previewFrameClock;
 #include "settings_preview_input.inc"
 
 struct PreviewRecordingControl : IRhythmControl {
@@ -2282,18 +2297,84 @@ void verifyPreviewScoreUsesRealJudgements() {
   expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
              scene.previewCombo == 0 && scene.previewMaximumCombo == 0,
          "a fresh preview has no invented score or completed notes");
-  for (const auto judgement : {PGreat, Great, Good, Bad, Poor, Kpoor})
-    scene.publishPreviewJudgement(JudgeResult(judgement, 0), 1'000'000);
+  for (const auto [lane, time] : {std::pair{0, 1'000'000LL},
+                                  std::pair{2, 1'390'000LL},
+                                  std::pair{4, 1'800'000LL}}) {
+    scene.previewElapsedMicros = time;
+    scene.pressLane(lane, 0);
+    scene.releaseLane(lane, 0);
+  }
+  scene.previewElapsedMicros = 2'300'000;
+  scene.advancePreviewSimulation();
   const auto state = store.capture({.serial = 1});
-  expect(scene.previewScore == 3 && scene.previewPassedNotes == 5 &&
+  expect(scene.previewScore == 3 && scene.previewPassedNotes == 4 &&
+             scene.previewJudgeCount.at(Poor) == 1 && scene.previewCombo == 0 &&
              state.authority.pacemakerStatus.currentScore == 3 &&
-             state.authority.pacemakerStatus.playedNotes == 5,
-         "preview EX score awards two for PGREAT, one for GREAT, and none for other judgements");
+             state.authority.pacemakerStatus.playedNotes == 4,
+         "preview scores real inputs and breaks combo when the next note is missed");
   scene.resetPreviewHudSample();
   expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
              scene.previewJudgeCount.at(PGreat) == 0 &&
              scene.previewJudgeFastSlowCount.empty(),
          "restarting clears preview score, note progression, and timing counters");
+}
+
+void verifyPreviewMissesAndFullCombo() {
+  for (const int mode : settings_scene::kPreviewKeyModes) {
+    const auto chart = settings_scene::makePreviewChart(mode);
+    const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+    PlayfieldVisualStateStore store(model);
+    Judge judge(chart->Meta.Rank);
+    BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+    SettingsScene scene;
+    scene.previewChart = chart.get();
+    scene.previewRenderer = &renderer;
+    scene.previewVisualStateStore = &store;
+    scene.previewChartVisualModel = &model;
+    for (const auto *timeline : chart->Measures.front()->TimeLines)
+      for (const auto *note : timeline->Notes)
+        if (note) scene.previewVisualNoteSources.push_back(note);
+    scene.previewPresentationEvents =
+        std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+    scene.resetPreviewHudSample();
+    scene.previewElapsedMicros = 900'000;
+    scene.advancePreviewSimulation();
+    expect(scene.previewPassedNotes == 0 && scene.previewJudgeCount.at(Poor) == 0,
+           "the one-second preview lead-in never judges a note before it arrives");
+    scene.previewElapsedMicros = 33'000'000;
+    scene.advancePreviewSimulation();
+    scene.capturePreviewVisualState();
+    expect(scene.previewPassedNotes == chart->Meta.TotalNotes &&
+               scene.previewJudgeCount.at(Poor) == chart->Meta.TotalNotes &&
+               scene.previewCombo == 0 && scene.previewScore == 0 &&
+               scene.previewCapturedVisualState->lastJudge.judgement == Poor &&
+               scene.previewCapturedVisualState->authority.currentGauge < 74.0F,
+           "untouched preview judges every missed normal and long note once and cannot claim full combo");
+    expect(std::ranges::all_of(scene.previewCapturedVisualState->notes,
+                               [](const auto &note) { return note.judged; }),
+           "missed sample notes publish their resolved visual state");
+    scene.advancePreviewSimulation();
+    expect(scene.previewJudgeCount.at(Poor) == chart->Meta.TotalNotes,
+           "repeated preview frames do not count the same miss twice");
+    scene.resetPreviewHudSample();
+    for (const auto *timeline : chart->Measures.front()->TimeLines) {
+      scene.previewElapsedMicros = timeline->Timing;
+      scene.advancePreviewSimulation();
+      for (const auto *note : timeline->Notes) {
+        if (!note) continue;
+        const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+        if (!longNote || !longNote->IsTail()) scene.pressLane(note->Lane, 0);
+        if (!longNote || longNote->IsTail()) scene.releaseLane(note->Lane, 0);
+      }
+    }
+    scene.previewElapsedMicros = 33'000'000;
+    scene.advancePreviewSimulation();
+    expect(scene.previewPassedNotes == chart->Meta.TotalNotes &&
+               scene.previewCombo == chart->Meta.TotalNotes &&
+               scene.previewJudgeCount.at(Poor) == 0 &&
+               scene.previewScore == 2 * chart->Meta.TotalNotes,
+           "hitting the entire sample including long-note tails earns full combo only at completion");
+  }
 }
 
 void verifyPreviewPacemakerMatchesChartScore() {
@@ -2834,6 +2915,7 @@ int main() {
       verifyPreviewPacemakerDiff(target);
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewScoreUsesRealJudgements();
+  verifyPreviewMissesAndFullCombo();
       verifyIndividualJudgementLabelVisibility(target);
       verifySeparatedJudgementCombo(target);
       verifyJudgementFeedbackStyles(target);

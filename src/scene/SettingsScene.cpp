@@ -6,7 +6,6 @@
 #include "../input/RhythmInputHandler.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
-#include "play/RhythmLaneInputController.h"
 
 #include <iomanip>
 #include <sstream>
@@ -251,7 +250,11 @@ void SettingsScene::update(float dt) {
     syncPreviewInputLayout();
     previewElapsedMicros +=
         static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
-    if (previewElapsedMicros >= kPreviewLoopMicros) {
+    advancePreviewSimulation();
+    const bool skinEnding = previewPresentation &&
+                            previewPresentation->selectedSkinGameplayTiming().has_value();
+    if (skinEnding ? previewEndAnimation.complete
+                   : previewElapsedMicros >= kPreviewLoopMicros) {
       resetPreviewSimulation();
     }
   }
@@ -365,7 +368,6 @@ void SettingsScene::cleanupScene() {
   inputViewRebuildGate.reset();
   inputLastViewSignature.clear();
   profileInlineEditor.clear();
-  previewLanePressed.clear();
   previewCombo = 0;
   previewScore = 0;
   rootLayout = nullptr;
