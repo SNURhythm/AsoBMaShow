@@ -1,16 +1,12 @@
 #include "ResultRecordSummary.h"
+#include "DisplayTime.h"
 
 #include "ReplayAutoPlay.h"
 #include "ReplayClearMarkUtils.h"
 #include "ResultContracts.h"
 
 #include <algorithm>
-#include <array>
-#include <charconv>
-#include <ctime>
-#include <iomanip>
 #include <ranges>
-#include <sstream>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
@@ -37,93 +33,13 @@ bool validLinkedRemoteIdentity(const IrRemoteRecordId &identity) noexcept {
                               });
 }
 
-bool isLeapYear(int year) noexcept {
-  return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-}
-
-int daysInMonth(int year, int month) noexcept {
-  constexpr std::array days{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (month < 1 || month > static_cast<int>(days.size())) {
-    return 0;
-  }
-  return month == 2 && isLeapYear(year) ? 29 : days[month - 1];
-}
-
-std::optional<int> parseDigits(std::string_view text, std::size_t offset,
-                               std::size_t count) noexcept {
-  if (offset > text.size() || count > text.size() - offset) {
-    return std::nullopt;
-  }
-  int value = 0;
-  const char *begin = text.data() + offset;
-  const char *end = begin + count;
-  const auto parsed = std::from_chars(begin, end, value);
-  if (parsed.ec != std::errc{} || parsed.ptr != end) {
-    return std::nullopt;
-  }
-  return value;
-}
-
-// Howard Hinnant's civil-calendar transform, shifted to the Unix epoch.
-std::int64_t daysFromCivil(int year, unsigned month, unsigned day) noexcept {
-  year -= month <= 2;
-  const int era = (year >= 0 ? year : year - 399) / 400;
-  const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
-  const unsigned dayOfYear =
-      (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
-  const unsigned dayOfEra =
-      yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
-  return static_cast<std::int64_t>(era) * 146097 +
-         static_cast<std::int64_t>(dayOfEra) - 719468;
-}
-
 std::int64_t parseDisplayedTime(std::string_view value) noexcept {
-  if (value.size() != 19 && value.size() != 23) {
-    return 0;
-  }
-  if (value[4] != '-' || value[7] != '-' || value[10] != ' ' ||
-      value[13] != ':' || value[16] != ':' ||
-      (value.size() == 23 && value[19] != '.')) {
-    return 0;
-  }
-  const auto year = parseDigits(value, 0, 4);
-  const auto month = parseDigits(value, 5, 2);
-  const auto day = parseDigits(value, 8, 2);
-  const auto hour = parseDigits(value, 11, 2);
-  const auto minute = parseDigits(value, 14, 2);
-  const auto second = parseDigits(value, 17, 2);
-  const auto millis =
-      value.size() == 23 ? parseDigits(value, 20, 3) : std::optional<int>(0);
-  if (!year || !month || !day || !hour || !minute || !second || !millis ||
-      *day < 1 || *day > daysInMonth(*year, *month) || *hour > 23 ||
-      *minute > 59 || *second > 59) {
-    return 0;
-  }
-  const std::int64_t days = daysFromCivil(*year, static_cast<unsigned>(*month),
-                                          static_cast<unsigned>(*day));
-  return (((days * 24 + *hour) * 60 + *minute) * 60 + *second) * 1'000 +
-         *millis;
+  return display_time::parseUtcTimestamp(value).value_or(0);
 }
 
 std::string formatUnixMillis(std::int64_t unixMillis) {
-  if (unixMillis <= 0) {
-    return {};
-  }
-  const std::time_t seconds = static_cast<std::time_t>(unixMillis / 1'000);
-  std::tm utc{};
-#if defined(_WIN32)
-  if (gmtime_s(&utc, &seconds) != 0) {
-    return {};
-  }
-#else
-  if (gmtime_r(&seconds, &utc) == nullptr) {
-    return {};
-  }
-#endif
-  std::ostringstream output;
-  output << std::put_time(&utc, "%Y-%m-%d %H:%M:%S") << '.' << std::setw(3)
-         << std::setfill('0') << (unixMillis % 1'000);
-  return output.str();
+  return unixMillis <= 0 ? std::string{} : display_time::formatUnixMillis(
+      unixMillis, display_time::Precision::Milliseconds);
 }
 
 bool actionEnabled(const ResultRecordCapabilities &capabilities,
@@ -386,7 +302,7 @@ ResultRecordSummary makeAutoPlayResultRecord(ReplaySummary summary) {
       .finalGauge = summary.finalGauge,
       .clearRank = replay_clear_mark::effectiveClearRank(summary),
       .displayedTimeUnixMillis = parseDisplayedTime(summary.createdAt),
-      .displayedTime = summary.createdAt,
+      .displayedTime = display_time::formatStoredTimestamp(summary.createdAt),
       .playOption = summary.playOption,
       .playOption2 = summary.playOption2,
       .irState = ir::IrRecordState::Hidden,
@@ -423,7 +339,7 @@ makeLegacyChartResultRecord(LegacyChartResultSummary summary) {
       .clearRankAvailable = summary.clearType.has_value(),
       .displayedTimeUnixMillis =
           summary.createdAt ? parseDisplayedTime(*summary.createdAt) : 0,
-      .displayedTime = summary.createdAt.value_or(""),
+      .displayedTime = display_time::formatStoredTimestamp(summary.createdAt.value_or("")),
       .playOption = std::nullopt,
       .irState = ir::IrRecordState::Hidden,
       .autoPlayReplay = std::nullopt,
@@ -463,7 +379,7 @@ makeLegacyCourseResultRecord(LegacyCourseResultSummary summary) {
       .clearRankAvailable = summary.clearType.has_value(),
       .displayedTimeUnixMillis =
           summary.createdAt ? parseDisplayedTime(*summary.createdAt) : 0,
-      .displayedTime = summary.createdAt.value_or(""),
+      .displayedTime = display_time::formatStoredTimestamp(summary.createdAt.value_or("")),
       .playOption = std::nullopt,
       .irState = ir::IrRecordState::Hidden,
       .autoPlayReplay = std::nullopt,

@@ -1,4 +1,5 @@
 #include "ir/IrRankingModal.h"
+#include "ScopedTimeZone.h"
 #include "i18n/Localization.h"
 #include "view/RecyclerView.h"
 #include "view/Button.h"
@@ -886,7 +887,21 @@ void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
 
 } // namespace
 
+void testRankingTimesFollowTimezoneAndDaylightSaving() {
+  {
+    ScopedTimeZone zone("KST-9");
+    REQUIRE(ir::formatIrRankingTimestamp(1'704'164'645'123LL) == "2024-01-02 12:04");
+    REQUIRE(ir::formatIrRankingTimestamp(std::nullopt) == "—");
+  }
+  {
+    ScopedTimeZone zone("EST5EDT,M3.2.0/2,M11.1.0/2");
+    REQUIRE(ir::formatIrRankingTimestamp(1'710'053'940'000LL) == "2024-03-10 01:59");
+    REQUIRE(ir::formatIrRankingTimestamp(1'710'054'000'000LL) == "2024-03-10 03:00");
+  }
+}
+
 int main() {
+  testRankingTimesFollowTimezoneAndDaylightSaving();
   testRankingViewsKeepEveryColumn();
   testRankingViewportScrollsOnlyWhenNeededAndKeepsSelection();
   testRetainedModalTreesRefreshLanguageWhileHidden();

@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "IrRankingModal.h"
+#include "../DisplayTime.h"
 #include "../CanonicalDigest.h"
 #include "../ResultContracts.h"
 #include "../view/View.h"
@@ -108,20 +109,9 @@ std::string formatIrRankingTimestamp(std::optional<std::int64_t> unixMillis) {
   if (!unixMillis || *unixMillis <= 0) {
     return std::string(kMissing);
   }
-  const std::time_t seconds = static_cast<std::time_t>(*unixMillis / 1000);
-  std::tm utc{};
-#if defined(_WIN32)
-  if (gmtime_s(&utc, &seconds) != 0) {
-    return std::string(kMissing);
-  }
-#else
-  if (gmtime_r(&seconds, &utc) == nullptr) {
-    return std::string(kMissing);
-  }
-#endif
-  std::ostringstream output;
-  output << std::put_time(&utc, "%Y-%m-%d %H:%M UTC");
-  return output.str();
+  const auto formatted = display_time::formatUnixMillis(
+      *unixMillis, display_time::Precision::Minutes);
+  return formatted.empty() ? std::string(kMissing) : formatted;
 }
 
 IrChartQueryBuildOutcome

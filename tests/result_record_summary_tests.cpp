@@ -1,4 +1,7 @@
 #include "../src/ResultRecordSummary.h"
+#include "ScopedTimeZone.h"
+#include "../src/DisplayTime.h"
+#include "../src/ScoreHistoryTime.h"
 #include "../src/ResultRecordFormatting.h"
 #include "../src/replay/ReplayFileActionSelection.h"
 
@@ -910,7 +913,58 @@ void testMergeSuppressesOnlyReceiptLinkedRemoteRow() {
 
 } // namespace
 
+void testRecordTimesFollowLocalTimezoneWithoutChangingIdentity() {
+  ScopedTimeZone zone("KST-9");
+  auto remote = validRemoteScore();
+  const auto record = makeRemoteResultRecord("tachi", "https://boku.tachi.ac", remote);
+  expect(record.displayedTime == "2024-01-02 12:04:05.123" &&
+             record.displayedTimeUnixMillis == *remote.timeAchievedUnixMillis,
+         "remote records display local time while retaining their UTC instant");
+  ModernChartResultRecord modern{.result = validModernResult()};
+  modern.result.playedAtUnixMillis = *remote.timeAchievedUnixMillis;
+  expect(makeModernChartResultRecord(modern, replay::ReplayState::Missing,
+                                    ir::IrRecordState::Eligible).displayedTime ==
+             "2024-01-02 12:04:05.123",
+         "modern chart records use local display time");
+  ModernCourseResultRecord modernCourse{.result = validModernCourseResult()};
+  modernCourse.result.playedAtUnixMillis = *remote.timeAchievedUnixMillis;
+  expect(makeModernCourseResultRecord(modernCourse, replay::ReplayState::Missing)
+             .displayedTime == "2024-01-02 12:04:05.123",
+         "modern course records use local display time");
+  expect(scoreHistoryTime(*remote.timeAchievedUnixMillis) == "2024-01-02 03:04:05",
+         "history query timestamps remain UTC under a local display timezone");
+  expect(display_time::formatStoredTimestamp("2024-01-02T20:04:05Z") ==
+             "2024-01-03 05:04:05",
+         "profile last-used ISO UTC dates display in local time");
+  expect(display_time::formatStoredTimestamp("AUTO PLAY") == "AUTO PLAY" &&
+             display_time::formatStoredTimestamp("").empty() &&
+             display_time::formatStoredTimestamp("2024-02-30 01:02:03") ==
+                 "2024-02-30 01:02:03" &&
+             display_time::formatStoredTimestamp("2024-01-02 -1:02:03") ==
+                 "2024-01-02 -1:02:03",
+         "non-timestamp labels and invalid stored dates are not reinterpreted");
+  expect(display_time::formatStoredTimestamp("1970-01-01 00:00:00.001") ==
+             "1970-01-01 09:00:00.001" &&
+             display_time::formatStoredTimestamp("2024-02-29 20:00:00.010") ==
+                 "2024-03-01 05:00:00.010",
+         "epoch and leap-day timestamps retain millisecond precision");
+  LegacyChartResultSummary chart;
+  chart.legacyReplayId = 42;
+  chart.createdAt = "2024-01-02 20:04:05.123";
+  const auto local = makeLegacyChartResultRecord(chart);
+  expect(local.displayedTime == "2024-01-03 05:04:05.123" &&
+             local.legacyChart->createdAt == chart.createdAt,
+         "legacy chart display crosses midnight without rewriting stored time");
+  LegacyCourseResultSummary course;
+  course.legacyCourseReplayId = 43;
+  course.createdAt = "2024-01-02 20:04:05";
+  expect(makeLegacyCourseResultRecord(course).displayedTime == "2024-01-03 05:04:05",
+         "legacy course display preserves second precision in local time");
+}
+
 int main() {
+  ScopedTimeZone baseline("UTC0");
+  testRecordTimesFollowLocalTimezoneWithoutChangingIdentity();
   testRecordActionsRequireTypedIdentityAndPayloadAgreement();
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
   testReplayDeleteConfirmationOwnsTheExactRequestedAttempt();

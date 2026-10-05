@@ -1,4 +1,5 @@
 #include "../src/view/Button.h"
+#include "ScopedTimeZone.h"
 #include "../src/view/IconText.h"
 #include "../src/view/ReplaySummaryListView.h"
 #include "../src/rendering/UniformCache.h"
@@ -42,7 +43,7 @@ ReplaySummary summary(int id,
                       ir::IrRecordState state = ir::IrRecordState::Eligible) {
   ReplaySummary value;
   value.id = id;
-  value.createdAt = "2026-07-19 12:00 UTC";
+  value.createdAt = "2026-07-19 20:00:00";
   value.finalScore = 1500;
   value.maxScore = 2000;
   value.maxCombo = 700;
@@ -81,7 +82,17 @@ void clickThroughList(ReplaySummaryListView &list, const Button &button) {
 
 } // namespace
 
+bool containsText(View &view, const std::string &value) {
+  if (const auto *text = dynamic_cast<const TextView *>(&view);
+      text && text->getText() == value) return true;
+  for (auto *child : view.getChildren()) {
+    if (containsText(*child, value)) return true;
+  }
+  return false;
+}
+
 int main() {
+  ScopedTimeZone zone("KST-9");
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;
@@ -123,6 +134,8 @@ int main() {
       auto *row = dynamic_cast<ReplaySummaryListItemView *>(
           list.getViewByIndex(0));
       require(row != nullptr, "IR state row is bound");
+      require(containsText(*row, "2026-07-20 05:00:00"),
+              "replay row renders the stored UTC timestamp in local time");
       if (reusedRow == nullptr) {
         reusedRow = row;
       }

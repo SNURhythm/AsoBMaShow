@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
+#include "../DisplayTime.h"
 #include "ProfileRuntimeReapply.h"
 
 #if TARGET_OS_ANDROID
@@ -681,7 +682,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
                       {{"active", active ? i18n::message("settings.profiles.active.prefix")
                                            : i18n::Text("")},
                        {"lastUsed", i18n::message("settings.profiles.last_used.prefix")},
-                       {"timestamp", profile.lastUsedAt}}),
+                       {"timestamp", display_time::formatStoredTimestamp(profile.lastUsedAt)}}),
         metrics.smallTextSize,
         active ? ui_theme::lime() : ui_theme::textSecondary()));
 

@@ -2,6 +2,7 @@
 
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayClearMarkUtils.h"
+#include "../DisplayTime.h"
 #include "../ReplaySummaryFormatting.h"
 #include "../ScoreRankUtils.h"
 #include "ClearLampColors.h"
@@ -187,7 +188,7 @@ public:
                            ? i18n::message("records.auto_play.label")
                            : (summary.createdAt.empty()
                                   ? i18n::message("records.replay.number", {{"id", std::to_string(summary.id)}})
-                                  : i18n::Text(summary.createdAt)));
+                                  : i18n::Text(display_time::formatStoredTimestamp(summary.createdAt))));
     detailText->setText(replay_summary_ui::detailLabel(summary));
     scoreText->setText(summary.autoPlay ? "AUTO"
                                         : std::to_string(summary.finalScore));
