@@ -290,6 +290,10 @@ private:
   std::vector<int> laneOrder;
   std::vector<int> displayedLaneOrder;
   bool scratchLaneOnRight = false;
+  bool scratchlessSinglePlay = false;
+  bool emptyScratchLaneHidden = false;
+  bool hideEmptyScratchLaneRequested = false;
+  void rebuildDisplayedLaneOrder();
   std::vector<AtomicLaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
@@ -622,6 +626,7 @@ public:
   void reset() override;
   void refreshGeometry() override;
   [[nodiscard]] PresentationMode activeMode() const noexcept override;
+  [[nodiscard]] bool hidesScratchLane() const noexcept override { return emptyScratchLaneHidden; }
   [[nodiscard]] std::optional<PresentationFailure>
   lastFailure() const override;
   void setVisibleTimeDurationMilliseconds(int milliseconds);

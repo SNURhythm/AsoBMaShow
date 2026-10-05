@@ -1,3 +1,4 @@
+#include "../../GameplayKeyMode.h"
 #include "../../ChartPlayability.h"
 //
 // Created by XF on 9/2/2024.
@@ -668,6 +669,7 @@ BMSRenderer::BMSRenderer(
   setCurrentBpm(chart != nullptr ? chart->Meta.Bpm : 0.0);
   auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
 
+  scratchlessSinglePlay = gameplay::isScratchlessSinglePlay(*chart);
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
   displayedLaneOrder = laneOrder;
@@ -2627,6 +2629,7 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 }
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
+  if (emptyScratchLaneHidden && event.lane == 7) return;
   const auto visible = image_alpha::trimBottomUp(
       {laneToX(event.lane), y, noteRenderWidth, noteRenderHeight},
       sheetForLane(event.lane).noteVisibleBounds);
@@ -2664,6 +2667,7 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
 }
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
+  if (emptyScratchLaneHidden && marker.lane == 7) return;
   const auto visible = image_alpha::trimBottomUp(
       {laneToX(marker.lane), y, noteRenderWidth, noteRenderHeight},
       sheetForLane(marker.lane).noteVisibleBounds);
@@ -4003,7 +4007,8 @@ void BMSRenderer::renderFrame(
       laneStateSnapshot.emplace_back(laneOrder[i], snapshot);
     }
     for (const auto &entry : laneStateSnapshot) {
-      drawLaneBeam(entry.first, entry.second, nowMicros);
+      if (!emptyScratchLaneHidden || entry.first != 7)
+        drawLaneBeam(entry.first, entry.second, nowMicros);
     }
     simpleBatchRenderer.flush();
   }
@@ -4413,6 +4418,12 @@ void BMSRenderer::configure(
   configuredLaneLength = std::isfinite(configuration.laneLength)
       ? std::clamp(configuration.laneLength, geometryPolicy.length.minimum, geometryPolicy.length.maximum)
       : geometryPolicy.length.defaultValue;
+  hideEmptyScratchLaneRequested = configuration.hideEmptyScratchLane;
+  const bool hideScratch = hideEmptyScratchLaneRequested && scratchlessSinglePlay;
+  if (emptyScratchLaneHidden != hideScratch) {
+    emptyScratchLaneHidden = hideScratch;
+    rebuildDisplayedLaneOrder();
+  }
   setScratchLaneOnRight(configuration.scratchLaneOnRight);
   setPlayAreaWidth(configuration.playAreaWidth);
   if (presentationOrientation == player_settings::PresentationOrientation::Portrait) {
@@ -4497,7 +4508,7 @@ gameplay::RealtimeTouchLayout BMSRenderer::touchLayout() const {
   layout.bottomRight = normalizedScreenPoint((*touchBounds)[1]);
   layout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
   layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
-  layout.laneCount = laneOrder.size();
+  layout.laneCount = displayedLaneOrder.size();
   layout.keyMode = chart->Meta.KeyMode;
   layout.lanes = displayedLaneOrder;
   layout.scratch.reserve(displayedLaneOrder.size());
@@ -4578,6 +4589,12 @@ PresentationTouchResult BMSRenderer::endPresentationTouch(
 void BMSRenderer::cancelPresentationTouches(long long) {}
 
 void BMSRenderer::reset() {
+  scratchlessSinglePlay = gameplay::isScratchlessSinglePlay(*chart);
+  const bool hideScratch = hideEmptyScratchLaneRequested && scratchlessSinglePlay;
+  if (hideScratch != emptyScratchLaneHidden) {
+    emptyScratchLaneHidden = hideScratch;
+    rebuildDisplayedLaneOrder();
+  }
   preparedPresentationFrame.reset();
   lastPreparedPresentationFrameSerial = 0;
   presentationFailure.reset();
@@ -5282,6 +5299,7 @@ void BMSRenderer::drawStartLaneIndicators() {
   }
 
   for (const int lane : startLaneIndicatorLanes) {
+    if (emptyScratchLaneHidden && lane == 7) continue;
     const auto colorRole = startLaneIndicatorColorRoles.find(lane);
     if (colorRole == startLaneIndicatorColorRoles.end()) {
       continue;
@@ -5436,8 +5454,13 @@ void BMSRenderer::setScratchLaneOnRight(bool enabled) {
   enabled = enabled && scratchLaneCount == 1;
   if (scratchLaneOnRight == enabled) return;
   scratchLaneOnRight = enabled;
+  rebuildDisplayedLaneOrder();
+}
+
+void BMSRenderer::rebuildDisplayedLaneOrder() {
   displayedLaneOrder = laneOrder;
-  if (enabled) {
+  if (emptyScratchLaneHidden) std::erase(displayedLaneOrder, 7);
+  if (scratchLaneOnRight) {
     std::stable_partition(displayedLaneOrder.begin(), displayedLaneOrder.end(),
                           [this](int lane) { return !isScratch(lane); });
   }
@@ -5447,9 +5470,9 @@ void BMSRenderer::setScratchLaneOnRight(bool enabled) {
 void BMSRenderer::rebuildPlayAreaGeometry() {
   playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
   noteRenderWidth =
-      laneOrder.empty()
+      displayedLaneOrder.empty()
           ? gameplay_geometry::standardNoteWidth(playAreaWidth)
-          : playAreaWidth / static_cast<float>(laneOrder.size());
+          : playAreaWidth / static_cast<float>(displayedLaneOrder.size());
   if (noteImageWidth > 0.0f) {
     noteRenderHeight = static_cast<float>(noteImageHeight) /
                        static_cast<float>(noteImageWidth) * noteRenderWidth;

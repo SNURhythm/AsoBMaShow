@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
@@ -386,7 +387,7 @@ void SettingsScene::refreshInputDropdowns() {
   std::vector<DropdownView::Option> keyModeOptions;
   for (const int keyMode : kInputKeyModes) {
     keyModeOptions.push_back({.id = std::to_string(keyMode),
-                              .label = i18n::message("settings.input.key_mode.label", {{"count", std::to_string(keyMode)}})});
+                              .label = gameplay::keyModeLabel(keyMode)});
   }
 
   std::vector<DropdownView::Option> deviceOptions = {

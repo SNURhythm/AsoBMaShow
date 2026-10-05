@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "SettingsSceneShared.h"
 #include "../i18n/Localization.h"
 #include "../i18n/PlatformLocale.h"
@@ -2219,7 +2220,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     row->setAlignItems(YGAlignCenter);
 
     auto *label =
-        makeText(std::to_string(keyMode) + "K", metrics.bodyTextSize + 4,
+        makeText(gameplay::keyModeLabel(keyMode), metrics.bodyTextSize + 4,
                  ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
     label->setWidth(metrics.compact ? 54.0f : 64.0f);
     label->setHeight(static_cast<float>(metrics.actionButtonHeight));

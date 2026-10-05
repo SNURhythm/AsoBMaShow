@@ -323,7 +323,7 @@ void testLocalNormalParity() {
 
   expect(model.title == "Local Result" && model.artist == "Local Artist",
          "local header title and artist are preserved");
-  expect(model.difficulty == "★12 / LV 12" && model.playtype == "7K",
+  expect(model.difficulty == "★12 / LV 12" && model.playtype == "7K1S",
          "local difficulty and key mode are presentation-ready");
   expect(model.score == 1'700 && model.maxScore == 2'000,
          "local score and maximum are preserved");
@@ -581,7 +581,7 @@ void testFullyPopulatedRemotePresentation() {
   const auto model = makeRemoteResultPresentation(remoteScore());
 
   expect(model.title == "Remote Result" && model.artist == "Remote Artist" &&
-             model.difficulty == "ANOTHER" && model.playtype == "7K",
+             model.difficulty == "ANOTHER" && model.playtype == "7K1S",
          "remote header uses canonical title, artist, difficulty, and game");
   expect(model.achievedAtUnixMillis == 1'700'000'000'123LL &&
              model.service == "Bokutachi" && model.client == "AsoBMaShow" &&

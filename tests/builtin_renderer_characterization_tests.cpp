@@ -1,3 +1,4 @@
+#include "GameplayKeyMode.h"
 #include "input/RhythmInputHandler.h"
 #include "rendering/RenderPlan.h"
 #include "rendering/ShaderManager.h"
@@ -1901,6 +1902,81 @@ void destroyRenderTarget(RenderTarget &target) {
   target = {};
 }
 
+void verifyScratchlessChartEligibility() {
+  for (int mode : {5, 7}) {
+    for (int content = 0; content < 7; ++content) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = mode;
+      auto *measure = new bms_parser::Measure();
+      auto *timeline = new bms_parser::TimeLine(16, false);
+      measure->TimeLines.push_back(timeline);
+      chart.Measures.push_back(measure);
+      switch (content) {
+      case 0: break;
+      case 1: timeline->SetInvisibleNote(7, new bms_parser::Note(1)); break;
+      case 2: timeline->SetLandmineNote(7, new bms_parser::LandmineNote(10)); break;
+      case 3: timeline->SetNote(7, new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote)); break;
+      case 4: chart.Meta.TotalScratchNotes = 1; break;
+      case 5: chart.Meta.TotalBackSpinNotes = 1; break;
+      case 6: chart.Meta.IsDP = true; break;
+      }
+      expect(gameplay::presentationKeyMode(chart) == (content == 0 ? -mode : mode),
+             "scratchless selection excludes invisible, mine, long, metadata-only scratches and DP");
+      expect(chart.Meta.KeyMode == mode,
+             "presentation selection never mutates chart/replay key-mode identity");
+    }
+  }
+  for (int mode : {4, 6, 8, 9, 10, 14, 24, 48}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = mode;
+    expect(gameplay::presentationKeyMode(chart) == mode,
+           "only 5K1S and 7K1S are eligible for automatic scratchless selection");
+  }
+}
+
+void verifyEmptyScratchLanePresentation(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  for (int mode : {5, 7}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = mode;
+    chart.Meta.Bpm = 120;
+    auto *measure = new bms_parser::Measure();
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Bpm = 120;
+    timeline->SetNote(0, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+    Judge judge(chart.Meta.Rank);
+    BMSRenderer renderer(&chart, judge.timingWindows, 500, false);
+    auto config = presentationConfig(0);
+    config.hideEmptyScratchLane = true;
+    renderer.configure(config);
+    const auto hidden = renderer.touchLayout();
+    expect(hidden.laneCount == mode && hidden.lanes == chart.Meta.GetKeyLaneIndices() &&
+               std::ranges::none_of(hidden.scratch, [](bool scratch) { return scratch; }),
+           "empty scratch is removed from built-in geometry and touch lanes");
+    config.scratchLaneOnRight = true;
+    renderer.configure(config);
+    expect(renderer.touchLayout().lanes == hidden.lanes,
+           "moving scratch cannot reintroduce a hidden lane");
+    config.hideEmptyScratchLane = false;
+    renderer.configure(config);
+    expect(renderer.touchLayout().laneCount == mode + 1,
+           "built-in option can restore the empty scratch lane");
+    // Metadata can be stale after modifiers: scan actual lane content too.
+    timeline->SetNote(7, new bms_parser::Note(2));
+    BMSRenderer scratched(&chart, judge.timingWindows, 500, false);
+    config.hideEmptyScratchLane = true;
+    renderer.configure(config);
+    renderer.reset();
+    expect(renderer.touchLayout().laneCount == mode + 1,
+           "practice modifiers restore scratch visibility at the next attempt");
+    scratched.configure(config);
+    expect(scratched.touchLayout().laneCount == mode + 1,
+           "scratch content is never hidden even with stale zero metadata counts");
+  }
+}
+
 void verifyVisibleTimeDurationUsesMilliseconds() {
   SyntheticChartFixture fixture;
   Judge judge(fixture.chart->Meta.Rank);
@@ -2395,6 +2471,8 @@ int main() {
           target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
           kRenderMicros, 41, true, false, true);
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
+      verifyScratchlessChartEligibility();
+      verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);
       verifyPreviewPacemakerDiff(target);

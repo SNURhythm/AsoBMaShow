@@ -1,3 +1,4 @@
+#include "../../GameplayKeyMode.h"
 #include "../../i18n/Localization.h"
 //
 // Created by XF on 8/25/2024.
@@ -536,13 +537,13 @@ std::uint64_t effectiveRealtimeTouchLayoutRevision(
 
 gameplay::VirtualControllerLayout currentVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
-    const gameplay::RealtimeTouchUiTransform &transform) {
+    const gameplay::RealtimeTouchUiTransform &transform, bool hideScratch = false) {
   return gameplay::makeVirtualControllerLayout(
       config, keyMode,
       {.x = 0.0F,
        .y = 0.0F,
        .width = static_cast<float>(transform.uiWidth),
-       .height = static_cast<float>(transform.uiHeight)});
+       .height = static_cast<float>(transform.uiHeight)}, hideScratch);
 }
 
 void appendVirtualControllerHitRegions(
@@ -991,7 +992,10 @@ buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
   auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
   const auto controller = currentVirtualControllerLayout(
-      virtualController, chartMeta.KeyMode, transform);
+      virtualController, chartMeta.KeyMode, transform,
+      presentation.activeMode() == PresentationMode::BuiltIn &&
+          layout.laneCount > 0 && layout.scratch.size() == layout.laneCount &&
+          std::ranges::none_of(layout.scratch, [](bool scratch) { return scratch; }));
   auto controllerRegions =
       gameplay::makeVirtualControllerTouchRegions(controller, transform);
   if (!controllerRegions.empty()) {
@@ -1647,6 +1651,11 @@ bool GamePlayScene::realtimeGameplayAuthorityActive() const noexcept {
          realtimeGameplaySession->worker != nullptr;
 }
 
+bool GamePlayScene::hideVirtualControllerScratch() const noexcept {
+  return presentation != nullptr && presentation->activeMode() == PresentationMode::BuiltIn &&
+         builtInPresentation != nullptr && builtInPresentation->hidesScratchLane();
+}
+
 void GamePlayScene::acquireGameplaySkinForAttempt() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *coordinator =
@@ -1678,7 +1687,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     }
   };
   auto result = createGameplaySkinSession(std::move(services), {
-      .keyMode = chart->Meta.KeyMode,
+      .keyMode = gameplay::presentationKeyMode(*chart),
       .chartModel = &playfieldChartVisualModel,
       .initialState = &capturedPlayfieldVisualState,
       .initialProjection = &capturedPlayfieldProjection,
@@ -2324,7 +2333,8 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
           snapshot.regionsTopmostFirst,
           currentVirtualControllerLayout(context.inputProfile.virtualController,
                                          chart->Meta.KeyMode,
-                                         session.layoutRefreshKey.uiTransform),
+                                         session.layoutRefreshKey.uiTransform,
+                                         hideVirtualControllerScratch()),
           session.layoutRefreshKey.layoutRevision);
     }
     auto presentationRegions = presentation->touchHitRegions();
@@ -3095,11 +3105,14 @@ void GamePlayScene::init() {
           !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = context.settings.hispeedFixMode,
       .playAreaWidth =
-          context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+          context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart)),
       .orientation = context.settings.activePresentationOrientation(),
       .laneLength = context.settings.presentation().laneLength,
       .laneAngleDegrees = context.settings.presentation().laneAngleDegrees,
       .scratchLaneOnRight = context.settings.presentation().scratchLaneOnRight,
+      .hideEmptyScratchLane = chart->Meta.KeyMode == 5
+          ? context.settings.presentation().hideEmptyScratchLane5K
+          : context.settings.presentation().hideEmptyScratchLane7K,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
@@ -3197,7 +3210,7 @@ void GamePlayScene::init() {
         [this](const input::LogicalInputTransition &transition) {
           handleLogicalInputCommand(transition);
         },
-        context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+        context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart)),
         LogicalGameplayRegistryPolicy{},
         [this](const auto &transition) {
           consumePracticeMenuLaneInput(transition.physicalLane,
@@ -3529,6 +3542,9 @@ bool GamePlayScene::reset() {
   ownedState.reset();
   state = nullptr;
   presentation->reset();
+  playfieldPresentationConfiguration.playAreaWidth =
+      context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart));
+  presentation->configure(playfieldPresentationConfiguration);
   gameplaySkinSafeBoundsInitialized = false;
   updateSkinResetLayoutVisibility();
   playfieldProjection.reset();
@@ -6720,7 +6736,7 @@ void GamePlayScene::renderScene() {
     if (virtualControllerReady) {
       renderVirtualControllerOverlay(currentVirtualControllerLayout(
           context.inputProfile.virtualController, chart->Meta.KeyMode,
-          realtimeTouchUiTransform()),
+          realtimeTouchUiTransform(), hideVirtualControllerScratch()),
                                      spinScratchRotationDegrees, lanePressed,
                                      startButtonPressed, selectButtonPressed);
     }

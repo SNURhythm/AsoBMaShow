@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "ChartDetailsView.h"
 
 #include "ClearLampColors.h"
@@ -237,7 +238,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   }
 
   const auto &meta = record->meta;
-  difficulty_->setText(std::to_string(meta.KeyMode) + "K · Lv. " +
+  difficulty_->setText(gameplay::keyModeLabel(meta.KeyMode) + " · Lv. " +
       number(meta.PlayLevel) + (record->difficultyTableLabels.empty()
           ? "" : " · " + record->difficultyTableLabels));
   bpm_->setText(bpmRange(meta));

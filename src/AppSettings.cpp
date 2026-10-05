@@ -417,6 +417,8 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   liftRatio = sanitizeFloat(liftRatio, 0.1F, 0.0F, 1.0F);
   hiddenRatio = sanitizeFloat(hiddenRatio, 0.1F, 0.0F, 1.0F);
   playAreaWidth4K = sanitizeFloat(playAreaWidth4K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidthScratchless5K = sanitizeFloat(playAreaWidthScratchless5K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidthScratchless7K = sanitizeFloat(playAreaWidthScratchless7K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
   playAreaWidth5K = sanitizeFloat(playAreaWidth5K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
   playAreaWidth6K = sanitizeFloat(playAreaWidth6K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
   playAreaWidth7K = sanitizeFloat(playAreaWidth7K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
@@ -654,7 +656,11 @@ void AppSettings::sanitize() {
 }
 
 float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
+  if (keyMode == -5 && presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && presentation().skin.follow7K1S) keyMode = 7;
   switch (keyMode) {
+  case -5: return presentation().playAreaWidthScratchless5K;
+  case -7: return presentation().playAreaWidthScratchless7K;
   case 4:
     return presentation().playAreaWidth4K;
   case 5:
@@ -678,6 +684,8 @@ void AppSettings::setPlayAreaWidthForKeyMode(int keyMode, float width) {
   const auto bounds = player_settings::presentationGeometryPolicy(activePresentationOrientation()).width;
   const float sanitized = sanitizeFloat(width, bounds.defaultValue, bounds.minimum, bounds.maximum);
   switch (keyMode) {
+  case -5: presentation().playAreaWidthScratchless5K = sanitized; break;
+  case -7: presentation().playAreaWidthScratchless7K = sanitized; break;
   case 4:
     presentation().playAreaWidth4K = sanitized;
     break;

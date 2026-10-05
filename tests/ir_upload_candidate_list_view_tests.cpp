@@ -167,7 +167,7 @@ int main() {
                text(row, "irUploadAttempt")->getText().find("RANDOM") !=
                    std::string::npos &&
                text(row, "irUploadDifficulty")->getText().empty() &&
-               text(row, "irUploadKeyMode")->getText() == "7K" &&
+               text(row, "irUploadKeyMode")->getText() == "7K1S" &&
                text(row, "irUploadScore")->getText() == "1500" &&
                text(row, "irUploadRank")->getText() == "A",
            "row shows durable modern result and provenance facts");

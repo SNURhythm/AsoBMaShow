@@ -1,3 +1,4 @@
+#include "GameplayKeyMode.h"
 #include "ReplayVideoExporter.h"
 #include "ExportFileName.h"
 #include "replay/CourseReplayConsumer.h"
@@ -418,7 +419,7 @@ preflightReplayGameplayPresentation(
   authority.stageFileAvailable = resolvedChartMetadata.stageFileAvailable;
   authority.backBmpAvailable = resolvedChartMetadata.backBmpAvailable;
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
-      settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
+      settings, settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(chart)), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
       constraints, replay.assistOption);
   const auto result =
@@ -1338,7 +1339,7 @@ preflightCourseReplayGameplayPresentations(
          .preparationPlan = stage.preparationPlan,
          .configuration = replay_video_export::replayGameplayPresentationConfig(
              settings,
-             settings.playAreaWidthForKeyMode(stage.chart->Meta.KeyMode),
+             settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*stage.chart)),
              *stage.chart,
              resolvedOptions.renderTouchPoints,
              resolvedOptions.renderReplayGhosts, stage.constraints,

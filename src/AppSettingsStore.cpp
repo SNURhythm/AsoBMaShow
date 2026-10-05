@@ -239,6 +239,8 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
   }
   return {{"safetyLevel", static_cast<int>(skinSettings.safetyLevel)},
           {"modeEntries", std::move(modeEntries)},
+          {"follow5K1S", skinSettings.follow5K1S},
+          {"follow7K1S", skinSettings.follow7K1S},
           {"selectedSkinEntries", std::move(selectedSkinEntries)},
           {"entries", std::move(entries)}};
 }
@@ -331,6 +333,8 @@ void readSkinProfileSettings(const json &document,
   readValue(*found, "gameplayCompatibilityEnabled",
             destination.gameplayCompatibilityEnabled, diagnostics);
   readEnum(*found, "safetyLevel", destination.safetyLevel, diagnostics);
+  readValue(*found, "follow5K1S", destination.follow5K1S, diagnostics);
+  readValue(*found, "follow7K1S", destination.follow7K1S, diagnostics);
   if (const auto selected = found->find("selected7KeyEntry");
       selected != found->end() && !selected->is_null()) {
     destination.selected7KeyEntry =
@@ -525,6 +529,10 @@ void readSkinProfileSettings(const json &document,
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
   return {
       {"scratchLaneOnRight", settings.scratchLaneOnRight},
+      {"hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K},
+      {"hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K},
+      {"playAreaWidthScratchless5K", settings.playAreaWidthScratchless5K},
+      {"playAreaWidthScratchless7K", settings.playAreaWidthScratchless7K},
       {"laneAngleDegrees", settings.laneAngleDegrees},
       {"laneLength", settings.laneLength},
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
@@ -693,6 +701,10 @@ json settingsToJson(const AppSettings &settings) {
 void readPresentation(const json &document, AppSettings::PresentationSettings &settings,
                       std::vector<std::string> &diagnostics) {
   readValue(document, "scratchLaneOnRight", settings.scratchLaneOnRight, diagnostics);
+  readValue(document, "hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K, diagnostics);
+  readValue(document, "hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K, diagnostics);
+  readValue(document, "playAreaWidthScratchless5K", settings.playAreaWidthScratchless5K, diagnostics);
+  readValue(document, "playAreaWidthScratchless7K", settings.playAreaWidthScratchless7K, diagnostics);
   readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
             diagnostics);
   readValue(document, "laneLength", settings.laneLength, diagnostics);

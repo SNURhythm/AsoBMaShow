@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
@@ -785,7 +786,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
 }
 
 void SettingsScene::appendBuiltInGameplayTraitSettings(
-    View *body, const LayoutMetrics &metrics, int keyMode) {
+    View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
   body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
                                 ui_theme::lime()));
   const auto appendNumeric =
@@ -820,7 +821,30 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         body->addView(row);
       };
 
-  if (keyMode == 5 || keyMode == 7) {
+  if (keyMode == -5 || keyMode == -7) {
+    const bool hide = keyMode == -5 ? context.settings.presentation().hideEmptyScratchLane5K
+                                     : context.settings.presentation().hideEmptyScratchLane7K;
+    const auto apply = [this, keyMode](bool value) {
+      auto &settings = context.settings.presentation();
+      (keyMode == -5 ? settings.hideEmptyScratchLane5K : settings.hideEmptyScratchLane7K) = value;
+      persistSettings();
+      lastLayoutWidth = -1;
+    };
+    body->addView(makeGameplaySkinChoiceRow(
+        metrics, i18n::message("settings.skins.hide_empty_scratch.label"), true,
+        {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
+          .selected = !hide, .action = [apply] { apply(false); }},
+         {.label = i18n::message("settings.skins.judgement_hud.on.label"),
+          .selected = hide, .action = [apply] { apply(true); }}}));
+  }
+  if (followsOriginal) {
+    body->addView(makeWrappedText(
+        i18n::message("settings.skins.follow_original.description",
+            {{"mode", keyMode == -5 ? "5K1S" : "7K1S"}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    return;
+  }
+  if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
     body->addView(buildScratchLanePositionControl(metrics));
   }
   appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
@@ -850,7 +874,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                           text, context.settings.presentation().laneBeamLengthPercent));
                   persistSettings();
                 });
-  appendNumeric(i18n::message("settings.skins.play_area_width.key_mode", {{"keys", std::to_string(keyMode)}}),
+  appendNumeric(i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
                 formatPlayAreaWidthLabel(
                     context.settings.playAreaWidthForKeyMode(keyMode)),
                 formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue),
@@ -1219,8 +1243,12 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       selectableRows.push_back(&candidate);
     }
   }
-  const auto selected = snapshot.selectedSkinEntries.find(
-      gameplaySkinActiveTraitSkinType);
+  const bool followsOriginal = (gameplaySkinActiveTraitSkinType == -5 && snapshot.follow5K1S) ||
+                               (gameplaySkinActiveTraitSkinType == -7 && snapshot.follow7K1S);
+  const int effectiveTarget = followsOriginal
+      ? skin::skinSourceTypeForTarget(gameplaySkinActiveTraitSkinType)
+      : gameplaySkinActiveTraitSkinType;
+  const auto selected = snapshot.selectedSkinEntries.find(effectiveTarget);
   const skin::GameplaySkinEntryRow *selectedRow = nullptr;
   if (selected != snapshot.selectedSkinEntries.end()) {
     const auto selectedCandidate = std::ranges::find_if(
@@ -1236,6 +1264,12 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   std::vector<DropdownView::Option> dropdownOptions = {
       {.id = "", .label = i18n::message("settings.skins.built_in.label"), .available = ordinaryActionsEnabled},
   };
+  if (gameplaySkinActiveTraitSkinType == -5 || gameplaySkinActiveTraitSkinType == -7) {
+    dropdownOptions.push_back({.id = "@follow-original",
+        .label = i18n::message("settings.skins.follow_original.label",
+            {{"mode", gameplaySkinActiveTraitSkinType == -5 ? "5K1S" : "7K1S"}}),
+        .available = ordinaryActionsEnabled});
+  }
   dropdownEntries.reserve(selectableRows.size());
   for (const auto *candidate : selectableRows) {
     dropdownEntries.push_back(candidate->entry);
@@ -1257,6 +1291,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             entries = std::move(dropdownEntries)](const std::string &id) {
              gameplaySkinTraitDropdownOpen = false;
              gameplaySkinConfigurationDropdownOpenKey.clear();
+             if (id == "@follow-original") {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->followGameplayTrait(skinType));
+             }
              if (id.empty()) {
                return handleGameplaySkinActionResult(
                    gameplaySkinSettingsController->clearGameplayTrait(skinType));
@@ -1275,7 +1313,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       overlayPortal);
   skinDropdown->refresh(
       {.label = "",
-       .selectedId = selectedRow ? selectedRow->entry.collisionKey : "",
+       .selectedId = followsOriginal ? "@follow-original" : selectedRow ? selectedRow->entry.collisionKey : "",
        .options = std::move(dropdownOptions),
        .open = gameplaySkinTraitDropdownOpen,
        .enabled = ordinaryActionsEnabled,
@@ -1308,7 +1346,12 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         metrics.smallTextSize, ui_theme::textSecondary()));
   }
 
-  if (selectedRow != nullptr) {
+  if (followsOriginal && selected != snapshot.selectedSkinEntries.end()) {
+    traitPanel->addView(makeWrappedText(
+        i18n::message("settings.skins.follow_original.description",
+            {{"mode", gameplaySkinActiveTraitSkinType == -5 ? "5K1S" : "7K1S"}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+  } else if (selectedRow != nullptr) {
     const auto &row = *selectedRow;
     auto *entryBody = new View();
     entryBody->setFlexDirection(FlexDirection::Column);
@@ -1771,7 +1814,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     builtInBody->setFlexDirection(FlexDirection::Column);
     builtInBody->setGap(metrics.compact ? 10.0F : 12.0F);
     appendBuiltInGameplayTraitSettings(builtInBody, metrics,
-                                       activeTrait->keyMode);
+                                       activeTrait->skinType == -5 || activeTrait->skinType == -7
+                                           ? activeTrait->skinType : activeTrait->keyMode,
+                                       followsOriginal);
     traitPanel->addView(builtInBody);
   }
 

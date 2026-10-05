@@ -986,6 +986,27 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
           "additional mode selections must not select skins for their source modes");
 }
 
+void testScratchlessFollowTracksOriginalSelection() {
+  LifecycleFake fake;
+  fake.owner.settings.follow5K1S = true;
+  fake.owner.settings.follow7K1S = true;
+  fake.setSelectedSkinEntries({{1, fake.entry}});
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  require(lifecycle.acquireForNextChart(-5).has_value() &&
+              !lifecycle.acquireForNextChart(-7).has_value(),
+          "following resolves the corresponding source and supports built-in sources");
+  fake.setSelectedSkinEntries({{0, fake.entry}});
+  ++fake.owner.generation;
+  require(!lifecycle.acquireForNextChart(-5).has_value() &&
+              lifecycle.acquireForNextChart(-7).has_value(),
+          "following is live rather than copying the previous source selection");
+  fake.owner.settings.follow7K1S = false;
+  ++fake.owner.generation;
+  require(!lifecycle.acquireForNextChart(-7).has_value(),
+          "switching scratchless mode to built-in stops following the source skin");
+}
+
 void testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure() {
   LifecycleFake fake;
   fake.setSelectedSkinEntries({});
@@ -1384,6 +1405,7 @@ int main() {
   testWriterIngressIsBoundedPerSession();
   testDisabledNextChartClearsThePreviousSessionIdentity();
   testNextChartAcquisitionUsesTheMatchingKeymodeTrait();
+  testScratchlessFollowTracksOriginalSelection();
   testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure();
   testSwitchingSkinRevisionEvictsTheDecodeCache();
   testWriterWaitsForViewportCommitAndRebasesOntoItsSuccessor();

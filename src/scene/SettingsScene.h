@@ -478,7 +478,8 @@ private:
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);
   void appendBuiltInGameplayTraitSettings(
-      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
+      bool followsOriginal = false);
   void buildGameplaySkinSafetyOverlay(
       const settings_scene::LayoutMetrics &metrics);
   bool handleGameplaySkinActionResult(skin::ControllerActionResult result);

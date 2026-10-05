@@ -1,3 +1,4 @@
+#include "../../GameplayKeyMode.h"
 #include "ReplayPlayfieldPresentation.h"
 
 #include "BeatorajaHiSpeedChart.h"
@@ -214,7 +215,7 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
       *model, initialState, initialProjectionRequest(creation.configuration,
                                                      *renderer));
 
-  creation.skinInput.keyMode = creation.chart.Meta.KeyMode;
+  creation.skinInput.keyMode = gameplay::presentationKeyMode(creation.chart);
   creation.skinInput.chartModel = model.get();
   creation.skinInput.initialState = &initialState;
   creation.skinInput.initialProjection = &initialProjection;

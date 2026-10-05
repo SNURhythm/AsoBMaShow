@@ -1,3 +1,4 @@
+#include <tuple>
 #include "../i18n/Localization.h"
 #include "GameplaySkinSettingsPresentation.h"
 #include "../skin/beatoraja/GameplaySkinSourceFormat.h"
@@ -215,14 +216,14 @@ std::string formatProgressBytes(std::uint64_t bytes) {
 
 std::vector<SkinTargetTrait> gameplaySkinSettingsTargets() {
   std::vector<SkinTargetTrait> targets(skinTargetTraits().begin(), skinTargetTraits().end());
-  for (const auto &[keys, label] : {std::pair{4, "4K"}, {6, "6K"}, {8, "8K"}}) {
+  for (const auto &[keys, label] : {std::pair{4, "4K"}, {5, "5K"}, {6, "6K"}, {7, "7K"}, {8, "8K"}}) {
     targets.push_back({-keys, SkinTargetKind::Gameplay, keys, label});
   }
   const auto order = [](const SkinTargetTrait &target) {
-    if (target.kind != SkinTargetKind::Gameplay) return std::pair{100, target.skinType};
+    if (target.kind != SkinTargetKind::Gameplay) return std::tuple{100, target.skinType, 0};
     const int keys = target.keyMode == 10 ? 5 : target.keyMode == 14 ? 7
                    : target.keyMode == 48 ? 24 : target.keyMode;
-    return std::pair{keys, target.keyMode};
+    return std::tuple{keys, target.keyMode, target.skinType};
   };
   std::ranges::sort(targets, {}, order);
   return targets;
@@ -392,6 +393,8 @@ std::string gameplaySkinSettingsPresentationKey(
   encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.totalBytes);
   encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.completedFiles);
 
+  encoder.unsignedNumber(snapshot.follow5K1S);
+  encoder.unsignedNumber(snapshot.follow7K1S);
   encoder.unsignedNumber(snapshot.selectedSkinEntries.size());
   for (const auto &[skinType, entry] : snapshot.selectedSkinEntries) {
     encoder.signedNumber(skinType);
@@ -456,6 +459,8 @@ std::string gameplaySkinSettingsLayoutKey(
     encodeEnum(encoder, *snapshot.pendingSafetyLevel);
   }
 
+  encoder.unsignedNumber(snapshot.follow5K1S);
+  encoder.unsignedNumber(snapshot.follow7K1S);
   encoder.unsignedNumber(snapshot.selectedSkinEntries.size());
   for (const auto &[skinType, entry] : snapshot.selectedSkinEntries) {
     encoder.signedNumber(skinType);

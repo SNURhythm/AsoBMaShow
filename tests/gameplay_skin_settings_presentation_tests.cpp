@@ -487,15 +487,15 @@ void testSkinRescanProgressAvoidsInventedWorkTotals() {
 void testSettingsTargetsIncludeCompatibleModesInNumericOrder() {
   const auto targets = skin::gameplaySkinSettingsTargets();
   const std::vector<std::string_view> expected = {
-      "4K", "5K", "5K DP", "6K", "7K", "7K DP", "8K", "9K",
+      "4K", "5K", "5K1S", "5K DP", "6K", "7K", "7K1S", "7K DP", "8K", "9K",
       "24K", "24K Double", "Music Select", "Result", "Course Result"};
   require(targets.size() == expected.size(), "all gameplay modes and screen targets are visible");
   for (std::size_t i = 0; i < targets.size(); ++i) {
     require(targets[i].label == expected[i], "key labels sort numerically with DP beside single play");
-    if (targets[i].keyMode == 4 || targets[i].keyMode == 6 || targets[i].keyMode == 8) {
+    if (targets[i].skinType < 0) {
       require(targets[i].skinType < 0, "additional tabs keep separate settings identities");
       auto row = entryRow();
-      row.metadata.skinType = targets[i].keyMode == 4 ? 1 : 0;
+      row.metadata.skinType = targets[i].keyMode <= 5 ? 1 : 0;
       require(skin::gameplaySkinEntrySelectableForTarget(row, targets[i]),
               "additional modes offer their compatible custom skins");
     }

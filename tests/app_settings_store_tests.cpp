@@ -725,6 +725,10 @@ void testCompatibleSkinModesPersistIndependentConfigurations() {
   const auto entry = *skin::normalizeEntryPath(*package.package, "play7.luaskin").entry;
   settings.presentation().skin.selectedSkinEntries = {{0, entry}, {-6, entry}, {-8, entry}};
   settings.presentation().skin.entries[entry].options["Lane"] = 7;
+  settings.presentation().skin.selectedSkinEntries[-5] = entry;
+  settings.presentation().skin.selectedSkinEntries[-7] = entry;
+  settings.presentation().skin.modeEntries[-5][entry].options["Lane"] = 5;
+  settings.presentation().skin.modeEntries[-7][entry].options["Lane"] = 70;
   settings.presentation().skin.modeEntries[-6][entry].options["Lane"] = 6;
   settings.presentation().skin.modeEntries[-8][entry].options["Lane"] = 8;
   settings.presentation().skin.modeEntries[-6][entry].viewport.scaleX = 1.5F;
@@ -1990,7 +1994,40 @@ void testFeedbackDefaultsAndScaleMigration() {
          "new feedback scale supports both endpoints without repeated migration");
 }
 
+void testScratchlessBuiltInPreferencesRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "scratchless.json";
+  AppSettings settings;
+  expect(settings.presentation().hideEmptyScratchLane5K &&
+             settings.presentation().hideEmptyScratchLane7K,
+         "empty scratch lanes are hidden by default in built-in 5K and 7K");
+  settings.presentation().hideEmptyScratchLane5K = false;
+  settings.presentation().skin.follow5K1S = true;
+  settings.setPlayAreaWidthForKeyMode(-5, 6.0F);
+  settings.setPlayAreaWidthForKeyMode(-7, 7.0F);
+  settings.setPlayAreaWidthForKeyMode(5, 9.0F);
+  settings.setPlayAreaWidthForKeyMode(7, 10.0F);
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "scratchless preferences save");
+  auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.presentation().skin.follow5K1S && !loaded.presentation().skin.follow7K1S,
+         "follow selections persist independently from built-in and custom choices");
+  expect(!loaded.presentation().hideEmptyScratchLane5K &&
+             loaded.presentation().hideEmptyScratchLane7K &&
+             loaded.presentation(AppSettings::PresentationOrientation::Portrait).hideEmptyScratchLane5K,
+         "scratchless toggles persist independently by key mode and orientation");
+  expect(loaded.playAreaWidthForKeyMode(-5) == 9.0F &&
+             loaded.playAreaWidthForKeyMode(-7) == 7.0F &&
+             loaded.playAreaWidthForKeyMode(5) == 9.0F &&
+             loaded.playAreaWidthForKeyMode(7) == 10.0F,
+         "followed width comes from original mode while independent mode retains its width");
+  loaded.presentation().skin.follow5K1S = false;
+  expect(loaded.playAreaWidthForKeyMode(-5) == 6.0F,
+         "leaving Follow restores the child width without overwriting its parent");
+}
+
 int main() {
+  testScratchlessBuiltInPreferencesRoundTrip();
   testFeedbackDefaultsAndScaleMigration();
   testOrientationPresentationMigrationAndIndependentRoundTrip();
   testPresentationValidationAndRuntimeSelection();

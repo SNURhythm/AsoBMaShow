@@ -810,7 +810,7 @@ void testCompatibleModesSaveIndependentSettings() {
       return controller->snapshot().state == GameplaySkinSettingsState::Ready;
     });
   };
-  for (int target : {0, -6, -8}) {
+  for (int target : {0, -6, -7, -8}) {
     expect(controller->selectGameplayTrait(target, entry).accepted && ready(),
            "compatible skin selection commits to the chosen mode");
     expect(controller->setOption(entry, "Play Side", target == -6 ? 921 : 920).accepted && ready(),
@@ -821,14 +821,14 @@ void testCompatibleModesSaveIndependentSettings() {
            "viewport saves for the active mode");
   }
   const auto saved = fixture.owner.snapshot(fixture.profileA).settings;
-  expect(saved.selectedSkinEntries.size() == 3 &&
+  expect(saved.selectedSkinEntries.size() == 4 &&
              saved.entries.at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-6).at(entry).options.at("Play Side") == 921 &&
              saved.modeEntries.at(-8).at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-8).at(entry).viewport.scaleX == 2.0F &&
              saved.entries.at(entry).viewport.scaleX == 1.0F,
          "same source skin keeps independent selections, options and layouts");
-  for (int target : {0, -6, -8}) {
+  for (int target : {0, -6, -7, -8}) {
     const auto &settings = saved.entriesForTarget(target).at(entry);
     const auto activation = fixture.operations->acquireValidatedActivation(
         fixture.profileA, entry, skinConfigurationDigest(settings));
@@ -836,6 +836,20 @@ void testCompatibleModesSaveIndependentSettings() {
                activation.activation->reconciledSettings.options == settings.options,
            "all mode configurations remain separately available for gameplay");
   }
+  expect(controller->followGameplayTrait(-7).accepted && ready(),
+         "scratchless mode can follow its original mode");
+  expect(controller->snapshot().follow7K1S &&
+             !fixture.owner.snapshot(fixture.profileA).settings.selectedSkinEntries.contains(-7),
+         "Follow replaces the child selection without copying a skin entry");
+  expect(controller->selectGameplayTrait(-7, entry).accepted && ready() &&
+             !controller->snapshot().follow7K1S,
+         "selecting an authored scratchless skin exits Follow");
+  expect(controller->followGameplayTrait(-7).accepted && ready() &&
+             controller->clearGameplayTrait(-7).accepted && ready() &&
+             !controller->snapshot().follow7K1S,
+         "selecting Built-in exits Follow independently");
+  expect(!controller->followGameplayTrait(0).accepted,
+         "only scratchless variants offer Follow");
   controller->setActiveTarget(-6);
   expect(controller->snapshot().entries.front().settings.options.at("Play Side") == 921,
          "switching tabs displays that mode's saved configuration");

@@ -70,6 +70,9 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneLength = settings.presentation().laneLength,
       .laneAngleDegrees = settings.presentation().laneAngleDegrees,
       .scratchLaneOnRight = settings.presentation().scratchLaneOnRight,
+      .hideEmptyScratchLane = chart.Meta.KeyMode == 5
+          ? settings.presentation().hideEmptyScratchLane5K
+          : settings.presentation().hideEmptyScratchLane7K,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = laneCoverEnabled,

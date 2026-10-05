@@ -272,6 +272,8 @@ struct GameplaySkinSettingsController::Impl {
           profile.settings.gameplayCompatibilityEnabled;
       projected.safetyLevel = profile.settings.safetyLevel;
       projected.selectedSkinEntries = profile.settings.selectedSkinEntries;
+      projected.follow5K1S = profile.settings.follow5K1S;
+      projected.follow7K1S = profile.settings.follow7K1S;
       projected.selected7KeyEntry = profile.settings.selected7KeyEntry;
       projected.entries.clear();
       if (catalogValue) {
@@ -1185,6 +1187,8 @@ GameplaySkinSettingsController::selectGameplayTrait(int skinType,
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
+  if (skinType == -5) candidate.follow5K1S = false;
+  if (skinType == -7) candidate.follow7K1S = false;
   candidate.selectedSkinEntries.insert_or_assign(skinType, entry);
   candidate.entriesForTarget(skinType).try_emplace(entry);
   auto selectedEntry = entry;
@@ -1204,11 +1208,29 @@ GameplaySkinSettingsController::clearGameplayTrait(int skinType) {
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
+  if (skinType == -5) candidate.follow5K1S = false;
+  if (skinType == -7) candidate.follow7K1S = false;
   candidate.selectedSkinEntries.erase(skinType);
   candidate.selectedGameplayEntries.erase(skinType);
   // An empty new-format map must not be repopulated from a legacy alias.
   candidate.selected7KeyEntry.reset();
   candidate.gameplayCompatibilityEnabled = false;
+  return impl_->submitProfileOnly(std::move(candidate));
+}
+
+ControllerActionResult
+GameplaySkinSettingsController::followGameplayTrait(int skinType) {
+  if (impl_->closed || impl_->hasControllerOperation()) {
+    return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
+  }
+  if (skinType != -5 && skinType != -7) {
+    return rejected(i18n::message("settings.skins.trait_unavailable.message"));
+  }
+  auto candidate = impl_->dependencies.profileOwner.snapshot(
+      impl_->dependencies.profileId, impl_->dependencies.orientation).settings;
+  (skinType == -5 ? candidate.follow5K1S : candidate.follow7K1S) = true;
+  candidate.selectedSkinEntries.erase(skinType);
+  candidate.selectedGameplayEntries.erase(skinType);
   return impl_->submitProfileOnly(std::move(candidate));
 }
 

@@ -1325,6 +1325,7 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
     if (!skinTargetTraitForType(skinType)) {
       return {};
     }
+    skinType = base.settings.effectiveTarget(skinType);
     const auto selectedTrait =
         base.settings.selectedSkinEntries.find(skinType);
     if (selectedTrait == base.settings.selectedSkinEntries.end()) {

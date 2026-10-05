@@ -1,3 +1,4 @@
+#include "bms_parser.hpp"
 #include "skin/beatoraja/MusicSelectSkinSession.h"
 #include "skin/beatoraja/PlaySkinSession.h"
 #include "skin/beatoraja/ResultSkinSession.h"
@@ -6268,6 +6269,52 @@ void testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout() {
          "repeat render cannot resubmit the consumed frame or enqueue writes");
 }
 
+void testAuthoredScratchlessSkinTouchLayout() {
+  for (int keys : {5, 7}) {
+    // Missing scratch, zero-sized scratch, valid scratch, missing key,
+    // and missing scratch on a chart that actually requires it.
+    for (int scenario = 0; scenario < 5; ++scenario) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      fixture.addTouchGeometry();
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = keys;
+      chart.Meta.TotalScratchNotes = scenario == 4 ? 1 : 0;
+      fixture.chart() = buildPlayfieldChartVisualModel(chart, 0);
+      for (auto &object : fixture.model().model.objects) {
+        auto *notes = std::get_if<SkinNoteObject>(&object.payload);
+        if (!notes) continue;
+        notes->lanes.clear();
+        for (int lane = scenario == 3 ? 1 : 0; lane < keys; ++lane) {
+          notes->lanes.push_back({.authoredLane = lane,
+              .laneDestination = {.x = 100.0 * lane, .y = 20.0,
+                                  .width = 80.0, .height = 500.0}});
+        }
+        if (scenario == 1 || scenario == 2) {
+          notes->lanes.push_back({.authoredLane = 7,
+              .laneDestination = {.x = 800.0, .y = 20.0,
+                                  .width = scenario == 1 ? 0.0 : 80.0, .height = 500.0}});
+        }
+      }
+      expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) == PresentationFrameOutcome::Ready,
+             "authored scratchless skin frame prepares without changing its source mode");
+      RenderContext context;
+      SessionBgaSubmitter bga;
+      const auto rendered = fixture.session().render(context, bgaFrame(44), bga);
+      const auto layout = fixture.session().touchLayout();
+      expect(rendered.outcome == PresentationFrameOutcome::Ready,
+             "authored scratchless geometry renders");
+      const std::size_t expected = scenario >= 3 ? 0 : keys + (scenario == 2 ? 1 : 0);
+      expect(layout.laneRegions.size() == expected,
+             "only optional scratch may be absent; authored scratch and required keys retain their meaning");
+      if (scenario < 2) {
+        expect(layout.lanes == chart.Meta.GetKeyLaneIndices(),
+               "authored scratchless touch layout preserves every original key channel");
+      }
+    }
+  }
+}
+
 void testSparseModeTouchLayoutKeepsOriginalChannels() {
   for (int keys : {4, 6}) {
     SessionFixture fixture;
@@ -10510,6 +10557,7 @@ int main(int argc, char **argv) {
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();
   testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout();
+  testAuthoredScratchlessSkinTouchLayout();
   testSparseModeTouchLayoutKeepsOriginalChannels();
   testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();

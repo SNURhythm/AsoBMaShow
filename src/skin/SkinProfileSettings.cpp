@@ -298,6 +298,8 @@ void SkinProfileSettings::sanitize() {
     }
   }
 
+  if (follow5K1S) selectedSkinEntries.erase(-5);
+  if (follow7K1S) selectedSkinEntries.erase(-7);
   selected7KeyEntry.reset();
   if (const auto legacySelection = selectedSkinEntries.find(0);
       legacySelection != selectedSkinEntries.end()) {

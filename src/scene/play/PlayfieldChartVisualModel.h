@@ -175,6 +175,8 @@ struct PlayfieldChartVisualModel {
   std::string chartMd5;
   std::string chartSha256;
   int keyCount = 0;
+  // Empty-scratch eligibility does not change canonical chart lane identities.
+  bool scratchlessSinglePlay = false;
   double initialBpm = 0.0;
   PlayfieldChartTextMetadata text;
   PlayfieldChartStaticMetadata staticMetadata;

@@ -201,6 +201,10 @@ public:
   using PresentationOrientation = player_settings::PresentationOrientation;
   struct PresentationSettings {
     bool scratchLaneOnRight = false;
+    bool hideEmptyScratchLane5K = true;
+    bool hideEmptyScratchLane7K = true;
+    float playAreaWidthScratchless5K = kDefaultPlayAreaWidth;
+    float playAreaWidthScratchless7K = kDefaultPlayAreaWidth;
     float laneAngleDegrees = kDefaultLaneAngleDegrees;
     float laneLength = kDefaultLaneLength;
     int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
@@ -249,6 +253,7 @@ public:
       const auto policy = player_settings::presentationGeometryPolicy(orientation);
       laneAngleDegrees = policy.angle.defaultValue;
       laneLength = policy.length.defaultValue;
+      playAreaWidthScratchless5K = playAreaWidthScratchless7K = policy.width.defaultValue;
       playAreaWidth4K = playAreaWidth5K = playAreaWidth6K = playAreaWidth7K =
           playAreaWidth8K = playAreaWidth10K = playAreaWidth14K = policy.width.defaultValue;
       if (orientation == PresentationOrientation::Portrait) {

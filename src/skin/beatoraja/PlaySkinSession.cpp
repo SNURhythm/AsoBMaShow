@@ -1648,6 +1648,14 @@ gameplay::RealtimeTouchLayout PlaySkinSession::touchLayout() const {
           [chartLane](const SkinLaneInteractionRegion &region) {
             return region.authoredLane == chartLane;
           });
+      if (context_.chartModel.scratchlessSinglePlay && chartLane == 7) {
+        if (found == publishedLayout_->laneRegions.end()) continue;
+        const auto &rect = found->authoredRegion;
+        if (std::isfinite(rect.x) && std::isfinite(rect.y) &&
+            std::isfinite(rect.width) && std::isfinite(rect.height) &&
+            rect.width >= 0.0 && rect.height >= 0.0 &&
+            (rect.width == 0.0 || rect.height == 0.0)) continue;
+      }
       if (found == publishedLayout_->laneRegions.end() ||
           !finiteRect(found->authoredRegion)) {
         return gameplay::RealtimeTouchLayout{

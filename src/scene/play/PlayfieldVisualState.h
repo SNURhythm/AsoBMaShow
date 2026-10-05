@@ -68,6 +68,7 @@ struct PlayfieldPresentationConfig {
   float laneLength = AppSettings::kDefaultLaneLength;
   float laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
   bool scratchLaneOnRight = false;
+  bool hideEmptyScratchLane = false;
   bool laneBeamsEnabled = true;
   // Live LaneRenderer::getHispeed() cover factor.  It is intentionally kept
   // separate from noteStartPositionPercent because toggling lane cover in
