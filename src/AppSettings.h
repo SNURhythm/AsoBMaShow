@@ -95,7 +95,7 @@ public:
   static constexpr float kMaxHispeedMargin = 10.0F;
   static constexpr int kMinBgaBrightnessPercent = 0;
   static constexpr int kMaxBgaBrightnessPercent = 100;
-  static constexpr int kDefaultBgaBrightnessPercent = 100;
+  static constexpr int kDefaultBgaBrightnessPercent = 50;
   static constexpr float kMinBgaBlurStrength = 0.0f;
   static constexpr float kMaxBgaBlurStrength = 8.0f;
   static constexpr float kDefaultBgaBlurStrength = 2.0f;
