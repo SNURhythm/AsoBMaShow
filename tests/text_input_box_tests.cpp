@@ -592,7 +592,7 @@ std::string withoutEmphasis(std::string text) {
   return text;
 }
 
-void testReminderDescriptionPreservesLineBreaks() {
+void checkReminderDescriptionAtCurrentSize() {
   for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
                               i18n::Language::Korean}) {
     i18n::setLanguage(language);
@@ -604,10 +604,19 @@ void testReminderDescriptionPreservesLineBreaks() {
     const auto *title = fixture.guidedAccessReminderTitle;
     expect(title->pointSize() > why->pointSize() &&
            title->fontWeight() == TextView::FontWeight::Bold &&
-           title->textureHeight() <= title->getContentHeight(),
+           title->textureHeight() <= title->getContentHeight() &&
+           title->textureWidth() <= title->getContentWidth(),
            "larger bold title fits above the explanation");
     auto *help = fixture.guidedAccessReminderHelp;
     auto *disableHelp = fixture.guidedAccessReminderDisableHelp;
+    for (const auto *paragraph : {static_cast<const View *>(title), static_cast<const View *>(why),
+                                  static_cast<const View *>(help), static_cast<const View *>(disableHelp)}) {
+      expect(paragraph->getX() >= 32 &&
+             paragraph->getX() + paragraph->getWidth() <= rendering::window_width - 32 &&
+             paragraph->getY() >= 32 &&
+             paragraph->getY() + paragraph->getHeight() <= rendering::window_height - 32,
+             "reminder paragraphs stay inside the padded screen in either orientation");
+    }
     expect(why->pointSize() > 22 && why->fontWeight() == TextView::FontWeight::Bold,
            "explanation is larger and bold");
     expect(why->textureWidth() <= why->getContentWidth() &&
@@ -655,6 +664,19 @@ void testReminderDescriptionPreservesLineBreaks() {
     testButtonLocation = {};
   }
   i18n::setLanguage(i18n::Language::English);
+}
+
+void testReminderDescriptionPreservesLineBreaks() {
+  const int originalWidth = rendering::window_width;
+  const int originalHeight = rendering::window_height;
+  for (const auto size : {std::pair{1920, 1080}, std::pair{1080, 1920},
+                          std::pair{720, 1280}, std::pair{1440, 1080}}) {
+    rendering::window_width = size.first;
+    rendering::window_height = size.second;
+    checkReminderDescriptionAtCurrentSize();
+  }
+  rendering::window_width = originalWidth;
+  rendering::window_height = originalHeight;
 }
 
 void testHardwareButtonCueTextFits() {

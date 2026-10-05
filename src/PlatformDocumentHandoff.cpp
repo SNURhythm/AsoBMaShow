@@ -1,4 +1,5 @@
 #include "PlatformDocumentHandoff.h"
+#include "ArchiveFile.h"
 #include "NativeDialogMutex.h"
 #include "skin/package/SkinPathPolicy.h"
 
@@ -1339,9 +1340,21 @@ importDocument(std::uint64_t operationToken,
                                    request.maxBytes, &cancellationRequested,
                                    &originalSourceName);
 #else
-  const char *filters[] = {"*.asobprofile", "*.zip"};
+  const bool archiveImport = request.mimeType == "*/*";
+  std::vector<std::string> filterPatterns;
+  if (archiveImport) {
+    for (const auto extension : archive_file::kArchiveExtensions) {
+      filterPatterns.push_back("*" + std::string(extension));
+    }
+  } else {
+    filterPatterns = {"*.asobprofile", "*.zip"};
+  }
+  std::vector<const char *> filters;
+  for (const auto &pattern : filterPatterns) filters.push_back(pattern.c_str());
   const char *selected = tinyfd_openFileDialog(
-      "Import player profile", "", 2, filters, "Player profile archive", 0);
+      archiveImport ? "Import archive" : "Import player profile", "",
+      static_cast<int>(filters.size()), filters.data(),
+      archiveImport ? "Supported archives" : "Player profile archive", 0);
   if (selected == nullptr) {
     bridgeResult = std::string(kCancelled);
   } else if (cancellationRequested.load(std::memory_order_acquire)) {

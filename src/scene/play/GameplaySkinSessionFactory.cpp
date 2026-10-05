@@ -172,7 +172,8 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .applyPracticeVisibleItems =
             std::move(services.applyPracticeVisibleItems),
         .pinnedRuntimeSelection = std::move(input.pinnedRuntimeSelection),
-        .stop = services.stop};
+        .stop = services.stop,
+        .orientation = request.orientation};
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
     auto created = services.createSessionForTesting
                        ? services.createSessionForTesting(

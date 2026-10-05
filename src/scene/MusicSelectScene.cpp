@@ -697,7 +697,14 @@ void MusicSelectScene::onResume() {
   if (background) onApplicationBackgroundChanged(true);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (reactivateSkinOnResume_) {
+    if (context.gameplaySkinLifecycle &&
+        !context.gameplaySkinLifecycle->presentationReady()) {
+      presentationSkinRefreshPending = true;
+      buildSkinLoadingView();
+      return;
+    }
     reactivateSkinOnResume_ = false;
+    presentationSkinRefreshPending = false;
     if (!reactivateSkinAfterSettings()) return;
   }
   if (!background && !failed_ && skinSession_) skinSession_->resumeAudio();
@@ -711,6 +718,14 @@ void MusicSelectScene::onResume() {
     selectedBarMoved();
     startInputListening();
   }
+}
+
+void MusicSelectScene::onPresentationOrientationChanged() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  cancelSkinPreparation();
+  skinSession_.reset();
+  presentationSkinRefreshPending = true;
+#endif
 }
 
 void MusicSelectScene::onLanguageChanged() {
@@ -3317,6 +3332,17 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (presentationSkinRefreshPending &&
+      (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
+    presentationSkinRefreshPending = false;
+    if (reactivateSkinOnResume_) {
+      onResume();
+      return;
+    }
+    if (!reactivateSkinAfterSettings()) return;
+  }
+#endif
   if (failed_ || !sceneActive_ || context.appInBackground.load()) return;
   if (auto completion = recordsTask_.takeCompletion()) {
     finishRecordsLoading();
@@ -3361,6 +3387,9 @@ void MusicSelectScene::update(float) {
   if (modalOverlayPortal_ != nullptr) {
     modalOverlayPortal_->setSize(rendering::window_width,
                                  rendering::window_height);
+  }
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setSize(rendering::window_width, rendering::window_height);
   }
   if (revealContextMenu_) {
     revealContextMenu_->setViewportSize(rendering::window_width,
@@ -4335,8 +4364,12 @@ bool MusicSelectScene::activateSkin(
       .configuration = request.activation.reconciledSettings,
       .configurationDigest = request.activation.configurationDigest,
       .viewport = request.viewport,
-      .safetyLevel = request.safetyLevel};
-  if (!failed_ && skinSession_ && activeSkinIdentity_ == identity) return true;
+      .safetyLevel = request.safetyLevel,
+      .orientation = request.orientation};
+  if (!failed_ && skinSession_ && activeSkinIdentity_ == identity) {
+    if (skinLoadingView_ != nullptr) skinLoadingView_->setVisible(false);
+    return true;
+  }
   cancelSkinPreparation();
   skinSession_.reset();
   failed_ = false;
@@ -4384,7 +4417,7 @@ bool MusicSelectScene::reactivateSkinAfterSettings() {
   if (context.gameplaySkinLifecycle) {
     acquisition =
         context.gameplaySkinLifecycle->acquireForSkinType(5, false);
-  } else if (context.settings.skin.selectedSkinEntries.contains(5)) {
+  } else if (context.settings.presentation().skin.selectedSkinEntries.contains(5)) {
     acquisition.disposition =
         skin::GameplaySkinAcquisitionDisposition::Failed;
     acquisition.failure = skin::GameplaySkinAcquisitionFailure{

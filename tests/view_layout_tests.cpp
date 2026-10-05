@@ -659,6 +659,29 @@ void testSiblingInsertionPreservesLayoutAndZOrders() {
          YGNodeGetChildCount(root.getNode()) == 0);
 }
 
+void testMovingAViewPreservesOwnershipAndLayout() {
+  View root(0, 0, 500, 300);
+  auto *left = new View();
+  auto *right = new View();
+  root.addView(left);
+  root.addView(right);
+  auto *card = new View();
+  card->setName("movingCard");
+  card->setHeight(60);
+  left->addView(card);
+  auto *nested = new View();
+  card->addView(nested);
+  assert(!card->moveTo(*nested));
+  assert(card->moveTo(*right));
+  assert(left->getChildren().empty() && YGNodeGetChildCount(left->getNode()) == 0);
+  assert(right->findViewByName("movingCard") == card);
+  assert(YGNodeGetParent(card->getNode()) == right->getNode());
+  assert(card->moveTo(*right) && right->getChildren().size() == 1);
+  assert(card->moveTo(*left));
+  assert(right->getChildren().empty() && left->findViewByName("movingCard") == card);
+  assert(!root.moveTo(*left));
+}
+
 void testCompactResultVisualRowFitsActions() {
   const auto metrics = result_layout::metricsFor(885.0f, true);
   View root(0, 0, 1920, 885);
@@ -968,6 +991,33 @@ void testLegacyDigitalScratchBindingsRemainManageable() {
   }));
 }
 
+void testScratchlessInputModesUseIndependentKeyBindings() {
+  for (const int mode : {5, 7}) {
+    assert(std::ranges::find(settings_scene::kInputKeyModes, -mode) !=
+           settings_scene::kInputKeyModes.end());
+    for (const int player : {1, 2}) {
+      const input::InputScope canonical{player, mode};
+      const input::InputScope scratchless{player, -mode};
+      assert(settings_scene::inputScopeForSelection(player, -mode) == scratchless);
+      assert(scratchless != canonical);
+      const input::InputBinding legacy{
+          .scope = canonical,
+          .action = {input::LogicalActionKind::Lane, player == 1 ? 7 : 15}};
+      const auto actions = settings_scene::inputActionsForScope(
+          {player, -mode}, std::span<const input::InputBinding>(&legacy, 1));
+      assert(std::ranges::count_if(actions, [](const auto &row) {
+        return row.action.kind == input::LogicalActionKind::Lane;
+      }) == mode);
+      assert(std::ranges::none_of(actions, [](const auto &row) {
+        return row.action.kind == input::LogicalActionKind::ScratchClockwise ||
+               row.action.kind == input::LogicalActionKind::ScratchCounterClockwise ||
+               (row.action.kind == input::LogicalActionKind::Lane &&
+                (row.action.lane == 7 || row.action.lane == 15));
+      }));
+    }
+  }
+}
+
 void testGyroscopeSettingsLayoutAndPresentation() {
   const auto wide = settings_scene::resolveGyroscopeSettingsLayout(900, false);
   assert(!wide.stackEditors);
@@ -1103,6 +1153,7 @@ int main() {
   testInputBindingEditorCapabilitiesMatchControlSemantics();
   testInputBindingEditorStaysInsidePaddedActionGroup();
   testLegacyDigitalScratchBindingsRemainManageable();
+  testScratchlessInputModesUseIndependentKeyBindings();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();
@@ -1145,6 +1196,7 @@ int main() {
 
   testWrappedGridRowsKeepColumnMeasurements();
   testSiblingInsertionPreservesLayoutAndZOrders();
+  testMovingAViewPreservesOwnershipAndLayout();
   testCompactResultVisualRowFitsActions();
   testCompactIrFailureStatusPreservesResultActions();
 

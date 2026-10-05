@@ -1026,6 +1026,49 @@ void testSafeAreaReplacementCancelsBeforeRefreshingBothPresentations() {
          "pre-rotation pointer ownership cannot cross into new geometry");
 }
 
+// Substitute only the expensive session factory; exercise the production
+// restart against the real coordinator, whose reset() removes its skin.
+struct SettingsScene {
+  FakeBga bga;
+  bool previewRendererDirty = false;
+  bool reloadReady = true;
+  int generation = 0;
+  std::unique_ptr<PlayfieldPresentationCoordinator> previewPresentation;
+  void ensurePreviewRenderer() {
+    if (!reloadReady || !previewRendererDirty) return;
+    previewPresentation = std::make_unique<PlayfieldPresentationCoordinator>(
+        PlayfieldPresentationCoordinatorDependencies{
+            .builtIn = std::make_unique<FakeBuiltIn>(std::make_shared<PresentationStats>()),
+            .skin = std::make_unique<FakeSkin>(std::make_shared<PresentationStats>(), identity()),
+            .bga = bga});
+    previewRendererDirty = false;
+    ++generation;
+  }
+  void resetPreviewSimulation();
+};
+#include "settings_preview_restart.inc"
+
+void testPreviewRestartPreservesSelectedSkin() {
+  SettingsScene scene;
+  for (int loop = 1; loop <= 3; ++loop) {
+    scene.resetPreviewSimulation();
+    expect(scene.generation == loop &&
+               scene.previewPresentation->activeMode() == PresentationMode::Skin,
+           "each sample-chart restart creates another selected skin session");
+  }
+  const auto *current = scene.previewPresentation.get();
+  scene.reloadReady = false;
+  scene.resetPreviewSimulation();
+  expect(scene.previewPresentation.get() == current &&
+             scene.previewPresentation->activeMode() == PresentationMode::Skin,
+         "a loop during a catalog commit keeps the current selected skin");
+  scene.reloadReady = true;
+  scene.ensurePreviewRenderer();
+  expect(scene.generation == 4 &&
+             scene.previewPresentation->activeMode() == PresentationMode::Skin,
+         "a deferred loop restarts the selected skin once activation is ready");
+}
+
 void testResetAndDestructorCancelBeforeDestroyingSkin() {
   auto builtIn = std::make_shared<PresentationStats>();
   auto replacedSkin = std::make_shared<PresentationStats>();
@@ -1076,6 +1119,7 @@ int main() {
   testDuplicatePrepareCannotAdvanceBgaTwice();
   testSafeAreaReplacementCancelsBeforeRefreshingBothPresentations();
   testResetAndDestructorCancelBeforeDestroyingSkin();
+  testPreviewRestartPreservesSelectedSkin();
   if (failures != 0) {
     std::cerr << failures << " coordinator test(s) failed\n";
     return EXIT_FAILURE;

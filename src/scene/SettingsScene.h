@@ -9,12 +9,18 @@
 #include "SettingsAudioVideoModel.h"
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
+#include "SettingsPreviewPlayback.h"
+#include "SettingsPreviewAutoPlay.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
+#include "play/GameplaySimulation.h"
+#include "play/PlayfieldVisualState.h"
 #include <cstdint>
+#include <array>
+#include <stop_token>
 #include <map>
 #include <memory>
 #include <optional>
@@ -30,9 +36,12 @@ class ScrollView;
 class DropdownView;
 class OverlayPortal;
 class BMSRenderer;
+class PlayfieldPresentation;
+class PlayfieldProjection;
+struct PlayfieldProjectionResult;
+namespace gameplay { class RealtimeTouchInputRouter; }
 struct GameplayGaugeRules;
 class RhythmInputHandler;
-class RhythmLaneInputController;
 struct PlayfieldChartVisualModel;
 struct PlayfieldVisualState;
 class PlayfieldVisualStateStore;
@@ -60,6 +69,7 @@ class SoundSetFolderPicker;
 #include "SettingsSceneInputRebuild.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "GameplaySkinSettingsController.h"
+namespace skin { struct GameplaySkinSelection; }
 #endif
 
 enum class SettingsDestination { Profile, Ir };
@@ -76,6 +86,9 @@ public:
   void init() override;
   void update(float dt) override;
   void onLanguageChanged() override;
+  void onPresentationOrientationWillChange() override;
+  void onPresentationOrientationChanged() override;
+  bool renderViewBeforeScene(const View *) const override { return !previewActive; }
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
@@ -120,7 +133,6 @@ private:
   TextView *summaryLaneBeamLengthValueText = nullptr;
   TextView *summaryNoteStartPositionValueText = nullptr;
   TextView *summaryPreviewPlayAreaWidthValueText = nullptr;
-  TextView *summaryJudgementTextYValueText = nullptr;
   TextView *summaryJudgementIndicatorYValueText = nullptr;
   TextView *summaryJudgementIndicatorWidthValueText = nullptr;
   TextView *summaryJudgementIndicatorRangeValueText = nullptr;
@@ -274,24 +286,49 @@ private:
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
+  bool lastLaidOutPreviewActive = false;
+  int lastLaidOutPreviewPanelPage = 0;
+  float lastLayoutScrollOffset = 0.0F;
   bool previewPanelFolded = false;
+  bool previewPanelOnLeft = false;
   int previewPanelPage = 0;
+  int previewKeyMode = 7;
+  bool previewRendererDirty = false;
+  std::string previewError;
+  std::string previewSkinConfigurationKey;
+  DropdownView *previewKeyModeDropdown = nullptr;
+  bool previewKeyModeDropdownOpen = false;
+  std::stop_source previewSkinStop;
+  std::array<double, 4> previewSkinBounds{};
+  std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
+  std::uint64_t previewTouchLayoutRevision = 0;
   std::unique_ptr<bms_parser::Chart> previewChart;
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
+  std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   std::uint64_t previewFrameSerial = 0;
-  std::unique_ptr<BMSRenderer> previewRenderer;
+  std::unique_ptr<PlayfieldPresentation> previewPresentation;
+  std::unique_ptr<PlayfieldProjection> previewProjection;
+  BMSRenderer *previewRenderer = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
-  std::unique_ptr<RhythmLaneInputController> previewLaneController;
-  std::unordered_map<int, bool> previewLanePressed;
   long long previewElapsedMicros = 0;
+  bool previewAutoPlay = false;
+  bool previewRandomTiming = false;
+  std::mt19937 previewAutoPlayRandom{std::random_device{}()};
+  std::vector<settings_scene::PreviewAutoPlayEvent> previewAutoPlayEvents;
+  std::size_t previewAutoPlayNextEvent = 0;
+  settings_scene::PreviewEndAnimation previewEndAnimation;
   int previewCombo = 0;
   int previewScore = 0;
   int previewComboBreak = 0;
+  int previewMaximumCombo = 0;
+  int previewPassedNotes = 0;
+  std::map<Judgement, PlayfieldJudgementFastSlowCount> previewJudgeFastSlowCount;
   std::map<Judgement, int> previewJudgeCount;
   SettingsTab activeTab = SettingsTab::Profile;
   std::vector<DifficultyTableInfo> difficultyTables;
@@ -304,6 +341,7 @@ private:
   std::unique_ptr<skin::GameplaySkinSettingsController>
       gameplaySkinSettingsController;
   std::string gameplaySkinSettingsProfileId;
+  player_settings::PresentationOrientation gameplaySkinSettingsOrientation = player_settings::PresentationOrientation::Landscape;
   std::string gameplaySkinSettingsLayoutKey;
   i18n::Text gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;
@@ -386,6 +424,12 @@ private:
   void initView();
   void resetViewState();
   void ensureLayoutUpToDate();
+  void styleVisibilityButton(Button *button, TextView *text, bool visible);
+  View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
+  View *buildJudgementFeedbackPositionControls(const settings_scene::LayoutMetrics &metrics,
+                                              bool previewStyle = false);
+  View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
+                                              bool previewStyle = false);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
                                  bool includeDescription,
                                  bool compactAdjustments);
@@ -411,11 +455,16 @@ private:
   void buildDisplayPreviewOverlay(const settings_scene::LayoutMetrics &metrics);
   void startLanePreview();
   void stopLanePreview();
+  bool previewSkinReloadReady() const;
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
   void syncPreviewPresentationConfiguration();
   void syncPreviewAuthority();
   void capturePreviewVisualState();
+  PlayfieldProjectionResult projectPreviewFrame();
+  void renderPreview();
+  void syncPreviewTouchLayout();
+  void refreshPreviewKeyModeDropdown();
   void ensurePreviewInputHandler();
   void destroyPreviewInputHandler();
   void ensureInputCaptureController();
@@ -427,8 +476,10 @@ private:
   void commitVirtualControllerSetting(input::VirtualControllerConfig config);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
-  void syncPreviewInputPlayAreaWidth();
+  void syncPreviewInputLayout();
   void resetPreviewHudSample();
+  void advancePreviewSimulation();
+  void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult> transactions);
   void publishPreviewJudgement(const JudgeResult &judgeResult,
                                long long sourceSongTimeMicros);
   void resetPreviewSimulation();
@@ -452,6 +503,10 @@ private:
   void refreshSettingsText(bool syncInputs = true);
   void refreshIrSettingsPresentation();
   void ensureProfileController();
+  void appendSelectedSkinHudSettings(View *body,
+                                     const settings_scene::LayoutMetrics &metrics,
+                                     bool includeBuiltInOnlySettings);
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
@@ -466,11 +521,19 @@ private:
   [[nodiscard]] skin::ViewportSettings
   gameplaySkinViewportForEntry(const skin::SkinEntryId &entry) const;
   [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
-  void appendSelectedSkinHudSettings(View *body,
-                                     const settings_scene::LayoutMetrics &metrics,
-                                     bool includeBuiltInOnlySettings);
+  DropdownView *buildGameplaySkinSelectionDropdown(
+      const settings_scene::LayoutMetrics &metrics, int skinType,
+      const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
+      float menuWidth);
+  void appendGameplaySkinCatalogSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
+  void appendGameplaySkinViewportSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
   void appendBuiltInGameplayTraitSettings(
-      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
+      bool followsOriginal = false);
   void buildGameplaySkinSafetyOverlay(
       const settings_scene::LayoutMetrics &metrics);
   bool handleGameplaySkinActionResult(skin::ControllerActionResult result);

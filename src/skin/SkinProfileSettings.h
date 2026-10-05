@@ -12,6 +12,10 @@
 namespace skin {
 
 struct SkinProfileSettingsPolicy {
+  static constexpr float minPlayAreaZoom = 0.5F;
+  static constexpr float maxPlayAreaZoom = 3.0F;
+  static constexpr float minPlayAreaBottomPaddingPercent = 0.0F;
+  static constexpr float maxPlayAreaBottomPaddingPercent = 50.0F;
   static constexpr float minCustomScale = 0.1F;
   static constexpr float maxCustomScale = 10.0F;
   static constexpr float minCustomTranslation = -8'192.0F;
@@ -43,6 +47,10 @@ struct ViewportSettings {
   float scaleY = 1.0F;
   float translateX = 0.0F;
   float translateY = 0.0F;
+  bool centerPlayArea = false;
+  bool keepHudFixed = false;
+  float playAreaZoom = 1.0F;
+  float playAreaBottomPaddingPercent = 0.0F;
   bool operator==(const ViewportSettings &) const = default;
 };
 
@@ -76,10 +84,18 @@ struct SkinProfileSettings {
   // Legacy gameplay-only view retained for older settings readers.
   std::map<int, SkinEntryId> selectedGameplayEntries;
   // Screen-target selection, keyed by Beatoraja SkinType or an additional
-  // gameplay target (-4, -6, -8). New
+  // gameplay target (-4, -5, -6, -7, -8). New
   // settings writes use this map; selectedGameplayEntries remains readable
   // while profiles migrate from gameplay-only selection.
   std::map<int, SkinEntryId> selectedSkinEntries;
+  bool follow5K1S = false;
+  bool follow7K1S = false;
+
+  [[nodiscard]] int effectiveTarget(int target) const noexcept {
+    if (target == -5 && follow5K1S) return 1;
+    if (target == -7 && follow7K1S) return 0;
+    return target;
+  }
 
   // Transitional derived aliases. New settings files do not write these, but
   // readers accept them so existing profiles preserve their 7K selection.

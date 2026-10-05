@@ -27,7 +27,14 @@ void SceneManager::cleanupSceneInstance(Scene *scene) {
   }
 }
 
-void SceneManager::updateBackgroundTaskPauseState() {
+void SceneManager::updateForegroundSceneState() {
+  const bool lockOrientation = currentScene && currentScene->locksOrientation();
+  if (lockOrientation != orientationLocked_) {
+    orientationLocked_ = lockOrientation;
+    if (context.setGameplayOrientationLocked) {
+      context.setGameplayOrientationLocked(lockOrientation);
+    }
+  }
   const bool shouldPause =
       currentScene != nullptr &&
       currentScene->pausesBackgroundTasksForPerformance();
@@ -40,6 +47,23 @@ void SceneManager::updateBackgroundTaskPauseState() {
   if (changed && context.notifyBackgroundTaskPauseStateChanged) {
     context.notifyBackgroundTaskPauseStateChanged();
   }
+}
+
+void SceneManager::setPresentationOrientation(player_settings::PresentationOrientation orientation) {
+  if (context.settings.activePresentationOrientation() == orientation) return;
+  // Finish edits while their original owner is still selected. Retained scenes
+  // keep their lists/selection; only presentation controls are refreshed.
+  auto retained = backgroundScenes;
+  if (currentScene) retained.insert(currentScene);
+  for (auto *scene : retained) scene->onPresentationOrientationWillChange();
+  context.settings.setActivePresentationOrientation(orientation);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (context.gameplaySkinLifecycle) {
+    if (const auto profile = skin::makeSkinProfileId(context.profileManager.activeProfile().id))
+      context.gameplaySkinLifecycle->profileChanged(*profile, orientation);
+  }
+#endif
+  for (auto *scene : retained) scene->onPresentationOrientationChanged();
 }
 
 void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene> scene) {
@@ -72,14 +96,14 @@ void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
   }
 
   currentScene = newScenePtr;
-  updateBackgroundTaskPauseState();
+  updateForegroundSceneState();
   try {
     currentScene->prepareForUse();
     currentScene->init();
   } catch (...) {
     if (currentScene == newScenePtr) {
       currentScene = nullptr;
-      updateBackgroundTaskPauseState();
+      updateForegroundSceneState();
     }
     throw;
   }
@@ -104,7 +128,7 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     // Scene is in background, bring it to foreground
     currentScene = newScene;
     backgroundScenes.erase(it);
-    updateBackgroundTaskPauseState();
+    updateForegroundSceneState();
     pendingRegisteredSceneChange_.reset();
     resumingScene_ = true;
     try {
@@ -124,9 +148,17 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
   } else {
     // Normal scene change for new or registered scenes
     currentScene = newScene;
-    updateBackgroundTaskPauseState();
+    updateForegroundSceneState();
     currentScene->prepareForUse();
-    currentScene->init();
+    try {
+      currentScene->init();
+    } catch (...) {
+      if (currentScene == newScene) {
+        currentScene = nullptr;
+        updateForegroundSceneState();
+      }
+      throw;
+    }
   }
 }
 
@@ -182,7 +214,7 @@ void SceneManager::cleanup() {
   if (currentScene != nullptr) {
     cleanupSceneInstance(currentScene);
     currentScene = nullptr;
-    updateBackgroundTaskPauseState();
+    updateForegroundSceneState();
   }
 
   for (auto *scene : backgroundScenes) {
@@ -197,6 +229,6 @@ void SceneManager::cleanup() {
     scene->cleanup();
   }
   registeredScenes.clear();
-  updateBackgroundTaskPauseState();
+  updateForegroundSceneState();
 }
 SceneManager::~SceneManager() { cleanup(); }

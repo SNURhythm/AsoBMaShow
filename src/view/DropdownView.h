@@ -46,6 +46,8 @@ public:
   ~DropdownView() override;
 
   void refresh(const State &state);
+  // A positive width fixes the trigger allocation; the popup can remain wider.
+  void setTriggerWidth(float width);
   void onLayout() override;
 
 private:
@@ -76,12 +78,14 @@ private:
   bool deferredRefreshScheduled = false;
   bool deferredOptionViewClearScheduled = false;
   float resolvedWidth = kDefaultWidth;
+  float triggerWidth = 0.0f;
 
   void buildView();
   void applyRefresh(State state);
   void rebuildOptions();
   void clearOptionViews();
   void refreshVisualState();
+  void refreshWidths();
   void setOpen(bool open);
   void updateMenuPlacement();
   void scheduleDeferredRefresh();

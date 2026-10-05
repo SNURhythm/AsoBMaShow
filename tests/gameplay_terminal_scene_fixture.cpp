@@ -1,4 +1,5 @@
 #include "i18n/Localization.h"
+#include "GameplayKeyMode.h"
 #include "ir/tachi/TachiEligibility.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GamePlayTiming.h"
@@ -73,6 +74,10 @@ extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity
 }
 
 struct FixtureInput {
+  std::vector<input::InputScope> activeScopes;
+  void setBindings(const InputProfile &, std::vector<input::InputScope> scopes) {
+    activeScopes = std::move(scopes);
+  }
   void stopListen() {}
   void pumpPendingTouchEvents() {}
   void discardPendingTouchEvents() {}
@@ -174,6 +179,7 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
+    InputProfile inputProfile;
     struct { bool ipadGestureReminderEnabled = false; } settings;
     ReminderSceneManager reminderSceneManager;
     ReminderSceneManager *sceneManager = &reminderSceneManager;
@@ -184,6 +190,7 @@ public:
     } inputDeviceRegistry;
   } context;
   FixtureInput *inputHandler = nullptr;
+  std::unique_ptr<FixtureInput> ownedInputHandler;
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
   std::optional<gameplay::StartSelectControl> startSelectControl;
   bool practiceMenuActive = false;
@@ -1879,7 +1886,26 @@ void testLegacyLr2HellChargeOrdering() {
   }
 }
 
+void testRetryRefreshesIndependentInputScope() {
+  for (const int mode : {5, 7}) {
+    GamePlayScene scene;
+    scene.chart->Meta.KeyMode = mode;
+    scene.chart->Meta.IsDP = false;
+    scene.chart->Meta.TotalScratchNotes = 0;
+    scene.chart->Meta.TotalBackSpinNotes = 0;
+    scene.ownedInputHandler = std::make_unique<FixtureInput>();
+    scene.resetAttemptBoundaryForTest();
+    require(scene.ownedInputHandler->activeScopes == makeGameplayInputScopes(-mode),
+            "actual retry boundary selects independent scratchless bindings");
+    scene.chart->Meta.TotalScratchNotes = 1;
+    scene.resetAttemptBoundaryForTest();
+    require(scene.ownedInputHandler->activeScopes == makeGameplayInputScopes(mode),
+            "actual retry boundary switches bindings when scratch content appears");
+  }
+}
+
 int main(int argc, char **argv) {
+  testRetryRefreshesIndependentInputScope();
   testLegacyLr2HellChargeInitialPassingBound();
   testLegacyLr2HellChargeOrdering();
   if (argc > 1 && std::string_view(argv[1]) == "course-club-mode") {

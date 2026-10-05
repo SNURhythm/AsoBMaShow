@@ -588,6 +588,7 @@ struct SwitchFixture {
     secondPaths = manager.pathsFor(secondId);
 
     AppSettings firstSettings;
+    firstSettings.presentation(AppSettings::PresentationOrientation::Portrait).laneLength = 25;
     firstSettings.audioOffsetMs = -17;
     firstSettings.selectedGameplayRuleset = "lr2";
     firstSettings.selectedGaugeType = "gas";
@@ -601,9 +602,9 @@ struct SwitchFixture {
             ? skin::normalizeEntryPath(*skinPackage, "play/main.luaskin").entry
             : std::nullopt;
     if (skinEntry) {
-      firstSettings.skin.entries[*skinEntry].options["Lane cover"] = 1;
-      firstSettings.skin.selected7KeyEntry = *skinEntry;
-      firstSettings.skin.gameplayCompatibilityEnabled = true;
+      firstSettings.presentation().skin.entries[*skinEntry].options["Lane cover"] = 1;
+      firstSettings.presentation().skin.selected7KeyEntry = *skinEntry;
+      firstSettings.presentation().skin.gameplayCompatibilityEnabled = true;
     }
     firstSettings.sanitize();
     AppSettings secondSettings;
@@ -615,7 +616,7 @@ struct SwitchFixture {
     secondSettings.selectedAssistOption = "OFF";
     secondSettings.selectedPacemakerTarget = "MAX-";
     if (skinEntry) {
-      auto &entrySettings = secondSettings.skin.entries[*skinEntry];
+      auto &entrySettings = secondSettings.presentation().skin.entries[*skinEntry];
       entrySettings.options["Lane cover"] = 2;
       entrySettings.viewport = {
           .mode = skin::ViewportMode::Custom,
@@ -625,8 +626,8 @@ struct SwitchFixture {
           .translateX = 12.0F,
           .translateY = -8.0F,
       };
-      secondSettings.skin.selected7KeyEntry = *skinEntry;
-      secondSettings.skin.gameplayCompatibilityEnabled = true;
+      secondSettings.presentation().skin.selected7KeyEntry = *skinEntry;
+      secondSettings.presentation().skin.gameplayCompatibilityEnabled = true;
     }
     secondSettings.sanitize();
     std::string error;
@@ -920,6 +921,15 @@ void expectFirstProfileState(SwitchFixture &fixture,
          std::string(label) + " exposes first profile result history");
 }
 
+void testProfileSwitchRetainsRuntimePresentationOrientation() {
+  SwitchFixture fixture;
+  fixture.currentSettings.setActivePresentationOrientation(AppSettings::PresentationOrientation::Portrait);
+  const auto result = fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(result.ok(), "portrait profile switch succeeds");
+  expect(fixture.currentSettings.activePresentationOrientation() == AppSettings::PresentationOrientation::Portrait,
+         "profile switch retains viewport orientation instead of loaded default");
+}
+
 void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   SwitchFixture fixture;
   if (fixture.firstId.empty() || fixture.secondId.empty()) {
@@ -950,9 +960,9 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
       fixture.currentSettings.audioOffsetMs == 42 &&
           fixture.currentSettings.selectedGameplayRuleset == "beatoraja" &&
           fixture.currentSettings.selectedPlayOption == "R-RANDOM" &&
-          fixture.currentSettings.skin.gameplayCompatibilityEnabled &&
-          fixture.currentSettings.skin.selected7KeyEntry.has_value() &&
-          fixture.currentSettings.skin.entries.begin()->second.viewport.mode ==
+          fixture.currentSettings.presentation().skin.gameplayCompatibilityEnabled &&
+          fixture.currentSettings.presentation().skin.selected7KeyEntry.has_value() &&
+          fixture.currentSettings.presentation().skin.entries.begin()->second.viewport.mode ==
               skin::ViewportMode::Custom,
       "successful switch installs target settings and skin layout");
   expect(firstBindingId(fixture.currentInput) == "second-profile-binding" &&
@@ -981,11 +991,14 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
       InputProfileStore::load(fixture.firstPaths.inputJson);
   expect(savedOldSettings.status == AppSettingsLoadStatus::Loaded &&
              savedOldSettings.settings.audioOffsetMs == -88 &&
-             savedOldSettings.settings.skin.gameplayCompatibilityEnabled &&
-             savedOldSettings.settings.skin.selected7KeyEntry.has_value() &&
-             savedOldSettings.settings.skin.entries.begin()->second.options.at(
+             savedOldSettings.settings.presentation().skin.gameplayCompatibilityEnabled &&
+             savedOldSettings.settings.presentation().skin.selected7KeyEntry.has_value() &&
+             savedOldSettings.settings.presentation().skin.entries.begin()->second.options.at(
                  "Lane cover") == 1,
          "switch saves current settings and skin into the old profile first");
+  expect(savedOldSettings.settings.presentation(
+             AppSettings::PresentationOrientation::Portrait).laneLength == 25,
+         "switching profiles preserves the inactive presentation");
   expect(savedOldInput.status == InputProfileLoadStatus::Loaded &&
              firstBindingId(savedOldInput.profile) == "unsaved-first-binding",
          "switch saves current input into the old profile first");
@@ -2629,6 +2642,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 } // namespace
 
 int main() {
+  testProfileSwitchRetainsRuntimePresentationOrientation();
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
   testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
   testPostActivationOwnerNotificationCannotRollbackCommittedProfile();

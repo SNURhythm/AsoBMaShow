@@ -17,6 +17,7 @@
 #include "view/TextInputBox.h"
 #include "i18n/Localization.h"
 #include "rendering/UniformCache.h"
+#include "scene/SettingsSceneInputLayout.h"
 
 #include <SDL2/SDL.h>
 
@@ -256,6 +257,51 @@ void testDropdownDefersOptionViewsUntilOpen() {
           "closing dropdown releases hidden option views after the event");
 }
 
+void testInputSelectorWidthsStayStableAcrossRefreshes() {
+  for (const int width : {1200, 520}) {
+    const auto layout = settings_scene::resolveInputSettingsLayout(width, width < 720);
+    View row(0, 0, width, 300);
+    row.setFlexDirection(layout.stackSelectors ? FlexDirection::Column : FlexDirection::Row);
+    row.setGap(layout.selectorGap);
+    std::vector<DropdownView *> selectors;
+    for (int index = 0; index < 3; ++index) {
+      auto *dropdown = new DropdownView({});
+      dropdown->setTriggerWidth(layout.selectorWidth);
+      dropdown->setFlexGrow(layout.stackSelectors ? 0.0F : 1.0F);
+      row.addView(dropdown);
+      selectors.push_back(dropdown);
+    }
+    for (int iteration = 0; iteration < 8; ++iteration) {
+      for (auto *dropdown : selectors) {
+        DropdownView::State state;
+        state.label = i18n::message("settings.input.device.label");
+        state.options = {{.id = "short", .label = "Keyboard"},
+                         {.id = "long", .label = std::string(100 + iteration * 5, 'W')}};
+        state.selectedId = iteration % 2 == 0 ? "short" : "long";
+        state.open = iteration % 2 != 0;
+        dropdown->refresh(state);
+      }
+      i18n::setLanguage(iteration % 2 == 0 ? i18n::Language::English : i18n::Language::Korean);
+      row.propagateLanguageChange();
+      row.applyYogaLayout();
+      for (std::size_t index = 0; index < selectors.size(); ++index) {
+        auto *dropdown = selectors[index];
+        require(std::abs(dropdown->getWidth() - layout.selectorWidth) <= 1,
+                "input selector width stays allocated across refresh, selection, and language changes");
+        require(dropdown->getX() == (layout.stackSelectors ? 0 :
+                    static_cast<int>(index) * (layout.selectorWidth + layout.selectorGap)),
+                "input selector siblings do not shift as device labels change");
+        if (dropdown->current.open) {
+          require(dropdown->menuScroll->getWidth() >= dropdown->getWidth() &&
+                      dropdown->menuScroll->getWidth() <= rendering::window_width,
+                  "long device labels can use a wider bounded popup without widening the trigger");
+        }
+      }
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testDropdownSelectionDefersTeardownUntilItsCallbackReturns() {
   DropdownView *dropdownRef = nullptr;
   DropdownView dropdown(
@@ -297,6 +343,7 @@ int main() {
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
   testDropdownDefersOptionViewsUntilOpen();
+  testInputSelectorWidthsStayStableAcrossRefreshes();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
 
   {

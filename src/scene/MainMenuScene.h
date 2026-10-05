@@ -81,6 +81,9 @@ public:
   void onPause() override;
   void onResume() override;
   void onLanguageChanged() override;
+  void onPresentationOrientationChanged() override;
+  bool presentationSkinRefreshPending = false;
+  void queueSelectedSkinHandoff();
   void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
 
@@ -94,6 +97,9 @@ private:
   NewcomerTutorialView *tutorial_ = nullptr;
   Button *addFolderButton_ = nullptr;
   ScrollView *tutorialRightScroll_ = nullptr;
+  View *detailsContent_ = nullptr;
+  View *detailsControlsContent_ = nullptr;
+  ScrollView *detailsControlsScroll_ = nullptr;
   void buildTutorial();
   std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
@@ -222,7 +228,6 @@ private:
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
-  TextView *replayStatusText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   PlayOptionsPanelView *playOptionsPanel = nullptr;
@@ -352,6 +357,9 @@ private:
   i18n::Text musicStatusMessage;
 
   void initView(ApplicationContext &context);
+  void updatePanelLayout();
+  float portraitDetailsHeight(float availableHeight) const;
+  void updateMenuPresentation(bool portrait);
   void applyThemeChange();
   void reloadProfileSelectionsFromSettings();
   void reloadFolderItems(bool preserveViewState = false);

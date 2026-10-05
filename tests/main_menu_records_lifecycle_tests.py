@@ -32,6 +32,7 @@ def records_fixture():
         "void MainMenuScene::startRemoteResultRecall(",
         "void MainMenuScene::onPause()",
         "void MainMenuScene::onResume()",
+        "void MainMenuScene::queueSelectedSkinHandoff()",
     )]
     for signature, success, prepared in (
         ("void MainMenuScene::startModernReplayResultRecall(",
@@ -85,11 +86,23 @@ class MainMenuRecordsLifecycleTests(unittest.TestCase):
         fixture = (ROOT / "tests/main_menu_skin_resume_fixture.cpp").read_text()
         fixture = fixture.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace(
             "RESUME_BODY", fixture_tools.function_body(source, "void MainMenuScene::onResume()"))
+        fixture = fixture.replace("HANDOFF_BODY", fixture_tools.function_body(source, "void MainMenuScene::queueSelectedSkinHandoff()"))
+        fixture = fixture.replace("COMPLETION_BODY", fixture_tools.function_body(source, "void MainMenuScene::applyReplayLoadCompletion()"))
+        intro = (ROOT / "src/scene/IntroScene.cpp").read_text()
+        for placeholder, signature in (
+            ("INTRO_START_BODY", "void IntroScene::start()"),
+            ("INTRO_UPDATE_BODY", "void IntroScene::update(float)"),
+            ("INTRO_SETTINGS_BODY", "void IntroScene::openSettings()"),
+            ("INTRO_TUTORIAL_BODY", "void IntroScene::startTutorial()"),
+            ("INTRO_CLEANUP_BODY", "void IntroScene::cleanupScene()"),
+        ):
+            fixture = fixture.replace(placeholder, fixture_tools.function_body(intro, signature))
         for enabled in (0, 1):
             with self.subTest(skins_enabled=enabled):
                 try:
                     fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(
-                        f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture)
+                        f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture,
+                        [ROOT / "src/scene/ReplayRecordTask.cpp"])
                 except subprocess.CalledProcessError as error:
                     self.fail(error.stderr)
 

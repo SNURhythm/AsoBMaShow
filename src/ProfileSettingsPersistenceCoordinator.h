@@ -17,12 +17,15 @@ class ProfileSettingsPersistenceCoordinator;
 
 namespace skin {
 
+using player_settings::PresentationOrientation;
+
 class ISkinProfileSnapshotProvider;
 
 struct VersionedSkinProfileSettings {
   SkinProfileId profileId;
   std::uint64_t generation = 0;
   SkinProfileSettings settings;
+  PresentationOrientation orientation = PresentationOrientation::Landscape;
   bool operator==(const VersionedSkinProfileSettings &) const = default;
 };
 
@@ -131,10 +134,14 @@ class ISkinProfileSettingsOwner {
 public:
   virtual ~ISkinProfileSettingsOwner() = default;
   virtual VersionedSkinProfileSettings
-  snapshot(const SkinProfileId &) const = 0;
+  snapshot(const SkinProfileId &, PresentationOrientation = PresentationOrientation::Landscape) const = 0;
   virtual SkinProfileCommitResult
-  beginCommit(const SkinProfileId &, std::uint64_t expectedGeneration,
+  beginCommit(const SkinProfileId &, PresentationOrientation, std::uint64_t expectedGeneration,
               SkinProfileSettings candidate) = 0;
+  SkinProfileCommitResult beginCommit(const SkinProfileId &id, std::uint64_t generation,
+                                      SkinProfileSettings candidate) {
+    return beginCommit(id, PresentationOrientation::Landscape, generation, std::move(candidate));
+  }
   virtual SkinProfileCommitResult pollCommit(std::uint64_t ticket) = 0;
   virtual void acknowledgeCommit(std::uint64_t ticket) noexcept = 0;
 };
@@ -165,10 +172,11 @@ public:
   ~ProfileSettingsPersistenceCoordinator();
 
   skin::VersionedSkinProfileSettings
-  snapshot(const skin::SkinProfileId &) const override;
+  snapshot(const skin::SkinProfileId &, skin::PresentationOrientation = skin::PresentationOrientation::Landscape) const override;
   skin::SkinProfileCommitResult
-  beginCommit(const skin::SkinProfileId &, std::uint64_t expectedGeneration,
+  beginCommit(const skin::SkinProfileId &, skin::PresentationOrientation, std::uint64_t expectedGeneration,
               skin::SkinProfileSettings candidate) override;
+  using skin::ISkinProfileSettingsOwner::beginCommit;
   skin::SkinProfileCommitResult pollCommit(std::uint64_t ticket) override;
   void acknowledgeCommit(std::uint64_t ticket) noexcept override;
   std::uint64_t beginSnapshotAllProfiles() override;

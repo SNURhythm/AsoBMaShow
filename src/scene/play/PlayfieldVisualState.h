@@ -64,6 +64,11 @@ struct PlayfieldPresentationConfig {
   AppSettings::HiSpeedFixMode hispeedFixMode =
       AppSettings::HiSpeedFixMode::Main;
   float playAreaWidth = 0.0F;
+  player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+  float laneLength = AppSettings::kDefaultLaneLength;
+  float laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
+  bool scratchLaneOnRight = false;
+  bool hideEmptyScratchLane = false;
   bool laneBeamsEnabled = true;
   // Live LaneRenderer::getHispeed() cover factor.  It is intentionally kept
   // separate from noteStartPositionPercent because toggling lane cover in
@@ -110,7 +115,20 @@ struct PlayfieldPresentationConfig {
   float judgementIndicatorWidthScale = 1.0F;
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
+  player_settings::JudgementTextVisibility judgementTextVisibility;
   float judgementTextY = 0.0F;
+  float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
+  int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTextBold = false;
+  bool judgementComboSeparated = false;
+  float comboTextY = AppSettings::kDefaultComboTextY;
+  int comboTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool comboTextBold = false;
+  int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTimingBold = false;
+  float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
+  int pacemakerDiffSizePercent = AppSettings::kDefaultPacemakerDiffSizePercent;
+  bool pacemakerDiffBold = false;
   bool judgementCounterEnabled = false;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;

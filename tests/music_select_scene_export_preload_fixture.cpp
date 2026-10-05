@@ -384,6 +384,7 @@ struct MusicSelectScene {
   ExternalUrl *irExternalUrlService_ = nullptr;
   View *toolbar_ = nullptr, *searchOverlay_ = nullptr, *modalLayer_ = nullptr;
   View *modalOverlayPortal_ = nullptr, *playOptionsModal_ = nullptr, *tasksModal_ = nullptr;
+  View *decideOverlay_ = nullptr;
   std::uint64_t irAccountEvidenceRevision_ = 0;
   std::optional<std::int64_t> startInputMicros_;
   FolderStatus *folderStatusLoader_ = nullptr;

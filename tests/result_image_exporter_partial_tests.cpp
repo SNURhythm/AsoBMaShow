@@ -250,12 +250,11 @@ void testCompletePresentationUsesSceneCardsAndGaugePlan() {
            "resultJudgementTile:bad",
            "resultJudgementTile:poor",
            "resultMetricTile:break",
-           "resultMetricTile:fast",
-           "resultMetricTile:slow",
+           "resultMetricTile:fast-slow",
            "graph",
        }) {
     expect(exportCards.contains(required),
-           "complete export retains every supplied named card");
+           std::string("complete export retains supplied card: ") + required);
   }
   expect(!exportCards.contains("resultJudgementTile:kpoor") &&
              exportRoot->findViewByName("timingAnalytics") == nullptr,

@@ -56,7 +56,7 @@ struct ArchiveMember {
   std::string installedCollisionKey;
   MemberKind kind = MemberKind::Regular;
   std::uint64_t declaredSize = 0;
-  std::uint32_t expectedCrc32 = 0;
+  std::optional<std::uint32_t> expectedCrc32;
   std::uint16_t compressionMethod = 0;
   std::string streamedSha256;
 
@@ -186,7 +186,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
   if (!owned.valid()) {
     diagnostics.push_back(
         diagnostic("skin_archive_owned_copy_failed",
-                   "unable to allocate private storage for the skin ZIP"));
+                   "unable to allocate private storage for the skin archive"));
     return std::nullopt;
   }
 
@@ -231,7 +231,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
                   &read, nullptr)) {
       CloseHandle(source);
       diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
-                                       "unable to copy the opened skin ZIP"));
+                                       "unable to copy the opened skin archive"));
       return std::nullopt;
     }
     if (read == 0) {
@@ -241,7 +241,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
         !owned.write(std::span(buffer.data(), read))) {
       CloseHandle(source);
       diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
-                                       "unable to copy the opened skin ZIP"));
+                                       "unable to copy the opened skin archive"));
       return std::nullopt;
     }
     total += read;
@@ -300,7 +300,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
     if (count < 0) {
       ::close(source);
       diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
-                                       "unable to copy the opened skin ZIP"));
+                                       "unable to copy the opened skin archive"));
       return std::nullopt;
     }
     if (count == 0) {
@@ -312,7 +312,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
             std::span(buffer.data(), static_cast<std::size_t>(count)))) {
       ::close(source);
       diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
-                                       "unable to copy the opened skin ZIP"));
+                                       "unable to copy the opened skin archive"));
       return std::nullopt;
     }
     total += chunk;
@@ -349,7 +349,7 @@ copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
 #endif
   if (!owned.finishCopy()) {
     diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
-                                     "unable to finalize the owned skin ZIP"));
+                                     "unable to finalize the owned skin archive"));
     return std::nullopt;
   }
   owned.setBytes(total);
@@ -381,15 +381,15 @@ std::string archiveError(archive *reader, std::string_view fallback) {
 
 bool configureArchiveReader(archive *reader, OwnedArchiveFile &owned,
                             std::vector<SkinDiagnostic> &diagnostics) {
-  if (archive_read_support_filter_none(reader) != ARCHIVE_OK ||
-      archive_read_support_format_zip(reader) != ARCHIVE_OK ||
+  if (archive_read_support_filter_all(reader) < ARCHIVE_WARN ||
+      archive_read_support_format_all(reader) != ARCHIVE_OK ||
       archive_read_set_format_option(reader, "zip", "mac-ext", nullptr) !=
           ARCHIVE_OK ||
       !owned.rewind() ||
       archive_read_open_FILE(reader, owned.get()) != ARCHIVE_OK) {
     diagnostics.push_back(diagnostic(
         "skin_archive_open_failed",
-        archiveError(reader, "unable to open the skin ZIP archive")));
+        archiveError(reader, "unable to open the skin archive")));
     return false;
   }
   return true;
@@ -442,13 +442,33 @@ bool hasAppleDoubleComponent(std::string_view path) {
   return false;
 }
 
-bool supportedCompression(archive *reader) {
-  const char *format = archive_format_name(reader);
-  if (format == nullptr) {
+bool supportedArchiveFormat(archive *reader) {
+  switch (archive_format(reader) & ARCHIVE_FORMAT_BASE_MASK) {
+  case ARCHIVE_FORMAT_ZIP:
+  case ARCHIVE_FORMAT_7ZIP:
+  case ARCHIVE_FORMAT_RAR:
+  case ARCHIVE_FORMAT_RAR_V5:
+  case ARCHIVE_FORMAT_LHA:
+  case ARCHIVE_FORMAT_TAR:
+    return true;
+  default:
     return false;
   }
-  const std::string_view name(format);
-  return name.ends_with("(uncompressed)") || name.ends_with("(deflation)");
+}
+
+bool isZipArchive(OwnedArchiveFile &owned) {
+  // Inspect bytes, not the picker staging filename (which may always end in .zip).
+  std::array<unsigned char, 4> signature{};
+  if (owned.readAt(0, signature) && signature[0] == 'P' && signature[1] == 'K') {
+    return true;
+  }
+  ArchiveHandle reader(archive_read_new());
+  std::vector<SkinDiagnostic> ignored;
+  if (!reader || !configureArchiveReader(reader.get(), owned, ignored)) return false;
+  archive_entry *entry = nullptr;
+  const int status = archive_read_next_header(reader.get(), &entry);
+  return (status == ARCHIVE_OK || status == ARCHIVE_EOF) &&
+         (archive_format(reader.get()) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_ZIP;
 }
 
 bool addWithoutOverflow(std::uint64_t left, std::uint64_t right,
@@ -588,8 +608,7 @@ bool validateRawZipEnvelope(
     if (recordBytes > directoryBytes ||
         cursor + recordBytes >
             static_cast<std::uint64_t>(directoryOffset) + directoryBytes ||
-        nameBytes == 0 || startingDisk != 0 || (flags & 0x0001U) != 0 ||
-        (method != 0 && method != 8)) {
+        nameBytes == 0 || startingDisk != 0 || (flags & 0x0001U) != 0) {
       diagnostics.push_back(diagnostic(
           "skin_archive_member_metadata_invalid",
           "skin ZIP member metadata is unsafe, encrypted, or uses unsupported "
@@ -809,7 +828,7 @@ bool validateInstalledStructure(ArchiveInventory &inventory,
 
 std::optional<ArchiveInventory>
 inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
-                 const RawZipMembers &rawMembers, std::stop_token stop,
+                 const std::optional<RawZipMembers> &rawMembers, std::stop_token stop,
                  const SkinProgressCallback &callback,
                  std::vector<SkinDiagnostic> &diagnostics,
                  const SkinSafetyPolicy &safetyPolicy) {
@@ -842,11 +861,12 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
       break;
     }
     if (status != ARCHIVE_OK || entry == nullptr ||
-        (archive_format(reader.get()) & ARCHIVE_FORMAT_BASE_MASK) !=
-            ARCHIVE_FORMAT_ZIP) {
+        !supportedArchiveFormat(reader.get()) ||
+        (((archive_format(reader.get()) & ARCHIVE_FORMAT_BASE_MASK) ==
+          ARCHIVE_FORMAT_ZIP) != rawMembers.has_value())) {
       diagnostics.push_back(diagnostic(
           "skin_archive_inventory_failed",
-          archiveError(reader.get(), "unable to inventory the skin ZIP")));
+          archiveError(reader.get(), "unable to inventory the skin archive")));
       return std::nullopt;
     }
     ++memberCount;
@@ -854,12 +874,6 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
       diagnostics.push_back(
           diagnostic("skin_archive_member_limit_exceeded",
                      "archive exceeds the package member-count limit"));
-      return std::nullopt;
-    }
-    if (!supportedCompression(reader.get())) {
-      diagnostics.push_back(
-          diagnostic("skin_archive_compression_unsupported",
-                     "skin ZIP entries must use store or deflate compression"));
       return std::nullopt;
     }
     const char *rawName = archive_entry_pathname_utf8(entry);
@@ -872,8 +886,12 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
       return std::nullopt;
     }
     std::string authoredPath(rawName);
-    const auto rawMetadata = rawMembers.find(authoredPath);
-    if (rawMetadata == rawMembers.end()) {
+    const RawZipMember *rawMetadata = nullptr;
+    if (rawMembers) {
+      const auto found = rawMembers->find(authoredPath);
+      if (found != rawMembers->end()) rawMetadata = &found->second;
+    }
+    if (rawMembers && rawMetadata == nullptr) {
       diagnostics.push_back(diagnostic(
           "skin_archive_inventory_failed",
           "archive reader exposed a member absent from raw inventory",
@@ -894,14 +912,14 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
       return std::nullopt;
     }
     if (directory) {
-      if (!authoredPath.ends_with('/')) {
+      if (rawMembers && !authoredPath.ends_with('/')) {
         diagnostics.push_back(
             diagnostic("skin_archive_directory_path_invalid",
                        "explicit archive directories must end with a slash",
                        authoredPath));
         return std::nullopt;
       }
-      authoredPath.pop_back();
+      if (authoredPath.ends_with('/')) authoredPath.pop_back();
     }
     if (hasAppleDoubleComponent(authoredPath)) {
       diagnostics.push_back(
@@ -940,7 +958,7 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
         return std::nullopt;
       }
       declaredSize = static_cast<std::uint64_t>(archive_entry_size(entry));
-      if (declaredSize != rawMetadata->second.uncompressedBytes) {
+      if (rawMetadata && declaredSize != rawMetadata->uncompressedBytes) {
         diagnostics.push_back(
             diagnostic("skin_archive_member_metadata_invalid",
                        "raw and decoded ZIP sizes disagree",
@@ -979,12 +997,34 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
          .collisionKey = normalized.entry->collisionKey,
          .kind = kind,
          .declaredSize = declaredSize,
-         .expectedCrc32 = rawMetadata->second.crc32,
-         .compressionMethod = rawMetadata->second.compressionMethod});
-    if (archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
+         .expectedCrc32 = rawMetadata ? std::optional(rawMetadata->crc32) : std::nullopt,
+         .compressionMethod = rawMetadata ? rawMetadata->compressionMethod : std::uint16_t{0}});
+    if (!rawMembers && regular) {
+      // Solid/compressed containers may decompress while advancing headers.
+      // Drain explicitly so cancellation and declared-size limits still apply.
+      std::array<char, 64 * 1024> buffer{};
+      std::uint64_t readBytes = 0;
+      while (true) {
+        if (stop.stop_requested()) return std::nullopt;
+        const auto count = archive_read_data(reader.get(), buffer.data(), buffer.size());
+        if (count == 0) break;
+        if (count < 0 || !addWithoutOverflow(readBytes, static_cast<std::uint64_t>(count),
+                                            declaredSize, readBytes)) {
+          diagnostics.push_back(diagnostic("skin_archive_inventory_failed",
+              archiveError(reader.get(), "archive data exceeds its declared size"),
+              normalized.entry->packageRelativePath));
+          return std::nullopt;
+        }
+      }
+      if (readBytes != declaredSize) {
+        diagnostics.push_back(diagnostic("skin_archive_inventory_failed",
+            "archive data ended before its declared size", normalized.entry->packageRelativePath));
+        return std::nullopt;
+      }
+    } else if (archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
       diagnostics.push_back(diagnostic(
           "skin_archive_inventory_failed",
-          archiveError(reader.get(), "unable to skip inventoried ZIP data"),
+          archiveError(reader.get(), "unable to skip inventoried archive data"),
           normalized.entry->packageRelativePath));
       return std::nullopt;
     }
@@ -1000,18 +1040,18 @@ inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
   if (archive_read_has_encrypted_entries(reader.get()) > 0) {
     diagnostics.push_back(
         diagnostic("skin_archive_encrypted_rejected",
-                   "encrypted skin ZIP entries are not supported"));
+                   "encrypted skin archive entries are not supported"));
     return std::nullopt;
   }
   if (archive_read_close(reader.get()) != ARCHIVE_OK) {
     diagnostics.push_back(
         diagnostic("skin_archive_inventory_failed",
-                   archiveError(reader.get(), "skin ZIP ended unexpectedly")));
+                   archiveError(reader.get(), "skin archive ended unexpectedly")));
     return std::nullopt;
   }
   if (inventory.fileCount == 0) {
     diagnostics.push_back(
-        diagnostic("skin_archive_empty", "skin ZIP contains no regular files"));
+        diagnostic("skin_archive_empty", "skin archive contains no regular files"));
     return std::nullopt;
   }
 
@@ -2238,9 +2278,7 @@ bool archiveMemberMatches(const ArchiveMember &expected, archive_entry *entry,
     rawName = archive_entry_pathname(entry);
   }
   if (rawName == nullptr || expected.archivePath != rawName ||
-      (archive_format(reader) & ARCHIVE_FORMAT_BASE_MASK) !=
-          ARCHIVE_FORMAT_ZIP ||
-      !supportedCompression(reader) || archive_entry_is_encrypted(entry) > 0 ||
+      !supportedArchiveFormat(reader) || archive_entry_is_encrypted(entry) > 0 ||
       archive_entry_symlink(entry) != nullptr ||
       archive_entry_hardlink(entry) != nullptr ||
       archive_entry_sparse_count(entry) != 0) {
@@ -2249,9 +2287,8 @@ bool archiveMemberMatches(const ArchiveMember &expected, archive_entry *entry,
   const auto expectedType =
       expected.kind == MemberKind::Regular ? AE_IFREG : AE_IFDIR;
   return archive_entry_filetype(entry) == expectedType &&
-         archive_entry_size_is_set(entry) != 0 &&
-         archive_entry_size(entry) ==
-             static_cast<la_int64_t>(expected.declaredSize);
+         (archive_entry_size_is_set(entry) != 0 || expected.kind == MemberKind::Directory) &&
+         archive_entry_size(entry) == static_cast<la_int64_t>(expected.declaredSize);
 }
 
 std::uint32_t updateCrc32(std::uint32_t crc, std::span<const char> bytes) {
@@ -2302,7 +2339,7 @@ bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
       diagnostics.push_back(diagnostic(
           "skin_archive_changed_or_corrupt",
           archiveError(reader.get(),
-                       "skin ZIP changed after inventory or is corrupt")));
+                       "skin archive changed after inventory or is corrupt")));
       return false;
     }
     ArchiveMember &member = inventory.members[index++];
@@ -2455,7 +2492,7 @@ bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
       return false;
     }
     if (!flushed || !handleClosed || fileBytes != member.declaredSize ||
-        (crc32 ^ 0xffffffffU) != member.expectedCrc32) {
+        (member.expectedCrc32 && (crc32 ^ 0xffffffffU) != *member.expectedCrc32)) {
       diagnostics.push_back(
           diagnostic("skin_archive_crc_or_read_failed",
                      "extracted package data does not match its size or CRC",
@@ -2474,7 +2511,7 @@ bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
     diagnostics.push_back(diagnostic(
         "skin_archive_changed_or_corrupt",
         archiveError(reader.get(),
-                     "skin ZIP ended before its inventory was extracted")));
+                     "skin archive ended before its inventory was extracted")));
     return false;
   }
   return true;
@@ -2642,7 +2679,7 @@ digestArchivePayload(const ArchiveInventory &inventory,
         stagedFileHash.finalHex() != member->streamedSha256) {
       diagnostics.push_back(
           diagnostic("skin_archive_payload_digest_mismatch",
-                     "staged archive member does not match streamed ZIP bytes",
+                     "staged archive member does not match streamed archive bytes",
                      member->installedPath));
       return std::nullopt;
     }
@@ -2996,19 +3033,22 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
   if (!owned) {
     return result;
   }
-  RawZipMembers rawMembers;
-  if (!validateRawZipEnvelope(
-          *owned, owned->bytes(), *normalizedPackage.package, stop,
-          result.cancelled, observer_, rawMembers, result.diagnostics,
-          maximumArchiveMembers)) {
-    return result;
+  std::optional<RawZipMembers> rawMembers;
+  if (isZipArchive(*owned)) {
+    rawMembers.emplace();
+    if (!validateRawZipEnvelope(
+            *owned, owned->bytes(), *normalizedPackage.package, stop,
+            result.cancelled, observer_, *rawMembers, result.diagnostics,
+            maximumArchiveMembers)) {
+      return result;
+    }
   }
   const auto beforeDigest =
       hashOwnedArchive(*owned, stop, result.cancelled, observer_);
   if (!beforeDigest) {
     if (!result.cancelled) {
       result.diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
-                                              "unable to hash owned skin ZIP"));
+                                              "unable to hash owned skin archive"));
     }
     return result;
   }

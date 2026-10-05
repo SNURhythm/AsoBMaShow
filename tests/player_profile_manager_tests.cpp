@@ -2743,11 +2743,11 @@ void testProfileCrudConstraintsAndDataIsolation() {
           ? skin::normalizeEntryPath(*skinPackage, "play/main.luaskin").entry
           : std::nullopt;
   if (skinEntry) {
-    auto &entrySettings = sourceSettings.skin.entries[*skinEntry];
+    auto &entrySettings = sourceSettings.presentation().skin.entries[*skinEntry];
     entrySettings.options["Judge"] = 3;
     entrySettings.filePaths["Note"] = "notes/red.png";
-    sourceSettings.skin.selected7KeyEntry = *skinEntry;
-    sourceSettings.skin.gameplayCompatibilityEnabled = true;
+    sourceSettings.presentation().skin.selected7KeyEntry = *skinEntry;
+    sourceSettings.presentation().skin.gameplayCompatibilityEnabled = true;
   }
   std::string settingsError;
   expect(AppSettingsStore::Save(manager.pathsFor(firstId).settingsJson,
@@ -2789,7 +2789,7 @@ void testProfileCrudConstraintsAndDataIsolation() {
       AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson);
   expect(persistedSourceSettings.status == AppSettingsLoadStatus::Loaded &&
              copiedSettings.status == AppSettingsLoadStatus::Loaded &&
-             copiedSettings.settings.skin == persistedSourceSettings.settings.skin,
+             copiedSettings.settings.presentation().skin == persistedSourceSettings.settings.presentation().skin,
          "duplicate preserves selected skin configuration and viewport");
   expect(matchingRowCount(manager.pathsFor(copyId).scoresDb,
                           "SELECT COUNT(*) FROM scores WHERE score_source=0") ==

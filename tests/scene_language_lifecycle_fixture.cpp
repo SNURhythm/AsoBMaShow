@@ -1,6 +1,7 @@
 // Keep production scene ownership/event ordering; substitute only SDL, UI, and
 // application services so the regression needs neither graphics nor audio.
 #include "i18n/Localization.h"
+#include "settings/PresentationOrientation.h"
 
 #include <atomic>
 #include <cassert>
@@ -27,12 +28,18 @@ struct BackgroundTasks {
 };
 class ApplicationContext {
 public:
+  struct Settings {
+    player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+    auto activePresentationOrientation() const { return orientation; }
+    void setActivePresentationOrientation(player_settings::PresentationOrientation value) { orientation = value; }
+  } settings;
   Uint64 currentFrame = 0;
   int uiBatchRenderer = 0;
   SceneManager *sceneManager = nullptr;
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
+  std::function<void(bool)> setGameplayOrientationLocked;
   int gameplayBgaCompositeState = 0;
 };
 struct RenderContext {
@@ -67,6 +74,12 @@ PRODUCTION_MANAGER_METHODS
 struct ObservedScene final : Scene {
   explicit ObservedScene(ApplicationContext &context, bool tutorial = false)
       : Scene(context), tutorial(tutorial) {}
+  player_settings::PresentationOrientation editOwner = player_settings::PresentationOrientation::Landscape;
+  int presentationChanges = 0;
+  void onPresentationOrientationWillChange() override {
+    editOwner = context.settings.activePresentationOrientation();
+  }
+  void onPresentationOrientationChanged() override { ++presentationChanges; }
   bool tutorial = false;
   int initializations = 0;
   int cleanups = 0;
@@ -122,6 +135,7 @@ void assertRetainedState(const ObservedScene &scene, const View *originalLabel) 
 using MainMenuScene = ObservedScene;
 struct IntroScene {
   ApplicationContext &context;
+  bool pendingStart_ = false;
   void startTutorial();
 };
 PRODUCTION_TUTORIAL_LAUNCH
@@ -151,7 +165,50 @@ void testTutorialMenuReturnsWithState() {
   }
 }
 
+void testGameplayOrientationFollowsSceneLifetime() {
+  ApplicationContext context;
+  bool locked = false;
+  std::vector<bool> requests;
+  context.setGameplayOrientationLocked = [&](bool value) {
+    locked = value;
+    requests.push_back(value);
+  };
+  SceneManager manager(context);
+  struct Gameplay final : Scene {
+    bool &locked;
+    bool fail;
+    Gameplay(ApplicationContext &context, bool &locked, bool fail = false)
+        : Scene(context), locked(locked), fail(fail) {}
+    bool locksOrientation() const override { return true; }
+    void init() override {
+      assert(locked && "lock the current orientation before gameplay loading");
+      if (fail) throw 1;
+    }
+    void update(float) override { assert(locked); }
+    void renderScene() override {}
+    void cleanupScene() override {}
+  };
+  manager.changeScene(std::make_unique<ObservedScene>(context));
+  manager.changeScene(std::make_unique<Gameplay>(context, locked), true);
+  manager.currentScene->onApplicationBackgroundChanged(true);
+  manager.currentScene->onApplicationBackgroundChanged(false);
+  manager.update(0);
+  manager.changeScene(std::make_unique<Gameplay>(context, locked));
+  assert(requests == std::vector<bool>{true} && "retry must not recapture device orientation");
+  manager.changeScene(std::make_unique<ObservedScene>(context));
+  assert(!locked && "results and menus restore the selected orientation mode");
+  try {
+    manager.changeScene(std::make_unique<Gameplay>(context, locked, true));
+    assert(false);
+  } catch (int) {}
+  assert(!locked && "failed gameplay initialization must release the lock");
+  manager.changeScene(std::make_unique<Gameplay>(context, locked));
+  manager.cleanup();
+  assert(!locked && "shutdown must release the lock");
+}
+
 int main() {
+  testGameplayOrientationFollowsSceneLifetime();
   testTutorialMenuReturnsWithState();
   i18n::setLanguage(i18n::Language::English);
   ApplicationContext context;
@@ -211,6 +268,14 @@ int main() {
   manager.update(0);
   manager.handleEvents(event);
   assert(originalLabel->languageChanges == 2);
+
+  manager.setPresentationOrientation(player_settings::PresentationOrientation::Portrait);
+  assert(retained->editOwner == player_settings::PresentationOrientation::Landscape);
+  assert(context.settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait);
+  assert(retained->presentationChanges == 1);
+  manager.setPresentationOrientation(player_settings::PresentationOrientation::Portrait);
+  assert(retained->presentationChanges == 1);
+  assertRetainedState(*retained, originalLabel);
 
   // Language changes outside event delivery are picked up at the next frame.
   i18n::setLanguage(i18n::Language::English);

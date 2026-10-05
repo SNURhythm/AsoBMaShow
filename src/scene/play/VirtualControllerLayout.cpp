@@ -89,7 +89,7 @@ bool supportsVirtualControllerKeyMode(int keyMode) noexcept {
 
 VirtualControllerLayout makeVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
-    VirtualControllerCanvas canvas) {
+    VirtualControllerCanvas canvas, bool hideScratch) {
   VirtualControllerLayout layout;
   if (!config.enabled || !canvas.valid() ||
       !supportsVirtualControllerKeyMode(keyMode)) {
@@ -108,6 +108,7 @@ VirtualControllerLayout makeVirtualControllerLayout(
     return layout;
   }
 
+  hideScratch = hideScratch && (keyMode == 5 || keyMode == 7);
   bms_parser::ChartMeta meta;
   meta.KeyMode = keyMode;
   const int keysPerPlayer = keysPerVirtualControllerPlayer(keyMode);
@@ -150,7 +151,7 @@ VirtualControllerLayout makeVirtualControllerLayout(
       return elements;
     }
 
-    const float keyplateLeft = scratchDiameter + scratchToKeyplateGap;
+    const float keyplateLeft = hideScratch ? 0.0F : scratchDiameter + scratchToKeyplateGap;
     const float upperKeyTop = systemSize + keyHeight * 0.25F;
     const float lowerKeyTop = upperKeyTop + keyPitchY;
     const float keyplateRight =
@@ -184,7 +185,7 @@ VirtualControllerLayout makeVirtualControllerLayout(
                     .y = 0.0F,
                     .width = systemSize,
                     .height = systemSize}});
-    elements.push_back(
+    if (!hideScratch) elements.push_back(
         {.control = VirtualControllerControl::Scratch,
          .shape = VirtualControllerShape::Circle,
          .lane = scratchLanes[scratchOffset],

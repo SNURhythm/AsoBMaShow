@@ -51,6 +51,9 @@ class RhythmInputHandler;
 class BuiltInPlayfieldPresentation;
 class PlayfieldPresentation;
 class GamePlayScene : public Scene, public IRhythmControl {
+public:
+  bool locksOrientation() const override { return true; }
+
 private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
@@ -342,6 +345,7 @@ private:
   GameplaySkinSessionStopOwner gameplaySkinSessionStopOwner;
   BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
+  [[nodiscard]] bool hideVirtualControllerScratch() const noexcept;
   std::unique_ptr<PlayfieldPresentationEventFanout>
       ownedPresentationEventFanout;
   PlayfieldPresentationEventFanout *presentationEventFanout = nullptr;

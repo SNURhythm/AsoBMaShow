@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../../settings/PresentationOrientation.h"
+
 #include "../SkinProfileSettings.h"
 
 #include <cstdint>
@@ -13,6 +15,7 @@ struct PlaySkinSessionIdentity {
   SkinEntryId entry;
   std::string revisionDigest;
   std::string configurationDigest;
+  player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
 };
 
 } // namespace skin

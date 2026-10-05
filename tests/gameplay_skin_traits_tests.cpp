@@ -14,6 +14,19 @@ void require(bool condition, const char *message) {
   }
 }
 
+void testScratchlessTargetsKeepOriginalSkinCompatibility() {
+  for (const auto [mode, source] : {std::pair{5, 1}, {7, 0}}) {
+    const auto original = skin::gameplaySkinTraitForKeyMode(mode);
+    require(original && original->label == (mode == 5 ? "5K1S" : "7K1S"),
+            "original single-play labels explicitly include their scratch");
+    const auto target = skin::skinTargetTraitForType(-mode);
+    const auto gameplay = skin::gameplaySkinTraitForKeyMode(-mode);
+    require(target && gameplay && target->skinType == gameplay->skinType &&
+                target->keyMode == mode && skin::skinSourceTypeForTarget(-mode) == source,
+            "scratchless targets have separate identities and accept original skin files");
+  }
+}
+
 void testPinnedBeatorajaGameplayTraitMapping() {
   for (const auto [keys, type] : {std::pair{4, 1}, {6, 0}, {8, 0}}) {
     const auto gameplay = skin::gameplaySkinTraitForKeyMode(keys);
@@ -63,6 +76,7 @@ void testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testScratchlessTargetsKeepOriginalSkinCompatibility();
   testPinnedBeatorajaGameplayTraitMapping();
   testResultTargetsAreFirstClassTraits();
   testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn();

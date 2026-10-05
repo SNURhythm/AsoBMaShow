@@ -487,19 +487,96 @@ void testSkinRescanProgressAvoidsInventedWorkTotals() {
 void testSettingsTargetsIncludeCompatibleModesInNumericOrder() {
   const auto targets = skin::gameplaySkinSettingsTargets();
   const std::vector<std::string_view> expected = {
-      "4K", "5K", "5K DP", "6K", "7K", "7K DP", "8K", "9K",
+      "4K", "5K", "5K1S", "5K DP", "6K", "7K", "7K1S", "7K DP", "8K", "9K",
       "24K", "24K Double", "Music Select", "Result", "Course Result"};
   require(targets.size() == expected.size(), "all gameplay modes and screen targets are visible");
   for (std::size_t i = 0; i < targets.size(); ++i) {
     require(targets[i].label == expected[i], "key labels sort numerically with DP beside single play");
-    if (targets[i].keyMode == 4 || targets[i].keyMode == 6 || targets[i].keyMode == 8) {
+    if (targets[i].skinType < 0) {
       require(targets[i].skinType < 0, "additional tabs keep separate settings identities");
       auto row = entryRow();
-      row.metadata.skinType = targets[i].keyMode == 4 ? 1 : 0;
+      row.metadata.skinType = targets[i].keyMode <= 5 ? 1 : 0;
       require(skin::gameplaySkinEntrySelectableForTarget(row, targets[i]),
               "additional modes offer their compatible custom skins");
     }
   }
+}
+
+void testPreviewSettingsResolveTheSelectedModeCatalog() {
+  auto snapshot = snapshotWithEntry();
+  const auto *original = &snapshot.entries.front();
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 7) == original,
+          "7K1S preview uses the selected 7K1S catalog");
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, -7) == nullptr,
+          "scratchless built-in preview does not borrow the original catalog");
+  snapshot.follow7K1S = true;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, -7) == original,
+          "follow-original preview exposes its effective skin's catalog");
+  snapshot.follow7K1S = false;
+  snapshot.selectedSkinEntries[-7] = original->entry;
+  snapshot.selectedSkinEntries[-6] = original->entry;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, -7) == original &&
+              skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 6) == original,
+          "explicit scratchless and compatible-mode selections resolve their own target");
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 14) == nullptr,
+          "DP preview does not edit another mode's selected skin");
+  snapshot.compatibilityEnabled = false;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 7) == nullptr,
+          "disabled skins show built-in preview settings");
+  snapshot.compatibilityEnabled = true;
+  snapshot.entries.front().validation = skin::SkinValidationDisposition::Invalid;
+  require(skin::gameplaySkinSettingsEntryForKeyMode(snapshot, 7) == nullptr,
+          "invalid selections do not expose an unrelated settings catalog");
+}
+
+void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
+  const auto snapshot = snapshotWithEntry();
+  const auto key = skin::gameplaySkinPreviewConfigurationKey(snapshot, 7);
+  auto changed = snapshot;
+  changed.state = skin::GameplaySkinSettingsState::Busy;
+  changed.statusMessage = "Validating";
+  changed.progress.completedBytes++;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) == key,
+          "validation progress does not restart the active preview");
+  require(!skin::gameplaySkinPreviewCanReload(changed, true),
+          "a pending profile commit cannot replace the active preview");
+  require(!skin::gameplaySkinPreviewCanReload(snapshot, false),
+          "preview waits for activation revalidation after persistence");
+  require(skin::gameplaySkinPreviewCanReload(snapshot, true),
+          "ready committed configuration can replace the preview");
+  changed.entries.front().configurationDigest = "new-option-file-or-offset";
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "committed catalog settings reload the preview");
+  changed = snapshot;
+  changed.entries.front().settings.viewport.translateX += 10;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "viewport edits reload even though the skin configuration digest excludes viewport");
+  changed = snapshot;
+  changed.entries.front().settings.viewport.centerPlayArea = true;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "play area framing updates the live preview");
+  const auto focusedKey = skin::gameplaySkinPreviewConfigurationKey(changed, 7);
+  changed.entries.front().settings.viewport.keepHudFixed = true;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != focusedKey,
+          "HUD framing changes update the live preview");
+  changed.entries.front().settings.viewport.playAreaZoom = 1.5F;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != focusedKey,
+          "play area zoom updates the live preview");
+  changed = snapshot;
+  changed.entries.front().settings.viewport.playAreaBottomPaddingPercent = 12.5F;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "bottom padding updates the live preview even though the skin digest excludes viewport");
+  changed = snapshot;
+  changed.entries.front().revisionDigest = "new-revision";
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "skin revalidation reloads a changed installed revision");
+  changed = snapshot;
+  changed.follow7K1S = true;
+  require(skin::gameplaySkinSettingsTargetForKeyMode(changed, -7)->skinType == 0,
+          "follow-original edits target the same profile settings as the preview skin");
+  changed.follow7K1S = false;
+  require(skin::gameplaySkinSettingsTargetForKeyMode(changed, -7)->skinType == -7,
+          "independent scratchless settings keep their separate configuration target");
 }
 
 void testGameplaySkinTraitsRuntimeAvailabilityRequiresBothServices() {
@@ -520,6 +597,10 @@ void testViewportModeChangesPreserveEveryOtherField() {
       .scaleY = 0.625F,
       .translateX = 23.0F,
       .translateY = -31.0F,
+      .centerPlayArea = true,
+      .keepHudFixed = true,
+      .playAreaZoom = 1.4F,
+      .playAreaBottomPaddingPercent = 12.5F,
   };
 
   for (const auto mode : {skin::ViewportMode::Fit, skin::ViewportMode::Stretch,
@@ -538,9 +619,40 @@ void testViewportModeChangesPreserveEveryOtherField() {
           "custom-base switch preserves all numeric fields");
 }
 
+void testPreviewSkinChoicesRespectModeAndFollowSelection() {
+  auto snapshot = snapshotWithEntry();
+  auto incompatible = entryRow();
+  incompatible.entry = entryId("-dp");
+  incompatible.metadata.skinType = 2;
+  auto invalid = entryRow();
+  invalid.entry = entryId("-invalid");
+  invalid.validation = skin::SkinValidationDisposition::Invalid;
+  snapshot.entries.push_back(incompatible);
+  snapshot.entries.push_back(invalid);
+  snapshot.follow7K1S = true;
+  const auto target = *skin::gameplaySkinTargetForKeyMode(-7);
+  auto selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(selection.entries.size() == 1 && selection.selectedRow == &snapshot.entries[0] &&
+              selection.followsOriginal && selection.hasSelectedEntry,
+          "scratchless preview offers compatible valid skins and shows its followed selection");
+  snapshot.follow7K1S = false;
+  selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(!selection.followsOriginal && !selection.hasSelectedEntry && !selection.selectedRow,
+          "independent scratchless Built-in does not inherit the original skin selection");
+  snapshot.selectedSkinEntries[-7] = entryId();
+  selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(selection.selectedRow == &snapshot.entries[0],
+          "an explicit scratchless selection resolves to the installed skin");
+  snapshot.selectedSkinEntries[-7] = entryId("-missing");
+  selection = skin::gameplaySkinSelectionForTarget(snapshot, target);
+  require(selection.hasSelectedEntry && !selection.selectedRow,
+          "a missing selection remains distinguishable from Built-in");
+}
+
 } // namespace
 
 int main() {
+  testPreviewSkinChoicesRespectModeAndFollowSelection();
   testPreparedImportAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();
   testActionDrivingChangesInvalidatePresentation();
@@ -554,6 +666,8 @@ int main() {
   testSkinPackageProgressUsesMeasuredWork();
   testSkinRescanProgressAvoidsInventedWorkTotals();
   testSettingsTargetsIncludeCompatibleModesInNumericOrder();
+  testPreviewSettingsResolveTheSelectedModeCatalog();
+  testPreviewReloadKeyTracksCommittedSkinSettingsOnly();
   testGameplaySkinTraitsRuntimeAvailabilityRequiresBothServices();
   testViewportModeChangesPreserveEveryOtherField();
   return 0;

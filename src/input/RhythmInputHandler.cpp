@@ -416,6 +416,30 @@ void RhythmInputHandler::setPlayAreaWidth(float configuredPlayAreaWidth) {
   playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
 }
 
+void RhythmInputHandler::setTouchLaneOrder(
+    const std::vector<int> &displayedLaneOrder) {
+  if (displayedLaneOrder == laneOrder || displayedLaneOrder.empty()) return;
+  for (const int lane : displayedLaneOrder) {
+    if (std::find(chartLaneOrder.begin(), chartLaneOrder.end(), lane) ==
+            chartLaneOrder.end() ||
+        std::count(displayedLaneOrder.begin(), displayedLaneOrder.end(), lane) != 1) {
+      return;
+    }
+  }
+  for (const int lane : chartLaneOrder) {
+    if (!isScratchLane(lane) &&
+        std::find(displayedLaneOrder.begin(), displayedLaneOrder.end(), lane) ==
+            displayedLaneOrder.end()) return;
+  }
+  // Release touches against their original raw lanes before changing hit testing.
+  while (!fingerToLane.empty()) {
+    releaseFingerLane(fingerToLane.begin()->first);
+  }
+  cancelGraceExpiry.clear();
+  laneOrder = displayedLaneOrder;
+  totalLaneCount = static_cast<int>(laneOrder.size());
+}
+
 void RhythmInputHandler::setTouchEventCallback(
     std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback) {
   touchEventCallback = std::move(callback);
@@ -473,6 +497,11 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
   return lane;
 }
 
+void RhythmInputHandler::setBindings(
+    const InputProfile &profile, std::vector<input::InputScope> activeScopes) {
+  logicalInputPipeline->setBindings(profile, std::move(activeScopes));
+}
+
 void RhythmInputHandler::setLongNoteHeldCallback(
     std::function<std::optional<bool>(int)> callback) {
   longNoteHeldCallback = std::move(callback);
@@ -501,7 +530,8 @@ RhythmInputHandler::RhythmInputHandler(
   logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
       *control, profile, std::move(activeScopes), std::move(commandCallback),
       registryPolicy, std::move(configuredAppliedTransitionCallback));
-  laneOrder = meta.GetTotalLaneIndices();
+  chartLaneOrder = meta.GetTotalLaneIndices();
+  laneOrder = chartLaneOrder;
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();
   if (!std::isfinite(configuredPlayAreaWidth) ||

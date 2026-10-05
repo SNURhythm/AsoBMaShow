@@ -2176,14 +2176,18 @@ std::string revisionKey(const SkinPackageId &package, std::string_view digest) {
   return package.collisionKey + ":" + std::string(digest);
 }
 
+std::string orientationActivationPrefix(const SkinProfileId &profile, PresentationOrientation orientation) {
+  return profile.opaque + std::string(1, '\0') +
+         player_settings::presentationOrientationName(orientation) + std::string(1, '\0');
+}
+
 std::string activationKey(const SkinProfileId &profile,
                           const SkinEntryId &entry,
-                          std::string_view configurationDigest) {
+                          std::string_view configurationDigest, PresentationOrientation orientation) {
   std::string result;
   result.reserve(profile.opaque.size() + entry.collisionKey.size() +
                  configurationDigest.size() + 2);
-  result.append(profile.opaque);
-  result.push_back('\0');
+  result.append(orientationActivationPrefix(profile, orientation));
   result.append(entry.collisionKey);
   result.push_back('\0');
   result.append(configurationDigest);
@@ -3828,12 +3832,13 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
             std::make_move_iterator(validation.diagnostics.end()));
         if (validatesGameplayTrait(validation, skinType) &&
             validation.reconciledSettings &&
-            lowercaseSha256(validation.configurationDigest) &&
-            std::ranges::find(selectedEntry->validatedConfigurationDigests,
-                              validation.configurationDigest) ==
-                selectedEntry->validatedConfigurationDigests.end()) {
-          selectedEntry->validatedConfigurationDigests.push_back(
-              std::move(validation.configurationDigest));
+            lowercaseSha256(validation.configurationDigest)) {
+          if (std::ranges::find(selectedEntry->validatedConfigurationDigests,
+                                validation.configurationDigest) ==
+              selectedEntry->validatedConfigurationDigests.end()) {
+            selectedEntry->validatedConfigurationDigests.push_back(
+                std::move(validation.configurationDigest));
+          }
         } else {
           const auto previous = std::ranges::find_if(
               oldCatalog->entries,
@@ -4026,7 +4031,7 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
   {
     std::scoped_lock lock(stateMutex_);
     for (const auto &[key, activation] : activations_) {
-      const std::string prefix = base.profileId.opaque + std::string(1, '\0');
+      const std::string prefix = orientationActivationPrefix(base.profileId, base.orientation);
       if (key.starts_with(prefix) && activation.entry == entry) {
         result.previousActivation = cloneActivation(activation);
         break;
@@ -4128,7 +4133,8 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
               .entry = entry,
               .reconciledSettings = *validation.reconciledSettings,
               .configurationDigest = std::move(validation.configurationDigest)},
-      .candidateProfileSettings = std::move(candidateProfileSettings)};
+      .candidateProfileSettings = std::move(candidateProfileSettings),
+      .orientation = base.orientation};
   return result;
 }
 
@@ -4153,7 +4159,7 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
     }
   }
   const VersionedSkinProfileSettings ownerSnapshot =
-      owner.snapshot(prepared.profileId);
+      owner.snapshot(prepared.profileId, prepared.orientation);
   if (ownerSnapshot.generation != prepared.expectedProfileGeneration) {
     result.disposition = ActivationCommitDisposition::ProfileGenerationChanged;
     result.profileSnapshot = ownerSnapshot;
@@ -4191,13 +4197,13 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
     const auto &entries = ownerCandidate.entriesForTarget(target);
     if (const auto settings = entries.find(entry); settings != entries.end()) {
       retainedActivationKeys.push_back(
-          activationKey(profile, entry, skinConfigurationDigest(settings->second)));
+          activationKey(profile, entry, skinConfigurationDigest(settings->second), prepared.orientation));
     }
   }
   ActivationMap reservedActivation;
   const std::string key =
       activationKey(profile, prepared.activation.entry,
-                    prepared.activation.configurationDigest);
+                    prepared.activation.configurationDigest, prepared.orientation);
   reservedActivation.emplace(key, std::move(prepared.activation));
   auto activationNode = reservedActivation.extract(reservedActivation.begin());
   std::uint64_t ticket = 0;
@@ -4218,11 +4224,12 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
                     .activationNode = std::move(activationNode),
                     .terminalActivation = std::move(terminalActivation),
                     .catalogUpdate = std::move(catalogUpdate),
-                    .catalogChanged = catalogChanged});
+                    .catalogChanged = catalogChanged,
+                    .orientation = prepared.orientation});
   }
   SkinProfileCommitResult ownerResult;
   try {
-    ownerResult = owner.beginCommit(profile, expectedProfileGeneration,
+    ownerResult = owner.beginCommit(profile, prepared.orientation, expectedProfileGeneration,
                                     std::move(ownerCandidate));
   } catch (...) {
     {
@@ -4358,7 +4365,7 @@ CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
       // Modes can select the same entry with independent configurations.
       // Retain configurations still selected elsewhere in this profile.
       const std::string entryPrefix =
-          commit.profileId.opaque + std::string(1, '\0') +
+          orientationActivationPrefix(commit.profileId, commit.orientation) +
           commit.terminalActivation.entry.collisionKey + std::string(1, '\0');
       std::erase_if(activations_, [&](const auto &item) {
         return item.first.starts_with(entryPrefix) &&
@@ -4385,7 +4392,7 @@ CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
 
 AcquireActivationResult SkinPackageStore::acquireValidatedActivation(
     const SkinProfileId &profile, const SkinEntryId &entry,
-    std::string_view configurationDigest) {
+    std::string_view configurationDigest, PresentationOrientation orientation) {
   AcquireActivationResult result;
   const auto current = catalog_.snapshot();
   const auto catalogEntry = std::ranges::find_if(
@@ -4408,7 +4415,7 @@ AcquireActivationResult SkinPackageStore::acquireValidatedActivation(
     return result;
   }
   const auto activation =
-      activations_.find(activationKey(profile, entry, configurationDigest));
+      activations_.find(activationKey(profile, entry, configurationDigest, orientation));
   if (activation != activations_.end() &&
       activation->second.revision.revision().lowercaseSha256 ==
           catalogEntry->revisionDigest) {

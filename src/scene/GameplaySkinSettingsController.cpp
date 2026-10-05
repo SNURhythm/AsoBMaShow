@@ -1,6 +1,7 @@
 #include "../i18n/Localization.h"
 #include "GameplaySkinSettingsController.h"
 
+#include "../ArchiveFile.h"
 #include "../skin/SkinTargetTraits.h"
 #include "../skin/package/SkinPathPolicy.h"
 
@@ -13,16 +14,6 @@
 
 namespace skin {
 namespace {
-
-bool endsWithZipAsciiCaseInsensitive(std::string_view value) {
-  if (value.size() < 4) {
-    return false;
-  }
-  const auto suffix = value.substr(value.size() - 4);
-  return suffix[0] == '.' && (suffix[1] == 'z' || suffix[1] == 'Z') &&
-         (suffix[2] == 'i' || suffix[2] == 'I') &&
-         (suffix[3] == 'p' || suffix[3] == 'P');
-}
 
 ControllerActionResult rejected(i18n::Text message) {
   return {.message = std::move(message)};
@@ -95,9 +86,9 @@ suggestSkinPackageName(std::string originalSourceName,
   }
 
   std::string proposed = std::move(*normalized.value);
-  if (pathKind == PlatformTemporaryPathKind::File &&
-      endsWithZipAsciiCaseInsensitive(proposed)) {
-    proposed.resize(proposed.size() - 4);
+  if (pathKind == PlatformTemporaryPathKind::File) {
+    const auto extension = archive_file::archiveExtensionFromName(proposed);
+    proposed.resize(proposed.size() - extension.size());
   }
   auto package = normalizePackageId(proposed);
   if (!package.package) {
@@ -153,6 +144,7 @@ struct GameplaySkinSettingsController::Impl {
   std::shared_ptr<const SkinPackageCatalogSnapshot> projectedCatalog;
   std::string projectedProfileId;
   std::uint64_t projectedProfileGeneration = 0;
+  PresentationOrientation projectedOrientation = PresentationOrientation::Landscape;
   bool projectionInputsReady = false;
 
   void setStatus(i18n::Text message) {
@@ -179,6 +171,7 @@ struct GameplaySkinSettingsController::Impl {
     number(projectedCatalog ? projectedCatalog->sourceGeneration : 0);
     append(projectedProfileId);
     number(projectedProfileGeneration);
+    number(static_cast<int>(projectedOrientation));
     number(static_cast<unsigned>(projected.state));
     number(projected.compatibilityEnabled);
     number(static_cast<unsigned>(projected.safetyLevel));
@@ -255,12 +248,13 @@ struct GameplaySkinSettingsController::Impl {
       return;
     }
     const auto profile =
-        dependencies.profileOwner.snapshot(dependencies.profileId);
+        dependencies.profileOwner.snapshot(dependencies.profileId, dependencies.orientation);
     const auto catalogValue = catalog();
     const bool inputsChanged = !projectionInputsReady ||
                                projectedCatalog != catalogValue ||
                                projectedProfileId != profile.profileId.opaque ||
-                               projectedProfileGeneration != profile.generation;
+                               projectedProfileGeneration != profile.generation ||
+                               projectedOrientation != profile.orientation;
     if (inputsChanged) {
       // Keep the full, display-ready catalog projection stable between catalog
       // or profile generations. Opening a dropdown must not clone every skin
@@ -269,6 +263,8 @@ struct GameplaySkinSettingsController::Impl {
           profile.settings.gameplayCompatibilityEnabled;
       projected.safetyLevel = profile.settings.safetyLevel;
       projected.selectedSkinEntries = profile.settings.selectedSkinEntries;
+      projected.follow5K1S = profile.settings.follow5K1S;
+      projected.follow7K1S = profile.settings.follow7K1S;
       projected.selected7KeyEntry = profile.settings.selected7KeyEntry;
       projected.entries.clear();
       if (catalogValue) {
@@ -296,6 +292,7 @@ struct GameplaySkinSettingsController::Impl {
       projectedCatalog = catalogValue;
       projectedProfileId = profile.profileId.opaque;
       projectedProfileGeneration = profile.generation;
+      projectedOrientation = profile.orientation;
       projectionInputsReady = true;
     }
     projected.history = dependencies.history.records();
@@ -533,7 +530,7 @@ struct GameplaySkinSettingsController::Impl {
     }
     SkinPackageOperationHandle handle;
     const SkinSafetyPolicy safetyPolicy(
-        dependencies.profileOwner.snapshot(dependencies.profileId)
+        dependencies.profileOwner.snapshot(dependencies.profileId, dependencies.orientation)
             .settings.safetyLevel);
     if (pickedSource->temporaryPathKind == PlatformTemporaryPathKind::File) {
       handle = dependencies.operations.submitPrepareArchive(
@@ -943,7 +940,7 @@ struct GameplaySkinSettingsController::Impl {
     if (closed || hasControllerOperation()) {
       return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
     }
-    auto base = dependencies.profileOwner.snapshot(dependencies.profileId);
+    auto base = dependencies.profileOwner.snapshot(dependencies.profileId, dependencies.orientation);
     candidate.sanitize();
     auto handle = dependencies.operations.submitPrepareActivation(
         std::move(base), std::move(entry), std::move(candidate), target);
@@ -963,7 +960,7 @@ struct GameplaySkinSettingsController::Impl {
       return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
     }
     const auto base =
-        dependencies.profileOwner.snapshot(dependencies.profileId);
+        dependencies.profileOwner.snapshot(dependencies.profileId, dependencies.orientation);
     candidate.sanitize();
     auto submission = dependencies.commits.submitProfileSettings(
         dependencies.clientId, base, std::move(candidate));
@@ -1082,7 +1079,7 @@ void GameplaySkinSettingsController::setActiveTarget(int skinType) {
 void GameplaySkinSettingsController::poll() { impl_->poll(); }
 
 void GameplaySkinSettingsController::profileChanged(
-    SkinProfileId profileId, SkinActivationClientId clientId) {
+    SkinProfileId profileId, SkinActivationClientId clientId, PresentationOrientation orientation) {
   if (impl_->closed) {
     return;
   }
@@ -1098,6 +1095,7 @@ void GameplaySkinSettingsController::profileChanged(
   impl_->projected.canCancel = false;
   impl_->projected.pendingSafetyLevel.reset();
   impl_->dependencies.profileId = std::move(profileId);
+  impl_->dependencies.orientation = orientation;
   impl_->dependencies.clientId = clientId;
   impl_->setStatus({});
   impl_->refreshProjection();
@@ -1178,8 +1176,10 @@ GameplaySkinSettingsController::selectGameplayTrait(int skinType,
     return rejected(i18n::message("settings.skins.skin_trait_unsupported.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
+  if (skinType == -5) candidate.follow5K1S = false;
+  if (skinType == -7) candidate.follow7K1S = false;
   candidate.selectedSkinEntries.insert_or_assign(skinType, entry);
   candidate.entriesForTarget(skinType).try_emplace(entry);
   auto selectedEntry = entry;
@@ -1197,8 +1197,10 @@ GameplaySkinSettingsController::clearGameplayTrait(int skinType) {
     return rejected(i18n::message("settings.skins.trait_unavailable.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
+  if (skinType == -5) candidate.follow5K1S = false;
+  if (skinType == -7) candidate.follow7K1S = false;
   candidate.selectedSkinEntries.erase(skinType);
   candidate.selectedGameplayEntries.erase(skinType);
   // An empty new-format map must not be repopulated from a legacy alias.
@@ -1208,12 +1210,28 @@ GameplaySkinSettingsController::clearGameplayTrait(int skinType) {
 }
 
 ControllerActionResult
+GameplaySkinSettingsController::followGameplayTrait(int skinType) {
+  if (impl_->closed || impl_->hasControllerOperation()) {
+    return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
+  }
+  if (skinType != -5 && skinType != -7) {
+    return rejected(i18n::message("settings.skins.trait_unavailable.message"));
+  }
+  auto candidate = impl_->dependencies.profileOwner.snapshot(
+      impl_->dependencies.profileId, impl_->dependencies.orientation).settings;
+  (skinType == -5 ? candidate.follow5K1S : candidate.follow7K1S) = true;
+  candidate.selectedSkinEntries.erase(skinType);
+  candidate.selectedGameplayEntries.erase(skinType);
+  return impl_->submitProfileOnly(std::move(candidate));
+}
+
+ControllerActionResult
 GameplaySkinSettingsController::setCompatibilityEnabled(bool enabled) {
   if (impl_->closed || impl_->hasControllerOperation()) {
     return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   if (enabled) {
     if (candidate.selectedSkinEntries.empty()) {
@@ -1254,7 +1272,7 @@ GameplaySkinSettingsController::setSafetyLevel(SkinSafetyLevel level) {
     return accepted(i18n::message("settings.skins.unrestricted_confirmation_required.message"), false);
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   candidate.safetyLevel = level;
   impl_->projected.pendingSafetyLevel.reset();
@@ -1268,7 +1286,7 @@ GameplaySkinSettingsController::confirmSafetyLevelChange() {
     return rejected(i18n::message("settings.skins.no_safety_confirmation_pending.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   candidate.safetyLevel = *impl_->projected.pendingSafetyLevel;
   const auto result = impl_->submitProfileOnly(std::move(candidate));
@@ -1294,7 +1312,7 @@ GameplaySkinSettingsController::setOption(const SkinEntryId &entry,
     return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   const auto skinType = selectableGameplaySkinType(
       impl_->findCatalogEntry(entry, impl_->catalog()));
@@ -1314,7 +1332,7 @@ ControllerActionResult GameplaySkinSettingsController::setFileChoice(
     return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   const auto skinType = selectableGameplaySkinType(
       impl_->findCatalogEntry(entry, impl_->catalog()));
@@ -1334,7 +1352,7 @@ ControllerActionResult GameplaySkinSettingsController::setOffset(
     return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   const auto skinType = selectableGameplaySkinType(
       impl_->findCatalogEntry(entry, impl_->catalog()));
@@ -1355,7 +1373,7 @@ GameplaySkinSettingsController::setViewport(const SkinEntryId &entry,
     return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
-      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
           .settings;
   const auto declared = selectableGameplaySkinType(
       impl_->findCatalogEntry(entry, impl_->catalog()));

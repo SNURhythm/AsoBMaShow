@@ -172,21 +172,22 @@ class FakeProfileOwner final : public ISkinProfileSettingsOwner,
 public:
   explicit FakeProfileOwner(std::vector<SkinProfileId> profiles) {
     for (auto &profile : profiles) {
-      snapshots_.emplace(
-          profile.opaque,
-          VersionedSkinProfileSettings{.profileId = profile, .generation = 1});
+      for (auto orientation : player_settings::kPresentationOrientations)
+        snapshots_.emplace(std::pair{profile.opaque, orientation},
+            VersionedSkinProfileSettings{.profileId = profile, .generation = 1, .orientation = orientation});
     }
   }
 
   VersionedSkinProfileSettings
-  snapshot(const SkinProfileId &profile) const override {
-    return snapshots_.at(profile.opaque);
+  snapshot(const SkinProfileId &profile, PresentationOrientation orientation = PresentationOrientation::Landscape) const override {
+    return snapshots_.at({profile.opaque, orientation});
   }
 
-  SkinProfileCommitResult beginCommit(const SkinProfileId &profile,
+  using ISkinProfileSettingsOwner::beginCommit;
+  SkinProfileCommitResult beginCommit(const SkinProfileId &profile, PresentationOrientation orientation,
                                       std::uint64_t expectedGeneration,
                                       SkinProfileSettings candidate) override {
-    auto &current = snapshots_.at(profile.opaque);
+    auto &current = snapshots_.at({profile.opaque, orientation});
     if (rejectNextCommitGeneration) {
       rejectNextCommitGeneration = false;
       return {.status = SkinProfileCommitResult::Status::GenerationChanged,
@@ -201,7 +202,7 @@ public:
     const std::uint64_t ticket = ++nextCommitTicket_;
     ++current.generation;
     current.settings = std::move(candidate);
-    commits_.emplace(ticket, profile);
+    commits_.emplace(ticket, std::pair{profile.opaque, orientation});
     return {.status = SkinProfileCommitResult::Status::Pending,
             .ticket = ticket,
             .snapshot = current};
@@ -219,7 +220,7 @@ public:
     }
     return {.status = SkinProfileCommitResult::Status::Persisted,
             .ticket = ticket,
-            .snapshot = snapshots_.at(found->second.opaque)};
+            .snapshot = snapshots_.at(found->second)};
   }
 
   void acknowledgeCommit(std::uint64_t ticket) noexcept override {
@@ -302,8 +303,8 @@ private:
   std::uint64_t nextCommitTicket_ = 0;
   std::uint64_t nextInventoryTicket_ = 0;
   std::uint64_t inventoryGeneration_ = 0;
-  std::map<std::string, VersionedSkinProfileSettings> snapshots_;
-  std::map<std::uint64_t, SkinProfileId> commits_;
+  std::map<std::pair<std::string, PresentationOrientation>, VersionedSkinProfileSettings> snapshots_;
+  std::map<std::uint64_t, std::pair<std::string, PresentationOrientation>> commits_;
   std::vector<std::uint64_t> inventories_;
 };
 
@@ -526,6 +527,13 @@ void testSourceNameSuggestionPreservesTypedSemantics() {
       suggestSkinPackageName("ModernChic.ZIP", PlatformTemporaryPathKind::File);
   expect(archive.ok() && archive.suggestedPackageName == "ModernChic",
          "archive suggestion strips one case-insensitive zip suffix");
+  for (const auto suffix : {".7z", ".RAR", ".lzh", ".tar.gz", ".TAR.BZ2",
+                            ".tar.xz", ".tar.zst", ".tgz", ".zipx", ".cb7"}) {
+    const auto name = suggestSkinPackageName(std::string("ModernChic") + suffix,
+                                            PlatformTemporaryPathKind::File);
+    expect(name.ok() && name.suggestedPackageName == "ModernChic",
+           "archive suggestion removes the complete supported archive suffix");
+  }
   const auto repeated = suggestSkinPackageName("ModernChic.zip.zip",
                                                PlatformTemporaryPathKind::File);
   expect(repeated.ok() && repeated.suggestedPackageName == "ModernChic.zip",
@@ -809,7 +817,7 @@ void testCompatibleModesSaveIndependentSettings() {
       return controller->snapshot().state == GameplaySkinSettingsState::Ready;
     });
   };
-  for (int target : {0, -6, -8}) {
+  for (int target : {0, -6, -7, -8}) {
     expect(controller->selectGameplayTrait(target, entry).accepted && ready(),
            "compatible skin selection commits to the chosen mode");
     expect(controller->setOption(entry, "Play Side", target == -6 ? 921 : 920).accepted && ready(),
@@ -820,14 +828,14 @@ void testCompatibleModesSaveIndependentSettings() {
            "viewport saves for the active mode");
   }
   const auto saved = fixture.owner.snapshot(fixture.profileA).settings;
-  expect(saved.selectedSkinEntries.size() == 3 &&
+  expect(saved.selectedSkinEntries.size() == 4 &&
              saved.entries.at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-6).at(entry).options.at("Play Side") == 921 &&
              saved.modeEntries.at(-8).at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-8).at(entry).viewport.scaleX == 2.0F &&
              saved.entries.at(entry).viewport.scaleX == 1.0F,
          "same source skin keeps independent selections, options and layouts");
-  for (int target : {0, -6, -8}) {
+  for (int target : {0, -6, -7, -8}) {
     const auto &settings = saved.entriesForTarget(target).at(entry);
     const auto activation = fixture.operations->acquireValidatedActivation(
         fixture.profileA, entry, skinConfigurationDigest(settings));
@@ -835,6 +843,20 @@ void testCompatibleModesSaveIndependentSettings() {
                activation.activation->reconciledSettings.options == settings.options,
            "all mode configurations remain separately available for gameplay");
   }
+  expect(controller->followGameplayTrait(-7).accepted && ready(),
+         "scratchless mode can follow its original mode");
+  expect(controller->snapshot().follow7K1S &&
+             !fixture.owner.snapshot(fixture.profileA).settings.selectedSkinEntries.contains(-7),
+         "Follow replaces the child selection without copying a skin entry");
+  expect(controller->selectGameplayTrait(-7, entry).accepted && ready() &&
+             !controller->snapshot().follow7K1S,
+         "selecting an authored scratchless skin exits Follow");
+  expect(controller->followGameplayTrait(-7).accepted && ready() &&
+             controller->clearGameplayTrait(-7).accepted && ready() &&
+             !controller->snapshot().follow7K1S,
+         "selecting Built-in exits Follow independently");
+  expect(!controller->followGameplayTrait(0).accepted,
+         "only scratchless variants offer Follow");
   controller->setActiveTarget(-6);
   expect(controller->snapshot().entries.front().settings.options.at("Play Side") == 921,
          "switching tabs displays that mode's saved configuration");
@@ -1195,6 +1217,55 @@ void testProfileSwitchDetachesPendingProfileSaveAndUnlocksNewProfile() {
                    [&] {
                      const auto settings =
                          fixture.owner.snapshot(fixture.profileB).settings;
+                     const auto found = settings.entries.find(entry);
+                     return found != settings.entries.end() &&
+                            found->second.viewport == custom &&
+                            controller->snapshot().state ==
+                                GameplaySkinSettingsState::Ready;
+                   }),
+         "new profile save completes without receiving the old completion");
+  expect(fixture.owner.snapshot(fixture.profileA)
+                 .settings.entries.at(entry)
+                 .viewport.mode == ViewportMode::Stretch,
+         "detached old profile save remains durable and profile-scoped");
+}
+
+void testOrientationSwitchDetachesPendingProfileSave() {
+  Fixture fixture;
+  const auto folder = fixture.temp.root() / "PendingProfileSave";
+  writeText(folder / "play/play7.luaskin", "return { type = 0 }");
+  fixture.folderResults.push_back(picked(folder, "PendingProfileSave",
+                                         PlatformTemporaryPathKind::Directory));
+  auto controller = fixture.makeController();
+  installQueuedImport(fixture, *controller, false);
+  const SkinEntryId entry = controller->snapshot().entries.front().entry;
+
+  fixture.owner.commitsReady = false;
+  const ViewportSettings stretch{.mode = ViewportMode::Stretch};
+  expect(controller->setViewport(entry, stretch).accepted,
+         "pending-profile fixture starts profile-only persistence");
+  expect(fixture.owner.snapshot(fixture.profileA)
+                 .settings.entries.at(entry)
+                 .viewport.mode == ViewportMode::Stretch,
+         "old profile owns its accepted optimistic settings snapshot");
+
+  controller->profileChanged(fixture.profileA, fixture.commits.createClient(), PresentationOrientation::Portrait);
+  expect(controller->snapshot().state == GameplaySkinSettingsState::Ready,
+         "profile switch clears detached profile-save wait state locally");
+  const ViewportSettings custom{.mode = ViewportMode::Custom,
+                                .customBase = CustomViewportBase::Fit,
+                                .scaleX = 1.25F,
+                                .scaleY = 0.75F,
+                                .translateX = 20.0F,
+                                .translateY = -12.0F};
+  expect(controller->setViewport(entry, custom).accepted,
+         "new profile accepts a save while old profile save remains pending");
+
+  fixture.owner.commitsReady = true;
+  expect(pumpUntil(fixture, *controller,
+                   [&] {
+                     const auto settings =
+                         fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
                      const auto found = settings.entries.find(entry);
                      return found != settings.entries.end() &&
                             found->second.viewport == custom &&
@@ -1667,7 +1738,8 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
                                          .scaleX = 100.0F,
                                          .scaleY = 0.01F,
                                          .translateX = 20'000.0F,
-                                         .translateY = -20'000.0F};
+                                         .translateY = -20'000.0F,
+                                         .playAreaBottomPaddingPercent = 80.0F};
   expect(controller->setViewport(entry, excessiveCustom).accepted,
          "Custom viewport enters profile-only persistence");
   const ViewportSettings sanitizedCustom{.mode = ViewportMode::Custom,
@@ -1676,7 +1748,8 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
                                          .scaleX = 10.0F,
                                          .scaleY = 0.1F,
                                          .translateX = 8'192.0F,
-                                         .translateY = -8'192.0F};
+                                         .translateY = -8'192.0F,
+                                         .playAreaBottomPaddingPercent = 50.0F};
   expect(pumpUntil(fixture, *controller,
                    [&] {
                      return fixture.owner.snapshot(fixture.profileA)
@@ -1755,6 +1828,7 @@ void testMusicSelectSelectionDefaultsToBuiltInAndSurvivesSanitize() {
 } // namespace
 
 int main() {
+  testOrientationSwitchDetachesPendingProfileSave();
   testSourceNameSuggestionPreservesTypedSemantics();
   testFallbackPackageIdentityIsStableAcrossLanguages();
   testOperationMessagesFollowLanguage();

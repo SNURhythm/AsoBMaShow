@@ -576,7 +576,7 @@ SkinProfileCommitSubmissionResult SkinCommitCoordinator::submitProfileSettings(
 
   SkinProfileCommitResult result;
   try {
-    result = impl_->owner.beginCommit(base.profileId, base.generation,
+    result = impl_->owner.beginCommit(base.profileId, base.orientation, base.generation,
                                       std::move(candidate));
   } catch (...) {
     impl_->profiles.erase(coordinatorTicket);

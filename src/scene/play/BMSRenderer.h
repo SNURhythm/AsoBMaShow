@@ -150,6 +150,7 @@ enum class SubmissionKind {
   JudgementIndicatorPass,
   GaugePass,
   HudPass,
+  JudgementAccentBar,
   TouchPass,
 };
 
@@ -244,6 +245,7 @@ private:
   std::unique_ptr<TextView> judgementTimingMsText;
   std::unique_ptr<TextView> scoreText;
   std::unique_ptr<TextView> comboText;
+  std::unique_ptr<TextView> judgementComboText;
   std::unique_ptr<TextView> pacemakerText;
   std::unique_ptr<TextView> gaugeText;
   std::unique_ptr<View> gaugeTypeBadge;
@@ -286,7 +288,14 @@ private:
   std::atomic<uint32_t> judgementCounterRevision{1};
   uint32_t renderedJudgementCounterRevision = 0;
   JudgementCounterSnapshot renderedJudgementCounterSnapshot;
+  // Input state and replay identities keep the chart's canonical order.
   std::vector<int> laneOrder;
+  std::vector<int> displayedLaneOrder;
+  bool scratchLaneOnRight = false;
+  bool scratchlessSinglePlay = false;
+  bool emptyScratchLaneHidden = false;
+  bool hideEmptyScratchLaneRequested = false;
+  void rebuildDisplayedLaneOrder();
   std::vector<AtomicLaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
@@ -334,6 +343,8 @@ private:
   BMSRendererState state;
   int scratchLaneCount = 0;
   float playAreaWidth = AppSettings::kDefaultPlayAreaWidth;
+  player_settings::PresentationOrientation presentationOrientation = player_settings::PresentationOrientation::Landscape;
+  float configuredLaneLength = AppSettings::kDefaultLaneLength;
   float playAreaLeftX = 0.0f;
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;
@@ -360,7 +371,20 @@ private:
       AppSettings::HiSpeedFixMode::Main;
   double mainBpm = 0.0;
   bool renderHud = true;
+  player_settings::JudgementTextVisibility judgementTextVisibility;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
+  float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
+  int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTextBold = false;
+  bool judgementComboSeparated = false;
+  float comboTextY = AppSettings::kDefaultComboTextY;
+  int comboTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool comboTextBold = false;
+  int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool judgementTimingBold = false;
+  float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
+  int pacemakerDiffSizePercent = AppSettings::kDefaultPacemakerDiffSizePercent;
+  bool pacemakerDiffBold = false;
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
@@ -427,8 +451,10 @@ private:
   std::array<float, 4> hudGaugeRect() const;
   float gameplayHudRightReserveLeft() const;
   float gameplayHudTitleWidth() const;
+  std::array<float, 4> gameplayHudTitleRect() const;
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
+  void refreshJudgementFeedbackTextStyle();
   void updateJudgementCounterText();
   void synchronizeCapturedJudgementHud(const PlayfieldVisualState &);
   void publishJudgementCounterSnapshot(const JudgementCounterSnapshot &snapshot);
@@ -510,6 +536,7 @@ private:
   std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
+  void setScratchLaneOnRight(bool enabled);
   float laneToX(int lane) const;
   const NoteSheet &sheetForLane(int lane) const;
   rendering::TexBatchRenderer &
@@ -518,7 +545,7 @@ private:
   void beginOrderedNoteBatches();
   void flushOrderedNoteBatches();
   void destroyNoteSheetTextures();
-  float calculateLanePlaneScreenTopIntersection();
+  std::pair<float, float> calculateLanePlaneScreenBounds() const;
   NoteSheet graySheet;
   NoteSheet blueSheet;
   NoteSheet scratchSheet;
@@ -606,6 +633,7 @@ public:
   void reset() override;
   void refreshGeometry() override;
   [[nodiscard]] PresentationMode activeMode() const noexcept override;
+  [[nodiscard]] bool hidesScratchLane() const noexcept override { return emptyScratchLaneHidden; }
   [[nodiscard]] std::optional<PresentationFailure>
   lastFailure() const override;
   void setVisibleTimeDurationMilliseconds(int milliseconds);
@@ -633,6 +661,10 @@ public:
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode, int rangeMilliseconds);
   void setJudgementTextY(float y);
+  void setJudgementTimingY(float y);
+  void setPacemakerDiffStyle(float y, int sizePercent, bool bold);
+  void setJudgementFeedbackStyle(int textSizePercent, bool textBold,
+                                int timingSizePercent, bool timingBold);
   void setJudgementCounterEnabled(bool enabled);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
@@ -669,6 +701,20 @@ public:
   void setStartLaneIndicators(std::vector<int> lanes);
   void setStartLaneIndicatorsVisible(bool visible);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  [[nodiscard]] bool lanePressedForTesting(int lane) const {
+    return laneIsCurrentlyPressed(lane);
+  }
+  [[nodiscard]] std::array<const TextView *, 4>
+  judgementFeedbackTextViewsForTesting() const {
+    return {judgeText.get(), judgementTimingDirectionText.get(),
+            judgementTimingMsText.get(), pacemakerDeltaText.get()};
+  }
+  [[nodiscard]] const TextView *comboTextViewForTesting() const {
+    return comboText.get();
+  }
+  [[nodiscard]] const TextView *separatedComboTextViewForTesting() const {
+    return judgementComboText.get();
+  }
   void setCharacterizationRecorder(
       bms_renderer_characterization::Recorder *recorder) {
     characterizationRecorder = recorder;

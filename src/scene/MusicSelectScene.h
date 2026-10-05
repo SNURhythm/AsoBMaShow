@@ -69,6 +69,8 @@ public:
   void onPause() override;
   void onResume() override;
   void onLanguageChanged() override;
+  void onPresentationOrientationChanged() override;
+  bool presentationSkinRefreshPending = false;
   void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &) override;
   void update(float) override;
@@ -343,6 +345,7 @@ private:
     std::string configurationDigest;
     skin::ViewportSettings viewport;
     skin::SkinSafetyLevel safetyLevel;
+    player_settings::PresentationOrientation orientation;
     bool operator==(const SkinActivationIdentity &) const = default;
   };
   std::optional<SkinActivationIdentity> activeSkinIdentity_;

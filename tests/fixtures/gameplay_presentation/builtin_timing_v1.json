@@ -335,6 +335,14 @@
     "judgementIndicatorHudMode": false,
     "judgementIndicatorRangeMilliseconds": 180,
     "judgementTextY": 0.34,
+    "judgementTimingY": 0.65,
+    "judgementTextSizePercent": 100,
+    "judgementTextBold": true,
+    "judgementTimingSizePercent": 100,
+    "judgementTimingBold": true,
+    "pacemakerDiffY": 0.72,
+    "pacemakerDiffSizePercent": 100,
+    "pacemakerDiffBold": true,
     "judgementCounterEnabled": true,
     "judgementCounterPosition": 2,
     "fastSlowCriteria": 0,
@@ -395,26 +403,26 @@
       },
       "projectionBounds": {
         "currentScrollPosition": 3.25,
-        "visibleScrollMin": 3.05798,
+        "visibleScrollMin": 3.098801,
         "visibleScrollMax": 4.5,
         "visibleReferenceBpm": 120.0,
         "hispeed": 0.8,
-        "rxhs": 6.835218,
+        "rxhs": 6.835217,
         "playAreaLeftX": 0.0,
         "playAreaWidth": 8.0,
         "noteWidth": 1.0,
         "noteHeight": 0.3125,
-        "lowerY": -1.0,
+        "lowerY": -0.720979,
         "judgeY": 0.0,
-        "upperY": 8.544023,
-        "noteVisibleUpperY": 8.544023
+        "upperY": 8.544022,
+        "noteVisibleUpperY": 8.544022
       },
       "timelineProjection": [
         {
           "sequence": 0,
           "timelineOrdinal": 0,
           "timeMicros": 0,
-          "y": -22.214458,
+          "y": -22.214457,
           "future": false,
           "finite": true
         },
@@ -422,7 +430,7 @@
           "sequence": 1,
           "timelineOrdinal": 1,
           "timeMicros": 350000,
-          "y": -17.429806,
+          "y": -17.429804,
           "future": false,
           "finite": true
         },
@@ -430,7 +438,7 @@
           "sequence": 2,
           "timelineOrdinal": 2,
           "timeMicros": 650000,
-          "y": -13.328675,
+          "y": -13.328674,
           "future": false,
           "finite": true
         },
@@ -438,7 +446,7 @@
           "sequence": 3,
           "timelineOrdinal": 3,
           "timeMicros": 1100000,
-          "y": -7.176979,
+          "y": -7.176978,
           "future": false,
           "finite": true
         },
@@ -478,15 +486,7 @@
           "sequence": 8,
           "timelineOrdinal": 8,
           "timeMicros": 2250000,
-          "y": 8.544023,
-          "future": true,
-          "finite": true
-        },
-        {
-          "sequence": 9,
-          "timelineOrdinal": 9,
-          "timeMicros": 2800000,
-          "y": 16.062761,
+          "y": 8.544022,
           "future": true,
           "finite": true
         }
@@ -507,7 +507,7 @@
             0.0,
             0.0,
             8.0,
-            8.544023
+            8.544022
           ]
         },
         {
@@ -631,103 +631,49 @@
           "longBodyState": "none",
           "rect": [
             0.0,
-            8.544023,
+            8.544022,
             8.0,
             0.05
           ]
         },
         {
           "sequence": 8,
-          "kind": "normal",
+          "kind": "longBody",
           "view": "main",
-          "depth": 191,
-          "timelineOrdinal": 8,
-          "pairedTimelineOrdinal": 18446744073709551615,
-          "timeMicros": 2250000,
-          "lane": 0,
+          "depth": 183,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
           "primitiveOrdinal": 0,
-          "longBodyState": "none",
+          "longBodyState": "off",
           "rect": [
+            4.0,
+            -1.033479,
             1.0,
-            8.544023,
-            1.0,
-            0.3125
+            9.5775
           ]
         },
         {
           "sequence": 9,
-          "kind": "mine",
+          "kind": "longHead",
           "view": "main",
-          "depth": 191,
-          "timelineOrdinal": 8,
-          "pairedTimelineOrdinal": 18446744073709551615,
-          "timeMicros": 2250000,
-          "lane": 5,
+          "depth": 184,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
           "primitiveOrdinal": 0,
           "longBodyState": "none",
           "rect": [
-            6.0,
-            8.544023,
+            4.0,
+            -1.033479,
             1.0,
             0.3125
           ]
         },
         {
           "sequence": 10,
-          "kind": "longBody",
-          "view": "main",
-          "depth": 188,
-          "timelineOrdinal": 6,
-          "pairedTimelineOrdinal": 14,
-          "timeMicros": 1700000,
-          "lane": 6,
-          "primitiveOrdinal": 0,
-          "longBodyState": "off",
-          "rect": [
-            7.0,
-            1.025283,
-            1.0,
-            7.51874
-          ]
-        },
-        {
-          "sequence": 11,
-          "kind": "longTail",
-          "view": "main",
-          "depth": 189,
-          "timelineOrdinal": 14,
-          "pairedTimelineOrdinal": 6,
-          "timeMicros": 4100000,
-          "lane": 6,
-          "primitiveOrdinal": 0,
-          "longBodyState": "none",
-          "rect": [
-            7.0,
-            8.544023,
-            1.0,
-            0.3125
-          ]
-        },
-        {
-          "sequence": 12,
-          "kind": "longHead",
-          "view": "main",
-          "depth": 189,
-          "timelineOrdinal": 6,
-          "pairedTimelineOrdinal": 14,
-          "timeMicros": 1700000,
-          "lane": 6,
-          "primitiveOrdinal": 0,
-          "longBodyState": "none",
-          "rect": [
-            7.0,
-            1.025283,
-            1.0,
-            0.3125
-          ]
-        },
-        {
-          "sequence": 13,
           "kind": "longBody",
           "view": "main",
           "depth": 185,
@@ -741,11 +687,11 @@
             5.0,
             -3.75937,
             1.0,
-            12.303392
+            12.303391
           ]
         },
         {
-          "sequence": 14,
+          "sequence": 11,
           "kind": "longTail",
           "view": "main",
           "depth": 186,
@@ -757,13 +703,13 @@
           "longBodyState": "none",
           "rect": [
             5.0,
-            8.544023,
+            8.544022,
             1.0,
             0.3125
           ]
         },
         {
-          "sequence": 15,
+          "sequence": 12,
           "kind": "longHead",
           "view": "main",
           "depth": 186,
@@ -781,37 +727,91 @@
           ]
         },
         {
-          "sequence": 16,
+          "sequence": 13,
           "kind": "longBody",
           "view": "main",
-          "depth": 183,
-          "timelineOrdinal": 3,
-          "pairedTimelineOrdinal": 12,
-          "timeMicros": 1100000,
-          "lane": 3,
+          "depth": 188,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
           "primitiveOrdinal": 0,
           "longBodyState": "off",
           "rect": [
-            4.0,
-            -1.0,
+            7.0,
+            1.025283,
             1.0,
-            9.544023
+            7.518739
+          ]
+        },
+        {
+          "sequence": 14,
+          "kind": "longTail",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 14,
+          "pairedTimelineOrdinal": 6,
+          "timeMicros": 4100000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            8.544022,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 15,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            1.025283,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 16,
+          "kind": "normal",
+          "view": "main",
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 0,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            1.0,
+            8.544022,
+            1.0,
+            0.3125
           ]
         },
         {
           "sequence": 17,
-          "kind": "longHead",
+          "kind": "mine",
           "view": "main",
-          "depth": 184,
-          "timelineOrdinal": 3,
-          "pairedTimelineOrdinal": 12,
-          "timeMicros": 1100000,
-          "lane": 3,
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 5,
           "primitiveOrdinal": 0,
           "longBodyState": "none",
           "rect": [
-            4.0,
-            -1.0,
+            6.0,
+            8.544022,
             1.0,
             0.3125
           ]
@@ -831,7 +831,7 @@
             0.0,
             0.0,
             8.0,
-            8.544023
+            8.544022
           ]
         },
         {
@@ -847,7 +847,7 @@
           "longBodyState": "none",
           "rect": [
             0.0,
-            8.544023,
+            8.544022,
             8.0,
             0.0
           ]
@@ -867,7 +867,7 @@
             0.0,
             0.0,
             8.0,
-            8.544023
+            8.544022
           ]
         },
         {
@@ -885,7 +885,7 @@
             0.0,
             0.0,
             8.0,
-            8.544023
+            8.544022
           ]
         },
         {
@@ -900,7 +900,7 @@
           "primitiveOrdinal": 0,
           "longBodyState": "none",
           "rect": [
-            1702.0,
+            1716.0,
             291.599976,
             30.0,
             496.800018
@@ -1051,26 +1051,26 @@
       },
       "projectionBounds": {
         "currentScrollPosition": 3.25,
-        "visibleScrollMin": 2.997342,
+        "visibleScrollMin": 3.051054,
         "visibleScrollMax": 4.894737,
         "visibleReferenceBpm": 120.0,
         "hispeed": 0.608,
-        "rxhs": 5.194766,
+        "rxhs": 5.194765,
         "playAreaLeftX": 0.0,
         "playAreaWidth": 8.0,
         "noteWidth": 1.0,
         "noteHeight": 0.3125,
-        "lowerY": -1.0,
+        "lowerY": -0.720979,
         "judgeY": 0.0,
-        "upperY": 8.544023,
-        "noteVisibleUpperY": 6.493457
+        "upperY": 8.544022,
+        "noteVisibleUpperY": 6.493456
       },
       "timelineProjection": [
         {
           "sequence": 0,
           "timelineOrdinal": 0,
           "timeMicros": 0,
-          "y": -16.882988,
+          "y": -16.882986,
           "future": false,
           "finite": true
         },
@@ -1078,7 +1078,7 @@
           "sequence": 1,
           "timelineOrdinal": 1,
           "timeMicros": 350000,
-          "y": -13.246652,
+          "y": -13.246651,
           "future": false,
           "finite": true
         },
@@ -1086,7 +1086,7 @@
           "sequence": 2,
           "timelineOrdinal": 2,
           "timeMicros": 650000,
-          "y": -10.129793,
+          "y": -10.129792,
           "future": false,
           "finite": true
         },
@@ -1094,7 +1094,7 @@
           "sequence": 3,
           "timelineOrdinal": 3,
           "timeMicros": 1100000,
-          "y": -5.454504,
+          "y": -5.454503,
           "future": false,
           "finite": true
         },
@@ -1134,7 +1134,7 @@
           "sequence": 8,
           "timelineOrdinal": 8,
           "timeMicros": 2250000,
-          "y": 6.493457,
+          "y": 6.493456,
           "future": true,
           "finite": true
         },
@@ -1142,7 +1142,7 @@
           "sequence": 9,
           "timelineOrdinal": 9,
           "timeMicros": 2800000,
-          "y": 12.207699,
+          "y": 12.207698,
           "future": true,
           "finite": true
         }
@@ -1163,7 +1163,7 @@
             0.0,
             0.0,
             8.0,
-            8.544023
+            8.544022
           ]
         },
         {
@@ -1287,103 +1287,49 @@
           "longBodyState": "none",
           "rect": [
             0.0,
-            6.493457,
+            6.493456,
             8.0,
             0.05
           ]
         },
         {
           "sequence": 8,
-          "kind": "normal",
+          "kind": "longBody",
           "view": "main",
-          "depth": 191,
-          "timelineOrdinal": 8,
-          "pairedTimelineOrdinal": 18446744073709551615,
-          "timeMicros": 2250000,
-          "lane": 0,
+          "depth": 183,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
           "primitiveOrdinal": 0,
-          "longBodyState": "none",
+          "longBodyState": "off",
           "rect": [
+            4.0,
+            -1.033479,
             1.0,
-            6.493457,
-            1.0,
-            0.3125
+            9.5775
           ]
         },
         {
           "sequence": 9,
-          "kind": "mine",
+          "kind": "longHead",
           "view": "main",
-          "depth": 191,
-          "timelineOrdinal": 8,
-          "pairedTimelineOrdinal": 18446744073709551615,
-          "timeMicros": 2250000,
-          "lane": 5,
+          "depth": 184,
+          "timelineOrdinal": 3,
+          "pairedTimelineOrdinal": 12,
+          "timeMicros": 1100000,
+          "lane": 3,
           "primitiveOrdinal": 0,
           "longBodyState": "none",
           "rect": [
-            6.0,
-            6.493457,
+            4.0,
+            -1.033479,
             1.0,
             0.3125
           ]
         },
         {
           "sequence": 10,
-          "kind": "longBody",
-          "view": "main",
-          "depth": 188,
-          "timelineOrdinal": 6,
-          "pairedTimelineOrdinal": 14,
-          "timeMicros": 1700000,
-          "lane": 6,
-          "primitiveOrdinal": 0,
-          "longBodyState": "off",
-          "rect": [
-            7.0,
-            0.779215,
-            1.0,
-            7.764808
-          ]
-        },
-        {
-          "sequence": 11,
-          "kind": "longTail",
-          "view": "main",
-          "depth": 189,
-          "timelineOrdinal": 14,
-          "pairedTimelineOrdinal": 6,
-          "timeMicros": 4100000,
-          "lane": 6,
-          "primitiveOrdinal": 0,
-          "longBodyState": "none",
-          "rect": [
-            7.0,
-            8.544023,
-            1.0,
-            0.3125
-          ]
-        },
-        {
-          "sequence": 12,
-          "kind": "longHead",
-          "view": "main",
-          "depth": 189,
-          "timelineOrdinal": 6,
-          "pairedTimelineOrdinal": 14,
-          "timeMicros": 1700000,
-          "lane": 6,
-          "primitiveOrdinal": 0,
-          "longBodyState": "none",
-          "rect": [
-            7.0,
-            0.779215,
-            1.0,
-            0.3125
-          ]
-        },
-        {
-          "sequence": 13,
           "kind": "longBody",
           "view": "main",
           "depth": 185,
@@ -1397,11 +1343,11 @@
             5.0,
             -2.857121,
             1.0,
-            11.401144
+            11.401142
           ]
         },
         {
-          "sequence": 14,
+          "sequence": 11,
           "kind": "longTail",
           "view": "main",
           "depth": 186,
@@ -1413,13 +1359,13 @@
           "longBodyState": "none",
           "rect": [
             5.0,
-            8.544023,
+            8.544022,
             1.0,
             0.3125
           ]
         },
         {
-          "sequence": 15,
+          "sequence": 12,
           "kind": "longHead",
           "view": "main",
           "depth": 186,
@@ -1437,37 +1383,91 @@
           ]
         },
         {
-          "sequence": 16,
+          "sequence": 13,
           "kind": "longBody",
           "view": "main",
-          "depth": 183,
-          "timelineOrdinal": 3,
-          "pairedTimelineOrdinal": 12,
-          "timeMicros": 1100000,
-          "lane": 3,
+          "depth": 188,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
           "primitiveOrdinal": 0,
           "longBodyState": "off",
           "rect": [
-            4.0,
-            -1.0,
+            7.0,
+            0.779215,
             1.0,
-            9.544023
+            7.764807
+          ]
+        },
+        {
+          "sequence": 14,
+          "kind": "longTail",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 14,
+          "pairedTimelineOrdinal": 6,
+          "timeMicros": 4100000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            8.544022,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 15,
+          "kind": "longHead",
+          "view": "main",
+          "depth": 189,
+          "timelineOrdinal": 6,
+          "pairedTimelineOrdinal": 14,
+          "timeMicros": 1700000,
+          "lane": 6,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            7.0,
+            0.779215,
+            1.0,
+            0.3125
+          ]
+        },
+        {
+          "sequence": 16,
+          "kind": "normal",
+          "view": "main",
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 0,
+          "primitiveOrdinal": 0,
+          "longBodyState": "none",
+          "rect": [
+            1.0,
+            6.493456,
+            1.0,
+            0.3125
           ]
         },
         {
           "sequence": 17,
-          "kind": "longHead",
+          "kind": "mine",
           "view": "main",
-          "depth": 184,
-          "timelineOrdinal": 3,
-          "pairedTimelineOrdinal": 12,
-          "timeMicros": 1100000,
-          "lane": 3,
+          "depth": 191,
+          "timelineOrdinal": 8,
+          "pairedTimelineOrdinal": 18446744073709551615,
+          "timeMicros": 2250000,
+          "lane": 5,
           "primitiveOrdinal": 0,
           "longBodyState": "none",
           "rect": [
-            4.0,
-            -1.0,
+            6.0,
+            6.493456,
             1.0,
             0.3125
           ]
@@ -1487,7 +1487,7 @@
             0.0,
             0.0,
             8.0,
-            6.493457
+            6.493456
           ]
         },
         {
@@ -1503,9 +1503,9 @@
           "longBodyState": "none",
           "rect": [
             0.0,
-            6.493457,
+            6.493456,
             8.0,
-            2.050566
+            2.050565
           ]
         },
         {
@@ -1523,7 +1523,7 @@
             0.0,
             0.0,
             8.0,
-            6.493457
+            6.493456
           ]
         },
         {
@@ -1541,7 +1541,7 @@
             0.0,
             0.0,
             8.0,
-            8.544023
+            8.544022
           ]
         },
         {
@@ -1556,7 +1556,7 @@
           "primitiveOrdinal": 0,
           "longBodyState": "none",
           "rect": [
-            1702.0,
+            1716.0,
             291.599976,
             30.0,
             496.800018
@@ -1700,21 +1700,21 @@
   "laneCoverResponse": {
     "before": {
       "percent": 0,
-      "noteVisibleUpperY": 8.544023,
+      "noteVisibleUpperY": 8.544022,
       "visibleReferenceBpm": 120.0,
-      "probeNoteY": 8.544023
+      "probeNoteY": 8.544022
     },
     "after": {
       "percent": 24,
-      "noteVisibleUpperY": 6.493457,
+      "noteVisibleUpperY": 6.493456,
       "visibleReferenceBpm": 120.0,
-      "probeNoteY": 6.493457
+      "probeNoteY": 6.493456
     },
     "dragProbe": {
       "requestedPercent": 40,
       "renderX": 640.0,
-      "renderY": 140.765137,
-      "grabOffset": 0.182813,
+      "renderY": 140.765167,
+      "grabOffset": 0.182814,
       "returnedPercent": 40
     }
   }

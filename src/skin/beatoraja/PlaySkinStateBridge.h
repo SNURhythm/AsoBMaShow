@@ -163,7 +163,8 @@ public:
   PlaySkinStateBridge &operator=(PlaySkinStateBridge &&) = delete;
 
   void beginFrame(const PlayfieldVisualState &,
-                  const PlayfieldProjectionResult &);
+                  const PlayfieldProjectionResult &,
+                  std::optional<PlaySkinVisibleScroll> visibleScroll = std::nullopt);
   SkinHostCallResult updateCustomObjects();
   SkinHostCallResult executeEvent(int, std::span<const int> arguments);
   SkinHostCallResult invokeEventBinding(SkinEventBindingId,
@@ -248,6 +249,7 @@ private:
   std::uint64_t frameSerial_ = 0;
   std::uint64_t lastAcceptedFrameSerial_ = 0;
   std::optional<BuiltInRendererTraversal> builtInTraversal_;
+  std::optional<PlaySkinVisibleScroll> visibleScroll_;
   SkinRuntimeOffset liftOffset_;
   SkinRuntimeOffset laneCoverOffset_;
   SkinRuntimeOffset hiddenCoverOffset_;

@@ -22,6 +22,8 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace settings_scene {
 // Let Yoga size the button from its content and horizontal padding.
@@ -83,6 +85,8 @@ inline SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.left * static_cast<float>(rendering::window_width)));
   insets.right = static_cast<int>(std::lround(
       normalized.right * static_cast<float>(rendering::window_width)));
+  insets.bottom = static_cast<int>(std::lround(
+      normalized.bottom * static_cast<float>(rendering::window_height)));
 #endif
   return insets;
 }
@@ -90,7 +94,8 @@ inline SafeAreaInsets getSafeAreaInsetsUi() {
 inline LayoutMetrics resolveLayoutMetrics() {
   LayoutMetrics metrics;
   metrics.safe = getSafeAreaInsetsUi();
-  metrics.compact = rendering::window_height < 980;
+  metrics.compact = rendering::window_height < 980 ||
+                    rendering::window_width < rendering::window_height;
   metrics.ultraCompact = rendering::window_height < 860;
 
   if (metrics.ultraCompact) {
@@ -501,20 +506,16 @@ inline float clampBgaBlur(float value) {
                     AppSettings::kMaxBgaBlurStrength);
 }
 
-inline float clampLaneAngle(float value) {
-  if (!std::isfinite(value)) {
-    return AppSettings::kDefaultLaneAngleDegrees;
-  }
-  return std::clamp(value, AppSettings::kMinLaneAngleDegrees,
-                    AppSettings::kMaxLaneAngleDegrees);
+inline float clampLaneAngle(const AppSettings &settings, float value) {
+  const auto range = settings.geometryPolicy().angle;
+  return std::isfinite(value) ? std::clamp(value, range.minimum, range.maximum)
+                              : range.defaultValue;
 }
 
-inline float clampLaneLength(float value) {
-  if (!std::isfinite(value)) {
-    return AppSettings::kDefaultLaneLength;
-  }
-  return std::clamp(value, AppSettings::kMinLaneLength,
-                    AppSettings::kMaxLaneLength);
+inline float clampLaneLength(const AppSettings &settings, float value) {
+  const auto range = settings.geometryPolicy().length;
+  return std::isfinite(value) ? std::clamp(value, range.minimum, range.maximum)
+                              : range.defaultValue;
 }
 
 inline int clampLaneBeamLengthPercent(int value) {
@@ -527,12 +528,10 @@ inline int clampNoteStartPositionPercent(int value) {
                     AppSettings::kMaxNoteStartPositionPercent);
 }
 
-inline float clampPlayAreaWidth(float value) {
-  if (!std::isfinite(value)) {
-    return AppSettings::kDefaultPlayAreaWidth;
-  }
-  return std::clamp(value, AppSettings::kMinPlayAreaWidth,
-                    AppSettings::kMaxPlayAreaWidth);
+inline float clampPlayAreaWidth(const AppSettings &settings, float value) {
+  const auto range = settings.geometryPolicy().width;
+  return std::isfinite(value) ? std::clamp(value, range.minimum, range.maximum)
+                              : range.defaultValue;
 }
 
 inline float clampJudgementIndicatorY(float value) {
@@ -687,7 +686,7 @@ inline std::string formatJudgementPercentLabel(int percent) {
 }
 
 inline std::string formatPlayAreaWidthLabel(float width) {
-  return formatFloatValue(clampPlayAreaWidth(width), 1);
+  return formatFloatValue(width, 1);
 }
 
 inline i18n::Text formatJudgementIndicatorRenderModeLabel(
@@ -934,5 +933,22 @@ inline AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {
   }
   return AppSettings::UiThemeMode::Dark;
 }
+
+} // namespace settings_scene
+
+namespace settings_scene {
+
+struct GameplaySkinChoiceButton {
+  i18n::Text label;
+  bool selected = false;
+  std::function<void()> action;
+  std::function<bool()> tryAction;
+};
+
+void styleGameplaySkinChoiceButton(Button *button, bool selected);
+View *makeGameplaySkinChoiceRow(const LayoutMetrics &metrics,
+                                const i18n::Text &label, bool enabled,
+                                std::vector<GameplaySkinChoiceButton> choices);
+int sanitizeOffsetComponent(std::string_view text, int fallback);
 
 } // namespace settings_scene

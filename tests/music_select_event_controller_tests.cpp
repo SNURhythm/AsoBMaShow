@@ -243,16 +243,16 @@ void testSelectedPlayConfigGuardsAndRemainingModifiers() {
   require(settings.autoSaveReplay[0] == 0 && settings.autoSaveReplay[1] == 10,
           "autosave replay cycles all eleven source constraints");
 
-  const bool laneCover = settings.laneCoverEnabled;
-  const bool lift = settings.liftEnabled;
-  const bool hidden = settings.hiddenEnabled;
+  const bool laneCover = settings.presentation().laneCoverEnabled;
+  const bool lift = settings.presentation().liftEnabled;
+  const bool hidden = settings.presentation().hiddenEnabled;
   const bool autoHispeed = settings.hispeedAutoAdjust;
   (void)run(context, 330);
   (void)run(context, 331);
   (void)run(context, 332);
   (void)run(context, 342);
-  require(settings.laneCoverEnabled != laneCover &&
-              settings.liftEnabled != lift && settings.hiddenEnabled != hidden &&
+  require(settings.presentation().laneCoverEnabled != laneCover &&
+              settings.presentation().liftEnabled != lift && settings.presentation().hiddenEnabled != hidden &&
               settings.hispeedAutoAdjust != autoHispeed,
           "selected PlayConfig boolean events toggle exact fields");
 

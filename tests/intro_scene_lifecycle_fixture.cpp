@@ -115,6 +115,7 @@ public:
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0, inputDeviceSubscription_ = 0;
   int layoutWidth_ = -1, layoutHeight_ = -1;
+  bool pendingStart_ = false;
 };
 INTRO_METHODS
 

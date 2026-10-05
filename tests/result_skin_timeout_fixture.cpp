@@ -73,18 +73,34 @@ struct View {
   static void dispatchDeferredEventCallbacks() {}
 };
 class SceneManager;
+namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
+namespace skin {
+std::optional<int> makeSkinProfileId(int id) { return id; }
+struct Lifecycle { void profileChanged(int, player_settings::PresentationOrientation) {} };
+}
 struct BackgroundTasks { void setGameplayPaused(bool) {} };
 struct InputDeviceRegistry {
   struct Pointer { float x = 0, y = 0; bool normalized = false; };
   std::optional<Pointer> pointerPosition() const { return std::nullopt; }
 };
 struct ApplicationContext {
+  struct {
+    player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+    auto activePresentationOrientation() const { return orientation; }
+    void setActivePresentationOrientation(player_settings::PresentationOrientation value) { orientation = value; }
+  } settings;
+  skin::Lifecycle *gameplaySkinLifecycle = nullptr;
+  struct {
+    struct Profile { int id = 1; };
+    Profile activeProfile() const { return {}; }
+  } profileManager;
   Uint64 currentFrame = 0;
   FakeRenderer uiBatchRenderer;
   SceneManager *sceneManager = nullptr;
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
+  std::function<void(bool)> setGameplayOrientationLocked;
   int gameplayBgaCompositeState = 0;
   InputDeviceRegistry inputDeviceRegistry;
 };

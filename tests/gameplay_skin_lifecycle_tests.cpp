@@ -136,14 +136,15 @@ public:
               return true;
             },
         .snapshotProfile =
-            [this](const SkinProfileId &requested) {
+            [this](const SkinProfileId &requested, PresentationOrientation orientation) {
               require(requested == profile,
                       "lifecycle snapshots the active profile");
+              require(orientation == owner.orientation, "lifecycle snapshots the originating orientation");
               return owner;
             },
         .acquireActivation =
             [this](const SkinProfileId &requested, const SkinEntryId &selected,
-                   std::string_view digest) {
+                   std::string_view digest, PresentationOrientation orientation) {
               ++acquireCalls;
               operationEvents.emplace_back("acquire");
               AcquireActivationResult result;
@@ -437,7 +438,8 @@ public:
                 chart.activation.revision.revision().lowercaseSha256,
             .expectedConfigurationDigest = chart.activation.configurationDigest,
             .frameSerial = frame,
-            .orderedWrites = std::move(ordered)};
+            .orderedWrites = std::move(ordered),
+            .orientation = chart.orientation};
   }
 
   TempDirectory temp;
@@ -901,6 +903,23 @@ void testStaleSessionIsDiagnosedAndCannotEnterWriterChain() {
           "a stale session is discarded without changing desired settings");
 }
 
+void testWriterRejectsDifferentOrientationWithOtherwiseMatchingIdentity() {
+  LifecycleFake fake;
+  fake.owner.orientation = PresentationOrientation::Portrait;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile, PresentationOrientation::Portrait);
+  const auto chart = lifecycle.acquireForNextChart();
+  require(chart && chart->orientation == PresentationOrientation::Portrait,
+          "chart activation captures portrait owner");
+  auto stale = fake.request(*chart, 10, {SetSkinOption{.key = "choice", .value = 4}});
+  stale.orientation = PresentationOrientation::Landscape;
+  fake.writes.push_back(std::move(stale));
+  lifecycle.poll();
+  require(fake.prepares.empty() && !fake.diagnostics.empty() &&
+              fake.owner.settings.entries.at(fake.entry).options.at("choice") == 0,
+          "same session/digest cannot save to a different orientation");
+}
+
 void testWriterIngressIsBoundedPerSession() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -965,6 +984,27 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
   require(!lifecycle.acquireForNextChart(5).has_value() &&
               !lifecycle.acquireForNextChart(7).has_value(),
           "additional mode selections must not select skins for their source modes");
+}
+
+void testScratchlessFollowTracksOriginalSelection() {
+  LifecycleFake fake;
+  fake.owner.settings.follow5K1S = true;
+  fake.owner.settings.follow7K1S = true;
+  fake.setSelectedSkinEntries({{1, fake.entry}});
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  require(lifecycle.acquireForNextChart(-5).has_value() &&
+              !lifecycle.acquireForNextChart(-7).has_value(),
+          "following resolves the corresponding source and supports built-in sources");
+  fake.setSelectedSkinEntries({{0, fake.entry}});
+  ++fake.owner.generation;
+  require(!lifecycle.acquireForNextChart(-5).has_value() &&
+              lifecycle.acquireForNextChart(-7).has_value(),
+          "following is live rather than copying the previous source selection");
+  fake.owner.settings.follow7K1S = false;
+  ++fake.owner.generation;
+  require(!lifecycle.acquireForNextChart(-7).has_value(),
+          "switching scratchless mode to built-in stops following the source skin");
 }
 
 void testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure() {
@@ -1345,6 +1385,7 @@ void testShutdownPersistsAcceptedWriterRequests() {
 } // namespace
 
 int main() {
+  testWriterRejectsDifferentOrientationWithOtherwiseMatchingIdentity();
   testStartupUsesRecoveredCatalogWithoutRescan();
   testStartupRestoresPersistedSelectionWithoutRescan();
   testStartupRevalidatesEverySelectedTraitFromCurrentGeneration();
@@ -1364,6 +1405,7 @@ int main() {
   testWriterIngressIsBoundedPerSession();
   testDisabledNextChartClearsThePreviousSessionIdentity();
   testNextChartAcquisitionUsesTheMatchingKeymodeTrait();
+  testScratchlessFollowTracksOriginalSelection();
   testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure();
   testSwitchingSkinRevisionEvictsTheDecodeCache();
   testWriterWaitsForViewportCommitAndRebasesOntoItsSuccessor();

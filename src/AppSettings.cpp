@@ -399,15 +399,125 @@ std::string parsePacemakerTargetId(const std::string &value,
   return fallback;
 }
 
-float sanitizePlayAreaWidth(float width) {
-  return sanitizeFloat(width, AppSettings::kDefaultPlayAreaWidth,
-                       AppSettings::kMinPlayAreaWidth,
-                       AppSettings::kMaxPlayAreaWidth);
-}
 } // namespace
 
-void AppSettings::sanitize() {
+void AppSettings::PresentationSettings::sanitize(PresentationOrientation orientation) {
+  const auto policy = player_settings::presentationGeometryPolicy(orientation);
+  const PresentationSettings defaults(orientation);
   skin.sanitize();
+  laneAngleDegrees = sanitizeFloat(laneAngleDegrees, policy.angle.defaultValue,
+                                   policy.angle.minimum, policy.angle.maximum);
+  laneLength = sanitizeFloat(laneLength, policy.length.defaultValue, policy.length.minimum,
+                             policy.length.maximum);
+  laneBeamLengthPercent =
+      std::clamp(laneBeamLengthPercent, kMinLaneBeamLengthPercent,
+                 kMaxLaneBeamLengthPercent);
+  noteStartPositionPercent =
+      std::clamp(noteStartPositionPercent, kMinNoteStartPositionPercent,
+                 kMaxNoteStartPositionPercent);
+  liftRatio = sanitizeFloat(liftRatio, 0.1F, 0.0F, 1.0F);
+  hiddenRatio = sanitizeFloat(hiddenRatio, 0.1F, 0.0F, 1.0F);
+  playAreaWidth4K = sanitizeFloat(playAreaWidth4K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidthScratchless5K = sanitizeFloat(playAreaWidthScratchless5K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidthScratchless7K = sanitizeFloat(playAreaWidthScratchless7K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidth5K = sanitizeFloat(playAreaWidth5K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidth6K = sanitizeFloat(playAreaWidth6K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidth7K = sanitizeFloat(playAreaWidth7K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidth8K = sanitizeFloat(playAreaWidth8K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidth10K = sanitizeFloat(playAreaWidth10K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  playAreaWidth14K = sanitizeFloat(playAreaWidth14K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
+  judgementIndicatorY =
+      sanitizeFloat(judgementIndicatorY, kDefaultJudgementIndicatorY,
+                    kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
+  judgementIndicatorWidthScale = sanitizeFloat(
+      judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
+      kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
+  judgementIndicatorRangeMilliseconds =
+      judgement_indicator::sanitizeStoredRangeMilliseconds(
+          judgementIndicatorRangeMilliseconds);
+  judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
+                                 kMinJudgementTextY, kMaxJudgementTextY);
+  judgementTimingY = sanitizeFloat(judgementTimingY, defaults.judgementTimingY,
+                                   kMinJudgementTextY, kMaxJudgementTextY);
+  pacemakerDiffY = sanitizeFloat(pacemakerDiffY, defaults.pacemakerDiffY,
+                                 kMinJudgementTextY, kMaxJudgementTextY);
+  pacemakerDiffSizePercent = std::clamp(pacemakerDiffSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
+  judgementTextSizePercent = std::clamp(judgementTextSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
+  comboTextY = sanitizeFloat(comboTextY, defaults.comboTextY,
+                             kMinJudgementTextY, kMaxJudgementTextY);
+  comboTextSizePercent = std::clamp(comboTextSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
+  judgementTimingSizePercent = std::clamp(judgementTimingSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
+  switch (judgementIndicatorRenderMode) {
+  case JudgementIndicatorRenderMode::World3D:
+  case JudgementIndicatorRenderMode::Hud2D:
+    break;
+  default:
+    judgementIndicatorRenderMode = orientation == PresentationOrientation::Portrait
+        ? JudgementIndicatorRenderMode::Hud2D : JudgementIndicatorRenderMode::World3D;
+    break;
+  }
+  switch (judgementCounterPosition) {
+  case JudgementCounterPosition::Top:
+  case JudgementCounterPosition::Left:
+  case JudgementCounterPosition::Right:
+    break;
+  default:
+    judgementCounterPosition = orientation == PresentationOrientation::Portrait
+        ? JudgementCounterPosition::Left : JudgementCounterPosition::Right;
+    break;
+  }
+  auto sanitizeTimingDisplayCriteria =
+      [](JudgementTimingDisplayCriteria &criteria) {
+        switch (criteria) {
+        case JudgementTimingDisplayCriteria::GreatOrBelow:
+        case JudgementTimingDisplayCriteria::PGreatOrBelow:
+        case JudgementTimingDisplayCriteria::GoodOrBelow:
+        case JudgementTimingDisplayCriteria::BadOrBelow:
+        case JudgementTimingDisplayCriteria::Off:
+          break;
+        default:
+          criteria = JudgementTimingDisplayCriteria::GreatOrBelow;
+          break;
+        }
+      };
+  sanitizeTimingDisplayCriteria(judgementTimingFastSlowCriteria);
+  sanitizeTimingDisplayCriteria(judgementTimingMillisecondsCriteria);
+  switch (gaugeBarPosition) {
+  case GaugeBarPosition::World:
+  case GaugeBarPosition::Left:
+  case GaugeBarPosition::Right:
+    break;
+  default:
+    gaugeBarPosition = orientation == PresentationOrientation::Portrait
+        ? GaugeBarPosition::Right : GaugeBarPosition::World;
+    break;
+  }
+}
+
+void AppSettings::sanitize() {
+  switch (notePriorityMode) {
+  case NotePriorityMode::Lowest:
+  case NotePriorityMode::Combo:
+  case NotePriorityMode::Duration:
+  case NotePriorityMode::Score:
+    break;
+  default:
+    notePriorityMode = NotePriorityMode::Combo;
+    break;
+  }
+  skin::SkinProfileSettings safety;
+  safety.safetyLevel = skinSafetyLevel;
+  safety.sanitize();
+  skinSafetyLevel = safety.safetyLevel;
+  for (auto orientation : player_settings::kPresentationOrientations) {
+    auto &value = presentation(orientation);
+    value.skin.safetyLevel = skinSafetyLevel;
+    value.sanitize(orientation);
+  }
   irProviders.try_emplace(std::string(ir::kTachiProviderId),
                           ir::IrProviderSettings{});
   for (auto &[providerId, settings] : irProviders) {
@@ -453,88 +563,6 @@ void AppSettings::sanitize() {
     bgaDisplayMode = BgaDisplayMode::Fit;
     break;
   }
-  laneAngleDegrees = sanitizeFloat(laneAngleDegrees, kDefaultLaneAngleDegrees,
-                                   kMinLaneAngleDegrees, kMaxLaneAngleDegrees);
-  laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
-                             kMaxLaneLength);
-  laneBeamLengthPercent =
-      std::clamp(laneBeamLengthPercent, kMinLaneBeamLengthPercent,
-                 kMaxLaneBeamLengthPercent);
-  noteStartPositionPercent =
-      std::clamp(noteStartPositionPercent, kMinNoteStartPositionPercent,
-                 kMaxNoteStartPositionPercent);
-  liftRatio = sanitizeFloat(liftRatio, 0.1F, 0.0F, 1.0F);
-  hiddenRatio = sanitizeFloat(hiddenRatio, 0.1F, 0.0F, 1.0F);
-  playAreaWidth4K = sanitizePlayAreaWidth(playAreaWidth4K);
-  playAreaWidth5K = sanitizePlayAreaWidth(playAreaWidth5K);
-  playAreaWidth6K = sanitizePlayAreaWidth(playAreaWidth6K);
-  playAreaWidth7K = sanitizePlayAreaWidth(playAreaWidth7K);
-  playAreaWidth8K = sanitizePlayAreaWidth(playAreaWidth8K);
-  playAreaWidth10K = sanitizePlayAreaWidth(playAreaWidth10K);
-  playAreaWidth14K = sanitizePlayAreaWidth(playAreaWidth14K);
-  judgementIndicatorY =
-      sanitizeFloat(judgementIndicatorY, kDefaultJudgementIndicatorY,
-                    kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
-  judgementIndicatorWidthScale = sanitizeFloat(
-      judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
-      kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
-  judgementIndicatorRangeMilliseconds =
-      judgement_indicator::sanitizeStoredRangeMilliseconds(
-          judgementIndicatorRangeMilliseconds);
-  judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
-                                 kMinJudgementTextY, kMaxJudgementTextY);
-  switch (notePriorityMode) {
-  case NotePriorityMode::Lowest:
-  case NotePriorityMode::Combo:
-  case NotePriorityMode::Duration:
-  case NotePriorityMode::Score:
-    break;
-  default:
-    notePriorityMode = NotePriorityMode::Combo;
-    break;
-  }
-  switch (judgementIndicatorRenderMode) {
-  case JudgementIndicatorRenderMode::World3D:
-  case JudgementIndicatorRenderMode::Hud2D:
-    break;
-  default:
-    judgementIndicatorRenderMode = JudgementIndicatorRenderMode::World3D;
-    break;
-  }
-  switch (judgementCounterPosition) {
-  case JudgementCounterPosition::Top:
-  case JudgementCounterPosition::Left:
-  case JudgementCounterPosition::Right:
-    break;
-  default:
-    judgementCounterPosition = JudgementCounterPosition::Right;
-    break;
-  }
-  auto sanitizeTimingDisplayCriteria =
-      [](JudgementTimingDisplayCriteria &criteria) {
-        switch (criteria) {
-        case JudgementTimingDisplayCriteria::GreatOrBelow:
-        case JudgementTimingDisplayCriteria::PGreatOrBelow:
-        case JudgementTimingDisplayCriteria::GoodOrBelow:
-        case JudgementTimingDisplayCriteria::BadOrBelow:
-        case JudgementTimingDisplayCriteria::Off:
-          break;
-        default:
-          criteria = JudgementTimingDisplayCriteria::GreatOrBelow;
-          break;
-        }
-      };
-  sanitizeTimingDisplayCriteria(judgementTimingFastSlowCriteria);
-  sanitizeTimingDisplayCriteria(judgementTimingMillisecondsCriteria);
-  switch (gaugeBarPosition) {
-  case GaugeBarPosition::World:
-  case GaugeBarPosition::Left:
-  case GaugeBarPosition::Right:
-    break;
-  default:
-    gaugeBarPosition = GaugeBarPosition::World;
-    break;
-  }
   switch (hispeedFixMode) {
   case HiSpeedFixMode::Off:
   case HiSpeedFixMode::Start:
@@ -554,6 +582,7 @@ void AppSettings::sanitize() {
     uiThemeMode = UiThemeMode::Dark;
     break;
   }
+  screenOrientation = screen_orientation::sanitize(screenOrientation);
   selectedGameplayRuleset = std::string(gameplayRulesetId(
       gameplayRulesetSelectionOrDefault(selectedGameplayRuleset)));
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
@@ -632,49 +661,58 @@ void AppSettings::sanitize() {
 }
 
 float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
+  if (keyMode == -5 && presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && presentation().skin.follow7K1S) keyMode = 7;
   switch (keyMode) {
+  case -5: return presentation().playAreaWidthScratchless5K;
+  case -7: return presentation().playAreaWidthScratchless7K;
   case 4:
-    return playAreaWidth4K;
+    return presentation().playAreaWidth4K;
   case 5:
-    return playAreaWidth5K;
+    return presentation().playAreaWidth5K;
   case 6:
-    return playAreaWidth6K;
+    return presentation().playAreaWidth6K;
   case 7:
-    return playAreaWidth7K;
+    return presentation().playAreaWidth7K;
   case 8:
-    return playAreaWidth8K;
+    return presentation().playAreaWidth8K;
   case 10:
-    return playAreaWidth10K;
+    return presentation().playAreaWidth10K;
   case 14:
-    return playAreaWidth14K;
+    return presentation().playAreaWidth14K;
   default:
     return kDefaultPlayAreaWidth;
   }
 }
 
 void AppSettings::setPlayAreaWidthForKeyMode(int keyMode, float width) {
-  const float sanitized = sanitizePlayAreaWidth(width);
+  if (keyMode == -5 && presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && presentation().skin.follow7K1S) keyMode = 7;
+  const auto bounds = player_settings::presentationGeometryPolicy(activePresentationOrientation()).width;
+  const float sanitized = sanitizeFloat(width, bounds.defaultValue, bounds.minimum, bounds.maximum);
   switch (keyMode) {
+  case -5: presentation().playAreaWidthScratchless5K = sanitized; break;
+  case -7: presentation().playAreaWidthScratchless7K = sanitized; break;
   case 4:
-    playAreaWidth4K = sanitized;
+    presentation().playAreaWidth4K = sanitized;
     break;
   case 5:
-    playAreaWidth5K = sanitized;
+    presentation().playAreaWidth5K = sanitized;
     break;
   case 6:
-    playAreaWidth6K = sanitized;
+    presentation().playAreaWidth6K = sanitized;
     break;
   case 7:
-    playAreaWidth7K = sanitized;
+    presentation().playAreaWidth7K = sanitized;
     break;
   case 8:
-    playAreaWidth8K = sanitized;
+    presentation().playAreaWidth8K = sanitized;
     break;
   case 10:
-    playAreaWidth10K = sanitized;
+    presentation().playAreaWidth10K = sanitized;
     break;
   case 14:
-    playAreaWidth14K = sanitized;
+    presentation().playAreaWidth14K = sanitized;
     break;
   default:
     break;
@@ -797,88 +835,88 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.bgaDisplayMode =
             parseBgaDisplayMode(value, settings.bgaDisplayMode);
       } else if (key == "lane_angle_degrees") {
-        settings.laneAngleDegrees = std::stof(value);
+        settings.presentation().laneAngleDegrees = std::stof(value);
       } else if (key == "lane_length") {
-        settings.laneLength = std::stof(value);
+        settings.presentation().laneLength = std::stof(value);
       } else if (key == "lane_beam_length_percent") {
-        settings.laneBeamLengthPercent = std::stoi(value);
+        settings.presentation().laneBeamLengthPercent = std::stoi(value);
       } else if (key == "note_start_position_percent") {
-        settings.noteStartPositionPercent = std::stoi(value);
+        settings.presentation().noteStartPositionPercent = std::stoi(value);
       } else if (key == "lane_cover_enabled") {
-        bool parsed = settings.laneCoverEnabled;
+        bool parsed = settings.presentation().laneCoverEnabled;
         if (parseBool(value, parsed)) {
-          settings.laneCoverEnabled = parsed;
+          settings.presentation().laneCoverEnabled = parsed;
         }
       } else if (key == "lift_enabled") {
-        bool parsed = settings.liftEnabled;
+        bool parsed = settings.presentation().liftEnabled;
         if (parseBool(value, parsed)) {
-          settings.liftEnabled = parsed;
+          settings.presentation().liftEnabled = parsed;
         }
       } else if (key == "lift_ratio") {
-        settings.liftRatio = std::stof(value);
+        settings.presentation().liftRatio = std::stof(value);
       } else if (key == "hidden_enabled") {
-        bool parsed = settings.hiddenEnabled;
+        bool parsed = settings.presentation().hiddenEnabled;
         if (parseBool(value, parsed)) {
-          settings.hiddenEnabled = parsed;
+          settings.presentation().hiddenEnabled = parsed;
         }
       } else if (key == "hidden_ratio") {
-        settings.hiddenRatio = std::stof(value);
+        settings.presentation().hiddenRatio = std::stof(value);
       } else if (key == "hispeed_auto_adjust") {
         bool parsed = settings.hispeedAutoAdjust;
         if (parseBool(value, parsed)) {
           settings.hispeedAutoAdjust = parsed;
         }
       } else if (key == "play_area_width_4k") {
-        settings.playAreaWidth4K = std::stof(value);
+        settings.presentation().playAreaWidth4K = std::stof(value);
       } else if (key == "play_area_width_5k") {
-        settings.playAreaWidth5K = std::stof(value);
+        settings.presentation().playAreaWidth5K = std::stof(value);
       } else if (key == "play_area_width_6k") {
-        settings.playAreaWidth6K = std::stof(value);
+        settings.presentation().playAreaWidth6K = std::stof(value);
       } else if (key == "play_area_width_7k") {
-        settings.playAreaWidth7K = std::stof(value);
+        settings.presentation().playAreaWidth7K = std::stof(value);
       } else if (key == "play_area_width_8k") {
-        settings.playAreaWidth8K = std::stof(value);
+        settings.presentation().playAreaWidth8K = std::stof(value);
       } else if (key == "play_area_width_10k") {
-        settings.playAreaWidth10K = std::stof(value);
+        settings.presentation().playAreaWidth10K = std::stof(value);
       } else if (key == "play_area_width_14k") {
-        settings.playAreaWidth14K = std::stof(value);
+        settings.presentation().playAreaWidth14K = std::stof(value);
       } else if (key == "note_priority_mode") {
         settings.notePriorityMode =
             parseNotePriorityMode(value, settings.notePriorityMode);
       } else if (key == "judgement_indicator_enabled") {
-        bool parsed = settings.judgementIndicatorEnabled;
+        bool parsed = settings.presentation().judgementIndicatorEnabled;
         if (parseBool(value, parsed)) {
-          settings.judgementIndicatorEnabled = parsed;
+          settings.presentation().judgementIndicatorEnabled = parsed;
         }
       } else if (key == "judgement_indicator_y") {
-        settings.judgementIndicatorY = std::stof(value);
+        settings.presentation().judgementIndicatorY = std::stof(value);
       } else if (key == "judgement_indicator_width_scale") {
-        settings.judgementIndicatorWidthScale = std::stof(value);
+        settings.presentation().judgementIndicatorWidthScale = std::stof(value);
       } else if (key == "judgement_indicator_render_mode") {
-        settings.judgementIndicatorRenderMode =
+        settings.presentation().judgementIndicatorRenderMode =
             parseJudgementIndicatorRenderMode(
-                value, settings.judgementIndicatorRenderMode);
+                value, settings.presentation().judgementIndicatorRenderMode);
       } else if (key == "judgement_text_y") {
-        settings.judgementTextY = std::stof(value);
+        settings.presentation().judgementTextY = std::stof(value);
       } else if (key == "judgement_counter_enabled") {
-        bool parsed = settings.judgementCounterEnabled;
+        bool parsed = settings.presentation().judgementCounterEnabled;
         if (parseBool(value, parsed)) {
-          settings.judgementCounterEnabled = parsed;
+          settings.presentation().judgementCounterEnabled = parsed;
         }
       } else if (key == "judgement_counter_position") {
-        settings.judgementCounterPosition = parseJudgementCounterPosition(
-            value, settings.judgementCounterPosition);
+        settings.presentation().judgementCounterPosition = parseJudgementCounterPosition(
+            value, settings.presentation().judgementCounterPosition);
       } else if (key == "judgement_timing_fast_slow_criteria") {
-        settings.judgementTimingFastSlowCriteria =
+        settings.presentation().judgementTimingFastSlowCriteria =
             parseJudgementTimingDisplayCriteria(
-                value, settings.judgementTimingFastSlowCriteria);
+                value, settings.presentation().judgementTimingFastSlowCriteria);
       } else if (key == "judgement_timing_milliseconds_criteria") {
-        settings.judgementTimingMillisecondsCriteria =
+        settings.presentation().judgementTimingMillisecondsCriteria =
             parseJudgementTimingDisplayCriteria(
-                value, settings.judgementTimingMillisecondsCriteria);
+                value, settings.presentation().judgementTimingMillisecondsCriteria);
       } else if (key == "gauge_bar_position") {
-        settings.gaugeBarPosition =
-            parseGaugeBarPosition(value, settings.gaugeBarPosition);
+        settings.presentation().gaugeBarPosition =
+            parseGaugeBarPosition(value, settings.presentation().gaugeBarPosition);
       } else if (key == "ui_theme_mode") {
         settings.uiThemeMode = parseUiThemeMode(value, settings.uiThemeMode);
       } else if (key == "system_playback_show_jacket") {

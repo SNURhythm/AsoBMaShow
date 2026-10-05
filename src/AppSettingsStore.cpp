@@ -225,7 +225,12 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
              {"scaleX", settings.viewport.scaleX},
              {"scaleY", settings.viewport.scaleY},
              {"translateX", settings.viewport.translateX},
-             {"translateY", settings.viewport.translateY}}}}}});
+             {"translateY", settings.viewport.translateY},
+             {"centerPlayArea", settings.viewport.centerPlayArea},
+             {"keepHudFixed", settings.viewport.keepHudFixed},
+             {"playAreaZoom", settings.viewport.playAreaZoom},
+             {"playAreaBottomPaddingPercent",
+              settings.viewport.playAreaBottomPaddingPercent}}}}}});
   }
   json selectedSkinEntries = json::object();
   for (const auto &[skinType, entry] : skinSettings.selectedSkinEntries) {
@@ -239,6 +244,8 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
   }
   return {{"safetyLevel", static_cast<int>(skinSettings.safetyLevel)},
           {"modeEntries", std::move(modeEntries)},
+          {"follow5K1S", skinSettings.follow5K1S},
+          {"follow7K1S", skinSettings.follow7K1S},
           {"selectedSkinEntries", std::move(selectedSkinEntries)},
           {"entries", std::move(entries)}};
 }
@@ -315,6 +322,11 @@ void readViewport(const json &encoded, skin::ViewportSettings &viewport,
   readValue(encoded, "scaleY", viewport.scaleY, diagnostics);
   readValue(encoded, "translateX", viewport.translateX, diagnostics);
   readValue(encoded, "translateY", viewport.translateY, diagnostics);
+  readValue(encoded, "centerPlayArea", viewport.centerPlayArea, diagnostics);
+  readValue(encoded, "keepHudFixed", viewport.keepHudFixed, diagnostics);
+  readValue(encoded, "playAreaZoom", viewport.playAreaZoom, diagnostics);
+  readValue(encoded, "playAreaBottomPaddingPercent",
+            viewport.playAreaBottomPaddingPercent, diagnostics);
 }
 
 void readSkinProfileSettings(const json &document,
@@ -331,6 +343,8 @@ void readSkinProfileSettings(const json &document,
   readValue(*found, "gameplayCompatibilityEnabled",
             destination.gameplayCompatibilityEnabled, diagnostics);
   readEnum(*found, "safetyLevel", destination.safetyLevel, diagnostics);
+  readValue(*found, "follow5K1S", destination.follow5K1S, diagnostics);
+  readValue(*found, "follow7K1S", destination.follow7K1S, diagnostics);
   if (const auto selected = found->find("selected7KeyEntry");
       selected != found->end() && !selected->is_null()) {
     destination.selected7KeyEntry =
@@ -522,9 +536,72 @@ void readSkinProfileSettings(const json &document,
   }
 }
 
+json presentationToJson(const AppSettings::PresentationSettings &settings) {
+  json judgementVisibility = json::object();
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+    judgementVisibility[option.label] = settings.judgementTextVisibility.*option.member;
+  }
+  judgementVisibility["COMBO"] = settings.judgementTextVisibility.combo;
+  return {
+      {"scratchLaneOnRight", settings.scratchLaneOnRight},
+      {"hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K},
+      {"hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K},
+      {"playAreaWidthScratchless5K", settings.playAreaWidthScratchless5K},
+      {"playAreaWidthScratchless7K", settings.playAreaWidthScratchless7K},
+      {"laneAngleDegrees", settings.laneAngleDegrees},
+      {"laneLength", settings.laneLength},
+      {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
+      {"noteStartPositionPercent", settings.noteStartPositionPercent},
+      {"laneCoverEnabled", settings.laneCoverEnabled},
+      {"liftEnabled", settings.liftEnabled},
+      {"liftRatio", settings.liftRatio},
+      {"hiddenEnabled", settings.hiddenEnabled},
+      {"hiddenRatio", settings.hiddenRatio},
+      {"playAreaWidth4K", settings.playAreaWidth4K},
+      {"playAreaWidth5K", settings.playAreaWidth5K},
+      {"playAreaWidth6K", settings.playAreaWidth6K},
+      {"playAreaWidth7K", settings.playAreaWidth7K},
+      {"playAreaWidth8K", settings.playAreaWidth8K},
+      {"playAreaWidth10K", settings.playAreaWidth10K},
+      {"playAreaWidth14K", settings.playAreaWidth14K},
+      {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
+      {"judgementIndicatorY", settings.judgementIndicatorY},
+      {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorRangeMilliseconds",
+       settings.judgementIndicatorRangeMilliseconds},
+      {"judgementTextVisibility", std::move(judgementVisibility)},
+      {"judgementTextY", settings.judgementTextY},
+      {"judgementTimingY", settings.judgementTimingY},
+      {"judgementFeedbackSizeVersion", 2},
+      {"judgementTextSizePercent", settings.judgementTextSizePercent},
+      {"judgementTextBold", settings.judgementTextBold},
+      {"judgementComboSeparated", settings.judgementComboSeparated},
+      {"comboTextY", settings.comboTextY},
+      {"comboTextSizePercent", settings.comboTextSizePercent},
+      {"comboTextBold", settings.comboTextBold},
+      {"judgementTimingSizePercent", settings.judgementTimingSizePercent},
+      {"judgementTimingBold", settings.judgementTimingBold},
+      {"pacemakerDiffY", settings.pacemakerDiffY},
+      {"pacemakerDiffSizePercent", settings.pacemakerDiffSizePercent},
+      {"pacemakerDiffBold", settings.pacemakerDiffBold},
+      {"judgementIndicatorRenderMode",
+       static_cast<int>(settings.judgementIndicatorRenderMode)},
+      {"judgementCounterEnabled", settings.judgementCounterEnabled},
+      {"judgementCounterPosition",
+       static_cast<int>(settings.judgementCounterPosition)},
+      {"judgementTimingFastSlowCriteria",
+       static_cast<int>(settings.judgementTimingFastSlowCriteria)},
+      {"judgementTimingMillisecondsCriteria",
+       static_cast<int>(settings.judgementTimingMillisecondsCriteria)},
+      {"gaugeBarPosition", static_cast<int>(settings.gaugeBarPosition)},
+      {"skin", skinProfileSettingsToJson(settings.skin)},
+  };
+}
+
 json settingsToJson(const AppSettings &settings) {
   json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
+      {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
       {"visibleTimeDurationMilliseconds",
@@ -563,41 +640,9 @@ json settingsToJson(const AppSettings &settings) {
       {"bgaBrightnessPercent", settings.bgaBrightnessPercent},
       {"bgaBlurStrength", settings.bgaBlurStrength},
       {"bgaDisplayMode", static_cast<int>(settings.bgaDisplayMode)},
-      {"laneAngleDegrees", settings.laneAngleDegrees},
-      {"laneLength", settings.laneLength},
-      {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
-      {"noteStartPositionPercent", settings.noteStartPositionPercent},
-      {"laneCoverEnabled", settings.laneCoverEnabled},
-      {"liftEnabled", settings.liftEnabled},
-      {"liftRatio", settings.liftRatio},
-      {"hiddenEnabled", settings.hiddenEnabled},
-      {"hiddenRatio", settings.hiddenRatio},
       {"hispeedAutoAdjust", settings.hispeedAutoAdjust},
-      {"playAreaWidth4K", settings.playAreaWidth4K},
-      {"playAreaWidth5K", settings.playAreaWidth5K},
-      {"playAreaWidth6K", settings.playAreaWidth6K},
-      {"playAreaWidth7K", settings.playAreaWidth7K},
-      {"playAreaWidth8K", settings.playAreaWidth8K},
-      {"playAreaWidth10K", settings.playAreaWidth10K},
-      {"playAreaWidth14K", settings.playAreaWidth14K},
-      {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
-      {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
-      {"judgementIndicatorY", settings.judgementIndicatorY},
-      {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
-      {"judgementIndicatorRangeMilliseconds",
-       settings.judgementIndicatorRangeMilliseconds},
-      {"judgementTextY", settings.judgementTextY},
-      {"judgementIndicatorRenderMode",
-       static_cast<int>(settings.judgementIndicatorRenderMode)},
-      {"judgementCounterEnabled", settings.judgementCounterEnabled},
-      {"judgementCounterPosition",
-       static_cast<int>(settings.judgementCounterPosition)},
-      {"judgementTimingFastSlowCriteria",
-       static_cast<int>(settings.judgementTimingFastSlowCriteria)},
-      {"judgementTimingMillisecondsCriteria",
-       static_cast<int>(settings.judgementTimingMillisecondsCriteria)},
-      {"gaugeBarPosition", static_cast<int>(settings.gaugeBarPosition)},
       {"uiThemeMode", static_cast<int>(settings.uiThemeMode)},
+      {"screenOrientation", static_cast<int>(settings.screenOrientation)},
       {"systemPlaybackShowJacket", settings.systemPlaybackShowJacket},
       {"systemPlaybackShowTitle", settings.systemPlaybackShowTitle},
       {"systemPlaybackShowArtist", settings.systemPlaybackShowArtist},
@@ -640,7 +685,6 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
-      {"skin", skinProfileSettingsToJson(settings.skin)},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
         {"requestedSampleRate", settings.audioVideo.audio.requestedSampleRate},
@@ -666,7 +710,104 @@ json settingsToJson(const AppSettings &settings) {
     };
   }
   document["ir"] = {{"providers", std::move(providers)}};
+  document["skinSafetyLevel"] = static_cast<int>(settings.skinSafetyLevel);
+  for (auto orientation : player_settings::kPresentationOrientations) {
+    document["presentations"][player_settings::presentationOrientationName(orientation)] =
+        presentationToJson(settings.presentation(orientation));
+  }
   return document;
+}
+
+void readPresentation(const json &document, AppSettings::PresentationSettings &settings,
+                      std::vector<std::string> &diagnostics,
+                      AppSettings::PresentationOrientation orientation =
+                          AppSettings::PresentationOrientation::Landscape) {
+  readValue(document, "scratchLaneOnRight", settings.scratchLaneOnRight, diagnostics);
+  readValue(document, "hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K, diagnostics);
+  readValue(document, "hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K, diagnostics);
+  readValue(document, "playAreaWidthScratchless5K", settings.playAreaWidthScratchless5K, diagnostics);
+  readValue(document, "playAreaWidthScratchless7K", settings.playAreaWidthScratchless7K, diagnostics);
+  readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
+            diagnostics);
+  readValue(document, "laneLength", settings.laneLength, diagnostics);
+  readValue(document, "laneBeamLengthPercent", settings.laneBeamLengthPercent,
+            diagnostics);
+  readValue(document, "noteStartPositionPercent",
+            settings.noteStartPositionPercent, diagnostics);
+  readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
+            diagnostics);
+  readValue(document, "liftEnabled", settings.liftEnabled, diagnostics);
+  readValue(document, "liftRatio", settings.liftRatio, diagnostics);
+  readValue(document, "hiddenEnabled", settings.hiddenEnabled, diagnostics);
+  readValue(document, "hiddenRatio", settings.hiddenRatio, diagnostics);
+  readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);
+  readValue(document, "playAreaWidth5K", settings.playAreaWidth5K, diagnostics);
+  readValue(document, "playAreaWidth6K", settings.playAreaWidth6K, diagnostics);
+  readValue(document, "playAreaWidth7K", settings.playAreaWidth7K, diagnostics);
+  readValue(document, "playAreaWidth8K", settings.playAreaWidth8K, diagnostics);
+  readValue(document, "playAreaWidth10K", settings.playAreaWidth10K,
+            diagnostics);
+  readValue(document, "playAreaWidth14K", settings.playAreaWidth14K,
+            diagnostics);
+  readValue(document, "judgementIndicatorEnabled",
+            settings.judgementIndicatorEnabled, diagnostics);
+  readValue(document, "judgementIndicatorY", settings.judgementIndicatorY,
+            diagnostics);
+  readValue(document, "judgementIndicatorWidthScale",
+            settings.judgementIndicatorWidthScale, diagnostics);
+  readValue(document, "judgementIndicatorRangeMilliseconds",
+            settings.judgementIndicatorRangeMilliseconds, diagnostics);
+  if (const auto found = document.find("judgementTextVisibility"); found != document.end()) {
+    if (found->is_object()) {
+      for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+        readValue(*found, option.label, settings.judgementTextVisibility.*option.member,
+                  diagnostics);
+      }
+      readValue(*found, "COMBO", settings.judgementTextVisibility.combo, diagnostics);
+    } else {
+      invalidValue("judgementTextVisibility", "expected object", diagnostics);
+    }
+  }
+  readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
+  settings.judgementTimingY = std::clamp(settings.judgementTextY +
+      (AppSettings::PresentationSettings(orientation).judgementTimingY -
+       AppSettings::kDefaultJudgementTextY), 0.0f, 1.0f);
+  readValue(document, "judgementTimingY", settings.judgementTimingY, diagnostics);
+  readValue(document, "judgementTextSizePercent", settings.judgementTextSizePercent, diagnostics);
+  readValue(document, "judgementTextBold", settings.judgementTextBold, diagnostics);
+  readValue(document, "judgementComboSeparated", settings.judgementComboSeparated, diagnostics);
+  readValue(document, "comboTextY", settings.comboTextY, diagnostics);
+  readValue(document, "comboTextSizePercent", settings.comboTextSizePercent, diagnostics);
+  readValue(document, "comboTextBold", settings.comboTextBold, diagnostics);
+  readValue(document, "judgementTimingSizePercent", settings.judgementTimingSizePercent, diagnostics);
+  readValue(document, "judgementTimingBold", settings.judgementTimingBold, diagnostics);
+  readValue(document, "pacemakerDiffY", settings.pacemakerDiffY, diagnostics);
+  readValue(document, "pacemakerDiffSizePercent", settings.pacemakerDiffSizePercent, diagnostics);
+  readValue(document, "pacemakerDiffBold", settings.pacemakerDiffBold, diagnostics);
+  int feedbackSizeVersion = 1;
+  readValue(document, "judgementFeedbackSizeVersion", feedbackSizeVersion, diagnostics);
+  if (feedbackSizeVersion < 2) {
+    // Version 2 makes the former 200% size the new 100% baseline.
+    if (document.contains("judgementTextSizePercent"))
+      settings.judgementTextSizePercent = static_cast<int>(std::lround(
+          std::clamp(settings.judgementTextSizePercent, 50, 200) / 2.0f));
+    if (document.contains("judgementTimingSizePercent"))
+      settings.judgementTimingSizePercent = static_cast<int>(std::lround(
+          std::clamp(settings.judgementTimingSizePercent, 50, 200) / 2.0f));
+  }
+  readEnum(document, "judgementIndicatorRenderMode",
+           settings.judgementIndicatorRenderMode, diagnostics);
+  readValue(document, "judgementCounterEnabled",
+            settings.judgementCounterEnabled, diagnostics);
+  readEnum(document, "judgementCounterPosition",
+           settings.judgementCounterPosition, diagnostics);
+  readEnum(document, "judgementTimingFastSlowCriteria",
+           settings.judgementTimingFastSlowCriteria, diagnostics);
+  readEnum(document, "judgementTimingMillisecondsCriteria",
+           settings.judgementTimingMillisecondsCriteria, diagnostics);
+  readEnum(document, "gaugeBarPosition", settings.gaugeBarPosition,
+           diagnostics);
+  readSkinProfileSettings(document, settings.skin, diagnostics);
 }
 
 AppSettings settingsFromJson(const json &document,
@@ -676,6 +817,7 @@ AppSettings settingsFromJson(const json &document,
       document.contains("selectedGaugeType")) {
     settings.selectedGaugeAutoShiftMode = "none";
   }
+  readEnum(document, "notePriorityMode", settings.notePriorityMode, diagnostics);
   readValue(document, "audioOffsetMs", settings.audioOffsetMs, diagnostics);
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
   if (document.contains("visibleTimeDurationMilliseconds")) {
@@ -744,54 +886,10 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "bgaBlurStrength", settings.bgaBlurStrength, diagnostics);
   readEnum(document, "bgaDisplayMode", settings.bgaDisplayMode, diagnostics);
-  readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
-            diagnostics);
-  readValue(document, "laneLength", settings.laneLength, diagnostics);
-  readValue(document, "laneBeamLengthPercent", settings.laneBeamLengthPercent,
-            diagnostics);
-  readValue(document, "noteStartPositionPercent",
-            settings.noteStartPositionPercent, diagnostics);
-  readValue(document, "laneCoverEnabled", settings.laneCoverEnabled,
-            diagnostics);
-  readValue(document, "liftEnabled", settings.liftEnabled, diagnostics);
-  readValue(document, "liftRatio", settings.liftRatio, diagnostics);
-  readValue(document, "hiddenEnabled", settings.hiddenEnabled, diagnostics);
-  readValue(document, "hiddenRatio", settings.hiddenRatio, diagnostics);
   readValue(document, "hispeedAutoAdjust", settings.hispeedAutoAdjust,
             diagnostics);
-  readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);
-  readValue(document, "playAreaWidth5K", settings.playAreaWidth5K, diagnostics);
-  readValue(document, "playAreaWidth6K", settings.playAreaWidth6K, diagnostics);
-  readValue(document, "playAreaWidth7K", settings.playAreaWidth7K, diagnostics);
-  readValue(document, "playAreaWidth8K", settings.playAreaWidth8K, diagnostics);
-  readValue(document, "playAreaWidth10K", settings.playAreaWidth10K,
-            diagnostics);
-  readValue(document, "playAreaWidth14K", settings.playAreaWidth14K,
-            diagnostics);
-  readEnum(document, "notePriorityMode", settings.notePriorityMode,
-           diagnostics);
-  readValue(document, "judgementIndicatorEnabled",
-            settings.judgementIndicatorEnabled, diagnostics);
-  readValue(document, "judgementIndicatorY", settings.judgementIndicatorY,
-            diagnostics);
-  readValue(document, "judgementIndicatorWidthScale",
-            settings.judgementIndicatorWidthScale, diagnostics);
-  readValue(document, "judgementIndicatorRangeMilliseconds",
-            settings.judgementIndicatorRangeMilliseconds, diagnostics);
-  readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
-  readEnum(document, "judgementIndicatorRenderMode",
-           settings.judgementIndicatorRenderMode, diagnostics);
-  readValue(document, "judgementCounterEnabled",
-            settings.judgementCounterEnabled, diagnostics);
-  readEnum(document, "judgementCounterPosition",
-           settings.judgementCounterPosition, diagnostics);
-  readEnum(document, "judgementTimingFastSlowCriteria",
-           settings.judgementTimingFastSlowCriteria, diagnostics);
-  readEnum(document, "judgementTimingMillisecondsCriteria",
-           settings.judgementTimingMillisecondsCriteria, diagnostics);
-  readEnum(document, "gaugeBarPosition", settings.gaugeBarPosition,
-           diagnostics);
   readEnum(document, "uiThemeMode", settings.uiThemeMode, diagnostics);
+  readEnum(document, "screenOrientation", settings.screenOrientation, diagnostics);
   readValue(document, "systemPlaybackShowJacket",
             settings.systemPlaybackShowJacket, diagnostics);
   readValue(document, "systemPlaybackShowTitle",
@@ -888,7 +986,6 @@ AppSettings settingsFromJson(const json &document,
            diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
-  readSkinProfileSettings(document, settings.skin, diagnostics);
 
   const auto irObject = document.find("ir");
   if (irObject != document.end()) {
@@ -962,6 +1059,28 @@ AppSettings settingsFromJson(const json &document,
     }
   }
 
+  const auto presentations = document.find("presentations");
+  if (presentations == document.end()) {
+    readPresentation(document, settings.presentation(), diagnostics);
+    settings.presentation(AppSettings::PresentationOrientation::Portrait).skin =
+        settings.presentation().skin;
+    settings.skinSafetyLevel = settings.presentation().skin.safetyLevel;
+  } else if (!presentations->is_object()) {
+    invalidValue("presentations", "expected object", diagnostics);
+  } else {
+    for (auto orientation : player_settings::kPresentationOrientations) {
+      const auto name = player_settings::presentationOrientationName(orientation);
+      const auto block = presentations->find(name);
+      if (block == presentations->end()) continue;
+      if (!block->is_object()) {
+        invalidValue(std::string("presentations.") + name, "expected object", diagnostics);
+        continue;
+      }
+      readPresentation(*block, settings.presentation(orientation), diagnostics, orientation);
+    }
+  }
+  readEnum(document, "skinSafetyLevel", settings.skinSafetyLevel, diagnostics);
+
   const json beforeSanitize = settingsToJson(settings);
   settings.sanitize();
   if (settingsToJson(settings) != beforeSanitize) {
@@ -984,7 +1103,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 7> migrations = {
+  const std::array<versioned_json::Migration, 8> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -1079,6 +1198,11 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
           document["skin"]["safetyLevel"] =
               static_cast<int>(skin::SkinSafetyLevel::Standard);
         }
+        return true;
+      },
+      [](json &, std::string &) {
+        // The decoder initializes missing presentation blocks from legacy
+        // fields once; subsequent saves write both named blocks.
         return true;
       }};
   auto loaded = versioned_json::loadAndMigrate(

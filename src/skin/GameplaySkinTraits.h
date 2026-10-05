@@ -24,8 +24,8 @@ struct GameplaySkinTrait {
 // deriving it from key mode: the enum also distinguishes 24K single and
 // double play while charts expose the latter as key mode 48.
 inline constexpr std::array<GameplaySkinTrait, 7> kGameplaySkinTraits = {{
-    {.skinType = 0, .keyMode = 7, .label = "7K"},
-    {.skinType = 1, .keyMode = 5, .label = "5K"},
+    {.skinType = 0, .keyMode = 7, .label = "7K1S"},
+    {.skinType = 1, .keyMode = 5, .label = "5K1S"},
     {.skinType = 2, .keyMode = 14, .label = "7K DP"},
     {.skinType = 3, .keyMode = 10, .label = "5K DP"},
     {.skinType = 4, .keyMode = 9, .label = "9K"},
@@ -51,6 +51,8 @@ gameplaySkinTraitForSkinType(int skinType) noexcept {
 [[nodiscard]] inline std::optional<GameplaySkinTrait>
 gameplaySkinTraitForKeyMode(int keyMode) noexcept {
   switch (keyMode) {
+  case -5: return GameplaySkinTrait{-5, 5, "5K"};
+  case -7: return GameplaySkinTrait{-7, 7, "7K"};
   case 4: return GameplaySkinTrait{-4, 4, "4K"};
   case 6: return GameplaySkinTrait{-6, 6, "6K"};
   case 8: return GameplaySkinTrait{-8, 8, "8K"};

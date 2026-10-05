@@ -767,9 +767,9 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
     out.imageIndexes[321 + replayIndex] =
         settings.autoSaveReplay[static_cast<std::size_t>(replayIndex)];
   }
-  out.imageIndexes[330] = settings.laneCoverEnabled ? 1 : 0;
-  out.imageIndexes[331] = settings.liftEnabled ? 1 : 0;
-  out.imageIndexes[332] = settings.hiddenEnabled ? 1 : 0;
+  out.imageIndexes[330] = settings.presentation().laneCoverEnabled ? 1 : 0;
+  out.imageIndexes[331] = settings.presentation().liftEnabled ? 1 : 0;
+  out.imageIndexes[332] = settings.presentation().hiddenEnabled ? 1 : 0;
   out.imageIndexes[340] =
       beatorajaJudgeAlgorithmImageIndex(settings.notePriorityMode);
   out.imageIndexes[342] = settings.hispeedAutoAdjust ? 1 : 0;

@@ -20,6 +20,16 @@ struct GameplaySkinSettingsActionAvailability {
   bool canInstallPrepared = false;
 };
 
+struct GameplaySkinSelection {
+  std::vector<const GameplaySkinEntryRow *> entries;
+  const GameplaySkinEntryRow *selectedRow = nullptr;
+  bool followsOriginal = false;
+  bool hasSelectedEntry = false;
+};
+
+[[nodiscard]] GameplaySkinSelection gameplaySkinSelectionForTarget(
+    const GameplaySkinSettingsSnapshot &snapshot, const SkinTargetTrait &target);
+
 // The native settings screen consumes this projection in the same sequence as
 // Beatoraja's SkinConfigurationView: declared category heading, its resolved
 // items, a separator, then ungrouped declarations under Other.  Declaration
@@ -40,6 +50,22 @@ struct GameplaySkinCatalogItem {
 
 [[nodiscard]] std::vector<GameplaySkinCatalogItem>
 gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata);
+
+[[nodiscard]] std::optional<SkinTargetTrait> gameplaySkinSettingsTargetForKeyMode(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept;
+
+// Changes only when the effective preview skin, its configuration, viewport,
+// or safety policy changes; progress/status updates do not restart playback.
+[[nodiscard]] std::string gameplaySkinPreviewConfigurationKey(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode);
+
+[[nodiscard]] bool gameplaySkinPreviewCanReload(
+    const GameplaySkinSettingsSnapshot &snapshot, bool presentationReady) noexcept;
+
+// Resolve the preview's effective gameplay selection, including scratchless
+// modes which follow their original skin. The returned row belongs to snapshot.
+[[nodiscard]] const GameplaySkinEntryRow *gameplaySkinSettingsEntryForKeyMode(
+    const GameplaySkinSettingsSnapshot &snapshot, int keyMode) noexcept;
 
 // Invalid and unavailable entries are not selectable gameplay skins, but they
 // must remain reachable for revalidation and removal.

@@ -11,6 +11,7 @@
 #include "scene/ResultGaugeHistory.h"
 #include "scene/play/GameplayGaugeTypes.h"
 #include "skin/DefaultSkin.h"
+#include "view/Button.h"
 #include "view/ClearLampColors.h"
 #include "view/TextView.h"
 #include "view/UiTheme.h"
@@ -322,7 +323,7 @@ void testLocalNormalParity() {
 
   expect(model.title == "Local Result" && model.artist == "Local Artist",
          "local header title and artist are preserved");
-  expect(model.difficulty == "★12 / LV 12" && model.playtype == "7K",
+  expect(model.difficulty == "★12 / LV 12" && model.playtype == "7K1S",
          "local difficulty and key mode are presentation-ready");
   expect(model.score == 1'700 && model.maxScore == 2'000,
          "local score and maximum are preserved");
@@ -580,7 +581,7 @@ void testFullyPopulatedRemotePresentation() {
   const auto model = makeRemoteResultPresentation(remoteScore());
 
   expect(model.title == "Remote Result" && model.artist == "Remote Artist" &&
-             model.difficulty == "ANOTHER" && model.playtype == "7K",
+             model.difficulty == "ANOTHER" && model.playtype == "7K1S",
          "remote header uses canonical title, artist, difficulty, and game");
   expect(model.achievedAtUnixMillis == 1'700'000'000'123LL &&
              model.service == "Bokutachi" && model.client == "AsoBMaShow" &&
@@ -962,6 +963,108 @@ void testDefaultSkinLocalPresentationContract() {
          "local no-previous comparison placeholders remain rendered");
 }
 
+void testPortraitResultKeepsComparisonCardsReadable() {
+  const auto model = makeLocalResultPresentation(localMeta(), localState(), localOptions());
+  const auto root = buildPresentationLayout(model, 1080, 1920, true);
+  const auto *grade = root->findViewByName("resultSummaryCard:grade");
+  const auto *score = root->findViewByName("resultSummaryCard:score");
+  const auto *lamp = root->findViewByName("resultSummaryCard:lamp");
+  const auto *combo = root->findViewByName("resultSummaryCard:combo");
+  expect(grade && score && lamp && combo, "portrait keeps all result comparisons");
+  if (grade && score && lamp && combo) {
+    expect(lamp->getY() >= grade->getY() + grade->getHeight(),
+           "portrait stacks comparisons into two readable rows");
+    expect(score->getWidth() >= 450 && combo->getWidth() >= 450,
+           "portrait comparisons retain enough width for current and best scores");
+    expect(combo->getX() + combo->getWidth() <= 1080,
+           "portrait comparisons stay inside the viewport");
+  }
+}
+
+void testPortraitResultTimingAndActionsFit() {
+  auto options = localOptions();
+  bms_parser::Chart chart;
+  chart.Meta = localMeta();
+  options.timingAnalytics.emplace(chart, std::span<const ReplayData>{}, 2);
+  const auto model = makeLocalResultPresentation(localMeta(), localState(), std::move(options));
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean,
+                              i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    for (const int width : {720, 1080}) {
+      const auto root = buildPresentationLayout(model, width, 1920, true);
+      auto *details = root->findViewByName("detailsGrid");
+      auto *timing = root->findViewByName("resultMetricTile:fast-slow");
+      expect(timing && textView(timing, "fast") && textView(timing, "slow"),
+             "FAST and SLOW retain both counts in a single result tile");
+      if (timing) {
+        expect(textView(timing, "fast")->getText() == "452" &&
+                   textView(timing, "slow")->getText() == "528",
+               "combined timing tile preserves each total independently");
+      }
+      for (auto *tile : details->getChildren()) {
+        expect(tile->getY() + tile->getHeight() <= details->getY() + details->getHeight(),
+               "every judgement and timing tile fits the portrait grid");
+      }
+      auto *actions = root->findViewByName("resultActions");
+      auto *group = new View();
+      group->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)->setGap(14);
+      std::vector<Button *> buttons{dynamic_cast<Button *>(root->findViewByName("backButton"))};
+      for (const char *key : {"result.gameplay.retry.label", "result.retry_same.label",
+                              "result.rankings.label", "result.export_photo.label",
+                              "result.select_section.label"}) {
+        auto *button = new Button(0, 0, 232, 64);
+        auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+        label->setText(i18n::tr(key));
+        button->setContentView(label);
+        group->addView(button);
+        buttons.push_back(button);
+      }
+      actions->addView(group);
+      DefaultSkin::resizeResultLayout(root.get(), width, 1920);
+      root->applyYogaLayout();
+      for (const auto *button : buttons) {
+        expect(button->getY() == buttons.front()->getY() && button->getWidth() >= 64,
+               "all portrait result actions share one row with usable widths");
+        if (button->getX() < actions->getX() ||
+            button->getX() + button->getWidth() > actions->getX() + actions->getWidth()) {
+          std::cerr << "Action overflow: language " << static_cast<int>(language)
+                    << " viewport " << width << " button " << button->getX() << "+" << button->getWidth()
+                    << " host " << actions->getX() << "+" << actions->getWidth() << '\n';
+        }
+        expect(button->getX() >= actions->getX() &&
+                   button->getX() + button->getWidth() <= actions->getX() + actions->getWidth(),
+               "autosized result buttons stay inside the portrait viewport");
+      }
+      // One pixel of safe inset plus nested Yoga rounding may leave two pixels.
+      expect(buttons.front()->getX() == actions->getX() &&
+                 std::abs(buttons.back()->getX() + buttons.back()->getWidth() -
+                          actions->getX() - actions->getWidth()) <= 2,
+             "portrait actions fill the parent width including nested groups");
+      auto *visuals = root->findViewByName("resultVisuals");
+      auto *gauge = root->findViewByName("graph");
+      auto *analytics = root->findViewByName("timingAnalytics");
+      expect(visuals->getHeight() < 450 && gauge->getHeight() >= 150 &&
+                 analytics->getHeight() >= 236 &&
+                 analytics->getY() >= gauge->getY() + gauge->getHeight() &&
+                 analytics->getY() + analytics->getHeight() <=
+                     visuals->getY() + visuals->getHeight(),
+             "portrait graphs are compact while retaining readable analytics space");
+      expect(buttons[1]->getWidth() < buttons.back()->getWidth(),
+             "button widths follow label length rather than a fixed equal width");
+      root->setSize(1920, 1080);
+      DefaultSkin::resizeResultLayout(root.get(), 1920, 1080);
+      root->applyYogaLayout();
+      expect(buttons.front()->getHeight() == 64 &&
+                 buttons.front()->getX() == actions->getX() &&
+                 std::abs(buttons.back()->getX() + buttons.back()->getWidth() -
+                          actions->getX() - actions->getWidth()) <= 1,
+             "landscape actions retain their height and fill the parent width");
+      bgfx::frame();
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testDefaultSkinLegacyNullPresentationParity() {
   const auto meta = localMeta();
   const auto state = localState();
@@ -1003,6 +1106,32 @@ void testDefaultSkinLegacyNullPresentationParity() {
              textView(emptyRoot.get(), "resultGradeRate") &&
              textView(emptyRoot.get(), "resultGradeRate")->getText() == "0.00%",
          "legacy null presentation retains the zero-note grade panel");
+}
+
+void testLegacyPortraitResultMetricsFitWithoutDividers() {
+  const auto root = buildLegacyLayout(localMeta(), localState());
+  for (const auto dimensions : {std::pair{720, 1920}, std::pair{1920, 1080},
+                                std::pair{1080, 1920}}) {
+    root->setSize(dimensions.first, dimensions.second);
+    DefaultSkin::resizeResultLayout(root.get(), dimensions.first, dimensions.second);
+    root->applyYogaLayout();
+    auto *grid = root->findViewByName("detailsGrid");
+    expect(grid != nullptr, "legacy export has a statistics grid");
+    if (!grid) continue;
+    const bool portrait = dimensions.second > dimensions.first;
+    for (auto *child : grid->getChildren()) {
+      const bool metric = child->getName().starts_with("resultMetricTile:") ||
+                          child->getName().starts_with("resultJudgementTile:");
+      if (!metric) {
+        expect(portrait ? child->getWidth() == 0 : child->getWidth() <= 1,
+               "legacy result separators never occupy metric-card columns");
+      } else {
+        expect(child->getHeight() > 0 &&
+                   child->getY() + child->getHeight() <= grid->getY() + grid->getHeight() + 1,
+               "every legacy export statistic fits its reserved rows after rotation");
+      }
+    }
+  }
 }
 
 void testDefaultSkinSparseRemoteOmitsUnsupportedViews() {
@@ -1270,7 +1399,10 @@ int main() {
   testRemoteGaugeLabelAndLampFallbackSemantics();
   testLocalizedResultsKeepSemanticLayoutAndColors();
   testDefaultSkinLocalPresentationContract();
+  testPortraitResultKeepsComparisonCardsReadable();
+  testPortraitResultTimingAndActionsFit();
   testDefaultSkinLegacyNullPresentationParity();
+  testLegacyPortraitResultMetricsFitWithoutDividers();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();

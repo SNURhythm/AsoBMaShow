@@ -111,6 +111,7 @@ struct ResultSkinSession {
 struct ApplicationContext {
   struct Settings {
     struct Skin { std::map<int, int> selectedSkinEntries; } skin;
+    Settings &presentation() { return *this; }
   } settings;
   std::unique_ptr<skin::Lifecycle> gameplaySkinLifecycle = std::make_unique<skin::Lifecycle>();
   std::optional<int> skinStorageRoots = 1;
@@ -242,11 +243,11 @@ int main() {
       check(presentation.prepare(unavailable, data, type, stop.get_token(), error, nullptr) &&
                 !presentation.active() && error.empty(),
             "missing services keep native layout when no result skin is selected");
-      unavailable.settings.skin.selectedSkinEntries.emplace(type == 7 ? 15 : 7, 1);
+      unavailable.settings.presentation().skin.selectedSkinEntries.emplace(type == 7 ? 15 : 7, 1);
       check(presentation.prepare(unavailable, data, type, stop.get_token(), error, nullptr) &&
                 !presentation.active() && error.empty(),
             "another result type's selection does not require services for this result");
-      unavailable.settings.skin.selectedSkinEntries.emplace(type, 1);
+      unavailable.settings.presentation().skin.selectedSkinEntries.emplace(type, 1);
       check(!presentation.prepare(unavailable, data, type, stop.get_token(), error, nullptr) &&
                 !presentation.active() && !error.empty(),
             "missing service aborts a selected result skin instead of substituting native UI");

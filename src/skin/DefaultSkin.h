@@ -9,6 +9,7 @@ public:
                    void *data) override;
   bool rebuildLayoutSection(const std::string &sectionName, View *root,
                             void *data) override;
+  static void resizeResultLayout(View *root, int width, int height);
 
 private:
   void buildResultLayout(View *root, ResultSkinData *data,

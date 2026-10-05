@@ -43,10 +43,10 @@ struct GameplaySkinLifecycleOperationCompletion {
 struct GameplaySkinLifecycleDependencies {
   SkinStorageRoots roots;
   std::function<bool()> ensureVisibleRoot;
-  std::function<VersionedSkinProfileSettings(const SkinProfileId &)>
+  std::function<VersionedSkinProfileSettings(const SkinProfileId &, PresentationOrientation)>
       snapshotProfile;
   std::function<AcquireActivationResult(const SkinProfileId &,
-                                        const SkinEntryId &, std::string_view)>
+                                        const SkinEntryId &, std::string_view, PresentationOrientation)>
       acquireActivation;
   std::function<GameplaySkinLifecycleOperationSubmission(
       VersionedSkinProfileSettings, SkinEntryId, SkinProfileSettings, std::optional<int>)>
@@ -102,8 +102,8 @@ public:
   GameplaySkinLifecycle(const GameplaySkinLifecycle &) = delete;
   GameplaySkinLifecycle &operator=(const GameplaySkinLifecycle &) = delete;
 
-  void startAfterProfileInitialization(SkinProfileId);
-  void profileChanged(SkinProfileId);
+  void startAfterProfileInitialization(SkinProfileId, PresentationOrientation = PresentationOrientation::Landscape);
+  void profileChanged(SkinProfileId, PresentationOrientation = PresentationOrientation::Landscape);
   void requestRescan(SkinRescanReason);
   void cancelRescan() noexcept;
   [[nodiscard]] SkinRescanProgress rescanProgress() const noexcept;
@@ -111,6 +111,7 @@ public:
   GameplayViewportPersistenceResult
   requestViewportReset(const PlaySkinSessionIdentity &, ViewportSettings);
   void poll();
+  [[nodiscard]] bool presentationReady() const noexcept;
   [[nodiscard]] std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
   [[nodiscard]] GameplaySkinAcquisition

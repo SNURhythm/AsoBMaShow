@@ -41,6 +41,7 @@ private:
   float playAreaLeftX = 0.0f;
   bool dragModeEnabled = false;
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
+  std::vector<int> chartLaneOrder;
   std::vector<int> laneOrder;
   std::map<SDL_FingerID, int> fingerToLane;
   std::map<SDL_FingerID, bool> fingerLanePressed;
@@ -63,11 +64,11 @@ private:
                         Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
+public:
+  // Authored skin geometry routes into the same logical touch ownership as built-in lanes.
   [[nodiscard]] bms_parser::Note *
   applyTouchLane(int lane, bool pressed,
                  std::optional<int> scratchDirection);
-
-public:
   IRhythmControl *control;
   RhythmInputHandler(
       IRhythmControl *control, const bms_parser::ChartMeta &meta,
@@ -92,7 +93,10 @@ public:
   void discardPendingTouchEvents();
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
+  void setBindings(const InputProfile &profile,
+                   std::vector<input::InputScope> activeScopes);
   void setPlayAreaWidth(float configuredPlayAreaWidth);
+  void setTouchLaneOrder(const std::vector<int> &displayedLaneOrder);
   void setDragModeEnabled(bool enabled);
   void setRegistryDeviceClassEnabled(input::DeviceClass deviceClass,
                                      bool enabled);

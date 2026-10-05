@@ -1,3 +1,4 @@
+#include "bms_parser.hpp"
 #include "skin/beatoraja/MusicSelectSkinSession.h"
 #include "skin/beatoraja/PlaySkinSession.h"
 #include "skin/beatoraja/ResultSkinSession.h"
@@ -8,6 +9,7 @@
 
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
+#include "scene/SettingsScenePreviewAuthority.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/ResultSkinConfiguration.h"
 #include "skin/SkinConfigurationWriteQueue.h"
@@ -753,6 +755,7 @@ struct ActivationFixtureOptions {
   int skinType = 0;
   int configuredSkinType = -1;
   bool resourceBearing = false;
+  bool previewTimeProperties = false;
   bool movieBearing = false;
   bool audioBearing = false;
   bool requireConfiguredState = false;
@@ -1302,6 +1305,29 @@ end
       script += R"lua(
     }
   }
+)lua";
+    } else if (options.previewTimeProperties) {
+      script += R"lua(
+  local skin = { type = 0, w = 1280, h = 720,
+    source = {{id = "atlas", path = "resources/fixture.png"}},
+    image = {{id = "gauge-node", src = "atlas", w = 10, h = 20}},
+    gauge = {id = "gauge", parts = 50,
+             nodes = {"gauge-node", "gauge-node", "gauge-node", "gauge-node"}},
+    value = {}, destination = {},
+    slider = {{id = "progress", src = "atlas", x = 0, y = 0,
+               w = 40, h = 20, type = 6, range = 500, angle = 1}}
+  }
+  for _, ref in ipairs({161, 162, 163, 164}) do
+    table.insert(skin.value, {id = ref, src = "atlas", x = 0, y = 0,
+        w = 40, h = 20, divx = 10, digit = 2, ref = ref})
+    table.insert(skin.destination, {id = ref, timer = 41,
+        dst = {{time = 0, x = (ref - 161) * 100, y = 100, w = 4, h = 20}}})
+  end
+  table.insert(skin.destination, {id = "progress",
+      dst = {{time = 0, x = 0, y = 0, w = 40, h = 20}}})
+  table.insert(skin.destination, {id = "gauge", loop = 450,
+      dst = {{time = 450, x = 40, y = 141, w = 450, h = 30}}})
+  return skin
 )lua";
     } else if (options.resourceBearing && options.customObjectCallbacks.empty()) {
       script += "\n  return {\n    type = " +
@@ -2848,6 +2874,46 @@ void testExplicitOversizedPomyuDoesNotFallBackToSibling() {
          "Pomyu timing metadata");
 }
 
+void testPreviewTimePropertiesPrepareCompleteSkinFrames() {
+  for (const auto level : {SkinSafetyLevel::Standard,
+                           SkinSafetyLevel::BeatorajaCompatibility,
+                           SkinSafetyLevel::Unrestricted}) {
+    ActivationFixture fixture({.resourceBearing = true, .previewTimeProperties = true});
+    if (!fixture.ready()) return;
+    auto initialState = stateAt(1);
+    initialState.clock = settings_scene::previewFrameClock(1, 0, 31'500'000);
+    initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+    const auto chart = settings_scene::makePreviewChart();
+    initialState.authority.currentGauge = 74.0F;
+    initialState.authority.gaugeRules = compileGameplayGaugeRules(
+        kDefaultGameplayRuleset, chart->Meta, GaugeProfile::Standard);
+    auto context = fixture.context();
+    context.safetyPolicy = SkinSafetyPolicy(level);
+    context.initialState = &initialState;
+    auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+    expect(created.session != nullptr,
+           "preview clock is available during configured skin creation");
+    if (!created.session) return;
+    std::uint64_t serial = 1;
+    for (const auto elapsed : {0LL, 3'500'000LL, 7'999'999LL, 0LL}) {
+      auto state = initialState;
+      state.clock = settings_scene::previewFrameClock(++serial, elapsed, 31'500'000);
+      const auto frame = created.session->prepareFrame(state, projectionAt(serial), {});
+      expect(frame.ready() && frame.evaluation.submitReady &&
+                 frame.evaluation.submitReady->commands.size() >= 5,
+             "preview renders elapsed/remaining numbers and progress at startup, during play, and after looping");
+      if (elapsed >= 450'000 && frame.evaluation.submitReady) {
+        const auto &objects = created.session->modelForTesting().model.objects;
+        const auto gauge = std::ranges::find(objects, "gauge", &SkinObjectDefinition::authoredName);
+        expect(gauge != objects.end() && std::ranges::count(
+                   frame.evaluation.submitReady->commands, gauge->id,
+                   &SkinDrawCommand::sourceObject) == 50,
+               "preview renders all gauge bar segments under every safety policy");
+      }
+    }
+  }
+}
+
 void testIncompletePomyuResourcesKeepDefaultCycles() {
   for (const ActivationFixtureOptions options : {
            ActivationFixtureOptions{.pomyuMissingCharBmp = true},
@@ -2982,7 +3048,7 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
       .privateCatalog = temp.root() / "catalog",
       .profileOverlays = temp.root() / "overlays",
   };
-  const auto package = normalizePackageId("ExternalGameplaySkin").package;
+  const auto package = normalizePackageId(source.filename().string()).package;
   const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
                              : std::nullopt;
   const auto profile =
@@ -2992,6 +3058,16 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
   if (!package || !entry || !profile) {
     return;
   }
+
+  // Authored skins may update player-data files during configuration. Keep
+  // those writes in a disposable visible package, separate from the source.
+  std::error_code copyError;
+  fs::create_directories(roots.visiblePackages, copyError);
+  if (!copyError)
+    fs::copy(source, roots.visiblePackages / package->directoryName,
+             fs::copy_options::recursive, copyError);
+  expect(!copyError, "external gameplay package stages a writable test copy");
+  if (copyError) return;
 
   AcceptFiles aliases;
   SkinTreeSnapshotter snapshotter(roots, aliases);
@@ -3021,13 +3097,17 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
     return;
   }
 
-  PlayfieldChartVisualModel chart;
-  chart.keyCount = 7;
-  chart.text = {.title = "external title",
-                .artist = "external artist",
-                .fullArtist = "external artist"};
-  PlayfieldVisualState initialState = stateAt(1);
+  const auto sampleChart = settings_scene::makePreviewChart(7);
+  const auto chart = buildPlayfieldChartVisualModel(*sampleChart, 0);
+  PlayfieldVisualStateStore sampleStore(chart);
+  sampleStore.setSceneStartMicros(0);
+  sampleStore.setPlayStartMicros(0);
+  PlayfieldVisualState initialState = sampleStore.capture(
+      settings_scene::previewFrameClock(1, 0, sampleChart->Meta.PlayLength));
   initialState.authority.loadingState = PlayfieldLoadingState::Loaded;
+  initialState.authority.currentGauge = 74;
+  initialState.authority.gaugeRules = compileGameplayGaugeRules(
+      kDefaultGameplayRuleset, sampleChart->Meta, GaugeProfile::Standard);
   const PlayfieldProjectionResult initialProjection = projectionAt(1);
   SkinConfigurationWriteQueue configurationWrites;
   auto device = std::make_shared<SessionTextureDevice>();
@@ -3039,6 +3119,7 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
        .configurationDigest = validation.configurationDigest},
       {.sessionSerial = 92,
        .profileId = *profile,
+       .safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility),
        .chartModel = chart,
        .initialState = &initialState,
        .initialProjection = &initialProjection,
@@ -3046,6 +3127,7 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
        .storageRoots = roots,
        .resourcePreparation = resources,
        .textureDevice = std::move(device),
+       .movieDevice = std::make_shared<SessionMovieDevice>(),
        .liveResourceCounters = std::move(counters),
        .configurationWrites = configurationWrites});
   if (!created.session) {
@@ -3062,6 +3144,28 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
   expect(created.session != nullptr && !created.cancelled && !hasError,
          "requested external gameplay skin creates a full configured session; "
          "unsupported optional visuals may remain visible as warnings");
+  if (created.session) {
+    std::vector<SkinObjectId> gaugeIds;
+    for (const auto &object : created.session->modelForTesting().model.objects) {
+      if (const auto *gauge = std::get_if<SkinGaugeObject>(&object.payload)) {
+        gaugeIds.push_back(object.id);
+        expect(gauge->orderedNodes.size() == 36,
+               "authored gauge keeps its sprite nodes in compatibility mode");
+      }
+    }
+    initialState.clock = settings_scene::previewFrameClock(
+        2, 4'000'000, sampleChart->Meta.PlayLength);
+    const auto frame = created.session->prepareFrame(initialState, projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady,
+           "external gameplay skin prepares a frame with real preview chart data");
+    if (!gaugeIds.empty()) {
+      expect(frame.evaluation.submitReady && std::ranges::any_of(
+                 frame.evaluation.submitReady->commands, [&](const auto &command) {
+                   return std::ranges::find(gaugeIds, command.sourceObject) != gaugeIds.end();
+                 }),
+             "external gameplay skin emits its gauge bar, not only its percentage");
+    }
+  }
 }
 
 void testMusicSelectSourceResolutionMatchesPinnedEnumLookup() {
@@ -5259,7 +5363,7 @@ return {
   void addTouchGeometry(
       SkinFloatWriterId writer = SkinFloatWriterId{1},
       std::optional<double> firstLaneSecondaryDestinationY = std::nullopt,
-      double destinationX = 100.0) {
+      double destinationX = 100.0, int valueSelector = 4) {
     resources_.addImage(80);
     const bool dynamicValue = writer == SkinFloatWriterId{4} ||
                               writer == SkinFloatWriterId{6};
@@ -5272,7 +5376,7 @@ return {
                    ? std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
                          *writerDragValue_}
                    : std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
-                         SkinBuiltinPropertySelector{.value = 4}});
+                         SkinBuiltinPropertySelector{.value = valueSelector}});
     model_.model.floatProperties.push_back(
         {.id = valueProperty,
          .domain = SkinFloatPropertyDomain::Rate,
@@ -5414,6 +5518,77 @@ return {
                                       .width = 40.0,
                                       .height = 20.0}},
                           .authoredOrdinal = 820}});
+  }
+
+  void configureLaneCover(bool namedSelector, bool interactive) {
+    auto &slider = std::get<SkinSliderObject>(model_.model.objects[
+        model_.model.objects.size() - 2].payload);
+    slider.direction = 2;
+    slider.range = 500.0;
+    if (!interactive) slider.writer.reset();
+    model_.model.floatProperties.back().source = namedSelector
+        ? SkinBuiltinPropertySelector{.value = std::string{"lanecover"}}
+        : SkinBuiltinPropertySelector{.value = 4};
+    auto &coverDestination = std::ranges::find(
+        model_.model.destinations, SkinObjectId{80}, &SkinDestination::object)->presentation;
+    coverDestination.frames = {
+        {.timeMillis = 0, .x = 100.0, .y = 520.0, .width = 200.0, .height = 500.0}};
+    addClickableImage();
+    auto &label = model_.model.destinations.back().presentation;
+    label.frames.front().x = 110.0;
+    label.frames.front().y = 600.0;
+    label.offsetIds = {4};
+  }
+
+  void enableTouchLaneNotes() {
+    auto &note = std::get<SkinNoteObject>(model_.model.objects[
+        model_.model.objects.size() - 1].payload);
+    for (std::size_t index = 0; index < note.lanes.size(); ++index) {
+      note.lanes[index].authoredLane = static_cast<int>(index);
+      for (const auto kind : {SkinNoteVisualKind::Mine, SkinNoteVisualKind::Hidden,
+             SkinNoteVisualKind::Processed, SkinNoteVisualKind::LnEnd,
+             SkinNoteVisualKind::LnStart, SkinNoteVisualKind::LnBodyActive,
+             SkinNoteVisualKind::LnBodyInactive, SkinNoteVisualKind::HcnEnd,
+             SkinNoteVisualKind::HcnStart, SkinNoteVisualKind::HcnBodyActive,
+             SkinNoteVisualKind::HcnBodyInactive, SkinNoteVisualKind::HcnDamage,
+             SkinNoteVisualKind::HcnReactive}) {
+        note.lanes[index].visuals[kind] = SkinSynthesizedNoteVisual{.kind = kind};
+      }
+      note.lanes[index].visuals[SkinNoteVisualKind::Normal] = SkinSpriteFrames{
+          .resource = 80, .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}};
+    }
+    model_.model.destinations.push_back(
+        {.object = 81, .presentation = {.authoredOrdinal = 810}});
+  }
+
+  void configureLaneBackground(bool flipX, bool flipY) {
+    auto &destination = model_.model.destinations.back().presentation;
+    const double x = flipX ? 300.0 : 100.0;
+    const double y = flipY ? 520.0 : 20.0;
+    const double width = flipX ? -200.0 : 200.0;
+    destination.loop = 1000;
+    destination.frames = {
+        {.timeMillis = 0, .x = x, .y = y, .width = width, .height = 0.0},
+        {.timeMillis = 1000, .x = x, .y = y, .width = width,
+         .height = flipY ? -500.0 : 500.0}};
+  }
+
+  void configureLaneEffect(int timer, bool bomb) {
+    model_.model.timerProperties.push_back(
+        {.id = SkinTimerPropertyId{500},
+         .source = SkinBuiltinPropertySelector{.value = timer},
+         .authoredOrdinal = 500});
+    auto &destination = model_.model.destinations.back().presentation;
+    destination.timer = SkinTimerPropertyId{500};
+    if (bomb) {
+      destination.frames = {{.timeMillis = 0, .x = 60.0, .y = -92.0,
+                             .width = 180.0, .height = 192.0}};
+    } else {
+      auto terminal = destination.frames.front();
+      terminal.timeMillis = 1000;
+      terminal.width = 0.0;
+      destination.frames.push_back(terminal);
+    }
   }
 
   void addOrderedClickableImage(double destinationX) {
@@ -6266,6 +6441,52 @@ void testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout() {
              fixture.quadBackend().submitCalls == 1 &&
              fixture.configurationWrites().drain().empty(),
          "repeat render cannot resubmit the consumed frame or enqueue writes");
+}
+
+void testAuthoredScratchlessSkinTouchLayout() {
+  for (int keys : {5, 7}) {
+    // Missing scratch, zero-sized scratch, valid scratch, missing key,
+    // and missing scratch on a chart that actually requires it.
+    for (int scenario = 0; scenario < 5; ++scenario) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      fixture.addTouchGeometry();
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = keys;
+      chart.Meta.TotalScratchNotes = scenario == 4 ? 1 : 0;
+      fixture.chart() = buildPlayfieldChartVisualModel(chart, 0);
+      for (auto &object : fixture.model().model.objects) {
+        auto *notes = std::get_if<SkinNoteObject>(&object.payload);
+        if (!notes) continue;
+        notes->lanes.clear();
+        for (int lane = scenario == 3 ? 1 : 0; lane < keys; ++lane) {
+          notes->lanes.push_back({.authoredLane = lane,
+              .laneDestination = {.x = 100.0 * lane, .y = 20.0,
+                                  .width = 80.0, .height = 500.0}});
+        }
+        if (scenario == 1 || scenario == 2) {
+          notes->lanes.push_back({.authoredLane = 7,
+              .laneDestination = {.x = 800.0, .y = 20.0,
+                                  .width = scenario == 1 ? 0.0 : 80.0, .height = 500.0}});
+        }
+      }
+      expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) == PresentationFrameOutcome::Ready,
+             "authored scratchless skin frame prepares without changing its source mode");
+      RenderContext context;
+      SessionBgaSubmitter bga;
+      const auto rendered = fixture.session().render(context, bgaFrame(44), bga);
+      const auto layout = fixture.session().touchLayout();
+      expect(rendered.outcome == PresentationFrameOutcome::Ready,
+             "authored scratchless geometry renders");
+      const std::size_t expected = scenario >= 3 ? 0 : keys + (scenario == 2 ? 1 : 0);
+      expect(layout.laneRegions.size() == expected,
+             "only optional scratch may be absent; authored scratch and required keys retain their meaning");
+      if (scenario < 2) {
+        expect(layout.lanes == chart.Meta.GetKeyLaneIndices(),
+               "authored scratchless touch layout preserves every original key channel");
+      }
+    }
+  }
 }
 
 void testSparseModeTouchLayoutKeepsOriginalChannels() {
@@ -7188,6 +7409,293 @@ void testImageActTouchQueuesPinnedEventOnDown() {
              fixture.session().render(context, bgaFrame(121), bga).outcome ==
                  PresentationFrameOutcome::Ready,
          "the queued Image act event reaches the next frame transaction");
+}
+
+void testCroppedPlayAreaReappliesCoverAndVisibleDuration() {
+  for (const auto [padding, lift] : {std::pair{0.0F, 0.0F}, std::pair{10.0F, 0.0F},
+                                      std::pair{0.0F, 0.2F}, std::pair{10.0F, 0.2F}}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.enableTouchLaneNotes();
+    fixture.configureLaneCover(false, true);
+    ViewportSettings settings;
+    settings.centerPlayArea = true;
+    settings.keepHudFixed = true;
+    settings.playAreaZoom = 2.0F;
+    settings.playAreaBottomPaddingPercent = padding;
+    fixture.session().setViewport(settings);
+    auto state = stateAt(1);
+    state.authority.laneCoverEnabled = true;
+    state.authority.laneCoverPercent = 50;
+    state.authority.currentBpm = 120.0;
+    state.authority.liftEnabled = lift > 0.0F;
+    state.authority.liftRatio = lift;
+    auto projection = projectionAt(1);
+    projection.builtInTraversal = BuiltInRendererTraversal{
+        .configuredHispeed = 2.0F, .hispeed = 2.0F};
+    projection.notes.push_back({.lane = 0, .scrollDelta = 0.125});
+    const auto frame = fixture.session().prepareFrame(state, projection, {});
+    if (!frame.ready()) {
+      for (const auto &diagnostic : frame.diagnostics)
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      for (const auto &diagnostic : frame.evaluation.diagnostics)
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.interactionLayout,
+           "cropped gameplay frame prepares");
+    if (!frame.evaluation.submitReady || !frame.evaluation.interactionLayout) continue;
+    const float anchor = 720.0F * (1.0F - padding / 100.0F) * (1.0F - 2.0F * lift);
+    bool coverAligned = false, noteAligned = false;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+      if (!quad) continue;
+      if (command.sourceObject == 80) {
+        coverAligned = std::abs(quad->vertices[0].y - anchor * 0.5F) < 0.001F;
+      }
+      if (command.sourceObject == 81) {
+        noteAligned = std::abs(quad->vertices[0].y - anchor * 0.75F) < 0.001F;
+      }
+    }
+    expect(coverAligned, "requested note start uses the visible cropped height");
+    expect(noteAligned, "note travel preserves green number after crop and padding");
+    const UiLogicalPoint halfCover{640.0F, anchor * 0.5F};
+    const auto &layout = *frame.evaluation.interactionLayout;
+    const auto hit = layout.hitTestUiControl(halfCover);
+    const auto writer = layout.writerInvocationFor(hit, halfCover, 1);
+    expect(hit.sourceObject == 80 && writer &&
+               std::abs(writer->normalizedValue - 0.5F) < 0.0001F,
+           "dragging halfway down visible lanes writes the original 50 percent");
+    expect(state.authority.laneCoverPercent == 50 &&
+               projection.builtInTraversal->configuredHispeed == 2.0F,
+           "crop compensation leaves requested cover and speed untouched");
+    const auto &ghost = frame.evaluation.syntheticReplayGhostGeometry;
+    expect(ghost && ghost->visibleScroll, "cropped lane publishes the shared visible span");
+    if (!ghost || !ghost->visibleScroll) continue;
+    const std::array events{ReplayGhostEvent{.lane = 0, .noteTimeMicros = 100'000,
+        .judgeTimeMicros = 200'000, .judgeScrollPosition = 0.125, .judgement = PGreat}};
+    const auto overlay = buildSyntheticReplayGhostOverlay(
+        *ghost, {.frameSerial = 1, .visualTimeMicros = 10'000,
+                 .currentScrollPosition = 0.0, .hispeed = 2.0,
+                 .visibleLaneHeightRatio = 0.5, .enabled = true, .events = events});
+    float ghostBottom = -1e9F;
+    for (const auto &command : overlay.commands) {
+      if (const auto *primitive = std::get_if<SkinPrimitiveCommand>(&command.payload)) {
+        for (const auto &vertex : primitive->vertices) ghostBottom = std::max(ghostBottom, vertex.y);
+      }
+    }
+    expect(std::abs(ghostBottom - anchor * 0.75F) < 0.001F,
+           "replay ghost follows the same cropped note travel with Lift");
+    state.clock.serial = projection.frameSerial = 2;
+    fixture.bridge().beginFrame(state, projection, ghost->visibleScroll);
+    const auto green = fixture.bridge().integerProperty({313});
+    const auto rawCover = fixture.bridge().floatProperty({4});
+    expect(green.supported && green.value == 300 && rawCover.supported &&
+               std::abs(rawCover.value - 0.5 * (1.0 - lift)) < 0.0001,
+           "green number and skin cover properties retain the configured values");
+    fixture.bridge().discardFrame();
+  }
+}
+
+void testFocusedMirroredLaneBackgrounds() {
+  for (const bool flipX : {false, true}) {
+    for (const bool flipY : {false, true}) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      fixture.addTouchGeometry();
+      fixture.addClickableImage();
+      fixture.configureLaneBackground(flipX, flipY);
+      fixture.addOrderedClickableImage(900.0);
+      ViewportSettings settings;
+      settings.centerPlayArea = true;
+      settings.keepHudFixed = true;
+      fixture.session().setViewport(settings);
+      const auto frame = fixture.session().prepareFrame(stateAt(100), projectionAt(100), {});
+      expect(frame.ready() && frame.evaluation.submitReady,
+             "mirrored lane background frame prepares");
+      if (!frame.evaluation.submitReady) continue;
+      bool moved = false;
+      for (const auto &command : frame.evaluation.submitReady->commands) {
+        const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        if (command.sourceObject != 82 || !quad) continue;
+        float left = quad->vertices[0].x, right = left;
+        float top = quad->vertices[0].y, bottom = top;
+        for (const auto &vertex : quad->vertices) {
+          left = std::min(left, vertex.x);
+          right = std::max(right, vertex.x);
+          top = std::min(top, vertex.y);
+          bottom = std::max(bottom, vertex.y);
+        }
+        moved = std::abs(left - 496.0F) < 0.001F &&
+                std::abs(right - 784.0F) < 0.001F &&
+                std::abs(top) < 0.001F && std::abs(bottom - 720.0F) < 0.001F;
+      }
+      expect(moved && frame.evaluation.submitReady->commands.back().sourceObject == 82,
+             "mirrored and growing lane backgrounds follow the foreground play area");
+    }
+  }
+}
+
+void testFocusedLaneCoverAndAttachedArtwork() {
+  for (const bool namedSelector : {false, true}) {
+    for (const bool interactive : {false, true}) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      fixture.addTouchGeometry();
+      fixture.configureLaneCover(namedSelector, interactive);
+      fixture.addOrderedClickableImage(900.0);
+      ViewportSettings settings;
+      settings.centerPlayArea = true;
+      settings.keepHudFixed = true;
+      fixture.session().setViewport(settings);
+      auto state = stateAt(1);
+      state.authority.laneCoverEnabled = true;
+      state.authority.laneCoverPercent = 50;
+      const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+      expect(frame.ready() && frame.evaluation.submitReady &&
+                 frame.evaluation.interactionLayout,
+             "focused lane cover frame prepares");
+      if (!frame.evaluation.submitReady || !frame.evaluation.interactionLayout) continue;
+      bool movedCover = false;
+      bool movedLabel = false;
+      const auto &commands = frame.evaluation.submitReady->commands;
+      for (const auto &command : commands) {
+        const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        if (!quad) continue;
+        if (command.sourceObject == 80) {
+          movedCover = std::abs(quad->vertices[0].x - 496.0F) < 0.001F &&
+                       std::abs(quad->vertices[0].y - 360.0F) < 0.001F;
+        }
+        if (command.sourceObject == 82) {
+          movedLabel = std::abs(quad->vertices[0].x - 510.4F) < 0.001F &&
+                       std::abs(quad->vertices[0].y - 244.8F) < 0.001F;
+        }
+      }
+      expect(movedCover && movedLabel && commands.back().sourceObject == 82,
+             "lane cover and offset-attached artwork follow the foreground play area");
+      if (interactive) {
+        expect(frame.evaluation.interactionLayout->hitTestUiControl({600.0F, 180.0F}).sourceObject == 80,
+               "lane cover touch target follows its moved drawing");
+      }
+      expect(frame.evaluation.interactionLayout->hitTestUiControl({920.0F, 610.0F}).sourceObject == 86,
+             "unrelated HUD retains its original camera");
+    }
+  }
+}
+
+void testFocusedLaneEffectsFollowTimers() {
+  for (const int timer : {121, 51}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.addClickableImage();
+    fixture.configureLaneEffect(timer, timer == 51);
+    ViewportSettings settings;
+    settings.centerPlayArea = true;
+    settings.keepHudFixed = true;
+    fixture.session().setViewport(settings);
+    auto state = stateAt(1);
+    state.lanes.resize(2);
+    state.lanes[1].releaseMicros = 0;
+    state.lanes[1].bombMicros = 0;
+    const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+    expect(frame.ready() && frame.evaluation.submitReady,
+           "lane effect frame prepares");
+    bool moved = false;
+    if (frame.evaluation.submitReady) {
+      for (const auto &command : frame.evaluation.submitReady->commands) {
+        const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+        if (command.sourceObject == 82 && quad) {
+          moved = std::abs(quad->vertices[0].x - (timer == 51 ? 438.4F : 496.0F)) < 0.001F &&
+                  std::abs(quad->vertices[0].y - (timer == 51 ? 881.28F : 604.8F)) < 0.001F;
+        }
+      }
+    }
+    expect(moved, "release beams and oversized bombs follow the lane camera");
+  }
+}
+
+void testPlayAreaFramingKeepsDrawingAndInteractionTogether() {
+  for (const bool keepHudFixed : {false, true}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry(SkinFloatWriterId{1}, std::nullopt, 900.0, 17);
+    fixture.addClickableImage();
+    fixture.addOrderedClickableImage(500.0);
+    ViewportSettings settings;
+    settings.centerPlayArea = true;
+    settings.keepHudFixed = keepHudFixed;
+    fixture.session().setViewport(settings);
+    const auto frame = fixture.session().prepareFrame(stateAt(1), projectionAt(1), {});
+    expect(frame.ready() && frame.evaluation.interactionLayout &&
+               frame.evaluation.submitReady,
+           "both play area framing modes evaluate successfully");
+    if (!frame.evaluation.interactionLayout || !frame.evaluation.submitReady) continue;
+    const auto &layout = *frame.evaluation.interactionLayout;
+    // Authored lanes span (100,20)-(300,520), fitting at 1.44x into 1280x720.
+    const UiLogicalPoint laneControl{524.8F, 590.4F};
+    expect(layout.hitTestUiControl(laneControl).sourceObject == 82,
+           "lane-local artwork and its touch target move with the play area");
+    bool foundMovedImage = false;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+      if (command.sourceObject == 82 && quad) {
+        foundMovedImage = std::abs(quad->vertices[0].x - 496.0F) < 0.001F &&
+                          std::abs(quad->vertices[0].y - 604.8F) < 0.001F;
+      }
+    }
+    expect(foundMovedImage, "lane-local image draws under the same transform as touch");
+    const UiLogicalPoint hudPoint{950.0F, 610.0F};
+    const auto hudHit = layout.hitTestUiControl(hudPoint);
+    if (keepHudFixed) {
+      expect(frame.evaluation.submitReady->commands.back().sourceObject == 82 &&
+                 layout.hitTestUiControl({510.0F, 602.0F}).sourceObject == 82,
+             "focused play area draws and receives touches above later HUD artwork");
+      const auto writer = layout.writerInvocationFor(hudHit, hudPoint, 1);
+      expect(hudHit.sourceObject == 80 && writer &&
+                 std::abs(writer->normalizedValue - 0.5F) < 0.001F,
+             "fixed HUD slider retains its screen position and value mapping");
+    } else {
+      expect(hudHit.sourceObject != 80,
+             "whole-skin framing moves the surrounding HUD with the lanes");
+    }
+
+    SessionBgaSubmitter bga;
+    RenderContext context;
+    expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                   PresentationFrameOutcome::Ready &&
+               fixture.session().render(context, bgaFrame(2), bga).outcome ==
+                   PresentationFrameOutcome::Ready,
+           "framed session publishes gameplay touch geometry");
+    auto touch = fixture.session().touchLayout();
+    const auto normalize = [](double value, bool horizontal) {
+      return (value * (horizontal ? rendering::ui_scale_x : rendering::ui_scale_y) +
+              (horizontal ? rendering::ui_offset_x : rendering::ui_offset_y)) /
+             (horizontal ? rendering::render_width : rendering::render_height);
+    };
+    expect(touch.laneRegions.size() == 2 &&
+               std::abs(touch.laneRegions[0].bottomLeft.x - normalize(496.0, true)) < 0.0001 &&
+               std::abs(touch.laneRegions[0].bottomLeft.y - normalize(720.0, false)) < 0.0001,
+           "published gameplay touch lanes follow centered rendering");
+    const auto revision = touch.revision;
+    settings.playAreaZoom = 1.5F;
+    fixture.session().setViewport(settings);
+    fixture.session().updateViewportGeometry({20.0, 40.0, 360.0, 760.0});
+    expect(fixture.session().touchLayout().laneRegions.empty() &&
+               fixture.session().touchLayoutRevision() != revision,
+           "zoom and orientation changes discard stale touch geometry");
+    expect(fixture.session().prepareFrame(stateAt(3), projectionAt(3)) ==
+                   PresentationFrameOutcome::Ready &&
+               fixture.session().render(context, bgaFrame(3), bga).outcome ==
+                   PresentationFrameOutcome::Ready,
+           "zoomed portrait viewport republishes geometry");
+    touch = fixture.session().touchLayout();
+    expect(touch.laneRegions.size() == 2 &&
+               std::abs(touch.laneRegions[0].bottomLeft.x - normalize(-28.0, true)) < 0.0001 &&
+               std::abs(touch.laneRegions[0].bottomLeft.y - normalize(800.0, false)) < 0.0001,
+           "zoomed portrait touch bounds use the exact visible lane transform");
+  }
 }
 
 void testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry() {
@@ -9137,9 +9645,9 @@ void testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces() {
   settings.longNoteModifierMode = 3;
   settings.sevenToNinePattern = 5;
   settings.sevenToNineType = 4;
-  settings.laneCoverEnabled = false;
-  settings.liftEnabled = true;
-  settings.hiddenEnabled = true;
+  settings.presentation().laneCoverEnabled = false;
+  settings.presentation().liftEnabled = true;
+  settings.presentation().hiddenEnabled = true;
   settings.hispeedAutoAdjust = true;
   settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
   settings.selectedAssistOption = assist_options::kBpmGuide;
@@ -10443,6 +10951,7 @@ int main(int argc, char **argv) {
   testRepeatedPomyuObjectsShareCyclePreparation();
   testMalformedPomyuNumericDirectivesAbortTheCp932Character();
   testExplicitOversizedPomyuDoesNotFallBackToSibling();
+  testPreviewTimePropertiesPrepareCompleteSkinFrames();
   testIncompletePomyuResourcesKeepDefaultCycles();
   testPomyuResourcesUseMs932AndWindowsSeparators();
   testPomyuRootedResourcePathIsRejected();
@@ -10510,6 +11019,7 @@ int main(int argc, char **argv) {
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();
   testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout();
+  testAuthoredScratchlessSkinTouchLayout();
   testSparseModeTouchLayoutKeepsOriginalChannels();
   testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
   testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
@@ -10528,6 +11038,11 @@ int main(int argc, char **argv) {
   testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
+  testCroppedPlayAreaReappliesCoverAndVisibleDuration();
+  testFocusedMirroredLaneBackgrounds();
+  testFocusedLaneCoverAndAttachedArtwork();
+  testFocusedLaneEffectsFollowTimers();
+  testPlayAreaFramingKeepsDrawingAndInteractionTogether();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
   testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();

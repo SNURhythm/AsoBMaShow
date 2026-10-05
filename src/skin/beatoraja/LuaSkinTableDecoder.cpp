@@ -2777,7 +2777,7 @@ bool makeGaugeObject(GameplayDecodeRequest &request,
   // a music selector (there is no GrooveGauge).  Do not apply gameplay-only
   // expansion limits or parameter validation to an object which the pinned
   // selector never draws.
-  if (!request.enforceGameplayLimits) {
+  if (request.result.model->header.type == 5) {
     output = SkinGaugeObject{};
     return true;
   }

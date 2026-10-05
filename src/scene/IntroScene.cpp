@@ -83,16 +83,22 @@ void IntroScene::buildView() {
 }
 
 void IntroScene::start() {
+  pendingStart_ = false;
   if (!context.applicationUiState.newcomerTutorialCompleted) {
     startTutorial();
     return;
   }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (context.gameplaySkinLifecycle &&
+      !context.gameplaySkinLifecycle->presentationReady()) {
+    pendingStart_ = true;
+    return;
+  }
   skin::GameplaySkinAcquisition acquisition;
   if (context.gameplaySkinLifecycle) {
     acquisition =
         context.gameplaySkinLifecycle->acquireForSkinType(5, false);
-  } else if (context.settings.skin.selectedSkinEntries.contains(5)) {
+  } else if (context.settings.presentation().skin.selectedSkinEntries.contains(5)) {
     acquisition.disposition =
         skin::GameplaySkinAcquisitionDisposition::Failed;
     acquisition.failure = skin::GameplaySkinAcquisitionFailure{
@@ -119,12 +125,14 @@ void IntroScene::start() {
 }
 
 void IntroScene::openSettings() {
+  pendingStart_ = false;
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
       SceneReturnTarget::Registered("Intro")));
 }
 
 void IntroScene::startTutorial() {
+  pendingStart_ = false;
   // Gameplay and other menu screens return to the registered MainMenu.
   // Register the tutorial instance so those returns resume its retained state.
   context.sceneManager->registerScene(
@@ -159,6 +167,14 @@ EventHandleResult IntroScene::handleEvents(SDL_Event &event) {
 }
 
 void IntroScene::update(float) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (pendingStart_ &&
+      (!context.gameplaySkinLifecycle ||
+       context.gameplaySkinLifecycle->presentationReady())) {
+    start();
+    return;
+  }
+#endif
   processNavigationInput();
   if (rootLayout_ != nullptr &&
       (layoutWidth_ != rendering::window_width ||
@@ -173,6 +189,7 @@ void IntroScene::update(float) {
 void IntroScene::renderScene() {}
 
 void IntroScene::cleanupScene() {
+  pendingStart_ = false;
   stopInputListening();
   rootLayout_ = nullptr;
   startButton_ = nullptr;

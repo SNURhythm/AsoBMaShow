@@ -49,6 +49,8 @@ void DecideLoadingOverlay::rebuild() {
 
   auto *content = new View();
   content->setFlexDirection(FlexDirection::Column);
+  content->setWidthPercent(100);
+  YGNodeStyleSetMaxWidth(content->getNode(), 720);
   content->setAlignItems(YGAlignCenter);
   content->setJustifyContent(YGJustifyCenter);
   content->setPadding(Edge::All, 32);
@@ -56,8 +58,14 @@ void DecideLoadingOverlay::rebuild() {
   content->setThemedBackgroundColor(ui_theme::panelStrong);
 
   if (!stageFileResourcePath_.empty()) {
+    auto *stageFrame = new View();
+    stageFrame->setWidthPercent(100);
+    YGNodeStyleSetMaxWidth(stageFrame->getNode(), 512);
+    stageFrame->setMargin(Edge::Bottom, 24);
     auto *stage = new ImageView(0, 0, 512, 288);
-    stage->setMargin(Edge::Bottom, 24);
+    stage->setWidthPercent(100);
+    YGNodeStyleSetHeightAuto(stage->getNode());
+    YGNodeStyleSetAspectRatio(stage->getNode(), 16.0f / 9.0f);
     const auto stageLoadStarted = std::chrono::steady_clock::now();
     stage->setImageAsyncShared(stageFileResourcePath_);
     if (stage->imageWidth() > 0 || stage->imageHeight() > 0) {
@@ -71,7 +79,8 @@ void DecideLoadingOverlay::rebuild() {
                 static_cast<long long>(stageLoadMillis));
       }
     }
-    content->addView(stage);
+    stageFrame->addView(stage);
+    content->addView(stageFrame);
   }
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 36);
@@ -79,6 +88,7 @@ void DecideLoadingOverlay::rebuild() {
   title->setThemedColor(ui_theme::textPrimary);
   title->setAlign(TextView::CENTER);
   title->setWrap(true);
+  title->setWidthPercent(100);
   title->setOverflow(TextView::TextOverflow::Hidden);
   content->addView(title);
 
@@ -87,6 +97,7 @@ void DecideLoadingOverlay::rebuild() {
   artist->setThemedColor(ui_theme::textSecondary);
   artist->setAlign(TextView::CENTER);
   artist->setWrap(true);
+  artist->setWidthPercent(100);
   artist->setOverflow(TextView::TextOverflow::Hidden);
   content->addView(artist);
 

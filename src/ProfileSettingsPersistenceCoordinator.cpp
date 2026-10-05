@@ -13,6 +13,8 @@
 #include <utility>
 
 namespace {
+using player_settings::PresentationOrientation;
+using player_settings::kPresentationOrientations;
 
 skin::SkinDiagnostic failureDiagnostic(std::string code, std::string message) {
   return {.code = std::move(code),
@@ -80,12 +82,18 @@ struct InventoryGateState {
 } // namespace
 
 struct ProfileSettingsPersistenceCoordinator::Impl {
-  struct ProfileState {
+  struct SkinState {
     std::uint64_t generation = 1;
     std::uint64_t highWaterGeneration = 1;
     skin::SkinProfileSettings settings;
-    AppSettings durableSettings;
     std::optional<std::uint64_t> unresolvedTicket;
+  };
+
+  struct ProfileState {
+    std::array<SkinState, 2> skins;
+    AppSettings durableSettings;
+    SkinState &skin(PresentationOrientation orientation) { return skins[static_cast<std::size_t>(orientation)]; }
+    const SkinState &skin(PresentationOrientation orientation) const { return skins[static_cast<std::size_t>(orientation)]; }
   };
 
   struct WaitResult {
@@ -112,9 +120,12 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
     std::filesystem::path path;
     AppSettings settings;
     skin::SkinProfileSettings previousSkin;
+    PresentationOrientation orientation = PresentationOrientation::Landscape;
+    bool policyChanged = false;
+    skin::SkinSafetyLevel previousPolicy = skin::SkinSafetyLevel::Standard;
     std::shared_ptr<WaitResult> waiter;
     std::uint64_t inventoryGeneration = 0;
-    std::uint64_t skinGeneration = 0;
+    std::array<std::uint64_t, 2> skinGenerations{};
     std::vector<SnapshotInput> snapshotInputs;
   };
 
@@ -144,7 +155,9 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       : manager(managerValue), activeSettings(settingsValue),
         dependencies(std::move(dependencyValue)),
         activeProfileId(manager.activeProfile().id) {
-    profiles[activeProfileId].settings = activeSettings.skin;
+    for (auto orientation : kPresentationOrientations) {
+      profiles[activeProfileId].skin(orientation).settings = activeSettings.presentation(orientation).skin;
+    }
     profiles[activeProfileId].durableSettings = activeSettings;
     worker = std::thread([this] { run(); });
   }
@@ -159,14 +172,15 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
   }
 
   skin::VersionedSkinProfileSettings
-  snapshotLocked(const skin::SkinProfileId &profileId) const {
+  snapshotLocked(const skin::SkinProfileId &profileId, PresentationOrientation orientation) const {
     const auto found = profiles.find(profileId.opaque);
     if (found == profiles.end()) {
-      return {.profileId = profileId};
+      return {.profileId = profileId, .orientation = orientation};
     }
     return {.profileId = profileId,
-            .generation = found->second.generation,
-            .settings = found->second.settings};
+            .generation = found->second.skin(orientation).generation,
+            .settings = found->second.skin(orientation).settings,
+            .orientation = orientation};
   }
 
   void enqueue(Job job) {
@@ -187,6 +201,14 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
     waiter->cv.notify_all();
   }
 
+  void restorePolicy(ProfileState &state, const Job &job) {
+    if (job.policyChanged) {
+      for (auto orientation : kPresentationOrientations) {
+        state.skin(orientation).settings.safetyLevel = job.previousPolicy;
+      }
+    }
+  }
+
   void processSkinCommit(Job &job) {
     AppSettings merged;
     {
@@ -196,7 +218,8 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         return;
       }
       merged = state->second.durableSettings;
-      merged.skin = job.settings.skin;
+      merged.presentation(job.orientation).skin = job.settings.presentation(job.orientation).skin;
+      merged.skinSafetyLevel = job.settings.skinSafetyLevel;
     }
     merged.sanitize();
     std::string error;
@@ -208,11 +231,12 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
                       ? skin::SkinProfileCommitResult::Status::Persisted
                       : skin::SkinProfileCommitResult::Status::RetryableFailure,
         .ticket = job.ticket,
-        .snapshot = snapshotLocked(job.profileId),
+        .snapshot = snapshotLocked(job.profileId, job.orientation),
     };
     if (!saved) {
-      state.settings = std::move(job.previousSkin);
-      result.snapshot = snapshotLocked(job.profileId);
+      state.skin(job.orientation).settings = std::move(job.previousSkin);
+      restorePolicy(state, job);
+      result.snapshot = snapshotLocked(job.profileId, job.orientation);
       result.failure = failureDiagnostic(
           "skin_profile_save_failed",
           error.empty() ? "Skin profile settings could not be saved" : error);
@@ -230,9 +254,13 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         completeWaiter(job.waiter, false, {}, "Skin profile is not bound");
         return;
       }
-      if (state->second.generation == job.skinGeneration) {
-        job.settings.skin = state->second.settings;
+      for (auto orientation : kPresentationOrientations) {
+        const auto &skin = state->second.skin(orientation);
+        if (skin.generation == job.skinGenerations[static_cast<std::size_t>(orientation)]) {
+          job.settings.presentation(orientation).skin = skin.settings;
+        }
       }
+      job.settings.skinSafetyLevel = job.settings.presentation(PresentationOrientation::Landscape).skin.safetyLevel;
     }
     job.settings.sanitize();
     std::string error;
@@ -275,7 +303,10 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       }
       if (input.active) {
         if (!mutateIfCurrent(
-                [&] { inventory.profiles.push_back(snapshotLocked(input.id)); })) {
+                [&] {
+                  for (auto orientation : kPresentationOrientations)
+                    inventory.profiles.push_back(snapshotLocked(input.id, orientation));
+                })) {
           result.cancelled = true;
           break;
         }
@@ -294,31 +325,28 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       }
       if (!mutateIfCurrent([&] {
             auto [state, inserted] = profiles.try_emplace(input.id.opaque);
-            if (inserted) {
-              state->second.settings = loaded.settings.skin;
-              state->second.durableSettings = loaded.settings;
-            } else if (state->second.settings != loaded.settings.skin ||
-                       state->second.durableSettings != loaded.settings) {
-              if (state->second.highWaterGeneration ==
-                  std::numeric_limits<std::uint64_t>::max()) {
-                result.diagnostics.push_back(failureDiagnostic(
-                    "skin_profile_generation_exhausted",
-                    "Profile generations are exhausted during inventory refresh"));
-                return;
+            for (auto orientation : kPresentationOrientations) {
+              auto &slot = state->second.skin(orientation);
+              const auto &loadedSkin = loaded.settings.presentation(orientation).skin;
+              if (!inserted && (slot.settings != loadedSkin || state->second.durableSettings != loaded.settings)) {
+                if (slot.highWaterGeneration == std::numeric_limits<std::uint64_t>::max()) {
+                  result.diagnostics.push_back(failureDiagnostic(
+                      "skin_profile_generation_exhausted", "Profile generations are exhausted during inventory refresh"));
+                  return;
+                }
+                slot.generation = ++slot.highWaterGeneration;
               }
-              ++state->second.highWaterGeneration;
-              state->second.generation = state->second.highWaterGeneration;
-              state->second.settings = loaded.settings.skin;
-              state->second.durableSettings = loaded.settings;
+              slot.settings = loadedSkin;
+              inventory.profiles.push_back(snapshotLocked(input.id, orientation));
             }
-            inventory.profiles.push_back(snapshotLocked(input.id));
+            state->second.durableSettings = loaded.settings;
           })) {
         result.cancelled = true;
         break;
       }
     }
     if (!result.cancelled && result.diagnostics.empty() &&
-        inventory.profiles.size() == job.snapshotInputs.size()) {
+        inventory.profiles.size() == job.snapshotInputs.size() * 2) {
       std::set<std::string, std::less<>> capturedProfileIds;
       for (const auto &input : job.snapshotInputs) {
         capturedProfileIds.insert(input.id.opaque);
@@ -332,7 +360,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       } else {
         std::sort(inventory.profiles.begin(), inventory.profiles.end(),
                   [](const auto &left, const auto &right) {
-                    return left.profileId < right.profileId;
+                    return std::tie(left.profileId, left.orientation) < std::tie(right.profileId, right.orientation);
                   });
         result.complete = true;
         result.inventory = std::move(inventory);
@@ -350,12 +378,13 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       std::lock_guard lock(mutex);
       auto state = profiles.find(job.profileId.opaque);
       if (state != profiles.end()) {
-        state->second.settings = std::move(job.previousSkin);
+        state->second.skin(job.orientation).settings = std::move(job.previousSkin);
+        restorePolicy(state->second, job);
       }
       commits[job.ticket] = {
           .status = skin::SkinProfileCommitResult::Status::RetryableFailure,
           .ticket = job.ticket,
-          .snapshot = snapshotLocked(job.profileId),
+          .snapshot = snapshotLocked(job.profileId, job.orientation),
           .failure = failureDiagnostic("skin_profile_worker_failure",
                                        std::move(message)),
       };
@@ -452,14 +481,14 @@ ProfileSettingsPersistenceCoordinator::
 
 skin::VersionedSkinProfileSettings
 ProfileSettingsPersistenceCoordinator::snapshot(
-    const skin::SkinProfileId &profileId) const {
+    const skin::SkinProfileId &profileId, PresentationOrientation orientation) const {
   std::lock_guard lock(impl_->mutex);
-  return impl_->snapshotLocked(profileId);
+  return impl_->snapshotLocked(profileId, orientation);
 }
 
 skin::SkinProfileCommitResult
 ProfileSettingsPersistenceCoordinator::beginCommit(
-    const skin::SkinProfileId &profileId, std::uint64_t expectedGeneration,
+    const skin::SkinProfileId &profileId, PresentationOrientation orientation, std::uint64_t expectedGeneration,
     skin::SkinProfileSettings candidate) {
   candidate.sanitize();
   const auto gate = impl_->inventoryGate;
@@ -474,21 +503,26 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
             .failure = failureDiagnostic("skin_profile_not_bound",
                                          "Skin profile is not bound")};
   }
-  auto &state = found->second;
+  auto &profileState = found->second;
+  auto &state = profileState.skin(orientation);
   if (state.generation != expectedGeneration) {
     return {.status = skin::SkinProfileCommitResult::Status::GenerationChanged,
             .generationChanged = true,
-            .snapshot = impl_->snapshotLocked(profileId)};
+            .snapshot = impl_->snapshotLocked(profileId, orientation)};
   }
-  if (state.unresolvedTicket) {
+  if (std::any_of(profileState.skins.begin(), profileState.skins.end(), [](const auto &slot) { return slot.unresolvedTicket.has_value(); })) {
     return {.status = skin::SkinProfileCommitResult::Status::RetryableFailure,
-            .snapshot = impl_->snapshotLocked(profileId),
+            .snapshot = impl_->snapshotLocked(profileId, orientation),
             .failure = failureDiagnostic("skin_profile_commit_unresolved",
                                          "A profile commit is unresolved")};
   }
 
   const std::uint64_t ticket = impl_->allocateTicket();
-  if (state.highWaterGeneration == std::numeric_limits<std::uint64_t>::max()) {
+  if (state.highWaterGeneration == std::numeric_limits<std::uint64_t>::max() ||
+      (candidate.safetyLevel != state.settings.safetyLevel &&
+       std::any_of(profileState.skins.begin(), profileState.skins.end(), [](const auto &slot) {
+         return slot.highWaterGeneration == std::numeric_limits<std::uint64_t>::max();
+       }))) {
     return {.status = skin::SkinProfileCommitResult::Status::RetryableFailure,
             .failure =
                 failureDiagnostic("skin_profile_generation_exhausted",
@@ -507,14 +541,16 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
   skin::SkinProfileCommitResult admissionFailure;
   try {
     previous = state.settings;
-    activePrevious = impl_->activeSettings.skin;
+    activePrevious = impl_->activeSettings.presentation(orientation).skin;
     activeCandidate = candidate;
     full = impl_->activeSettings;
-    full.skin = candidate;
+    full.presentation(orientation).skin = candidate;
+    full.skinSafetyLevel = candidate.safetyLevel;
     const skin::VersionedSkinProfileSettings nextSnapshot{
         .profileId = profileId,
         .generation = reservedGeneration,
         .settings = candidate,
+        .orientation = orientation,
     };
     pending = {
         .status = skin::SkinProfileCommitResult::Status::Pending,
@@ -524,7 +560,7 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
     callerResult = pending;
     admissionFailure = {
         .status = skin::SkinProfileCommitResult::Status::RetryableFailure,
-        .snapshot = impl_->snapshotLocked(profileId),
+        .snapshot = impl_->snapshotLocked(profileId, orientation),
         .failure = failureDiagnostic(
             "skin_profile_commit_admission_failed",
             "Skin profile commit admission failed before worker handoff"),
@@ -534,7 +570,10 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
            .profileId = profileId,
            .path = impl_->manager.pathsFor(profileId.opaque).settingsJson,
            .settings = std::move(full),
-           .previousSkin = previous};
+           .previousSkin = previous,
+           .orientation = orientation,
+           .policyChanged = candidate.safetyLevel != previous.safetyLevel,
+           .previousPolicy = previous.safetyLevel};
     impl_->commits.emplace(ticket, std::move(pending));
     try {
       impl_->jobs.push_back(std::move(job));
@@ -559,9 +598,20 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
   state.generation = reservedGeneration;
   state.settings = std::move(candidate);
   state.unresolvedTicket = ticket;
+  const bool policyChanged = state.settings.safetyLevel != previous.safetyLevel;
+  const auto otherOrientation = orientation == PresentationOrientation::Landscape
+                                    ? PresentationOrientation::Portrait : PresentationOrientation::Landscape;
+  auto &other = profileState.skin(otherOrientation);
+  const auto previousOtherGeneration = other.generation;
+  if (policyChanged) {
+    other.settings.safetyLevel = state.settings.safetyLevel;
+    other.generation = ++other.highWaterGeneration;
+  }
   const bool activeProfile = impl_->activeProfileId == profileId.opaque;
   if (activeProfile) {
-    impl_->activeSettings.skin = std::move(activeCandidate);
+    impl_->activeSettings.presentation(orientation).skin = std::move(activeCandidate);
+    impl_->activeSettings.presentation(otherOrientation).skin.safetyLevel = state.settings.safetyLevel;
+    impl_->activeSettings.skinSafetyLevel = state.settings.safetyLevel;
   }
   try {
     if (impl_->dependencies.afterSkinCommitStatePublished) {
@@ -569,7 +619,15 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
     }
   } catch (...) {
     if (activeProfile) {
-      impl_->activeSettings.skin = std::move(activePrevious);
+      impl_->activeSettings.presentation(orientation).skin = std::move(activePrevious);
+    }
+    if (policyChanged) {
+      other.settings.safetyLevel = previous.safetyLevel;
+      other.generation = previousOtherGeneration;
+      if (activeProfile) {
+        impl_->activeSettings.presentation(otherOrientation).skin.safetyLevel = previous.safetyLevel;
+        impl_->activeSettings.skinSafetyLevel = previous.safetyLevel;
+      }
     }
     state.settings = std::move(previous);
     state.generation = previousGeneration;
@@ -593,7 +651,9 @@ ProfileSettingsPersistenceCoordinator::pollCommit(std::uint64_t ticket) {
   if (found->second.status != skin::SkinProfileCommitResult::Status::Pending &&
       found->second.snapshot &&
       found->second.snapshot->profileId.opaque == impl_->activeProfileId) {
-    impl_->activeSettings.skin = found->second.snapshot->settings;
+    for (auto orientation : kPresentationOrientations)
+      impl_->activeSettings.presentation(orientation).skin = impl_->profiles.at(impl_->activeProfileId).skin(orientation).settings;
+    impl_->activeSettings.skinSafetyLevel = found->second.snapshot->settings.safetyLevel;
   }
   return found->second;
 }
@@ -612,8 +672,8 @@ void ProfileSettingsPersistenceCoordinator::acknowledgeCommit(
       auto state =
           impl_->profiles.find(found->second.snapshot->profileId.opaque);
       if (state != impl_->profiles.end() &&
-          state->second.unresolvedTicket == ticket) {
-        state->second.unresolvedTicket.reset();
+          state->second.skin(found->second.snapshot->orientation).unresolvedTicket == ticket) {
+        state->second.skin(found->second.snapshot->orientation).unresolvedTicket.reset();
       }
     }
     impl_->commits.erase(found);
@@ -698,13 +758,17 @@ ProfileSettingsPersistenceCoordinator::tryAcquireInventoryCommitFence(
   std::lock_guard lock(impl_->mutex);
   if (gate->stopping || impl_->stopping || gate->mutationActive ||
       inventory.inventoryGeneration != gate->generation ||
-      inventory.profiles.size() != impl_->profiles.size()) {
+      inventory.profiles.size() != impl_->profiles.size() * 2) {
     return std::nullopt;
   }
+  std::set<std::pair<std::string, PresentationOrientation>> captured;
   for (const auto &profile : inventory.profiles) {
+    if (!captured.emplace(profile.profileId.opaque, profile.orientation).second) {
+      return std::nullopt;
+    }
     const auto found = impl_->profiles.find(profile.profileId.opaque);
     if (found == impl_->profiles.end() ||
-        found->second.generation != profile.generation) {
+        found->second.skin(profile.orientation).generation != profile.generation) {
       return std::nullopt;
     }
   }
@@ -768,7 +832,8 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
          .path = impl_->manager.pathsFor(profileId.opaque).settingsJson,
          .settings = settings,
          .waiter = waiter,
-         .skinGeneration = impl_->profiles.at(profileId.opaque).generation});
+         .skinGenerations = {impl_->profiles.at(profileId.opaque).skin(PresentationOrientation::Landscape).generation,
+                             impl_->profiles.at(profileId.opaque).skin(PresentationOrientation::Portrait).generation}});
   }
   try {
     if (impl_->dependencies.afterFullSaveAdmitted) {
@@ -788,7 +853,10 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
     const auto state = impl_->profiles.find(profileId.opaque);
     if (profileId.opaque == impl_->activeProfileId &&
         state != impl_->profiles.end()) {
-      settings.skin = state->second.settings;
+      for (auto orientation : kPresentationOrientations)
+        settings.presentation(orientation).skin = state->second.skin(orientation).settings;
+      settings.skinSafetyLevel = settings.presentation().skin.safetyLevel;
+      settings.setActivePresentationOrientation(impl_->activeSettings.activePresentationOrientation());
       impl_->activeSettings = settings;
     }
   }
@@ -827,10 +895,12 @@ void ProfileSettingsPersistenceCoordinator::bindCommittedActiveProfile(
   }
   std::lock_guard lock(impl_->mutex);
   auto &state = impl_->profiles[profileId.opaque];
-  state.highWaterGeneration =
-      std::max(state.highWaterGeneration, state.generation);
-  state.generation = ++state.highWaterGeneration;
-  state.settings = settings.skin;
+  for (auto orientation : kPresentationOrientations) {
+    auto &slot = state.skin(orientation);
+    slot.highWaterGeneration = std::max(slot.highWaterGeneration, slot.generation);
+    slot.generation = ++slot.highWaterGeneration;
+    slot.settings = settings.presentation(orientation).skin;
+  }
   state.durableSettings = settings;
   impl_->activeProfileId = profileId.opaque;
   impl_->activeSettings = settings;

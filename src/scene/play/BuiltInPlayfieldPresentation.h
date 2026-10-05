@@ -24,6 +24,8 @@ class BuiltInPlayfieldPresentation : public PlayfieldPresentation {
 public:
   ~BuiltInPlayfieldPresentation() override = default;
 
+  [[nodiscard]] virtual bool hidesScratchLane() const noexcept { return false; }
+
   [[nodiscard]] virtual BuiltInRendererTraversal
   projectionTraversal() const = 0;
   [[nodiscard]] virtual long long

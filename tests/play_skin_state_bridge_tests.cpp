@@ -1,4 +1,5 @@
 #include "skin/beatoraja/PlaySkinStateBridge.h"
+#include "scene/SettingsScenePreviewAuthority.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -2803,6 +2804,49 @@ void testScoreAndComboTimersUseCapturedGameplayState() {
   bridge.discardFrame();
 }
 
+void testSettingsPreviewSuppliesGameplayTimeProperties() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  // Include the initial frame, motion, loop boundary, and reset.
+  for (const auto elapsed : {0LL, 3'500'000LL, 27'500'000LL, 31'500'000LL, 31'501'000LL, 36'500'000LL, 36'501'000LL}) {
+    auto state = stateAt(++serial);
+    state.clock = settings_scene::previewFrameClock(serial, elapsed, 31'500'000);
+    bridge.beginFrame(state, projectionAt(serial));
+    for (const int id : {161, 162, 163, 164}) {
+      expect(bridge.integerProperty({id}).supported,
+             "preview elapsed and remaining time numbers never reject a skin frame");
+    }
+    expect(bridge.integerProperty({162}).value == elapsed / 1'000'000,
+           "preview elapsed time follows the simulation and resets with the loop");
+    expect(bridge.integerProperty({164}).value == (37500 - elapsed / 1000) / 1000,
+           "preview remaining time uses the actual play deadline and the gameplay time-left bias");
+    expect(bridge.floatProperty({101}).supported,
+           "both gameplay music-progress slider selectors are available in preview");
+    const auto progress = bridge.floatProperty({6});
+    expect(progress.supported && std::abs(progress.value -
+               std::min(static_cast<float>(elapsed / 1000) / 36500.0F, 1.0F)) < 0.000001,
+           "preview music progress includes the standard end-of-notes margin");
+    expect(bridge.timerProperty({41}) == 0,
+           "preview play timer is active from the first configured skin frame");
+    expect(bridge.timerProperty({143}) == kPlayfieldTimestampOff || elapsed > 31'500'000,
+           "preview end-of-notes animation stays off while sample notes are falling");
+    expect(bridge.timerProperty({48}) == kPlayfieldTimestampOff,
+           "an untouched preview never claims a full combo");
+    expect((bridge.timerProperty({143}) != kPlayfieldTimestampOff) == (elapsed > 31'500'000),
+           "preview end-of-notes starts only after the final sample chord");
+    expect((bridge.timerProperty({908}) != kPlayfieldTimestampOff) == (elapsed > 36'500'000),
+           "preview finish starts after the final note plus the standard five-second margin");
+    bridge.discardFrame();
+  }
+}
+
 void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -4160,6 +4204,7 @@ int main() {
   testIrTargetsUseCompleteRankingAndPinnedSelection();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
+  testSettingsPreviewSuppliesGameplayTimeProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();
   testClearAndFullComboTimersFollowPinnedBmsPlayerState();

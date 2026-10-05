@@ -35,6 +35,7 @@ private:
       const auto line = resolved.substr(lineStart, newline - lineStart);
       auto *row = new View();
       row->setFlexDirection(FlexDirection::Row);
+      row->setWidthPercent(100);
       row->setFlexWrap(YGWrapWrap);
       row->setJustifyContent(YGJustifyCenter);
       row->setAlignItems(YGAlignCenter);
@@ -49,6 +50,9 @@ private:
           auto *run = new TextView("assets/fonts/notosanscjkjp.ttf", 22,
               emphasized ? TextView::FontWeight::Bold : TextView::FontWeight::Regular);
           run->setText(text);
+          run->setWrap(true);
+          run->setAlign(TextView::CENTER);
+          YGNodeStyleSetMaxWidthPercent(run->getNode(), 100);
           run->setVAlign(TextView::MIDDLE);
           run->setThemedColor(emphasized ? ui_theme::cyan : ui_theme::textSecondary);
           row->addView(run);

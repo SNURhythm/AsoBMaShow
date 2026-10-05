@@ -60,7 +60,7 @@ SkinActivationCommitStoreFake::beginPreparedActivationCommit(
   SkinProfileCommitResult ownerResult;
   try {
     ownerResult =
-        owner.beginCommit(pending->prepared->profileId,
+        owner.beginCommit(pending->prepared->profileId, pending->prepared->orientation,
                           pending->prepared->expectedProfileGeneration,
                           pending->prepared->candidateProfileSettings);
   } catch (...) {

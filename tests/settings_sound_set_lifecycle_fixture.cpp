@@ -21,9 +21,11 @@ struct View {
   void setText(const std::string &value) { text = value; localizedText = value; }
   void setLocalizedText(const i18n::Text &value) { localizedText = value; text = value.resolve(); }
   void setEditingText(const std::string &value) { text = value; }
-  float getScrollOffset() { return 0; }
-  void setScrollOffset(float) {}
+  float scrollOffset = 0;
+  float getScrollOffset() { return scrollOffset; }
+  void setScrollOffset(float value) { scrollOffset = value; }
 };
+using ScrollView = View;
 struct TrackedInput {
   View *pointer = nullptr;
   unsigned generation = 0;
@@ -80,11 +82,29 @@ struct SettingsScene {
   int lastLayoutWidth = -1, lastLayoutHeight = -1;
   int lastSafeTop = 0, lastSafeLeft = 0, lastSafeBottom = 0, lastSafeRight = 0;
   int activeTab = 1, lastLaidOutTab = -1;
+  bool previewActive = false, lastLaidOutPreviewActive = false;
+  bool previewPanelFolded = false;
+  float lastLayoutScrollOffset = 0.0F;
+  int previewPanelPage = 0, lastLaidOutPreviewPanelPage = 0;
+  View *visibleScroll = nullptr;
   int saves = 0;
   void persistSettings() { ++saves; }
   void initView() {
     rootLayout = new View;
     views.push_back(rootLayout);
+    if (previewActive) {
+      if (previewPanelFolded) {
+        visibleScroll = nullptr;
+        return;
+      }
+      PREVIEW_SCROLL_BINDING
+      visibleScroll = previewScroll;
+      views.push_back(previewScroll);
+    } else {
+      scrollView = new View;
+      visibleScroll = scrollView;
+      views.push_back(scrollView);
+    }
     if (activeTab == 1) {
       auto *input = new View;
       views.push_back(input);
@@ -105,6 +125,41 @@ void expect(bool condition, const char *message) {
   if (!condition) { ++failures; std::cerr << message << '\n'; }
 }
 int main() {
+  {
+    SettingsScene scene;
+    scene.previewActive = true;
+    scene.previewPanelPage = 1;
+    scene.ensureLayoutUpToDate();
+    scene.visibleScroll->setScrollOffset(375);
+    for (int reload = 0; reload < 3; ++reload) {
+      scene.lastLayoutWidth = -1;
+      scene.ensureLayoutUpToDate();
+      expect(scene.visibleScroll->getScrollOffset() == 375,
+             "preview session and catalog reloads preserve the displayed panel scroll");
+    }
+    scene.previewPanelFolded = true;
+    for (int reload = 0; reload < 3; ++reload) {
+      scene.lastLayoutWidth = -1;
+      scene.ensureLayoutUpToDate();
+    }
+    scene.previewPanelFolded = false;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleScroll->getScrollOffset() == 375,
+           "hiding, rebuilding, and showing the preview panel retains its scroll");
+    scene.previewPanelPage = 2;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleScroll->getScrollOffset() == 0,
+           "another preview page does not inherit the previous page's scroll");
+    scene.visibleScroll->setScrollOffset(250);
+    scene.previewActive = false;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleScroll->getScrollOffset() == 0,
+           "leaving preview does not apply its panel offset to normal settings");
+    scene.resetViewState();
+  }
   for (bool sameTab : {false, true}) {
     for (bool cancelled : {false, true}) {
       i18n::setLanguage(i18n::Language::English);

@@ -127,6 +127,11 @@ constexpr int kDetailsPanelWidth = 500;
 constexpr int kDetailsContentWidth = 460;
 // 84 design units give a 44.8-point target at 1024-point iPad width.
 constexpr int kMenuActionHeight = 84;
+constexpr int kPortraitMenuActionHeight = 64;
+int currentMenuActionHeight() {
+  return rendering::window_height > rendering::window_width
+             ? kPortraitMenuActionHeight : kMenuActionHeight;
+}
 constexpr int kLibraryPanelPadding = 14;
 constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
@@ -389,6 +394,8 @@ SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.left * static_cast<float>(rendering::window_width)));
   insets.right = static_cast<int>(std::lround(
       normalized.right * static_cast<float>(rendering::window_width)));
+  insets.bottom = static_cast<int>(std::lround(
+      normalized.bottom * static_cast<float>(rendering::window_height)));
 #endif
   return insets;
 }
@@ -704,16 +711,7 @@ void MainMenuScene::onPause() {
 
 void MainMenuScene::onApplicationBackgroundChanged(bool background) {
   if (background && archiveUnzipModal_ != nullptr) {
-    const bool wasRunning = archiveUnzipInProgress();
     archiveUnzipModal_->cancelAndWait();
-    if (wasRunning) {
-      if (unzipButtonText != nullptr) {
-        unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
-      }
-      if (replayStatusText != nullptr) {
-        replayStatusText->setLocalizedText(i18n::message("menu.unzip_cancelled.label"));
-      }
-    }
   }
 }
 
@@ -745,15 +743,25 @@ void MainMenuScene::onResume() {
   }
   refreshLibraryIfNeeded();
   reselectCurrentChart();
+  queueSelectedSkinHandoff();
+}
+
+void MainMenuScene::queueSelectedSkinHandoff() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   // Settings retains the built-in selector. Re-evaluate type 5 after resume
   // unwinds, so changing the scene cannot clean up views inside onResume().
   defer([this]() {
+    if (context.gameplaySkinLifecycle &&
+        !context.gameplaySkinLifecycle->presentationReady()) {
+      presentationSkinRefreshPending = true;
+      return true;
+    }
+    presentationSkinRefreshPending = false;
     skin::GameplaySkinAcquisition acquisition;
     if (context.gameplaySkinLifecycle) {
       acquisition =
           context.gameplaySkinLifecycle->acquireForSkinType(5, false);
-    } else if (context.settings.skin.selectedSkinEntries.contains(5)) {
+    } else if (context.settings.presentation().skin.selectedSkinEntries.contains(5)) {
       acquisition.disposition =
           skin::GameplaySkinAcquisitionDisposition::Failed;
       acquisition.failure = skin::GameplaySkinAcquisitionFailure{
@@ -779,6 +787,11 @@ void MainMenuScene::onResume() {
     return true;
   }, 0, true);
 #endif
+}
+
+void MainMenuScene::onPresentationOrientationChanged() {
+  updatePanelLayout();
+  presentationSkinRefreshPending = true;
 }
 
 void MainMenuScene::onLanguageChanged() {
@@ -915,6 +928,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
+  detailsContent_ = nullptr;
+  detailsControlsContent_ = nullptr;
+  detailsControlsScroll_ = nullptr;
   findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
   findBmsModal_.reset();
@@ -955,7 +971,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
-  replayStatusText = nullptr;
   recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
@@ -1128,9 +1143,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     refreshPlayOptionButtons();
     refreshLongNoteModeButtons();
     refreshAssistOptionButtons();
-    if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-      replayStatusText->setText("");
-    }
     if (item.courseStart) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
@@ -1160,11 +1172,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     if (item.solidArchive) {
       jacketView->freeImage();
-      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setText(
-            "Skipped solid archive. Estimated unzip: " +
-            formatFindBmsBytes(item.archiveUncompressedSize));
-      }
       archive_file::appendDebugLogLine(
           "Solid archive selected without chart probing: " +
           fspath_to_utf8(meta.BmsPath) +
@@ -1180,9 +1187,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
     if (archiveVirtualPath && !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
-      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setLocalizedText(i18n::message("menu.archive_preview_disabled.label"));
-      }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
           fspath_to_utf8(meta.BmsPath));
@@ -1203,9 +1207,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
       jacketView->freeImage();
     }
     if (suppressPreview) {
-      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setLocalizedText(i18n::message("menu.unzipped_chart_selected.label"));
-      }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
           fspath_to_utf8(meta.BmsPath));
@@ -1301,6 +1302,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+  auto *browser = new View();
+  browser->setName("mainMenuBrowser");
+  browser->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
+  browser->setFlex(1)->setMinWidth(0)->setMinHeight(0)->setGap(24);
+  rootLayout->addView(browser);
 
 overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                                      rendering::window_height);
@@ -1375,6 +1381,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay);
 
   auto nav = new View();
+  nav->setName("mainMenuLibrary");
   nav->setFlexDirection(FlexDirection::Column);
   nav->setAlignItems(YGAlignStretch);
   nav->setWidth(kLibraryPanelWidth);
@@ -1385,6 +1392,12 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   nav->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   nav->setThemedBorderColor(ui_theme::hairline);
   nav->setBorderWidth(1);
+
+  auto *libraryActions = new View();
+  libraryActions->setName("mainMenuLibraryActions");
+  libraryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
+  libraryActions->setFlexShrink(0);
+  nav->addView(libraryActions);
 
   bool showAddFolderButton = true;
   i18n::Text addFolderButtonLabel = i18n::message("menu.add_folder.label");
@@ -1416,7 +1429,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
         this->context.requestAddChartFolderFromFiles();
       }
     });
-    nav->addView(addFolderButton);
+    libraryActions->addView(addFolderButton);
   }
 #if TARGET_OS_ANDROID
   auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
@@ -1437,7 +1450,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
           this->context.chartLibraryFolderActions->requestImportArchive();
         }
       });
-  nav->addView(importArchiveButton);
+  libraryActions->addView(importArchiveButton);
 #endif
 
   folderRecyclerView->setFlex(1);
@@ -1445,9 +1458,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   folderRecyclerView->setBorderWidth(0);
   folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
-  rootLayout->addView(nav);
+  browser->addView(nav);
 
   auto left = new View();
+  left->setName("mainMenuSongs");
+  left->setMinWidth(0)->setMinHeight(0);
   left->setFlexDirection(FlexDirection::Column);
   left->setAlignItems(YGAlignStretch);
   left->setFlex(1);
@@ -1460,12 +1475,14 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   left->setBorderWidth(1);
 
   auto *libraryHeader = new View();
+  libraryHeader->setName("mainMenuToolbar");
   libraryHeader->setFlexDirection(FlexDirection::Row);
   libraryHeader->setAlignItems(YGAlignCenter);
   libraryHeader->setGap(12);
   libraryHeader->setHeight(kMenuActionHeight);
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
+  libraryTitle->setName("mainMenuTitle");
   libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
   libraryTitle->setThemedColor(ui_theme::textPrimary);
   libraryTitle->setVAlign(TextView::MIDDLE);
@@ -1631,9 +1648,10 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   recyclerView->setBorderWidth(0);
   recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
-  rootLayout->addView(left);
+  browser->addView(left);
 
   auto right = new View();
+  right->setName("mainMenuDetails");
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
   right->setWidth(kDetailsPanelWidth);
@@ -1647,12 +1665,15 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   right->setPadding(Edge::Bottom, 16);
 
   auto *rightScroll = new ScrollView();
+  rightScroll->setName("mainMenuDetailsScroll");
+  rightScroll->setMinWidth(0)->setMinHeight(0);
   tutorialRightScroll_ = rightScroll;
   rightScroll->setWidth(kDetailsPanelWidth - 20);
   rightScroll->setFlex(1);
   rightScroll->setFlexShrink(1);
   rightScroll->clearBackgroundColor();
   auto *rightContent = new View();
+  detailsContent_ = rightContent;
   rightContent->setWidth(kDetailsPanelWidth - 22);
   rightContent->setFlexDirection(FlexDirection::Column);
   rightContent->setAlignItems(YGAlignCenter);
@@ -1833,12 +1854,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
 
-  replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  replayStatusText->setText("");
-  replayStatusText->setThemedColor(ui_theme::textSecondary);
-  replayStatusText->setAlign(TextView::CENTER);
-  replayStatusText->setHeight(20);
-
   rankingsButton = new Button(0, 0, 224, kMenuActionHeight);
   rankingsButton->setFlex(1)->setMinWidth(0);
   rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
@@ -1907,9 +1922,9 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   rightContent->addView(unzipButtonSlot);
   rightContent->addView(findBmsButtonSlot);
-  rightContent->addView(replayStatusText);
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
+  settingsButton->setName("mainMenuSettings");
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   settingsText->setLocalizedText(i18n::message("menu.settings.label"));
   settingsText->setAlign(TextView::CENTER);
@@ -1936,9 +1951,28 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
   // Primary actions stay reachable while chart details and tools scroll.
-  right->addView(startButton);
-  right->addView(recordActions);
-  right->addView(settingsButton);
+  auto *primaryActions = new View();
+  primaryActions->setName("mainMenuPrimaryActions");
+  primaryActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
+  primaryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
+  primaryActions->addView(startButton);
+  primaryActions->addView(recordActions);
+  primaryActions->addView(settingsButton);
+  right->addView(primaryActions);
+  auto *controls = new View();
+  controls->setName("mainMenuControls");
+  controls->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
+  controls->setFlex(1)->setMinWidth(0)->setMinHeight(0)->setGap(8);
+  controls->setDisplay(YGDisplayNone);
+  detailsControlsScroll_ = new ScrollView();
+  detailsControlsScroll_->setWidthPercent(100)->setFlex(1)->setMinHeight(0);
+  detailsControlsScroll_->clearBackgroundColor();
+  detailsControlsContent_ = new View();
+  detailsControlsContent_->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
+  detailsControlsContent_->setGap(8)->setPadding(Edge::Bottom, 4);
+  detailsControlsScroll_->setContentView(detailsControlsContent_);
+  controls->addView(detailsControlsScroll_);
+  right->addView(controls);
   rootLayout->addView(right);
   buildPlayOptionsModal();
   recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
@@ -1952,7 +1986,143 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   reloadFolderItems();
   reloadChartList();
   libraryRevision = context.chartRepository.GetLibraryRevision();
+  updatePanelLayout();
   rootLayout->applyYogaLayout();
+}
+
+float MainMenuScene::portraitDetailsHeight(float availableHeight) const {
+  const auto *primary = rootLayout->findViewByName("mainMenuPrimaryActions");
+  // Use the natural minimum, not the stretched left column's previous height,
+  // so hiding controls on the right can shrink the panel again.
+  const float detailsHeight = ChartDetailsView::minimumChartHeight();
+  const float controlsHeight = detailsControlsContent_ ? detailsControlsContent_->getHeight() : 0;
+  const float actionsHeight = primary ? primary->getHeight() : 0;
+  // Match the two scroll columns, the action gap, and the panel's 16-unit
+  // top/bottom padding plus border. Tall content stays scrollable while the
+  // browser retains room for its toolbar and song rows.
+  const float contentHeight = std::max(detailsHeight, controlsHeight + actionsHeight + 8);
+  return std::clamp(contentHeight + 34, 0.0F, std::max(0.0F, availableHeight - 320));
+}
+
+void MainMenuScene::updatePanelLayout() {
+  if (!rootLayout) return;
+  View::LayoutBatchScope batch;
+  const bool portrait = rendering::window_height > rendering::window_width;
+  const auto safe = getSafeAreaInsetsUi();
+  const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - 24);
+  const float detailsHeight = portraitDetailsHeight(contentHeight);
+  auto *browser = rootLayout->findViewByName("mainMenuBrowser");
+  auto *library = rootLayout->findViewByName("mainMenuLibrary");
+  auto *actions = rootLayout->findViewByName("mainMenuLibraryActions");
+  auto *details = rootLayout->findViewByName("mainMenuDetails");
+  auto *detailsScroll = rootLayout->findViewByName("mainMenuDetailsScroll");
+  auto *controls = rootLayout->findViewByName("mainMenuControls");
+  rootLayout->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+  if (browser) {
+    browser->setFlex(portrait ? 0.0F : 1.0F);
+    browser->setWidth(portrait ? contentWidth : YGUndefined);
+    browser->setHeight(portrait ? contentHeight - detailsHeight : YGUndefined);
+  }
+  if (library) {
+    library->setWidth(portrait ? std::max(0.0F, contentWidth - 24) * 0.3F : kLibraryPanelWidth);
+    library->setHeight(YGUndefined)->setMinHeight(0);
+    library->setFlexShrink(0);
+  }
+  if (actions) {
+    actions->setFlexDirection(FlexDirection::Column);
+    for (auto *action : actions->getChildren()) action->setWidthPercent(100);
+  }
+  if (details) {
+    details->setWidth(portrait ? YGUndefined : kDetailsPanelWidth);
+    details->setHeight(portrait ? detailsHeight : YGUndefined)->setMinHeight(0);
+    details->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
+    details->setAlignItems(portrait ? YGAlignStretch : YGAlignCenter);
+    details->setPadding(Edge::Left, portrait ? 12.0F : 0.0F);
+    details->setPadding(Edge::Right, portrait ? 12.0F : 0.0F);
+    details->setPadding(Edge::Top, portrait ? 16.0F : 0.0F);
+  }
+  if (detailsScroll) {
+    detailsScroll->setWidth(portrait ? YGUndefined : kDetailsPanelWidth - 20);
+    detailsScroll->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
+  }
+  if (controls) {
+    controls->setWidth(YGUndefined);
+    controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
+  }
+  chartDetailsView_->setMinHeight(portrait ? std::max(0.0F, detailsHeight - 34) : 0);
+  detailsContent_->setPadding(Edge::Top, portrait ? 0 : 16);
+  detailsContent_->setPadding(Edge::Bottom, portrait ? 0 : 16);
+  updateMenuPresentation(portrait);
+}
+
+void MainMenuScene::updateMenuPresentation(bool portrait) {
+  if (!detailsContent_ || !detailsControlsContent_) return;
+  auto *details = rootLayout->findViewByName("mainMenuDetails");
+  auto *controls = rootLayout->findViewByName("mainMenuControls");
+  auto *primary = rootLayout->findViewByName("mainMenuPrimaryActions");
+  auto *records = rootLayout->findViewByName("mainMenuRecordActions");
+  auto *settings = static_cast<Button *>(rootLayout->findViewByName("mainMenuSettings"));
+  auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
+  auto *target = portrait ? detailsControlsContent_ : detailsContent_;
+  chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
+  for (auto *view : std::array<View *, 4>{readyPlayOptionsButton, chartActionsRow,
+           unzipButtonSlot, findBmsButtonSlot}) {
+    view->moveTo(*target);
+  }
+  settings->moveTo(portrait ? *records : *primary);
+  primary->moveTo(portrait ? *controls : *details);
+  controls->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
+  controls->setVisible(portrait);
+  tutorialRightScroll_ = portrait ? detailsControlsScroll_ : detailsScroll;
+  primary->setGap(portrait ? 8 : 12);
+  records->setGap(portrait ? 8 : 12);
+  settings->setFlex(portrait ? 1 : 0)->setMinWidth(0);
+  settings->setWidth(portrait ? YGUndefined : kDetailsContentWidth);
+  settings->getContentView()->setAutoFitText(portrait);
+  replayButtonText->setAutoFitText(portrait);
+  rankingsButtonText->setAutoFitText(portrait);
+  for (auto *view : std::array<View *, 7>{primary, records, startButton,
+           readyPlayOptionsButton, chartActionsRow, unzipButtonSlot, findBmsButtonSlot}) {
+    if (portrait) view->setWidthPercent(100);
+    else view->setWidth(kDetailsContentWidth);
+  }
+  for (auto *button : {unzipButton, findBmsButton}) {
+    if (portrait) button->setWidthPercent(100);
+    else button->setWidth(kDetailsContentWidth);
+  }
+  const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
+  startButton->setHeight(portrait ? height : 88);
+  for (auto *view : std::array<View *, 8>{replayButtonSlot, replayButton, rankingsButton,
+           settings, chartActionsRow, unzipButton, findBmsButton, searchBox}) view->setHeight(height);
+  for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
+  for (auto *slot : {unzipButtonSlot, findBmsButtonSlot})
+    slot->setHeight(slot->getVisible() ? height : 0);
+  for (auto *button : {chartFilterButton, chartSortButton})
+    button->setWidth(height)->setHeight(height);
+  auto *toolbar = rootLayout->findViewByName("mainMenuToolbar");
+  auto *title = rootLayout->findViewByName("mainMenuTitle");
+  title->setVisible(!portrait);
+  title->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
+  toolbar->setHeight(height);
+  for (auto *view : toolbar->getChildren()) if (view != title) view->setHeight(height);
+  for (auto *view : rootLayout->findViewByName("mainMenuLibraryActions")->getChildren())
+    view->setHeight(height);
+  readyPlayOptionsButton->setHeight(portrait ? 96 : 122);
+  auto *summary = readyPlayOptionsButton->getContentView();
+  summary->setPadding(Edge::Top, portrait ? 8 : 10);
+  summary->setPadding(Edge::Bottom, portrait ? 8 : 10);
+  summary->setGap(portrait ? 4 : 6);
+  const int rowHeight = portrait ? 24 : 28;
+  for (auto *row : summary->getChildren()) {
+    row->setHeight(rowHeight);
+    for (auto *child : row->getChildren()) {
+      child->setHeight(rowHeight);
+      for (auto *label : child->getChildren()) label->setHeight(rowHeight);
+    }
+  }
+  detailsScroll->refreshContentLayout();
+  detailsControlsScroll_->refreshContentLayout();
 }
 
 void MainMenuScene::reloadFolderItems(bool preserveViewState) {
@@ -3733,9 +3903,6 @@ void MainMenuScene::startSelectedCourse() {
 
   const CourseValidationCache &validation = courseValidationForActiveFolder();
   if (validation.empty) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setLocalizedText(i18n::message("menu.no_course_charts.label"));
-    }
     refreshStartButtonForActiveFolder();
     return;
   }
@@ -3743,9 +3910,6 @@ void MainMenuScene::startSelectedCourse() {
   const auto &records = validation.records;
   const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setLocalizedText(i18n::message("menu.course_has_missing_charts.label"));
-    }
     int visibleMissingIndex = -1;
     const auto &missingRecord =
         records[static_cast<std::size_t>(firstMissingIndex)];
@@ -3825,6 +3989,12 @@ void MainMenuScene::startCourseDirect(
 
   defer(
       [this, session, selectedLongNoteMode]() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+        if (context.gameplaySkinLifecycle &&
+            !context.gameplaySkinLifecycle->presentationReady()) {
+          return false;
+        }
+#endif
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -3852,10 +4022,11 @@ void MainMenuScene::startCourseDirect(
               fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
         }
         if (preparedChart == nullptr || parseCancelled) {
-          if (replayStatusText != nullptr) {
-            replayStatusText->setLocalizedText(i18n::message("menu.course_start_failed.label"));
+          finishStart();
+          if (startButtonText != nullptr) {
+            startButtonText->setLocalizedText(i18n::message("menu.course_start_failed.label"));
           }
-          return finishStart();
+          return true;
         }
         applyCourseConstraintsToChart(*preparedChart, session->constraints);
 
@@ -3999,6 +4170,12 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
        pacemakerTarget, playback,
        canReusePreviewForStart, chartRandomInfo, tableName = std::move(tableName),
        tableLevel = std::move(tableLevel)]() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+        if (context.gameplaySkinLifecycle &&
+            !context.gameplaySkinLifecycle->presentationReady()) {
+          return false;
+        }
+#endif
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -4389,12 +4566,8 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
     return;
   }
 
-  const bool show = visible || archiveUnzipInProgress();
-  unzipButtonSlot->setVisible(show);
-  unzipButtonSlot->setHeight(show ? kMenuActionHeight : 0.0f);
-  if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
-    unzipButtonText->setLocalizedText(i18n::message("library.archive.unzipping.progress"));
-  }
+  unzipButtonSlot->setVisible(visible);
+  unzipButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -4407,7 +4580,7 @@ void MainMenuScene::refreshUnzipButtonForSelection(
       (record->unzipAll || !record->meta.BmsPath.empty())) {
     visible = record->solidArchive;
   }
-  if (unzipButtonText != nullptr && !archiveUnzipInProgress()) {
+  if (unzipButtonText != nullptr) {
     unzipButtonText->setLocalizedText(record != nullptr && record->unzipAll
                                 ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzip.label"));
   }
@@ -4446,20 +4619,11 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     previewWorker_->stop();
   }
   stopAndClearSelectedChart();
-  const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
-                                      : archiveUnzipModal_->start(record);
-  if (!started) {
-    return;
+  if (record.unzipAll) {
+    archiveUnzipModal_->startAll();
+  } else {
+    archiveUnzipModal_->start(record);
   }
-  if (unzipButtonText != nullptr) {
-    unzipButtonText->setLocalizedText(record.unzipAll ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzipping.progress"));
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setLocalizedText(record.unzipAll
-                                 ? i18n::message("library.archive.choose_whether_keep_delete_archives.message")
-                                 : i18n::message("library.archive.unzipping_full_archive.progress"));
-  }
-  setUnzipButtonVisible(true);
 }
 
 bool MainMenuScene::archiveUnzipInProgress() const {
@@ -4470,14 +4634,8 @@ void MainMenuScene::buildUnzipProgressModal() {
   ArchiveUnzipModalCallbacks callbacks;
   callbacks.libraryChanged = [this]() { requestLibraryReload(true); };
   callbacks.finished = [this](const ArchiveUnzipResult &result) {
-    if (unzipButtonText != nullptr) {
-      unzipButtonText->setLocalizedText(result.success ? i18n::message("library.archive.unzipped.label") : i18n::message("library.archive.unzip.label"));
-    }
     if (result.success && !result.chartPath.empty()) {
       pendingSelectChartPath = result.chartPath;
-    }
-    if (replayStatusText != nullptr) {
-      replayStatusText->setLocalizedText(result.message);
     }
     archive_file::appendDebugLogLine(
         result.message.resolve() + (result.chartPath.empty()
@@ -4513,7 +4671,7 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   }
 
   findBmsButtonSlot->setVisible(visible);
-  findBmsButtonSlot->setHeight(visible ? kMenuActionHeight : 0.0f);
+  findBmsButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -6290,9 +6448,6 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
     recordsModal_->setStatus(safeDiagnostic);
     recordsModal_->reloadRecords(true);
   }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setText(safeDiagnostic);
-  }
   return true;
 }
 
@@ -6321,6 +6476,12 @@ void MainMenuScene::queueReplayLoadCompletion(
 
 void MainMenuScene::applyReplayLoadCompletion() {
   if (context.appInBackground.load()) return;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (context.gameplaySkinLifecycle &&
+      !context.gameplaySkinLifecycle->presentationReady()) {
+    return;
+  }
+#endif
   if (auto completion = replayLoadTask_.takeCompletion()) {
     resetReplayWatchLoadingUi();
     replayResultRecallInProgress = false;
@@ -6368,9 +6529,6 @@ bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,
     recordsModal_->setExportInProgress(true);
     recordsModal_->showExportProgress(progressTitle, progressMessage);
     recordsModal_->setStatus(statusMessage);
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setLocalizedText(statusMessage);
   }
   return true;
 }
@@ -6875,17 +7033,6 @@ void MainMenuScene::applyReplayExportResult() {
     }
   }
 
-  if (replayStatusText != nullptr) {
-    if (result->success) {
-      replayStatusText->setLocalizedText(
-          result->message == "Saved to Photos" ? i18n::message("menu.saved.label") : i18n::message("menu.exported.label"));
-    } else if (result->message == "No Chart") {
-      replayStatusText->setLocalizedText(i18n::message("menu.no_chart.label"));
-    } else {
-      replayStatusText->setText(replay_records::diagnosticOr(
-          result->message, i18n::tr("menu.replay_export_failed.message")));
-    }
-  }
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(false);
     recordsModal_->returnToList(
@@ -6906,18 +7053,16 @@ void MainMenuScene::applyReplayExportResult() {
     SDL_Log("Replay video export failed: %s (%s)", result->message.c_str(),
             fspath_to_utf8(result->outputPath).c_str());
   }
-
-  defer(
-      [this]() {
-        if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-          replayStatusText->setText("");
-        }
-        return true;
-      },
-      result->success ? 1800 : 1400, true);
 }
 
 void MainMenuScene::update(float dt) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (presentationSkinRefreshPending &&
+      (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
+    presentationSkinRefreshPending = false;
+    queueSelectedSkinHandoff();
+  }
+#endif
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   refreshScoreClearRanksIfNeeded();
@@ -6958,6 +7103,14 @@ void MainMenuScene::update(float dt) {
   if (rankingsModal) {
     rankingsModal->update();
   }
+  if (rootLayout && rendering::window_height > rendering::window_width) {
+    const auto safe = getSafeAreaInsetsUi();
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - 24);
+    const auto *details = rootLayout->findViewByName("mainMenuDetails");
+    if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
+      updatePanelLayout();
+    }
+  }
 }
 
 void MainMenuScene::renderScene() {
@@ -6982,6 +7135,9 @@ void MainMenuScene::renderScene() {
   }
   if (overlayPortal != nullptr) {
     overlayPortal->setSize(rendering::window_width, rendering::window_height);
+  }
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setSize(rendering::window_width, rendering::window_height);
   }
   if (revealContextMenu != nullptr) {
     revealContextMenu->setViewportSize(rendering::window_width,
@@ -7017,6 +7173,7 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
     rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
     rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
+    updatePanelLayout();
     rootLayout->applyYogaLayout();
   }
   if (tutorial_ && tutorial_->getVisible()) {
@@ -7028,6 +7185,9 @@ void MainMenuScene::cleanupScene() {
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
+  detailsContent_ = nullptr;
+  detailsControlsContent_ = nullptr;
+  detailsControlsScroll_ = nullptr;
   // Cleanup resources when exiting the scene
   revealContextMenu.reset();
   rankingsModal.reset();
@@ -7084,7 +7244,6 @@ void MainMenuScene::cleanupScene() {
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
-  replayStatusText = nullptr;
   recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;

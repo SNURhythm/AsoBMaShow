@@ -50,8 +50,8 @@ struct MainMenuScene {
   Rows *recyclerView = &rows;
   Modal modal;
   Modal *archiveUnzipModal_ = &modal;
-  Text button, status;
-  Text *unzipButtonText = &button, *replayStatusText = &status;
+  Text button;
+  Text *unzipButtonText = &button;
   struct Preview { void stop() {} };
   Preview *previewWorker_ = nullptr;
   bool buttonVisible = false;

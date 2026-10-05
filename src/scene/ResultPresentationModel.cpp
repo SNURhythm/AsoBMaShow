@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "../i18n/Localization.h"
 #include "ResultPresentationModel.h"
 
@@ -115,7 +116,7 @@ bool knownLampRank(int rank) {
 
 std::optional<std::string> playtypeForGame(std::string_view game) {
   if (game == "bms-7k") {
-    return "7K";
+    return "7K1S";
   }
   if (game == "bms-14k") {
     return "14K";
@@ -124,7 +125,7 @@ std::optional<std::string> playtypeForGame(std::string_view game) {
 }
 
 std::string localPlaytype(int keyMode) {
-  return keyMode > 0 ? std::to_string(keyMode) + "K" : std::string{};
+  return gameplay::keyModeLabel(keyMode);
 }
 
 int countFor(const RhythmState &state, Judgement judgement) {

@@ -26,11 +26,13 @@ skin::UiLogicalRect replayGameplayLogicalUiBounds(int exportWidth,
   if (exportWidth <= 0 || exportHeight <= 0) {
     return {};
   }
-  const double scale = static_cast<double>(exportWidth) /
-                       static_cast<double>(rendering::design_width);
+  const double logicalWidth = exportHeight > exportWidth
+                                  ? rendering::design_height
+                                  : rendering::design_width;
+  const double scale = static_cast<double>(exportWidth) / logicalWidth;
   return {.x = 0.0,
           .y = 0.0,
-          .width = static_cast<double>(rendering::design_width),
+          .width = logicalWidth,
           .height = static_cast<double>(exportHeight) / scale};
 }
 
@@ -46,8 +48,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       settings.visibleTimeDurationMilliseconds;
   const int noteStartPositionPercent =
       noSpeed ? AppSettings::kDefaultNoteStartPositionPercent
-              : settings.noteStartPositionPercent;
-  const bool laneCoverEnabled = settings.laneCoverEnabled;
+              : settings.presentation().noteStartPositionPercent;
+  const bool laneCoverEnabled = settings.presentation().laneCoverEnabled;
   const gameplay_hispeed::State hispeed(
       {.mode = noSpeed ? gameplay_hispeed::FixMode::Off
                        : gameplay_hispeed::fixModeFromEncoded(
@@ -66,10 +68,17 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
           !noSpeed && settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = settings.hispeedFixMode,
       .playAreaWidth = playAreaWidth,
+      .orientation = settings.activePresentationOrientation(),
+      .laneLength = settings.presentation().laneLength,
+      .laneAngleDegrees = settings.presentation().laneAngleDegrees,
+      .scratchLaneOnRight = settings.presentation().scratchLaneOnRight,
+      .hideEmptyScratchLane = chart.Meta.KeyMode == 5
+          ? settings.presentation().hideEmptyScratchLane5K
+          : settings.presentation().hideEmptyScratchLane7K,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = laneCoverEnabled,
-      .laneBeamLengthPercent = settings.laneBeamLengthPercent,
+      .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = noteStartPositionPercent,
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
@@ -96,20 +105,33 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .sevenToNineType = settings.sevenToNineType,
       .constantScroll = !noSpeed && settings.constantScroll,
       .constantFadeInMilliseconds = settings.constantFadeInMilliseconds,
-      .judgementIndicatorEnabled = settings.judgementIndicatorEnabled,
-      .judgementIndicatorY = settings.judgementIndicatorY,
-      .judgementIndicatorWidthScale = settings.judgementIndicatorWidthScale,
+      .judgementIndicatorEnabled = settings.presentation().judgementIndicatorEnabled,
+      .judgementIndicatorY = settings.presentation().judgementIndicatorY,
+      .judgementIndicatorWidthScale = settings.presentation().judgementIndicatorWidthScale,
       .judgementIndicatorHudMode =
-          settings.judgementIndicatorRenderMode ==
+          settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
-          settings.judgementIndicatorRangeMilliseconds,
-      .judgementTextY = settings.judgementTextY,
-      .judgementCounterEnabled = settings.judgementCounterEnabled,
-      .judgementCounterPosition = settings.judgementCounterPosition,
-      .fastSlowCriteria = settings.judgementTimingFastSlowCriteria,
-      .millisecondsCriteria = settings.judgementTimingMillisecondsCriteria,
-      .gaugeBarPosition = settings.gaugeBarPosition,
+          settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextVisibility = settings.presentation().judgementTextVisibility,
+      .judgementTextY = settings.presentation().judgementTextY,
+      .judgementTimingY = settings.presentation().judgementTimingY,
+      .judgementTextSizePercent = settings.presentation().judgementTextSizePercent,
+      .judgementTextBold = settings.presentation().judgementTextBold,
+      .judgementComboSeparated = settings.presentation().judgementComboSeparated,
+      .comboTextY = settings.presentation().comboTextY,
+      .comboTextSizePercent = settings.presentation().comboTextSizePercent,
+      .comboTextBold = settings.presentation().comboTextBold,
+      .judgementTimingSizePercent = settings.presentation().judgementTimingSizePercent,
+      .judgementTimingBold = settings.presentation().judgementTimingBold,
+      .pacemakerDiffY = settings.presentation().pacemakerDiffY,
+      .pacemakerDiffSizePercent = settings.presentation().pacemakerDiffSizePercent,
+      .pacemakerDiffBold = settings.presentation().pacemakerDiffBold,
+      .judgementCounterEnabled = settings.presentation().judgementCounterEnabled,
+      .judgementCounterPosition = settings.presentation().judgementCounterPosition,
+      .fastSlowCriteria = settings.presentation().judgementTimingFastSlowCriteria,
+      .millisecondsCriteria = settings.presentation().judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = settings.presentation().gaugeBarPosition,
       .touchVisualizationEnabled = touchVisualizationEnabled,
       .replayGhostRenderingEnabled = replayGhostRenderingEnabled,
       .judgeAlgorithmImageIndex =
@@ -347,10 +369,10 @@ ReplayLaneCoverInitialState replayLaneCoverInitialState(
     bool noSpeed) noexcept {
   if (noSpeed) {
     return {.percent = AppSettings::kDefaultNoteStartPositionPercent,
-            .enabled = settings.laneCoverEnabled};
+            .enabled = settings.presentation().laneCoverEnabled};
   }
   const auto state = replayInitialLaneCoverState(
-      replay, settings.noteStartPositionPercent, settings.laneCoverEnabled);
+      replay, settings.presentation().noteStartPositionPercent, settings.presentation().laneCoverEnabled);
   return {.percent = state.percent, .enabled = state.enabled};
 }
 

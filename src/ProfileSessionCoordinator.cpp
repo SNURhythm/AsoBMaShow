@@ -331,6 +331,7 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
                         std::string(error.what()));
   }
   currentSettings = targetSettings.settings;
+  currentSettings.setActivePresentationOrientation(oldSettings.activePresentationOrientation());
 
   if (refreshCaches_) {
     try {

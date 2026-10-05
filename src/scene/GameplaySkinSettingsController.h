@@ -52,6 +52,8 @@ struct GameplaySkinSettingsSnapshot {
   SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
   std::optional<SkinSafetyLevel> pendingSafetyLevel;
   std::map<int, SkinEntryId> selectedSkinEntries;
+  bool follow5K1S = false;
+  bool follow7K1S = false;
   // Transitional projection for old callers. The trait map above is the UI's
   // source of truth.
   std::optional<SkinEntryId> selected7KeyEntry;
@@ -96,6 +98,7 @@ struct GameplaySkinSettingsControllerDependencies {
   std::function<platform_document_handoff::PlatformDocumentHandoffOperation(
       PlatformDirectoryImportRequest)>
       beginFolderHandoff;
+  PresentationOrientation orientation = PresentationOrientation::Landscape;
 };
 
 class GameplaySkinSettingsController {
@@ -112,7 +115,8 @@ public:
   [[nodiscard]] const GameplaySkinSettingsSnapshot &snapshot() const noexcept;
   void poll();
   void setActiveTarget(int skinType);
-  void profileChanged(SkinProfileId profileId, SkinActivationClientId clientId);
+  void profileChanged(SkinProfileId profileId, SkinActivationClientId clientId,
+                      PresentationOrientation orientation = PresentationOrientation::Landscape);
 
   [[nodiscard]] ControllerActionResult beginArchiveImport();
   [[nodiscard]] ControllerActionResult beginFolderImport();
@@ -126,6 +130,7 @@ public:
   [[nodiscard]] ControllerActionResult
   selectGameplayTrait(int skinType, const SkinEntryId &entry);
   [[nodiscard]] ControllerActionResult clearGameplayTrait(int skinType);
+  [[nodiscard]] ControllerActionResult followGameplayTrait(int skinType);
   // Transitional convenience API: selects the trait declared by the entry.
   [[nodiscard]] ControllerActionResult select(const SkinEntryId &entry);
   [[nodiscard]] ControllerActionResult setCompatibilityEnabled(bool enabled);

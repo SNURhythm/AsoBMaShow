@@ -17,7 +17,7 @@ struct AppSettingsLoadResult {
 
 class AppSettingsStore {
 public:
-  static constexpr int kCurrentSchemaVersion = 7;
+  static constexpr int kCurrentSchemaVersion = 8;
 
   static AppSettingsLoadResult Load(const std::filesystem::path &settingsJson);
   static AppSettingsLoadResult

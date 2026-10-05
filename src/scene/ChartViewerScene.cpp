@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "../ChartTiming.h"
 #include "../i18n/Localization.h"
 #include "ChartViewerScene.h"
@@ -3146,7 +3147,7 @@ void ChartViewerScene::refreshHeaderText() {
     const auto &meta = chart != nullptr ? chart->Meta : record.meta;
     subtitleText->setText(meta.Artist + " / BPM " + formatDouble(meta.MinBpm) +
                           "-" + formatDouble(meta.MaxBpm) + " / " +
-                          std::to_string(meta.KeyMode) + "K");
+                          gameplay::keyModeLabel(meta.KeyMode));
   }
   if (randomSummaryText != nullptr) {
     randomSummaryText->setText(randomSummary() + i18n::tr("chart_viewer.option.suffix") +

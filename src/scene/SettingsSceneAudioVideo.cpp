@@ -326,9 +326,9 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     row->setGap(metrics.compact ? 8.0F : 10.0F);
     row->setAlignItems(YGAlignCenter);
     auto *minus =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5");
     minus->setOnClickListener(
-        [this, busIndex]() { adjustVolume(busIndex, -10); });
+        [this, busIndex]() { adjustVolume(busIndex, -5); });
     row->addView(minus);
     auto *input = makeNumericInput(metrics);
     input->onEditingFinished([this, input, busIndex](const std::string &) {
@@ -336,9 +336,9 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     });
     *inputOut = input;
     row->addView(makeInputFrame(metrics, input));
-    auto *plus = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10");
+    auto *plus = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5");
     plus->setOnClickListener(
-        [this, busIndex]() { adjustVolume(busIndex, 10); });
+        [this, busIndex]() { adjustVolume(busIndex, 5); });
     row->addView(plus);
     group->addView(row);
     return group;
@@ -385,6 +385,32 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
 View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   ensureAudioVideoSession();
   auto *cardsColumn = makeAudioVideoCardsColumn(metrics);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  auto *orientationControls = new View();
+  orientationControls->setFlexDirection(FlexDirection::Row)->setGap(12);
+  for (const auto &[mode, label] : {
+           std::pair{screen_orientation::Mode::Auto, "settings.display.orientation_auto.label"},
+           std::pair{screen_orientation::Mode::Landscape, "settings.display.orientation_landscape.label"},
+           std::pair{screen_orientation::Mode::Portrait, "settings.display.orientation_portrait.label"}}) {
+    auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
+                          ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+    auto *button = context.settings.screenOrientation == mode
+        ? makeAccentButton(0, metrics.actionButtonHeight, text, ui_theme::cyan())
+        : makeControlButton(0, metrics.actionButtonHeight, text);
+    button->setFlex(1)->setMinWidth(0);
+    button->setOnClickListener([this, mode] {
+      context.settings.screenOrientation = mode;
+      persistSettings();
+      // Rebuild on the next update, after this button's callback returns.
+      lastLayoutWidth = -1;
+    });
+    orientationControls->addView(button);
+  }
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.display.orientation.label"),
+      i18n::message("settings.display.orientation_help.message"),
+      orientationControls, metrics.modeCardHeight, metrics.cardsWidth));
+#endif
   if (audioVideoSession == nullptr ||
       context.displaySettingsManager == nullptr) {
     cardsColumn->addView(makeCard(

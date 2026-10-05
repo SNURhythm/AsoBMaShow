@@ -196,9 +196,9 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   settings.sevenToNineType = 6;
   settings.constantScroll = true;
   settings.bgaEnabled = false;
-  settings.laneCoverEnabled = true;
-  settings.liftEnabled = true;
-  settings.hiddenEnabled = false;
+  settings.presentation().laneCoverEnabled = true;
+  settings.presentation().liftEnabled = true;
+  settings.presentation().hiddenEnabled = false;
   settings.hispeedAutoAdjust = true;
   settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
   settings.audioVideo.audio.masterVolume = 0.75F;

@@ -20,6 +20,7 @@
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "../skin/SkinTypes.h"
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -32,6 +33,7 @@
 #include <variant>
 
 struct CoursePlaySession;
+class ScrollView;
 
 struct ResultTableContext {
   std::string tableName;
@@ -299,6 +301,9 @@ public:
   ~ResultScene() override;
 
   void init() override;
+  void onPresentationOrientationChanged() override;
+  bool presentationSkinRefreshPending = false;
+  void buildResultView();
   void update(float dt) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   bool renderViewBeforeScene(const View *view) const override;
@@ -379,6 +384,10 @@ private:
 
   std::variant<LocalResultSource, RemoteResultSource> source;
   View *rootLayout = nullptr;
+  View *viewportLayout = nullptr;
+  ScrollView *resultScroll = nullptr;
+  std::array<int, 6> resultLayoutSignature{};
+  void resizeResultLayout();
   View *graphPlaceHolder = nullptr;
   View *resultTouchControlsOverlay = nullptr;
   View *resultTouchControlsPanel = nullptr;

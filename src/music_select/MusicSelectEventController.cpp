@@ -363,17 +363,17 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
   }
   case 330:
     if (!context.hasSelectedPlayConfig) break;
-    settings.laneCoverEnabled = !settings.laneCoverEnabled;
+    settings.presentation().laneCoverEnabled = !settings.presentation().laneCoverEnabled;
     changedWithSound(outcome);
     break;
   case 331:
     if (!context.hasSelectedPlayConfig) break;
-    settings.liftEnabled = !settings.liftEnabled;
+    settings.presentation().liftEnabled = !settings.presentation().liftEnabled;
     changedWithSound(outcome);
     break;
   case 332:
     if (!context.hasSelectedPlayConfig) break;
-    settings.hiddenEnabled = !settings.hiddenEnabled;
+    settings.presentation().hiddenEnabled = !settings.presentation().hiddenEnabled;
     changedWithSound(outcome);
     break;
   case 340: {

@@ -11,6 +11,7 @@ public:
   ~ScrollView() override;
 
   void setContentView(View *view);
+  View *getContentView() const { return contentView.get(); }
   ScrollView *setContentPadding(Edge edge, float padding);
   void refreshContentLayout();
   void propagateThemeChange() override;

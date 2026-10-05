@@ -1,6 +1,16 @@
 #include "ir/IrRankingModal.h"
+#include "ScopedTimeZone.h"
 #include "i18n/Localization.h"
 #include "view/RecyclerView.h"
+#include "view/Button.h"
+#include "view/TextView.h"
+#include "view/ClearLampColors.h"
+#include "view/IconText.h"
+#include "view/UiTheme.h"
+#include "rendering/UniformCache.h"
+#include "targets.h"
+#include "ir/IrRankingTableViewport.h"
+#include <bgfx/bgfx.h>
 
 #include <cmath>
 #include <cstdlib>
@@ -26,6 +36,8 @@ int ui_offset_y = 0;
 int ui_view_width = design_width;
 int ui_view_height = design_height;
 } // namespace rendering
+
+#include "ir_ranking_view.inc"
 
 namespace {
 
@@ -109,6 +121,142 @@ ir::IrRankingSnapshot snapshot(ir::IrRankingSnapshotState state,
           .ranking = state == ir::IrRankingSnapshotState::Succeeded ? ranking()
                                                                     : nullptr,
           .diagnostic = "safe detail"};
+}
+
+void testRankingViewsKeepEveryColumn() {
+  struct TextCapture : rendering::UiBatchBackend {
+    std::size_t vertices = 0;
+    std::vector<rendering::PosTexCoord0Vertex> points;
+    bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+      vertices += submission.texturedVertices.size();
+      points.insert(points.end(), submission.texturedVertices.begin(), submission.texturedVertices.end());
+      return true;
+    }
+  };
+  const auto textQuads = [](View &view) {
+    TextCapture capture;
+    rendering::UiBatchRenderer batch(capture);
+    RenderContext context(batch);
+    batch.begin();
+    view.render(context);
+    batch.end();
+    return capture.vertices / 4;
+  };
+  bgfx::Init init;
+  init.type = bgfx::RendererType::Noop;
+  init.resolution.width = 1920;
+  init.resolution.height = 1080;
+  REQUIRE(bgfx::init(init));
+  {
+    ir::IrRankingModalModel model;
+    model.open(request(), "Chart");
+    REQUIRE(model.apply(snapshot(ir::IrRankingSnapshotState::Succeeded)));
+    ir::RankingRowView row;
+    ir::RankingTableHeaderView header;
+    for (const int width : {1200, 900, 980, 1200}) {
+      row.setSize(width, 92);
+      row.bind(model.row(0, width));
+      header.setWidth(width);
+      header.bind(width);
+      constexpr auto expected = 8;
+      REQUIRE(textQuads(row) == expected);
+      REQUIRE(textQuads(header) == expected);
+    }
+    row.setSize(900, 74);
+    for (const auto &[label, expected] : {
+             std::pair{"NORMAL CLEAR", "NORMAL"}, {"EX-HARD CLEAR", "EX-HARD"},
+             {"ASSIST EASY CLEAR", "ASSIST EASY"}, {"FULL COMBO", "FULL COMBO"}}) {
+      auto presentation = model.row(0, 900);
+      presentation.lampText = label;
+      row.bind(presentation);
+      auto *lamp = dynamic_cast<TextView *>(row.getChildren().front()->getChildren()[4]);
+      REQUIRE(lamp && lamp->getText() == expected);
+      TextCapture capture;
+      rendering::UiBatchRenderer batch(capture);
+      RenderContext context(batch);
+      batch.begin();
+      lamp->render(context);
+      batch.end();
+      REQUIRE(capture.points.size() == 4);
+      for (const auto &point : capture.points) {
+        REQUIRE(point.x >= lamp->getX() && point.x <= lamp->getX() + lamp->getWidth());
+        REQUIRE(point.y >= lamp->getY() && point.y <= lamp->getY() + lamp->getHeight());
+      }
+      for (auto *cell : row.getChildren().front()->getChildren()) {
+        REQUIRE(cell->getX() >= row.getX());
+        REQUIRE(cell->getX() + cell->getWidth() <= row.getX() + row.getWidth());
+      }
+    }
+  }
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::shutdown();
+}
+
+void testRankingViewportScrollsOnlyWhenNeededAndKeepsSelection() {
+  ir::RankingTableViewport viewport;
+  viewport.setSize(600, 400);
+  auto *table = new View();
+  table->setFlexDirection(FlexDirection::Column);
+  auto *header = new View();
+  header->setHeight(34)->setFlexShrink(0);
+  table->addView(header);
+  auto *list = new RecyclerView<int>([](int left, int right) { return left == right; });
+  list->setFlex(1)->setMinHeight(0);
+  list->itemHeight = 74;
+  list->onCreateView = [](const int &) { return new View(); };
+  std::vector<int> rows(100);
+  for (int i = 0; i < 100; ++i) rows[i] = i;
+  list->setItemProvider(100, [&rows](int index) -> const int & { return rows[index]; });
+  int selections = 0;
+  list->onSelected = [&selections](const int &, int) { ++selections; };
+  table->addView(list);
+  viewport.setContentView(table);
+  const auto finger = [&](Uint32 type, float x, float y) {
+    SDL_Event event{};
+    event.type = type;
+    event.tfinger.touchId = 1;
+    event.tfinger.fingerId = 42;
+    event.tfinger.x = x / rendering::window_width;
+    event.tfinger.y = y / rendering::window_height;
+    viewport.handleEvents(event);
+  };
+  finger(SDL_FINGERDOWN, 500, 150);
+  finger(SDL_FINGERMOTION, 300, 150);
+  finger(SDL_FINGERUP, 300, 150);
+  REQUIRE(table->getX() == -200);
+  REQUIRE(header->getX() == list->getX());
+  REQUIRE(list->scrollOffset == 0 && selections == 0);
+  finger(SDL_FINGERDOWN, 400, 200);
+  finger(SDL_FINGERMOTION, 400, 100);
+  finger(SDL_FINGERUP, 400, 100);
+  REQUIRE(list->scrollOffset > 0 && selections == 0);
+  REQUIRE(table->getX() == -200);
+  finger(SDL_FINGERDOWN, 400, 100);
+  finger(SDL_FINGERUP, 400, 100);
+  REQUIRE(selections == 1);
+  viewport.setSize(1080, 400);
+  REQUIRE(table->getX() == 0 && table->getWidth() == 1080);
+  REQUIRE(header->getX() == list->getX());
+  viewport.setSize(600, 400);
+  SDL_Event mouse{};
+  mouse.type = SDL_MOUSEBUTTONDOWN;
+  mouse.button.button = SDL_BUTTON_LEFT;
+  mouse.button.x = 500;
+  mouse.button.y = 150;
+  viewport.handleEvents(mouse);
+  REQUIRE(selections == 1);
+  mouse = {};
+  mouse.type = SDL_MOUSEMOTION;
+  mouse.motion.x = 300;
+  mouse.motion.y = 150;
+  viewport.handleEvents(mouse);
+  mouse = {};
+  mouse.type = SDL_MOUSEBUTTONUP;
+  mouse.button.button = SDL_BUTTON_LEFT;
+  mouse.button.x = 300;
+  mouse.button.y = 150;
+  viewport.handleEvents(mouse);
+  REQUIRE(selections == 1 && table->getX() == -200);
 }
 
 void testRetainedModalTreesRefreshLanguageWhileHidden() {
@@ -410,15 +558,15 @@ void testResponsiveRowsKeepFixedHeightCoreFields() {
 
   const auto constrained = model.row(0, 900);
   REQUIRE(constrained.compact);
-  REQUIRE(!constrained.showBadPoints);
-  REQUIRE(!constrained.showMaxCombo);
-  REQUIRE(!constrained.showAchievementTime);
+  REQUIRE(constrained.showBadPoints);
+  REQUIRE(constrained.showMaxCombo);
+  REQUIRE(constrained.showAchievementTime);
 
   auto compact = model.row(0, 560);
   REQUIRE(compact.compact);
-  REQUIRE(!compact.showBadPoints);
-  REQUIRE(!compact.showMaxCombo);
-  REQUIRE(!compact.showAchievementTime);
+  REQUIRE(compact.showBadPoints);
+  REQUIRE(compact.showMaxCombo);
+  REQUIRE(compact.showAchievementTime);
   REQUIRE(!compact.rankText.empty());
   REQUIRE(!compact.playerText.empty());
   REQUIRE(!compact.rateText.empty());
@@ -739,7 +887,23 @@ void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
 
 } // namespace
 
+void testRankingTimesFollowTimezoneAndDaylightSaving() {
+  {
+    ScopedTimeZone zone("KST-9");
+    REQUIRE(ir::formatIrRankingTimestamp(1'704'164'645'123LL) == "2024-01-02 12:04");
+    REQUIRE(ir::formatIrRankingTimestamp(std::nullopt) == "—");
+  }
+  {
+    ScopedTimeZone zone("EST5EDT,M3.2.0/2,M11.1.0/2");
+    REQUIRE(ir::formatIrRankingTimestamp(1'710'053'940'000LL) == "2024-03-10 01:59");
+    REQUIRE(ir::formatIrRankingTimestamp(1'710'054'000'000LL) == "2024-03-10 03:00");
+  }
+}
+
 int main() {
+  testRankingTimesFollowTimezoneAndDaylightSaving();
+  testRankingViewsKeepEveryColumn();
+  testRankingViewportScrollsOnlyWhenNeededAndKeepsSelection();
   testRetainedModalTreesRefreshLanguageWhileHidden();
   testLocalComparisonRetainsLocalizedLabelsAndRawMetrics();
   testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest();

@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "ChartDetailsView.h"
 
 #include "ClearLampColors.h"
@@ -85,10 +86,10 @@ std::string nextGrade(int score, int maxScore) {
 ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   setName("chartDetails");
   setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
-  setFlexShrink(0)->setMinWidth(0)->setGap(10);
+  setFlexShrink(0)->setMinWidth(0)->setGap(kSectionGap);
 
   auto *identity = new View();
-  identity->setFlexDirection(FlexDirection::Row)->setGap(14)->setHeight(132);
+  identity->setFlexDirection(FlexDirection::Row)->setGap(14)->setHeight(kIdentityHeight);
   identity->setAlignItems(YGAlignCenter)->setFlexShrink(0);
   artworkFrame_ = new View();
   artworkFrame_->setWidth(112)->setHeight(112)->setFlexShrink(0);
@@ -115,28 +116,30 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   identity->addView(titles);
   addView(identity);
 
-  difficulty_ = label("chartDetailsDifficulty", 24, 34, ui_theme::cyan);
+  difficulty_ = label("chartDetailsDifficulty", 24, kDifficultyHeight, ui_theme::cyan);
   difficulty_->setOverflow(TextView::TextOverflow::Marquee);
   addView(difficulty_);
 
   facts_ = new View();
   facts_->setName("chartDetailsFacts");
-  facts_->setFlexDirection(FlexDirection::Column)->setGap(8)->setFlexShrink(0);
-  facts_->setPadding(Edge::All, 14);
+  facts_->setFlexDirection(FlexDirection::Column)->setGap(kFactGap)->setFlexShrink(0);
+  facts_->setFlexGrow(1);
+  facts_->setPadding(Edge::All, kFactPadding);
   facts_->setThemedBackgroundColor(ui_theme::mainMenuSurface);
   facts_->setCornerRadius(ui_theme::controlRadius());
 
   auto row = [this]() {
     auto *view = new View();
     view->setFlexDirection(FlexDirection::Row)->setGap(14);
-    view->setHeight(60)->setFlexShrink(0);
+    view->setHeight(kFactRowHeight)->setMinHeight(kFactRowHeight)->setFlexShrink(0);
+    view->setFlexGrow(1);
     facts_->addView(view);
     return view;
   };
   auto metric = [](View *row, const char *key, const char *name,
                    TextView **caption = nullptr) {
     auto *cell = new View();
-    cell->setFlex(1)->setMinWidth(0);
+    cell->setFlex(1)->setMinWidth(0)->setJustifyContent(YGJustifySpaceBetween);
     auto *heading = label("", 20, 26, ui_theme::textSecondary);
     heading->setLocalizedText(i18n::message(key));
     auto *value = label(name, 28, 34);
@@ -171,9 +174,9 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   bestHeading->addView(bestLabel_);
   auto *clearRow = new View();
   clearRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(8);
-  clearRow->setFlex(1)->setMinWidth(0);
+  clearRow->setFlex(2)->setMinWidth(0);
   clearLamp_ = new View();
-  clearLamp_->setWidth(6)->setHeight(22)->setCornerRadius(3);
+  clearLamp_->setWidth(10)->setHeight(22)->setCornerRadius(3)->setFlexShrink(0);
   clearRow->addView(clearLamp_);
   clear_ = label("chartDetailsClear", 20, 28);
   clear_->setFlex(1);
@@ -197,6 +200,10 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   personalBest_->addView(emptyScore_);
   addView(personalBest_);
   setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
+}
+
+void ChartDetailsView::setScoreContainer(View *container) {
+  personalBest_->moveTo(container ? *container : *this);
 }
 
 void ChartDetailsView::setChart(const ChartMetaRecord *record,
@@ -231,7 +238,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   }
 
   const auto &meta = record->meta;
-  difficulty_->setText(std::to_string(meta.KeyMode) + "K · Lv. " +
+  difficulty_->setText(gameplay::keyModeLabel(meta.KeyMode) + " · Lv. " +
       number(meta.PlayLevel) + (record->difficultyTableLabels.empty()
           ? "" : " · " + record->difficultyTableLabels));
   bpm_->setText(bpmRange(meta));

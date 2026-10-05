@@ -29,6 +29,7 @@ enum {
 };
 struct SDL_Event { int type = SDL_MOUSEBUTTONUP; struct { int event = 0; } window; };
 class SceneManager;
+namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
 struct BackgroundTasks { void setGameplayPaused(bool) {} };
 struct ApplicationContext {
   Uint64 currentFrame = 0;
@@ -37,8 +38,14 @@ struct ApplicationContext {
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
+  std::function<void(bool)> setGameplayOrientationLocked;
   int gameplayBgaCompositeState = 0;
-  struct { struct { int video = 0; } audioVideo; } settings;
+  struct {
+    struct { int video = 0; } audioVideo;
+    player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+    auto activePresentationOrientation() const { return orientation; }
+    void setActivePresentationOrientation(player_settings::PresentationOrientation value) { orientation = value; }
+  } settings;
 };
 struct RenderContext {
   explicit RenderContext(int) {}
@@ -77,6 +84,7 @@ struct SettingsScene : Scene {
   int displayDraft = 0;
   bool previewActive = false;
   int previewEvents = 0;
+  int previewInputCleanups = 0;
   int *destructions = nullptr;
   std::string displayStatus;
   int displayPreviewUpdates = 0;
@@ -84,6 +92,7 @@ struct SettingsScene : Scene {
   void setDisplayStatus(const std::string &status, Color) { displayStatus = status; }
   void updateDisplayPreviewUi() { ++displayPreviewUpdates; }
   void forwardPreviewInputEvent(SDL_Event &) { ++previewEvents; }
+  void destroyPreviewInputHandler() { ++previewInputCleanups; }
   void init() override { addView(new View); }
   void update(float) override {}
   void renderScene() override {}
@@ -120,6 +129,7 @@ int main() {
     assert(display.focusLosses == 1 && active->displayDraft == 42);
     assert(active->displayStatus == "Display restored");
     assert(active->displayPreviewUpdates == 1);
+    assert(active->previewInputCleanups == (previewActive ? 1 : 0));
     assert(active->previewEvents == (previewActive ? 1 : 0));
     event.type = SDL_MOUSEBUTTONUP;
     active->views.front()->eventCallback = [&manager] {

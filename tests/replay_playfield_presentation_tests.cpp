@@ -395,6 +395,10 @@ void testExportPixelSizesMapToLogicalGameplayBounds() {
   expect(default4k.x == 0.0 && default4k.y == 0.0 &&
              default4k.width == 1920.0 && default4k.height == 1080.0,
          "default 4K export uses the 1920x1080 logical gameplay viewport");
+  const auto portrait =
+      replay_video_export::replayGameplayLogicalUiBounds(2160, 3840);
+  expect(portrait.width == 1080.0 && portrait.height == 1920.0,
+         "portrait export uses the same logical bounds as live rendering");
   const auto wide4k =
       replay_video_export::replayGameplayLogicalUiBounds(3840, 1600);
   expect(wide4k.x == 0.0 && wide4k.y == 0.0 && wide4k.width == 1920.0 &&
@@ -409,8 +413,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Off;
   settings.visibleTimeUseMilliseconds = true;
   settings.notesDisplayTimingMilliseconds = -37;
-  settings.laneBeamLengthPercent = 71;
-  settings.noteStartPositionPercent = 40;
+  settings.presentation().laneBeamLengthPercent = 71;
+  settings.presentation().noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
   settings.showPastNotes = true;
   settings.audioVideo.audio.masterVolume = 0.25F;
@@ -432,20 +436,29 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.sevenToNineType = 7;
   settings.constantScroll = true;
   settings.constantFadeInMilliseconds = 456;
-  settings.judgementIndicatorEnabled = false;
-  settings.judgementIndicatorY = 0.25F;
-  settings.judgementIndicatorWidthScale = 0.75F;
-  settings.judgementIndicatorRenderMode =
+  settings.presentation().judgementIndicatorEnabled = false;
+  settings.presentation().judgementIndicatorY = 0.25F;
+  settings.presentation().judgementIndicatorWidthScale = 0.75F;
+  settings.presentation().judgementIndicatorRenderMode =
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
-  settings.judgementIndicatorRangeMilliseconds = 123;
-  settings.judgementTextY = 0.6F;
-  settings.judgementCounterEnabled = false;
-  settings.judgementCounterPosition = AppSettings::JudgementCounterPosition::Top;
-  settings.judgementTimingFastSlowCriteria =
+  settings.presentation().judgementIndicatorRangeMilliseconds = 123;
+  settings.presentation().scratchLaneOnRight = true;
+  settings.presentation().judgementTextY = 0.6F;
+  settings.presentation().judgementTimingY = 0.4F;
+  settings.presentation().pacemakerDiffY = 0.2F;
+  settings.presentation().pacemakerDiffSizePercent = 350;
+  settings.presentation().pacemakerDiffBold = false;
+  settings.presentation().judgementTextSizePercent = 150;
+  settings.presentation().judgementTextBold = true;
+  settings.presentation().judgementTimingSizePercent = 75;
+  settings.presentation().judgementTimingBold = true;
+  settings.presentation().judgementCounterEnabled = false;
+  settings.presentation().judgementCounterPosition = AppSettings::JudgementCounterPosition::Top;
+  settings.presentation().judgementTimingFastSlowCriteria =
       AppSettings::JudgementTimingDisplayCriteria::Off;
-  settings.judgementTimingMillisecondsCriteria =
+  settings.presentation().judgementTimingMillisecondsCriteria =
       AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
-  settings.gaugeBarPosition = AppSettings::GaugeBarPosition::Left;
+  settings.presentation().gaugeBarPosition = AppSettings::GaugeBarPosition::Left;
   settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
 
   bms_parser::Chart chart;
@@ -497,7 +510,16 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.judgementIndicatorWidthScale == 0.75F &&
              configuration.judgementIndicatorHudMode &&
              configuration.judgementIndicatorRangeMilliseconds == 123 &&
+             configuration.scratchLaneOnRight &&
              configuration.judgementTextY == 0.6F &&
+             configuration.judgementTimingY == 0.4F &&
+             configuration.pacemakerDiffY == 0.2F &&
+             configuration.pacemakerDiffSizePercent == 350 &&
+             !configuration.pacemakerDiffBold &&
+             configuration.judgementTextSizePercent == 150 &&
+             configuration.judgementTextBold == true &&
+             configuration.judgementTimingSizePercent == 75 &&
+             configuration.judgementTimingBold == true &&
              !configuration.judgementCounterEnabled &&
              configuration.judgementCounterPosition ==
                  AppSettings::JudgementCounterPosition::Top &&
@@ -574,8 +596,8 @@ void testCourseNoSpeedReplayExportConfigOverridesProfileSettings() {
   settings.gameplayHispeed = 1.75F;
   settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Main;
   settings.visibleTimeUseMilliseconds = true;
-  settings.noteStartPositionPercent = 40;
-  settings.laneCoverEnabled = true;
+  settings.presentation().noteStartPositionPercent = 40;
+  settings.presentation().laneCoverEnabled = true;
   settings.constantScroll = true;
 
   bms_parser::Chart chart;
@@ -604,7 +626,7 @@ void testReplayExportConfigUsesLaneRendererMainBpmTieRule() {
   AppSettings settings;
   settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Main;
   settings.visibleTimeDurationMilliseconds = 500;
-  settings.noteStartPositionPercent = 0;
+  settings.presentation().noteStartPositionPercent = 0;
 
   bms_parser::Chart chart;
   chart.Meta.Bpm = 120.0;
@@ -1010,8 +1032,8 @@ void testReplayLaneCoverInitialStateUsesReplaySetup() {
   replay.initialLaneCoverEnabled = true;
   replay.hasInitialLaneCoverState = true;
   AppSettings settings;
-  settings.noteStartPositionPercent = 12;
-  settings.laneCoverEnabled = false;
+  settings.presentation().noteStartPositionPercent = 12;
+  settings.presentation().laneCoverEnabled = false;
 
   const auto replayInitial = replay_video_export::replayLaneCoverInitialState(
       replay, settings, false);
@@ -1061,8 +1083,8 @@ void testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions() {
   AppSettings settings;
   settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Start;
   settings.visibleTimeDurationMilliseconds = 500;
-  settings.noteStartPositionPercent = 0;
-  settings.laneCoverEnabled = true;
+  settings.presentation().noteStartPositionPercent = 0;
+  settings.presentation().laneCoverEnabled = true;
   PlayfieldPresentationConfig configuration =
       replay_video_export::replayGameplayPresentationConfig(
           settings, 8.0F, chart, false, false);

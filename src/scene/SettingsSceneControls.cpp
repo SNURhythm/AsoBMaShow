@@ -148,6 +148,11 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 }
 } // namespace
 
+void SettingsScene::styleVisibilityButton(Button *button, TextView *text, bool visible) {
+  applySemanticButtonStyle(button, text,
+      visible ? SettingsButtonTone::Success : SettingsButtonTone::Danger);
+}
+
 void SettingsScene::refreshSettingsText(bool syncInputs) {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
@@ -171,26 +176,24 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   const i18n::Text bgaBlurLabel =
       formatBgaBlurLabel(context.settings.bgaBlurStrength);
   const i18n::Text laneAngleLabel =
-      formatLaneAngleLabel(context.settings.laneAngleDegrees);
+      formatLaneAngleLabel(context.settings.presentation().laneAngleDegrees);
   const i18n::Text laneLengthLabel =
-      formatLaneLengthLabel(context.settings.laneLength);
+      formatLaneLengthLabel(context.settings.presentation().laneLength);
   const i18n::Text laneBeamLengthLabel =
-      formatLaneBeamLengthLabel(context.settings.laneBeamLengthPercent);
+      formatLaneBeamLengthLabel(context.settings.presentation().laneBeamLengthPercent);
   const i18n::Text noteStartPositionLabel =
-      formatNoteStartPositionLabel(context.settings.noteStartPositionPercent);
+      formatNoteStartPositionLabel(context.settings.presentation().noteStartPositionPercent);
   const i18n::Text previewPlayAreaWidthLabel =
-      formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(7));
-  const i18n::Text judgementTextYLabel = formatJudgementPercentLabel(
-      judgementTextYToPercent(context.settings.judgementTextY));
+      formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(previewKeyMode));
   const i18n::Text judgementIndicatorYLabel = formatJudgementPercentLabel(
-      judgementIndicatorYToPercent(context.settings.judgementIndicatorY));
+      judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY));
   const i18n::Text judgementIndicatorWidthLabel =
       std::to_string(judgementIndicatorWidthScaleToPercent(
-          context.settings.judgementIndicatorWidthScale)) +
+          context.settings.presentation().judgementIndicatorWidthScale)) +
       "%";
   const i18n::Text judgementIndicatorRangeLabel =
       formatJudgementIndicatorRangeLabel(
-          context.settings.judgementIndicatorRangeMilliseconds);
+          context.settings.presentation().judgementIndicatorRangeMilliseconds);
   const i18n::Text notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const i18n::Text invisibleNotesLabel =
@@ -210,26 +213,26 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
       context.settings.findBmsSkipUnarchivingForNonSolidArchives ? i18n::message("settings.controls.find_bms_skip_unarchiving.on.label")
                                                                  : i18n::message("settings.controls.find_bms_skip_unarchiving.off.label");
   const i18n::Text judgementIndicatorLabel =
-      context.settings.judgementIndicatorEnabled ? i18n::message("settings.controls.judgement_indicator.enabled.label") : i18n::message("settings.controls.judgement_indicator.disabled.label");
+      context.settings.presentation().judgementIndicatorEnabled ? i18n::message("settings.controls.judgement_indicator.enabled.label") : i18n::message("settings.controls.judgement_indicator.disabled.label");
   const i18n::Text judgementIndicatorRenderModeLabel =
       formatJudgementIndicatorRenderModeLabel(
-          context.settings.judgementIndicatorRenderMode);
+          context.settings.presentation().judgementIndicatorRenderMode);
   const i18n::Text judgementCounterPositionLabel =
       formatJudgementCounterPositionLabel(
-          context.settings.judgementCounterPosition);
+          context.settings.presentation().judgementCounterPosition);
   const i18n::Text judgementCounterModeLabel =
-      context.settings.judgementCounterEnabled ? i18n::message("settings.controls.judgement_counter_mode.enabled.label") : i18n::message("settings.controls.judgement_counter_mode.disabled.label");
+      context.settings.presentation().judgementCounterEnabled ? i18n::message("settings.controls.judgement_counter_mode.enabled.label") : i18n::message("settings.controls.judgement_counter_mode.disabled.label");
   const i18n::Text judgementCounterSummaryLabel =
-      context.settings.judgementCounterEnabled ? judgementCounterPositionLabel
+      context.settings.presentation().judgementCounterEnabled ? judgementCounterPositionLabel
                                                : i18n::message("settings.controls.judgement_counter_summary.disabled.label");
   const i18n::Text judgementTimingFastSlowLabel =
       formatJudgementTimingDisplayCriteriaLabel(
-          context.settings.judgementTimingFastSlowCriteria);
+          context.settings.presentation().judgementTimingFastSlowCriteria);
   const i18n::Text judgementTimingMillisecondsLabel =
       formatJudgementTimingDisplayCriteriaLabel(
-          context.settings.judgementTimingMillisecondsCriteria);
+          context.settings.presentation().judgementTimingMillisecondsCriteria);
   const i18n::Text gaugeBarPositionLabel =
-      formatGaugeBarPositionLabel(context.settings.gaugeBarPosition);
+      formatGaugeBarPositionLabel(context.settings.presentation().gaugeBarPosition);
   const i18n::Text uiThemeLabel =
       formatUiThemeModeLabel(context.settings.uiThemeMode);
 
@@ -298,9 +301,6 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   }
   if (summaryPreviewPlayAreaWidthValueText != nullptr) {
     summaryPreviewPlayAreaWidthValueText->setLocalizedText(previewPlayAreaWidthLabel);
-  }
-  if (summaryJudgementTextYValueText != nullptr) {
-    summaryJudgementTextYValueText->setLocalizedText(judgementTextYLabel);
   }
   if (summaryJudgementIndicatorYValueText != nullptr) {
     summaryJudgementIndicatorYValueText->setLocalizedText(judgementIndicatorYLabel);
@@ -468,22 +468,22 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
           : SettingsButtonTone::Info);
   applySemanticButtonStyle(
       judgementIndicatorModeButton, judgementIndicatorModeText,
-      context.settings.judgementIndicatorEnabled ? SettingsButtonTone::Success
+      context.settings.presentation().judgementIndicatorEnabled ? SettingsButtonTone::Success
                                                  : SettingsButtonTone::Danger);
   applySemanticButtonStyle(
       judgementIndicatorRenderModeButton, judgementIndicatorRenderModeText,
-      context.settings.judgementIndicatorRenderMode ==
+      context.settings.presentation().judgementIndicatorRenderMode ==
               AppSettings::JudgementIndicatorRenderMode::Hud2D
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
   applySemanticButtonStyle(judgementCounterModeButton, judgementCounterModeText,
-                           context.settings.judgementCounterEnabled
+                           context.settings.presentation().judgementCounterEnabled
                                ? SettingsButtonTone::Success
                                : SettingsButtonTone::Danger);
   SettingsButtonTone judgementCounterPositionTone = SettingsButtonTone::Neutral;
-  if (context.settings.judgementCounterEnabled) {
+  if (context.settings.presentation().judgementCounterEnabled) {
     judgementCounterPositionTone =
-        context.settings.judgementCounterPosition ==
+        context.settings.presentation().judgementCounterPosition ==
                 AppSettings::JudgementCounterPosition::Top
             ? SettingsButtonTone::Info
             : SettingsButtonTone::Success;
@@ -512,14 +512,14 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
       judgementTimingFastSlowCriteriaButton,
       judgementTimingFastSlowCriteriaText,
       judgementTimingCriteriaTone(
-          context.settings.judgementTimingFastSlowCriteria));
+          context.settings.presentation().judgementTimingFastSlowCriteria));
   applySemanticButtonStyle(
       judgementTimingMillisecondsCriteriaButton,
       judgementTimingMillisecondsCriteriaText,
       judgementTimingCriteriaTone(
-          context.settings.judgementTimingMillisecondsCriteria));
+          context.settings.presentation().judgementTimingMillisecondsCriteria));
   applySemanticButtonStyle(gaugeBarPositionButton, gaugeBarPositionText,
-                           context.settings.gaugeBarPosition ==
+                           context.settings.presentation().gaugeBarPosition ==
                                    AppSettings::GaugeBarPosition::World
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);
@@ -653,7 +653,7 @@ void SettingsScene::syncLaneAngleInputText(bool force) {
     return;
   }
   laneAngleInput->setEditingText(
-      formatFloatValue(context.settings.laneAngleDegrees));
+      formatFloatValue(context.settings.presentation().laneAngleDegrees));
 }
 
 void SettingsScene::syncLaneLengthInputText(bool force) {
@@ -664,7 +664,7 @@ void SettingsScene::syncLaneLengthInputText(bool force) {
     return;
   }
   laneLengthInput->setEditingText(
-      formatFloatValue(context.settings.laneLength));
+      formatFloatValue(context.settings.presentation().laneLength));
 }
 
 void SettingsScene::syncLaneBeamLengthInputText(bool force) {
@@ -675,7 +675,7 @@ void SettingsScene::syncLaneBeamLengthInputText(bool force) {
     return;
   }
   laneBeamLengthInput->setEditingText(
-      std::to_string(context.settings.laneBeamLengthPercent));
+      std::to_string(context.settings.presentation().laneBeamLengthPercent));
 }
 
 void SettingsScene::syncNoteStartPositionInputText(bool force) {
@@ -686,7 +686,7 @@ void SettingsScene::syncNoteStartPositionInputText(bool force) {
     return;
   }
   noteStartPositionInput->setEditingText(
-      std::to_string(context.settings.noteStartPositionPercent));
+      std::to_string(context.settings.presentation().noteStartPositionPercent));
 }
 
 void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
@@ -697,7 +697,7 @@ void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
     return;
   }
   judgementIndicatorYInput->setEditingText(std::to_string(
-      judgementIndicatorYToPercent(context.settings.judgementIndicatorY)));
+      judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY)));
 }
 
 void SettingsScene::syncJudgementIndicatorWidthInputText(bool force) {
@@ -709,7 +709,7 @@ void SettingsScene::syncJudgementIndicatorWidthInputText(bool force) {
   }
   judgementIndicatorWidthInput->setEditingText(
       std::to_string(judgementIndicatorWidthScaleToPercent(
-          context.settings.judgementIndicatorWidthScale)));
+          context.settings.presentation().judgementIndicatorWidthScale)));
 }
 
 void SettingsScene::syncJudgementIndicatorRangeInputText(bool force) {
@@ -720,7 +720,7 @@ void SettingsScene::syncJudgementIndicatorRangeInputText(bool force) {
     return;
   }
   judgementIndicatorRangeInput->setEditingText(
-      std::to_string(context.settings.judgementIndicatorRangeMilliseconds));
+      std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds));
 }
 
 void SettingsScene::commitOffsetInput() {
@@ -843,7 +843,7 @@ void SettingsScene::commitLaneAngleInput() {
   }
 
   try {
-    context.settings.laneAngleDegrees = clampLaneAngle(std::stof(rawText));
+    context.settings.presentation().laneAngleDegrees = clampLaneAngle(context.settings, std::stof(rawText));
     persistSettings();
     syncLaneAngleInputText(true);
   } catch (const std::exception &) {
@@ -863,7 +863,7 @@ void SettingsScene::commitLaneLengthInput() {
   }
 
   try {
-    context.settings.laneLength = clampLaneLength(std::stof(rawText));
+    context.settings.presentation().laneLength = clampLaneLength(context.settings, std::stof(rawText));
     persistSettings();
     syncLaneLengthInputText(true);
   } catch (const std::exception &) {
@@ -883,7 +883,7 @@ void SettingsScene::commitLaneBeamLengthInput() {
   }
 
   try {
-    context.settings.laneBeamLengthPercent =
+    context.settings.presentation().laneBeamLengthPercent =
         clampLaneBeamLengthPercent(std::stoi(rawText));
     persistSettings();
     syncLaneBeamLengthInputText(true);
@@ -904,7 +904,7 @@ void SettingsScene::commitNoteStartPositionInput() {
   }
 
   try {
-    context.settings.noteStartPositionPercent =
+    context.settings.presentation().noteStartPositionPercent =
         clampNoteStartPositionPercent(std::stoi(rawText));
     persistSettings();
     syncNoteStartPositionInputText(true);
@@ -926,7 +926,7 @@ void SettingsScene::commitJudgementIndicatorYInput() {
 
   try {
     const int percent = std::clamp(std::stoi(rawText), 0, 100);
-    context.settings.judgementIndicatorY =
+    context.settings.presentation().judgementIndicatorY =
         judgementIndicatorPercentToY(percent);
     persistSettings();
     syncJudgementIndicatorYInputText(true);
@@ -952,7 +952,7 @@ void SettingsScene::commitJudgementIndicatorWidthInput() {
     const int maxPercent = judgementIndicatorWidthScaleToPercent(
         AppSettings::kMaxJudgementIndicatorWidthScale);
     const int percent = std::clamp(std::stoi(rawText), minPercent, maxPercent);
-    context.settings.judgementIndicatorWidthScale =
+    context.settings.presentation().judgementIndicatorWidthScale =
         judgementIndicatorWidthPercentToScale(percent);
     persistSettings();
     syncJudgementIndicatorWidthInputText(true);
@@ -973,7 +973,7 @@ void SettingsScene::commitJudgementIndicatorRangeInput() {
   }
 
   try {
-    context.settings.judgementIndicatorRangeMilliseconds =
+    context.settings.presentation().judgementIndicatorRangeMilliseconds =
         clampJudgementIndicatorRangeMilliseconds(std::stoi(rawText));
     persistSettings();
     syncJudgementIndicatorRangeInputText(true);

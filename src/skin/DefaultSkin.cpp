@@ -99,6 +99,7 @@ void DefaultSkin::buildLayout(const std::string &screenName, View *root,
                               void *data) {
   if (screenName == "Result") {
     buildResultLayout(root, static_cast<ResultSkinData *>(data));
+    resizeResultLayout(root, rendering::window_width, rendering::window_height);
   }
 }
 
@@ -110,7 +111,82 @@ bool DefaultSkin::rebuildLayoutSection(const std::string &sectionName,
   View::LayoutBatchScope layoutBatch;
   root->clearChildren();
   buildResultSummary(root, static_cast<ResultSkinData *>(data));
+  resizeResultLayout(root, rendering::window_width, rendering::window_height);
   return true;
+}
+
+void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
+  if (!root) return;
+  View::LayoutBatchScope batch;
+  const bool portrait = height > width;
+  const auto metrics = result_layout::metricsFor(
+      static_cast<float>(height), TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android);
+  const float contentWidth = std::max(0.0F, width - 2 * metrics.rootPadding);
+  if (auto *summary = root->findViewByName("resultSummary")) {
+    const bool stack = portrait && summary->getChildren().size() > 3;
+    summary->setFlexWrap(stack ? YGWrapWrap : YGWrapNoWrap);
+    summary->setHeight(stack ? metrics.summaryHeight * 2 + 12 : metrics.summaryHeight);
+    summary->setFlexShrink(0);
+    for (auto *card : summary->getChildren()) {
+      card->setHeight(metrics.summaryHeight);
+      const bool fixedGrade = card->getName() == "resultSummaryCard:grade" &&
+                              YGNodeStyleGetFlexGrow(card->getNode()) == 0;
+      card->setFlexBasis(stack ? (contentWidth - 12) / 2
+                              : (fixedGrade ? YGUndefined : 0.0F));
+    }
+  }
+  if (auto *details = root->findViewByName("detailsGrid")) {
+    details->setFlexWrap(portrait ? YGWrapWrap : YGWrapNoWrap);
+    details->setHeight(portrait ? metrics.detailsHeight * 2 + 2 : metrics.detailsHeight);
+    details->setFlexShrink(0);
+    for (auto *tile : details->getChildren()) {
+      if (tile->getName() == "resultMetricDivider") {
+        tile->setVisible(!portrait);
+        tile->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
+        continue;
+      }
+      tile->setHeight(portrait ? metrics.detailsHeight : YGUndefined);
+      tile->setFlexBasis(portrait ? contentWidth / 4 - 1 : 0.0F);
+    }
+  }
+  if (auto *actions = root->findViewByName("resultActions")) {
+    actions->setWidthPercent(100);
+    actions->setPadding(Edge::Right, portrait ? 1 : 0);
+    const auto sizeActions = [&](auto &&self, View *view) -> int {
+      if (auto *button = dynamic_cast<Button *>(view)) {
+        auto *text = dynamic_cast<TextView *>(button->getContentView());
+        const float regularWidth = button->getName() == "resultPracticeSectionButton" ? 280 : 232;
+        const float width = portrait && text
+            ? std::max(64.0F, static_cast<float>(text->textureWidth()) + 24.0F)
+            : regularWidth;
+        button->setWidth(width)->setHeight(portrait ? 56 : 64);
+        button->setMinWidth(portrait ? 64 : 0)->setFlexShrink(portrait ? 1 : 0);
+        button->setFlexGrow(1);
+        if (text) {
+          text->setPadding(Edge::Left, portrait ? 12 : 0);
+          text->setPadding(Edge::Right, portrait ? 12 : 0);
+        }
+        return YGNodeStyleGetDisplay(button->getNode()) == YGDisplayNone ? 0 : 1;
+      }
+      view->setFlexWrap(portrait ? YGWrapNoWrap : YGWrapWrap);
+      view->setGap(portrait ? 8 : 14);
+      view->setMinWidth(0)->setFlexShrink(portrait && view != actions ? 1 : 0);
+      int buttonCount = 0;
+      for (auto *child : view->getChildren()) buttonCount += self(self, child);
+      // Match each nested group's share to its buttons so free space is
+      // distributed evenly without discarding label-based preferred widths.
+      view->setFlexGrow(view == actions ? 0 : buttonCount);
+      return YGNodeStyleGetDisplay(view->getNode()) == YGDisplayNone ? 0 : buttonCount;
+    };
+    sizeActions(sizeActions, actions);
+  }
+  if (auto *visuals = root->findViewByName("resultVisuals")) {
+    visuals->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+    const float visualHeight = portrait ? metrics.visualHeight * 1.8F + metrics.visualGap
+                                        : metrics.visualHeight;
+    visuals->setHeight(visualHeight);
+    visuals->setMinHeight(portrait ? visualHeight : metrics.visualMinimumHeight);
+  }
 }
 
 void DefaultSkin::buildResultSummary(View *root, ResultSkinData *data) {
@@ -640,7 +716,9 @@ void DefaultSkin::buildPresentationResultLayout(
 
     const auto addSeparator = [&]() {
       if (!authoritativePresentation && !detailsGrid->getChildren().empty()) {
-        detailsGrid->addView(makeDivider());
+        auto *divider = makeDivider();
+        divider->setName("resultMetricDivider");
+        detailsGrid->addView(divider);
       }
     };
 
@@ -741,11 +819,40 @@ void DefaultSkin::buildPresentationResultLayout(
       makeMetricTile("BREAK", *presentation.comboBreak, ui_theme::coral(),
                      "break");
     }
-    if (showFast) {
+    if (showFast && showSlow) {
+      addSeparator();
+      auto *tile = new View();
+      tile->setName("resultMetricTile:fast-slow");
+      tile->setFlexGrow(1)->setFlexBasis(0)->setFlexShrink(1)->setMinWidth(0);
+      tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
+      tile->setFlexDirection(FlexDirection::Column)->setJustifyContent(YGJustifyCenter);
+      auto *label = makeLabel("FAST / SLOW", 15, ui_theme::textSecondary());
+      label->setHeight(21);
+      label->setAlign(TextView::CENTER);
+      tile->addView(label);
+      auto *values = new View();
+      values->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+      values->setHeight(43);
+      auto *fast = makeLabel(std::to_string(*presentation.fast), 34, ui_theme::fastFeedback());
+      fast->setName("fast");
+      fast->setFlex(1)->setMinWidth(0)->setHeight(43)->setAutoFitText(true);
+      fast->setAlign(TextView::RIGHT);
+      values->addView(fast);
+      auto *slash = makeLabel(" / ", 24, ui_theme::textSecondary());
+      slash->setWidth(22)->setHeight(43);
+      slash->setAlign(TextView::CENTER);
+      values->addView(slash);
+      auto *slow = makeLabel(std::to_string(*presentation.slow), 34, ui_theme::slowFeedback());
+      slow->setName("slow");
+      slow->setFlex(1)->setMinWidth(0)->setHeight(43)->setAutoFitText(true);
+      slow->setAlign(TextView::LEFT);
+      values->addView(slow);
+      tile->addView(values);
+      detailsGrid->addView(tile);
+    } else if (showFast) {
       makeMetricTile("FAST", *presentation.fast, ui_theme::fastFeedback(),
                      "fast");
-    }
-    if (showSlow) {
+    } else if (showSlow) {
       makeMetricTile("SLOW", *presentation.slow, ui_theme::slowFeedback(),
                      "slow");
     }

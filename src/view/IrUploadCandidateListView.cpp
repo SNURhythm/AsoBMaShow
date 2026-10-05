@@ -24,9 +24,9 @@ std::string formatGauge(float gauge) {
 std::string keyModeDescription(int keyMode) {
   switch (keyMode) {
   case 5:
-    return "5K";
+    return "5K1S";
   case 7:
-    return "7K";
+    return "7K1S";
   case 10:
     return "5KDP";
   case 14:

@@ -604,6 +604,19 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
               profile.bindings,
               [&](const auto &value) { return sameBinding(value, untouched); }),
           "scoped reset preserves every binding in other scopes");
+
+  const auto originalBindings = profile.bindings;
+  profile.bindings.push_back(binding("scratchless-custom", {1, -7}, lane(0),
+                                     buttonControl("pad:one", 5)));
+  controller.resetScopeToDefaults({1, -7});
+  require(saves == 3 && profile.bindingsFor({1, -7}).size() == 7,
+          "scratchless reset restores its independent defaults");
+  for (const auto &original : originalBindings) {
+    require(std::ranges::any_of(profile.bindings, [&](const auto &value) {
+              return sameBinding(value, original);
+            }), "scratchless reset preserves every original-mode binding");
+  }
+
 }
 
 void testPartialBindingEditsComposeAgainstCurrentProfileState() {

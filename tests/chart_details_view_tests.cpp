@@ -49,6 +49,48 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart details");
   {
+    View scoreColumn;
+    scoreColumn.setWidth(420);
+    ChartDetailsView details(new ImageView(0, 0, 0, 0));
+    details.setScoreContainer(&scoreColumn);
+    details.setWidth(460);
+    ChartMetaRecord record;
+    record.meta.Title = "Chart in the left column";
+    record.meta.BmsPath = "/charts/split.bms";
+    ScoreBestSnapshot best;
+    best.score = 1800;
+    best.maxScore = 2000;
+    details.setChart(&record, best, kClearTypeHardClearRank, "300");
+    details.applyYogaLayout();
+    scoreColumn.applyYogaLayout();
+    require(details.findViewByName("chartDetailsPersonalBest") == nullptr &&
+                scoreColumn.findViewByName("chartDetailsPersonalBest") != nullptr,
+            "split details keep chart facts and personal best in separate columns");
+    require(text(scoreColumn, "chartDetailsScore") == "1800 / 2000",
+            "the external score card receives selection updates");
+    const int naturalHeight = details.getHeight();
+    details.setMinHeight(520);
+    details.applyYogaLayout();
+    const auto *facts = details.findViewByName("chartDetailsFacts");
+    const auto *lastValue = details.findViewByName("chartDetailsTotal");
+    require(details.getHeight() == 520 &&
+                facts->getY() + facts->getHeight() == details.getY() + details.getHeight() &&
+                std::abs(lastValue->getY() + lastValue->getHeight() -
+                         (facts->getY() + facts->getHeight() - 14)) <= 1,
+            "portrait chart facts distribute content through the aligned column height");
+    details.setMinHeight(0);
+    details.applyYogaLayout();
+    require(details.getHeight() == naturalHeight,
+            "removing the portrait fill constraint restores natural chart height");
+    details.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
+    require(text(scoreColumn, "chartDetailsScore") == "—",
+            "the external score card clears when the selection has no chart");
+    details.setScoreContainer(nullptr);
+    require(scoreColumn.getChildren().empty() &&
+                text(details, "chartDetailsScore") == "—",
+            "returning to landscape restores the original score card and ownership");
+  }
+  {
     ScrollView scroll(0, 0, 460, 800);
     auto *details = new ChartDetailsView(new ImageView(0, 0, 0, 0));
     scroll.setContentView(details);

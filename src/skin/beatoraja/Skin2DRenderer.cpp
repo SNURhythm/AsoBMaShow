@@ -22,6 +22,7 @@
 #include <memory>
 #include <numeric>
 #include <ranges>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -140,7 +141,7 @@ bool invertibleViewport(const PlaySkinViewport &viewport) noexcept {
 SkinSliderInteractionGeometry sliderInteraction(
     SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
     const AuthoredDestinationGeometry &geometry,
-    const SkinSliderObject &slider, PresentationUiControlKind kind) {
+    const SkinSliderObject &slider, PresentationUiControlKind kind, double range) {
   SkinSliderInteractionGeometry result{
       .sourceObject = sourceObject,
       .authoredOrdinal = authoredOrdinal,
@@ -150,27 +151,27 @@ SkinSliderInteractionGeometry sliderInteraction(
       .valueZero = {.x = geometry.rect.x, .y = geometry.rect.y},
       .valueOne = {.x = geometry.rect.x, .y = geometry.rect.y},
       .direction = slider.direction,
-      .range = slider.range,
+      .range = range,
       .changeable = slider.changeable,
       .writer = slider.writer};
   switch (slider.direction) {
   case 0:
-    result.authoredHitRegion.height = slider.range;
-    result.valueOne.y += slider.range;
+    result.authoredHitRegion.height = range;
+    result.valueOne.y += range;
     break;
   case 1:
-    result.authoredHitRegion.width = slider.range;
-    result.valueOne.x += slider.range;
+    result.authoredHitRegion.width = range;
+    result.valueOne.x += range;
     break;
   case 2:
-    result.authoredHitRegion.y -= slider.range;
-    result.authoredHitRegion.height = slider.range;
-    result.valueOne.y -= slider.range;
+    result.authoredHitRegion.y -= range;
+    result.authoredHitRegion.height = range;
+    result.valueOne.y -= range;
     break;
   case 3:
-    result.authoredHitRegion.x -= slider.range;
-    result.authoredHitRegion.width = slider.range;
-    result.valueOne.x -= slider.range;
+    result.authoredHitRegion.x -= range;
+    result.authoredHitRegion.width = range;
+    result.valueOne.x -= range;
     break;
   }
   return result;
@@ -412,6 +413,22 @@ const Binding *findBinding(const std::vector<const Binding *> &bindings,
                                         return binding->id.value < value.value;
                                       });
   return found == bindings.end() || (*found)->id != id ? nullptr : *found;
+}
+
+bool laneEffectTimer(const FrameLookupIndex &index,
+                     const SkinDestinationBody &destination) {
+  if (!destination.timer) return false;
+  const auto *binding = findBinding(index.timers, *destination.timer);
+  const auto *builtin = binding
+                            ? std::get_if<SkinBuiltinPropertySelector>(&binding->source)
+                            : nullptr;
+  const auto *id = builtin ? std::get_if<int>(&builtin->value) : nullptr;
+  if (!id) return false;
+  // Bomb, hold, key-on/off and HCN effect timers identify lane artwork even
+  // when its animation collapses or extends beyond the authored lane bounds.
+  if ((*id >= 50 && *id <= 89) || (*id >= 100 && *id <= 139) ||
+      (*id >= 250 && *id <= 289)) return true;
+  return *id >= 1010 && *id <= 2199 && *id % 100 >= 10;
 }
 
 bool disabledOptionalObject(const FrameLookupIndex &index,
@@ -2645,7 +2662,9 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       laneCover.supported && laneCover.liftEnabled
           ? sharedLaneHeight * laneCover.lift
           : 0.0;
-  const double sharedScrollHeight = sharedLaneHeight - liftOffsetY;
+  const double sharedScrollHeight = inputs.visibleScroll
+                                        ? inputs.visibleScroll->height
+                                        : sharedLaneHeight - liftOffsetY;
 
   float expansionWidth = 1.0F;
   float expansionHeight = 1.0F;
@@ -4265,9 +4284,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrame(
 }
 
 SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
-    const SkinFrameInputs &inputs, bool beginRuntimeFrame) {
+    const SkinFrameInputs &frameInputs, bool beginRuntimeFrame) {
   SkinFrameEvaluationResult result;
   try {
+    auto inputs = frameInputs;
     if (inputs.state.frameSerial() != inputs.frameSerial) {
       result.diagnostics.push_back(diagnostic(
           "skin.renderer.frame.serial",
@@ -4289,7 +4309,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         return result;
       }
     }
-    if (!invertibleViewport(inputs.viewport)) {
+    if (!invertibleViewport(inputs.viewport) ||
+        (inputs.fixedHudViewport && !invertibleViewport(*inputs.fixedHudViewport))) {
       result.diagnostics.push_back(
           diagnostic("skin.renderer.viewport.invalid",
                      "Gameplay skin viewport is not projectable."));
@@ -4401,6 +4422,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     deferredNotes.reserve(inputs.model.model.destinations.size());
     std::map<const SkinDestination *, SkinBlendMode> blendAfterDestination;
 
+    const auto playArea = inputs.fixedHudViewport
+                              ? playSkinAuthoredPlayArea(inputs.model)
+                              : std::nullopt;
+    std::set<std::uint32_t> fixedHudOrdinals;
     for (const auto &destination : inputs.model.model.destinations) {
       const auto *object = findObject(objects, destination.object);
       if (!object) {
@@ -4411,6 +4436,43 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
       if (disabledOptionalObject(lookupIndex, object->id)) {
         continue;
+      }
+      inputs.viewport = frameInputs.viewport;
+      if (playArea && inputs.fixedHudViewport) {
+        bool followsPlayArea = std::holds_alternative<SkinNoteObject>(object->payload) ||
+                               std::holds_alternative<SkinCoverObject>(object->payload) ||
+                               std::holds_alternative<SkinJudgeObject>(object->payload) ||
+                               laneEffectTimer(lookupIndex, destination.presentation) ||
+                               std::ranges::any_of(destination.presentation.offsetIds,
+                                                   pinnedLaneCoverRuntimeOffset);
+        // Lane covers are ordinary rate sliders authored above the lanes;
+        // their attached labels use the reserved live cover/lift offsets.
+        if (const auto *slider = std::get_if<SkinSliderObject>(&object->payload)) {
+          followsPlayArea = followsPlayArea ||
+                            laneCoverRateProperty(inputs.model, *slider);
+        }
+        // Skins have no universal HUD grouping. Move lane-local artwork with
+        // the lanes, retaining the original camera for surrounding objects.
+        if (!followsPlayArea && !destination.presentation.frames.empty()) {
+          followsPlayArea = std::ranges::all_of(
+              destination.presentation.frames, [&](const auto &frame) {
+                const double margin = playArea->width * 0.05;
+                // Mirrored backgrounds use signed sizes, and their entrance
+                // animation may begin collapsed. Classify their visible bounds.
+                const auto [left, right] =
+                    std::minmax({frame.x, frame.x + frame.width});
+                const auto [bottom, top] =
+                    std::minmax({frame.y, frame.y + frame.height});
+                return left >= playArea->x - margin &&
+                       right <= playArea->x + playArea->width + margin &&
+                       bottom >= playArea->y - playArea->height * 0.1 &&
+                       top <= playArea->y + playArea->height * 1.1;
+              });
+        }
+        if (!followsPlayArea) {
+          inputs.viewport = *inputs.fixedHudViewport;
+          fixedHudOrdinals.insert(destination.presentation.authoredOrdinal);
+        }
       }
       if (const auto *songList =
               std::get_if<SkinSongListObject>(&object->payload)) {
@@ -5612,6 +5674,21 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         // FloatProperty.get and LuaValue.tofloat both cross a Java float
         // boundary before SkinSlider/SkinGraph perform their arithmetic.
         const float objectRate = static_cast<float>(*rate.value);
+        auto sliderGeometry = *evaluated.geometry;
+        double sliderRange = slider ? slider->range : 0.0;
+        double sliderInteractionRange = sliderRange;
+        if (slider && inputs.visibleScroll &&
+            (slider->direction == 0 || slider->direction == 2) &&
+            laneCoverRateProperty(inputs.model, *slider)) {
+          const auto &visible = *inputs.visibleScroll;
+          const double shift = sliderRange / visible.authoredLaneHeight * visible.topCrop;
+          sliderGeometry.rect.y += slider->direction == 0 ? shift : -shift;
+          sliderRange *= visible.scale;
+          // The cover rate includes Lift, but its writer takes the user's
+          // unadjusted percentage over the visible post-Lift span.
+          sliderInteractionRange = sliderRange * visible.authoredHeight /
+                                   visible.authoredLaneHeight;
+        }
 
         QuadLoweringResult lowered;
         if (slider) {
@@ -5620,9 +5697,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                 "skin.renderer.slider.invalid",
                 "Slider range is outside its safe domain.");
           } else {
-            auto geometry = *evaluated.geometry;
+            auto geometry = sliderGeometry;
             const float displacement =
-                objectRate * static_cast<float>(slider->range);
+                objectRate * static_cast<float>(sliderRange);
             switch (slider->direction) {
             case 0:
               geometry.rect.y =
@@ -5719,8 +5796,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             interactionLayout.slidersTopmostFirst.push_back(
                 sliderInteraction(object->id,
                                   destination.presentation.authoredOrdinal,
-                                  *evaluated.geometry, *slider,
-                                  interactionKind));
+                                  sliderGeometry, *slider,
+                                  interactionKind, sliderInteractionRange));
             interactionLayout.controlsTopmostFirst.push_back(
                 interactionLayout.slidersTopmostFirst.back());
           }
@@ -6092,6 +6169,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
     }
 
+    inputs.viewport = frameInputs.viewport;
     std::size_t insertedNoteCommands = 0;
     for (auto &deferred : deferredNotes) {
       auto lowered = lowerNoteObject(
@@ -6159,7 +6237,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             .sharedLaneOriginY =
                 layout->note->lanes.front().laneDestination.y,
             .sharedLaneHeight =
-                layout->note->lanes.front().laneDestination.height};
+                layout->note->lanes.front().laneDestination.height,
+            .visibleScroll = inputs.visibleScroll};
         for (std::size_t laneIndex = 0; laneIndex < layout->note->lanes.size();
              ++laneIndex) {
           const auto &lane = layout->note->lanes[laneIndex];
@@ -6177,7 +6256,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           const double noteHeight = lane.authoredNoteHeight.value_or(8.0);
           const AuthoredRect normalNote{
               .x = lane.laneDestination.x + offsetX,
-              .y = lane.laneDestination.y + offsetY,
+              .y = lane.laneDestination.y + offsetY +
+                   (inputs.visibleScroll
+                        ? inputs.visibleScroll->originY - replayGhostGeometry.sharedLaneOriginY
+                        : 0.0),
               .width = lane.laneDestination.width + offsetWidth,
               .height = noteHeight + offsetHeight};
           if (emptyClip || !clip || !std::isfinite(normalNote.x) ||
@@ -6215,6 +6297,24 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
     }
 
+    const auto isFixedHud = [&](const auto &item) {
+      return fixedHudOrdinals.contains(item.authoredOrdinal);
+    };
+    if (inputs.fixedHudViewport) {
+      // Keep authored order within each layer, promoting the entire focused
+      // play area above surrounding artwork. Hit testing uses the same order.
+      std::stable_partition(buffer.commands.begin(), buffer.commands.end(), isFixedHud);
+      std::stable_partition(interactionLayout.slidersTopmostFirst.begin(),
+                            interactionLayout.slidersTopmostFirst.end(), isFixedHud);
+      std::stable_partition(interactionLayout.imagesTopmostFirst.begin(),
+                            interactionLayout.imagesTopmostFirst.end(), isFixedHud);
+      std::stable_partition(interactionLayout.textsTopmostFirst.begin(),
+                            interactionLayout.textsTopmostFirst.end(), isFixedHud);
+      std::stable_partition(interactionLayout.controlsTopmostFirst.begin(),
+                            interactionLayout.controlsTopmostFirst.end(),
+                            [&](const auto &control) { return std::visit(isFixedHud, control); });
+    }
+
     SkinBlendMode nextRetainedBlend =
         retainedBlendSessionSerial_ == inputs.sessionSerial &&
                 retainedBlendModelIdentity_ == &inputs.model
@@ -6226,7 +6326,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       // Resolve this after deferred notes so it follows draw, not prepare,
       // order. LR2 image fonts still use the ordinary image draw overload.
       std::size_t commandIndex = 0;
-      for (const auto &destination : inputs.model.model.destinations) {
+      const auto resolveDestinationBlend = [&](const SkinDestination &destination) {
         while (commandIndex < buffer.commands.size() &&
                buffer.commands[commandIndex].authoredOrdinal ==
                    destination.presentation.authoredOrdinal) {
@@ -6254,6 +6354,58 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             found != blendAfterDestination.end()) {
           nextRetainedBlend = found->second;
         }
+      };
+      if (inputs.fixedHudViewport) {
+        for (const bool fixed : {true, false}) {
+          for (const auto &destination : inputs.model.model.destinations) {
+            if (isFixedHud(destination.presentation) == fixed) {
+              resolveDestinationBlend(destination);
+            }
+          }
+        }
+      } else {
+        for (const auto &destination : inputs.model.model.destinations) {
+          resolveDestinationBlend(destination);
+        }
+      }
+    }
+    // Publish every control in the common play-area coordinate space. This
+    // keeps hit testing, slider values and text editing aligned with each
+    // object's selected camera without evaluating any callbacks twice.
+    if (inputs.fixedHudViewport && !fixedHudOrdinals.empty()) {
+      const auto &forward = inputs.fixedHudViewport->authoredToUi;
+      const auto &inverse = frameInputs.viewport.uiToAuthored;
+      const auto mapPoint = [&](AuthoredPoint point) {
+        const double x = forward.m00 * point.x + forward.tx;
+        const double y = forward.m11 * point.y + forward.ty;
+        return AuthoredPoint{inverse.m00 * x + inverse.tx,
+                             inverse.m11 * y + inverse.ty};
+      };
+      const auto mapRect = [&](AuthoredRect rect) {
+        const auto lower = mapPoint({rect.x, rect.y});
+        const auto upper = mapPoint({rect.x + rect.width, rect.y + rect.height});
+        return AuthoredRect{lower.x, lower.y, upper.x - lower.x, upper.y - lower.y};
+      };
+      const auto mapControl = [&](auto &control) {
+        if (!fixedHudOrdinals.contains(control.authoredOrdinal)) return;
+        using Control = std::decay_t<decltype(control)>;
+        if constexpr (std::is_same_v<Control, SkinSliderInteractionGeometry>) {
+          control.authoredDestination = mapRect(control.authoredDestination);
+          control.authoredHitRegion = mapRect(control.authoredHitRegion);
+          control.valueZero = mapPoint(control.valueZero);
+          control.valueOne = mapPoint(control.valueOne);
+          control.range *= (control.direction == 0 || control.direction == 2)
+                               ? forward.m11 * inverse.m11
+                               : forward.m00 * inverse.m00;
+        } else {
+          control.authoredRegion = mapRect(control.authoredRegion);
+        }
+      };
+      for (auto &control : interactionLayout.slidersTopmostFirst) mapControl(control);
+      for (auto &control : interactionLayout.imagesTopmostFirst) mapControl(control);
+      for (auto &control : interactionLayout.textsTopmostFirst) mapControl(control);
+      for (auto &control : interactionLayout.controlsTopmostFirst) {
+        std::visit(mapControl, control);
       }
     }
     buildAdjacentBatches(buffer);

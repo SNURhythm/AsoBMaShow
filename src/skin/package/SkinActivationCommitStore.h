@@ -24,6 +24,7 @@ struct PreparedSkinActivation {
   SkinProfileId profileId;
   ValidatedSkinActivation activation;
   SkinProfileSettings candidateProfileSettings;
+  PresentationOrientation orientation = PresentationOrientation::Landscape;
 };
 
 enum class ActivationCommitDisposition : std::uint8_t {

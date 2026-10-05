@@ -878,7 +878,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     const PlaySkinViewport viewport = evaluatePlaySkinViewport(
         {.width = static_cast<double>(header.width),
          .height = static_cast<double>(header.height)},
-        context.safeUiBounds, context.viewport);
+        context.safeUiBounds, context.viewport,
+        playSkinAuthoredPlayArea(document.model));
     if (!viewport.valid) {
       result.diagnostics.push_back(sessionDiagnostic(
           "skin.session.viewport_invalid",
@@ -895,7 +896,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         .entry = activation.entry,
         .revisionDigest =
             activation.revision.revision().lowercaseSha256,
-        .configurationDigest = result.configurationDigest};
+        .configurationDigest = result.configurationDigest,
+        .orientation = context.orientation};
     auto owned = std::make_unique<OwnedActivation>(
         std::move(activation.revision), std::move(identity),
         context.chartModel, result.reconciledSettings,
@@ -996,7 +998,10 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
       return result;
     }
   }
-  context_.bridge.beginFrame(state, projection);
+  const auto visibleScroll = playSkinVisibleScroll(
+      context_.model, context_.viewport,
+      state.authority.liftEnabled ? state.authority.liftRatio : 0.0);
+  context_.bridge.beginFrame(state, projection, visibleScroll);
   FrameDiscardGuard discard(context_.bridge);
   if (context_.bridge.frameSerial() != state.clock.serial ||
       state.clock.serial == 0) {
@@ -1043,6 +1048,16 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
+  std::optional<PlaySkinViewport> fixedHudViewport;
+  if (context_.viewportSettings.centerPlayArea &&
+      context_.viewportSettings.keepHudFixed) {
+    auto hudSettings = context_.viewportSettings;
+    hudSettings.centerPlayArea = false;
+    const auto &header = context_.model.model.header;
+    fixedHudViewport = evaluatePlaySkinViewport(
+        {static_cast<double>(header.width), static_cast<double>(header.height)},
+        context_.viewport.safeUiBounds, hudSettings);
+  }
   result.evaluation = context_.renderer.evaluateFrame(
       {.frameSerial = state.clock.serial,
        .sessionSerial = context_.sessionSerial,
@@ -1057,7 +1072,9 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .markProcessedNotes = state.configuration.markProcessedNotes,
        .safetyPolicy = context_.safetyPolicy,
        .gaugeRandomSource = context_.gaugeRandomSource,
-       .pointerUiPosition = pointerUiPosition_},
+       .pointerUiPosition = pointerUiPosition_,
+       .fixedHudViewport = fixedHudViewport,
+       .visibleScroll = visibleScroll},
       std::move(ownership));
   appendDiagnostics(result.diagnostics, context_.bridge.diagnostics());
   if (!result.evaluation.submitReady) {
@@ -1337,7 +1354,8 @@ PresentationFrameResult PlaySkinSession::render(
             .expectedRevisionDigest = identity().revisionDigest,
             .expectedConfigurationDigest = identity().configurationDigest,
             .frameSerial = transaction.frameSerial,
-            .orderedWrites = std::move(persistedWrites)});
+            .orderedWrites = std::move(persistedWrites),
+            .orientation = identity().orientation});
       } catch (...) {
         persistenceFailure = PersistencePreparationFailure::Request;
       }
@@ -1532,8 +1550,14 @@ void PlaySkinSession::submitSyntheticStartLaneIndicators(
         return start_lane_indicator::colorRoleForKey(
             static_cast<std::size_t>(position), keyLanes.size());
       }();
+      auto laneRegion = region->authoredRegion;
+      if (publishedReplayGhostGeometry_ && publishedReplayGhostGeometry_->visibleScroll) {
+        const auto &visible = *publishedReplayGhostGeometry_->visibleScroll;
+        laneRegion.y = visible.visibleBottomY;
+        laneRegion.height = visible.height;
+      }
       geometry.push_back({.lane = lane,
-                          .laneRegion = region->authoredRegion,
+                          .laneRegion = laneRegion,
                           .rgba = startLaneIndicatorColor(role)});
     }
 
@@ -1585,7 +1609,8 @@ void PlaySkinSession::updateViewportGeometry(UiLogicalRect safeUiBounds) {
   context_.viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),
        .height = static_cast<double>(header.height)},
-      safeUiBounds, context_.viewportSettings);
+      safeUiBounds, context_.viewportSettings,
+      playSkinAuthoredPlayArea(context_.model));
   if (owned_) {
     owned_->safeUiBounds = safeUiBounds;
     owned_->viewport = context_.viewport;
@@ -1646,6 +1671,14 @@ gameplay::RealtimeTouchLayout PlaySkinSession::touchLayout() const {
           [chartLane](const SkinLaneInteractionRegion &region) {
             return region.authoredLane == chartLane;
           });
+      if (context_.chartModel.scratchlessSinglePlay && chartLane == 7) {
+        if (found == publishedLayout_->laneRegions.end()) continue;
+        const auto &rect = found->authoredRegion;
+        if (std::isfinite(rect.x) && std::isfinite(rect.y) &&
+            std::isfinite(rect.width) && std::isfinite(rect.height) &&
+            rect.width >= 0.0 && rect.height >= 0.0 &&
+            (rect.width == 0.0 || rect.height == 0.0)) continue;
+      }
       if (found == publishedLayout_->laneRegions.end() ||
           !finiteRect(found->authoredRegion)) {
         return gameplay::RealtimeTouchLayout{

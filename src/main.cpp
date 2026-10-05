@@ -1,3 +1,6 @@
+#include "rendering/PortraitPlayfieldFraming.h"
+#include "rendering/UiSafeArea.h"
+#include "settings/PresentationOrientationState.h"
 #include "perf/LatencyTelemetry.h"
 #include "targets.h"
 #include "AppDatabaseInitializer.h"
@@ -310,9 +313,12 @@ int rendering::ui_view_height = rendering::design_height;
 Camera *rendering::main_camera = nullptr;
 Camera rendering::game_camera{rendering::main_view};
 void rendering::updateUIScale(int renderW, int renderH) {
+  if (renderW <= 0 || renderH <= 0) {
+    return;
+  }
   render_width = renderW;
   render_height = renderH;
-  window_width = design_width;
+  window_width = renderW < renderH ? design_height : design_width;
   ui_scale_x = static_cast<float>(renderW) / static_cast<float>(window_width);
   ui_scale_y = ui_scale_x;
   window_height = static_cast<int>(renderH / ui_scale_y);
@@ -558,6 +564,8 @@ int main(int argv, char **args) {
 #endif
   rendering::main_camera = &rendering::game_camera;
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+  SDL_SetHint(SDL_HINT_ORIENTATIONS,
+              "Portrait PortraitUpsideDown LandscapeLeft LandscapeRight");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
 #if TARGET_OS_IPHONE
   // UIKit exposes a physical trackpad as a mouse. SDL otherwise mirrors every
@@ -611,6 +619,11 @@ int main(int argv, char **args) {
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
   uint32_t windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+  if (TARGET_PLATFORM == iOS) {
+    // Use the current screen size in either launch orientation. An exclusive
+    // mode based on the initial landscape dimensions can fail in portrait.
+    windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
+  }
   if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS) {
     windowFlags |= SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI;
   } else if (TARGET_PLATFORM == Android) {
@@ -636,7 +649,9 @@ int main(int argv, char **args) {
                 windowLogicalHeight);
 
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID
   SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
+#endif
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
   if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
     windowLogicalWidth = windowCreateWidth;
@@ -782,6 +797,25 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+  player_settings::PresentationOrientationState presentationOrientation;
+  presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
+  bool orientationLocked = false;
+  auto appliedOrientation = context.settings.screenOrientation;
+  context.setGameplayOrientationLocked = [&](bool locked) {
+    if (locked && !orientationLocked) {
+      int logicalWidth = 0;
+      int logicalHeight = 0;
+      SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
+      presentationOrientation.updateViewport(logicalWidth, logicalHeight);
+    }
+    orientationLocked = locked;
+    presentationOrientation.setGameplayLocked(locked);
+    if (context.sceneManager)
+      context.sceneManager->setPresentationOrientation(presentationOrientation.orientation());
+    appliedOrientation = context.settings.screenOrientation;
+    screen_orientation::apply(appliedOrientation, locked);
+  };
+  screen_orientation::apply(appliedOrientation, false);
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
   if (context.chartLibraryTasks) {
     context.chartLibraryTasks->start();
@@ -794,6 +828,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
   bgfx::setViewMode(rendering::readback_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
+  sceneManager.setPresentationOrientation(presentationOrientation.orientation());
   sceneManager.registerScene("Intro", std::make_unique<IntroScene>(context));
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
@@ -868,8 +903,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   // counting the current frame in the next window.
   std::optional<std::chrono::steady_clock::time_point> fpsWindowStart;
   int renderedFramesInWindow = 0;
-  float appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
-  float appliedLaneLength = context.settings.laneLength;
+  float appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
+  float appliedLaneLength = context.settings.presentation().laneLength;
   bool hasDeferredRenderResize = false;
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
@@ -970,6 +1005,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+    if (!orientationLocked &&
+        appliedOrientation != context.settings.screenOrientation) {
+      appliedOrientation = context.settings.screenOrientation;
+      screen_orientation::apply(appliedOrientation, false);
+    }
     context.pollGameplaySkinCommits();
     if (context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
@@ -1053,6 +1093,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       rendering::heightScale =
           static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
       rendering::updateUIScale(targetRenderW, targetRenderH);
+      presentationOrientation.updateViewport(targetRenderW, targetRenderH);
+      sceneManager.setPresentationOrientation(presentationOrientation.orientation());
 
       // set bgfx resolution
       bgfx::reset(rendering::render_width, rendering::render_height,
@@ -1190,13 +1232,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
 #endif
 
-      if (scene_event_routing::shouldDispatchToScene(event)) {
-        auto result = sceneManager.handleEvents(event);
-        if (result.quit) {
-          context.quitFlag = true;
-        }
-      }
-
       // on window resize
       if (event.type == SDL_WINDOWEVENT &&
           (event.window.event == SDL_WINDOWEVENT_RESIZED ||
@@ -1208,10 +1243,29 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
 
+      if (scene_event_routing::shouldDispatchToScene(event)) {
+        auto result = sceneManager.handleEvents(event);
+        if (result.quit) {
+          context.quitFlag = true;
+        }
+      }
+
       if (event.type == SDL_TEXTEDITING_EXT) {
         SDL_free(event.editExt.text);
         event.editExt.text = nullptr;
       }
+    };
+
+    auto flushPendingResize = [&]() {
+      if (!hasPendingResize) return;
+      processEvent(pendingResizeEvent);
+      if (pendingResizeCount > 1) {
+        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+          coalescedResizeInWindow += (pendingResizeCount - 1);
+        }
+      }
+      hasPendingResize = false;
+      pendingResizeCount = 0;
     };
 
     auto waitForBackgroundEvent = [&]() {
@@ -1229,6 +1283,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
         ++rawEventsInWindow;
       }
+      // A later Start/touch callback may enter gameplay and lock orientation.
+      // Apply earlier viewport changes before either input dispatch path.
+      const bool resizeEvent = e.type == SDL_WINDOWEVENT &&
+          (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+           e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED);
+      if (!resizeEvent) flushPendingResize();
       context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
       if (e.type == SDL_MOUSEMOTION) {
@@ -1264,14 +1324,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       processEvent(e);
     }
 
-    if (hasPendingResize) {
-      processEvent(pendingResizeEvent);
-      if (pendingResizeCount > 1) {
-        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-          coalescedResizeInWindow += (pendingResizeCount - 1);
-        }
-      }
-    }
+    flushPendingResize();
     if (!pendingFingerMotions.empty()) {
       for (const auto &pendingFingerMotion : pendingFingerMotions) {
         processEvent(pendingFingerMotion);
@@ -1332,17 +1385,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
     const bool laneTransformChanged =
-        std::abs(appliedLaneAngleDegrees - context.settings.laneAngleDegrees) >
+        std::abs(appliedLaneAngleDegrees - context.settings.presentation().laneAngleDegrees) >
             0.001f ||
-        std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f;
+        std::abs(appliedLaneLength - context.settings.presentation().laneLength) > 0.001f;
     if (laneTransformChanged &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                             std::try_to_lock);
       if (bgfxLock.owns_lock()) {
-        appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
-        appliedLaneLength = context.settings.laneLength;
+        appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
+        appliedLaneLength = context.settings.presentation().laneLength;
         context.restoreGameplayRenderViews();
       }
     }
@@ -1582,6 +1635,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     //
   }
   sceneManager.cleanup();
+  context.setGameplayOrientationLocked = {};
   if (context.displaySettingsManager) {
     const auto shutdownResult = context.displaySettingsManager->shutdown();
     if (!shutdownResult.message.empty()) {
@@ -1670,18 +1724,31 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
   bgfx::setViewTransform(blurViewH, nullptr, ortho);
   bgfx::setViewTransform(blurViewV, nullptr, ortho);
 
-  constexpr float kCameraDepth = 2.1f;
-  const float laneLookAtY = settings.laneLength * 0.25f;
-  const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
+  const float aspect =
+      float(rendering::window_width) / float(rendering::window_height);
+  float kCameraDepth = 2.1f;
+  float laneLookAtY = settings.presentation().laneLength * 0.25f;
+  if (settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait) {
+    const auto safe = rendering::uiSafeAreaInsets();
+    const auto frame = rendering::framePortraitPlayfield(
+        settings.presentation().laneLength, settings.playAreaWidthForKeyMode(7),
+        settings.presentation().laneAngleDegrees, aspect,
+        {.top = float(safe.top) / rendering::window_height,
+         .right = float(safe.right) / rendering::window_width,
+         .bottom = float(safe.bottom) / rendering::window_height,
+         .left = float(safe.left) / rendering::window_width});
+    kCameraDepth = frame.cameraDepth;
+    laneLookAtY = frame.lookAtY;
+  }
+  const float laneAngleRad = bx::toRad(settings.presentation().laneAngleDegrees);
   bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0f};
   bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
                   laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
                   -kCameraDepth};
 
-  float aspect =
-      float(rendering::window_width) / float(rendering::window_height);
   rendering::game_camera.edit()
       .setPosition(eye)
+      .setFov(rendering::kPlayfieldVerticalFovDegrees)
       .setLookAt(at)
       .setAspectRatio(aspect)
       .setViewRect(rendering::ui_offset_x, rendering::ui_offset_y,

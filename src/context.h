@@ -272,6 +272,7 @@ public:
   std::function<void()> requestAddChartFolderFromFiles;
   std::function<void()> requestRebuildChartLibrary;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
+  std::function<void(bool)> setGameplayOrientationLocked;
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<skin::SkinStorageRoots> skinStorageRoots;
@@ -360,7 +361,7 @@ public:
               skinResourcePreparationService->dropTextAtlasCache();
             });
         gameplaySkinLifecycle->startAfterProfileInitialization(
-            *activeProfileId);
+            *activeProfileId, settings.activePresentationOrientation());
         acquireGameplaySkinForNextChart = [this](int keyMode) {
           return gameplaySkinLifecycle
                      ? gameplaySkinLifecycle->acquireForNextChart(keyMode)
@@ -866,7 +867,7 @@ public:
                         ->bindCommittedActiveProfile(*typedId, activeSettings);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
                     if (gameplaySkinLifecycle) {
-                      gameplaySkinLifecycle->profileChanged(*typedId);
+                      gameplaySkinLifecycle->profileChanged(*typedId, activeSettings.activePresentationOrientation());
                     }
 #endif
                   } catch (...) {

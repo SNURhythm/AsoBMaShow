@@ -1,3 +1,4 @@
+#include "GameplayKeyMode.h"
 #include "ReplayVideoExporter.h"
 #include "ExportFileName.h"
 #include "replay/CourseReplayConsumer.h"
@@ -171,7 +172,7 @@ public:
     if (!context.gameplaySkinLifecycle || !context.skinStorageRoots ||
         !context.skinResourcePreparationService ||
         !context.skinLiveResourceCounters) {
-      if (context.settings.skin.selectedSkinEntries.contains(skinType)) {
+      if (context.settings.presentation().skin.selectedSkinEntries.contains(skinType)) {
         error = "Required services are unavailable for the selected replay result skin";
         return false;
       }
@@ -390,10 +391,10 @@ preflightReplayGameplayPresentation(
       .chartReplicationMode = settings.skinChartReplicationMode,
       .skinTargetId = settings.skinTargetId,
       .skinTargetList = settings.skinTargetList,
-      .liftEnabled = settings.liftEnabled,
-      .liftRatio = constraints.noSpeed ? 0.0F : settings.liftRatio,
-      .hiddenEnabled = settings.hiddenEnabled,
-      .hiddenRatio = constraints.noSpeed ? 0.0F : settings.hiddenRatio};
+      .liftEnabled = settings.presentation().liftEnabled,
+      .liftRatio = constraints.noSpeed ? 0.0F : settings.presentation().liftRatio,
+      .hiddenEnabled = settings.presentation().hiddenEnabled,
+      .hiddenRatio = constraints.noSpeed ? 0.0F : settings.presentation().hiddenRatio};
   const auto resolvedChartMetadata =
       chartMetadata != nullptr
           ? *chartMetadata
@@ -418,7 +419,7 @@ preflightReplayGameplayPresentation(
   authority.stageFileAvailable = resolvedChartMetadata.stageFileAvailable;
   authority.backBmpAvailable = resolvedChartMetadata.backBmpAvailable;
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
-      settings, settings.playAreaWidthForKeyMode(chart.Meta.KeyMode), chart,
+      settings, settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(chart)), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
       constraints, replay.assistOption);
   const auto result =
@@ -1338,7 +1339,7 @@ preflightCourseReplayGameplayPresentations(
          .preparationPlan = stage.preparationPlan,
          .configuration = replay_video_export::replayGameplayPresentationConfig(
              settings,
-             settings.playAreaWidthForKeyMode(stage.chart->Meta.KeyMode),
+             settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*stage.chart)),
              *stage.chart,
              resolvedOptions.renderTouchPoints,
              resolvedOptions.renderReplayGhosts, stage.constraints,
@@ -1363,11 +1364,11 @@ preflightCourseReplayGameplayPresentations(
              .courseStageIndex = static_cast<int>(stageIndex),
              .courseStageCount = static_cast<int>(stages.size()),
              .courseStageTitles = courseStageTitles,
-             .liftEnabled = settings.liftEnabled,
-             .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.liftRatio,
-             .hiddenEnabled = settings.hiddenEnabled,
+             .liftEnabled = settings.presentation().liftEnabled,
+             .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.presentation().liftRatio,
+             .hiddenEnabled = settings.presentation().hiddenEnabled,
              .hiddenRatio = stage.constraints.noSpeed ? 0.0F
-                                                       : settings.hiddenRatio,
+                                                       : settings.presentation().hiddenRatio,
          },
          .skinServices = replayGameplaySkinSessionServices(context, stop),
          .presentation = stage.gameplayPresentation->presentation,
@@ -3310,10 +3311,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
         .laneCoverEnabled = laneCover.enabled,
-        .liftEnabled = settings.liftEnabled,
-        .liftRatio = settings.liftRatio,
-        .hiddenEnabled = settings.hiddenEnabled,
-        .hiddenRatio = settings.hiddenRatio,
+        .liftEnabled = settings.presentation().liftEnabled,
+        .liftRatio = settings.presentation().liftRatio,
+        .hiddenEnabled = settings.presentation().hiddenEnabled,
+        .hiddenRatio = settings.presentation().hiddenRatio,
         .failureAnimationActive =
             replay_video_export::replayGameplayFailureAnimationActive(
                 frameTiming.gameplayTimeMicros, failureMicros),
@@ -4102,7 +4103,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                  ? replay_video_export::ReplayLaneCoverFrameState{
                                        .percent =
                                            AppSettings::kDefaultNoteStartPositionPercent,
-                                       .enabled = settings.laneCoverEnabled}
+                                       .enabled = settings.presentation().laneCoverEnabled}
                                  : laneCoverPlayback.advance(
                                        stageReplay.laneCoverEvents,
                                        frameTiming.gameplayTimeMicros);
@@ -4164,11 +4165,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
           .laneCoverEnabled = laneCover.enabled,
-          .liftEnabled = settings.liftEnabled,
-          .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.liftRatio,
-          .hiddenEnabled = settings.hiddenEnabled,
+          .liftEnabled = settings.presentation().liftEnabled,
+          .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.presentation().liftRatio,
+          .hiddenEnabled = settings.presentation().hiddenEnabled,
           .hiddenRatio = stage.constraints.noSpeed ? 0.0F
-                                                   : settings.hiddenRatio,
+                                                   : settings.presentation().hiddenRatio,
           .failureAnimationActive =
               replay_video_export::replayGameplayFailureAnimationActive(
                   frameTiming.gameplayTimeMicros, stage.failureMicros),

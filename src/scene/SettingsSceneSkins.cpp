@@ -1,3 +1,4 @@
+#include "../GameplayKeyMode.h"
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
@@ -53,97 +54,6 @@ Button *makeGameplaySkinAction(const LayoutMetrics &metrics,
   return button;
 }
 
-struct GameplaySkinChoiceButton {
-  i18n::Text label;
-  bool selected = false;
-  std::function<void()> action;
-  std::function<bool()> tryAction;
-};
-
-void styleGameplaySkinChoiceButton(Button *button, bool selected) {
-  button->setSelected(selected);
-  if (!selected) {
-    button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                      ui_theme::controlPressed);
-    button->setThemedBorderColors(ui_theme::hairline, ui_theme::accentBorder,
-                                  ui_theme::accentBorderStrong);
-    return;
-  }
-
-  const auto accent = []() { return ui_theme::cyan(); };
-  const auto accentWithModeAlpha = [](uint8_t lightAlpha, uint8_t darkAlpha) {
-    return [lightAlpha, darkAlpha]() {
-      return ui_theme::withAlpha(
-          ui_theme::cyan(), ui_theme::activeMode() == ui_theme::ThemeMode::Light
-                                ? lightAlpha
-                                : darkAlpha);
-    };
-  };
-  button->setThemedBackgroundColors(accentWithModeAlpha(54, 82),
-                                    accentWithModeAlpha(74, 108),
-                                    accentWithModeAlpha(100, 136));
-  button->setThemedBorderColors(
-      []() { return ui_theme::withAlpha(ui_theme::cyan(), 178); },
-      []() { return ui_theme::withAlpha(ui_theme::cyan(), 216); }, accent);
-}
-
-View *makeGameplaySkinChoiceRow(
-    const LayoutMetrics &metrics, const i18n::Text &label, bool enabled,
-    std::vector<GameplaySkinChoiceButton> choices) {
-  auto *row = new View();
-  row->setFlexDirection(FlexDirection::Row);
-  row->setFlexWrap(YGWrapWrap);
-  row->setAlignItems(YGAlignCenter);
-  row->setGap(metrics.compact ? 8.0f : 10.0f);
-
-  auto *labelView = makeText(label, metrics.smallTextSize,
-                             ui_theme::textSecondary(), TextView::LEFT,
-                             TextView::MIDDLE);
-  labelView->setMinWidth(0.0f);
-  labelView->setFlexShrink(1.0f);
-  row->addView(labelView);
-
-  auto *buttons = new View();
-  buttons->setFlexDirection(FlexDirection::Row);
-  buttons->setFlexWrap(YGWrapWrap);
-  buttons->setGap(metrics.compact ? 6.0f : 8.0f);
-  auto choiceButtons = std::make_shared<std::vector<Button *>>();
-  for (auto &choice : choices) {
-    auto *choiceLabel = makeText(choice.label, metrics.smallTextSize,
-                                 ui_theme::textPrimary(), TextView::CENTER,
-                                 TextView::MIDDLE);
-    constexpr int horizontalContentPadding = 28;
-    const int minimumWidth = metrics.compact ? 84 : 96;
-    const int width = std::max(
-        minimumWidth,
-        std::max(0, choiceLabel->textureWidth()) + horizontalContentPadding);
-    auto *button = choice.selected
-                       ? makeAccentButton(width, metrics.actionButtonHeight,
-                                          choiceLabel, ui_theme::cyan())
-                       : makeControlButton(width, metrics.actionButtonHeight,
-                                           choiceLabel);
-    button->setSelected(choice.selected);
-    button->setEnabled(enabled);
-    if (enabled) {
-      button->setOnClickListener(
-          [button, choiceButtons, action = std::move(choice.action),
-           tryAction = std::move(choice.tryAction)]() mutable {
-            const bool accepted = tryAction ? tryAction() : (action(), true);
-            if (!accepted) {
-              return;
-            }
-            for (auto *candidate : *choiceButtons) {
-              styleGameplaySkinChoiceButton(candidate, candidate == button);
-            }
-          });
-    }
-    choiceButtons->push_back(button);
-    buttons->addView(button);
-  }
-  row->addView(buttons);
-  return row;
-}
-
 i18n::Text validationLabel(skin::SkinValidationDisposition disposition) {
   switch (disposition) {
   case skin::SkinValidationDisposition::SelectableGameplay:
@@ -181,15 +91,6 @@ float sanitizeViewportComponent(std::string_view text, float fallback,
   } catch (...) {
     return fallback;
   }
-}
-
-int sanitizeOffsetComponent(std::string_view text, int fallback) {
-  int value = 0;
-  const auto result =
-      std::from_chars(text.data(), text.data() + text.size(), value);
-  return result.ec == std::errc{} && result.ptr == text.data() + text.size()
-             ? value
-             : fallback;
 }
 
 std::string formatViewportComponent(float value) {
@@ -245,7 +146,8 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   }
 
   if (gameplaySkinSettingsController != nullptr &&
-      gameplaySkinSettingsProfileId == profileId->opaque) {
+      gameplaySkinSettingsProfileId == profileId->opaque &&
+      gameplaySkinSettingsOrientation == context.settings.activePresentationOrientation()) {
     return;
   }
 
@@ -304,7 +206,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
             .beginArchiveHandoff =
                 [this]() {
                   return platform_document_handoff::ImportDocumentAsync(
-                      {.mimeType = "application/zip",
+                      {.mimeType = "*/*",
                        .maxBytes = skin::SkinPackagePolicy::maxArchiveBytes},
                       context.temporaryPathCleanupService);
                 },
@@ -312,11 +214,13 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
                 [this](PlatformDirectoryImportRequest request) {
                   return platform_document_handoff::ImportDirectoryAsync(
                       std::move(request), context.temporaryPathCleanupService);
-                }});
+                },
+            .orientation = context.settings.activePresentationOrientation()});
   } else {
-    gameplaySkinSettingsController->profileChanged(*profileId, clientId);
+    gameplaySkinSettingsController->profileChanged(*profileId, clientId, context.settings.activePresentationOrientation());
   }
   gameplaySkinSettingsProfileId = profileId->opaque;
+  gameplaySkinSettingsOrientation = context.settings.activePresentationOrientation();
   gameplaySkinSettingsLayoutKey.clear();
   gameplaySkinUiMessage = {};
   gameplaySkinSafetyDropdownOpen = false;
@@ -354,6 +258,12 @@ void SettingsScene::updateGameplaySkinSettingsController() {
   if (gameplaySkinSettingsController == nullptr) {
     return;
   }
+  if (previewActive) {
+    if (const auto target = skin::gameplaySkinSettingsTargetForKeyMode(
+            gameplaySkinSettingsController->snapshot(), previewKeyMode)) {
+      gameplaySkinSettingsController->setActiveTarget(target->skinType);
+    }
+  }
   gameplaySkinSettingsController->poll();
   const auto &snapshot = gameplaySkinSettingsController->snapshot();
   if (!snapshot.preparedName) {
@@ -367,15 +277,23 @@ void SettingsScene::updateGameplaySkinSettingsController() {
                    })) {
     gameplaySkinRemovalConfirmationKey.clear();
   }
-  if (activeTab == SettingsTab::GameplaySkins &&
+  if ((activeTab == SettingsTab::GameplaySkins || previewActive) &&
       gameplaySkinControlsBuiltDisabled &&
       skin::gameplaySkinSettingsActionAvailability(snapshot).ordinaryActions) {
     lastLayoutWidth = -1;
   }
+  if (previewActive && previewSkinReloadReady()) {
+    const auto key = skin::gameplaySkinPreviewConfigurationKey(snapshot, previewKeyMode);
+    if (key != previewSkinConfigurationKey) {
+      previewSkinConfigurationKey = key;
+      previewRendererDirty = true;
+      lastLayoutWidth = -1;
+    }
+  }
   const std::string next = skin::gameplaySkinSettingsLayoutKey(snapshot);
   if (next != gameplaySkinSettingsLayoutKey) {
     gameplaySkinSettingsLayoutKey = next;
-    if (activeTab == SettingsTab::GameplaySkins) {
+    if (activeTab == SettingsTab::GameplaySkins || previewActive) {
       lastLayoutWidth = -1;
     }
   }
@@ -414,7 +332,7 @@ skin::ViewportSettings SettingsScene::gameplaySkinViewportForEntry(
 
 void SettingsScene::updateGameplaySkinSettingsLiveUi(
     const skin::GameplaySkinSettingsSnapshot &snapshot) {
-  if (activeTab != SettingsTab::GameplaySkins) {
+  if (activeTab != SettingsTab::GameplaySkins && !previewActive) {
     return;
   }
 
@@ -539,249 +457,82 @@ bool SettingsScene::gameplaySkinTraitsRuntimeAvailable() const noexcept {
       gameplaySkinSettingsController != nullptr);
 }
 
-void SettingsScene::appendSelectedSkinHudSettings(
-    View *body, const LayoutMetrics &metrics, bool includeBuiltInOnlySettings) {
-  const auto appendHeading = [body, &metrics](const i18n::Text &label) {
-    body->addView(
-        makeWrappedText(label, metrics.bodyTextSize, ui_theme::cyan()));
+DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
+    const LayoutMetrics &metrics, int skinType,
+    const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
+    float menuWidth) {
+  const auto &selectableRows = selection.entries;
+  const auto *selectedRow = selection.selectedRow;
+  const bool followsOriginal = selection.followsOriginal;
+  std::vector<skin::SkinEntryId> dropdownEntries;
+  std::vector<DropdownView::Option> dropdownOptions = {
+      {.id = "", .label = i18n::message("settings.skins.built_in.label"), .available = ordinaryActionsEnabled},
   };
-  const auto appendNumeric =
-      [this, body, &metrics](const i18n::Text &label, const std::string &value,
-                             std::function<void(const std::string &)> apply) {
-        auto *row = new View();
-        row->setFlexDirection(FlexDirection::Row);
-        row->setFlexWrap(YGWrapWrap);
-        row->setAlignItems(YGAlignCenter);
-        row->setGap(metrics.compact ? 8.0F : 10.0F);
-        auto *labelView =
-            makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
-                     TextView::LEFT, TextView::MIDDLE);
-        labelView->setMinWidth(0.0F);
-        labelView->setFlexShrink(1.0F);
-        row->addView(labelView);
-        auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
-        input->setEditingText(value);
-        input->onEditingFinished(
-            [this, input, apply = std::move(apply)](const std::string &) {
-              apply(input->getText());
-              lastLayoutWidth = -1;
-            });
-        row->addView(input);
-        body->addView(row);
-      };
-  const auto appendToggle = [this, body,
-                             &metrics](const i18n::Text &label, bool value,
-                                       std::function<void(bool)> set) {
-    body->addView(makeGameplaySkinChoiceRow(
-        metrics, label, true,
-        {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
-          .selected = !value,
-          .action =
-              [this, set]() mutable {
-                set(false);
-                lastLayoutWidth = -1;
-              }},
-         {.label = i18n::message("settings.skins.judgement_hud.on.label"), .selected = value, .action = [this, set]() mutable {
-            set(true);
-            lastLayoutWidth = -1;
-          }}}));
-  };
-  const auto appendChoices =
-      [this, body, &metrics](const i18n::Text &label,
-                             std::vector<GameplaySkinChoiceButton> choices) {
-        body->addView(makeGameplaySkinChoiceRow(metrics, label, true,
-                                                std::move(choices)));
-      };
-
-  appendHeading(i18n::message("settings.skins.application_judgement_hud.label"));
-  appendToggle(i18n::message("settings.skins.judgement_indicator.label"),
-               context.settings.judgementIndicatorEnabled,
-               [this](bool enabled) {
-                 context.settings.judgementIndicatorEnabled = enabled;
-                 persistSettings();
-               });
-  appendNumeric(
-      i18n::message("settings.skins.indicator_y.percent_label"),
-      std::to_string(
-          judgementIndicatorYToPercent(context.settings.judgementIndicatorY)),
-      [this](const std::string &text) {
-        context.settings.judgementIndicatorY = judgementIndicatorPercentToY(
-            std::clamp(sanitizeOffsetComponent(
-                           text, judgementIndicatorYToPercent(
-                                     context.settings.judgementIndicatorY)),
-                       0, 100));
-        persistSettings();
-      });
-  appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
-                std::to_string(judgementIndicatorWidthScaleToPercent(
-                    context.settings.judgementIndicatorWidthScale)),
-                [this](const std::string &text) {
-                  const int current = judgementIndicatorWidthScaleToPercent(
-                      context.settings.judgementIndicatorWidthScale);
-                  context.settings.judgementIndicatorWidthScale =
-                      judgementIndicatorWidthPercentToScale(std::clamp(
-                          sanitizeOffsetComponent(text, current), 50, 200));
-                  persistSettings();
-                });
-  appendNumeric(
-      i18n::message("settings.skins.indicator_range_ms.label"),
-      std::to_string(context.settings.judgementIndicatorRangeMilliseconds),
-      [this](const std::string &text) {
-        context.settings.judgementIndicatorRangeMilliseconds =
-            clampJudgementIndicatorRangeMilliseconds(sanitizeOffsetComponent(
-                text, context.settings.judgementIndicatorRangeMilliseconds));
-        persistSettings();
-      });
-
-  if (includeBuiltInOnlySettings) {
-    appendChoices(
-        i18n::message("settings.skins.indicator_layout.label"),
-        {{.label = i18n::message("settings.skins.hud.position.world.label"),
-          .selected = context.settings.judgementIndicatorRenderMode ==
-                      AppSettings::JudgementIndicatorRenderMode::World3D,
-          .action =
-              [this]() {
-                context.settings.judgementIndicatorRenderMode =
-                    AppSettings::JudgementIndicatorRenderMode::World3D;
-                persistSettings();
-                lastLayoutWidth = -1;
-              }},
-         {.label = i18n::message("settings.skins.hud.position.overlay.label"),
-          .selected = context.settings.judgementIndicatorRenderMode ==
-                      AppSettings::JudgementIndicatorRenderMode::Hud2D,
-          .action = [this]() {
-            context.settings.judgementIndicatorRenderMode =
-                AppSettings::JudgementIndicatorRenderMode::Hud2D;
-            persistSettings();
-            lastLayoutWidth = -1;
-          }}});
+  if (skinType == -5 || skinType == -7) {
+    dropdownOptions.push_back({.id = "@follow-original",
+        .label = i18n::message("settings.skins.follow_original.label",
+            {{"mode", skinType == -5 ? "5K1S" : "7K1S"}}),
+        .available = ordinaryActionsEnabled});
   }
-
-  appendToggle(i18n::message("settings.skins.judgement_counter.label"), context.settings.judgementCounterEnabled,
-               [this](bool enabled) {
-                 context.settings.judgementCounterEnabled = enabled;
-                 persistSettings();
-               });
-  appendChoices(i18n::message("settings.skins.counter_position.label"),
-                {{.label = i18n::message("settings.skins.top.label"),
-                  .selected = context.settings.judgementCounterPosition ==
-                              AppSettings::JudgementCounterPosition::Top,
-                  .action =
-                      [this]() {
-                        context.settings.judgementCounterPosition =
-                            AppSettings::JudgementCounterPosition::Top;
-                        persistSettings();
-                        lastLayoutWidth = -1;
-                      }},
-                 {.label = i18n::message("settings.skins.left.label"),
-                  .selected = context.settings.judgementCounterPosition ==
-                              AppSettings::JudgementCounterPosition::Left,
-                  .action =
-                      [this]() {
-                        context.settings.judgementCounterPosition =
-                            AppSettings::JudgementCounterPosition::Left;
-                        persistSettings();
-                        lastLayoutWidth = -1;
-                      }},
-                 {.label = i18n::message("settings.skins.right.label"),
-                  .selected = context.settings.judgementCounterPosition ==
-                              AppSettings::JudgementCounterPosition::Right,
-                  .action = [this]() {
-                    context.settings.judgementCounterPosition =
-                        AppSettings::JudgementCounterPosition::Right;
-                    persistSettings();
-                    lastLayoutWidth = -1;
-                  }}});
-
-  if (!includeBuiltInOnlySettings) {
-    return;
+  dropdownEntries.reserve(selectableRows.size());
+  for (const auto *candidate : selectableRows) {
+    dropdownEntries.push_back(candidate->entry);
+    const std::string displayName = candidate->metadata.displayName.empty()
+                                        ? candidate->entry.packageRelativePath
+                                        : candidate->metadata.displayName;
+    dropdownOptions.push_back(
+        {.id = candidate->entry.collisionKey,
+         .label = displayName + " — " + candidate->entry.package.directoryName,
+         .available = ordinaryActionsEnabled});
   }
-
-  appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
-  appendNumeric(
-      i18n::message("settings.skins.judge_text_y.percent_label"),
-      std::to_string(judgementTextYToPercent(context.settings.judgementTextY)),
-      [this](const std::string &text) {
-        context.settings.judgementTextY = judgementTextPercentToY(std::clamp(
-            sanitizeOffsetComponent(
-                text, judgementTextYToPercent(context.settings.judgementTextY)),
-            0, 100));
-        persistSettings();
-      });
-  const auto timingChoices =
-      [this](AppSettings::JudgementTimingDisplayCriteria value, auto assign) {
-        std::vector<GameplaySkinChoiceButton> choices;
-        for (const auto criteria :
-             {AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow,
-              AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
-              AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow,
-              AppSettings::JudgementTimingDisplayCriteria::BadOrBelow,
-              AppSettings::JudgementTimingDisplayCriteria::Off}) {
-          choices.push_back(
-              {.label = formatJudgementTimingDisplayCriteriaLabel(criteria),
-               .selected = value == criteria,
-               .action = [this, criteria, assign]() mutable {
-                 assign(criteria);
-                 persistSettings();
-                 lastLayoutWidth = -1;
-               }});
-        }
-        return choices;
-      };
-  appendChoices(
-      "FAST/SLOW",
-      timingChoices(
-          context.settings.judgementTimingFastSlowCriteria,
-          [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
-            context.settings.judgementTimingFastSlowCriteria = criteria;
-          }));
-  appendChoices(
-      "+/- ms",
-      timingChoices(
-          context.settings.judgementTimingMillisecondsCriteria,
-          [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
-            context.settings.judgementTimingMillisecondsCriteria = criteria;
-          }));
-
-  appendHeading(i18n::message("settings.skins.gauge.label"));
-  appendChoices(i18n::message("settings.skins.gauge_position.label"),
-                {{.label = i18n::message("settings.skins.world.label"),
-                  .selected = context.settings.gaugeBarPosition ==
-                              AppSettings::GaugeBarPosition::World,
-                  .action =
-                      [this]() {
-                        context.settings.gaugeBarPosition =
-                            AppSettings::GaugeBarPosition::World;
-                        persistSettings();
-                        lastLayoutWidth = -1;
-                      }},
-                 {.label = i18n::message("settings.skins.left_hud.label"),
-                  .selected = context.settings.gaugeBarPosition ==
-                              AppSettings::GaugeBarPosition::Left,
-                  .action =
-                      [this]() {
-                        context.settings.gaugeBarPosition =
-                            AppSettings::GaugeBarPosition::Left;
-                        persistSettings();
-                        lastLayoutWidth = -1;
-                      }},
-                 {.label = i18n::message("settings.skins.right_hud.label"),
-                  .selected = context.settings.gaugeBarPosition ==
-                              AppSettings::GaugeBarPosition::Right,
-                  .action = [this]() {
-                    context.settings.gaugeBarPosition =
-                        AppSettings::GaugeBarPosition::Right;
-                    persistSettings();
-                    lastLayoutWidth = -1;
-                  }}});
+  auto *skinDropdown = new DropdownView(
+      {.onOpenChanged =
+           [this](bool open) {
+             gameplaySkinTraitDropdownOpen = open;
+           },
+       .onOptionSelectedResult =
+           [this, skinType,
+            entries = std::move(dropdownEntries)](const std::string &id) {
+             gameplaySkinTraitDropdownOpen = false;
+             gameplaySkinConfigurationDropdownOpenKey.clear();
+             if (id == "@follow-original") {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->followGameplayTrait(skinType));
+             }
+             if (id.empty()) {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->clearGameplayTrait(skinType));
+             }
+             const auto selectedEntry = std::ranges::find_if(
+                 entries, [&id](const auto &entry) {
+                   return entry.collisionKey == id;
+                 });
+             if (selectedEntry != entries.end()) {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->selectGameplayTrait(
+                       skinType, *selectedEntry));
+             }
+             return false;
+           }},
+      overlayPortal);
+  skinDropdown->refresh(
+      {.label = "",
+       .selectedId = followsOriginal ? "@follow-original" : selectedRow ? selectedRow->entry.collisionKey : "",
+       .options = std::move(dropdownOptions),
+       .open = gameplaySkinTraitDropdownOpen,
+       .enabled = ordinaryActionsEnabled,
+       .maxVisibleItems = metrics.compact ? 5 : 7,
+       .menuWidth = menuWidth});
+  return skinDropdown;
 }
 
 void SettingsScene::appendBuiltInGameplayTraitSettings(
-    View *body, const LayoutMetrics &metrics, int keyMode) {
+    View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
   body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
                                 ui_theme::lime()));
   const auto appendNumeric =
       [this, body, &metrics](const i18n::Text &label, const std::string &value,
+                             const std::string &defaultValue,
                              std::function<void(const std::string &)> apply) {
         auto *row = new View();
         row->setFlexDirection(FlexDirection::Row);
@@ -797,52 +548,567 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
         input->setEditingText(value);
         input->onEditingFinished(
-            [this, input, apply = std::move(apply)](const std::string &) {
+            [this, input, apply](const std::string &) {
               apply(input->getText());
               lastLayoutWidth = -1;
             });
         row->addView(input);
+        auto *reset = makeResetButton(metrics);
+        reset->setOnClickListener([this, apply, defaultValue]() {
+          apply(defaultValue);
+          lastLayoutWidth = -1;
+        });
+        row->addView(reset);
         body->addView(row);
       };
 
+  if (keyMode == -5 || keyMode == -7) {
+    const bool hide = keyMode == -5 ? context.settings.presentation().hideEmptyScratchLane5K
+                                     : context.settings.presentation().hideEmptyScratchLane7K;
+    const auto apply = [this, keyMode](bool value) {
+      auto &settings = context.settings.presentation();
+      (keyMode == -5 ? settings.hideEmptyScratchLane5K : settings.hideEmptyScratchLane7K) = value;
+      persistSettings();
+      lastLayoutWidth = -1;
+    };
+    body->addView(makeGameplaySkinChoiceRow(
+        metrics, i18n::message("settings.skins.hide_empty_scratch.label"), true,
+        {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
+          .selected = !hide, .action = [apply] { apply(false); }},
+         {.label = i18n::message("settings.skins.judgement_hud.on.label"),
+          .selected = hide, .action = [apply] { apply(true); }}}));
+  }
+  if (followsOriginal) {
+    body->addView(makeWrappedText(
+        i18n::message("settings.skins.follow_original.description",
+            {{"mode", keyMode == -5 ? "5K1S" : "7K1S"}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    return;
+  }
+  if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
+    body->addView(buildScratchLanePositionControl(metrics));
+  }
   appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
-                formatFloatValue(context.settings.laneAngleDegrees, 1),
+                formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
+                formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1),
                 [this](const std::string &text) {
-                  context.settings.laneAngleDegrees = sanitizeViewportComponent(
-                      text, context.settings.laneAngleDegrees,
-                      AppSettings::kMinLaneAngleDegrees,
-                      AppSettings::kMaxLaneAngleDegrees);
+                  context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
+                      text, context.settings.presentation().laneAngleDegrees,
+                      context.settings.geometryPolicy().angle.minimum,
+                      context.settings.geometryPolicy().angle.maximum);
                   persistSettings();
                 });
-  appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.laneLength, 1),
+  appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
+                formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1),
                 [this](const std::string &text) {
-                  context.settings.laneLength = sanitizeViewportComponent(
-                      text, context.settings.laneLength,
-                      AppSettings::kMinLaneLength, AppSettings::kMaxLaneLength);
+                  context.settings.presentation().laneLength = sanitizeViewportComponent(
+                      text, context.settings.presentation().laneLength,
+                      context.settings.geometryPolicy().length.minimum, context.settings.geometryPolicy().length.maximum);
                   persistSettings();
                 });
   appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
-                std::to_string(context.settings.laneBeamLengthPercent),
+                std::to_string(context.settings.presentation().laneBeamLengthPercent),
+                std::to_string(AppSettings::kDefaultLaneBeamLengthPercent),
                 [this](const std::string &text) {
-                  context.settings.laneBeamLengthPercent =
+                  context.settings.presentation().laneBeamLengthPercent =
                       clampLaneBeamLengthPercent(sanitizeOffsetComponent(
-                          text, context.settings.laneBeamLengthPercent));
+                          text, context.settings.presentation().laneBeamLengthPercent));
                   persistSettings();
                 });
-  appendNumeric(i18n::message("settings.skins.play_area_width.key_mode", {{"keys", std::to_string(keyMode)}}),
+  appendNumeric(i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
                 formatPlayAreaWidthLabel(
                     context.settings.playAreaWidthForKeyMode(keyMode)),
+                formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue),
                 [this, keyMode](const std::string &text) {
                   context.settings.setPlayAreaWidthForKeyMode(
                       keyMode,
                       sanitizeViewportComponent(
                           text,
                           context.settings.playAreaWidthForKeyMode(keyMode),
-                          AppSettings::kMinPlayAreaWidth,
-                          AppSettings::kMaxPlayAreaWidth));
+                          context.settings.geometryPolicy().width.minimum,
+                          context.settings.geometryPolicy().width.maximum));
                   persistSettings();
                 });
   appendSelectedSkinHudSettings(body, metrics, true);
+}
+
+void SettingsScene::appendGameplaySkinCatalogSettings(
+    View *entryBody, const LayoutMetrics &metrics,
+    const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled) {
+  const auto appendOption = [&](const auto &option) {
+    if (option.choices.empty()) {
+      return;
+    }
+    auto selected = option.choices.begin();
+    if (const auto configured = row.settings.options.find(option.name);
+        configured != row.settings.options.end()) {
+      if (const auto match =
+              std::find_if(option.choices.begin(), option.choices.end(),
+                           [&](const auto &choice) {
+                             return choice.value == configured->second;
+                           });
+          match != option.choices.end()) {
+        selected = match;
+      }
+    } else if (const auto match =
+                   std::find_if(option.choices.begin(), option.choices.end(),
+                                [&](const auto &choice) {
+                                  return choice.label == option.defaultLabel;
+                                });
+               match != option.choices.end()) {
+      selected = match;
+    }
+    const auto selectedIndex = static_cast<std::size_t>(
+        std::distance(option.choices.begin(), selected));
+    const bool hasBeatorajaRandomChoice =
+        !option.choices.empty() && option.choices.back().label == "Random" &&
+        option.choices.back().value == -1;
+    if (option.choices.size() >= 3 || hasBeatorajaRandomChoice) {
+      const std::string dropdownKey =
+          row.entry.collisionKey + "|option|" + option.name;
+      std::vector<DropdownView::Option> options;
+      std::vector<int> values;
+      options.reserve(option.choices.size());
+      values.reserve(option.choices.size());
+      for (std::size_t index = 0; index < option.choices.size(); ++index) {
+        options.push_back(
+            {.id = std::to_string(index),
+             .label = option.choices[index].label,
+             .available = ordinaryActionsEnabled});
+        values.push_back(option.choices[index].value);
+      }
+      auto *dropdown = new DropdownView(
+          {.onOpenChanged =
+               [this, dropdownKey](bool open) {
+                 gameplaySkinConfigurationDropdownOpenKey =
+                     open ? dropdownKey : std::string{};
+               },
+           .onOptionSelectedResult =
+               [this, entry = row.entry, name = option.name,
+                values = std::move(values)](const std::string &id) {
+                 gameplaySkinConfigurationDropdownOpenKey.clear();
+                 std::size_t index = 0;
+                 const auto parsed = std::from_chars(
+                     id.data(), id.data() + id.size(), index);
+                 if (parsed.ec == std::errc{} &&
+                     parsed.ptr == id.data() + id.size() &&
+                     index < values.size()) {
+                   return handleGameplaySkinActionResult(
+                       gameplaySkinSettingsController->setOption(
+                           entry, name, values[index]));
+                 }
+                 return false;
+               }},
+          overlayPortal);
+      dropdown->refresh(
+          {.label = "",
+           .selectedId = std::to_string(selectedIndex),
+           .options = std::move(options),
+           .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
+           .enabled = ordinaryActionsEnabled,
+           .maxVisibleItems = metrics.compact ? 5 : 7,
+           .menuWidth = 0.0f});
+      auto *dropdownRow = new View();
+      dropdownRow->setFlexDirection(FlexDirection::Row);
+      dropdownRow->setFlexWrap(YGWrapWrap);
+      dropdownRow->setAlignItems(YGAlignCenter);
+      dropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
+      auto *dropdownLabel =
+          makeText(option.name, metrics.smallTextSize,
+                   ui_theme::textSecondary(), TextView::LEFT,
+                   TextView::MIDDLE);
+      dropdownLabel->setMinWidth(0.0f);
+      dropdownLabel->setFlexShrink(1.0f);
+      dropdownRow->addView(dropdownLabel);
+      dropdownRow->addView(dropdown);
+      entryBody->addView(dropdownRow);
+    } else {
+      std::vector<GameplaySkinChoiceButton> choices;
+      choices.reserve(option.choices.size());
+      for (const auto &choice : option.choices) {
+        choices.push_back(
+            {.label = choice.label,
+             .selected = choice.value == selected->value,
+             .tryAction = [this, entry = row.entry, name = option.name,
+                           value = choice.value]() {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->setOption(entry, name,
+                                                             value));
+             }});
+      }
+      entryBody->addView(makeGameplaySkinChoiceRow(
+          metrics, option.name, ordinaryActionsEnabled, std::move(choices)));
+    }
+  };
+
+  const auto appendFile = [&](const auto &file) {
+    if (file.choices.empty()) {
+      return;
+    }
+    std::string selected = file.defaultValue;
+    if (const auto configured = row.settings.filePaths.find(file.name);
+        configured != row.settings.filePaths.end()) {
+      selected = configured->second;
+    }
+    auto current =
+        std::find(file.choices.begin(), file.choices.end(), selected);
+    if (current == file.choices.end()) {
+      current = file.choices.begin();
+    }
+    const auto selectedIndex = static_cast<std::size_t>(
+        std::distance(file.choices.begin(), current));
+    if (file.choices.size() >= 3) {
+      const std::string dropdownKey =
+          row.entry.collisionKey + "|file|" + file.name;
+      std::vector<DropdownView::Option> options;
+      options.reserve(file.choices.size());
+      for (std::size_t index = 0; index < file.choices.size(); ++index) {
+        options.push_back(
+            {.id = std::to_string(index),
+             .label = file.choices[index],
+             .available = ordinaryActionsEnabled});
+      }
+      auto *dropdown = new DropdownView(
+          {.onOpenChanged =
+               [this, dropdownKey](bool open) {
+                 gameplaySkinConfigurationDropdownOpenKey =
+                     open ? dropdownKey : std::string{};
+               },
+           .onOptionSelectedResult =
+               [this, entry = row.entry, name = file.name,
+                choices = file.choices](const std::string &id) {
+                 gameplaySkinConfigurationDropdownOpenKey.clear();
+                 std::size_t index = 0;
+                 const auto parsed = std::from_chars(
+                     id.data(), id.data() + id.size(), index);
+                 if (parsed.ec == std::errc{} &&
+                     parsed.ptr == id.data() + id.size() &&
+                     index < choices.size()) {
+                   return handleGameplaySkinActionResult(
+                       gameplaySkinSettingsController->setFileChoice(
+                           entry, name, choices[index]));
+                 }
+                 return false;
+               }},
+          overlayPortal);
+      dropdown->refresh(
+          {.label = "",
+           .selectedId = std::to_string(selectedIndex),
+           .options = std::move(options),
+           .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
+           .enabled = ordinaryActionsEnabled,
+           .maxVisibleItems = metrics.compact ? 5 : 7,
+           .menuWidth = 0.0f});
+      auto *dropdownRow = new View();
+      dropdownRow->setFlexDirection(FlexDirection::Row);
+      dropdownRow->setFlexWrap(YGWrapWrap);
+      dropdownRow->setAlignItems(YGAlignCenter);
+      dropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
+      auto *dropdownLabel =
+          makeText(file.name, metrics.smallTextSize, ui_theme::textSecondary(),
+                   TextView::LEFT, TextView::MIDDLE);
+      dropdownLabel->setMinWidth(0.0f);
+      dropdownLabel->setFlexShrink(1.0f);
+      dropdownRow->addView(dropdownLabel);
+      dropdownRow->addView(dropdown);
+      entryBody->addView(dropdownRow);
+    } else {
+      std::vector<GameplaySkinChoiceButton> choices;
+      choices.reserve(file.choices.size());
+      for (const auto &choice : file.choices) {
+        choices.push_back(
+            {.label = choice,
+             .selected = choice == *current,
+             .tryAction = [this, entry = row.entry, name = file.name,
+                           value = choice]() {
+               return handleGameplaySkinActionResult(
+                   gameplaySkinSettingsController->setFileChoice(entry, name,
+                                                                 value));
+             }});
+      }
+      entryBody->addView(makeGameplaySkinChoiceRow(
+          metrics, file.name, ordinaryActionsEnabled, std::move(choices)));
+    }
+  };
+
+  const auto appendOffset = [&](const auto &offset) {
+    skin::ConfigOffset configured{};
+    if (const auto saved = row.settings.offsets.find(offset.name);
+        saved != row.settings.offsets.end()) {
+      configured = saved->second;
+    }
+    auto *offsetControls = new View();
+    offsetControls->setFlexDirection(FlexDirection::Row);
+    offsetControls->setFlexWrap(YGWrapWrap);
+    offsetControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    offsetControls->addView(makeWrappedText(
+        offset.name, metrics.smallTextSize, ui_theme::textSecondary()));
+    auto addOffsetComponent =
+        [this, &metrics, &row, ordinaryActionsEnabled, offsetControls,
+         &offset,
+         configured](const i18n::Text &label, skin::OffsetPermissionMask permission,
+                     int skin::ConfigOffset::*member) {
+          if ((offset.permissions & permission) == 0) {
+            return;
+          }
+          auto *group = new View();
+          group->setFlexDirection(FlexDirection::Column);
+          group->setGap(metrics.compact ? 4.0f : 6.0f);
+          group->addView(makeWrappedText(label, metrics.smallTextSize,
+                                         ui_theme::textSecondary()));
+          auto *input =
+              makeTextInput(metrics, metrics.compact ? 96 : 112);
+          input->setEditingText(std::to_string(configured.*member));
+          if (ordinaryActionsEnabled) {
+            input->onEditingFinished(
+                [this, input, entry = row.entry, name = offset.name,
+                 member](const std::string &) {
+                  auto configured = gameplaySkinOffsetForEntry(entry, name);
+                  const int value = skin::gameplaySkinSanitizedOffsetComponent(
+                      input->getText(), configured.*member);
+                  configured.*member = value;
+                  if (handleGameplaySkinActionResult(
+                          gameplaySkinSettingsController->setOffset(
+                              entry, name, configured))) {
+                    input->setEditingText(std::to_string(value));
+                  }
+                });
+          }
+          group->addView(input);
+          offsetControls->addView(group);
+        };
+    addOffsetComponent("X", skin::kOffsetPermissionX, &skin::ConfigOffset::x);
+    addOffsetComponent("Y", skin::kOffsetPermissionY, &skin::ConfigOffset::y);
+    addOffsetComponent("W", skin::kOffsetPermissionW, &skin::ConfigOffset::w);
+    addOffsetComponent("H", skin::kOffsetPermissionH, &skin::ConfigOffset::h);
+    addOffsetComponent("R", skin::kOffsetPermissionR, &skin::ConfigOffset::r);
+    addOffsetComponent("A", skin::kOffsetPermissionA, &skin::ConfigOffset::a);
+    entryBody->addView(offsetControls);
+  };
+
+  for (const auto &catalogItem :
+       skin::gameplaySkinSettingsCatalogItems(row.metadata)) {
+    switch (catalogItem.kind) {
+    case skin::GameplaySkinCatalogItemKind::CategoryHeading:
+      entryBody->addView(makeWrappedText(
+          catalogItem.label, metrics.bodyTextSize, ui_theme::cyan()));
+      break;
+    case skin::GameplaySkinCatalogItemKind::Separator: {
+      auto *separator = new View();
+      separator->setHeight(metrics.compact ? 8.0f : 10.0f);
+      entryBody->addView(separator);
+      break;
+    }
+    case skin::GameplaySkinCatalogItemKind::Option:
+      if (catalogItem.declarationIndex < row.metadata.options.size()) {
+        appendOption(row.metadata.options[catalogItem.declarationIndex]);
+      }
+      break;
+    case skin::GameplaySkinCatalogItemKind::File:
+      if (catalogItem.declarationIndex < row.metadata.files.size()) {
+        appendFile(row.metadata.files[catalogItem.declarationIndex]);
+      }
+      break;
+    case skin::GameplaySkinCatalogItemKind::Offset:
+      if (catalogItem.declarationIndex < row.metadata.offsets.size()) {
+        appendOffset(row.metadata.offsets[catalogItem.declarationIndex]);
+      }
+      break;
+    }
+  }
+
+}
+
+void SettingsScene::appendGameplaySkinViewportSettings(
+    View *entryBody, const LayoutMetrics &metrics,
+    const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled) {
+  const auto target = skin::skinTargetTraitForType(row.metadata.skinType);
+  if (target && target->kind == skin::SkinTargetKind::Gameplay) {
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.label"), metrics.smallTextSize,
+        ui_theme::textSecondary()));
+    auto *framing = new View();
+    framing->setFlexDirection(FlexDirection::Row);
+    framing->setFlexWrap(YGWrapWrap);
+    framing->setGap(metrics.compact ? 8.0f : 10.0f);
+    const auto &saved = row.settings.viewport;
+    for (int mode = 0; mode < 3; ++mode) {
+      const bool selected = mode == 0 ? !saved.centerPlayArea
+                            : saved.centerPlayArea && saved.keepHudFixed == (mode == 2);
+      framing->addView(makeGameplaySkinAction(
+          metrics, i18n::message(mode == 0 ? "settings.skins.play_area.original"
+                                 : mode == 1 ? "settings.skins.play_area.whole"
+                                             : "settings.skins.play_area.only"),
+          ordinaryActionsEnabled,
+          [this, entry = row.entry, mode]() {
+            auto viewport = gameplaySkinViewportForEntry(entry);
+            viewport.centerPlayArea = mode != 0;
+            viewport.keepHudFixed = mode == 2;
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport));
+          }, selected ? ui_theme::lime() : ui_theme::textSecondary()));
+    }
+    entryBody->addView(framing);
+    auto *zoomRow = new View();
+    zoomRow->setFlexDirection(FlexDirection::Row);
+    zoomRow->setFlexWrap(YGWrapWrap);
+    zoomRow->setGap(metrics.compact ? 8.0f : 10.0f);
+    zoomRow->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.zoom",
+                      {{"percent", std::to_string(static_cast<int>(std::lround(saved.playAreaZoom * 100.0F)))}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    for (const float step : {-0.1F, 0.1F}) {
+      zoomRow->addView(makeGameplaySkinAction(
+          metrics, i18n::message(step < 0 ? "settings.skins.play_area.zoom_out"
+                                         : "settings.skins.play_area.zoom_in"),
+          ordinaryActionsEnabled && saved.centerPlayArea,
+          [this, entry = row.entry, step]() {
+            auto viewport = gameplaySkinViewportForEntry(entry);
+            viewport.playAreaZoom = std::clamp(
+                std::round((viewport.playAreaZoom + step) * 10.0F) / 10.0F,
+                skin::SkinProfileSettingsPolicy::minPlayAreaZoom,
+                skin::SkinProfileSettingsPolicy::maxPlayAreaZoom);
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport));
+          }));
+    }
+    entryBody->addView(zoomRow);
+    auto *paddingRow = new View();
+    paddingRow->setFlexDirection(FlexDirection::Row);
+    paddingRow->setFlexWrap(YGWrapWrap);
+    paddingRow->setGap(metrics.compact ? 8.0f : 10.0f);
+    paddingRow->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.bottom_padding",
+                      {{"percent", formatViewportComponent(saved.playAreaBottomPaddingPercent)}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    for (const float step : {-1.0F, 1.0F}) {
+      paddingRow->addView(makeGameplaySkinAction(
+          metrics, i18n::message(step < 0 ? "settings.skins.play_area.bottom_padding_decrease"
+                                         : "settings.skins.play_area.bottom_padding_increase"),
+          ordinaryActionsEnabled && saved.centerPlayArea,
+          [this, entry = row.entry, step]() {
+            auto viewport = gameplaySkinViewportForEntry(entry);
+            viewport.playAreaBottomPaddingPercent = std::clamp(
+                viewport.playAreaBottomPaddingPercent + step,
+                skin::SkinProfileSettingsPolicy::minPlayAreaBottomPaddingPercent,
+                skin::SkinProfileSettingsPolicy::maxPlayAreaBottomPaddingPercent);
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport));
+          }));
+    }
+    entryBody->addView(paddingRow);
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.bottom_padding_hint"), metrics.smallTextSize,
+        ui_theme::textMuted()));
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.hint"), metrics.smallTextSize,
+        ui_theme::textMuted()));
+  }
+  auto *customViewport = new View();
+  customViewport->setFlexDirection(FlexDirection::Row);
+  customViewport->setFlexWrap(YGWrapWrap);
+  customViewport->setGap(metrics.compact ? 8.0f : 10.0f);
+  customViewport->addView(makeGameplaySkinAction(
+      metrics, i18n::message("settings.skins.custom_base_fit.label"), ordinaryActionsEnabled,
+      [this, entry = row.entry]() {
+        const auto viewport = skin::gameplaySkinViewportWithCustomBase(
+            gameplaySkinViewportForEntry(entry),
+            skin::CustomViewportBase::Fit);
+        handleGameplaySkinActionResult(
+            gameplaySkinSettingsController->setViewport(entry, viewport));
+      }));
+  customViewport->addView(makeGameplaySkinAction(
+      metrics, i18n::message("settings.skins.custom_base_stretch.label"), ordinaryActionsEnabled,
+      [this, entry = row.entry]() {
+        const auto viewport = skin::gameplaySkinViewportWithCustomBase(
+            gameplaySkinViewportForEntry(entry),
+            skin::CustomViewportBase::Stretch);
+        handleGameplaySkinActionResult(
+            gameplaySkinSettingsController->setViewport(entry, viewport));
+      }));
+  auto addViewportComponent = [this, &metrics, &row, ordinaryActionsEnabled,
+                               customViewport](const i18n::Text &label, float value,
+                                               bool scale, bool horizontal) {
+    auto *group = new View();
+    group->setFlexDirection(FlexDirection::Column);
+    group->setGap(metrics.compact ? 4.0f : 6.0f);
+    group->addView(makeWrappedText(label, metrics.smallTextSize,
+                                   ui_theme::textSecondary()));
+    auto *input = makeTextInput(metrics, metrics.compact ? 132 : 156);
+    input->setEditingText(formatViewportComponent(value));
+    if (ordinaryActionsEnabled) {
+      input->onEditingFinished([this, input, entry = row.entry, scale,
+                                horizontal](const std::string &) {
+        const float minimum =
+            scale ? skin::SkinProfileSettingsPolicy::minCustomScale
+                  : skin::SkinProfileSettingsPolicy::minCustomTranslation;
+        const float maximum =
+            scale ? skin::SkinProfileSettingsPolicy::maxCustomScale
+                  : skin::SkinProfileSettingsPolicy::maxCustomTranslation;
+        auto viewport = gameplaySkinViewportForEntry(entry);
+        float &component =
+            scale ? (horizontal ? viewport.scaleX : viewport.scaleY)
+                  : (horizontal ? viewport.translateX : viewport.translateY);
+        component = skin::gameplaySkinSanitizedViewportComponent(
+            input->getText(), component, minimum, maximum);
+        viewport = skin::gameplaySkinViewportWithMode(
+            viewport, skin::ViewportMode::Custom);
+        if (handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport))) {
+          input->setEditingText(formatViewportComponent(component));
+        }
+      });
+    }
+    group->addView(input);
+    customViewport->addView(group);
+  };
+  addViewportComponent(i18n::message("settings.skins.custom_x.label"), row.settings.viewport.translateX, false,
+                       true);
+  addViewportComponent(i18n::message("settings.skins.custom_y.label"), row.settings.viewport.translateY, false,
+                       false);
+  addViewportComponent(i18n::message("settings.skins.custom_width.label"), row.settings.viewport.scaleX, true,
+                       true);
+  addViewportComponent(i18n::message("settings.skins.custom_height.label"), row.settings.viewport.scaleY, true,
+                       false);
+  entryBody->addView(customViewport);
+
+  auto *actions = new View();
+  actions->setFlexDirection(FlexDirection::Row);
+  actions->setFlexWrap(YGWrapWrap);
+  actions->setGap(metrics.compact ? 8.0f : 10.0f);
+  actions->addView(makeGameplaySkinAction(
+      metrics, i18n::message("settings.skins.fit.label"), ordinaryActionsEnabled,
+      [this, entry = row.entry]() {
+        const auto viewport = skin::gameplaySkinViewportWithMode(
+            gameplaySkinViewportForEntry(entry), skin::ViewportMode::Fit);
+        handleGameplaySkinActionResult(
+            gameplaySkinSettingsController->setViewport(entry, viewport));
+      }));
+  actions->addView(makeGameplaySkinAction(
+      metrics, i18n::message("settings.skins.stretch.label"), ordinaryActionsEnabled,
+      [this, entry = row.entry]() {
+        const auto viewport = skin::gameplaySkinViewportWithMode(
+            gameplaySkinViewportForEntry(entry),
+            skin::ViewportMode::Stretch);
+        handleGameplaySkinActionResult(
+            gameplaySkinSettingsController->setViewport(entry, viewport));
+      }));
+  actions->addView(makeGameplaySkinAction(
+      metrics, i18n::message("settings.skins.custom.label"), ordinaryActionsEnabled,
+      [this, entry = row.entry]() {
+        const auto viewport = skin::gameplaySkinViewportWithMode(
+            gameplaySkinViewportForEntry(entry), skin::ViewportMode::Custom);
+        handleGameplaySkinActionResult(
+            gameplaySkinSettingsController->setViewport(entry, viewport));
+      }));
+  actions->addView(makeGameplaySkinAction(
+      metrics, i18n::message("settings.skins.reset_layout.label"), ordinaryActionsEnabled,
+      [this, entry = row.entry]() {
+        handleGameplaySkinActionResult(
+            gameplaySkinSettingsController->resetLayout(entry));
+      },
+      ui_theme::coral()));
+  entryBody->addView(actions);
 }
 
 View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
@@ -1191,76 +1457,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       traitLabel + " skin", metrics.bodyTextSize,
       ui_theme::textPrimary()));
 
-  std::vector<const skin::GameplaySkinEntryRow *> selectableRows;
-  for (const auto &candidate : snapshot.entries) {
-    if (skin::gameplaySkinEntrySelectableForTarget(candidate, *activeTrait)) {
-      selectableRows.push_back(&candidate);
-    }
-  }
-  const auto selected = snapshot.selectedSkinEntries.find(
-      gameplaySkinActiveTraitSkinType);
-  const skin::GameplaySkinEntryRow *selectedRow = nullptr;
-  if (selected != snapshot.selectedSkinEntries.end()) {
-    const auto selectedCandidate = std::ranges::find_if(
-        selectableRows, [&selected](const auto *candidate) {
-          return candidate->entry == selected->second;
-        });
-    if (selectedCandidate != selectableRows.end()) {
-      selectedRow = *selectedCandidate;
-    }
-  }
-
-  std::vector<skin::SkinEntryId> dropdownEntries;
-  std::vector<DropdownView::Option> dropdownOptions = {
-      {.id = "", .label = i18n::message("settings.skins.built_in.label"), .available = ordinaryActionsEnabled},
-  };
-  dropdownEntries.reserve(selectableRows.size());
-  for (const auto *candidate : selectableRows) {
-    dropdownEntries.push_back(candidate->entry);
-    const std::string displayName = candidate->metadata.displayName.empty()
-                                        ? candidate->entry.packageRelativePath
-                                        : candidate->metadata.displayName;
-    dropdownOptions.push_back(
-        {.id = candidate->entry.collisionKey,
-         .label = displayName + " — " + candidate->entry.package.directoryName,
-         .available = ordinaryActionsEnabled});
-  }
-  auto *skinDropdown = new DropdownView(
-      {.onOpenChanged =
-           [this](bool open) {
-             gameplaySkinTraitDropdownOpen = open;
-           },
-       .onOptionSelectedResult =
-           [this, skinType = gameplaySkinActiveTraitSkinType,
-            entries = std::move(dropdownEntries)](const std::string &id) {
-             gameplaySkinTraitDropdownOpen = false;
-             gameplaySkinConfigurationDropdownOpenKey.clear();
-             if (id.empty()) {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->clearGameplayTrait(skinType));
-             }
-             const auto selectedEntry = std::ranges::find_if(
-                 entries, [&id](const auto &entry) {
-                   return entry.collisionKey == id;
-                 });
-             if (selectedEntry != entries.end()) {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->selectGameplayTrait(
-                       skinType, *selectedEntry));
-             }
-             return false;
-           }},
-      overlayPortal);
-  skinDropdown->refresh(
-      {.label = "",
-       .selectedId = selectedRow ? selectedRow->entry.collisionKey : "",
-       .options = std::move(dropdownOptions),
-       .open = gameplaySkinTraitDropdownOpen,
-       .enabled = ordinaryActionsEnabled,
-       .maxVisibleItems = metrics.compact ? 5 : 7,
-       .menuWidth = static_cast<float>(
-           std::max(220, metrics.cardsWidth - traitTabWidth -
-                             metrics.secondaryGap - metrics.cardPadding * 2))});
+  const auto selection = skin::gameplaySkinSelectionForTarget(snapshot, *activeTrait);
+  const auto &selectableRows = selection.entries;
+  const auto *selectedRow = selection.selectedRow;
+  const bool followsOriginal = selection.followsOriginal;
+  auto *skinDropdown = buildGameplaySkinSelectionDropdown(
+      metrics, activeTrait->skinType, selection, ordinaryActionsEnabled,
+      static_cast<float>(std::max(220, metrics.cardsWidth - traitTabWidth -
+                                         metrics.secondaryGap - metrics.cardPadding * 2)));
   auto *skinDropdownRow = new View();
   skinDropdownRow->setFlexDirection(FlexDirection::Row);
   skinDropdownRow->setFlexWrap(YGWrapWrap);
@@ -1274,8 +1478,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   skinDropdownRow->addView(skinDropdownLabel);
   skinDropdownRow->addView(skinDropdown);
   traitPanel->addView(skinDropdownRow);
-  if (selected != snapshot.selectedSkinEntries.end() &&
-      selectedRow == nullptr) {
+  if (selection.hasSelectedEntry && selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
         i18n::message("settings.skins.selection.missing_skin_notice"),
         metrics.smallTextSize, ui_theme::coral()));
@@ -1286,7 +1489,12 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         metrics.smallTextSize, ui_theme::textSecondary()));
   }
 
-  if (selectedRow != nullptr) {
+  if (followsOriginal && selection.hasSelectedEntry) {
+    traitPanel->addView(makeWrappedText(
+        i18n::message("settings.skins.follow_original.description",
+            {{"mode", gameplaySkinActiveTraitSkinType == -5 ? "5K1S" : "7K1S"}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+  } else if (selectedRow != nullptr) {
     const auto &row = *selectedRow;
     auto *entryBody = new View();
     entryBody->setFlexDirection(FlexDirection::Column);
@@ -1331,355 +1539,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                          ui_theme::textSecondary()));
     }
 
-    const auto appendOption = [&](const auto &option) {
-      if (option.choices.empty()) {
-        return;
-      }
-      auto selected = option.choices.begin();
-      if (const auto configured = row.settings.options.find(option.name);
-          configured != row.settings.options.end()) {
-        if (const auto match =
-                std::find_if(option.choices.begin(), option.choices.end(),
-                             [&](const auto &choice) {
-                               return choice.value == configured->second;
-                             });
-            match != option.choices.end()) {
-          selected = match;
-        }
-      } else if (const auto match =
-                     std::find_if(option.choices.begin(), option.choices.end(),
-                                  [&](const auto &choice) {
-                                    return choice.label == option.defaultLabel;
-                                  });
-                 match != option.choices.end()) {
-        selected = match;
-      }
-      const auto selectedIndex = static_cast<std::size_t>(
-          std::distance(option.choices.begin(), selected));
-      const bool hasBeatorajaRandomChoice =
-          !option.choices.empty() && option.choices.back().label == "Random" &&
-          option.choices.back().value == -1;
-      if (option.choices.size() >= 3 || hasBeatorajaRandomChoice) {
-        const std::string dropdownKey =
-            row.entry.collisionKey + "|option|" + option.name;
-        std::vector<DropdownView::Option> options;
-        std::vector<int> values;
-        options.reserve(option.choices.size());
-        values.reserve(option.choices.size());
-        for (std::size_t index = 0; index < option.choices.size(); ++index) {
-          options.push_back(
-              {.id = std::to_string(index),
-               .label = option.choices[index].label,
-               .available = ordinaryActionsEnabled});
-          values.push_back(option.choices[index].value);
-        }
-        auto *dropdown = new DropdownView(
-            {.onOpenChanged =
-                 [this, dropdownKey](bool open) {
-                   gameplaySkinConfigurationDropdownOpenKey =
-                       open ? dropdownKey : std::string{};
-                 },
-             .onOptionSelectedResult =
-                 [this, entry = row.entry, name = option.name,
-                  values = std::move(values)](const std::string &id) {
-                   gameplaySkinConfigurationDropdownOpenKey.clear();
-                   std::size_t index = 0;
-                   const auto parsed = std::from_chars(
-                       id.data(), id.data() + id.size(), index);
-                   if (parsed.ec == std::errc{} &&
-                       parsed.ptr == id.data() + id.size() &&
-                       index < values.size()) {
-                     return handleGameplaySkinActionResult(
-                         gameplaySkinSettingsController->setOption(
-                             entry, name, values[index]));
-                   }
-                   return false;
-                 }},
-            overlayPortal);
-        dropdown->refresh(
-            {.label = "",
-             .selectedId = std::to_string(selectedIndex),
-             .options = std::move(options),
-             .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
-             .enabled = ordinaryActionsEnabled,
-             .maxVisibleItems = metrics.compact ? 5 : 7,
-             .menuWidth = 0.0f});
-        auto *dropdownRow = new View();
-        dropdownRow->setFlexDirection(FlexDirection::Row);
-        dropdownRow->setFlexWrap(YGWrapWrap);
-        dropdownRow->setAlignItems(YGAlignCenter);
-        dropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
-        auto *dropdownLabel =
-            makeText(option.name, metrics.smallTextSize,
-                     ui_theme::textSecondary(), TextView::LEFT,
-                     TextView::MIDDLE);
-        dropdownLabel->setMinWidth(0.0f);
-        dropdownLabel->setFlexShrink(1.0f);
-        dropdownRow->addView(dropdownLabel);
-        dropdownRow->addView(dropdown);
-        entryBody->addView(dropdownRow);
-      } else {
-        std::vector<GameplaySkinChoiceButton> choices;
-        choices.reserve(option.choices.size());
-        for (const auto &choice : option.choices) {
-          choices.push_back(
-              {.label = choice.label,
-               .selected = choice.value == selected->value,
-               .tryAction = [this, entry = row.entry, name = option.name,
-                             value = choice.value]() {
-                 return handleGameplaySkinActionResult(
-                     gameplaySkinSettingsController->setOption(entry, name,
-                                                               value));
-               }});
-        }
-        entryBody->addView(makeGameplaySkinChoiceRow(
-            metrics, option.name, ordinaryActionsEnabled, std::move(choices)));
-      }
-    };
-
-    const auto appendFile = [&](const auto &file) {
-      if (file.choices.empty()) {
-        return;
-      }
-      std::string selected = file.defaultValue;
-      if (const auto configured = row.settings.filePaths.find(file.name);
-          configured != row.settings.filePaths.end()) {
-        selected = configured->second;
-      }
-      auto current =
-          std::find(file.choices.begin(), file.choices.end(), selected);
-      if (current == file.choices.end()) {
-        current = file.choices.begin();
-      }
-      const auto selectedIndex = static_cast<std::size_t>(
-          std::distance(file.choices.begin(), current));
-      if (file.choices.size() >= 3) {
-        const std::string dropdownKey =
-            row.entry.collisionKey + "|file|" + file.name;
-        std::vector<DropdownView::Option> options;
-        options.reserve(file.choices.size());
-        for (std::size_t index = 0; index < file.choices.size(); ++index) {
-          options.push_back(
-              {.id = std::to_string(index),
-               .label = file.choices[index],
-               .available = ordinaryActionsEnabled});
-        }
-        auto *dropdown = new DropdownView(
-            {.onOpenChanged =
-                 [this, dropdownKey](bool open) {
-                   gameplaySkinConfigurationDropdownOpenKey =
-                       open ? dropdownKey : std::string{};
-                 },
-             .onOptionSelectedResult =
-                 [this, entry = row.entry, name = file.name,
-                  choices = file.choices](const std::string &id) {
-                   gameplaySkinConfigurationDropdownOpenKey.clear();
-                   std::size_t index = 0;
-                   const auto parsed = std::from_chars(
-                       id.data(), id.data() + id.size(), index);
-                   if (parsed.ec == std::errc{} &&
-                       parsed.ptr == id.data() + id.size() &&
-                       index < choices.size()) {
-                     return handleGameplaySkinActionResult(
-                         gameplaySkinSettingsController->setFileChoice(
-                             entry, name, choices[index]));
-                   }
-                   return false;
-                 }},
-            overlayPortal);
-        dropdown->refresh(
-            {.label = "",
-             .selectedId = std::to_string(selectedIndex),
-             .options = std::move(options),
-             .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
-             .enabled = ordinaryActionsEnabled,
-             .maxVisibleItems = metrics.compact ? 5 : 7,
-             .menuWidth = 0.0f});
-        auto *dropdownRow = new View();
-        dropdownRow->setFlexDirection(FlexDirection::Row);
-        dropdownRow->setFlexWrap(YGWrapWrap);
-        dropdownRow->setAlignItems(YGAlignCenter);
-        dropdownRow->setGap(metrics.compact ? 8.0f : 10.0f);
-        auto *dropdownLabel =
-            makeText(file.name, metrics.smallTextSize, ui_theme::textSecondary(),
-                     TextView::LEFT, TextView::MIDDLE);
-        dropdownLabel->setMinWidth(0.0f);
-        dropdownLabel->setFlexShrink(1.0f);
-        dropdownRow->addView(dropdownLabel);
-        dropdownRow->addView(dropdown);
-        entryBody->addView(dropdownRow);
-      } else {
-        std::vector<GameplaySkinChoiceButton> choices;
-        choices.reserve(file.choices.size());
-        for (const auto &choice : file.choices) {
-          choices.push_back(
-              {.label = choice,
-               .selected = choice == *current,
-               .tryAction = [this, entry = row.entry, name = file.name,
-                             value = choice]() {
-                 return handleGameplaySkinActionResult(
-                     gameplaySkinSettingsController->setFileChoice(entry, name,
-                                                                   value));
-               }});
-        }
-        entryBody->addView(makeGameplaySkinChoiceRow(
-            metrics, file.name, ordinaryActionsEnabled, std::move(choices)));
-      }
-    };
-
-    const auto appendOffset = [&](const auto &offset) {
-      skin::ConfigOffset configured{};
-      if (const auto saved = row.settings.offsets.find(offset.name);
-          saved != row.settings.offsets.end()) {
-        configured = saved->second;
-      }
-      auto *offsetControls = new View();
-      offsetControls->setFlexDirection(FlexDirection::Row);
-      offsetControls->setFlexWrap(YGWrapWrap);
-      offsetControls->setGap(metrics.compact ? 8.0f : 10.0f);
-      offsetControls->addView(makeWrappedText(
-          offset.name, metrics.smallTextSize, ui_theme::textSecondary()));
-      auto addOffsetComponent =
-          [this, &metrics, &row, ordinaryActionsEnabled, offsetControls,
-           &offset,
-           configured](const i18n::Text &label, skin::OffsetPermissionMask permission,
-                       int skin::ConfigOffset::*member) {
-            if ((offset.permissions & permission) == 0) {
-              return;
-            }
-            auto *group = new View();
-            group->setFlexDirection(FlexDirection::Column);
-            group->setGap(metrics.compact ? 4.0f : 6.0f);
-            group->addView(makeWrappedText(label, metrics.smallTextSize,
-                                           ui_theme::textSecondary()));
-            auto *input =
-                makeTextInput(metrics, metrics.compact ? 96 : 112);
-            input->setEditingText(std::to_string(configured.*member));
-            if (ordinaryActionsEnabled) {
-              input->onEditingFinished(
-                  [this, input, entry = row.entry, name = offset.name,
-                   member](const std::string &) {
-                    auto configured = gameplaySkinOffsetForEntry(entry, name);
-                    const int value = skin::gameplaySkinSanitizedOffsetComponent(
-                        input->getText(), configured.*member);
-                    configured.*member = value;
-                    if (handleGameplaySkinActionResult(
-                            gameplaySkinSettingsController->setOffset(
-                                entry, name, configured))) {
-                      input->setEditingText(std::to_string(value));
-                    }
-                  });
-            }
-            group->addView(input);
-            offsetControls->addView(group);
-          };
-      addOffsetComponent("X", skin::kOffsetPermissionX, &skin::ConfigOffset::x);
-      addOffsetComponent("Y", skin::kOffsetPermissionY, &skin::ConfigOffset::y);
-      addOffsetComponent("W", skin::kOffsetPermissionW, &skin::ConfigOffset::w);
-      addOffsetComponent("H", skin::kOffsetPermissionH, &skin::ConfigOffset::h);
-      addOffsetComponent("R", skin::kOffsetPermissionR, &skin::ConfigOffset::r);
-      addOffsetComponent("A", skin::kOffsetPermissionA, &skin::ConfigOffset::a);
-      entryBody->addView(offsetControls);
-    };
-
-    for (const auto &catalogItem :
-         skin::gameplaySkinSettingsCatalogItems(row.metadata)) {
-      switch (catalogItem.kind) {
-      case skin::GameplaySkinCatalogItemKind::CategoryHeading:
-        entryBody->addView(makeWrappedText(
-            catalogItem.label, metrics.bodyTextSize, ui_theme::cyan()));
-        break;
-      case skin::GameplaySkinCatalogItemKind::Separator: {
-        auto *separator = new View();
-        separator->setHeight(metrics.compact ? 8.0f : 10.0f);
-        entryBody->addView(separator);
-        break;
-      }
-      case skin::GameplaySkinCatalogItemKind::Option:
-        if (catalogItem.declarationIndex < row.metadata.options.size()) {
-          appendOption(row.metadata.options[catalogItem.declarationIndex]);
-        }
-        break;
-      case skin::GameplaySkinCatalogItemKind::File:
-        if (catalogItem.declarationIndex < row.metadata.files.size()) {
-          appendFile(row.metadata.files[catalogItem.declarationIndex]);
-        }
-        break;
-      case skin::GameplaySkinCatalogItemKind::Offset:
-        if (catalogItem.declarationIndex < row.metadata.offsets.size()) {
-          appendOffset(row.metadata.offsets[catalogItem.declarationIndex]);
-        }
-        break;
-      }
-    }
-
-    auto *customViewport = new View();
-    customViewport->setFlexDirection(FlexDirection::Row);
-    customViewport->setFlexWrap(YGWrapWrap);
-    customViewport->setGap(metrics.compact ? 8.0f : 10.0f);
-    customViewport->addView(makeGameplaySkinAction(
-        metrics, i18n::message("settings.skins.custom_base_fit.label"), ordinaryActionsEnabled,
-        [this, entry = row.entry]() {
-          const auto viewport = skin::gameplaySkinViewportWithCustomBase(
-              gameplaySkinViewportForEntry(entry),
-              skin::CustomViewportBase::Fit);
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->setViewport(entry, viewport));
-        }));
-    customViewport->addView(makeGameplaySkinAction(
-        metrics, i18n::message("settings.skins.custom_base_stretch.label"), ordinaryActionsEnabled,
-        [this, entry = row.entry]() {
-          const auto viewport = skin::gameplaySkinViewportWithCustomBase(
-              gameplaySkinViewportForEntry(entry),
-              skin::CustomViewportBase::Stretch);
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->setViewport(entry, viewport));
-        }));
-    auto addViewportComponent = [this, &metrics, &row, ordinaryActionsEnabled,
-                                 customViewport](const i18n::Text &label, float value,
-                                                 bool scale, bool horizontal) {
-      auto *group = new View();
-      group->setFlexDirection(FlexDirection::Column);
-      group->setGap(metrics.compact ? 4.0f : 6.0f);
-      group->addView(makeWrappedText(label, metrics.smallTextSize,
-                                     ui_theme::textSecondary()));
-      auto *input = makeTextInput(metrics, metrics.compact ? 132 : 156);
-      input->setEditingText(formatViewportComponent(value));
-      if (ordinaryActionsEnabled) {
-        input->onEditingFinished([this, input, entry = row.entry, scale,
-                                  horizontal](const std::string &) {
-          const float minimum =
-              scale ? skin::SkinProfileSettingsPolicy::minCustomScale
-                    : skin::SkinProfileSettingsPolicy::minCustomTranslation;
-          const float maximum =
-              scale ? skin::SkinProfileSettingsPolicy::maxCustomScale
-                    : skin::SkinProfileSettingsPolicy::maxCustomTranslation;
-          auto viewport = gameplaySkinViewportForEntry(entry);
-          float &component =
-              scale ? (horizontal ? viewport.scaleX : viewport.scaleY)
-                    : (horizontal ? viewport.translateX : viewport.translateY);
-          component = skin::gameplaySkinSanitizedViewportComponent(
-              input->getText(), component, minimum, maximum);
-          viewport = skin::gameplaySkinViewportWithMode(
-              viewport, skin::ViewportMode::Custom);
-          if (handleGameplaySkinActionResult(
-                  gameplaySkinSettingsController->setViewport(entry, viewport))) {
-            input->setEditingText(formatViewportComponent(component));
-          }
-        });
-      }
-      group->addView(input);
-      customViewport->addView(group);
-    };
-    addViewportComponent(i18n::message("settings.skins.custom_x.label"), row.settings.viewport.translateX, false,
-                         true);
-    addViewportComponent(i18n::message("settings.skins.custom_y.label"), row.settings.viewport.translateY, false,
-                         false);
-    addViewportComponent(i18n::message("settings.skins.custom_width.label"), row.settings.viewport.scaleX, true,
-                         true);
-    addViewportComponent(i18n::message("settings.skins.custom_height.label"), row.settings.viewport.scaleY, true,
-                         false);
-    entryBody->addView(customViewport);
+    appendGameplaySkinCatalogSettings(entryBody, metrics, row, ordinaryActionsEnabled);
+    appendGameplaySkinViewportSettings(entryBody, metrics, row, ordinaryActionsEnabled);
 
     auto *actions = new View();
     actions->setFlexDirection(FlexDirection::Row);
@@ -1709,47 +1570,17 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           gameplaySkinRemovalConfirmationKey.clear();
         },
         ui_theme::coral()));
-    actions->addView(makeGameplaySkinAction(
-        metrics, i18n::message("settings.skins.fit.label"), ordinaryActionsEnabled,
-        [this, entry = row.entry]() {
-          const auto viewport = skin::gameplaySkinViewportWithMode(
-              gameplaySkinViewportForEntry(entry), skin::ViewportMode::Fit);
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->setViewport(entry, viewport));
-        }));
-    actions->addView(makeGameplaySkinAction(
-        metrics, i18n::message("settings.skins.stretch.label"), ordinaryActionsEnabled,
-        [this, entry = row.entry]() {
-          const auto viewport = skin::gameplaySkinViewportWithMode(
-              gameplaySkinViewportForEntry(entry),
-              skin::ViewportMode::Stretch);
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->setViewport(entry, viewport));
-        }));
-    actions->addView(makeGameplaySkinAction(
-        metrics, i18n::message("settings.skins.custom.label"), ordinaryActionsEnabled,
-        [this, entry = row.entry]() {
-          const auto viewport = skin::gameplaySkinViewportWithMode(
-              gameplaySkinViewportForEntry(entry), skin::ViewportMode::Custom);
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->setViewport(entry, viewport));
-        }));
-    actions->addView(makeGameplaySkinAction(
-        metrics, i18n::message("settings.skins.reset_layout.label"), ordinaryActionsEnabled,
-        [this, entry = row.entry]() {
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->resetLayout(entry));
-        },
-        ui_theme::coral()));
     entryBody->addView(actions);
     traitPanel->addView(entryBody);
-  } else if (selected == snapshot.selectedSkinEntries.end() &&
+  } else if (!selection.hasSelectedEntry &&
              activeTrait->kind == skin::SkinTargetKind::Gameplay) {
     auto *builtInBody = new View();
     builtInBody->setFlexDirection(FlexDirection::Column);
     builtInBody->setGap(metrics.compact ? 10.0F : 12.0F);
     appendBuiltInGameplayTraitSettings(builtInBody, metrics,
-                                       activeTrait->keyMode);
+                                       activeTrait->skinType == -5 || activeTrait->skinType == -7
+                                           ? activeTrait->skinType : activeTrait->keyMode,
+                                       followsOriginal);
     traitPanel->addView(builtInBody);
   }
 

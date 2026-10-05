@@ -678,6 +678,77 @@ int main() { return 0; }
         self.assertIn("ios_artifact_audit.sh", verify_script)
         self.assertNotIn("PrivacyInfo.xcprivacy", verify_script)
 
+    def test_mobile_startup_fullscreen_uses_the_current_ios_orientation(self):
+        source = MAIN_SOURCE.read_text(encoding="utf-8")
+        start = source.index("  int windowCreateWidth = 1280;")
+        create = source[start:source.index("  if (win == nullptr)", start)]
+        mobile_start = source.index("#if TARGET_OS_IPHONE || TARGET_OS_ANDROID", start)
+        transition = source[mobile_start:source.index("  SDL_GetWindowSize(win", mobile_start)] + "\n#endif\n"
+        compiler = shutil.which("clang++") or shutil.which("c++")
+        self.assertIsNotNone(compiler)
+        harness = r'''
+#define SDL_MAIN_HANDLED
+#include <SDL.h>
+#include <cassert>
+#include <cstdint>
+enum TargetPlatform { Windows, MacOS, Linux, iOS, Android };
+constexpr TargetPlatform TARGET_PLATFORM = TEST_PLATFORM;
+struct SDL_Window { Uint32 flags; } testWindow;
+bool portrait = false;
+bool hiddenAtCreation = false;
+int exclusiveRequests = 0;
+SDL_Window *SDL_CreateWindow(const char *, int, int, int, int, Uint32 flags) {
+  testWindow.flags = flags;
+  hiddenAtCreation = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS)) != 0;
+  return &testWindow;
+}
+int SDL_SetWindowFullscreen(SDL_Window *window, Uint32 flags) {
+  if (flags == SDL_WINDOW_FULLSCREEN) {
+    ++exclusiveRequests;
+    // UIKit rejects a landscape-sized exclusive mode while starting portrait.
+    if (portrait && TARGET_PLATFORM == iOS) return -1;
+  }
+  window->flags = flags;
+  return 0;
+}
+void startup() {
+CREATION
+TRANSITION
+  if (TARGET_PLATFORM == iOS) {
+    assert(hiddenAtCreation);
+    assert((win->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP);
+    assert(exclusiveRequests == 0);
+  } else if (TARGET_PLATFORM == Android) {
+    assert(win->flags & SDL_WINDOW_FULLSCREEN);
+  } else {
+    assert(!(win->flags & SDL_WINDOW_FULLSCREEN));
+  }
+}
+int main() {
+  for (bool orientation : {false, true}) {
+    portrait = orientation;
+    exclusiveRequests = 0;
+    startup();
+  }
+  return 0;
+}
+'''.replace("CREATION", create).replace("TRANSITION", transition)
+        with tempfile.TemporaryDirectory() as directory:
+            cpp = Path(directory) / "startup.cpp"
+            cpp.write_text(harness)
+            binary = Path(directory) / "startup"
+            for platform in ("iOS", "Android", "MacOS"):
+                result = subprocess.run([compiler, "-std=c++20", "-include", "initializer_list",
+                                "-I", str(ROOT / "SDL/include"),
+                                f"-DTEST_PLATFORM={platform}",
+                                f"-DTARGET_OS_IPHONE={int(platform == 'iOS')}",
+                                f"-DTARGET_OS_ANDROID={int(platform == 'Android')}",
+                                str(cpp), "-o", str(binary)],
+                               capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                result = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_ios_forces_bgfx_metal_work_onto_the_main_thread(self):
         source = MAIN_SOURCE.read_text(encoding="utf-8")
         limits = source.index("rendering::applyBgfxTransientBufferLimits")

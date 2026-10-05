@@ -113,36 +113,36 @@ AppSettings makeDistinctSettings() {
   value.bgaBrightnessPercent = 37;
   value.bgaBlurStrength = 4.5f;
   value.bgaDisplayMode = AppSettings::BgaDisplayMode::Fill;
-  value.laneAngleDegrees = 19.5f;
-  value.laneLength = 10.25f;
-  value.laneBeamLengthPercent = 61;
-  value.noteStartPositionPercent = 33;
-  value.liftEnabled = true;
-  value.liftRatio = 0.63F;
-  value.hiddenEnabled = true;
-  value.hiddenRatio = 0.37F;
+  value.presentation().laneAngleDegrees = 19.5f;
+  value.presentation().laneLength = 10.25f;
+  value.presentation().laneBeamLengthPercent = 61;
+  value.presentation().noteStartPositionPercent = 33;
+  value.presentation().liftEnabled = true;
+  value.presentation().liftRatio = 0.63F;
+  value.presentation().hiddenEnabled = true;
+  value.presentation().hiddenRatio = 0.37F;
   value.hispeedAutoAdjust = true;
-  value.playAreaWidth4K = 5.1f;
-  value.playAreaWidth5K = 5.2f;
-  value.playAreaWidth6K = 6.3f;
-  value.playAreaWidth7K = 7.4f;
-  value.playAreaWidth8K = 8.5f;
-  value.playAreaWidth10K = 9.6f;
-  value.playAreaWidth14K = 10.7f;
+  value.presentation().playAreaWidth4K = 5.1f;
+  value.presentation().playAreaWidth5K = 5.2f;
+  value.presentation().playAreaWidth6K = 6.3f;
+  value.presentation().playAreaWidth7K = 7.4f;
+  value.presentation().playAreaWidth8K = 8.5f;
+  value.presentation().playAreaWidth10K = 9.6f;
+  value.presentation().playAreaWidth14K = 10.7f;
   value.notePriorityMode = AppSettings::NotePriorityMode::Score;
-  value.judgementIndicatorEnabled = false;
-  value.judgementIndicatorY = 0.22f;
-  value.judgementIndicatorWidthScale = 1.45f;
-  value.judgementTextY = 0.73f;
-  value.judgementIndicatorRenderMode =
+  value.presentation().judgementIndicatorEnabled = false;
+  value.presentation().judgementIndicatorY = 0.22f;
+  value.presentation().judgementIndicatorWidthScale = 1.45f;
+  value.presentation().judgementTextY = 0.73f;
+  value.presentation().judgementIndicatorRenderMode =
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
-  value.judgementCounterEnabled = false;
-  value.judgementCounterPosition = AppSettings::JudgementCounterPosition::Left;
-  value.judgementTimingFastSlowCriteria =
+  value.presentation().judgementCounterEnabled = false;
+  value.presentation().judgementCounterPosition = AppSettings::JudgementCounterPosition::Left;
+  value.presentation().judgementTimingFastSlowCriteria =
       AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
-  value.judgementTimingMillisecondsCriteria =
+  value.presentation().judgementTimingMillisecondsCriteria =
       AppSettings::JudgementTimingDisplayCriteria::BadOrBelow;
-  value.gaugeBarPosition = AppSettings::GaugeBarPosition::Right;
+  value.presentation().gaugeBarPosition = AppSettings::GaugeBarPosition::Right;
   value.uiThemeMode = AppSettings::UiThemeMode::Light;
   value.systemPlaybackShowJacket = false;
   value.systemPlaybackShowTitle = false;
@@ -154,7 +154,7 @@ AppSettings makeDistinctSettings() {
   value.selectedAssistOption = "DRAG";
   value.selectedPacemakerTarget = "AAA";
   value.defaultDifficultyTablesSeeded = true;
-  value.skin.safetyLevel = skin::SkinSafetyLevel::Unrestricted;
+  value.skinSafetyLevel = skin::SkinSafetyLevel::Unrestricted;
   value.sanitize();
   return value;
 }
@@ -172,14 +172,15 @@ void testLegacyFixtureLoadsEverySetting() {
   expected.markProcessedNotes = false;
   expected.customJudge = false;
   expected.showJudgeArea = false;
-  expected.liftEnabled = false;
-  expected.liftRatio = 0.1F;
-  expected.hiddenEnabled = false;
-  expected.hiddenRatio = 0.1F;
-  expected.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
+  expected.presentation().liftEnabled = false;
+  expected.presentation().liftRatio = 0.1F;
+  expected.presentation().hiddenEnabled = false;
+  expected.presentation().hiddenRatio = 0.1F;
+  expected.skinSafetyLevel = skin::SkinSafetyLevel::Standard;
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
   expected.hispeedAutoAdjust = false;
+  expected.sanitize();
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "complete legacy fixture loads");
   expect(result.settings == expected,
@@ -198,11 +199,11 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
   expected.gameplayClubModeEnabled = true;
   expected.musicPlayerClubModeEnabled = true;
-  expected.judgementIndicatorRangeMilliseconds = 333;
+  expected.presentation().judgementIndicatorRangeMilliseconds = 333;
   expected.selectedGameplayRuleset = "beatoraja";
   expected.gameplayHispeed = 1.75F;
   expected.hispeedMargin = 0.5F;
-  expected.laneCoverEnabled = false;
+  expected.presentation().laneCoverEnabled = false;
   expected.irProviders["tachi"] = {
       .enabled = true,
       .autoSubmit = true,
@@ -211,11 +212,11 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   const auto package = skin::normalizePackageId("ModernChic");
   const auto entry =
       skin::normalizeEntryPath(*package.package, "play/7key.luaskin");
-  expected.skin.gameplayCompatibilityEnabled = true;
-  expected.skin.selected7KeyEntry = *entry.entry;
-  expected.skin.selectedGameplayEntries.emplace(0, *entry.entry);
-  expected.skin.selectedSkinEntries.emplace(0, *entry.entry);
-  expected.skin.entries[*entry.entry] = {
+  expected.presentation().skin.gameplayCompatibilityEnabled = true;
+  expected.presentation().skin.selected7KeyEntry = *entry.entry;
+  expected.presentation().skin.selectedGameplayEntries.emplace(0, *entry.entry);
+  expected.presentation().skin.selectedSkinEntries.emplace(0, *entry.entry);
+  expected.presentation().skin.entries[*entry.entry] = {
       .options = {{"Lane", 101}},
       .filePaths = {{"Judge", "parts/judge.png"}},
       .offsets = {{"Judge offset",
@@ -225,10 +226,14 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .scaleX = 1.25F,
                    .scaleY = 0.75F,
                    .translateX = 123.0F,
-                   .translateY = -456.0F},
+                   .translateY = -456.0F,
+                   .centerPlayArea = true,
+                   .keepHudFixed = true,
+                   .playAreaZoom = 1.25F,
+                   .playAreaBottomPaddingPercent = 12.5F},
   };
   const std::string expectedConfigurationDigest =
-      skin::skinConfigurationDigest(expected.skin.entries.at(*entry.entry));
+      skin::skinConfigurationDigest(expected.presentation().skin.entries.at(*entry.entry));
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -236,12 +241,12 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
-  expect(skin::skinConfigurationDigest(loaded.settings.skin.entries.at(
+  expect(skin::skinConfigurationDigest(loaded.settings.presentation().skin.entries.at(
              *entry.entry)) == expectedConfigurationDigest,
          "restart reconstructs the exact configuration digest from persisted "
          "entry maps");
-  expect(readFile(path).find("\"schemaVersion\": 7") != std::string::npos,
-         "saved JSON declares schema version 7");
+  expect(readFile(path).find("\"schemaVersion\": 8") != std::string::npos,
+         "saved JSON declares schema version 8");
   expect(readFile(path).find("\"visibleTimeDurationMilliseconds\": 1295") !=
              std::string::npos,
          "saved JSON persists exact canonical visible duration milliseconds");
@@ -722,19 +727,25 @@ void testCompatibleSkinModesPersistIndependentConfigurations() {
   AppSettings settings;
   const auto package = skin::normalizePackageId("SharedSkin");
   const auto entry = *skin::normalizeEntryPath(*package.package, "play7.luaskin").entry;
-  settings.skin.selectedSkinEntries = {{0, entry}, {-6, entry}, {-8, entry}};
-  settings.skin.entries[entry].options["Lane"] = 7;
-  settings.skin.modeEntries[-6][entry].options["Lane"] = 6;
-  settings.skin.modeEntries[-8][entry].options["Lane"] = 8;
-  settings.skin.modeEntries[-6][entry].viewport.scaleX = 1.5F;
-  settings.skin.modeEntries[-8][entry].viewport.scaleX = 2.0F;
+  settings.presentation().skin.selectedSkinEntries = {{0, entry}, {-6, entry}, {-8, entry}};
+  settings.presentation().skin.entries[entry].options["Lane"] = 7;
+  settings.presentation().skin.selectedSkinEntries[-5] = entry;
+  settings.presentation().skin.selectedSkinEntries[-7] = entry;
+  settings.presentation().skin.modeEntries[-5][entry].options["Lane"] = 5;
+  settings.presentation().skin.modeEntries[-7][entry].options["Lane"] = 70;
+  settings.presentation().skin.modeEntries[-6][entry].options["Lane"] = 6;
+  settings.presentation().skin.modeEntries[-8][entry].options["Lane"] = 8;
+  settings.presentation().skin.modeEntries[-6][entry].viewport.scaleX = 1.5F;
+  settings.presentation().skin.modeEntries[-8][entry].viewport.scaleX = 2.0F;
+  settings.presentation().skin.modeEntries[-6][entry].viewport.playAreaBottomPaddingPercent = 8.0F;
+  settings.presentation().skin.modeEntries[-8][entry].viewport.playAreaBottomPaddingPercent = 16.0F;
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "independent mode settings save: " + error);
   const auto loaded = AppSettingsStore::Load(path);
-  expect(loaded.settings.skin.selectedSkinEntries == settings.skin.selectedSkinEntries,
+  expect(loaded.settings.presentation().skin.selectedSkinEntries == settings.presentation().skin.selectedSkinEntries,
          "compatible modes retain separate skin selections");
-  expect(loaded.settings.skin.modeEntries == settings.skin.modeEntries &&
-             loaded.settings.skin.entries.at(entry).options.at("Lane") == 7,
+  expect(loaded.settings.presentation().skin.modeEntries == settings.presentation().skin.modeEntries &&
+             loaded.settings.presentation().skin.entries.at(entry).options.at("Lane") == 7,
          "same skin retains separate mode options and viewport after restart");
 }
 
@@ -749,8 +760,8 @@ void testSkinTargetSelectionsSurviveRestart() {
     const auto entry = skin::normalizeEntryPath(
         *package.package,
         "skin/trait-" + std::to_string(trait.skinType) + ".luaskin");
-    settings.skin.selectedSkinEntries.emplace(trait.skinType, *entry.entry);
-    settings.skin.entries.emplace(*entry.entry, skin::EntryProfileSettings{});
+    settings.presentation().skin.selectedSkinEntries.emplace(trait.skinType, *entry.entry);
+    settings.presentation().skin.entries.emplace(*entry.entry, skin::EntryProfileSettings{});
     expectedSelections.emplace(trait.skinType, *entry.entry);
   }
 
@@ -760,9 +771,9 @@ void testSkinTargetSelectionsSurviveRestart() {
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
          "all skin target selections load after restart");
-  expect(loaded.settings.skin.selectedSkinEntries == expectedSelections,
+  expect(loaded.settings.presentation().skin.selectedSkinEntries == expectedSelections,
          "restart preserves every selected skin target, including results");
-  expect(loaded.settings.skin.selected7KeyEntry == expectedSelections.at(0),
+  expect(loaded.settings.presentation().skin.selected7KeyEntry == expectedSelections.at(0),
          "the legacy alias remains a derived projection of only the 7K trait");
 }
 
@@ -791,13 +802,13 @@ void testSchemaThreeMigrationDisablesCompatibility() {
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
          "schema 3 settings migrate to the current schema");
-  expect(!loaded.settings.skin.gameplayCompatibilityEnabled,
+  expect(!loaded.settings.presentation().skin.gameplayCompatibilityEnabled,
          "schema 3 migration disables compatibility");
-  expect(loaded.settings.skin.safetyLevel == skin::SkinSafetyLevel::Standard,
+  expect(loaded.settings.skinSafetyLevel == skin::SkinSafetyLevel::Standard,
          "schema 3 migration defaults skin safety to Standard");
-  expect(!loaded.settings.skin.selected7KeyEntry.has_value(),
+  expect(!loaded.settings.presentation().skin.selected7KeyEntry.has_value(),
          "schema 3 migration has no selected gameplay skin");
-  expect(loaded.settings.skin.entries.empty(),
+  expect(loaded.settings.presentation().skin.entries.empty(),
          "schema 3 migration starts with no remembered skin entries");
 }
 
@@ -819,10 +830,10 @@ void testLegacy7KeySelectionMigratesToTraitSelection() {
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
          "legacy gameplay skin selection loads");
-  const auto selection = loaded.settings.skin.selectedSkinEntries.find(0);
-  expect(selection != loaded.settings.skin.selectedSkinEntries.end() &&
-             loaded.settings.skin.selected7KeyEntry == selection->second &&
-             loaded.settings.skin.gameplayCompatibilityEnabled,
+  const auto selection = loaded.settings.presentation().skin.selectedSkinEntries.find(0);
+  expect(selection != loaded.settings.presentation().skin.selectedSkinEntries.end() &&
+             loaded.settings.presentation().skin.selected7KeyEntry == selection->second &&
+             loaded.settings.presentation().skin.gameplayCompatibilityEnabled,
          "enabled legacy 7K selection migrates to the 7K trait");
 
   std::string error;
@@ -856,15 +867,15 @@ void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
          "schema 4 skin settings migrate and load");
-  expect(loaded.settings.skin.selected7KeyEntry.has_value() &&
-             loaded.settings.skin.entries.size() == 1,
+  expect(loaded.settings.presentation().skin.selected7KeyEntry.has_value() &&
+             loaded.settings.presentation().skin.entries.size() == 1,
          "valid typed selection and matching entry survive");
-  if (loaded.settings.skin.selected7KeyEntry) {
-    const auto &id = *loaded.settings.skin.selected7KeyEntry;
+  if (loaded.settings.presentation().skin.selected7KeyEntry) {
+    const auto &id = *loaded.settings.presentation().skin.selected7KeyEntry;
     expect(id.package.collisionKey == "pack" &&
                id.collisionKey == "pack/play/main.luaskin",
            "collision keys are rederived rather than trusted from JSON");
-    const auto &entry = loaded.settings.skin.entries.at(id);
+    const auto &entry = loaded.settings.presentation().skin.entries.at(id);
     expect(entry.offsets.at("offset").x == -99999 &&
                entry.offsets.at("offset").y == 99999,
            "offset components preserve their authored integer values");
@@ -877,9 +888,42 @@ void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
   }
 }
 
+void testSkinPlayAreaBottomPaddingDefaultsAndBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  AppSettings settings;
+  const auto package = skin::normalizePackageId("PaddingSkin");
+  const auto entry = *skin::normalizeEntryPath(*package.package, "play.luaskin").entry;
+  auto &viewport = settings.presentation().skin.entries[entry].viewport;
+  viewport.centerPlayArea = true;
+  viewport.playAreaZoom = 1.5F;
+  viewport.playAreaBottomPaddingPercent = 12.5F;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  document["presentations"]["landscape"]["skin"]["entries"][0]
+          ["settings"]["viewport"].erase("playAreaBottomPaddingPercent");
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  const auto &migrated = loaded.settings.presentation().skin.entries.at(entry).viewport;
+  expect(migrated.playAreaBottomPaddingPercent == 0.0F &&
+             migrated.centerPlayArea && migrated.playAreaZoom == 1.5F,
+         "missing bottom padding preserves the existing framed viewport with zero padding");
+  for (const auto &[input, expected] : {
+           std::pair{-1.0F, 0.0F}, std::pair{80.0F, 50.0F},
+           std::pair{12.5F, 12.5F},
+           std::pair{std::numeric_limits<float>::quiet_NaN(), 0.0F},
+           std::pair{std::numeric_limits<float>::infinity(), 0.0F}}) {
+    settings.presentation().skin.entries.at(entry).viewport.playAreaBottomPaddingPercent = input;
+    settings.sanitize();
+    expect(settings.presentation().skin.entries.at(entry).viewport.playAreaBottomPaddingPercent == expected,
+           "bottom padding sanitizes to a finite percentage from zero to fifty");
+  }
+}
+
 void testSkinSettingsDeterministicallyEnforceFixedLimits() {
   AppSettings settings;
-  settings.skin.gameplayCompatibilityEnabled = true;
+  settings.presentation().skin.gameplayCompatibilityEnabled = true;
   for (int index = 99; index >= 0; --index) {
     const auto package =
         skin::normalizePackageId("package-" + std::to_string(index));
@@ -895,15 +939,15 @@ void testSkinSettingsDeterministicallyEnforceFixedLimits() {
     }
     remembered.options[std::string(129, 'x')] = 1;
     remembered.filePaths["absolute"] = "/Users/example/secret.png";
-    settings.skin.entries[*entry.entry] = std::move(remembered);
+    settings.presentation().skin.entries[*entry.entry] = std::move(remembered);
   }
-  settings.skin.sanitize();
-  expect(settings.skin.entries.size() == 100,
+  settings.presentation().skin.sanitize();
+  expect(settings.presentation().skin.entries.size() == 100,
          "skin profile retains every valid entry without an app-defined limit");
-  expect(settings.skin.entries.begin()->first.package.directoryName ==
+  expect(settings.presentation().skin.entries.begin()->first.package.directoryName ==
              "package-0",
          "entry truncation is deterministic map order");
-  for (const auto &[entry, remembered] : settings.skin.entries) {
+  for (const auto &[entry, remembered] : settings.presentation().skin.entries) {
     (void)entry;
     expect(remembered.options.size() == 301 &&
                remembered.filePaths.size() == 300 &&
@@ -953,11 +997,11 @@ void testHostileSkinJsonIsBoundedDuringDecode() {
 
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
-             loaded.settings.skin.entries.size() == 70,
+             loaded.settings.presentation().skin.entries.size() == 70,
          "skin JSON retains every valid persisted entry without an app-defined "
          "count limit");
-  if (!loaded.settings.skin.entries.empty()) {
-    const auto &settings = loaded.settings.skin.entries.begin()->second;
+  if (!loaded.settings.presentation().skin.entries.empty()) {
+    const auto &settings = loaded.settings.presentation().skin.entries.begin()->second;
     expect(settings.options.size() == 271 && settings.filePaths.size() == 271 &&
                settings.offsets.size() == 270,
            "skin JSON retains every valid persisted configuration declaration");
@@ -1012,13 +1056,13 @@ void testSkinEntryCollisionKeysDeduplicateDeterministically() {
   const auto loaded = AppSettingsStore::Load(path);
   expect(
       loaded.status == AppSettingsLoadStatus::Loaded &&
-          loaded.settings.skin.entries.size() == 1 &&
-          loaded.settings.skin.entries.begin()->first.package.directoryName ==
+          loaded.settings.presentation().skin.entries.size() == 1 &&
+          loaded.settings.presentation().skin.entries.begin()->first.package.directoryName ==
               "Pack" &&
-          loaded.settings.skin.entries.begin()->second.options.at("variant") ==
+          loaded.settings.presentation().skin.entries.begin()->second.options.at("variant") ==
               1 &&
-          loaded.settings.skin.selected7KeyEntry ==
-              loaded.settings.skin.entries.begin()->first,
+          loaded.settings.presentation().skin.selected7KeyEntry ==
+              loaded.settings.presentation().skin.entries.begin()->first,
       "JSON load deduplicates derived collisions independent of array "
       "order");
 }
@@ -1093,21 +1137,21 @@ void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
   const auto nestedPackage = skin::normalizePackageId("AAA-NESTED");
   const auto nestedEntry =
       skin::normalizeEntryPath(*nestedPackage.package, "play/main.luaskin");
-  const auto selected = loaded.settings.skin.entries.find(*selectedEntry.entry);
-  const auto winner = loaded.settings.skin.entries.find(*aliasEntry.entry);
-  const auto nested = loaded.settings.skin.entries.find(*nestedEntry.entry);
+  const auto selected = loaded.settings.presentation().skin.entries.find(*selectedEntry.entry);
+  const auto winner = loaded.settings.presentation().skin.entries.find(*aliasEntry.entry);
+  const auto nested = loaded.settings.presentation().skin.entries.find(*nestedEntry.entry);
   const std::string normalizedAlias = "alias-"
                                       "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
                                       "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
-             loaded.settings.skin.entries.size() == 3 &&
-             loaded.settings.skin.selected7KeyEntry == selectedEntry.entry &&
-             selected != loaded.settings.skin.entries.end() &&
-             winner != loaded.settings.skin.entries.end() &&
-             nested != loaded.settings.skin.entries.end(),
+             loaded.settings.presentation().skin.entries.size() == 3 &&
+             loaded.settings.presentation().skin.selected7KeyEntry == selectedEntry.entry &&
+             selected != loaded.settings.presentation().skin.entries.end() &&
+             winner != loaded.settings.presentation().skin.entries.end() &&
+             nested != loaded.settings.presentation().skin.entries.end(),
          "entry bounds count derived collision identities so a later unique "
          "selected entry survives duplicate aliases");
-  if (nested != loaded.settings.skin.entries.end()) {
+  if (nested != loaded.settings.presentation().skin.entries.end()) {
     expect(nested->second.options.size() == 2 &&
                nested->second.options.at(normalizedAlias) == 0 &&
                nested->second.options.at("zzzz-later-unique") == 9001 &&
@@ -1121,10 +1165,33 @@ void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
            "nested bounds count NFC identities, keep the lexical alias "
            "winner, and retain later unique values");
   }
-  if (winner != loaded.settings.skin.entries.end()) {
+  if (winner != loaded.settings.presentation().skin.entries.end()) {
     expect(winner->second.options.at("entryWinner") == 0,
            "entry collision aliases deterministically keep the lexical "
            "winner's settings");
+  }
+}
+
+void testScreenOrientationRoundTripAndDefaults() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  expect(AppSettings{}.screenOrientation == screen_orientation::Mode::Landscape,
+         "new settings default to landscape");
+  expect(AppSettingsStore::Load(path).settings.screenOrientation == screen_orientation::Mode::Landscape,
+         "a first launch without saved settings defaults to landscape");
+  for (const auto &[input, expected] :
+       {std::pair{nlohmann::json(0), 0}, {nlohmann::json(1), 1},
+        {nlohmann::json(2), 2}, {nlohmann::json(99), 1},
+        {nlohmann::json("portrait"), 1}, {nlohmann::json(nullptr), 1}}) {
+    nlohmann::json document = {{"schemaVersion", AppSettingsStore::kCurrentSchemaVersion}};
+    if (!input.is_null()) document["screenOrientation"] = input;
+    writeFile(path, document.dump());
+    auto loaded = AppSettingsStore::Load(path);
+    std::string error;
+    expect(AppSettingsStore::Save(path, loaded.settings, error), "save orientation setting");
+    const auto saved = nlohmann::json::parse(readFile(path));
+    expect(saved.value("screenOrientation", -1) == expected,
+           "orientation survives restart; missing and invalid settings default to Landscape");
   }
 }
 
@@ -1189,19 +1256,19 @@ void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
 void testJudgementIndicatorRangeDefaultsAndSanitization() {
   AppSettings defaults;
   defaults.sanitize();
-  expect(defaults.judgementIndicatorRangeMilliseconds == 180,
+  expect(defaults.presentation().judgementIndicatorRangeMilliseconds == 180,
          "judgement indicator range defaults to 180 ms");
 
   AppSettings invalid;
-  invalid.judgementIndicatorRangeMilliseconds = 0;
+  invalid.presentation().judgementIndicatorRangeMilliseconds = 0;
   invalid.sanitize();
-  expect(invalid.judgementIndicatorRangeMilliseconds == 180,
+  expect(invalid.presentation().judgementIndicatorRangeMilliseconds == 180,
          "non-positive stored range uses the default");
 
   AppSettings excessive;
-  excessive.judgementIndicatorRangeMilliseconds = 1001;
+  excessive.presentation().judgementIndicatorRangeMilliseconds = 1001;
   excessive.sanitize();
-  expect(excessive.judgementIndicatorRangeMilliseconds == 1000,
+  expect(excessive.presentation().judgementIndicatorRangeMilliseconds == 1000,
          "stored range clamps to the 1000 ms hard cap");
 
   TempDirectory temp;
@@ -1210,7 +1277,7 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
   const auto legacy = AppSettingsStore::Load(path);
   expect(legacy.status == AppSettingsLoadStatus::Loaded,
          "settings written before range configuration still load");
-  expect(legacy.settings.judgementIndicatorRangeMilliseconds == 180,
+  expect(legacy.settings.presentation().judgementIndicatorRangeMilliseconds == 180,
          "settings without the range field use 180 ms");
 
   const auto malformedPath = temp.path() / "malformed-range-settings.json";
@@ -1220,7 +1287,7 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
   const auto malformed = AppSettingsStore::Load(malformedPath);
   expect(malformed.status == AppSettingsLoadStatus::Loaded,
          "malformed range does not invalidate the settings document");
-  expect(malformed.settings.judgementIndicatorRangeMilliseconds == 180,
+  expect(malformed.settings.presentation().judgementIndicatorRangeMilliseconds == 180,
          "malformed range falls back to 180 ms");
   expect(hasDiagnostic(malformed.diagnostics,
                        "judgementIndicatorRangeMilliseconds",
@@ -1232,9 +1299,9 @@ void testLaneAngleAcceptsZeroAndPreservesItAcrossRestart() {
   TempDirectory temp;
   for (const float angle : {0.0f, 0.5f, 3.5f}) {
     AppSettings settings;
-    settings.laneAngleDegrees = angle;
+    settings.presentation().laneAngleDegrees = angle;
     settings.sanitize();
-    expect(settings.laneAngleDegrees == angle,
+    expect(settings.presentation().laneAngleDegrees == angle,
            "lane angles below four degrees remain selectable");
     const auto path = temp.path() / "lane-angle.json";
     std::string error;
@@ -1242,13 +1309,13 @@ void testLaneAngleAcceptsZeroAndPreservesItAcrossRestart() {
            "lane angle saves: " + error);
     const auto loaded = AppSettingsStore::Load(path);
     expect(loaded.status == AppSettingsLoadStatus::Loaded &&
-               loaded.settings.laneAngleDegrees == angle,
+               loaded.settings.presentation().laneAngleDegrees == angle,
            "low lane angles survive an application restart");
   }
   AppSettings belowMinimum;
-  belowMinimum.laneAngleDegrees = -1.0f;
+  belowMinimum.presentation().laneAngleDegrees = -1.0f;
   belowMinimum.sanitize();
-  expect(belowMinimum.laneAngleDegrees == 0.0f,
+  expect(belowMinimum.presentation().laneAngleDegrees == 0.0f,
          "negative lane angles clamp to zero");
 }
 
@@ -1516,11 +1583,14 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.markProcessedNotes = false;
   expectedV0.customJudge = false;
   expectedV0.showJudgeArea = false;
-  expectedV0.liftEnabled = false;
-  expectedV0.liftRatio = 0.1F;
-  expectedV0.hiddenEnabled = false;
-  expectedV0.hiddenRatio = 0.1F;
-  expectedV0.skin.safetyLevel = skin::SkinSafetyLevel::Standard;
+  expectedV0.presentation().liftEnabled = false;
+  expectedV0.presentation().liftRatio = 0.1F;
+  expectedV0.presentation().hiddenEnabled = false;
+  expectedV0.presentation().hiddenRatio = 0.1F;
+  expectedV0.skinSafetyLevel = skin::SkinSafetyLevel::Standard;
+  expectedV0.presentation().judgementTimingY = 0.73f +
+      (AppSettings::kDefaultJudgementTimingY - AppSettings::kDefaultJudgementTextY);
+  expectedV0.sanitize();
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
   const auto v1 = AppSettingsStore::Load(fixture("settings-v1.json"));
@@ -1705,7 +1775,7 @@ void testInvalidValuesAreSanitizedWithDiagnostics() {
          "document with invalid individual values still loads");
   expect(result.settings.audioOffsetMs == AppSettings::kMaxAudioOffsetMs,
          "numeric value is sanitized");
-  expect(result.settings.laneLength == AppSettings::kDefaultLaneLength,
+  expect(result.settings.presentation().laneLength == AppSettings::kDefaultLaneLength,
          "wrong-typed value falls back");
   expect(result.settings.audioVideo.audio.masterVolume == 0.0f,
          "nested audio value is sanitized");
@@ -1802,7 +1872,297 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 }
 } // namespace
 
+void testOrientationPresentationMigrationAndIndependentRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  writeFile(path, R"({"schemaVersion":7,"laneLength":11,"notePriorityMode":3,
+                     "audioOffsetMs":23,"gameplayHispeed":2.5,
+                     "skin":{"selectedSkinEntries":{"0":{"package":"Example","path":"play.json"}},
+                       "entries":[{"entry":{"package":"Example","path":"play.json"},
+                                   "settings":{"options":{"Style":3}}}]}})");
+  auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "legacy orientation settings load");
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  expect(document.contains("presentations"),
+         "saving migrated settings retains two presentation blocks");
+  if (!document.contains("presentations")) return;
+  auto &landscape = document["presentations"]["landscape"];
+  auto &portrait = document["presentations"]["portrait"];
+  expect(document.value("notePriorityMode", -1) == 3 &&
+             !landscape.contains("notePriorityMode") &&
+             !portrait.contains("notePriorityMode"),
+         "legacy judgement candidate strategy stays shared across orientations");
+  expect(landscape["laneLength"] == 11,
+         "migration preserves legacy landscape lane length");
+  expect(portrait["laneLength"] == 16 && portrait["laneAngleDegrees"] == 0,
+         "migration initializes flat tall portrait lanes");
+  expect(portrait["skin"] == landscape["skin"],
+         "migration seeds both skin configurations from existing settings");
+  portrait["skin"]["entries"][0]["settings"]["options"]["Style"] = 7;
+  portrait["playAreaWidth7K"] = 15;
+  portrait["laneLength"] = 32;
+  portrait["scratchLaneOnRight"] = true;
+  portrait["judgementTextSizePercent"] = 150;
+  portrait["judgementTextBold"] = true;
+  portrait["judgementTimingSizePercent"] = 75;
+  portrait["judgementTimingBold"] = false;
+  landscape["judgementTextSizePercent"] = 10;
+  landscape["judgementTimingSizePercent"] = 900;
+  landscape["judgementTimingBold"] = true;
+  landscape["laneLength"] = 100;
+  writeFile(path, document.dump());
+  loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["portrait"]["playAreaWidth7K"] == 15 &&
+             document["presentations"]["portrait"]["laneLength"] == 32,
+         "portrait extended geometry survives restart");
+  expect(document["presentations"]["landscape"]["playAreaWidth7K"] == 8 &&
+             document["presentations"]["landscape"]["laneLength"] == 12,
+         "landscape uses its own values and accepted bounds");
+  expect(document["presentations"]["portrait"]["scratchLaneOnRight"] == true &&
+             document["presentations"]["landscape"]["scratchLaneOnRight"] == false,
+         "scratch position persists independently for each orientation");
+  expect(document["presentations"]["portrait"]["judgementTextSizePercent"] == 150 &&
+             document["presentations"]["portrait"]["judgementTextBold"] == true &&
+             document["presentations"]["portrait"]["judgementTimingSizePercent"] == 75 &&
+             document["presentations"]["portrait"]["judgementTimingBold"] == false,
+         "judgement and timing text styles persist independently");
+  expect(document["presentations"]["landscape"]["judgementTextSizePercent"] == 25 &&
+             document["presentations"]["landscape"]["judgementTextBold"] == false &&
+             document["presentations"]["landscape"]["judgementTimingSizePercent"] == 500 &&
+             document["presentations"]["landscape"]["judgementTimingBold"] == true,
+         "feedback styles use independent orientation values and clamp invalid sizes");
+  expect(loaded.settings.audioOffsetMs == 23 &&
+             loaded.settings.gameplayHispeed == 2.5f,
+         "presentation migration preserves shared play preferences");
+  expect(document["presentations"]["landscape"]["skin"]["entries"][0]
+                     ["settings"]["options"]["Style"] == 3 &&
+             document["presentations"]["portrait"]["skin"]["entries"][0]
+                     ["settings"]["options"]["Style"] == 7,
+         "editing portrait skin options cannot overwrite landscape options");
+  document["presentations"]["portrait"] = "invalid";
+  writeFile(path, document.dump());
+  loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"]["laneLength"] == 12,
+         "malformed portrait settings do not erase valid landscape settings");
+}
+
+void testPresentationValidationAndRuntimeSelection() {
+  using Orientation = AppSettings::PresentationOrientation;
+  AppSettings settings;
+  const auto &portraitDefaults = settings.presentation(Orientation::Portrait);
+  expect(portraitDefaults.playAreaWidth7K == 9.5F &&
+             portraitDefaults.judgementIndicatorRenderMode == AppSettings::JudgementIndicatorRenderMode::Hud2D &&
+             portraitDefaults.judgementCounterPosition == AppSettings::JudgementCounterPosition::Left &&
+             portraitDefaults.gaugeBarPosition == AppSettings::GaugeBarPosition::Right,
+         "portrait defaults use wider lanes and a left-counter/right-gauge 2D HUD");
+  const auto &landscapeDefaults = settings.presentation(Orientation::Landscape);
+  expect(landscapeDefaults.playAreaWidth7K == 8 &&
+             landscapeDefaults.judgementIndicatorRenderMode == AppSettings::JudgementIndicatorRenderMode::World3D &&
+             landscapeDefaults.judgementCounterPosition == AppSettings::JudgementCounterPosition::Right &&
+             landscapeDefaults.gaugeBarPosition == AppSettings::GaugeBarPosition::World,
+         "landscape presentation defaults stay unchanged");
+  settings.presentation(Orientation::Landscape).laneLength = 11;
+  settings.setActivePresentationOrientation(Orientation::Portrait);
+  settings.presentation().laneAngleDegrees = std::numeric_limits<float>::quiet_NaN();
+  settings.presentation().laneLength = std::numeric_limits<float>::infinity();
+  settings.setPlayAreaWidthForKeyMode(14, 15);
+  settings.sanitize();
+  expect(settings.presentation().laneAngleDegrees == 0 &&
+             settings.presentation().laneLength == 16 &&
+             settings.playAreaWidthForKeyMode(14) == 15,
+         "portrait validation uses portrait defaults and width bounds");
+  AppSettings copy = settings;
+  copy.setActivePresentationOrientation(Orientation::Landscape);
+  expect(copy == settings && copy.presentation().laneLength == 11,
+         "runtime orientation selects independent values without changing saved equality");
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings == settings &&
+             loaded.settings.activePresentationOrientation() == Orientation::Landscape,
+         "saving from portrait retains both blocks without persisting runtime selection");
+}
+
+void testFeedbackDefaultsAndScaleMigration() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  const auto &defaults = document["presentations"]["landscape"];
+  expect(defaults["judgementTextSizePercent"] == 50 &&
+             defaults["judgementTimingSizePercent"] == 50 &&
+             defaults["pacemakerDiffSizePercent"] == 100 &&
+             defaults["judgementTextBold"] == false &&
+             defaults["judgementTimingBold"] == false &&
+             defaults["pacemakerDiffBold"] == false,
+         "feedback defaults retain the original sizes and regular weight");
+  writeFile(path, R"({"schemaVersion":7,"judgementTextY":0.4,
+      "judgementTextSizePercent":200,"judgementTimingSizePercent":50,
+      "judgementTextBold":false})");
+  const auto migrated = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, migrated.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  auto &landscape = document["presentations"]["landscape"];
+  expect(landscape["judgementTextSizePercent"] == 100 &&
+             landscape["judgementTimingSizePercent"] == 25 &&
+             landscape["judgementTextBold"] == false,
+         "legacy feedback sizes convert once while preserving explicit weight");
+  landscape["pacemakerDiffY"] = 0.9;
+  landscape["pacemakerDiffSizePercent"] = 500;
+  landscape["pacemakerDiffBold"] = false;
+  landscape["judgementTextY"] = 0.2;
+  landscape["judgementTimingY"] = 0.8;
+  landscape["judgementTextSizePercent"] = 25;
+  landscape["judgementTimingSizePercent"] = 500;
+  writeFile(path, document.dump());
+  const auto reloaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, reloaded.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  const auto &saved = document["presentations"]["landscape"];
+  expect(saved["judgementTextY"] == 0.2f && saved.value("judgementTimingY", -1.0f) == 0.8f,
+         "judgement and timing positions round trip independently");
+  expect(saved.value("pacemakerDiffY", -1.0f) == 0.9f &&
+             saved.value("pacemakerDiffSizePercent", 0) == 500 &&
+             !saved.value("pacemakerDiffBold", true),
+         "pacemaker difference settings persist independently");
+  expect(saved["judgementTextSizePercent"] == 25 && saved["judgementTimingSizePercent"] == 500,
+         "new feedback scale supports both endpoints without repeated migration");
+}
+
+void testSeparatedComboSettingsRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "combo-layout.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &landscape = document["presentations"]["landscape"];
+  expect(landscape.value("judgementComboSeparated", true) == false,
+         "existing profiles keep combined judgement and combo by default");
+  landscape["judgementComboSeparated"] = true;
+  landscape["comboTextY"] = 0.3;
+  landscape["comboTextSizePercent"] = 125;
+  landscape["comboTextBold"] = true;
+  writeFile(path, document.dump());
+  expect(AppSettingsStore::Save(path, AppSettingsStore::Load(path).settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  const auto &saved = document["presentations"]["landscape"];
+  expect(saved.value("judgementComboSeparated", false) &&
+             saved.value("comboTextY", -1.0f) == 0.3f &&
+             saved.value("comboTextSizePercent", 0) == 125 &&
+             saved.value("comboTextBold", false),
+         "separated combo layout and styling survive reload independently of judgement settings");
+  expect(!document["presentations"]["portrait"].value("judgementComboSeparated", true) &&
+             !document["presentations"]["portrait"].value("comboTextBold", true),
+         "landscape combo changes leave portrait defaults intact");
+  document["presentations"]["landscape"]["comboTextY"] = -2.0;
+  document["presentations"]["landscape"]["comboTextSizePercent"] = 900;
+  writeFile(path, document.dump());
+  expect(AppSettingsStore::Save(path, AppSettingsStore::Load(path).settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"].value("comboTextY", -1.0f) == 0.0f &&
+             document["presentations"]["landscape"].value("comboTextSizePercent", 0) == 500,
+         "combo position and size are clamped to supported bounds");
+}
+
+void testJudgementLabelVisibilityRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "judgement-visibility.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  const nlohmann::json selected = {{"PGREAT", false}, {"GREAT", true},
+      {"GOOD", false}, {"BAD", true}, {"POOR", false}, {"KPOOR", true}, {"COMBO", false}};
+  document["presentations"]["landscape"]["judgementTextVisibility"] = selected;
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"]["judgementTextVisibility"] == selected,
+         "individual judgement visibility survives save and reload");
+  const nlohmann::json allVisible = {{"PGREAT", true}, {"GREAT", true},
+      {"GOOD", true}, {"BAD", true}, {"POOR", true}, {"KPOOR", true}, {"COMBO", true}};
+  expect(document["presentations"]["portrait"]["judgementTextVisibility"] == allVisible,
+         "judgement visibility is independent by orientation and defaults to visible");
+
+  writeFile(path, R"({"schemaVersion":7,"judgementTextY":0.4})");
+  expect(AppSettingsStore::Save(path, AppSettingsStore::Load(path).settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  expect(document["presentations"]["landscape"]["judgementTextVisibility"] == allVisible,
+         "older profiles retain visible judgement labels");
+  document["presentations"]["landscape"]["judgementTextVisibility"] =
+      {{"PGREAT", "hidden"}, {"GOOD", false}, {"POOR", 0}};
+  writeFile(path, document.dump());
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(!invalid.diagnostics.empty(), "invalid visibility values produce diagnostics");
+  expect(AppSettingsStore::Save(path, invalid.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  auto expected = allVisible;
+  expected["GOOD"] = false;
+  expect(document["presentations"]["landscape"]["judgementTextVisibility"] == expected,
+         "missing or invalid flags remain visible while valid flags load independently");
+}
+
+void testScratchlessBuiltInPreferencesRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "scratchless.json";
+  AppSettings settings;
+  expect(settings.presentation().hideEmptyScratchLane5K &&
+             settings.presentation().hideEmptyScratchLane7K,
+         "empty scratch lanes are hidden by default in built-in 5K and 7K");
+  settings.presentation().hideEmptyScratchLane5K = false;
+  settings.setPlayAreaWidthForKeyMode(-5, 6.0F);
+  settings.setPlayAreaWidthForKeyMode(-7, 7.0F);
+  settings.setPlayAreaWidthForKeyMode(5, 9.0F);
+  settings.setPlayAreaWidthForKeyMode(7, 10.0F);
+  settings.presentation().skin.follow5K1S = true;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "scratchless preferences save");
+  auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.presentation().skin.follow5K1S && !loaded.presentation().skin.follow7K1S,
+         "follow selections persist independently from built-in and custom choices");
+  expect(!loaded.presentation().hideEmptyScratchLane5K &&
+             loaded.presentation().hideEmptyScratchLane7K &&
+             loaded.presentation(AppSettings::PresentationOrientation::Portrait).hideEmptyScratchLane5K,
+         "scratchless toggles persist independently by key mode and orientation");
+  expect(loaded.playAreaWidthForKeyMode(-5) == 9.0F &&
+             loaded.playAreaWidthForKeyMode(-7) == 7.0F &&
+             loaded.playAreaWidthForKeyMode(5) == 9.0F &&
+             loaded.playAreaWidthForKeyMode(7) == 10.0F,
+         "followed width comes from original mode while independent mode retains its width");
+  loaded.setPlayAreaWidthForKeyMode(-5, 11.0F);
+  expect(loaded.playAreaWidthForKeyMode(-5) == 11.0F &&
+             loaded.playAreaWidthForKeyMode(5) == 11.0F,
+         "followed scratchless width controls update the visible source mode");
+  loaded.presentation().skin.follow7K1S = true;
+  loaded.setPlayAreaWidthForKeyMode(-7, 12.0F);
+  expect(loaded.playAreaWidthForKeyMode(-7) == 12.0F &&
+             loaded.playAreaWidthForKeyMode(7) == 12.0F,
+         "7K follow writes use the same effective mode as reads");
+  loaded.presentation().skin.follow7K1S = false;
+  expect(loaded.playAreaWidthForKeyMode(-7) == 7.0F,
+         "follow writes preserve the dormant independent 7K width");
+  loaded.presentation().skin.follow5K1S = false;
+  expect(loaded.playAreaWidthForKeyMode(-5) == 6.0F,
+         "leaving Follow restores the child width without overwriting its parent");
+}
+
 int main() {
+  testJudgementLabelVisibilityRoundTrip();
+  testScratchlessBuiltInPreferencesRoundTrip();
+  testFeedbackDefaultsAndScaleMigration();
+  testSeparatedComboSettingsRoundTrip();
+  testOrientationPresentationMigrationAndIndependentRoundTrip();
+  testPresentationValidationAndRuntimeSelection();
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
@@ -1820,11 +2180,13 @@ int main() {
   testSchemaThreeMigrationDisablesCompatibility();
   testLegacy7KeySelectionMigratesToTraitSelection();
   testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();
+  testSkinPlayAreaBottomPaddingDefaultsAndBounds();
   testSkinSettingsDeterministicallyEnforceFixedLimits();
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testIpadGestureReminderRoundTrip();
+  testScreenOrientationRoundTripAndDefaults();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();

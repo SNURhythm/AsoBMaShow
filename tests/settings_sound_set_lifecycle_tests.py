@@ -23,6 +23,10 @@ class SettingsSoundSetLifecycleTests(unittest.TestCase):
         fixture = (ROOT / "tests/settings_sound_set_lifecycle_fixture.cpp").read_text()
         field = re.search(r"^  [^\n]+ gameplaySkinUiMessage;", (ROOT / "src/scene/SettingsScene.h").read_text(), re.M).group(0)
         fixture = fixture.replace("STATUS_FIELD", field)
+        preview_scroll = re.search(
+            r"  auto \*previewScroll = new ScrollView\(\);\n(.*?)(?=  previewScroll->)",
+            layout, re.S).group(0)
+        fixture = fixture.replace("PREVIEW_SCROLL_BINDING", preview_scroll)
         fixture = (fixture.replace("VIEW_FIELDS", "\n".join(
             f"View *{name} = nullptr;" for name in pointers))
                    .replace("SCENE_METHODS", methods))

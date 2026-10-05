@@ -116,6 +116,18 @@ void sanitizeViewport(ViewportSettings &viewport) {
     viewport = {};
     return;
   }
+  viewport.playAreaZoom =
+      std::isfinite(viewport.playAreaZoom) && viewport.playAreaZoom > 0.0F
+          ? std::clamp(viewport.playAreaZoom,
+                       SkinProfileSettingsPolicy::minPlayAreaZoom,
+                       SkinProfileSettingsPolicy::maxPlayAreaZoom)
+          : 1.0F;
+  viewport.playAreaBottomPaddingPercent =
+      std::isfinite(viewport.playAreaBottomPaddingPercent)
+          ? std::clamp(viewport.playAreaBottomPaddingPercent,
+                       SkinProfileSettingsPolicy::minPlayAreaBottomPaddingPercent,
+                       SkinProfileSettingsPolicy::maxPlayAreaBottomPaddingPercent)
+          : 0.0F;
   viewport.scaleX =
       std::clamp(viewport.scaleX, SkinProfileSettingsPolicy::minCustomScale,
                  SkinProfileSettingsPolicy::maxCustomScale);
@@ -298,6 +310,8 @@ void SkinProfileSettings::sanitize() {
     }
   }
 
+  if (follow5K1S) selectedSkinEntries.erase(-5);
+  if (follow7K1S) selectedSkinEntries.erase(-7);
   selected7KeyEntry.reset();
   if (const auto legacySelection = selectedSkinEntries.find(0);
       legacySelection != selectedSkinEntries.end()) {

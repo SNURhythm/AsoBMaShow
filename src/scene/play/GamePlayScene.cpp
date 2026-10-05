@@ -1,3 +1,4 @@
+#include "../../GameplayKeyMode.h"
 #include "../../i18n/Localization.h"
 //
 // Created by XF on 8/25/2024.
@@ -67,6 +68,7 @@
 #include "../../view/UiTheme.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
+#include "../../rendering/UiSafeArea.h"
 
 #include <algorithm>
 #include <array>
@@ -535,13 +537,13 @@ std::uint64_t effectiveRealtimeTouchLayoutRevision(
 
 gameplay::VirtualControllerLayout currentVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
-    const gameplay::RealtimeTouchUiTransform &transform) {
+    const gameplay::RealtimeTouchUiTransform &transform, bool hideScratch = false) {
   return gameplay::makeVirtualControllerLayout(
       config, keyMode,
       {.x = 0.0F,
        .y = 0.0F,
        .width = static_cast<float>(transform.uiWidth),
-       .height = static_cast<float>(transform.uiHeight)});
+       .height = static_cast<float>(transform.uiHeight)}, hideScratch);
 }
 
 void appendVirtualControllerHitRegions(
@@ -990,7 +992,10 @@ buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
   auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
   const auto controller = currentVirtualControllerLayout(
-      virtualController, chartMeta.KeyMode, transform);
+      virtualController, chartMeta.KeyMode, transform,
+      presentation.activeMode() == PresentationMode::BuiltIn &&
+          layout.laneCount > 0 && layout.scratch.size() == layout.laneCount &&
+          std::ranges::none_of(layout.scratch, [](bool scratch) { return scratch; }));
   auto controllerRegions =
       gameplay::makeVirtualControllerTouchRegions(controller, transform);
   if (!controllerRegions.empty()) {
@@ -1646,6 +1651,11 @@ bool GamePlayScene::realtimeGameplayAuthorityActive() const noexcept {
          realtimeGameplaySession->worker != nullptr;
 }
 
+bool GamePlayScene::hideVirtualControllerScratch() const noexcept {
+  return presentation != nullptr && presentation->activeMode() == PresentationMode::BuiltIn &&
+         builtInPresentation != nullptr && builtInPresentation->hidesScratchLane();
+}
+
 void GamePlayScene::acquireGameplaySkinForAttempt() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *coordinator =
@@ -1677,7 +1687,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     }
   };
   auto result = createGameplaySkinSession(std::move(services), {
-      .keyMode = chart->Meta.KeyMode,
+      .keyMode = gameplay::presentationKeyMode(*chart),
       .chartModel = &playfieldChartVisualModel,
       .initialState = &capturedPlayfieldVisualState,
       .initialProjection = &capturedPlayfieldProjection,
@@ -1914,6 +1924,11 @@ void GamePlayScene::applySkinAudioVolume(
 #endif
 
 void GamePlayScene::refreshGameplayPresentationGeometry() {
+  if (inputHandler != nullptr && presentation != nullptr &&
+      presentation->activeMode() == PresentationMode::BuiltIn) {
+    inputHandler->setPlayAreaWidth(playfieldPresentationConfiguration.playAreaWidth);
+    inputHandler->setTouchLaneOrder(presentation->touchLayout().lanes);
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
@@ -2108,7 +2123,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   }
 #endif
   if (!options.autoPlay) {
-    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto activeInputScopes =
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
     const auto realtimeInputProfile =
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
                                                    activeInputScopes);
@@ -2323,7 +2339,8 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
           snapshot.regionsTopmostFirst,
           currentVirtualControllerLayout(context.inputProfile.virtualController,
                                          chart->Meta.KeyMode,
-                                         session.layoutRefreshKey.uiTransform),
+                                         session.layoutRefreshKey.uiTransform,
+                                         hideVirtualControllerScratch()),
           session.layoutRefreshKey.layoutRevision);
     }
     auto presentationRegions = presentation->touchHitRegions();
@@ -2516,12 +2533,14 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
     return;
   }
   auto &session = *realtimeGameplaySession;
+  const auto safeInsets = rendering::uiSafeAreaInsets();
   if (pauseButton != nullptr) {
-    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+    pauseButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                    safeInsets.top + 38);
   }
   if (practiceRestartButton != nullptr) {
-    practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
-                                               98);
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                               safeInsets.top + 98);
   }
   refreshGameplayPresentationGeometry();
   const auto currentKey = makeRealtimeTouchLayoutRefreshKey(
@@ -2878,7 +2897,8 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
-          std::move(options), context.inputProfile, chart->Meta.KeyMode))),
+          std::move(options), context.inputProfile,
+          gameplay::presentationKeyMode(*chart)))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
@@ -2900,7 +2920,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
       options(enforceCoursePlaybackRules(
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
-                                       this->chart->Meta.KeyMode))),
+                                       gameplay::presentationKeyMode(*this->chart)))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
@@ -2965,20 +2985,20 @@ void GamePlayScene::init() {
   const auto replayInitialLaneCover =
       isReplayPlayback() && !courseNoSpeed()
           ? replayInitialLaneCoverState(
-                *options.replayData, context.settings.noteStartPositionPercent,
-                context.settings.laneCoverEnabled)
+                *options.replayData, context.settings.presentation().noteStartPositionPercent,
+                context.settings.presentation().laneCoverEnabled)
           : ReplayInitialLaneCoverState{
                 .percent = effectiveNoteStartPositionPercent(),
-                .enabled = context.settings.laneCoverEnabled};
+                .enabled = context.settings.presentation().laneCoverEnabled};
   playfieldLaneCoverEnabled = replayInitialLaneCover.enabled;
   playfieldLaneCoverPercent = replayInitialLaneCover.percent;
   playfieldLaneCoverPercentExact =
       static_cast<float>(playfieldLaneCoverPercent);
-  playfieldLiftEnabled = context.settings.liftEnabled;
-  playfieldLiftRatio = courseNoSpeed() ? 0.0F : context.settings.liftRatio;
-  playfieldHiddenEnabled = context.settings.hiddenEnabled;
+  playfieldLiftEnabled = context.settings.presentation().liftEnabled;
+  playfieldLiftRatio = courseNoSpeed() ? 0.0F : context.settings.presentation().liftRatio;
+  playfieldHiddenEnabled = context.settings.presentation().hiddenEnabled;
   playfieldHiddenRatio =
-      courseNoSpeed() ? 0.0F : context.settings.hiddenRatio;
+      courseNoSpeed() ? 0.0F : context.settings.presentation().hiddenRatio;
   playfieldChangeLiftTarget = true;
   playfieldHispeedState.emplace(
       gameplay_hispeed::Settings{
@@ -3092,11 +3112,18 @@ void GamePlayScene::init() {
           !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = context.settings.hispeedFixMode,
       .playAreaWidth =
-          context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+          context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart)),
+      .orientation = context.settings.activePresentationOrientation(),
+      .laneLength = context.settings.presentation().laneLength,
+      .laneAngleDegrees = context.settings.presentation().laneAngleDegrees,
+      .scratchLaneOnRight = context.settings.presentation().scratchLaneOnRight,
+      .hideEmptyScratchLane = chart->Meta.KeyMode == 5
+          ? context.settings.presentation().hideEmptyScratchLane5K
+          : context.settings.presentation().hideEmptyScratchLane7K,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
-      .laneBeamLengthPercent = context.settings.laneBeamLengthPercent,
+      .laneBeamLengthPercent = context.settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
@@ -3127,22 +3154,35 @@ void GamePlayScene::init() {
       .constantScroll = !courseNoSpeed() && context.settings.constantScroll,
       .constantFadeInMilliseconds =
           context.settings.constantFadeInMilliseconds,
-      .judgementIndicatorEnabled = context.settings.judgementIndicatorEnabled,
-      .judgementIndicatorY = context.settings.judgementIndicatorY,
+      .judgementIndicatorEnabled = context.settings.presentation().judgementIndicatorEnabled,
+      .judgementIndicatorY = context.settings.presentation().judgementIndicatorY,
       .judgementIndicatorWidthScale =
-          context.settings.judgementIndicatorWidthScale,
+          context.settings.presentation().judgementIndicatorWidthScale,
       .judgementIndicatorHudMode =
-          context.settings.judgementIndicatorRenderMode ==
+          context.settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
-          context.settings.judgementIndicatorRangeMilliseconds,
-      .judgementTextY = context.settings.judgementTextY,
-      .judgementCounterEnabled = context.settings.judgementCounterEnabled,
-      .judgementCounterPosition = context.settings.judgementCounterPosition,
-      .fastSlowCriteria = context.settings.judgementTimingFastSlowCriteria,
+          context.settings.presentation().judgementIndicatorRangeMilliseconds,
+      .judgementTextVisibility = context.settings.presentation().judgementTextVisibility,
+      .judgementTextY = context.settings.presentation().judgementTextY,
+      .judgementTimingY = context.settings.presentation().judgementTimingY,
+      .judgementTextSizePercent = context.settings.presentation().judgementTextSizePercent,
+      .judgementTextBold = context.settings.presentation().judgementTextBold,
+      .judgementComboSeparated = context.settings.presentation().judgementComboSeparated,
+      .comboTextY = context.settings.presentation().comboTextY,
+      .comboTextSizePercent = context.settings.presentation().comboTextSizePercent,
+      .comboTextBold = context.settings.presentation().comboTextBold,
+      .judgementTimingSizePercent = context.settings.presentation().judgementTimingSizePercent,
+      .judgementTimingBold = context.settings.presentation().judgementTimingBold,
+      .pacemakerDiffY = context.settings.presentation().pacemakerDiffY,
+      .pacemakerDiffSizePercent = context.settings.presentation().pacemakerDiffSizePercent,
+      .pacemakerDiffBold = context.settings.presentation().pacemakerDiffBold,
+      .judgementCounterEnabled = context.settings.presentation().judgementCounterEnabled,
+      .judgementCounterPosition = context.settings.presentation().judgementCounterPosition,
+      .fastSlowCriteria = context.settings.presentation().judgementTimingFastSlowCriteria,
       .millisecondsCriteria =
-          context.settings.judgementTimingMillisecondsCriteria,
-      .gaugeBarPosition = context.settings.gaugeBarPosition,
+          context.settings.presentation().judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = context.settings.presentation().gaugeBarPosition,
       .touchVisualizationEnabled = options.touchVisualizationEnabled.value_or(
           context.settings.touchVisualizationEnabled),
       .replayGhostRenderingEnabled =
@@ -3171,7 +3211,8 @@ void GamePlayScene::init() {
     return;
   }
   if (!isReplayPlayback() && !options.autoPlay) {
-    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto activeInputScopes =
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
     const auto gameplayInputProfile =
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
                                                    activeInputScopes);
@@ -3182,7 +3223,7 @@ void GamePlayScene::init() {
         [this](const input::LogicalInputTransition &transition) {
           handleLogicalInputCommand(transition);
         },
-        context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+        context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart)),
         LogicalGameplayRegistryPolicy{},
         [this](const auto &transition) {
           consumePracticeMenuLaneInput(transition.physicalLane,
@@ -3218,6 +3259,7 @@ void GamePlayScene::init() {
       return handleTouchInput(fingerIndex, action, normalizedLocation);
     });
     inputHandler->discardPendingTouchEvents();
+    refreshGameplayPresentationGeometry();
     if (!guidedAccessReminderPending) {
       inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
@@ -3497,6 +3539,13 @@ bool GamePlayScene::reset() {
     guidedAccessReminderLayout->setVisible(false);
   }
   stopRealtimeGameplayAuthority(false);
+  if (ownedInputHandler != nullptr) {
+    const auto scopes =
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
+    ownedInputHandler->setBindings(
+        makeGameplayInputProfileWithEscapeFallback(context.inputProfile, scopes),
+        scopes);
+  }
   if (guidedAccessReminderPending && inputHandler != nullptr) {
     inputHandler->stopListen();
     inputHandler->discardPendingTouchEvents();
@@ -3514,6 +3563,9 @@ bool GamePlayScene::reset() {
   ownedState.reset();
   state = nullptr;
   presentation->reset();
+  playfieldPresentationConfiguration.playAreaWidth =
+      context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart));
+  presentation->configure(playfieldPresentationConfiguration);
   gameplaySkinSafeBoundsInitialized = false;
   updateSkinResetLayoutVisibility();
   playfieldProjection.reset();
@@ -3786,7 +3838,7 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 40, TextView::FontWeight::Bold);
     guidedAccessReminderTitle = title;
     title->setWidthPercent(100);
-    title->setHeight(72);
+    title->setMinHeight(72);
     title->setWrap(true);
     title->setAlign(TextView::CENTER);
     title->setVAlign(TextView::MIDDLE);
@@ -3806,7 +3858,7 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *why = new TextView("assets/fonts/notosanscjkjp.ttf", 26, TextView::FontWeight::Bold);
     guidedAccessReminderWhy = why;
     why->setWidthPercent(100);
-    why->setHeight(60);
+    why->setMinHeight(60);
     why->setWrap(true);
     why->setAlign(TextView::CENTER);
     why->setVAlign(TextView::MIDDLE);
@@ -3816,12 +3868,12 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *help = new GuidedAccessInstructionView();
     guidedAccessReminderHelp = help;
     help->setWidthPercent(100);
-    help->setHeight(140);
+    help->setMinHeight(140);
     overlay->addView(help);
     auto *disableHelp = new GuidedAccessInstructionView();
     guidedAccessReminderDisableHelp = disableHelp;
     disableHelp->setWidthPercent(100);
-    disableHelp->setHeight(60);
+    disableHelp->setMinHeight(60);
     disableHelp->setMargin(Edge::Top, 6);
     overlay->addView(disableHelp);
     auto *controls = new View();
@@ -4380,7 +4432,7 @@ void GamePlayScene::applyStartSelectControlActions(
           const int nextPercent = static_cast<int>(std::lround(next));
           if (next != playfieldLaneCoverPercentExact) {
             playfieldLaneCoverPercentExact = next;
-            context.settings.noteStartPositionPercent = nextPercent;
+            context.settings.presentation().noteStartPositionPercent = nextPercent;
             playfieldLaneCoverPercent = nextPercent;
             playfieldHispeedState->setLaneCover(
                 nextPercent, currentNoteDisplayBpm(),
@@ -4401,7 +4453,7 @@ void GamePlayScene::applyStartSelectControlActions(
               0.0F, 1.0F);
           if (next != playfieldLiftRatio) {
             playfieldLiftRatio = next;
-            context.settings.liftRatio = next;
+            context.settings.presentation().liftRatio = next;
             playfieldHispeedState->setLaneCover(
                 playfieldLaneCoverPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
@@ -4415,7 +4467,7 @@ void GamePlayScene::applyStartSelectControlActions(
               0.0F, 1.0F);
           if (next != playfieldHiddenRatio) {
             playfieldHiddenRatio = next;
-            context.settings.hiddenRatio = next;
+            context.settings.presentation().hiddenRatio = next;
             playfieldHispeedState->setLaneCover(
                 playfieldLaneCoverPercent, currentNoteDisplayBpm(),
                 context.settings.hispeedAutoAdjust);
@@ -4428,7 +4480,7 @@ void GamePlayScene::applyStartSelectControlActions(
     case gameplay::StartSelectControlActionKind::ToggleLaneCover:
       if (!courseNoSpeed()) {
         playfieldLaneCoverEnabled = !playfieldLaneCoverEnabled;
-        context.settings.laneCoverEnabled = playfieldLaneCoverEnabled;
+        context.settings.presentation().laneCoverEnabled = playfieldLaneCoverEnabled;
         playfieldHispeedState->setLaneCoverEnabled(playfieldLaneCoverEnabled);
         playfieldLaneCoverResetPending = false;
         refreshRuntimePresentationConfiguration();
@@ -4539,14 +4591,14 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   if (courseNoSpeed() || deltaPercent == 0) {
     return;
   }
-  const int previous = context.settings.noteStartPositionPercent;
+  const int previous = context.settings.presentation().noteStartPositionPercent;
   const int next = std::clamp(previous + deltaPercent,
                               AppSettings::kMinNoteStartPositionPercent,
                               AppSettings::kMaxNoteStartPositionPercent);
   if (next == previous) {
     return;
   }
-  context.settings.noteStartPositionPercent = next;
+  context.settings.presentation().noteStartPositionPercent = next;
   playfieldLaneCoverPercent = next;
   playfieldLaneCoverPercentExact = static_cast<float>(next);
   playfieldHispeedState->setLaneCover(
@@ -4730,7 +4782,7 @@ int GamePlayScene::effectiveVisibleTimeDurationMilliseconds() const {
 
 int GamePlayScene::effectiveNoteStartPositionPercent() const {
   return courseNoSpeed() ? AppSettings::kDefaultNoteStartPositionPercent
-                         : context.settings.noteStartPositionPercent;
+                         : context.settings.presentation().noteStartPositionPercent;
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
@@ -6640,12 +6692,14 @@ void GamePlayScene::renderScene() {
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope uiBatchScope(renderContext);
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
+  const auto safeInsets = rendering::uiSafeAreaInsets();
   if (pauseButton != nullptr) {
-    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+    pauseButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                    safeInsets.top + 38);
   }
   if (practiceRestartButton != nullptr) {
-    practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
-                                               98);
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - safeInsets.right - 88,
+                                               safeInsets.top + 98);
   }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinResetLayoutButton != nullptr) {
@@ -6703,7 +6757,7 @@ void GamePlayScene::renderScene() {
     if (virtualControllerReady) {
       renderVirtualControllerOverlay(currentVirtualControllerLayout(
           context.inputProfile.virtualController, chart->Meta.KeyMode,
-          realtimeTouchUiTransform()),
+          realtimeTouchUiTransform(), hideVirtualControllerScratch()),
                                      spinScratchRotationDegrees, lanePressed,
                                      startButtonPressed, selectButtonPressed);
     }
@@ -8062,10 +8116,10 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
       floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
 
   auto applyDrag = [&]() -> bool {
-    const int previous = context.settings.noteStartPositionPercent;
+    const int previous = context.settings.presentation().noteStartPositionPercent;
     const int next = builtInPresentation->dragLaneCoverHandleTo(
         renderX, renderY, floatingLaneCoverDragOffsetY);
-    context.settings.noteStartPositionPercent = next;
+    context.settings.presentation().noteStartPositionPercent = next;
     playfieldLaneCoverPercent = next;
     playfieldLaneCoverPercentExact = static_cast<float>(next);
     if (next == previous) {

@@ -700,8 +700,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     if(APPLE AND NOT IOS)
+        set(settings_preview_input_source
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_preview_input.inc)
+        add_custom_command(
+            OUTPUT ${settings_preview_input_source}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_preview_input_extract.py
+                    --root ${CMAKE_SOURCE_DIR} --output ${settings_preview_input_source}
+            DEPENDS tests/settings_preview_input_extract.py tests/gameplay_terminal_scene_extract.py
+                    src/scene/SettingsScenePreview.cpp
+            VERBATIM
+        )
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
+            ${settings_preview_input_source}
+            src/scene/SettingsPreviewChart.cpp
+            src/scene/play/RealtimeTouchInputRouter.cpp
+            src/settings/AudioVideoSettings.cpp
+            src/input/RhythmInputHandler.cpp
+            src/input/SDLTouchInputSource.cpp
+            src/input/LogicalGameplayInputAdapter.cpp
+            src/input/InputBindingResolver.cpp
+            src/input/InputDefaults.cpp
+            src/input/InputNormalizer.cpp
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp
@@ -720,6 +740,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/BMSRenderer.cpp
             src/scene/play/BeatorajaHiSpeedChart.cpp
             src/scene/play/BuiltInPlayfieldPresentation.cpp
+            src/scene/play/CompiledGameplayJudge.cpp
+            src/scene/play/GameplayCandidateRules.cpp
+            src/scene/play/GameplayDefinition.cpp
+            src/scene/play/GameplayJudgeRules.cpp
+            src/scene/play/GameplayNoteJudgeRole.cpp
+            src/scene/play/GameplaySimulation.cpp
             src/scene/play/GameplayGaugeRules.cpp
             src/scene/play/Judge.cpp
             src/scene/play/JudgementIndicatorRenderer.cpp
@@ -736,6 +762,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             bgfx/bimg/3rdparty/lodepng/lodepng.cpp
         )
         target_include_directories(builtin_renderer_characterization_tests PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/src
             ${CMAKE_SOURCE_DIR}/bgfx/bimg/3rdparty/lodepng
         )
@@ -745,6 +772,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )
         target_link_libraries(builtin_renderer_characterization_tests PRIVATE
+            input_registry_test_support
             ${COMMON_LIBS}
             bgfx
             yogacore
@@ -3318,8 +3346,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         cxx_std_23
     )
 
+    set(ir_ranking_view_source ${CMAKE_CURRENT_BINARY_DIR}/generated/ir_ranking_view.inc)
+    add_custom_command(
+        OUTPUT ${ir_ranking_view_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ir_ranking_view_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${ir_ranking_view_source}
+        DEPENDS tests/ir_ranking_view_extract.py src/ir/IrRankingModalView.cpp
+        VERBATIM
+    )
     add_executable(ir_ranking_modal_tests
         tests/ir_ranking_modal_tests.cpp
+        ${ir_ranking_view_source}
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
         src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -3327,6 +3367,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/View.cpp
     )
     target_include_directories(ir_ranking_modal_tests PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(ir_ranking_modal_tests PRIVATE cxx_std_23)
@@ -5702,6 +5743,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
 
+    add_executable(portrait_playfield_framing_tests tests/portrait_playfield_framing_tests.cpp)
+    target_compile_features(portrait_playfield_framing_tests PRIVATE cxx_std_23)
+    add_test(NAME portrait_playfield_framing_tests COMMAND portrait_playfield_framing_tests)
+
+    add_executable(presentation_orientation_state_tests tests/presentation_orientation_state_tests.cpp src/settings/AudioVideoSettings.cpp)
+    target_include_directories(presentation_orientation_state_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(presentation_orientation_state_tests PRIVATE cxx_std_23)
+    add_test(NAME presentation_orientation_state_tests COMMAND presentation_orientation_state_tests)
+
     add_executable(profile_settings_persistence_tests
         tests/profile_settings_persistence_tests.cpp
         src/CourseIdentity.cpp
@@ -6309,6 +6359,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
+            src/scene/SettingsPreviewChart.cpp
+            src/scene/play/PlayfieldVisualState.cpp
+            src/audio/GameplayBgaMissStateTracker.cpp
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp
@@ -6456,11 +6509,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${_gameplay_skin_benchmark_links}
         )
 
+        set(settings_preview_restart_source
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_preview_restart.inc)
+        add_custom_command(
+            OUTPUT ${settings_preview_restart_source}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_preview_input_extract.py
+                    --root ${CMAKE_SOURCE_DIR} --output ${settings_preview_restart_source}
+                    --restart-only
+            DEPENDS tests/settings_preview_input_extract.py tests/gameplay_terminal_scene_extract.py
+                    src/scene/SettingsScenePreview.cpp
+            VERBATIM
+        )
         add_executable(playfield_presentation_coordinator_tests
             tests/playfield_presentation_coordinator_tests.cpp
+            ${settings_preview_restart_source}
             src/scene/play/PlayfieldPresentationCoordinator.cpp
         )
         target_include_directories(playfield_presentation_coordinator_tests PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(playfield_presentation_coordinator_tests PRIVATE
@@ -8898,6 +8964,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_launch_tests)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
+    add_test(NAME settings_rotation_edit_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_rotation_edit_tests.py)
+    add_test(NAME ui_scale_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
+    set_tests_properties(ui_scale_tests PROPERTIES
+        ENVIRONMENT "ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")
     asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(result_presentation_model_tests)
     asobmashow_register_test(remote_result_scene_tests)
@@ -8931,6 +9003,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_button_layout_tests)
+    set_tests_properties(ir_ranking_modal_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(settings_button_layout_tests PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)

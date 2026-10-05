@@ -227,7 +227,7 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
   expect(second.ok() && second.profile,
          "reverse-order merge creates an inactive blocker profile");
   AppSettings active;
-  active.skin = selectedSettings(1);
+  active.presentation().skin = selectedSettings(1);
   active.irProviders["tachi"].enabled = false;
   BlockingStore store;
   store.failCall = 3;
@@ -275,21 +275,21 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
   const auto blockerResult = waitForCommit(coordinator, blocker.ticket);
   const auto failed = waitForCommit(coordinator, pending.ticket);
   const auto loaded =
-      AppSettingsStore::Load(manager.activePaths().settingsJson);
+      AppSettingsStore::Load(manager.pathsFor(manager.activeProfile().id).settingsJson);
   expect(failed.status ==
                  skin::SkinProfileCommitResult::Status::RetryableFailure &&
              loaded.status == AppSettingsLoadStatus::Loaded &&
              loaded.settings.irProviders.at("tachi").enabled &&
-             loaded.settings.skin.entries.at(sampleEntry())
+             loaded.settings.presentation().skin.entries.at(sampleEntry())
                      .options.at("variant") == 1,
          "failed skin successor leaves the ordinary edit and prior skin "
          "durable");
   expect(blockerResult.status ==
                  skin::SkinProfileCommitResult::Status::Persisted &&
              store.candidates.size() == 3 &&
-             !store.candidates[1].skin.entries.empty() &&
+             !store.candidates[1].presentation().skin.entries.empty() &&
              store.candidates[1]
-                     .skin.entries.at(sampleEntry())
+                     .presentation().skin.entries.at(sampleEntry())
                      .options.at("variant") == 1 &&
              store.candidates.back().irProviders.at("tachi").enabled,
          "FIFO writes merge at their own execution sequence point");
@@ -304,7 +304,7 @@ void testFullSaveKeepsOptimisticSkinWhileSuccessorIsPersisting() {
   expect(inactive.ok() && inactive.profile,
          "full-save skin coherence creates an inactive blocker");
   AppSettings active;
-  active.skin = selectedSettings(1);
+  active.presentation().skin = selectedSettings(1);
   QueuedSaveStore store;
   TestSignal ordinarySaveAdmitted;
   ProfileSettingsPersistenceCoordinator coordinator(
@@ -346,8 +346,8 @@ void testFullSaveKeepsOptimisticSkinWhileSuccessorIsPersisting() {
   store.releaseFirstSave();
   store.waitUntilThirdEntered();
   fullSave.join();
-  expect(active.skin.entries.at(sampleEntry()).options.at("variant") == 2 &&
-             ordinary.skin.entries.at(sampleEntry()).options.at("variant") ==
+  expect(active.presentation().skin.entries.at(sampleEntry()).options.at("variant") == 2 &&
+             ordinary.presentation().skin.entries.at(sampleEntry()).options.at("variant") ==
                  2,
          "completed full save keeps the newer optimistic skin until its save completes");
 
@@ -445,7 +445,7 @@ void testPostAdmissionFailureRollsBackWithoutPublishingOrEnqueueing() {
                  "skin_profile_ticket_unknown" &&
              afterFailure.generation == base.generation &&
              afterFailure.settings == base.settings &&
-             active.skin == base.settings && saveCalls == 0,
+             active.presentation().skin == base.settings && saveCalls == 0,
          "post-admission exception rolls back state and leaves no pollable "
          "ticket or queued I/O");
 
@@ -542,13 +542,13 @@ void testOrdinarySaveMergesPendingSkinAndLatestIrCandidate() {
   const auto committed = waitForCommit(coordinator, pending.ticket);
   expect(committed.status == skin::SkinProfileCommitResult::Status::Persisted,
          "pending skin commit remains independently pollable");
-  expect(ordinary.skin.gameplayCompatibilityEnabled &&
-             ordinary.skin.entries.at(sampleEntry()).options.at("variant") ==
+  expect(ordinary.presentation().skin.gameplayCompatibilityEnabled &&
+             ordinary.presentation().skin.entries.at(sampleEntry()).options.at("variant") ==
                  42 &&
              ordinary.irProviders.at("tachi").enabled,
          "ordinary candidate merges durable skin and keeps the IR edit");
   const auto loaded =
-      AppSettingsStore::Load(manager.activePaths().settingsJson);
+      AppSettingsStore::Load(manager.pathsFor(manager.activeProfile().id).settingsJson);
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
              loaded.settings == ordinary,
          "merged full candidate is the durable settings document");
@@ -574,7 +574,7 @@ void testSnapshotTicketsAndInventoryFenceRejectAba() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   expect(all && all->complete && all->inventory &&
-             all->inventory->profiles.size() == 2,
+             all->inventory->profiles.size() == 4,
          "all-profile snapshot includes active and inactive profiles");
   if (all && all->inventory) {
     auto fence = coordinator.tryAcquireInventoryCommitFence(*all->inventory);
@@ -671,7 +671,7 @@ void testSnapshotWorkerCannotReconcileAcrossInventoryMutation() {
                           ? skin::makeSkinProfileId(late.profile->id)
                           : std::optional<skin::SkinProfileId>{};
   AppSettings lateSettings;
-  lateSettings.skin = selectedSettings(67);
+  lateSettings.presentation().skin = selectedSettings(67);
   if (lateId) {
     coordinator.bindCommittedActiveProfile(*lateId, lateSettings);
   }
@@ -685,7 +685,7 @@ void testSnapshotWorkerCannotReconcileAcrossInventoryMutation() {
   const auto lateSnapshot =
       lateId ? coordinator.snapshot(*lateId) : skin::VersionedSkinProfileSettings{};
   expect(result && result->cancelled && !result->complete && !result->inventory &&
-             lateId && lateSnapshot.settings == lateSettings.skin,
+             lateId && lateSnapshot.settings == lateSettings.presentation().skin,
          "a snapshot worker that loses its inventory generation cannot erase "
          "or overwrite a later bound profile");
 }
@@ -728,7 +728,7 @@ void testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket() {
              failed.failure->code == "skin_profile_worker_failure" &&
              failed.snapshot && failed.snapshot->settings == base.settings &&
              coordinator.snapshot(profile).settings == base.settings &&
-             active.skin == base.settings && ordinary.skin == base.settings,
+             active.presentation().skin == base.settings && ordinary.presentation().skin == base.settings,
          "non-standard skin worker failure rolls back optimistic state and "
          "cannot leak its candidate into a later ordinary save");
 }
@@ -868,7 +868,7 @@ void testSnapshotReconcilesDeletedInactiveProfileCache() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   expect(initial && initial->complete && initial->inventory &&
-             initial->inventory->profiles.size() == 2,
+             initial->inventory->profiles.size() == 4,
          "initial snapshot caches the inactive profile");
 
   auto mutation = coordinator.beginInventoryMutation();
@@ -883,7 +883,7 @@ void testSnapshotReconcilesDeletedInactiveProfileCache() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   expect(refreshed && refreshed->complete && refreshed->inventory &&
-             refreshed->inventory->profiles.size() == 1 &&
+             refreshed->inventory->profiles.size() == 2 &&
              coordinator.tryAcquireInventoryCommitFence(*refreshed->inventory),
          "a refreshed snapshot drops the deleted cache entry and can publish");
 }
@@ -921,10 +921,10 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
          "overwritten snapshot fixture loads its initial inactive settings");
   AppSettings replacement = beforeReplacement.settings;
   const auto replacementEntry = sampleEntry("Replacement");
-  replacement.skin.selectedGameplayEntries[0] = replacementEntry;
-  replacement.skin.entries[replacementEntry].options["variant"] = 73;
-  replacement.skin.sanitize();
-  expect(replacement.skin != beforeReplacement.settings.skin,
+  replacement.presentation().skin.selectedGameplayEntries[0] = replacementEntry;
+  replacement.presentation().skin.entries[replacementEntry].options["variant"] = 73;
+  replacement.presentation().skin.sanitize();
+  expect(replacement.presentation().skin != beforeReplacement.settings.presentation().skin,
          "replacement fixture changes the inactive skin settings");
   auto mutation = coordinator.beginInventoryMutation();
   const auto overwritten = manager.installProfile(
@@ -958,7 +958,7 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
       AppSettingsStore::Load(manager.pathsFor(created.profile->id).settingsJson);
   expect(durable.status == AppSettingsLoadStatus::Loaded,
          "overwritten inactive profile settings remain loadable");
-  expect(durable.settings.skin == replacement.skin,
+  expect(durable.settings.presentation().skin == replacement.presentation().skin,
          "overwritten inactive profile has replacement settings on disk");
 
   const auto refreshedTicket = coordinator.beginSnapshotAllProfiles();
@@ -971,7 +971,7 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
                               : skin::VersionedSkinProfileSettings{};
   expect(refreshed && refreshed->complete && refreshed->inventory,
          "overwritten profile refresh completes with an inventory");
-  expect(typedId && cached.settings == replacement.skin,
+  expect(typedId && cached.settings == replacement.presentation().skin,
          "overwritten profile refresh updates cached skin settings");
   expect(cached.generation > initialGeneration,
          "overwritten profile refresh advances its generation");
@@ -979,9 +979,96 @@ void testSnapshotRefreshesOverwrittenInactiveProfileSettings() {
              coordinator.tryAcquireInventoryCommitFence(*refreshed->inventory),
          "overwritten profile refresh can publish its refreshed inventory");
 }
+void testSharedSkinPolicyInvalidatesBothOrientationSnapshots() {
+  using Orientation = player_settings::PresentationOrientation;
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(), "policy orientation fixture initializes");
+  AppSettings active;
+  active.presentation(Orientation::Portrait).skin = selectedSettings(42);
+  active.sanitize();
+  ProfileSettingsPersistenceCoordinator coordinator(manager, active);
+  const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+  const auto portrait = coordinator.snapshot(profile, Orientation::Portrait);
+  const auto landscape = coordinator.snapshot(profile, Orientation::Landscape);
+  auto candidate = landscape.settings;
+  candidate.safetyLevel = skin::SkinSafetyLevel::Unrestricted;
+  const auto pending = coordinator.beginCommit(profile, Orientation::Landscape,
+                                               landscape.generation, candidate);
+  std::string error;
+  expect(coordinator.flushProfileAndWait(profile, error), "policy save flushes");
+  coordinator.pollCommit(pending.ticket);
+  const auto after = coordinator.snapshot(profile, Orientation::Portrait);
+  expect(after.generation > portrait.generation &&
+             after.settings.safetyLevel == candidate.safetyLevel &&
+             after.settings.entries == portrait.settings.entries,
+         "shared safety change invalidates both slots without copying options");
+  const auto stale = coordinator.beginCommit(profile, Orientation::Portrait,
+                                             portrait.generation, portrait.settings);
+  expect(stale.generationChanged, "old portrait policy cannot overwrite new shared policy");
+  const auto loaded = AppSettingsStore::Load(manager.pathsFor(manager.activeProfile().id).settingsJson);
+  expect(loaded.settings.skinSafetyLevel == candidate.safetyLevel &&
+             loaded.settings.presentation(Orientation::Portrait).skin.safetyLevel == candidate.safetyLevel,
+         "shared safety policy persists to both slots");
+  coordinator.acknowledgeCommit(pending.ticket);
+}
+
+void testOrientationCommitKeepsOriginAcrossRotationAndFullSave() {
+  using Orientation = player_settings::PresentationOrientation;
+  for (bool fail : {false, true}) {
+    TempDirectory temp;
+    PlayerProfileManager manager(temp.path(), managerDependencies());
+    expect(manager.Initialize().ok(), "orientation fixture initializes");
+    AppSettings active;
+    active.presentation(Orientation::Landscape).skin = selectedSettings(11);
+    active.presentation(Orientation::Portrait).skin = selectedSettings(22);
+    active.sanitize();
+    const auto landscape = active.presentation(Orientation::Landscape).skin;
+    const auto portrait = active.presentation(Orientation::Portrait).skin;
+    BlockingStore store;
+    store.failCall = fail ? 1 : 0;
+    ProfileSettingsPersistenceCoordinator coordinator(manager, active,
+        {.saveAtomic = [&](const auto &path, const auto &settings, std::string &error) {
+          return store.save(path, settings, error);
+        }});
+    const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+    active.setActivePresentationOrientation(Orientation::Portrait);
+    const auto base = coordinator.snapshot(profile, Orientation::Portrait);
+    const auto pending = coordinator.beginCommit(profile, Orientation::Portrait,
+                                                 base.generation, selectedSettings(33));
+    store.waitUntilEntered();
+    active.setActivePresentationOrientation(Orientation::Landscape);
+    AppSettings ordinary = active;
+    ordinary.irProviders["tachi"].enabled = true;
+    store.unblock();
+    std::string error;
+    expect(coordinator.saveActiveSettingsAndWait(profile, ordinary, error),
+           "full save survives orientation skin completion: " + error);
+    const auto result = coordinator.pollCommit(pending.ticket);
+    expect(result.snapshot && result.snapshot->orientation == Orientation::Portrait,
+           "completion retains originating presentation");
+    expect(active.presentation(Orientation::Landscape).skin == landscape,
+           "portrait completion never replaces landscape");
+    auto expectedPortrait = selectedSettings(33);
+    expectedPortrait.sanitize();
+    if (fail) expectedPortrait = portrait;
+    expect(active.presentation(Orientation::Portrait).skin == expectedPortrait,
+           "portrait commits or rolls back its own slot");
+    const auto loaded = AppSettingsStore::Load(manager.pathsFor(manager.activeProfile().id).settingsJson);
+    expect(loaded.settings.presentation(Orientation::Landscape).skin == landscape &&
+               loaded.settings.presentation(Orientation::Portrait).skin == expectedPortrait,
+           "interleaved full save persists both orientations");
+    expect(coordinator.snapshot(profile, Orientation::Landscape).generation == 1,
+           "ordinary portrait changes leave landscape generation independent");
+    coordinator.acknowledgeCommit(pending.ticket);
+  }
+}
+
 } // namespace
 
 int main() {
+  testSharedSkinPolicyInvalidatesBothOrientationSnapshots();
+  testOrientationCommitKeepsOriginAcrossRotationAndFullSave();
   testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly();
   testPostAdmissionFailureRollsBackWithoutPublishingOrEnqueueing();
   testFailureRollsBackWithoutReusingGenerationAndPathIsCaptured();

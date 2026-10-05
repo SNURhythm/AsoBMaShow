@@ -6,7 +6,6 @@
 #include "../input/RhythmInputHandler.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
-#include "play/RhythmLaneInputController.h"
 
 #include <iomanip>
 #include <sstream>
@@ -189,6 +188,33 @@ void SettingsScene::init() {
   ensureLayoutUpToDate();
 }
 
+void SettingsScene::onPresentationOrientationWillChange() {
+  const auto finishSelected = [&](auto &&self, View *view) -> bool {
+    if (auto *input = dynamic_cast<TextInputBox *>(view); input && input->getSelected()) {
+      input->endEditing();
+      return true;
+    }
+    if (auto *scroll = dynamic_cast<ScrollView *>(view)) {
+      if (auto *content = scroll->getContentView(); content && self(self, content)) {
+        return true;
+      }
+    }
+    for (auto *child : view->getChildren()) if (self(self, child)) return true;
+    return false;
+  };
+  for (auto *view : views) if (finishSelected(finishSelected, view)) break;
+}
+
+void SettingsScene::onPresentationOrientationChanged() {
+  lastLayoutWidth = -1;
+  previewRendererDirty = previewActive;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  ensureGameplaySkinSettingsController();
+#endif
+  syncPreviewPresentationConfiguration();
+  ensureLayoutUpToDate();
+}
+
 void SettingsScene::onLanguageChanged() {
   View::LayoutBatchScope batch;
   Scene::onLanguageChanged();
@@ -226,10 +252,14 @@ void SettingsScene::update(float dt) {
   if (previewActive) {
     ensurePreviewRenderer();
     ensurePreviewInputHandler();
-    syncPreviewInputPlayAreaWidth();
+    syncPreviewInputLayout();
     previewElapsedMicros +=
         static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
-    if (previewElapsedMicros >= kPreviewLoopMicros) {
+    advancePreviewSimulation();
+    const bool skinEnding = previewPresentation &&
+                            previewPresentation->selectedSkinGameplayTiming().has_value();
+    if (skinEnding ? previewEndAnimation.complete
+                   : previewElapsedMicros >= kPreviewLoopMicros) {
       resetPreviewSimulation();
     }
   }
@@ -272,12 +302,7 @@ void SettingsScene::renderScene() {
   }
 #endif
   if (previewActive && previewRenderer != nullptr) {
-    syncPreviewPresentationConfiguration();
-    capturePreviewVisualState();
-    previewRenderer->refreshGeometry();
-    RenderContext renderContext(context.uiBatchRenderer);
-    RenderContext::UiBatchScope uiBatchScope(renderContext);
-    previewRenderer->render(renderContext, previewElapsedMicros);
+    renderPreview();
   }
 }
 
@@ -285,9 +310,10 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
   const bool losesFocus = event.type == SDL_APP_WILLENTERBACKGROUND ||
                           event.type == SDL_APP_DIDENTERBACKGROUND ||
                           (event.type == SDL_WINDOWEVENT &&
-                           (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                            (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
                             event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
                             event.window.event == SDL_WINDOWEVENT_HIDDEN));
+  if (losesFocus && previewActive) destroyPreviewInputHandler();
   if (losesFocus && audioVideoSession != nullptr &&
       audioVideoSession->hasDisplayPreview()) {
     const auto result = audioVideoSession->onFocusLost();
@@ -347,7 +373,6 @@ void SettingsScene::cleanupScene() {
   inputViewRebuildGate.reset();
   inputLastViewSignature.clear();
   profileInlineEditor.clear();
-  previewLanePressed.clear();
   previewCombo = 0;
   previewScore = 0;
   rootLayout = nullptr;
