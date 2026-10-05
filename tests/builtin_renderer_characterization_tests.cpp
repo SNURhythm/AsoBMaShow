@@ -1956,8 +1956,8 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
              std::abs(body->rect.x - 5.25F) < 0.00001F,
          "custom long-note bodies are centered and narrowed within the lane");
   expect(tail != legacy.recorder.submissions.end() &&
-             std::abs(tail->rect.height - 70.0F / 128.0F) < 0.00001F,
-         "long-note tails retain their full base height and independent thickness");
+             std::abs(tail->rect.height - 35.0F / 128.0F) < 0.00001F,
+         "long-note tails scale the shared 20-pixel base height independently");
   const auto countColor = [](const auto &pixels, std::uint32_t rgb) {
     std::size_t count = 0;
     for (std::size_t i = 0; i + 3 < pixels.size(); i += 4)

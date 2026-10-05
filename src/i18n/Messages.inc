@@ -1524,7 +1524,7 @@
 {"settings.navigation.visual.label", "Visual", "화면 효과", "表示"},
 {"settings.notes.body_width", "Body width (25–100%)", "몸통 너비 (25–100%)", "ボディの幅 (25–100%)"},
 {"settings.notes.custom_color", "Custom color (#RRGGBB)", "사용자 색상 (#RRGGBB)", "カスタムカラー (#RRGGBB)"},
-{"settings.notes.help", "Customize each lane and type. 100% matches the original visible size.", "레인과 종류별로 설정합니다. 100%는 기존에 보이는 크기입니다.", "レーンと種類ごとに設定します。100%は元の見た目のサイズです。"},
+{"settings.notes.help", "Customize each lane and type. 100% is the default thickness.", "레인과 종류별로 설정합니다. 100%는 기본 두께입니다.", "レーンと種類ごとに設定します。100%は標準の厚さです。"},
 {"settings.notes.key", "Key {number}", "키 {number}", "キー {number}"},
 {"settings.notes.lane", "Lane", "레인", "レーン"},
 {"settings.notes.presets", "Color presets", "색상 프리셋", "カラープリセット"},

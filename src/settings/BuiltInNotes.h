@@ -63,8 +63,9 @@ inline Style resolve(const ModeStyles &settings, int lane, Type type,
   return defaultStyle(palette, type);
 }
 inline float height(float laneWidth, Type type, const Style &style) {
-  // Normal notes and mines have 20 blank rows in a 128 x 40 sprite.
-  const float pixels = type == Type::Normal || type == Type::Mine ? 20.0F : 40.0F;
+  // Match the visible 20-pixel normal-note region for every endpoint.
+  // Invisible outlines retain their original height; body thickness is width.
+  const float pixels = type == Type::Invisible || isBody(type) ? 40.0F : 20.0F;
   return laneWidth * pixels / 128.0F *
          std::clamp(style.thickness, kMinThickness, kMaxThickness) / 100.0F;
 }

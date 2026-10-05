@@ -2184,8 +2184,11 @@ void testBuiltInNoteGeometryAndIsolation() {
          "normal defaults match raw sprite RGB pixels");
   expect(height(128, Type::Normal, gray) == 20 &&
              height(128, Type::Mine, gray) == 20 &&
-             height(128, Type::LongHead, gray) == 40,
-         "only padded note regions lose half their original height");
+             height(128, Type::LongHead, gray) == 20 &&
+             height(128, Type::LongTail, gray) == 20 &&
+             height(128, Type::HellHead, gray) == 20 &&
+             height(128, Type::HellTail, gray) == 20,
+         "normal notes, mines, and all long-note endpoints share the same default height");
   auto &notes = settings.presentation().builtInNotes;
   notes[7][0][Type::Normal] = {0x123456, 150};
   notes[7][0][Type::LongHead] = {0xABCDEF, 75};
