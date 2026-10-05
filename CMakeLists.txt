@@ -700,8 +700,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     if(APPLE AND NOT IOS)
+        set(settings_preview_input_source
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_preview_input.inc)
+        add_custom_command(
+            OUTPUT ${settings_preview_input_source}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_preview_input_extract.py
+                    --root ${CMAKE_SOURCE_DIR} --output ${settings_preview_input_source}
+            DEPENDS tests/settings_preview_input_extract.py tests/gameplay_terminal_scene_extract.py
+                    src/scene/SettingsScenePreview.cpp
+            VERBATIM
+        )
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
+            ${settings_preview_input_source}
+            src/input/RhythmInputHandler.cpp
+            src/input/SDLTouchInputSource.cpp
+            src/input/LogicalGameplayInputAdapter.cpp
+            src/input/InputBindingResolver.cpp
+            src/input/InputDefaults.cpp
+            src/input/InputNormalizer.cpp
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp
@@ -736,6 +753,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             bgfx/bimg/3rdparty/lodepng/lodepng.cpp
         )
         target_include_directories(builtin_renderer_characterization_tests PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/src
             ${CMAKE_SOURCE_DIR}/bgfx/bimg/3rdparty/lodepng
         )
@@ -745,6 +763,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )
         target_link_libraries(builtin_renderer_characterization_tests PRIVATE
+            input_registry_test_support
             ${COMMON_LIBS}
             bgfx
             yogacore

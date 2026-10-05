@@ -93,6 +93,7 @@ public:
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
   void setPlayAreaWidth(float configuredPlayAreaWidth);
+  void setTouchLaneOrder(const std::vector<int> &displayedLaneOrder);
   void setDragModeEnabled(bool enabled);
   void setRegistryDeviceClassEnabled(input::DeviceClass deviceClass,
                                      bool enabled);

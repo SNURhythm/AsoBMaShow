@@ -247,7 +247,7 @@ void SettingsScene::update(float dt) {
   if (previewActive) {
     ensurePreviewRenderer();
     ensurePreviewInputHandler();
-    syncPreviewInputPlayAreaWidth();
+    syncPreviewInputLayout();
     previewElapsedMicros +=
         static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
     if (previewElapsedMicros >= kPreviewLoopMicros) {

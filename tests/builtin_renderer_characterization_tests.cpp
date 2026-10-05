@@ -1,3 +1,4 @@
+#include "input/RhythmInputHandler.h"
 #include "rendering/RenderPlan.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
@@ -1917,6 +1918,117 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+// Only the surrounding Settings UI is substituted; the extracted scene method,
+// renderer, camera, input handler, and logical input pipeline are production code.
+struct SettingsScene {
+  struct {
+    struct {
+      float width = 8.0F;
+      float playAreaWidthForKeyMode(int) const { return width; }
+    } settings;
+  } context;
+  bms_parser::Chart *previewChart = nullptr;
+  BMSRenderer *previewRenderer = nullptr;
+  RhythmInputHandler *previewInputHandler = nullptr;
+  void syncPreviewInputLayout();
+};
+#include "settings_preview_input.inc"
+
+struct PreviewRecordingControl : IRhythmControl {
+  std::vector<int> presses;
+  std::vector<int> releases;
+  bms_parser::Note *pressLane(int lane, double) override {
+    presses.push_back(lane);
+    return nullptr;
+  }
+  bms_parser::Note *pressLane(int lane, int, double delay) override {
+    return pressLane(lane, delay);
+  }
+  bms_parser::Note *releaseLane(int lane, double, bool) override {
+    releases.push_back(lane);
+    return nullptr;
+  }
+};
+
+void verifyPreviewInputLanePosition(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  const auto profile = makeDefaultInputProfile();
+  for (const int keyMode : {5, 7, 10, 14}) {
+    SyntheticChartFixture fixture;
+    fixture.chart->Meta.KeyMode = keyMode;
+    Judge judge(fixture.chart->Meta.Rank);
+    BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+    PreviewRecordingControl control;
+    RhythmInputHandler handler(&control, fixture.chart->Meta, registry, profile,
+                               makeGameplayInputScopes(keyMode));
+    SettingsScene scene;
+    scene.previewChart = fixture.chart.get();
+    scene.previewRenderer = &renderer;
+    scene.previewInputHandler = &handler;
+    for (const auto dimensions : {std::pair{1280, 720}, std::pair{720, 1280}}) {
+      rendering::updateUIScale(dimensions.first, dimensions.second);
+      rendering::game_camera.setViewRect(0, 0, dimensions.first, dimensions.second)
+          .setAspectRatio(float(dimensions.first) / dimensions.second);
+      for (const bool right : {false, true, false, true}) {
+        auto config = presentationConfig(0);
+        config.scratchLaneOnRight = right;
+        config.playAreaWidth = right ? 6.0F : 8.0F;
+        renderer.configure(config);
+        scene.context.settings.width = config.playAreaWidth;
+        scene.syncPreviewInputLayout();
+        const std::vector<int> expected = keyMode == 5
+            ? (right ? std::vector<int>{0, 1, 2, 3, 4, 7} : std::vector<int>{7, 0, 1, 2, 3, 4})
+            : keyMode == 7
+            ? (right ? std::vector<int>{0, 1, 2, 3, 4, 5, 6, 7} : std::vector<int>{7, 0, 1, 2, 3, 4, 5, 6})
+            : keyMode == 10 ? std::vector<int>{7, 0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 15}
+                            : std::vector<int>{7, 0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+          const float x = gameplay_geometry::playAreaLeft(config.playAreaWidth) +
+              (float(i) + 0.5F) * config.playAreaWidth / expected.size();
+          const auto screen = rendering::game_camera.project({x, 0.0F, 0.0F});
+          expect(handler.touchToLane({screen.x, screen.y, 0}) == expected[i],
+                 "preview hit testing follows the displayed lane order after live changes");
+          const Vector3 finger{screen.x / rendering::render_width,
+                               screen.y / rendering::render_height, 0};
+          control.presses.clear();
+          control.releases.clear();
+          handler.onFingerDown(42, finger);
+          if (expected[i] == 7 || expected[i] == 15) {
+            expect(control.presses.empty(), "scratch waits for a flick rather than pressing a key");
+            handler.onFingerMove(42, {finger.x, finger.y - 0.1F, 0});
+          }
+          handler.onFingerUp(42, finger);
+          expect(control.presses == std::vector<int>{expected[i]} &&
+                     control.releases == std::vector<int>{expected[i]},
+                 "preview taps and scratch flicks press and release the visible raw lane");
+        }
+        const auto keyIndex = std::ranges::find(expected, 0) - expected.begin();
+        const float keyX = gameplay_geometry::playAreaLeft(config.playAreaWidth) +
+            (float(keyIndex) + 0.5F) * config.playAreaWidth / expected.size();
+        const auto screen = rendering::game_camera.project({keyX, 0.0F, 0.0F});
+        const Vector3 heldFinger{screen.x / rendering::render_width,
+                                 screen.y / rendering::render_height, 0};
+        control.presses.clear();
+        control.releases.clear();
+        handler.onFingerDown(43, heldFinger);
+        scene.syncPreviewInputLayout();
+        expect(control.presses == std::vector<int>{0} && control.releases.empty(),
+               "unchanged preview layout preserves held input");
+        config.scratchLaneOnRight = !right;
+        renderer.configure(config);
+        scene.syncPreviewInputLayout();
+        expect(control.releases == (keyMode == 5 || keyMode == 7
+                   ? std::vector<int>{0} : std::vector<int>{}),
+               "changing preview lane order releases old touches without disrupting double play");
+        handler.onFingerUp(43, heldFinger);
+        expect(control.releases == std::vector<int>{0},
+               "lifting a touch after remapping does not release a different lane");
+      }
+    }
+  }
+}
+
 void verifyScratchLanePosition(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   for (const int keyMode : {4, 5, 6, 7, 8, 10, 14}) {
@@ -2184,6 +2296,7 @@ int main() {
           kRenderMicros, 41, true, false, true);
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
       verifyScratchLanePosition(target);
+      verifyPreviewInputLanePosition(target);
       verifyJudgementFeedbackStyles(target);
       verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {

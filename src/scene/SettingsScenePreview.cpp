@@ -165,6 +165,7 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
       previewPresentationConfiguration(context.settings, *previewChart);
   previewVisualStateStore->setConfiguration(configuration);
   previewRenderer->configure(configuration);
+  syncPreviewInputLayout();
 }
 
 void SettingsScene::syncPreviewAuthority() {
@@ -276,6 +277,7 @@ void SettingsScene::ensurePreviewInputHandler() {
     previewInputHandler->discardPendingTouchEvents();
     previewInputHandler->startListenSDL();
   }
+  syncPreviewInputLayout();
 }
 
 void SettingsScene::destroyPreviewInputHandler() {
@@ -291,12 +293,14 @@ void SettingsScene::destroyPreviewInputHandler() {
   previewJudgeCount.clear();
 }
 
-void SettingsScene::syncPreviewInputPlayAreaWidth() {
-  if (previewInputHandler == nullptr || previewChart == nullptr) {
+void SettingsScene::syncPreviewInputLayout() {
+  if (previewInputHandler == nullptr || previewChart == nullptr ||
+      previewRenderer == nullptr) {
     return;
   }
   previewInputHandler->setPlayAreaWidth(
       context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+  previewInputHandler->setTouchLaneOrder(previewRenderer->touchLayout().lanes);
 }
 
 void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {

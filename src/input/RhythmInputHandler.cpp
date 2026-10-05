@@ -416,6 +416,21 @@ void RhythmInputHandler::setPlayAreaWidth(float configuredPlayAreaWidth) {
   playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
 }
 
+void RhythmInputHandler::setTouchLaneOrder(
+    const std::vector<int> &displayedLaneOrder) {
+  if (displayedLaneOrder == laneOrder ||
+      !std::is_permutation(displayedLaneOrder.begin(), displayedLaneOrder.end(),
+                           laneOrder.begin(), laneOrder.end())) {
+    return;
+  }
+  // Release touches against their original raw lanes before changing hit testing.
+  while (!fingerToLane.empty()) {
+    releaseFingerLane(fingerToLane.begin()->first);
+  }
+  cancelGraceExpiry.clear();
+  laneOrder = displayedLaneOrder;
+}
+
 void RhythmInputHandler::setTouchEventCallback(
     std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback) {
   touchEventCallback = std::move(callback);

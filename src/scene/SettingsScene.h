@@ -433,7 +433,7 @@ private:
   void commitVirtualControllerSetting(input::VirtualControllerConfig config);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
-  void syncPreviewInputPlayAreaWidth();
+  void syncPreviewInputLayout();
   void resetPreviewHudSample();
   void publishPreviewJudgement(const JudgeResult &judgeResult,
                                long long sourceSongTimeMicros);
