@@ -2156,7 +2156,81 @@ void testScratchlessBuiltInPreferencesRoundTrip() {
          "leaving Follow restores the child width without overwriting its parent");
 }
 
+void testBuiltInNoteAppearancePersists() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "notes.json";
+  AppSettings defaults;
+  std::string error;
+  expect(AppSettingsStore::Save(path, defaults, error), "save note defaults");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &notes = document["presentations"]["landscape"]["builtInNotes"];
+  notes = {{"7", {{"0", {{"normal", {{"color", "12ABEF"}, {"thickness", 150}}}}}}}};
+  notes["48"]["47"]["normal"] = {{"color", "AB1234"}, {"thickness", 175}};
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), "save note overrides");
+  const auto saved = nlohmann::json::parse(readFile(path));
+  expect(saved["presentations"]["landscape"].contains("builtInNotes") &&
+             saved["presentations"]["landscape"]["builtInNotes"] == notes,
+         "lane and type note appearance survives load and save");
+}
+
+void testBuiltInNoteGeometryAndIsolation() {
+  using namespace built_in_notes;
+  AppSettings settings;
+  const auto gray = defaultStyle(Palette::Gray, Type::Normal);
+  const auto blue = defaultStyle(Palette::Blue, Type::Normal);
+  expect(gray.color == 0xCCCCCC && blue.color == 0x3399CC,
+         "normal defaults match raw sprite RGB pixels");
+  expect(height(128, Type::Normal, gray) == 20 &&
+             height(128, Type::Mine, gray) == 20 &&
+             height(128, Type::LongHead, gray) == 40,
+         "only padded note regions lose half their original height");
+  auto &notes = settings.presentation().builtInNotes;
+  notes[7][0][Type::Normal] = {0x123456, 150};
+  notes[7][0][Type::LongHead] = {0xABCDEF, 75};
+  notes[7][1][Type::Normal] = {0xABC123, 200};
+  const auto &mode = settings.builtInNotesForKeyMode(7);
+  expect(height(128, Type::Normal, resolve(mode, 0, Type::Normal, Palette::Gray)) == 30,
+         "custom thickness scales the visible height exactly once");
+  expect(resolve(mode, 0, Type::LongHead, Palette::Gray).color == 0xABCDEF &&
+             resolve(mode, 1, Type::Normal, Palette::Blue).color == 0xABC123 &&
+             resolve(mode, 2, Type::Normal, Palette::Gray) == gray,
+         "customization is isolated by lane and note type");
+  expect(settings.builtInNotesForKeyMode(5).empty(), "note settings do not leak across modes");
+  settings.presentation().skin.follow7K1S = true;
+  expect(settings.builtInNotesForKeyMode(-7) == mode, "scratchless follow resolves parent notes");
+  settings.presentation().skin.follow7K1S = false;
+  expect(settings.builtInNotesForKeyMode(-7).empty(), "independent scratchless notes stay independent");
+  expect(settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInNotes.empty(),
+         "portrait notes are independent from landscape");
+  expect(bodyWidth(128, {0, 50}) == 64 && bodyWidth(128, {0, 300}) == 128,
+         "body width is adjustable without crossing lane boundaries");
+  expect(parseColor("#12abEF") == 0x12ABEF && !parseColor("12ZZ34") &&
+             !parseColor("#123") && !parseColor("1234567"),
+         "custom colors accept six hex digits and reject malformed input");
+  notes[7][0][Type::Normal].thickness = -10;
+  notes[7][0][Type::LongHead].thickness = 999;
+  notes[7][0][Type::LongBodyOn] = {0xFFFFFFFF, 999};
+  notes[9][8][Type::Normal] = {0x112233, 150};
+  notes[24][23][Type::Normal] = {0x445566, 175};
+  notes[48][47][Type::Normal] = {0x778899, 200};
+  notes[999][99][Type::Normal] = {};
+  notes[7][-1][Type::Normal] = {};
+  settings.sanitize();
+  expect(notes.contains(9) && notes.contains(24) && notes.contains(48) &&
+             notes.at(48).contains(47),
+         "every exposed gameplay mode and its last lane remains customizable");
+  expect(notes[7][0][Type::Normal].thickness == 25 &&
+             notes[7][0][Type::LongHead].thickness == 300 &&
+             notes[7][0][Type::LongBodyOn] == Style{0xFFFFFF, 100} &&
+             !notes.contains(999) && !notes[7].contains(-1),
+         "invalid style dimensions and identities are bounded");
+}
+
 int main() {
+  testBuiltInNoteAppearancePersists();
+  testBuiltInNoteGeometryAndIsolation();
   testJudgementLabelVisibilityRoundTrip();
   testScratchlessBuiltInPreferencesRoundTrip();
   testFeedbackDefaultsAndScaleMigration();

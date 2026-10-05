@@ -485,7 +485,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 #endif
 
   const int foldButtonSize = metrics.compact ? 54 : 58;
-  constexpr int previewPanelPageCount = 3;
+  const int previewPanelPageCount = previewHasSelectedSkin ? 3 : 4;
   if (previewPanelPage < 0 || previewPanelPage >= previewPanelPageCount) {
     previewPanelPage = 0;
   }
@@ -665,6 +665,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewTabs->addView(makePreviewTab(1, i18n::message(previewHasSelectedSkin
       ? "settings.skins.skin.label" : "settings.preview_layout.lane.label")));
   previewTabs->addView(makePreviewTab(2, "HUD"));
+  if (!previewHasSelectedSkin)
+    previewTabs->addView(makePreviewTab(3, i18n::message("settings.notes.title")));
   previewPanel->addView(previewTabs);
 
   auto *previewScroll = new ScrollView();
@@ -869,6 +871,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     playAreaWidthControls->addView(resetWidth);
     previewControls->addView(playAreaWidthControls);
+  } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
+    appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
   } else {
     appendSelectedSkinHudSettings(previewControls, metrics, !previewHasSelectedSkin);
   }

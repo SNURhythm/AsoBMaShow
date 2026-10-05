@@ -1,7 +1,11 @@
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
+#include "../view/DropdownView.h"
+#include "play/StartLaneIndicatorGeometry.h"
 #include "../view/UiTheme.h"
+
+#include <charconv>
 
 using namespace settings_scene;
 
@@ -980,4 +984,192 @@ void SettingsScene::commitJudgementIndicatorRangeInput() {
   } catch (const std::exception &) {
     syncJudgementIndicatorRangeInputText(true);
   }
+}
+
+void SettingsScene::appendBuiltInNoteControls(
+    View *body, const LayoutMetrics &metrics, int keyMode) {
+  using namespace built_in_notes;
+  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
+  bms_parser::ChartMeta meta;
+  meta.KeyMode = std::abs(keyMode);
+  meta.IsDP = keyMode == 10 || keyMode == 14;
+  const auto lanes = keyMode < 0 ? meta.GetKeyLaneIndices() : meta.GetTotalLaneIndices();
+  const auto keys = meta.GetKeyLaneIndices();
+  const auto scratches = keyMode < 0 ? std::vector<int>{} : meta.GetScratchLaneIndices();
+  if (lanes.empty()) return;
+  if (std::find(lanes.begin(), lanes.end(), builtInNoteLane) == lanes.end())
+    builtInNoteLane = lanes.front();
+  builtInNoteType = std::clamp(builtInNoteType, 0, int(kTypeNames.size()) - 1);
+  const int lane = builtInNoteLane;
+  const auto type = static_cast<Type>(builtInNoteType);
+  const bool scratch = std::find(scratches.begin(), scratches.end(), lane) != scratches.end();
+  auto palette = Palette::Gray;
+  if (scratch) palette = Palette::Scratch;
+  else {
+    const auto position = std::find(keys.begin(), keys.end(), lane) - keys.begin();
+    if (start_lane_indicator::colorRoleForKey(position, keys.size()) ==
+        start_lane_indicator::ColorRole::Blue) palette = Palette::Blue;
+  }
+  const auto style = resolve(context.settings.builtInNotesForKeyMode(keyMode), lane, type, palette);
+  const auto apply = [this, keyMode, lane, type](Style value) {
+    context.settings.presentation().builtInNotes[keyMode][lane][type] = value;
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  };
+  body->addView(makeWrappedText(i18n::message("settings.notes.title"),
+                               metrics.bodyTextSize, ui_theme::textPrimary()));
+  body->addView(makeWrappedText(i18n::message("settings.notes.help"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  std::vector<DropdownView::Option> laneOptions;
+  for (const int candidate : lanes) {
+    const auto scratchIt = std::find(scratches.begin(), scratches.end(), candidate);
+    const auto keyIt = std::find(keys.begin(), keys.end(), candidate);
+    const auto label = scratchIt != scratches.end()
+        ? i18n::message("settings.notes.scratch", {{"number", std::to_string(scratchIt - scratches.begin() + 1)}})
+        : i18n::message("settings.notes.key", {{"number", std::to_string(keyIt - keys.begin() + 1)}});
+    laneOptions.push_back({.id = std::to_string(candidate), .label = label});
+  }
+  const auto addDropdown = [this, body](const std::string &id, const i18n::Text &label,
+      std::string selected, std::vector<DropdownView::Option> options,
+      std::function<void(int)> select) {
+    auto *dropdown = new DropdownView(
+        {.onOpenChanged = [this, id](bool open) { builtInNoteDropdown = open ? id : ""; },
+         .onOptionSelected = [this, select](const std::string &value) {
+           select(std::stoi(value));
+           builtInNoteDropdown.clear();
+           lastLayoutWidth = -1;
+         }}, overlayPortal);
+    dropdown->setWidthPercent(100.0F);
+    dropdown->refresh({.label = label, .selectedId = std::move(selected),
+        .options = std::move(options), .open = builtInNoteDropdown == id});
+    body->addView(dropdown);
+  };
+  addDropdown("note-lane", i18n::message("settings.notes.lane"), std::to_string(lane),
+              std::move(laneOptions), [this](int value) { builtInNoteLane = value; });
+  constexpr std::array<const char *, kTypeNames.size()> typeLabels{
+      "settings.notes.type.normal", "settings.notes.type.long_head",
+      "settings.notes.type.long_tail", "settings.notes.type.long_body_off",
+      "settings.notes.type.long_body_on", "settings.notes.type.hcn_head",
+      "settings.notes.type.hcn_tail", "settings.notes.type.hcn_body_off",
+      "settings.notes.type.hcn_body_on", "settings.notes.type.hcn_damage",
+      "settings.notes.type.mine", "settings.notes.type.invisible"};
+  std::vector<DropdownView::Option> typeOptions;
+  for (std::size_t i = 0; i < typeLabels.size(); ++i)
+    typeOptions.push_back({.id = std::to_string(i),
+        .label = i18n::message(typeLabels[i])});
+  addDropdown("note-type", i18n::message("settings.notes.type"), std::to_string(builtInNoteType),
+              std::move(typeOptions), [this](int value) { builtInNoteType = value; });
+
+  auto *sampleFrame = new View();
+  sampleFrame->setHeight(std::max(80.0F, height(160.0F, type, style) + 16.0F));
+  sampleFrame->setWidthPercent(100.0F);
+  sampleFrame->setAlignItems(YGAlignCenter);
+  sampleFrame->setJustifyContent(YGJustifyCenter);
+  sampleFrame->setBackgroundColor(Color(20, 24, 30));
+  auto *sample = new View();
+  sample->setWidth(isBody(type) ? bodyWidth(80.0F, style) : 160.0F);
+  sample->setHeight(isBody(type) ? 64.0F : height(160.0F, type, style));
+  sample->setFlexShrink(0);
+  sample->setBackgroundColor(Color(0xFF000000U | style.color));
+  if (type == Type::Invisible) {
+    sample->setBackgroundColor(Color(0, 0, 0, 0));
+    sample->setBorderColor(Color(0xE0000000U | style.color));
+    sample->setBorderWidth(std::max(1, int(height(160.0F, type, style) * 0.15F)));
+  }
+  if (scratch && !isBody(type) && type != Type::Invisible) {
+    sample->setFlexDirection(FlexDirection::Row);
+    sample->setJustifyContent(YGJustifySpaceEvenly);
+    sample->setAlignItems(YGAlignCenter);
+    for (int i = 0; i < 2; ++i) {
+      auto *stripe = new View();
+      stripe->setWidth(9.6F);
+      stripe->setHeight(height(160.0F, type, style) * 0.6F);
+      stripe->setBackgroundColor(ui_theme::textOn(Color(0xFF000000U | style.color)));
+      sample->addView(stripe);
+    }
+  }
+  sampleFrame->addView(sample);
+  body->addView(sampleFrame);
+
+  body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *swatches = new View();
+  swatches->setFlexDirection(FlexDirection::Row);
+  swatches->setFlexWrap(YGWrapWrap);
+  swatches->setGap(6.0F);
+  const std::array<std::uint32_t, 12> colors{
+      defaultStyle(palette, type).color, 0xCCCCCC, 0xFFFFFF, 0x3399CC,
+      0x33BFCC, 0xDB3625, 0xCC0000, 0xFF9524, 0xFFDD55, 0x66DD88, 0xAA88FF, 0xFF77BB};
+  for (const auto rgb : colors) {
+    const Color color(0xFF000000U | rgb);
+    auto *button = makeButton(78, metrics.actionButtonHeight,
+        makeText(colorHex(rgb), metrics.smallTextSize, ui_theme::textOn(color),
+                 TextView::CENTER, TextView::MIDDLE),
+        color, color, color, style.color == rgb ? ui_theme::textPrimary() : color,
+        ui_theme::textPrimary(), ui_theme::textPrimary());
+    button->setOnClickListener([apply, style, rgb]() mutable {
+      auto next = style;
+      next.color = rgb;
+      apply(next);
+    });
+    swatches->addView(button);
+  }
+  body->addView(swatches);
+  body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *colorInput = makeTextInput(metrics, 140);
+  colorInput->setEditingText("#" + colorHex(style.color));
+  colorInput->onEditingFinished([this, apply, style](const std::string &text) {
+    if (const auto rgb = parseColor(text)) {
+      auto next = style;
+      next.color = *rgb;
+      apply(next);
+    } else lastLayoutWidth = -1;
+  });
+  body->addView(colorInput);
+  body->addView(makeWrappedText(i18n::message(isBody(type)
+      ? "settings.notes.body_width" : "settings.notes.thickness"),
+      metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *thicknessInput = makeTextInput(metrics, 140);
+  thicknessInput->setEditingText(std::to_string(style.thickness));
+  thicknessInput->onEditingFinished([this, apply, style](const std::string &text) {
+    int value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
+      auto next = style;
+      next.thickness = value;
+      apply(next);
+    } else lastLayoutWidth = -1;
+  });
+  body->addView(thicknessInput);
+  auto *steps = new View();
+  steps->setFlexDirection(FlexDirection::Row);
+  steps->setFlexWrap(YGWrapWrap);
+  steps->setGap(8.0F);
+  for (const int delta : {-10, 10}) {
+    auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                  delta < 0 ? "-10%" : "+10%");
+    button->setOnClickListener([apply, style, delta]() mutable {
+      auto next = style;
+      next.thickness += delta;
+      apply(next);
+    });
+    steps->addView(button);
+  }
+  auto *reset = makeResetButton(metrics);
+  reset->setOnClickListener([apply, palette, type] { apply(defaultStyle(palette, type)); });
+  steps->addView(reset);
+  body->addView(steps);
+  auto *resetAll = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.notes.reset_mode"), metrics.smallTextSize,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  resetAll->setOnClickListener([this, keyMode] {
+    context.settings.presentation().builtInNotes.erase(keyMode);
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  });
+  body->addView(resetAll);
 }

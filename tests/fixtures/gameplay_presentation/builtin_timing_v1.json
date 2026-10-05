@@ -530,24 +530,6 @@
         },
         {
           "sequence": 2,
-          "kind": "normal",
-          "view": "main",
-          "depth": 187,
-          "timelineOrdinal": 5,
-          "pairedTimelineOrdinal": 18446744073709551615,
-          "timeMicros": 1550000,
-          "lane": 7,
-          "primitiveOrdinal": 0,
-          "longBodyState": "none",
-          "rect": [
-            0.0,
-            -1.025283,
-            1.0,
-            0.3125
-          ]
-        },
-        {
-          "sequence": 3,
           "kind": "invisible",
           "view": "main",
           "depth": 190,
@@ -565,7 +547,7 @@
           ]
         },
         {
-          "sequence": 4,
+          "sequence": 3,
           "kind": "invisible",
           "view": "main",
           "depth": 190,
@@ -583,7 +565,7 @@
           ]
         },
         {
-          "sequence": 5,
+          "sequence": 4,
           "kind": "invisible",
           "view": "main",
           "depth": 190,
@@ -601,7 +583,7 @@
           ]
         },
         {
-          "sequence": 6,
+          "sequence": 5,
           "kind": "invisible",
           "view": "main",
           "depth": 190,
@@ -619,7 +601,7 @@
           ]
         },
         {
-          "sequence": 7,
+          "sequence": 6,
           "kind": "measureLine",
           "view": "main",
           "depth": 100,
@@ -637,7 +619,7 @@
           ]
         },
         {
-          "sequence": 8,
+          "sequence": 7,
           "kind": "longBody",
           "view": "main",
           "depth": 183,
@@ -655,7 +637,7 @@
           ]
         },
         {
-          "sequence": 9,
+          "sequence": 8,
           "kind": "longHead",
           "view": "main",
           "depth": 184,
@@ -673,7 +655,7 @@
           ]
         },
         {
-          "sequence": 10,
+          "sequence": 9,
           "kind": "longBody",
           "view": "main",
           "depth": 185,
@@ -691,7 +673,7 @@
           ]
         },
         {
-          "sequence": 11,
+          "sequence": 10,
           "kind": "longTail",
           "view": "main",
           "depth": 186,
@@ -709,7 +691,7 @@
           ]
         },
         {
-          "sequence": 12,
+          "sequence": 11,
           "kind": "longHead",
           "view": "main",
           "depth": 186,
@@ -727,7 +709,7 @@
           ]
         },
         {
-          "sequence": 13,
+          "sequence": 12,
           "kind": "longBody",
           "view": "main",
           "depth": 188,
@@ -745,7 +727,7 @@
           ]
         },
         {
-          "sequence": 14,
+          "sequence": 13,
           "kind": "longTail",
           "view": "main",
           "depth": 189,
@@ -763,7 +745,7 @@
           ]
         },
         {
-          "sequence": 15,
+          "sequence": 14,
           "kind": "longHead",
           "view": "main",
           "depth": 189,
@@ -781,7 +763,7 @@
           ]
         },
         {
-          "sequence": 16,
+          "sequence": 15,
           "kind": "normal",
           "view": "main",
           "depth": 191,
@@ -795,11 +777,11 @@
             1.0,
             8.544022,
             1.0,
-            0.3125
+            0.15625
           ]
         },
         {
-          "sequence": 17,
+          "sequence": 16,
           "kind": "mine",
           "view": "main",
           "depth": 191,
@@ -813,11 +795,11 @@
             6.0,
             8.544022,
             1.0,
-            0.3125
+            0.15625
           ]
         },
         {
-          "sequence": 18,
+          "sequence": 17,
           "kind": "laneBeamPass",
           "view": "main",
           "depth": 180,
@@ -835,7 +817,7 @@
           ]
         },
         {
-          "sequence": 19,
+          "sequence": 18,
           "kind": "laneCoverPass",
           "view": "main",
           "depth": 2415919104,
@@ -853,7 +835,7 @@
           ]
         },
         {
-          "sequence": 20,
+          "sequence": 19,
           "kind": "startIndicatorPass",
           "view": "main",
           "depth": 2684354560,
@@ -871,7 +853,7 @@
           ]
         },
         {
-          "sequence": 21,
+          "sequence": 20,
           "kind": "judgementIndicatorPass",
           "view": "main",
           "depth": 2952790016,
@@ -889,7 +871,7 @@
           ]
         },
         {
-          "sequence": 22,
+          "sequence": 21,
           "kind": "gaugePass",
           "view": "ui",
           "depth": 0,
@@ -907,7 +889,7 @@
           ]
         },
         {
-          "sequence": 23,
+          "sequence": 22,
           "kind": "hudPass",
           "view": "ui",
           "depth": 0,
@@ -925,7 +907,7 @@
           ]
         },
         {
-          "sequence": 24,
+          "sequence": 23,
           "kind": "touchPass",
           "view": "ui",
           "depth": 1,
@@ -1199,7 +1181,7 @@
             0.0,
             -0.779215,
             1.0,
-            0.3125
+            0.15625
           ]
         },
         {
@@ -1451,7 +1433,7 @@
             1.0,
             6.493456,
             1.0,
-            0.3125
+            0.15625
           ]
         },
         {
@@ -1469,7 +1451,7 @@
             6.0,
             6.493456,
             1.0,
-            0.3125
+            0.15625
           ]
         },
         {

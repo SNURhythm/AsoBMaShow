@@ -77,6 +77,7 @@ struct PlayfieldPresentationConfig {
   bool laneCoverEnabled = true;
   int laneBeamLengthPercent = 100;
   int noteStartPositionPercent = 0;
+  built_in_notes::ModeStyles builtInNotes;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
   bool showPastNotes = false;

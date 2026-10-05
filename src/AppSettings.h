@@ -4,6 +4,7 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "settings/BuiltInNotes.h"
 #include "settings/JudgementTextVisibility.h"
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
@@ -165,6 +166,14 @@ public:
   bool prepMetronomeEnabled = false;
   bool ipadGestureReminderEnabled = true;
   bool startLaneIndicatorsEnabled = true;
+  const built_in_notes::ModeStyles &builtInNotesForKeyMode(int mode) const {
+    if (mode == -5 && presentation().skin.follow5K1S) mode = 5;
+    if (mode == -7 && presentation().skin.follow7K1S) mode = 7;
+    const auto &notes = presentation().builtInNotes;
+    const auto found = notes.find(mode);
+    static const built_in_notes::ModeStyles empty;
+    return found == notes.end() ? empty : found->second;
+  }
   bool showInvisibleNotes = false;
   // PlayerConfig.showpastnote. Its narrow LaneRenderer condition is applied
   // by playfield projection rather than broadening past-note rendering.
@@ -257,6 +266,7 @@ public:
     JudgementTimingDisplayCriteria judgementTimingMillisecondsCriteria =
         JudgementTimingDisplayCriteria::GreatOrBelow;
     GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
+    built_in_notes::Settings builtInNotes;
     skin::SkinProfileSettings skin;
     explicit PresentationSettings(PresentationOrientation orientation =
                                       PresentationOrientation::Landscape) {

@@ -629,6 +629,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                           context.settings.geometryPolicy().width.maximum));
                   persistSettings();
                 });
+  appendBuiltInNoteControls(body, metrics, keyMode);
   appendSelectedSkinHudSettings(body, metrics, true);
 }
 

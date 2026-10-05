@@ -1,4 +1,5 @@
 #include "ReplayVideoGameplayPreflight.h"
+#include "../../GameplayKeyMode.h"
 
 #include "BeatorajaHiSpeedChart.h"
 
@@ -80,6 +81,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneCoverEnabled = laneCoverEnabled,
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = noteStartPositionPercent,
+      .builtInNotes = settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .showPastNotes = settings.showPastNotes,

@@ -705,7 +705,8 @@ ScenarioResult renderScenario(
     long long visualTimeMicros = kRenderMicros,
     std::uint64_t frameSerial = 0,
     bool seedPastInvisibleProbe = false,
-    bool primeRendererTraversal = false, bool scratchOnRight = false) {
+    bool primeRendererTraversal = false, bool scratchOnRight = false,
+    const built_in_notes::ModeStyles &noteStyles = {}) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
@@ -724,6 +725,7 @@ ScenarioResult renderScenario(
 
   auto configuration = presentationConfig(coverPercent);
   configuration.scratchLaneOnRight = scratchOnRight;
+  configuration.builtInNotes = noteStyles;
   const auto authority = authorityFor(*fixture.chart, coverPercent);
   store.setConfiguration(configuration);
   store.applyAuthorityUpdate(authority);
@@ -1919,6 +1921,58 @@ void destroyRenderTarget(RenderTarget &target) {
   target = {};
 }
 
+void verifyCustomNoteAppearance(const RenderTarget &target) {
+  using Type = built_in_notes::Type;
+  using Kind = characterization::SubmissionKind;
+  built_in_notes::ModeStyles styles;
+  styles[0][Type::Normal] = {0x12ABEF, 200};
+  styles[5][Type::Mine] = {0x77CC55, 150};
+  styles[4][Type::LongBodyOn] = {0xAA55EE, 50};
+  styles[4][Type::LongTail] = {0xEECC11, 175};
+  styles[6][Type::HellDamage] = {0xDD3366, 75};
+  styles[7][Type::Normal] = {0x66DD88, 300};
+  const auto legacy = renderScenario(target, kAfterCoverPercent, true,
+      ScenarioRenderPath::Legacy, 2'200'000, 43, true, false, false, styles);
+  const auto captured = renderScenario(target, kAfterCoverPercent, true,
+      ScenarioRenderPath::Captured, 2'200'000, 43, true, false, false, styles);
+  verifyCapturedOverloadEquivalence(legacy, captured);
+  const auto find = [&](Kind kind, int lane) {
+    return std::ranges::find_if(legacy.recorder.submissions, [=](const auto &submission) {
+      return submission.kind == kind && submission.lane == lane;
+    });
+  };
+  const auto normal = find(Kind::NormalNote, 0);
+  const auto mine = find(Kind::Mine, 5);
+  const auto body = find(Kind::LongBody, 4);
+  const auto tail = find(Kind::LongTail, 4);
+  expect(normal != legacy.recorder.submissions.end() &&
+             std::abs(normal->rect.height - 40.0F / 128.0F) < 0.00001F,
+         "normal thickness scales the 20-pixel visible region, not the 40-pixel sprite");
+  expect(mine != legacy.recorder.submissions.end() &&
+             std::abs(mine->rect.height - 30.0F / 128.0F) < 0.00001F,
+         "mine thickness uses its own padded sprite region and lane setting");
+  expect(body != legacy.recorder.submissions.end() &&
+             std::abs(body->rect.width - 0.5F) < 0.00001F &&
+             std::abs(body->rect.x - 5.25F) < 0.00001F,
+         "custom long-note bodies are centered and narrowed within the lane");
+  expect(tail != legacy.recorder.submissions.end() &&
+             std::abs(tail->rect.height - 70.0F / 128.0F) < 0.00001F,
+         "long-note tails retain their full base height and independent thickness");
+  const auto countColor = [](const auto &pixels, std::uint32_t rgb) {
+    std::size_t count = 0;
+    for (std::size_t i = 0; i + 3 < pixels.size(); i += 4)
+      if (pixels[i] == ((rgb >> 16) & 255) && pixels[i + 1] == ((rgb >> 8) & 255) &&
+          pixels[i + 2] == (rgb & 255)) ++count;
+    return count;
+  };
+  for (const auto rgb : {0x12ABEFU, 0x77CC55U, 0xAA55EEU}) {
+    expect(countColor(legacy.rgba, rgb) > 10 && countColor(captured.rgba, rgb) > 10,
+           "custom RGB " + built_in_notes::colorHex(rgb) + " reaches both render paths (" +
+               std::to_string(countColor(legacy.rgba, rgb)) + ", " +
+               std::to_string(countColor(captured.rgba, rgb)) + " pixels)");
+  }
+}
+
 void verifyScratchlessChartEligibility() {
   for (int mode : {5, 7}) {
     for (int content = 0; content < 7; ++content) {
@@ -2225,7 +2279,8 @@ void verifyScratchLanePosition(const RenderTarget &target) {
       RenderContext context(batch);
       {
         RenderContext::UiBatchScope scope(context);
-        renderer.render(context, kRenderMicros, kRenderMicros);
+        // Sample at the scratch timing, while its visible lower half is above the judge line.
+        renderer.render(context, 1'550'000, 1'550'000);
       }
       const auto scratch = std::ranges::find_if(recorder.submissions, [](const auto &submission) {
         return submission.kind == characterization::SubmissionKind::NormalNote && submission.lane == 7;
@@ -3085,6 +3140,7 @@ int main() {
           target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
           kRenderMicros, 41, true, false, true);
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
+      verifyCustomNoteAppearance(target);
       verifyScratchlessChartEligibility();
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);

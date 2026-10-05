@@ -26,7 +26,6 @@
 #include "../../RAII.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
-#include "../../utils/SpriteLoader.h"
 #include "../../view/ClearLampColors.h"
 #include "../../view/UiTheme.h"
 
@@ -46,6 +45,8 @@
 #include <utility>
 
 namespace {
+using NoteType = built_in_notes::Type;
+
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
 constexpr long long kJudgementTimingTextLingerMicros = 1000000LL;
 constexpr const char *kHudFontPath = "assets/fonts/notosanscjkjp.ttf";
@@ -64,9 +65,6 @@ constexpr float kPauseButtonSize = 52.0f;
 constexpr float kAutoPlayMarkGap = 12.0f;
 constexpr float kAutoPlayMarkMinWidth = 150.0f;
 constexpr float kAutoPlayMarkMaxWidth = 260.0f;
-constexpr int kAnimatedLongBodyFrameCount = 24;
-constexpr int kAnimatedLongBodyCycleMs = 266;
-constexpr int kHellChargeDamageCycleMs = 100;
 constexpr double kLaneBeamMaxAlpha = 0.2;
 constexpr double kScratchLaneBeamHeldAlpha = 0.08;
 constexpr long long kScratchLaneBeamHeldFadeMicros = 180000LL;
@@ -94,16 +92,6 @@ long long latePoorTimingFromWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   const auto it = windows.find(Bad);
   return it == windows.end() ? kDefaultLatePoorTimingMicros : it->second.second;
-}
-
-int skinAnimationFrame(long long timeMicros, int frameCount, int cycleMs) {
-  if (frameCount <= 1 || cycleMs <= 0 || timeMicros < 0) {
-    return 0;
-  }
-  const long long timeMs = timeMicros / 1000LL;
-  const long long cycle = static_cast<long long>(cycleMs);
-  const long long timeInCycle = timeMs % cycle;
-  return static_cast<int>((timeInCycle * frameCount / cycle) % frameCount);
 }
 
 uint8_t scaledAlpha(uint8_t alpha, float scale) {
@@ -191,27 +179,6 @@ gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
   }
   return noteRenderClip(note->Timeline->Timing, currentTimeMicros, y,
                         noteHeight, judgeY);
-}
-
-float clippedBottomV(float topV, float bottomV,
-                     float bottomTextureFraction) {
-  return topV + (bottomV - topV) * bottomTextureFraction;
-}
-
-void destroyTextureHandle(bgfx::TextureHandle &texture) {
-  if (bgfx::isValid(texture)) {
-    bgfx::destroy(texture);
-    texture = BGFX_INVALID_HANDLE;
-  }
-}
-
-void destroyNoteSheet(NoteSheet &sheet) {
-  destroyTextureHandle(sheet.texture);
-  destroyTextureHandle(sheet.longBodyOffTexture);
-  destroyTextureHandle(sheet.longBodyOnTexture);
-  destroyTextureHandle(sheet.hellChargeBodyOffTexture);
-  destroyTextureHandle(sheet.hellChargeBodyOnTexture);
-  destroyTextureHandle(sheet.hellChargeDamageTexture);
 }
 
 Color hudPanelFill() {
@@ -667,7 +634,6 @@ BMSRenderer::BMSRenderer(
       visibleTimeDurationMilliseconds(visibleTimeDurationMilliseconds),
       playbackRate(playbackRate), renderHud(renderHud), chart(chart) {
   setCurrentBpm(chart != nullptr ? chart->Meta.Bpm : 0.0);
-  auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
 
   scratchlessSinglePlay = gameplay::isScratchlessSinglePlay(*chart);
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
@@ -697,8 +663,6 @@ BMSRenderer::BMSRenderer(
       keyLanes.push_back(lane);
     }
   }
-  std::unordered_map<int, bool> laneUsesBlueSheet;
-  laneUsesBlueSheet.reserve(keyLanes.size());
   for (size_t keyPosition = 0; keyPosition < keyLanes.size(); ++keyPosition) {
     const int lane = keyLanes[keyPosition];
     if (lane < 0) {
@@ -707,7 +671,6 @@ BMSRenderer::BMSRenderer(
     const auto colorRole =
         start_lane_indicator::colorRoleForKey(keyPosition, keyLanes.size());
     const bool usesBlue = colorRole == start_lane_indicator::ColorRole::Blue;
-    laneUsesBlueSheet.emplace(lane, usesBlue);
     startLaneIndicatorColorRoles.emplace(lane, colorRole);
     const size_t laneIndex = static_cast<size_t>(lane);
     if (usesBlue) {
@@ -811,113 +774,14 @@ BMSRenderer::BMSRenderer(
   }
   buildTimelineScrollPositions();
   mainBpm = gameplay_hispeed::summarizeChartBpm(*chart).main;
-  SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
-  if (!spriteLoader.load()) {
-    throw std::runtime_error("Failed to load simple_gray.png");
-  }
-  constexpr int width = 128;
-  constexpr int height = 40;
-  noteImageHeight = height;
-  noteImageWidth = width;
   if (!laneOrder.empty()) {
     const int maxLane = *std::max_element(laneOrder.begin(), laneOrder.end());
     if (maxLane >= 0) {
       laneXLookup.assign(static_cast<size_t>(maxLane + 1),
                          std::numeric_limits<float>::quiet_NaN());
-      laneSheetLookup.assign(static_cast<size_t>(maxLane + 1), nullptr);
-      for (int lane : laneOrder) {
-        if (lane < 0) {
-          continue;
-        }
-        const size_t laneIndex = static_cast<size_t>(lane);
-        if (isScratch(lane)) {
-          laneSheetLookup[laneIndex] = &scratchSheet;
-        } else {
-          const auto colorIt = laneUsesBlueSheet.find(lane);
-          laneSheetLookup[laneIndex] =
-              colorIt != laneUsesBlueSheet.end() && colorIt->second ? &blueSheet
-                                                                     : &graySheet;
-        }
-      }
     }
   }
   rebuildPlayAreaGeometry();
-
-  SpriteLoader spriteLoader2(PATH("assets/img/simple_blue.png"));
-  if (!spriteLoader2.load()) {
-    throw std::runtime_error("Failed to load simple_blue.png");
-  }
-
-  SpriteLoader spriteLoader3(PATH("assets/img/orange.png"));
-  if (!spriteLoader3.load()) {
-    throw std::runtime_error("Failed to load orange.png");
-  }
-
-  graySheet.texture = loadSheetTexture(spriteLoader, "simple_gray");
-  blueSheet.texture = loadSheetTexture(spriteLoader2, "simple_blue");
-  scratchSheet.texture = loadSheetTexture(spriteLoader3, "orange");
-  graySheet.longBodyOffTexture =
-      loadCroppedTexture(spriteLoader, 0, 120, 128, 12, "gray long body off");
-  graySheet.longBodyOnTexture =
-      loadCroppedTexture(spriteLoader, 0, 132, 128, 24, "gray long body on");
-  graySheet.hellChargeBodyOffTexture = loadCroppedTexture(
-      spriteLoader, 0, 236, 128, 12, "gray hell charge body off");
-  graySheet.hellChargeBodyOnTexture = loadCroppedTexture(
-      spriteLoader, 0, 248, 128, 24, "gray hell charge body on");
-  graySheet.hellChargeDamageTexture = loadCroppedTexture(
-      spriteLoader, 0, 272, 128, 24, "gray hell charge body damage");
-  blueSheet.longBodyOffTexture =
-      loadCroppedTexture(spriteLoader2, 0, 120, 128, 12, "blue long body off");
-  blueSheet.longBodyOnTexture =
-      loadCroppedTexture(spriteLoader2, 0, 132, 128, 24, "blue long body on");
-  blueSheet.hellChargeBodyOffTexture = loadCroppedTexture(
-      spriteLoader2, 0, 236, 128, 12, "blue hell charge body off");
-  blueSheet.hellChargeBodyOnTexture = loadCroppedTexture(
-      spriteLoader2, 0, 248, 128, 24, "blue hell charge body on");
-  blueSheet.hellChargeDamageTexture = loadCroppedTexture(
-      spriteLoader2, 0, 272, 128, 24, "blue hell charge body damage");
-  scratchSheet.longBodyOffTexture = loadCroppedTexture(
-      spriteLoader3, 0, 120, 128, 12, "scratch long body off");
-  scratchSheet.longBodyOnTexture = loadCroppedTexture(
-      spriteLoader3, 0, 132, 128, 24, "scratch long body on");
-  scratchSheet.hellChargeBodyOffTexture = loadCroppedTexture(
-      spriteLoader3, 0, 236, 128, 12, "scratch hell charge body off");
-  scratchSheet.hellChargeBodyOnTexture = loadCroppedTexture(
-      spriteLoader3, 0, 248, 128, 24, "scratch hell charge body on");
-  scratchSheet.hellChargeDamageTexture = loadCroppedTexture(
-      spriteLoader3, 0, 272, 128, 24, "scratch hell charge body damage");
-
-  auto makeUv = [](int x, int y, int w, int h, int textureW, int textureH) {
-    NoteUvRegion uv{};
-    uv.u0 = static_cast<float>(x) / static_cast<float>(textureW);
-    uv.v0 = static_cast<float>(y) / static_cast<float>(textureH);
-    uv.u1 = static_cast<float>(x + w) / static_cast<float>(textureW);
-    uv.v1 = static_cast<float>(y + h) / static_cast<float>(textureH);
-    return uv;
-  };
-
-  auto configureSheet = [&](NoteSheet &sheet, const SpriteLoader &loader) {
-    const int textureW = loader.getWidth();
-    const int textureH = loader.getHeight();
-    sheet.noteVisibleBounds = image_alpha::visibleBounds(
-        {loader.getData(), static_cast<std::size_t>(textureW) * textureH * 4},
-        textureW, textureH, 0, 0, 128, 40);
-    sheet.note = makeUv(0, 0, 128, 40, textureW, textureH);
-    sheet.longTail = makeUv(0, 40, 128, 40, textureW, textureH);
-    sheet.longHead = makeUv(0, 80, 128, 40, textureW, textureH);
-    sheet.longBodyOff = makeUv(0, 120, 128, 12, textureW, textureH);
-    sheet.longBodyOn = makeUv(0, 132, 128, 24, textureW, textureH);
-    sheet.hellChargeTail = makeUv(0, 156, 128, 40, textureW, textureH);
-    sheet.hellChargeHead = makeUv(0, 196, 128, 40, textureW, textureH);
-    sheet.hellChargeBodyOff = makeUv(0, 236, 128, 12, textureW, textureH);
-    sheet.hellChargeBodyOn = makeUv(0, 248, 128, 24, textureW, textureH);
-    sheet.hellChargeDamage = makeUv(0, 272, 128, 24, textureW, textureH);
-    sheet.mine = makeUv(0, 296, 128, 40, textureW, textureH);
-  };
-
-  configureSheet(graySheet, spriteLoader);
-  configureSheet(blueSheet, spriteLoader2);
-  configureSheet(scratchSheet, spriteLoader3);
 
   titleText = std::make_unique<TextView>(kHudFontPath, 26);
   titleText->setText(chart->Meta.Title);
@@ -1035,57 +899,6 @@ BMSRenderer::BMSRenderer(
   }
 
   refreshGeometry();
-  textureGuard.dismiss();
-}
-
-bgfx::TextureHandle BMSRenderer::loadSheetTexture(SpriteLoader &loader,
-                                                  const char *label) {
-  if (!loader.isLoaded() || loader.getData() == nullptr) {
-    SDL_Log("Failed to load %s texture: image is not loaded", label);
-    throw std::runtime_error(std::string("Failed to load ") + label +
-                             " texture");
-  }
-  const int width = loader.getWidth();
-  const int height = loader.getHeight();
-  if (width <= 0 || height <= 0) {
-    SDL_Log("Failed to load %s texture: invalid dimensions", label);
-    throw std::runtime_error(std::string("Failed to load ") + label +
-                             " texture");
-  }
-  constexpr int kBytesPerPixel = 4; // stbi_load(..., 4) in SpriteLoader
-  const auto handle = bgfx::createTexture2D(
-      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-      bgfx::TextureFormat::RGBA8, 0,
-      bgfx::copy(loader.getData(), width * height * kBytesPerPixel));
-  if (!bgfx::isValid(handle)) {
-    SDL_Log("Failed to create bgfx texture for %s", label);
-    throw std::runtime_error(std::string("Failed to create texture for ") +
-                             label);
-  }
-  return handle;
-}
-
-bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
-                                                    int y, int width,
-                                                    int height,
-                                                    const char *label) {
-  UniqueResource<unsigned char, SDL_free> data(loader.crop(x, y, width, height));
-  if (data == nullptr) {
-    SDL_Log("Failed to load %s texture", label);
-    throw std::runtime_error(std::string("Failed to load ") + label +
-                             " texture");
-  }
-  constexpr int kBytesPerPixel = 4;
-  const auto handle = bgfx::createTexture2D(
-      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-      bgfx::TextureFormat::RGBA8, 0,
-      bgfx::copy(data.get(), width * height * kBytesPerPixel));
-  if (!bgfx::isValid(handle)) {
-    SDL_Log("Failed to create %s texture", label);
-    throw std::runtime_error(std::string("Failed to create ") + label +
-                             " texture");
-  }
-  return handle;
 }
 
 std::unique_ptr<TextView> BMSRenderer::createAutoPlayMarkText() {
@@ -2084,27 +1897,23 @@ void BMSRenderer::drawLongNote(
       head->Tail->IsPlayed && !tailMissedWithHead;
   if (tailResolvedForRendering && !tailReleasedEarly)
     return;
+  const bool isClassicLongNote = effectiveLongNoteIsClassic(head, chart);
+  const bool isHellCharge = effectiveLongNoteIsHellCharge(head, chart);
+  const auto headType = isHellCharge ? NoteType::HellHead : NoteType::LongHead;
+  const auto tailType = isHellCharge ? NoteType::HellTail : NoteType::LongTail;
   const float headRenderY =
       head->IsPlayed && !head->IsDead ? judgeY : headY;
   const auto headClip = noteRenderClip(
-      head, currentRenderMicros, headRenderY, noteRenderHeight, judgeY);
+      head, currentRenderMicros, headRenderY, builtInNoteHeight(head->Lane, headType), judgeY);
   const auto tailClip = noteRenderClip(
-      head->Tail, currentRenderMicros, tailY, noteRenderHeight, judgeY);
+      head->Tail, currentRenderMicros, tailY, builtInNoteHeight(head->Lane, tailType), judgeY);
   float bodyStartY = headRenderY;
   if (head->Timeline != nullptr &&
       head->Timeline->Timing >= currentRenderMicros) {
     bodyStartY = std::max(bodyStartY, judgeY);
   }
   const float bodyHeight = tailY - bodyStartY;
-  const float bodyWidth = noteRenderWidth;
 
-  const NoteSheet &sheet = sheetForLane(head->Lane);
-  const bool isClassicLongNote = effectiveLongNoteIsClassic(head, chart);
-  const bool isHellCharge = effectiveLongNoteIsHellCharge(head, chart);
-  const NoteUvRegion &headUv =
-      isHellCharge ? sheet.hellChargeHead : sheet.longHead;
-  const NoteUvRegion &tailUv =
-      isHellCharge ? sheet.hellChargeTail : sheet.longTail;
   const bool headHasReachedJudge = head->IsPlayed || head->IsDead ||
                                    headY <= judgeY;
   const bool hcnBodyRegrabbed = headHasReachedJudge && isHellCharge &&
@@ -2118,56 +1927,23 @@ void BMSRenderer::drawLongNote(
                  ? bms_renderer_characterization::LongBodyState::Damage
                  : bms_renderer_characterization::LongBodyState::Off);
 #endif
-  bgfx::TextureHandle bodyTexture = BGFX_INVALID_HANDLE;
-  float bodyRenderHeight = longBodyRenderHeightOff;
-  int bodyFrameCount = 1;
-  int bodyCycleMs = 0;
-  if (isHellCharge) {
-    if (bodyActive) {
-      bodyTexture = sheet.hellChargeBodyOnTexture;
-      bodyRenderHeight = longBodyRenderHeightOn;
-      bodyFrameCount = kAnimatedLongBodyFrameCount;
-      bodyCycleMs = kAnimatedLongBodyCycleMs;
-    } else if (headHasReachedJudge) {
-      bodyTexture = sheet.hellChargeDamageTexture;
-      bodyRenderHeight = longBodyRenderHeightOn;
-      bodyFrameCount = kAnimatedLongBodyFrameCount;
-      bodyCycleMs = kHellChargeDamageCycleMs;
-    } else {
-      bodyTexture = sheet.hellChargeBodyOffTexture;
-    }
-  } else if (bodyActive) {
-    bodyTexture = sheet.longBodyOnTexture;
-    bodyRenderHeight = longBodyRenderHeightOn;
-    bodyFrameCount = kAnimatedLongBodyFrameCount;
-    bodyCycleMs = kAnimatedLongBodyCycleMs;
-  } else {
-    bodyTexture = sheet.longBodyOffTexture;
-  }
-
-  // Body
-  if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
-    auto &bodyBatch = noteTextureBatchAtDepth(order.bodyDepth);
-    if (bodyFrameCount > 1 && bodyCycleMs > 0) {
-      const int frame =
-          skinAnimationFrame(currentRenderMicros, bodyFrameCount, bodyCycleMs);
-      const float v = (static_cast<float>(frame) + 0.5f) /
-                      static_cast<float>(bodyFrameCount);
-      bodyBatch.addRectUV(laneToX(head->Lane), bodyStartY, bodyWidth,
-                          bodyHeight,
-                          0.0f, v, 1.0f, v, bodyTexture);
-    } else {
-      float tileV = bodyHeight / bodyRenderHeight;
-      bodyBatch.addRect(laneToX(head->Lane), bodyStartY, bodyWidth, bodyHeight,
-                        1.0f, tileV, bodyTexture);
-    }
+  const auto bodyType = isHellCharge
+      ? (bodyActive ? NoteType::HellBodyOn
+                    : headHasReachedJudge ? NoteType::HellDamage : NoteType::HellBodyOff)
+      : (bodyActive ? NoteType::LongBodyOn : NoteType::LongBodyOff);
+  const float bodyWidth = built_in_notes::bodyWidth(noteRenderWidth,
+                                                    builtInNoteStyle(head->Lane, bodyType));
+  const float bodyX = laneToX(head->Lane) + (noteRenderWidth - bodyWidth) * 0.5F;
+  if (bodyHeight > 0.0f) {
+    drawBuiltInNote(head->Lane, bodyType, bodyX, bodyStartY, bodyWidth,
+                    bodyHeight, order.bodyDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
     recordCharacterizationSubmission(
         bms_renderer_characterization::SubmissionKind::LongBody,
         bms_renderer_characterization::Surface::Main, order.bodyDepth,
         head->Timeline, head->Tail->Timeline, head->Lane, 0,
         characterizationBodyState,
-        {.x = laneToX(head->Lane),
+        {.x = bodyX,
          .y = bodyStartY,
          .width = bodyWidth,
          .height = bodyHeight});
@@ -2176,12 +1952,8 @@ void BMSRenderer::drawLongNote(
 
   if (tailClip.visible && !isClassicLongNote &&
       (!tailReleasedEarly || tailY > judgeY)) {
-    noteTextureBatchAtDepth(order.endpointDepth).addRectUV(
-        laneToX(head->Tail->Lane), tailClip.y, noteRenderWidth,
-        tailClip.height, tailUv.u0, tailUv.v0, tailUv.u1,
-        clippedBottomV(tailUv.v0, tailUv.v1,
-                       tailClip.bottomTextureFraction),
-        sheet.texture);
+    drawBuiltInNote(head->Tail->Lane, tailType, laneToX(head->Tail->Lane),
+                    tailClip.y, noteRenderWidth, tailClip.height, order.endpointDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
     recordCharacterizationSubmission(
         bms_renderer_characterization::SubmissionKind::LongTail,
@@ -2199,12 +1971,8 @@ void BMSRenderer::drawLongNote(
     return;
 
   // Head
-  noteTextureBatchAtDepth(order.endpointDepth).addRectUV(
-      laneToX(head->Lane), headClip.y, noteRenderWidth, headClip.height,
-      headUv.u0, headUv.v0, headUv.u1,
-      clippedBottomV(headUv.v0, headUv.v1,
-                     headClip.bottomTextureFraction),
-      sheet.texture);
+  drawBuiltInNote(head->Lane, headType, laneToX(head->Lane), headClip.y,
+                  noteRenderWidth, headClip.height, order.endpointDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   recordCharacterizationSubmission(
       bms_renderer_characterization::SubmissionKind::LongHead,
@@ -2221,7 +1989,7 @@ void BMSRenderer::drawLongNote(
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
                                  uint32_t submitDepth) {
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteRenderHeight, judgeY);
+                                   builtInNoteHeight(note->Lane, NoteType::Normal), judgeY);
   if (note->IsPlayed || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound))
@@ -2232,14 +2000,8 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
     return;
   }
 
-  const NoteSheet &sheet = sheetForLane(note->Lane);
-
-  noteTextureBatchAtDepth(submitDepth).addRectUV(
-      laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.note.u0,
-      sheet.note.v0, sheet.note.u1,
-      clippedBottomV(sheet.note.v0, sheet.note.v1,
-                     clip.bottomTextureFraction),
-      sheet.texture);
+  drawBuiltInNote(note->Lane, NoteType::Normal, laneToX(note->Lane),
+                  clip.y, noteRenderWidth, clip.height, submitDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   recordCharacterizationSubmission(
       bms_renderer_characterization::SubmissionKind::NormalNote,
@@ -2255,15 +2017,16 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
                                     uint32_t submitDepth) {
+  const float height = builtInNoteHeight(note->Lane, NoteType::Invisible);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteRenderHeight, judgeY);
+                                   height, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound)) {
     return;
   }
 
-  const uint32_t color = Color(255, 149, 36, 224).toABGR();
+  const uint32_t color = (built_in_notes::abgr(builtInNoteStyle(note->Lane, NoteType::Invisible).color) & 0xFFFFFFU) | 0xE0000000U;
   const float x = laneToX(note->Lane);
   if (note->IsLongNote()) {
     if (!chartEntityRenderBudget.tryConsume(
@@ -2290,10 +2053,10 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
 
   const float borderThickness =
       std::max(0.015F,
-               noteRenderHeight *
+               height *
                    gameplay_scroll_geometry::kInvisibleNoteBorderHeightRatio);
   const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
-      x, y, noteRenderWidth, noteRenderHeight, borderThickness, clip);
+      x, y, noteRenderWidth, height, borderThickness, clip);
   if (outline.count == 0U ||
       !chartEntityRenderBudget.tryConsume(
           static_cast<uint32_t>(outline.count))) {
@@ -2323,7 +2086,7 @@ void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note,
                                    uint32_t submitDepth) {
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteRenderHeight, judgeY);
+                                   builtInNoteHeight(note->Lane, NoteType::Mine), judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound)) {
@@ -2335,13 +2098,8 @@ void BMSRenderer::drawLandmineNote(float y,
     return;
   }
 
-  const NoteSheet &sheet = sheetForLane(note->Lane);
-  noteTextureBatchAtDepth(submitDepth).addRectUV(
-      laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.mine.u0,
-      sheet.mine.v0, sheet.mine.u1,
-      clippedBottomV(sheet.mine.v0, sheet.mine.v1,
-                     clip.bottomTextureFraction),
-      sheet.texture);
+  drawBuiltInNote(note->Lane, NoteType::Mine, laneToX(note->Lane),
+                  clip.y, noteRenderWidth, clip.height, submitDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   recordCharacterizationSubmission(
       bms_renderer_characterization::SubmissionKind::Mine,
@@ -2608,7 +2366,7 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
   }
 
   const auto visible = gameplay_scroll_geometry::visibleScrollRange(
-      currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+      currentScrollPosition, rxhs, lowerBound, upperBound, maximumBuiltInNoteHeight(),
       judgeY);
   const double firstVisibleScrollPosition = visible.minimum;
   const double lastVisibleScrollPosition = visible.maximum;
@@ -2632,7 +2390,7 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
   }
 
   const auto visible = gameplay_scroll_geometry::visibleScrollRange(
-      currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+      currentScrollPosition, rxhs, lowerBound, upperBound, maximumBuiltInNoteHeight(),
       judgeY);
   const double firstVisibleScrollPosition = visible.minimum;
   const double lastVisibleScrollPosition = visible.maximum;
@@ -2659,13 +2417,9 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   if (emptyScratchLaneHidden && event.lane == 7) return;
-  const auto visible = image_alpha::trimBottomUp(
-      {laneToX(event.lane), y, noteRenderWidth, noteRenderHeight},
-      sheetForLane(event.lane).noteVisibleBounds);
-  const float x = static_cast<float>(visible.x);
-  y = static_cast<float>(visible.y);
-  const float noteWidth = static_cast<float>(visible.width);
-  const float noteHeight = static_cast<float>(visible.height);
+  const float x = laneToX(event.lane);
+  const float noteWidth = noteRenderWidth;
+  const float noteHeight = builtInNoteHeight(event.lane, NoteType::Normal);
   if (noteWidth <= 0.0f || noteHeight <= 0.0f ||
       y + noteHeight < lowerBound || y > upperBound) {
     return;
@@ -2697,13 +2451,9 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
   if (emptyScratchLaneHidden && marker.lane == 7) return;
-  const auto visible = image_alpha::trimBottomUp(
-      {laneToX(marker.lane), y, noteRenderWidth, noteRenderHeight},
-      sheetForLane(marker.lane).noteVisibleBounds);
-  const float x = static_cast<float>(visible.x);
-  y = static_cast<float>(visible.y);
-  const float noteWidth = static_cast<float>(visible.width);
-  const float noteHeight = static_cast<float>(visible.height);
+  const float x = laneToX(marker.lane);
+  const float noteWidth = noteRenderWidth;
+  const float noteHeight = builtInNoteHeight(marker.lane, NoteType::Normal);
   if (noteWidth <= 0.0f || noteHeight <= 0.0f ||
       y + noteHeight < lowerBound || y > upperBound) {
     return;
@@ -3246,14 +2996,14 @@ void BMSRenderer::renderFrame(
   float y = judgeY;
   // Retained long notes need an off-screen head anchor. Keep the entire
   // endpoint below the viewport now that lowerBound is the actual edge.
-  const float offscreenLongHeadY = lowerBound - noteRenderHeight;
+  const float offscreenLongHeadY = lowerBound - maximumBuiltInNoteHeight();
   const double currentScrollPosition =
       projection != nullptr ? projection->currentScrollPosition
                             : scrollPositionAtTime(chartTimeMicros);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   if (characterizationRecorder != nullptr) {
     const auto visibleScroll = gameplay_scroll_geometry::visibleScrollRange(
-        currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+        currentScrollPosition, rxhs, lowerBound, upperBound, maximumBuiltInNoteHeight(),
         judgeY);
     const auto coverHandle = laneCoverHandleGeometry();
     characterizationRecorder->beginFrame({
@@ -3269,7 +3019,7 @@ void BMSRenderer::renderFrame(
         .playAreaLeftX = playAreaLeftX,
         .playAreaWidth = playAreaWidth,
         .noteRenderWidth = noteRenderWidth,
-        .noteRenderHeight = noteRenderHeight,
+        .noteRenderHeight = maximumBuiltInNoteHeight(),
         .lowerBound = lowerBound,
         .judgeY = judgeY,
         .upperBound = upperBound,
@@ -3395,9 +3145,11 @@ void BMSRenderer::renderFrame(
           if (!std::isfinite(noteY)) {
             return;
           }
+          const int lane = rendererLaneFor(note.lane);
+          const auto type = mine ? NoteType::Mine : NoteType::Normal;
           const auto clip = noteRenderClip(note.timeMicros, currentRenderMicros,
                                            noteY,
-                                           noteRenderHeight, judgeY);
+                                           builtInNoteHeight(lane, type), judgeY);
           if (note.judged || !clip.visible ||
               !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
                   clip.y, clip.height, lowerBound, upperBound)) {
@@ -3408,14 +3160,8 @@ void BMSRenderer::renderFrame(
                       kSingleRectangleEntityCost)) {
             return;
           }
-          const int lane = rendererLaneFor(note.lane);
-          const NoteSheet &sheet = sheetForLane(lane);
-          const NoteUvRegion &uv = mine ? sheet.mine : sheet.note;
-          noteTextureBatchAtDepth(note.builtInDepth).addRectUV(
-              laneToX(lane), clip.y, noteRenderWidth, clip.height, uv.u0,
-              uv.v0, uv.u1,
-              clippedBottomV(uv.v0, uv.v1, clip.bottomTextureFraction),
-              sheet.texture);
+          drawBuiltInNote(lane, type, laneToX(lane), clip.y, noteRenderWidth,
+                          clip.height, note.builtInDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
           recordProjectedSubmission(
               mine ? bms_renderer_characterization::SubmissionKind::Mine
@@ -3437,9 +3183,11 @@ void BMSRenderer::renderFrame(
           if (!timelineWasTraversed(retainedOrdinal)) {
             return;
           }
+          const int renderLane = rendererLaneFor(lane);
+          const float height = builtInNoteHeight(renderLane, NoteType::Invisible);
           const auto clip = noteRenderClip(timeMicros, currentRenderMicros,
                                            noteY,
-                                           noteRenderHeight, judgeY);
+                                           height, judgeY);
           if (timeMicros < chartTimeMicros || dead || played || !clip.visible ||
               !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
                   clip.y, clip.height, lowerBound, upperBound)) {
@@ -3447,7 +3195,7 @@ void BMSRenderer::renderFrame(
           }
           lane = rendererLaneFor(lane);
           const float x = laneToX(lane);
-          const uint32_t color = Color(255, 149, 36, 224).toABGR();
+          const uint32_t color = (built_in_notes::abgr(builtInNoteStyle(renderLane, NoteType::Invisible).color) & 0xFFFFFFU) | 0xE0000000U;
           if (isLongEndpoint) {
             if (!chartEntityRenderBudget.tryConsume(
                     gameplay_chart_entity_render_budget::
@@ -3472,11 +3220,11 @@ void BMSRenderer::renderFrame(
           }
           const float borderThickness =
               std::max(0.015F,
-                       noteRenderHeight *
+                       height *
                            gameplay_scroll_geometry::
                                kInvisibleNoteBorderHeightRatio);
           const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
-              x, noteY, noteRenderWidth, noteRenderHeight,
+              x, noteY, noteRenderWidth, height,
               borderThickness, clip);
           if (outline.count == 0U ||
               !chartEntityRenderBudget.tryConsume(
@@ -3545,6 +3293,10 @@ void BMSRenderer::renderFrame(
         return;
       }
       const int lane = rendererLaneFor(longNote.lane);
+      const bool isClassicLongNote = longNote.mode == ChartLongNoteMode::LN;
+      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
+      const auto headType = isHellCharge ? NoteType::HellHead : NoteType::LongHead;
+      const auto tailType = isHellCharge ? NoteType::HellTail : NoteType::LongTail;
       const float legacyHeadY =
           longNote.headTimeMicros < chart_timing::subtract(chartTimeMicros, latePoorTiming)
               ? offscreenLongHeadY
@@ -3553,68 +3305,30 @@ void BMSRenderer::renderFrame(
           longNote.headPlayed && !longNote.headDead ? judgeY : legacyHeadY;
       const auto headClip = noteRenderClip(longNote.headTimeMicros,
                                            currentRenderMicros, headRenderY,
-                                           noteRenderHeight, judgeY);
+                                           builtInNoteHeight(lane, headType), judgeY);
       const auto tailClip = noteRenderClip(longNote.tailTimeMicros,
                                            currentRenderMicros, tailY,
-                                           noteRenderHeight, judgeY);
+                                           builtInNoteHeight(lane, tailType), judgeY);
       float bodyStartY = headRenderY;
       if (longNote.headTimeMicros >= currentRenderMicros) {
         bodyStartY = std::max(bodyStartY, judgeY);
       }
       const float bodyHeight = tailY - bodyStartY;
-      const NoteSheet &sheet = sheetForLane(lane);
-      const bool isClassicLongNote = longNote.mode == ChartLongNoteMode::LN;
-      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
-      const NoteUvRegion &headUv =
-          isHellCharge ? sheet.hellChargeHead : sheet.longHead;
-      const NoteUvRegion &tailUv =
-          isHellCharge ? sheet.hellChargeTail : sheet.longTail;
       const bool headHasReachedJudge = longNote.headPlayed ||
                                          longNote.headDead || headY <= judgeY;
       const bool bodyActive = longNote.active ||
                                (headHasReachedJudge && isHellCharge &&
                                laneIsCurrentlyPressed(lane));
-      bgfx::TextureHandle bodyTexture = BGFX_INVALID_HANDLE;
-      float bodyRenderHeight = longBodyRenderHeightOff;
-      int bodyFrameCount = 1;
-      int bodyCycleMs = 0;
-      if (isHellCharge) {
-        if (bodyActive) {
-          bodyTexture = sheet.hellChargeBodyOnTexture;
-          bodyRenderHeight = longBodyRenderHeightOn;
-          bodyFrameCount = kAnimatedLongBodyFrameCount;
-          bodyCycleMs = kAnimatedLongBodyCycleMs;
-        } else if (headHasReachedJudge) {
-          bodyTexture = sheet.hellChargeDamageTexture;
-          bodyRenderHeight = longBodyRenderHeightOn;
-          bodyFrameCount = kAnimatedLongBodyFrameCount;
-          bodyCycleMs = kHellChargeDamageCycleMs;
-        } else {
-          bodyTexture = sheet.hellChargeBodyOffTexture;
-        }
-      } else if (bodyActive) {
-        bodyTexture = sheet.longBodyOnTexture;
-        bodyRenderHeight = longBodyRenderHeightOn;
-        bodyFrameCount = kAnimatedLongBodyFrameCount;
-        bodyCycleMs = kAnimatedLongBodyCycleMs;
-      } else {
-        bodyTexture = sheet.longBodyOffTexture;
-      }
-      if (bodyHeight > 0.0F && bgfx::isValid(bodyTexture)) {
-        auto &bodyBatch = noteTextureBatchAtDepth(longNote.bodyDepth);
-        if (bodyFrameCount > 1 && bodyCycleMs > 0) {
-          const int frame = skinAnimationFrame(currentRenderMicros,
-                                               bodyFrameCount, bodyCycleMs);
-          const float v = (static_cast<float>(frame) + 0.5F) /
-                          static_cast<float>(bodyFrameCount);
-          bodyBatch.addRectUV(laneToX(lane), bodyStartY,
-                              noteRenderWidth, bodyHeight, 0.0F, v, 1.0F, v,
-                              bodyTexture);
-        } else {
-          bodyBatch.addRect(laneToX(lane), bodyStartY,
-                            noteRenderWidth, bodyHeight, 1.0F,
-                            bodyHeight / bodyRenderHeight, bodyTexture);
-        }
+      const auto bodyType = isHellCharge
+          ? (bodyActive ? NoteType::HellBodyOn
+                        : headHasReachedJudge ? NoteType::HellDamage : NoteType::HellBodyOff)
+          : (bodyActive ? NoteType::LongBodyOn : NoteType::LongBodyOff);
+      const float bodyWidth = built_in_notes::bodyWidth(noteRenderWidth,
+                                                        builtInNoteStyle(lane, bodyType));
+      const float bodyX = laneToX(lane) + (noteRenderWidth - bodyWidth) * 0.5F;
+      if (bodyHeight > 0.0F) {
+        drawBuiltInNote(lane, bodyType, bodyX, bodyStartY, bodyWidth,
+                        bodyHeight, longNote.bodyDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
         const auto bodyState =
             bodyActive ? bms_renderer_characterization::LongBodyState::On
@@ -3626,9 +3340,9 @@ void BMSRenderer::renderFrame(
             longNote.bodyDepth, longNote.headRetainedOrdinal,
             longNote.tailRetainedOrdinal, longNote.headTimeMicros,
             lane, 0, bodyState,
-            {.x = laneToX(lane),
+            {.x = bodyX,
              .y = bodyStartY,
-             .width = noteRenderWidth,
+             .width = bodyWidth,
              .height = bodyHeight});
 #endif
       }
@@ -3637,12 +3351,8 @@ void BMSRenderer::renderFrame(
       // even when the tail's timeline itself was not traversed this frame.
       if (tailClip.visible && !isClassicLongNote &&
           (!longNote.tailReleasedEarly || tailY > judgeY)) {
-        noteTextureBatchAtDepth(longNote.endpointDepth).addRectUV(
-            laneToX(lane), tailClip.y, noteRenderWidth,
-            tailClip.height, tailUv.u0, tailUv.v0, tailUv.u1,
-            clippedBottomV(tailUv.v0, tailUv.v1,
-                           tailClip.bottomTextureFraction),
-            sheet.texture);
+        drawBuiltInNote(lane, tailType, laneToX(lane), tailClip.y,
+                        noteRenderWidth, tailClip.height, longNote.endpointDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
         recordProjectedSubmission(
             bms_renderer_characterization::SubmissionKind::LongTail,
@@ -3657,12 +3367,8 @@ void BMSRenderer::renderFrame(
 #endif
       }
       if (!longNote.headPlayed && headClip.visible) {
-        noteTextureBatchAtDepth(longNote.endpointDepth).addRectUV(
-            laneToX(lane), headClip.y, noteRenderWidth,
-            headClip.height, headUv.u0, headUv.v0, headUv.u1,
-            clippedBottomV(headUv.v0, headUv.v1,
-                           headClip.bottomTextureFraction),
-            sheet.texture);
+        drawBuiltInNote(lane, headType, laneToX(lane), headClip.y,
+                        noteRenderWidth, headClip.height, longNote.endpointDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
         recordProjectedSubmission(
             bms_renderer_characterization::SubmissionKind::LongHead,
@@ -4439,6 +4145,8 @@ void BMSRenderer::updateJudgementCounterText() {
 
 void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
+  if (builtInNotes != configuration.builtInNotes)
+    builtInNotes = configuration.builtInNotes;
   setVisibleTimeDurationMilliseconds(
       configuration.visibleTimeDurationMilliseconds);
   if (configuration.configuredHispeed &&
@@ -5531,18 +5239,7 @@ void BMSRenderer::rebuildPlayAreaGeometry() {
       displayedLaneOrder.empty()
           ? gameplay_geometry::standardNoteWidth(playAreaWidth)
           : playAreaWidth / static_cast<float>(displayedLaneOrder.size());
-  if (noteImageWidth > 0.0f) {
-    noteRenderHeight = static_cast<float>(noteImageHeight) /
-                       static_cast<float>(noteImageWidth) * noteRenderWidth;
-    constexpr float kLongBodyOffImageHeight = 12.0f;
-    constexpr float kLongBodyOnImageHeight = 24.0f;
-    longBodyRenderHeightOff =
-        kLongBodyOffImageHeight / static_cast<float>(noteImageWidth) *
-        noteRenderWidth;
-    longBodyRenderHeightOn =
-        kLongBodyOnImageHeight / static_cast<float>(noteImageWidth) *
-        noteRenderWidth;
-  }
+  noteRenderHeight = 40.0F / 128.0F * noteRenderWidth;
   for (int lane : laneOrder) {
     if (lane < 0 || static_cast<size_t>(lane) >= laneXLookup.size()) {
       continue;
@@ -5578,27 +5275,54 @@ bool BMSRenderer::laneIsCurrentlyPressed(int lane) const {
   return laneStatesByOrder[it->second].isPressed.load(std::memory_order_relaxed);
 }
 
-inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
-  if (lane >= 0 && static_cast<size_t>(lane) < laneSheetLookup.size()) {
-    if (const auto *sheet = laneSheetLookup[static_cast<size_t>(lane)];
-        sheet != nullptr) {
-      return *sheet;
-    }
-  }
-  if (isScratch(lane)) {
-    return scratchSheet;
-  }
-  return graySheet;
+built_in_notes::Style BMSRenderer::builtInNoteStyle(int lane, NoteType type) const {
+  auto palette = built_in_notes::Palette::Gray;
+  const auto role = startLaneIndicatorColorRoles.find(lane);
+  if (isScratch(lane)) palette = built_in_notes::Palette::Scratch;
+  else if (role != startLaneIndicatorColorRoles.end() &&
+           role->second == start_lane_indicator::ColorRole::Blue)
+    palette = built_in_notes::Palette::Blue;
+  return built_in_notes::resolve(builtInNotes, lane, type, palette);
 }
 
-rendering::TexBatchRenderer &
-BMSRenderer::noteTextureBatchAtDepth(uint32_t submitDepth) {
-  if (activeNoteTextureDepth != submitDepth) {
-    noteTextureBatchRenderer.flush();
-    noteTextureBatchRenderer.setSubmitDepth(submitDepth);
-    activeNoteTextureDepth = submitDepth;
+float BMSRenderer::builtInNoteHeight(int lane, NoteType type) const {
+  return built_in_notes::height(noteRenderWidth, type, builtInNoteStyle(lane, type));
+}
+
+float BMSRenderer::maximumBuiltInNoteHeight() const {
+  float height = noteRenderHeight;
+  for (const int lane : laneOrder) {
+    for (const auto type : {NoteType::Normal, NoteType::Mine, NoteType::Invisible,
+                            NoteType::LongHead, NoteType::LongTail,
+                            NoteType::HellHead, NoteType::HellTail}) {
+      height = std::max(height, builtInNoteHeight(lane, type));
+    }
   }
-  return noteTextureBatchRenderer;
+  return height;
+}
+
+void BMSRenderer::drawBuiltInNote(int lane, NoteType type, float x, float y,
+                                 float width, float height, uint32_t depth) {
+  if (activeNoteDepth != depth) {
+    noteBatchRenderer.flush();
+    noteBatchRenderer.setSubmitDepth(depth);
+    activeNoteDepth = depth;
+  }
+  const auto style = builtInNoteStyle(lane, type);
+  noteBatchRenderer.addRect(x, y, width, height, built_in_notes::abgr(style.color));
+  if (isScratch(lane) && !built_in_notes::isBody(type) &&
+      chartEntityRenderBudget.remaining() >= 2 &&
+      chartEntityRenderBudget.tryConsume(2)) {
+    // Two inset grip marks remain legible on either light or dark colors.
+    const auto rgb = style.color;
+    const auto luminance = ((rgb >> 16) & 255) * 299 + ((rgb >> 8) & 255) * 587 +
+                           (rgb & 255) * 114;
+    const auto ink = luminance > 140000 ? 0xFF202020U : 0xFFF5F5F5U;
+    for (const float offset : {0.24F, 0.70F}) {
+      noteBatchRenderer.addRect(x + width * offset, y + height * 0.2F,
+                                width * 0.06F, height * 0.6F, ink);
+    }
+  }
 }
 
 void BMSRenderer::setInvisibleBatchDepth(uint32_t submitDepth) {
@@ -5611,14 +5335,14 @@ void BMSRenderer::setInvisibleBatchDepth(uint32_t submitDepth) {
 }
 
 void BMSRenderer::beginOrderedNoteBatches() {
-  activeNoteTextureDepth = std::numeric_limits<uint32_t>::max();
+  activeNoteDepth = std::numeric_limits<uint32_t>::max();
   activeInvisibleDepth = std::numeric_limits<uint32_t>::max();
-  noteTextureBatchRenderer.begin();
+  noteBatchRenderer.begin();
   gimmickBatchRenderer.begin();
 }
 
 void BMSRenderer::flushOrderedNoteBatches() {
-  noteTextureBatchRenderer.flush();
+  noteBatchRenderer.flush();
   gimmickBatchRenderer.flush();
 }
 
@@ -5627,10 +5351,4 @@ void BMSRendererState::reset() {
   currentTimelineIndex = 0;
 }
 
-void BMSRenderer::destroyNoteSheetTextures() {
-  destroyNoteSheet(graySheet);
-  destroyNoteSheet(blueSheet);
-  destroyNoteSheet(scratchSheet);
-}
-
-BMSRenderer::~BMSRenderer() { destroyNoteSheetTextures(); }
+BMSRenderer::~BMSRenderer() = default;

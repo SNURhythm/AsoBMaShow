@@ -405,6 +405,7 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   const auto policy = player_settings::presentationGeometryPolicy(orientation);
   const PresentationSettings defaults(orientation);
   skin.sanitize();
+  built_in_notes::sanitize(builtInNotes);
   laneAngleDegrees = sanitizeFloat(laneAngleDegrees, policy.angle.defaultValue,
                                    policy.angle.minimum, policy.angle.maximum);
   laneLength = sanitizeFloat(laneLength, policy.length.defaultValue, policy.length.minimum,
