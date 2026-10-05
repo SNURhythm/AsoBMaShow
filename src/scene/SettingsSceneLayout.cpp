@@ -580,6 +580,35 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   }
 #endif
   previewPanel->addView(previewSelectionRow);
+  auto *playbackControls = new View();
+  playbackControls->setFlexDirection(FlexDirection::Row);
+  playbackControls->setGap(selectionGap);
+  const auto addPlaybackToggle = [&](const char *labelKey, bool selected, bool enabled,
+                                      std::function<void()> action) {
+    auto *label = makeText(i18n::message(labelKey, {{"state", i18n::tr(selected
+        ? "settings.skins.judgement_hud.on.label" : "settings.skins.judgement_hud.off.label")}}),
+        metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+    const int width = static_cast<int>((selectionWidth - selectionGap) / 2);
+    auto *button = selected
+        ? makeAccentButton(width, metrics.actionButtonHeight, label, ui_theme::cyan())
+        : makeControlButton(width, metrics.actionButtonHeight, label);
+    button->setEnabled(enabled);
+    button->setOnClickListener([this, action = std::move(action)]() {
+      action();
+      resetPreviewSimulation();
+      lastLayoutWidth = -1;
+    });
+    playbackControls->addView(button);
+  };
+  addPlaybackToggle("settings.preview_layout.autoplay.label", previewAutoPlay, true,
+                     [this]() { previewAutoPlay = !previewAutoPlay; });
+  addPlaybackToggle("settings.preview_layout.random_timing.label", previewRandomTiming,
+                     previewAutoPlay, [this]() { previewRandomTiming = !previewRandomTiming; });
+  previewPanel->addView(playbackControls);
+  if (previewAutoPlay && previewRandomTiming)
+    previewPanel->addView(makeWrappedText(
+        i18n::message("settings.preview_layout.random_timing.description"),
+        metrics.smallTextSize, ui_theme::textSecondary()));
   previewPanel->addView(makeWrappedText(
       previewError.empty()
           ? i18n::message(previewPresentation && previewPresentation->activeMode() == PresentationMode::Skin

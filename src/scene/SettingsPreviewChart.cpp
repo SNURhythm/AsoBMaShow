@@ -144,6 +144,14 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
     noteAt(30'000'000 + step * 250'000, step);
   chordAt(31'500'000, {0, laneCount / 2, laneCount - 1});
 
+  constexpr std::array mineTimes{7'750'000LL, 15'750'000LL, 23'750'000LL, 31'125'000LL};
+  for (std::size_t index = 0; index < mineTimes.size(); ++index) {
+    auto mine = std::make_unique<bms_parser::LandmineNote>(5.0F);
+    appendTimeline(mineTimes[index])->SetLandmineNote(
+        lanes[(index * 2 + 1) % lanes.size()], mine.get());
+    (void)mine.release();
+  }
+
   // Delay the complete pattern, including long-note tails, by one second.
   for (auto *timeline : measure->TimeLines) {
     timeline->Timing += 1'000'000;
@@ -166,6 +174,8 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
         else ++chart->Meta.TotalLongNotes;
       } else if (scratch) ++chart->Meta.TotalScratchNotes;
     }
+    for (const auto *mine : timeline->LandmineNotes)
+      if (mine) ++chart->Meta.TotalLandmineNotes;
   }
 
   chart->Measures.push_back(measure.get());

@@ -7,6 +7,7 @@
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/SettingsPreviewChart.h"
+#include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
@@ -30,6 +31,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -2050,6 +2052,11 @@ struct SettingsScene {
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::uint64_t previewFrameSerial = 0;
   bool previewActive = true;
+  bool previewAutoPlay = false;
+  bool previewRandomTiming = false;
+  std::mt19937 previewAutoPlayRandom{42};
+  std::vector<settings_scene::PreviewAutoPlayEvent> previewAutoPlayEvents;
+  std::size_t previewAutoPlayNextEvent = 0;
   long long previewElapsedMicros = 0;
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::map<Judgement, int> previewJudgeCount;
@@ -2372,6 +2379,80 @@ void verifyPreviewScoreUsesRealJudgements() {
          "restarting clears preview score, note progression, and timing counters");
 }
 
+void verifyPreviewAutoPlay() {
+  for (const int mode : settings_scene::kPreviewKeyModes) {
+    const auto chart = settings_scene::makePreviewChart(mode);
+    const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+    Judge judge(chart->Meta.Rank);
+    BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+    PlayfieldVisualStateStore store(model);
+    SettingsScene scene;
+    scene.previewChart = chart.get();
+    scene.previewRenderer = &renderer;
+    scene.previewVisualStateStore = &store;
+    scene.previewPresentationEvents =
+        std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+    scene.previewAutoPlay = true;
+    scene.resetPreviewHudSample();
+    // A slow frame still dispatches inputs at their scheduled chart times.
+    scene.previewElapsedMicros = 33'000'000;
+    scene.advancePreviewSimulation();
+    expect(scene.previewPassedNotes == chart->Meta.TotalNotes &&
+               scene.previewJudgeCount.at(PGreat) == chart->Meta.TotalNotes &&
+               scene.previewCombo == chart->Meta.TotalNotes &&
+               scene.previewScore == 2 * chart->Meta.TotalNotes,
+           "accurate preview autoplay hits every normal note and long-note pair");
+    expect(std::ranges::none_of(scene.previewSimulation->replayEvents(), [](const auto &event) {
+      return event.action == gameplay::GameplayReplayAction::Mine;
+    }), "accurate autoplay avoids the sample landmines");
+
+    scene.previewRandomTiming = true;
+    scene.previewAutoPlayRandom.seed(42);
+    scene.resetPreviewHudSample();
+    scene.advancePreviewSimulation();
+    expect(scene.previewPassedNotes == chart->Meta.TotalNotes &&
+               scene.previewJudgeCount.at(Poor) > 0 &&
+               scene.previewJudgeCount.at(PGreat) > 0 &&
+               scene.previewJudgeCount.at(Great) > 0 &&
+               scene.previewJudgeCount.at(Good) > 0 &&
+               scene.previewJudgeCount.at(Bad) > 0 &&
+               scene.previewScore < 2 * chart->Meta.TotalNotes,
+           "random preview autoplay produces varied real judgements and misses");
+    const auto coarseCounts = scene.previewJudgeCount;
+    const auto coarseScore = scene.previewScore;
+    scene.previewAutoPlayRandom.seed(42);
+    scene.resetPreviewHudSample();
+    for (long long time = 0; time <= 33'000'000; time += 10'000) {
+      scene.previewElapsedMicros = time;
+      scene.advancePreviewSimulation();
+    }
+    expect(scene.previewJudgeCount == coarseCounts && scene.previewScore == coarseScore,
+           "autoplay timing and misses do not depend on render frame rate");
+    for (const auto &lane : scene.previewDefinition->lanes())
+      expect(!renderer.lanePressedForTesting(lane.lane),
+             "autoplay releases every lane after taps and holds");
+    bool triggeredMine = false;
+    for (unsigned seed = 0; seed < 8; ++seed) {
+      scene.previewAutoPlayRandom.seed(seed);
+      scene.resetPreviewHudSample();
+      scene.advancePreviewSimulation();
+      triggeredMine = triggeredMine || std::ranges::any_of(
+          scene.previewSimulation->replayEvents(), [](const auto &event) {
+            return event.action == gameplay::GameplayReplayAction::Mine;
+          });
+      // Production renders between batches, retiring replaced HUD textures.
+      bgfx::frame();
+    }
+    expect(triggeredMine, "random autoplay sometimes triggers real mine damage");
+
+    scene.previewAutoPlay = false;
+    scene.resetPreviewHudSample();
+    scene.advancePreviewSimulation();
+    expect(scene.previewJudgeCount.at(Poor) == chart->Meta.TotalNotes && scene.previewScore == 0,
+           "turning off autoplay restores manual preview play");
+  }
+}
+
 void verifyPreviewMissesAndFullCombo() {
   for (const int mode : settings_scene::kPreviewKeyModes) {
     const auto chart = settings_scene::makePreviewChart(mode);
@@ -2384,9 +2465,12 @@ void verifyPreviewMissesAndFullCombo() {
     scene.previewRenderer = &renderer;
     scene.previewVisualStateStore = &store;
     scene.previewChartVisualModel = &model;
-    for (const auto *timeline : chart->Measures.front()->TimeLines)
+    for (const auto *timeline : chart->Measures.front()->TimeLines) {
       for (const auto *note : timeline->Notes)
         if (note) scene.previewVisualNoteSources.push_back(note);
+      for (const auto *note : timeline->LandmineNotes)
+        if (note) scene.previewVisualNoteSources.push_back(note);
+    }
     scene.previewPresentationEvents =
         std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
     scene.resetPreviewHudSample();
@@ -2404,7 +2488,7 @@ void verifyPreviewMissesAndFullCombo() {
                scene.previewCapturedVisualState->authority.currentGauge < 74.0F,
            "untouched preview judges every missed normal and long note once and cannot claim full combo");
     expect(std::ranges::all_of(scene.previewCapturedVisualState->notes,
-                               [](const auto &note) { return note.judged; }),
+                               [](const auto &note) { return note.judged || note.dead; }),
            "missed sample notes publish their resolved visual state");
     scene.advancePreviewSimulation();
     expect(scene.previewJudgeCount.at(Poor) == chart->Meta.TotalNotes,
@@ -2969,6 +3053,7 @@ int main() {
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyPreviewAutoPlay();
   verifyPreviewMissesAndFullCombo();
       verifyIndividualJudgementLabelVisibility(target);
       verifySeparatedJudgementCombo(target);

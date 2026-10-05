@@ -5,6 +5,7 @@
 #include "support/AllocationLifetimeProbe.h"
 
 #include <array>
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <set>
@@ -94,6 +95,7 @@ void testKeyModes() {
                                    : chart->Meta.GetTotalLaneIndices();
     std::set<int> seen;
     int countedNotes = 0;
+    int countedMines = 0;
     for (const auto *timeline : chart->Measures.front()->TimeLines) {
       for (const auto *note : timeline->Notes) {
         if (!note) continue;
@@ -102,9 +104,18 @@ void testKeyModes() {
         const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
         if (!longNote || !longNote->IsTail()) ++countedNotes;
       }
+      for (const auto *mine : timeline->LandmineNotes) {
+        if (!mine) continue;
+        ++countedMines;
+        assert(mine->Damage > 0 && mine->Timeline == timeline);
+        assert(std::find(expected.begin(), expected.end(), mine->Lane) != expected.end());
+        assert(timeline->Timing > 1'000'000 && timeline->Timing < chart->Meta.PlayLength);
+        assert(timeline->Notes[mine->Lane] == nullptr);
+      }
     }
     assert(seen == std::set<int>(expected.begin(), expected.end()));
     assert(countedNotes == chart->Meta.TotalNotes);
+    assert(countedMines > 0 && countedMines <= 4 && chart->Meta.TotalLandmineNotes == countedMines);
   }
 }
 

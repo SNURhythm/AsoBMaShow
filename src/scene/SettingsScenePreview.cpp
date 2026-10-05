@@ -470,6 +470,8 @@ void SettingsScene::destroyPreviewRenderer() {
   previewGaugeRules.reset();
   previewSimulation.reset();
   previewDefinition.reset();
+  previewAutoPlayEvents.clear();
+  previewAutoPlayNextEvent = 0;
   previewVisualStateStore.reset();
   previewChartVisualModel.reset();
   previewVisualNoteSources.clear();
@@ -480,7 +482,7 @@ void SettingsScene::destroyPreviewRenderer() {
 }
 
 void SettingsScene::ensurePreviewInputHandler() {
-  if (!previewActive) {
+  if (!previewActive || previewAutoPlay) {
     return;
   }
   ensurePreviewRenderer();
@@ -636,6 +638,11 @@ void SettingsScene::resetPreviewHudSample() {
   previewSimulation.reset();
   previewDefinition = std::make_unique<gameplay::GameplayDefinition>(
       gameplay::buildGameplayDefinition(*previewChart, 0));
+  previewAutoPlayEvents = previewAutoPlay
+      ? settings_scene::makePreviewAutoPlayEvents(*previewDefinition, previewRandomTiming,
+                                                  previewAutoPlayRandom)
+      : std::vector<settings_scene::PreviewAutoPlayEvent>{};
+  previewAutoPlayNextEvent = 0;
   previewSimulation = std::make_unique<gameplay::GameplaySimulation>(
       *previewDefinition, gameplay::GameplaySimulationConfig{
           .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
@@ -702,9 +709,20 @@ void SettingsScene::consumePreviewTransactions(
 }
 
 void SettingsScene::advancePreviewSimulation() {
-  if (previewSimulation)
+  if (!previewSimulation) return;
+  while (previewAutoPlay && previewAutoPlayNextEvent < previewAutoPlayEvents.size() &&
+         previewAutoPlayEvents[previewAutoPlayNextEvent].timeMicros <= previewElapsedMicros) {
+    const auto &event = previewAutoPlayEvents[previewAutoPlayNextEvent++];
     consumePreviewTransactions(previewSimulation->advanceTo(
-        previewElapsedMicros, previewElapsedMicros).transactions);
+        event.timeMicros, event.timeMicros).transactions);
+    const gameplay::GameplayInputContext clock{
+        .songTimeMicros = event.timeMicros, .laneBeamTimeMicros = event.timeMicros};
+    const auto result = event.press ? previewSimulation->pressLane(event.lane, clock)
+                                    : previewSimulation->releaseLane(event.lane, clock);
+    consumePreviewTransactions(result.transactions);
+  }
+  consumePreviewTransactions(previewSimulation->advanceTo(
+      previewElapsedMicros, previewElapsedMicros).transactions);
 }
 
 bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
@@ -713,7 +731,7 @@ bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
 
 bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
                                           double inputDelay) {
-  if (!previewActive || !previewSimulation) return nullptr;
+  if (!previewActive || previewAutoPlay || !previewSimulation) return nullptr;
   const auto result = previewSimulation->pressLane(mainLane, compensateLane,
       {.songTimeMicros = previewElapsedMicros,
        .laneBeamTimeMicros = previewElapsedMicros,
@@ -725,7 +743,7 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
 
 bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
                                             bool isBackSpin) {
-  if (!previewActive || !previewSimulation) return nullptr;
+  if (!previewActive || previewAutoPlay || !previewSimulation) return nullptr;
   const auto result = previewSimulation->releaseLane(lane,
       {.songTimeMicros = previewElapsedMicros,
        .laneBeamTimeMicros = previewElapsedMicros,

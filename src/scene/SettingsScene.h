@@ -10,6 +10,7 @@
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
+#include "SettingsPreviewAutoPlay.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
@@ -315,6 +316,11 @@ private:
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
   long long previewElapsedMicros = 0;
+  bool previewAutoPlay = false;
+  bool previewRandomTiming = false;
+  std::mt19937 previewAutoPlayRandom{std::random_device{}()};
+  std::vector<settings_scene::PreviewAutoPlayEvent> previewAutoPlayEvents;
+  std::size_t previewAutoPlayNextEvent = 0;
   settings_scene::PreviewEndAnimation previewEndAnimation;
   int previewCombo = 0;
   int previewScore = 0;
