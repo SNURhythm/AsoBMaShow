@@ -962,6 +962,46 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
           "the lane edge is applied before the queued Escape pause fallback");
 }
 
+void testIndependentScratchlessGameplayBindings() {
+  for (const int mode : {5, 7}) {
+    auto profile = makeDefaultInputProfile();
+    const auto canonicalKey = mode == 5 ? SDL_SCANCODE_D : SDL_SCANCODE_S;
+    for (auto &binding : profile.bindings) {
+      if (binding.scope == input::InputScope{1, -mode} && binding.action.lane == 0) {
+        binding.control.index = SDL_SCANCODE_A;
+      }
+    }
+    std::vector<input::RealtimePhysicalInputTransition> output;
+    input::RealtimePhysicalInputRouter router(
+        profile, makeGameplayInputScopes(-mode), [&](const auto &transition) {
+          output.push_back(transition);
+          return true;
+        });
+    router.setGameplayEnabled(true, 0);
+    router.consume(keyEvent(canonicalKey, true), 10);
+    require(output.empty(), "original-mode binding cannot trigger scratchless play");
+    router.consume(keyEvent(SDL_SCANCODE_A, true), 20);
+    router.consume(keyEvent(SDL_SCANCODE_A, false), 30);
+    require(output.size() == 2 && output[0].lane == 0 && output[1].lane == 0 &&
+                output[0].hasReplayControl && output[1].hasReplayControl &&
+                output[0].replayControl.kind == replay::LogicalControlKind::Lane &&
+                output[0].replayControl.lane == 0 && output[0].replayControl.player == 1,
+            "scratchless custom bindings route physical edges with canonical replay controls");
+
+    RecordingControl control;
+    LogicalGameplayInputPipeline pipeline(control, profile, makeGameplayInputScopes(-mode));
+    pipeline.consumeDirectKeyboard(SDL_SCANCODE_A, true);
+    pipeline.setBindings(profile, makeGameplayInputScopes(mode));
+    require(control.calls.size() == 2 && control.calls.back().kind == ControlCall::Kind::Release,
+            "switching mode for a new attempt releases held scratchless keys");
+    pipeline.consumeDirectKeyboard(SDL_SCANCODE_A, true);
+    require(control.calls.size() == 2, "new attempt rejects previous scope bindings");
+    pipeline.consumeDirectKeyboard(canonicalKey, true);
+    require(control.calls.size() == 3 && control.calls.back().lane == 0,
+            "new attempt uses original-mode bindings after scratch is added");
+  }
+}
+
 void testRealtimePhysicalInputPreservesNativeTimestamp() {
   InputProfile profile;
   profile.bindings.push_back(
@@ -1483,6 +1523,7 @@ int main() {
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testIndependentScratchlessGameplayBindings();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testNonStockKeyModesCaptureBmsChannelReplayControls();
   testArbitraryLaneInputDoesNotDependOnBrdControls();

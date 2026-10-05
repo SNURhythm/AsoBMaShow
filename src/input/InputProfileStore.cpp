@@ -478,6 +478,14 @@ InputProfileStore::load(const std::filesystem::path &path) {
       result.diagnostics.emplace_back(
           "Migrated scratchless bindings to BMS channel lanes.");
     }
+    if (schemaVersion < 8) {
+      for (const auto &binding : makeDefaultInputProfile().bindings) {
+        if (binding.scope.keyMode == -5 || binding.scope.keyMode == -7) {
+          result.profile.bindings.push_back(binding);
+        }
+      }
+      result.diagnostics.emplace_back("Added independent 5K and 7K defaults.");
+    }
     result.profile.sanitize(result.diagnostics);
     return result;
   } catch (const std::exception &error) {

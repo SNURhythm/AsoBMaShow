@@ -6,8 +6,8 @@
 
 namespace gameplay {
 
-// Presentation identities only. Parser, score, replay and IR key modes stay
-// canonical; negative values select independent scratchless skin settings.
+// Settings identities. Parser, score, replay and IR key modes stay canonical;
+// negative values select independent scratchless skin and input settings.
 [[nodiscard]] inline bool isScratchlessSinglePlay(const bms_parser::Chart &chart) {
   const auto &meta = chart.Meta;
   if ((meta.KeyMode != 5 && meta.KeyMode != 7) || meta.IsDP ||

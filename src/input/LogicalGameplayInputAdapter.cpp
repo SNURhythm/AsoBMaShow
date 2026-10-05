@@ -1,5 +1,6 @@
 #include "LogicalGameplayInputAdapter.h"
 #include "InputTimestamp.h"
+#include "ChartLaneBinding.h"
 
 #include <SDL2/SDL_timer.h>
 #include <chrono>
@@ -339,7 +340,8 @@ replay::LogicalControl LogicalGameplayInputAdapter::replayLaneControl(
        transition.scope.keyMode == 10 || transition.scope.keyMode == 14) &&
       transition.action.lane == physicalScratchLane(transition.scope);
   const auto control = replay::logicalControlForChartLane(
-      transition.scope.keyMode, transition.action.lane, digitalScratch);
+      input_profile::canonicalChartKeyMode(transition.scope.keyMode),
+      transition.action.lane, digitalScratch);
   return control.value_or(replay::LogicalControl{
       .kind = replay::LogicalControlKind::Lane,
       .player = transition.scope.player,
@@ -399,7 +401,7 @@ void LogicalGameplayInputAdapter::notifyApplied(
     pendingPhysicalEdges_.erase(pending);
   }
   const auto mappedLane = replay::physicalChartLaneForLogicalControl(
-      source.scope.keyMode, control);
+      input_profile::canonicalChartKeyMode(source.scope.keyMode), control);
   const bool hasReplayControl =
       mappedLane.has_value() && *mappedLane == physicalLane;
   if (appliedTransitionCallback_) {
@@ -493,6 +495,14 @@ bms_parser::Note *LogicalGameplayInputPipeline::consumePhysicalTouchLane(
       .pressed = pressed,
       .value = pressed ? 1.0F : 0.0F,
   });
+}
+
+void LogicalGameplayInputPipeline::setBindings(
+    const InputProfile &profile, std::vector<input::InputScope> activeScopes) {
+  reset();
+  resolver_ = InputBindingResolver(
+      profile, std::move(activeScopes),
+      {.onTransitions = [this](auto transitions) { adapter_.apply(transitions); }});
 }
 
 void LogicalGameplayInputPipeline::disconnectDevice(std::string_view stableId) {

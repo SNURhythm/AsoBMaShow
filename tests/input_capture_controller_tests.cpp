@@ -605,24 +605,18 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
               [&](const auto &value) { return sameBinding(value, untouched); }),
           "scoped reset preserves every binding in other scopes");
 
-  const auto scratch = binding("custom-scratch", {1, 7}, lane(7),
-                               buttonControl("scratch-controller", 3));
-  const auto scratchSpin = binding("custom-spin", {1, 7},
-      {input::LogicalActionKind::ScratchClockwise, 0}, buttonControl("scratch-controller", 4));
-  profile.bindings.push_back(scratch);
-  profile.bindings.push_back(scratchSpin);
-  profile.bindings.push_back(binding("custom-key", {1, 7}, lane(0),
-                                     buttonControl("key-controller", 5)));
-  const std::vector<input::LogicalAction> visibleActions{lane(0), lane(1)};
-  controller.resetScopeToDefaults({1, 7}, visibleActions);
-  require(saves == 3 && std::ranges::none_of(profile.bindings, [](const auto &value) {
-            return value.id == "custom-key";
-          }), "resetting visible key rows removes their custom bindings");
-  for (const auto &preserved : {scratch, scratchSpin}) {
+  const auto originalBindings = profile.bindings;
+  profile.bindings.push_back(binding("scratchless-custom", {1, -7}, lane(0),
+                                     buttonControl("pad:one", 5)));
+  controller.resetScopeToDefaults({1, -7});
+  require(saves == 3 && profile.bindingsFor({1, -7}).size() == 7,
+          "scratchless reset restores its independent defaults");
+  for (const auto &original : originalBindings) {
     require(std::ranges::any_of(profile.bindings, [&](const auto &value) {
-              return sameBinding(value, preserved);
-            }), "resetting scratchless key rows preserves hidden scratch bindings");
+              return sameBinding(value, original);
+            }), "scratchless reset preserves every original-mode binding");
   }
+
 }
 
 void testPartialBindingEditsComposeAgainstCurrentProfileState() {

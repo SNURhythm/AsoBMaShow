@@ -144,5 +144,17 @@ InputProfile makeDefaultInputProfile() {
                             input::LogicalActionKind::ScratchClockwise,
                             SDL_SCANCODE_RSHIFT);
 
+  for (const int mode : {-5, -7}) {
+    const SDL_Scancode fiveKeys[] = {SDL_SCANCODE_D, SDL_SCANCODE_F,
+        SDL_SCANCODE_SPACE, SDL_SCANCODE_J, SDL_SCANCODE_K};
+    const SDL_Scancode sevenKeys[] = {SDL_SCANCODE_S, SDL_SCANCODE_D,
+        SDL_SCANCODE_F, SDL_SCANCODE_SPACE, SDL_SCANCODE_J,
+        SDL_SCANCODE_K, SDL_SCANCODE_L};
+    for (int lane = 0; lane < -mode; ++lane) {
+      addKeyboardPositionBinding(profile, {1, mode}, lane,
+                                  mode == -5 ? fiveKeys[lane] : sevenKeys[lane]);
+    }
+  }
+
   return profile;
 }

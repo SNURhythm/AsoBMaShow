@@ -92,6 +92,8 @@ public:
   void discardPendingTouchEvents();
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
+  void setBindings(const InputProfile &profile,
+                   std::vector<input::InputScope> activeScopes);
   void setPlayAreaWidth(float configuredPlayAreaWidth);
   void setTouchLaneOrder(const std::vector<int> &displayedLaneOrder);
   void setDragModeEnabled(bool enabled);

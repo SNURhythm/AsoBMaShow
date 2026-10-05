@@ -25,11 +25,12 @@ These settings are saved per player and presentation orientation. New
 scratchless selections default to Built-in. Existing 5K1S/7K1S skin selections
 and widths are retained.
 
-Input settings also offer **5K / 7K**. These entries share key bindings with
-**5K1S / 7K1S** and hide the scratch rows. Binding or unbinding a key applies
-to both entries; resetting the scratchless entry preserves scratch bindings.
+Input settings also offer **5K / 7K**, with independent bindings and resets
+from **5K1S / 7K1S**. Scratchless entries hide scratch rows and start with
+standard keyboard defaults. Existing profiles gain these new defaults once;
+custom bindings for the original modes are preserved. Scratchless gameplay
+uses these bindings regardless of the selected skin or hidden-lane setting.
 
-This is a presentation choice: chart identities, key bindings, judgements,
-scores, replay formats, and IR protocol key modes remain unchanged. Canonical
-chart-mode labels explicitly include `1S`; the separate settings targets are
-labeled `5K` and `7K`.
+Chart identities, judgements, scores, replay formats, and IR protocol key
+modes remain canonical. Canonical chart-mode labels explicitly include `1S`;
+the separate settings targets are labeled `5K` and `7K`.

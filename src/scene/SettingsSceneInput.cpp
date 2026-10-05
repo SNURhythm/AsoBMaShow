@@ -543,13 +543,6 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   }
   refreshInputDropdowns();
 
-  if (isScratchlessInputSelection(inputSelectedKeyMode)) {
-    selectorBody->addView(makeWrappedText(
-        i18n::message("settings.input.shared_scratchless_bindings.message",
-            {{"mode", gameplay::keyModeLabel(-inputSelectedKeyMode)}}),
-        metrics.smallTextSize, ui_theme::textSecondary()));
-  }
-
   auto *resetRow = new View();
   resetRow->setFlexDirection(FlexDirection::Row);
   resetRow->setFlexWrap(YGWrapWrap);
@@ -563,15 +556,8 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   resetButton->setOnClickListener([this]() {
     inputCaptureController->cancel();
     inputCaptureAction.reset();
-    std::vector<input::LogicalAction> actions;
-    if (isScratchlessInputSelection(inputSelectedKeyMode)) {
-      for (const auto &definition : inputActionsForScope(
-               {inputSelectedPlayer, inputSelectedKeyMode}, context.inputProfile.bindings)) {
-        actions.push_back(definition.action);
-      }
-    }
     inputCaptureController->resetScopeToDefaults(
-        inputScopeForSelection(inputSelectedPlayer, inputSelectedKeyMode), actions);
+        inputScopeForSelection(inputSelectedPlayer, inputSelectedKeyMode));
     requestInputViewRebuild();
   });
   resetRow->addView(resetButton);

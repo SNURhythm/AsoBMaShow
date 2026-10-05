@@ -991,13 +991,15 @@ void testLegacyDigitalScratchBindingsRemainManageable() {
   }));
 }
 
-void testScratchlessInputModesShareCanonicalKeyBindings() {
+void testScratchlessInputModesUseIndependentKeyBindings() {
   for (const int mode : {5, 7}) {
     assert(std::ranges::find(settings_scene::kInputKeyModes, -mode) !=
            settings_scene::kInputKeyModes.end());
     for (const int player : {1, 2}) {
       const input::InputScope canonical{player, mode};
-      assert(settings_scene::inputScopeForSelection(player, -mode) == canonical);
+      const input::InputScope scratchless{player, -mode};
+      assert(settings_scene::inputScopeForSelection(player, -mode) == scratchless);
+      assert(scratchless != canonical);
       const input::InputBinding legacy{
           .scope = canonical,
           .action = {input::LogicalActionKind::Lane, player == 1 ? 7 : 15}};
@@ -1151,7 +1153,7 @@ int main() {
   testInputBindingEditorCapabilitiesMatchControlSemantics();
   testInputBindingEditorStaysInsidePaddedActionGroup();
   testLegacyDigitalScratchBindingsRemainManageable();
-  testScratchlessInputModesShareCanonicalKeyBindings();
+  testScratchlessInputModesUseIndependentKeyBindings();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

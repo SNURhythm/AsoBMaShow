@@ -2118,7 +2118,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   }
 #endif
   if (!options.autoPlay) {
-    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto activeInputScopes =
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
     const auto realtimeInputProfile =
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
                                                    activeInputScopes);
@@ -2891,7 +2892,8 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
-          std::move(options), context.inputProfile, chart->Meta.KeyMode))),
+          std::move(options), context.inputProfile,
+          gameplay::presentationKeyMode(*chart)))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
@@ -2913,7 +2915,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
       options(enforceCoursePlaybackRules(
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
-                                       this->chart->Meta.KeyMode))),
+                                       gameplay::presentationKeyMode(*this->chart)))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
@@ -3199,7 +3201,8 @@ void GamePlayScene::init() {
     return;
   }
   if (!isReplayPlayback() && !options.autoPlay) {
-    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto activeInputScopes =
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
     const auto gameplayInputProfile =
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
                                                    activeInputScopes);
@@ -3525,6 +3528,13 @@ bool GamePlayScene::reset() {
     guidedAccessReminderLayout->setVisible(false);
   }
   stopRealtimeGameplayAuthority(false);
+  if (ownedInputHandler != nullptr) {
+    const auto scopes =
+        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
+    ownedInputHandler->setBindings(
+        makeGameplayInputProfileWithEscapeFallback(context.inputProfile, scopes),
+        scopes);
+  }
   if (guidedAccessReminderPending && inputHandler != nullptr) {
     inputHandler->stopListen();
     inputHandler->discardPendingTouchEvents();

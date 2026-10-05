@@ -51,7 +51,8 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
       diagnostics.emplace_back("Clamped input binding player to 1 or 2.");
     }
 
-    if (binding.scope.keyMode <= 0) {
+    if (binding.scope.keyMode <= 0 && binding.scope.keyMode != -5 &&
+        binding.scope.keyMode != -7) {
       binding.scope.keyMode = 7;
       diagnostics.emplace_back("Reset non-positive input key mode to 7.");
     }

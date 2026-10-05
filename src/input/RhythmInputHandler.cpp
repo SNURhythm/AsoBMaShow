@@ -488,6 +488,11 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
   return lane;
 }
 
+void RhythmInputHandler::setBindings(
+    const InputProfile &profile, std::vector<input::InputScope> activeScopes) {
+  logicalInputPipeline->setBindings(profile, std::move(activeScopes));
+}
+
 void RhythmInputHandler::setLongNoteHeldCallback(
     std::function<std::optional<bool>(int)> callback) {
   longNoteHeldCallback = std::move(callback);

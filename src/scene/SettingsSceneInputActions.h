@@ -19,7 +19,7 @@ constexpr bool isScratchlessInputSelection(int keyMode) {
 }
 
 constexpr input::InputScope inputScopeForSelection(int player, int keyMode) {
-  return {player, isScratchlessInputSelection(keyMode) ? -keyMode : keyMode};
+  return {player, keyMode};
 }
 
 struct InputActionDefinition {
@@ -43,10 +43,9 @@ inline bool isLegacyDigitalScratchBinding(
 inline std::vector<InputActionDefinition> inputActionsForScope(
     input::InputScope scope, std::span<const input::InputBinding> bindings) {
   const bool scratchless = isScratchlessInputSelection(scope.keyMode);
-  scope = inputScopeForSelection(scope.player, scope.keyMode);
   std::vector<InputActionDefinition> result;
   int firstLane = 0;
-  int noteLanes = scope.keyMode;
+  int noteLanes = scratchless ? -scope.keyMode : scope.keyMode;
   if (scope.keyMode == 10 || scope.keyMode == 14) {
     noteLanes = scope.keyMode / 2;
     firstLane = scope.player == 1 ? 0 : 8;

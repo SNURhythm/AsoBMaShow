@@ -141,7 +141,7 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
   };
 
   require(defaults.bindings.size() ==
-              expectedLanes.size() + expectedScratch.size(),
+              expectedLanes.size() + expectedScratch.size() + 12,
           "default profile contains exactly the keyboard bindings");
   for (const auto &binding : expectedLanes) {
     require(defaults.hasDigitalBinding(
@@ -228,7 +228,7 @@ int main() {
     require(
         oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
             std::ranges::find(diagnostics,
-                              "Reset unsupported input schema version to 7.") !=
+                              "Reset unsupported input schema version to 8.") !=
                 diagnostics.end(),
         "schema repair diagnostics report the real current version");
 
@@ -305,7 +305,7 @@ int main() {
         InputProfileStore::load(fixturePath("input-v1.json"));
     require(fixtureResult.status == InputProfileLoadStatus::Loaded,
             "version-one fixture loads");
-    require(fixtureResult.profile.bindings.size() == 1,
+    require(fixtureResult.profile.bindings.size() == 1 + 12,
             "version-one fixture retains its binding");
     require(fixtureResult.profile.bindings.front().control.deviceId.empty(),
             "omitted fixture device ID is represented as missing");
@@ -320,10 +320,42 @@ int main() {
                 input::GyroscopeTurntableConfig{},
             "version-one profiles migrate with default gyroscope settings");
 
+    for (const int mode : {5, 7}) {
+      require(defaults.bindingsFor({1, -mode}).size() == mode,
+              "scratchless defaults have independent key-only scopes");
+      for (int lane = 0; lane < mode; ++lane) {
+        const auto &binding = defaults.bindingsFor({1, -mode})[lane].get();
+        require(binding.action.kind == input::LogicalActionKind::Lane &&
+                    binding.action.lane == lane,
+                "scratchless defaults use canonical physical lanes");
+      }
+    }
+
     const auto testRoot = std::filesystem::temp_directory_path() /
                           "asobmashow_input_profile_tests";
     std::filesystem::remove_all(testRoot);
     std::filesystem::create_directories(testRoot);
+
+    const auto scratchlessPath = testRoot / "independent-scratchless.json";
+    writeFile(scratchlessPath, R"({"schemaVersion":7,"bindings":[]})");
+    auto migratedScratchless = InputProfileStore::load(scratchlessPath);
+    require(migratedScratchless.profile.bindings.size() == 12,
+            "schema seven gains standard independent scratchless defaults");
+    migratedScratchless.profile.bindings.front().control.index = SDL_SCANCODE_A;
+    std::string scratchlessSaveError;
+    require(InputProfileStore::saveAtomic(scratchlessPath,
+                migratedScratchless.profile, scratchlessSaveError),
+            "independent scratchless bindings save");
+    auto savedScratchless = InputProfileStore::load(scratchlessPath);
+    require(savedScratchless.profile.bindings.size() == 12 &&
+                savedScratchless.profile.bindings.front().scope.keyMode == -5 &&
+                savedScratchless.profile.bindings.front().control.index == SDL_SCANCODE_A,
+            "scratchless scope and custom binding survive sanitizing and reload");
+    savedScratchless.profile.bindings.clear();
+    require(InputProfileStore::saveAtomic(scratchlessPath,
+                savedScratchless.profile, scratchlessSaveError) &&
+                InputProfileStore::load(scratchlessPath).profile.bindings.empty(),
+            "current profiles preserve intentionally unbound scratchless scopes");
 
     const input::InputBinding legacyDigitalScratch{
         .id = "pre-directional-default-scratch",
@@ -380,7 +412,7 @@ int main() {
     const auto repairedIdsResult = InputProfileStore::load(repairedIdsPath);
     require(repairedIdsResult.status == InputProfileLoadStatus::Loaded,
             "an imported profile with repairable IDs still loads");
-    require(repairedIdsResult.profile.bindings.size() == 3 &&
+    require(repairedIdsResult.profile.bindings.size() == 3 + 12 &&
                 hasNonemptyUniqueBindingIds(repairedIdsResult.profile),
             "load sanitization retains distinct bindings and repairs their "
             "IDs");
@@ -424,7 +456,7 @@ int main() {
     const std::vector<int> migratedScratchlessLanes = [&] {
       std::vector<int> lanes;
       for (const auto &binding : compactScratchlessV2.profile.bindings) {
-        lanes.push_back(binding.action.lane);
+        if (binding.scope.keyMode > 0) lanes.push_back(binding.action.lane);
       }
       return lanes;
     }();
@@ -470,7 +502,7 @@ int main() {
                 gyroscopeV2Result.profile.gyroscopeTurntable.releaseDelayMs ==
                     350,
             "version-two gyroscope settings persist");
-    require(gyroscopeV2Result.profile.bindings.size() == 1 &&
+    require(gyroscopeV2Result.profile.bindings.size() == 1 + 12 &&
                 gyroscopeV2Result.profile.bindings.front()
                         .control.deviceClass == input::DeviceClass::Gyroscope,
             "gyroscope device class persists on an axis binding");
@@ -537,7 +569,7 @@ int main() {
     require(missingConfigObjectResult.status == InputProfileLoadStatus::Loaded &&
                 missingConfigObjectResult.profile.gyroscopeTurntable ==
                     input::GyroscopeTurntableConfig{} &&
-                missingConfigObjectResult.profile.bindings.size() == 1 &&
+                missingConfigObjectResult.profile.bindings.size() == 1 + 12 &&
                 missingConfigObjectResult.profile.bindings.front().id ==
                     "surviving-binding",
             "a missing config object recovers defaults without losing bindings");
@@ -593,7 +625,7 @@ int main() {
     require(versionZeroResult.status == InputProfileLoadStatus::Loaded &&
                 versionZeroResult.profile.schemaVersion ==
                     InputProfile::kSchemaVersion &&
-                versionZeroResult.profile.bindings.size() == 1 &&
+                versionZeroResult.profile.bindings.size() == 1 + 12 &&
                 sameBinding(versionZeroResult.profile.bindings.front(),
                             fixtureResult.profile.bindings.front()),
             "version-zero input migrates in memory to the current schema");
@@ -604,7 +636,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 7") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 8") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -622,7 +654,7 @@ int main() {
     const auto roundTripResult = InputProfileStore::load(roundTripPath);
     require(roundTripResult.status == InputProfileLoadStatus::Loaded,
             "saved profile reloads");
-    require(roundTripResult.profile.bindings.size() == 1 &&
+    require(roundTripResult.profile.bindings.size() == 1 + 12 &&
                 sameBinding(roundTripResult.profile.bindings.front(),
                             fixtureResult.profile.bindings.front()),
             "JSON round trip preserves a missing device ID and binding fields");
@@ -635,7 +667,7 @@ int main() {
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
     require(
-        gyroscopeRoundTripJson.find("\"schemaVersion\": 7") !=
+        gyroscopeRoundTripJson.find("\"schemaVersion\": 8") !=
                 std::string::npos &&
             gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                 std::string::npos &&
@@ -651,7 +683,7 @@ int main() {
     require(gyroscopeRoundTripResult.status == InputProfileLoadStatus::Loaded &&
                 gyroscopeRoundTripResult.profile.gyroscopeTurntable ==
                     gyroscopeV2Result.profile.gyroscopeTurntable &&
-                gyroscopeRoundTripResult.profile.bindings.size() == 1 &&
+                gyroscopeRoundTripResult.profile.bindings.size() == 1 + 12 &&
                 sameBinding(gyroscopeRoundTripResult.profile.bindings.front(),
                             gyroscopeV2Result.profile.bindings.front()),
             "version-two gyroscope profile round trips without loss");
@@ -683,7 +715,7 @@ int main() {
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 7") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 8") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
                     std::string::npos &&
@@ -697,7 +729,7 @@ int main() {
                     std::string::npos &&
                 virtualControllerJson.find("\"keyGap\"") == std::string::npos,
             "virtual-controller geometry, player, and scratch mode serialize "
-            "in schema seven");
+            "in schema eight");
 
     const auto legacyVirtualControllerPath =
         testRoot / "virtual-controller-v4.json";
