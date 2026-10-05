@@ -229,7 +229,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .translateY = -456.0F,
                    .centerPlayArea = true,
                    .keepHudFixed = true,
-                   .playAreaZoom = 1.25F},
+                   .playAreaZoom = 1.25F,
+                   .playAreaBottomPaddingPercent = 12.5F},
   };
   const std::string expectedConfigurationDigest =
       skin::skinConfigurationDigest(expected.presentation().skin.entries.at(*entry.entry));
@@ -736,6 +737,8 @@ void testCompatibleSkinModesPersistIndependentConfigurations() {
   settings.presentation().skin.modeEntries[-8][entry].options["Lane"] = 8;
   settings.presentation().skin.modeEntries[-6][entry].viewport.scaleX = 1.5F;
   settings.presentation().skin.modeEntries[-8][entry].viewport.scaleX = 2.0F;
+  settings.presentation().skin.modeEntries[-6][entry].viewport.playAreaBottomPaddingPercent = 8.0F;
+  settings.presentation().skin.modeEntries[-8][entry].viewport.playAreaBottomPaddingPercent = 16.0F;
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "independent mode settings save: " + error);
   const auto loaded = AppSettingsStore::Load(path);
@@ -882,6 +885,39 @@ void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
                entry.viewport.translateX == 0.0F &&
                entry.viewport.translateY == 0.0F,
            "invalid viewport enums and transforms reset deterministically");
+  }
+}
+
+void testSkinPlayAreaBottomPaddingDefaultsAndBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  AppSettings settings;
+  const auto package = skin::normalizePackageId("PaddingSkin");
+  const auto entry = *skin::normalizeEntryPath(*package.package, "play.luaskin").entry;
+  auto &viewport = settings.presentation().skin.entries[entry].viewport;
+  viewport.centerPlayArea = true;
+  viewport.playAreaZoom = 1.5F;
+  viewport.playAreaBottomPaddingPercent = 12.5F;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  document["presentations"]["landscape"]["skin"]["entries"][0]
+          ["settings"]["viewport"].erase("playAreaBottomPaddingPercent");
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  const auto &migrated = loaded.settings.presentation().skin.entries.at(entry).viewport;
+  expect(migrated.playAreaBottomPaddingPercent == 0.0F &&
+             migrated.centerPlayArea && migrated.playAreaZoom == 1.5F,
+         "missing bottom padding preserves the existing framed viewport with zero padding");
+  for (const auto &[input, expected] : {
+           std::pair{-1.0F, 0.0F}, std::pair{80.0F, 50.0F},
+           std::pair{12.5F, 12.5F},
+           std::pair{std::numeric_limits<float>::quiet_NaN(), 0.0F},
+           std::pair{std::numeric_limits<float>::infinity(), 0.0F}}) {
+    settings.presentation().skin.entries.at(entry).viewport.playAreaBottomPaddingPercent = input;
+    settings.sanitize();
+    expect(settings.presentation().skin.entries.at(entry).viewport.playAreaBottomPaddingPercent == expected,
+           "bottom padding sanitizes to a finite percentage from zero to fifty");
   }
 }
 
@@ -2144,6 +2180,7 @@ int main() {
   testSchemaThreeMigrationDisablesCompatibility();
   testLegacy7KeySelectionMigratesToTraitSelection();
   testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();
+  testSkinPlayAreaBottomPaddingDefaultsAndBounds();
   testSkinSettingsDeterministicallyEnforceFixedLimits();
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();

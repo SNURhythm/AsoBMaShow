@@ -160,6 +160,7 @@ void encodeViewport(PresentationKeyEncoder &encoder,
   encoder.boolean(viewport.centerPlayArea);
   encoder.boolean(viewport.keepHudFixed);
   encoder.floatingPoint(viewport.playAreaZoom);
+  encoder.floatingPoint(viewport.playAreaBottomPaddingPercent);
 }
 
 void encodeSettings(PresentationKeyEncoder &encoder,

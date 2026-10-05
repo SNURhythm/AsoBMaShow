@@ -1738,7 +1738,8 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
                                          .scaleX = 100.0F,
                                          .scaleY = 0.01F,
                                          .translateX = 20'000.0F,
-                                         .translateY = -20'000.0F};
+                                         .translateY = -20'000.0F,
+                                         .playAreaBottomPaddingPercent = 80.0F};
   expect(controller->setViewport(entry, excessiveCustom).accepted,
          "Custom viewport enters profile-only persistence");
   const ViewportSettings sanitizedCustom{.mode = ViewportMode::Custom,
@@ -1747,7 +1748,8 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
                                          .scaleX = 10.0F,
                                          .scaleY = 0.1F,
                                          .translateX = 8'192.0F,
-                                         .translateY = -8'192.0F};
+                                         .translateY = -8'192.0F,
+                                         .playAreaBottomPaddingPercent = 50.0F};
   expect(pumpUntil(fixture, *controller,
                    [&] {
                      return fixture.owner.snapshot(fixture.profileA)

@@ -266,6 +266,7 @@ struct SkinFrameInputs {
   std::optional<UiLogicalPoint> pointerUiPosition;
   // Optional original framing for objects outside the authored play area.
   std::optional<PlaySkinViewport> fixedHudViewport;
+  std::optional<PlaySkinVisibleScroll> visibleScroll;
 };
 
 [[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(

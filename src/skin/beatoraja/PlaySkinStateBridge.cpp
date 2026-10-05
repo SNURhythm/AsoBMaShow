@@ -933,7 +933,9 @@ void PlaySkinStateBridge::updatePinnedLaneCoverOffsets() {
   // Ported directly from LaneRenderer.draw. It deliberately updates only y
   // for Lift/lane cover, preserving the initial skin offset's other fields.
   liftOffset_.y = laneHeight * lift;
-  laneCoverOffset_.y = (liftOffset_.y - laneHeight) * laneCover;
+  laneCoverOffset_.y = visibleScroll_
+                          ? -visibleScroll_->topCrop - visibleScroll_->height * laneCover
+                          : (liftOffset_.y - laneHeight) * laneCover;
 
   // LaneRenderer keeps HIDDEN's prior y while disabled and changes only its
   // alpha to -255. That retained value remains observable through
@@ -950,7 +952,8 @@ void PlaySkinStateBridge::updatePinnedLaneCoverOffsets() {
 
 void PlaySkinStateBridge::beginFrame(
     const PlayfieldVisualState &state,
-    const PlayfieldProjectionResult &projection) {
+    const PlayfieldProjectionResult &projection,
+    std::optional<PlaySkinVisibleScroll> visibleScroll) {
   closeFrame();
   diagnostics_.clear();
   if (state.clock.serial == 0 || projection.frameSerial != state.clock.serial) {
@@ -967,6 +970,7 @@ void PlaySkinStateBridge::beginFrame(
   }
 
   state_ = state;
+  visibleScroll_ = visibleScroll;
   targetNeighbourNames_ = skin::beatorajaTargetNeighbourNames(
       state.authority.skinTargetId, state.authority.skinTargetList);
   targetScorePlayerName_ = beatorajaTargetScorePlayerName(state.authority);
@@ -3690,6 +3694,7 @@ void PlaySkinStateBridge::closeFrame() noexcept {
   state_.reset();
   frameSerial_ = 0;
   builtInTraversal_.reset();
+  visibleScroll_.reset();
   projection_ = {};
   staged_ = {};
 }

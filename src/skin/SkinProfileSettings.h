@@ -14,6 +14,8 @@ namespace skin {
 struct SkinProfileSettingsPolicy {
   static constexpr float minPlayAreaZoom = 0.5F;
   static constexpr float maxPlayAreaZoom = 3.0F;
+  static constexpr float minPlayAreaBottomPaddingPercent = 0.0F;
+  static constexpr float maxPlayAreaBottomPaddingPercent = 50.0F;
   static constexpr float minCustomScale = 0.1F;
   static constexpr float maxCustomScale = 10.0F;
   static constexpr float minCustomTranslation = -8'192.0F;
@@ -48,6 +50,7 @@ struct ViewportSettings {
   bool centerPlayArea = false;
   bool keepHudFixed = false;
   float playAreaZoom = 1.0F;
+  float playAreaBottomPaddingPercent = 0.0F;
   bool operator==(const ViewportSettings &) const = default;
 };
 

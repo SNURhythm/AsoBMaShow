@@ -998,7 +998,10 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
       return result;
     }
   }
-  context_.bridge.beginFrame(state, projection);
+  const auto visibleScroll = playSkinVisibleScroll(
+      context_.model, context_.viewport,
+      state.authority.liftEnabled ? state.authority.liftRatio : 0.0);
+  context_.bridge.beginFrame(state, projection, visibleScroll);
   FrameDiscardGuard discard(context_.bridge);
   if (context_.bridge.frameSerial() != state.clock.serial ||
       state.clock.serial == 0) {
@@ -1070,7 +1073,8 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .safetyPolicy = context_.safetyPolicy,
        .gaugeRandomSource = context_.gaugeRandomSource,
        .pointerUiPosition = pointerUiPosition_,
-       .fixedHudViewport = fixedHudViewport},
+       .fixedHudViewport = fixedHudViewport,
+       .visibleScroll = visibleScroll},
       std::move(ownership));
   appendDiagnostics(result.diagnostics, context_.bridge.diagnostics());
   if (!result.evaluation.submitReady) {
@@ -1546,8 +1550,14 @@ void PlaySkinSession::submitSyntheticStartLaneIndicators(
         return start_lane_indicator::colorRoleForKey(
             static_cast<std::size_t>(position), keyLanes.size());
       }();
+      auto laneRegion = region->authoredRegion;
+      if (publishedReplayGhostGeometry_ && publishedReplayGhostGeometry_->visibleScroll) {
+        const auto &visible = *publishedReplayGhostGeometry_->visibleScroll;
+        laneRegion.y = visible.visibleBottomY;
+        laneRegion.height = visible.height;
+      }
       geometry.push_back({.lane = lane,
-                          .laneRegion = region->authoredRegion,
+                          .laneRegion = laneRegion,
                           .rgba = startLaneIndicatorColor(role)});
     }
 

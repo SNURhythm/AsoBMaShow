@@ -122,6 +122,12 @@ void sanitizeViewport(ViewportSettings &viewport) {
                        SkinProfileSettingsPolicy::minPlayAreaZoom,
                        SkinProfileSettingsPolicy::maxPlayAreaZoom)
           : 1.0F;
+  viewport.playAreaBottomPaddingPercent =
+      std::isfinite(viewport.playAreaBottomPaddingPercent)
+          ? std::clamp(viewport.playAreaBottomPaddingPercent,
+                       SkinProfileSettingsPolicy::minPlayAreaBottomPaddingPercent,
+                       SkinProfileSettingsPolicy::maxPlayAreaBottomPaddingPercent)
+          : 0.0F;
   viewport.scaleX =
       std::clamp(viewport.scaleX, SkinProfileSettingsPolicy::minCustomScale,
                  SkinProfileSettingsPolicy::maxCustomScale);

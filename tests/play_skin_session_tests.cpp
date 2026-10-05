@@ -5529,13 +5529,36 @@ return {
     model_.model.floatProperties.back().source = namedSelector
         ? SkinBuiltinPropertySelector{.value = std::string{"lanecover"}}
         : SkinBuiltinPropertySelector{.value = 4};
-    model_.model.destinations.back().presentation.frames = {
+    auto &coverDestination = std::ranges::find(
+        model_.model.destinations, SkinObjectId{80}, &SkinDestination::object)->presentation;
+    coverDestination.frames = {
         {.timeMillis = 0, .x = 100.0, .y = 520.0, .width = 200.0, .height = 500.0}};
     addClickableImage();
     auto &label = model_.model.destinations.back().presentation;
     label.frames.front().x = 110.0;
     label.frames.front().y = 600.0;
     label.offsetIds = {4};
+  }
+
+  void enableTouchLaneNotes() {
+    auto &note = std::get<SkinNoteObject>(model_.model.objects[
+        model_.model.objects.size() - 1].payload);
+    for (std::size_t index = 0; index < note.lanes.size(); ++index) {
+      note.lanes[index].authoredLane = static_cast<int>(index);
+      for (const auto kind : {SkinNoteVisualKind::Mine, SkinNoteVisualKind::Hidden,
+             SkinNoteVisualKind::Processed, SkinNoteVisualKind::LnEnd,
+             SkinNoteVisualKind::LnStart, SkinNoteVisualKind::LnBodyActive,
+             SkinNoteVisualKind::LnBodyInactive, SkinNoteVisualKind::HcnEnd,
+             SkinNoteVisualKind::HcnStart, SkinNoteVisualKind::HcnBodyActive,
+             SkinNoteVisualKind::HcnBodyInactive, SkinNoteVisualKind::HcnDamage,
+             SkinNoteVisualKind::HcnReactive}) {
+        note.lanes[index].visuals[kind] = SkinSynthesizedNoteVisual{.kind = kind};
+      }
+      note.lanes[index].visuals[SkinNoteVisualKind::Normal] = SkinSpriteFrames{
+          .resource = 80, .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}};
+    }
+    model_.model.destinations.push_back(
+        {.object = 81, .presentation = {.authoredOrdinal = 810}});
   }
 
   void configureLaneBackground(bool flipX, bool flipY) {
@@ -7386,6 +7409,93 @@ void testImageActTouchQueuesPinnedEventOnDown() {
              fixture.session().render(context, bgaFrame(121), bga).outcome ==
                  PresentationFrameOutcome::Ready,
          "the queued Image act event reaches the next frame transaction");
+}
+
+void testCroppedPlayAreaReappliesCoverAndVisibleDuration() {
+  for (const auto [padding, lift] : {std::pair{0.0F, 0.0F}, std::pair{10.0F, 0.0F},
+                                      std::pair{0.0F, 0.2F}, std::pair{10.0F, 0.2F}}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.enableTouchLaneNotes();
+    fixture.configureLaneCover(false, true);
+    ViewportSettings settings;
+    settings.centerPlayArea = true;
+    settings.keepHudFixed = true;
+    settings.playAreaZoom = 2.0F;
+    settings.playAreaBottomPaddingPercent = padding;
+    fixture.session().setViewport(settings);
+    auto state = stateAt(1);
+    state.authority.laneCoverEnabled = true;
+    state.authority.laneCoverPercent = 50;
+    state.authority.currentBpm = 120.0;
+    state.authority.liftEnabled = lift > 0.0F;
+    state.authority.liftRatio = lift;
+    auto projection = projectionAt(1);
+    projection.builtInTraversal = BuiltInRendererTraversal{
+        .configuredHispeed = 2.0F, .hispeed = 2.0F};
+    projection.notes.push_back({.lane = 0, .scrollDelta = 0.125});
+    const auto frame = fixture.session().prepareFrame(state, projection, {});
+    if (!frame.ready()) {
+      for (const auto &diagnostic : frame.diagnostics)
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      for (const auto &diagnostic : frame.evaluation.diagnostics)
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.interactionLayout,
+           "cropped gameplay frame prepares");
+    if (!frame.evaluation.submitReady || !frame.evaluation.interactionLayout) continue;
+    const float anchor = 720.0F * (1.0F - padding / 100.0F) * (1.0F - 2.0F * lift);
+    bool coverAligned = false, noteAligned = false;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+      if (!quad) continue;
+      if (command.sourceObject == 80) {
+        coverAligned = std::abs(quad->vertices[0].y - anchor * 0.5F) < 0.001F;
+      }
+      if (command.sourceObject == 81) {
+        noteAligned = std::abs(quad->vertices[0].y - anchor * 0.75F) < 0.001F;
+      }
+    }
+    expect(coverAligned, "requested note start uses the visible cropped height");
+    expect(noteAligned, "note travel preserves green number after crop and padding");
+    const UiLogicalPoint halfCover{640.0F, anchor * 0.5F};
+    const auto &layout = *frame.evaluation.interactionLayout;
+    const auto hit = layout.hitTestUiControl(halfCover);
+    const auto writer = layout.writerInvocationFor(hit, halfCover, 1);
+    expect(hit.sourceObject == 80 && writer &&
+               std::abs(writer->normalizedValue - 0.5F) < 0.0001F,
+           "dragging halfway down visible lanes writes the original 50 percent");
+    expect(state.authority.laneCoverPercent == 50 &&
+               projection.builtInTraversal->configuredHispeed == 2.0F,
+           "crop compensation leaves requested cover and speed untouched");
+    const auto &ghost = frame.evaluation.syntheticReplayGhostGeometry;
+    expect(ghost && ghost->visibleScroll, "cropped lane publishes the shared visible span");
+    if (!ghost || !ghost->visibleScroll) continue;
+    const std::array events{ReplayGhostEvent{.lane = 0, .noteTimeMicros = 100'000,
+        .judgeTimeMicros = 200'000, .judgeScrollPosition = 0.125, .judgement = PGreat}};
+    const auto overlay = buildSyntheticReplayGhostOverlay(
+        *ghost, {.frameSerial = 1, .visualTimeMicros = 10'000,
+                 .currentScrollPosition = 0.0, .hispeed = 2.0,
+                 .visibleLaneHeightRatio = 0.5, .enabled = true, .events = events});
+    float ghostBottom = -1e9F;
+    for (const auto &command : overlay.commands) {
+      if (const auto *primitive = std::get_if<SkinPrimitiveCommand>(&command.payload)) {
+        for (const auto &vertex : primitive->vertices) ghostBottom = std::max(ghostBottom, vertex.y);
+      }
+    }
+    expect(std::abs(ghostBottom - anchor * 0.75F) < 0.001F,
+           "replay ghost follows the same cropped note travel with Lift");
+    state.clock.serial = projection.frameSerial = 2;
+    fixture.bridge().beginFrame(state, projection, ghost->visibleScroll);
+    const auto green = fixture.bridge().integerProperty({313});
+    const auto rawCover = fixture.bridge().floatProperty({4});
+    expect(green.supported && green.value == 300 && rawCover.supported &&
+               std::abs(rawCover.value - 0.5 * (1.0 - lift)) < 0.0001,
+           "green number and skin cover properties retain the configured values");
+    fixture.bridge().discardFrame();
+  }
 }
 
 void testFocusedMirroredLaneBackgrounds() {
@@ -10928,6 +11038,7 @@ int main(int argc, char **argv) {
   testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
+  testCroppedPlayAreaReappliesCoverAndVisibleDuration();
   testFocusedMirroredLaneBackgrounds();
   testFocusedLaneCoverAndAttachedArtwork();
   testFocusedLaneEffectsFollowTimers();

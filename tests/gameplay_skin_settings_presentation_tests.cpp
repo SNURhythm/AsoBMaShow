@@ -563,6 +563,10 @@ void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != focusedKey,
           "play area zoom updates the live preview");
   changed = snapshot;
+  changed.entries.front().settings.viewport.playAreaBottomPaddingPercent = 12.5F;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "bottom padding updates the live preview even though the skin digest excludes viewport");
+  changed = snapshot;
   changed.entries.front().revisionDigest = "new-revision";
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
           "skin revalidation reloads a changed installed revision");
@@ -596,6 +600,7 @@ void testViewportModeChangesPreserveEveryOtherField() {
       .centerPlayArea = true,
       .keepHudFixed = true,
       .playAreaZoom = 1.4F,
+      .playAreaBottomPaddingPercent = 12.5F,
   };
 
   for (const auto mode : {skin::ViewportMode::Fit, skin::ViewportMode::Stretch,

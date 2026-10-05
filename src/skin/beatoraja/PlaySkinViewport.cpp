@@ -28,6 +28,12 @@ ViewportSettings effectiveSettings(const ViewportSettings &settings) {
                        SkinProfileSettingsPolicy::minPlayAreaZoom,
                        SkinProfileSettingsPolicy::maxPlayAreaZoom)
           : 1.0F;
+  effective.playAreaBottomPaddingPercent =
+      std::isfinite(effective.playAreaBottomPaddingPercent)
+          ? std::clamp(effective.playAreaBottomPaddingPercent,
+                       SkinProfileSettingsPolicy::minPlayAreaBottomPaddingPercent,
+                       SkinProfileSettingsPolicy::maxPlayAreaBottomPaddingPercent)
+          : 0.0F;
   effective.scaleX = std::clamp(effective.scaleX,
                                 SkinProfileSettingsPolicy::minCustomScale,
                                 SkinProfileSettingsPolicy::maxCustomScale);
@@ -111,6 +117,39 @@ playSkinAuthoredPlayArea(const ValidatedBeatorajaSkinModel &model) {
   return bounds;
 }
 
+std::optional<PlaySkinVisibleScroll>
+playSkinVisibleScroll(const ValidatedBeatorajaSkinModel &model,
+                      const PlaySkinViewport &viewport, double liftRatio) {
+  if (!viewport.valid || !finite(liftRatio)) return std::nullopt;
+  const SkinNoteObject *source = nullptr;
+  for (const auto &object : model.model.objects) {
+    if (std::find(model.disabledOptionalObjects.begin(),
+                  model.disabledOptionalObjects.end(), object.id) !=
+        model.disabledOptionalObjects.end()) continue;
+    if (const auto *note = std::get_if<SkinNoteObject>(&object.payload)) source = note;
+  }
+  if (!source || source->lanes.empty()) return std::nullopt;
+  const auto &lane = source->lanes.front().laneDestination;
+  if (!finite(lane.y) || !finite(lane.height) || lane.height <= 0.0) return std::nullopt;
+  const double origin = lane.y + lane.height * std::clamp(liftRatio, 0.0, 1.0);
+  const double top = lane.y + lane.height;
+  const auto &bounds = viewport.drawableAuthoredBounds;
+  // The projection window starts at the judgment line. Only compress a
+  // top crop while that origin is visible; focused framing guarantees this.
+  if (origin < bounds.y - 1e-9) return std::nullopt;
+  const double visibleBottom = std::max(origin, bounds.y);
+  const double visibleTop = std::min(top, bounds.y + bounds.height);
+  const double height = visibleTop - visibleBottom;
+  const double authoredHeight = top - origin;
+  if (!finite(height) || height <= 0.0 || authoredHeight <= 0.0 ||
+      height >= authoredHeight - 1e-9) return std::nullopt;
+  return PlaySkinVisibleScroll{
+      .authoredLaneHeight = lane.height, .originY = origin,
+      .authoredHeight = authoredHeight, .visibleBottomY = visibleBottom,
+      .visibleTopY = visibleTop, .height = height,
+      .scale = height / authoredHeight, .topCrop = top - visibleTop};
+}
+
 PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
                                           UiLogicalRect safeUiBounds,
                                           const ViewportSettings &settings,
@@ -147,13 +186,15 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
       finite(playArea->x) && finite(playArea->y) &&
       finite(playArea->width) && finite(playArea->height) &&
       playArea->width > 0.0 && playArea->height > 0.0;
+  const double focusedHeight = safeUiBounds.height *
+      (1.0 - static_cast<double>(effective.playAreaBottomPaddingPercent) / 100.0);
   if (focusPlayArea) {
     scaleX = scaleY = std::min(safeUiBounds.width / playArea->width,
-                              safeUiBounds.height / playArea->height) *
+                              focusedHeight / playArea->height) *
                       effective.playAreaZoom;
     tx = safeUiBounds.x + safeUiBounds.width / 2.0 -
          (playArea->x + playArea->width / 2.0) * scaleX;
-    ty = safeUiBounds.y + safeUiBounds.height / 2.0 +
+    ty = safeUiBounds.y + focusedHeight / 2.0 +
          (playArea->y + playArea->height / 2.0) * scaleY;
   }
 
@@ -166,10 +207,10 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
     ty = centerY + effective.scaleY * (ty - centerY) + effective.translateY;
   }
 
-  // Authored Y points upward. Once the lanes exceed the safe height, keep
-  // their judgment-line edge visible and let the top crop as zoom increases.
-  if (focusPlayArea && playArea->height * scaleY > safeUiBounds.height) {
-    ty = std::min(ty, safeUiBounds.y + safeUiBounds.height + playArea->y * scaleY);
+  // Authored Y points upward. Keep the judgment-line edge above the padded
+  // bottom limit and let the top crop as zoom increases.
+  if (focusPlayArea) {
+    ty = std::min(ty, safeUiBounds.y + focusedHeight + playArea->y * scaleY);
   }
 
   result.authoredToUi = {.m00 = scaleX, .m01 = 0.0, .tx = tx,

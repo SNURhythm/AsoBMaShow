@@ -973,6 +973,33 @@ void SettingsScene::appendGameplaySkinViewportSettings(
           }));
     }
     entryBody->addView(zoomRow);
+    auto *paddingRow = new View();
+    paddingRow->setFlexDirection(FlexDirection::Row);
+    paddingRow->setFlexWrap(YGWrapWrap);
+    paddingRow->setGap(metrics.compact ? 8.0f : 10.0f);
+    paddingRow->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.bottom_padding",
+                      {{"percent", formatViewportComponent(saved.playAreaBottomPaddingPercent)}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    for (const float step : {-1.0F, 1.0F}) {
+      paddingRow->addView(makeGameplaySkinAction(
+          metrics, i18n::message(step < 0 ? "settings.skins.play_area.bottom_padding_decrease"
+                                         : "settings.skins.play_area.bottom_padding_increase"),
+          ordinaryActionsEnabled && saved.centerPlayArea,
+          [this, entry = row.entry, step]() {
+            auto viewport = gameplaySkinViewportForEntry(entry);
+            viewport.playAreaBottomPaddingPercent = std::clamp(
+                viewport.playAreaBottomPaddingPercent + step,
+                skin::SkinProfileSettingsPolicy::minPlayAreaBottomPaddingPercent,
+                skin::SkinProfileSettingsPolicy::maxPlayAreaBottomPaddingPercent);
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport));
+          }));
+    }
+    entryBody->addView(paddingRow);
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.bottom_padding_hint"), metrics.smallTextSize,
+        ui_theme::textMuted()));
     entryBody->addView(makeWrappedText(
         i18n::message("settings.skins.play_area.hint"), metrics.smallTextSize,
         ui_theme::textMuted()));

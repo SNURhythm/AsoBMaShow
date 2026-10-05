@@ -90,6 +90,11 @@ void testFocusedPlayAreaUsesSafeAreaAndSharedInverse() {
   const auto zoomTouch = apply(zoomed.uiToAuthored, 200.0, 800.0);
   expect(near(zoomTouch[0], 300.0) && near(zoomTouch[1], 80.0),
          "anchored judgment line preserves inverse touch mapping");
+  settings.playAreaBottomPaddingPercent = 10.0F;
+  const auto padded = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
+  expect(near(apply(padded.authoredToUi, 300.0, 80.0)[1], 724.0),
+         "bottom padding raises the zoomed judgment-line anchor");
+  settings.playAreaBottomPaddingPercent = 0.0F;
   settings.playAreaZoom = std::numeric_limits<float>::quiet_NaN();
   const auto invalidZoom = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
   expect(invalidZoom.valid && near(invalidZoom.authoredToUi.m00, 0.9),
@@ -107,6 +112,32 @@ void testFocusedPlayAreaUsesSafeAreaAndSharedInverse() {
       canvas, safe, settings, AuthoredRect{0.0, 0.0, 0.0, 100.0});
   expect(near(invalid.authoredToUi.m00, normal.authoredToUi.m00),
          "zero-sized lane geometry cannot break the viewport");
+}
+
+void testVisibleScrollUsesClippedPostLiftLane() {
+  ValidatedBeatorajaSkinModel model;
+  SkinNoteObject note;
+  note.lanes = {{.authoredLane = 0,
+                 .laneDestination = {.x = 100.0, .y = 20.0, .width = 200.0, .height = 500.0}}};
+  model.model.objects.push_back({.id = 1, .payload = note});
+  const auto area = playSkinAuthoredPlayArea(model);
+  ViewportSettings settings;
+  settings.centerPlayArea = true;
+  settings.playAreaZoom = 2.0F;
+  auto viewport = evaluatePlaySkinViewport({1280.0, 720.0}, {0.0, 0.0, 1280.0, 720.0}, settings, area);
+  const auto cropped = playSkinVisibleScroll(model, viewport);
+  expect(cropped && near(cropped->height, 250.0) && near(cropped->scale, 0.5) &&
+             near(cropped->topCrop, 250.0), "crop metrics use the visible primary lane");
+  const auto lifted = playSkinVisibleScroll(model, viewport, 0.2);
+  expect(lifted && near(lifted->height, 150.0) && near(lifted->authoredHeight, 400.0) &&
+             near(lifted->scale, 0.375), "Lift is removed before crop compensation");
+  settings.playAreaZoom = 1.0F;
+  viewport = evaluatePlaySkinViewport({1280.0, 720.0}, {0.0, 0.0, 1280.0, 720.0}, settings, area);
+  expect(!playSkinVisibleScroll(model, viewport), "uncropped lanes preserve exact authored behavior");
+  viewport.drawableAuthoredBounds.y = 100.0;
+  viewport.drawableAuthoredBounds.height = 300.0;
+  expect(!playSkinVisibleScroll(model, viewport),
+         "offscreen judgment lines preserve the authored projection window");
 }
 
 void testPlayAreaBoundsFollowSelectedNoteSource() {
@@ -278,6 +309,7 @@ void testOffsetsPrecedeViewportProjection() {
 int main() {
   testFitUsesSafeAreaAndBars();
   testFocusedPlayAreaUsesSafeAreaAndSharedInverse();
+  testVisibleScrollUsesClippedPostLiftLane();
   testPlayAreaBoundsFollowSelectedNoteSource();
   testStretchAndCustomComposeOverSelectedBase();
   testCustomFitClampingAndLogicalScaleEquivalence();

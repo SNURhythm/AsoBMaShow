@@ -31,6 +31,7 @@ struct SyntheticReplayGhostGeometry {
   // traversal turns its visible height into this coordinate space.
   double sharedLaneOriginY = 0.0;
   double sharedLaneHeight = 0.0;
+  std::optional<PlaySkinVisibleScroll> visibleScroll;
   std::vector<SyntheticReplayGhostLaneGeometry> lanes;
 };
 

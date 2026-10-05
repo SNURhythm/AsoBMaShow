@@ -141,7 +141,7 @@ bool invertibleViewport(const PlaySkinViewport &viewport) noexcept {
 SkinSliderInteractionGeometry sliderInteraction(
     SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
     const AuthoredDestinationGeometry &geometry,
-    const SkinSliderObject &slider, PresentationUiControlKind kind) {
+    const SkinSliderObject &slider, PresentationUiControlKind kind, double range) {
   SkinSliderInteractionGeometry result{
       .sourceObject = sourceObject,
       .authoredOrdinal = authoredOrdinal,
@@ -151,27 +151,27 @@ SkinSliderInteractionGeometry sliderInteraction(
       .valueZero = {.x = geometry.rect.x, .y = geometry.rect.y},
       .valueOne = {.x = geometry.rect.x, .y = geometry.rect.y},
       .direction = slider.direction,
-      .range = slider.range,
+      .range = range,
       .changeable = slider.changeable,
       .writer = slider.writer};
   switch (slider.direction) {
   case 0:
-    result.authoredHitRegion.height = slider.range;
-    result.valueOne.y += slider.range;
+    result.authoredHitRegion.height = range;
+    result.valueOne.y += range;
     break;
   case 1:
-    result.authoredHitRegion.width = slider.range;
-    result.valueOne.x += slider.range;
+    result.authoredHitRegion.width = range;
+    result.valueOne.x += range;
     break;
   case 2:
-    result.authoredHitRegion.y -= slider.range;
-    result.authoredHitRegion.height = slider.range;
-    result.valueOne.y -= slider.range;
+    result.authoredHitRegion.y -= range;
+    result.authoredHitRegion.height = range;
+    result.valueOne.y -= range;
     break;
   case 3:
-    result.authoredHitRegion.x -= slider.range;
-    result.authoredHitRegion.width = slider.range;
-    result.valueOne.x -= slider.range;
+    result.authoredHitRegion.x -= range;
+    result.authoredHitRegion.width = range;
+    result.valueOne.x -= range;
     break;
   }
   return result;
@@ -2662,7 +2662,9 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
       laneCover.supported && laneCover.liftEnabled
           ? sharedLaneHeight * laneCover.lift
           : 0.0;
-  const double sharedScrollHeight = sharedLaneHeight - liftOffsetY;
+  const double sharedScrollHeight = inputs.visibleScroll
+                                        ? inputs.visibleScroll->height
+                                        : sharedLaneHeight - liftOffsetY;
 
   float expansionWidth = 1.0F;
   float expansionHeight = 1.0F;
@@ -5672,6 +5674,21 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         // FloatProperty.get and LuaValue.tofloat both cross a Java float
         // boundary before SkinSlider/SkinGraph perform their arithmetic.
         const float objectRate = static_cast<float>(*rate.value);
+        auto sliderGeometry = *evaluated.geometry;
+        double sliderRange = slider ? slider->range : 0.0;
+        double sliderInteractionRange = sliderRange;
+        if (slider && inputs.visibleScroll &&
+            (slider->direction == 0 || slider->direction == 2) &&
+            laneCoverRateProperty(inputs.model, *slider)) {
+          const auto &visible = *inputs.visibleScroll;
+          const double shift = sliderRange / visible.authoredLaneHeight * visible.topCrop;
+          sliderGeometry.rect.y += slider->direction == 0 ? shift : -shift;
+          sliderRange *= visible.scale;
+          // The cover rate includes Lift, but its writer takes the user's
+          // unadjusted percentage over the visible post-Lift span.
+          sliderInteractionRange = sliderRange * visible.authoredHeight /
+                                   visible.authoredLaneHeight;
+        }
 
         QuadLoweringResult lowered;
         if (slider) {
@@ -5680,9 +5697,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                 "skin.renderer.slider.invalid",
                 "Slider range is outside its safe domain.");
           } else {
-            auto geometry = *evaluated.geometry;
+            auto geometry = sliderGeometry;
             const float displacement =
-                objectRate * static_cast<float>(slider->range);
+                objectRate * static_cast<float>(sliderRange);
             switch (slider->direction) {
             case 0:
               geometry.rect.y =
@@ -5779,8 +5796,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             interactionLayout.slidersTopmostFirst.push_back(
                 sliderInteraction(object->id,
                                   destination.presentation.authoredOrdinal,
-                                  *evaluated.geometry, *slider,
-                                  interactionKind));
+                                  sliderGeometry, *slider,
+                                  interactionKind, sliderInteractionRange));
             interactionLayout.controlsTopmostFirst.push_back(
                 interactionLayout.slidersTopmostFirst.back());
           }
@@ -6220,7 +6237,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             .sharedLaneOriginY =
                 layout->note->lanes.front().laneDestination.y,
             .sharedLaneHeight =
-                layout->note->lanes.front().laneDestination.height};
+                layout->note->lanes.front().laneDestination.height,
+            .visibleScroll = inputs.visibleScroll};
         for (std::size_t laneIndex = 0; laneIndex < layout->note->lanes.size();
              ++laneIndex) {
           const auto &lane = layout->note->lanes[laneIndex];
@@ -6238,7 +6256,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           const double noteHeight = lane.authoredNoteHeight.value_or(8.0);
           const AuthoredRect normalNote{
               .x = lane.laneDestination.x + offsetX,
-              .y = lane.laneDestination.y + offsetY,
+              .y = lane.laneDestination.y + offsetY +
+                   (inputs.visibleScroll
+                        ? inputs.visibleScroll->originY - replayGhostGeometry.sharedLaneOriginY
+                        : 0.0),
               .width = lane.laneDestination.width + offsetWidth,
               .height = noteHeight + offsetHeight};
           if (emptyClip || !clip || !std::isfinite(normalNote.x) ||

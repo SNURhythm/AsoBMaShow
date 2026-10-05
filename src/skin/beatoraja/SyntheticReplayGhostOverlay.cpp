@@ -280,18 +280,21 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
   // BMSRenderer's noteVisibleUpperBound is measured from the judgement line.
   // Map that same retained fraction onto the selected skin's primary lane.
   // With no cover the full authored/shared play area remains authoritative.
-  const double laneCoverBottom =
-      visibleLaneHeightRatio < 1.0
-          ? std::min(sharedPlayAreaBottom,
-                     geometry.sharedLaneOriginY +
-                         geometry.sharedLaneHeight * visibleLaneHeightRatio)
-          : sharedPlayAreaBottom;
+  const double laneCoverBottom = geometry.visibleScroll
+      ? geometry.visibleScroll->visibleTopY -
+            geometry.visibleScroll->height * (1.0 - visibleLaneHeightRatio)
+      : (visibleLaneHeightRatio < 1.0
+             ? std::min(sharedPlayAreaBottom,
+                        geometry.sharedLaneOriginY +
+                            geometry.sharedLaneHeight * visibleLaneHeightRatio)
+             : sharedPlayAreaBottom);
   if (!std::isfinite(laneCoverBottom) ||
       laneCoverBottom <= sharedPlayArea.y) {
     return result;
   }
 
-  const double scrollScale = geometry.sharedLaneHeight * input.hispeed;
+  const double scrollScale = (geometry.visibleScroll ? geometry.visibleScroll->height
+                                                     : geometry.sharedLaneHeight) * input.hispeed;
   if (!std::isfinite(scrollScale) || scrollScale <= 0.0) {
     return result;
   }
@@ -302,7 +305,9 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
     if (!validRect(lane.normalNote) || !validRect(lane.clip)) {
       continue;
     }
-    const double clipTop = std::max(lane.clip.y, sharedPlayArea.y);
+    const double clipTop = std::max(lane.clip.y, geometry.visibleScroll
+                                              ? geometry.visibleScroll->visibleBottomY
+                                              : sharedPlayArea.y);
     const double clipBottom =
         std::min(lane.clip.y + lane.clip.height, laneCoverBottom);
     if (!std::isfinite(clipTop) || !std::isfinite(clipBottom) ||
@@ -338,7 +343,9 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
         !validRect(lane->clip)) {
       continue;
     }
-    const double clipTop = std::max(lane->clip.y, sharedPlayArea.y);
+    const double clipTop = std::max(lane->clip.y, geometry.visibleScroll
+                                               ? geometry.visibleScroll->visibleBottomY
+                                               : sharedPlayArea.y);
     const double clipBottom =
         std::min(lane->clip.y + lane->clip.height,
                  laneCoverBottom);
@@ -358,7 +365,7 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
         .x = visible.x,
         .y = visible.y +
              (event.judgeScrollPosition - input.currentScrollPosition) *
-                 geometry.sharedLaneHeight * input.hispeed,
+                 scrollScale,
         .width = visible.width,
         .height = visible.height};
     if (!validRect(outline)) {

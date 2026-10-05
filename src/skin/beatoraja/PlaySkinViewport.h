@@ -47,6 +47,23 @@ struct PlaySkinViewport {
   double destinationScaleY = 1.0;
 };
 
+// Transient compensation for a vertically cropped lane. Authored geometry,
+// configured Hi-Speed and the user's cover percentage remain unchanged.
+struct PlaySkinVisibleScroll {
+  double authoredLaneHeight = 0.0;
+  double originY = 0.0;
+  double authoredHeight = 0.0;
+  double visibleBottomY = 0.0;
+  double visibleTopY = 0.0;
+  double height = 0.0;
+  double scale = 1.0;
+  double topCrop = 0.0;
+};
+
+std::optional<PlaySkinVisibleScroll>
+playSkinVisibleScroll(const ValidatedBeatorajaSkinModel &, const PlaySkinViewport &,
+                      double liftRatio = 0.0);
+
 // Same last enabled Note source used by the renderer for lane interaction.
 std::optional<AuthoredRect>
 playSkinAuthoredPlayArea(const ValidatedBeatorajaSkinModel &model);
