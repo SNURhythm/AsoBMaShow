@@ -765,7 +765,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     previewControls->addView(makePreviewStepRow(
         minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
-    previewControls->addView(buildJudgementFeedbackStyleControls(metrics));
+    previewControls->addView(buildJudgementFeedbackStyleControls(metrics, true));
 
     previewControls->addView(makeSummaryRow(
         metrics, "FAST/SLOW", &summaryJudgementTimingFastSlowValueText));
@@ -1061,40 +1061,69 @@ View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metric
   return row;
 }
 
-View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &metrics) {
+View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &metrics,
+                                                         bool previewStyle) {
   auto *body = new View();
   body->setFlexDirection(FlexDirection::Column);
   body->setWidthPercent(100);
-  body->setGap(metrics.compact ? 8.0f : 12.0f);
-  const auto appendStyle = [this, body, &metrics](const i18n::Text &label,
+  body->setGap(previewStyle ? (metrics.compact ? 12.0f : 16.0f)
+                            : (metrics.compact ? 8.0f : 12.0f));
+  const auto appendStyle = [this, body, &metrics, previewStyle](const i18n::Text &label,
       int AppSettings::PresentationSettings::*sizeMember,
       bool AppSettings::PresentationSettings::*boldMember) {
-    auto *heading = makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
-                             TextView::LEFT, TextView::MIDDLE);
-    heading->setWidthPercent(100);
-    heading->setWrap(true);
-    body->addView(heading);
+    TextView *sizeText = nullptr;
+    auto *input = previewStyle ? nullptr
+        : makeTextInput(metrics, metrics.compact ? 116 : 136);
+    if (previewStyle) {
+      body->addView(makeSummaryRow(metrics, label, &sizeText));
+    } else {
+      auto *heading = makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
+                               TextView::LEFT, TextView::MIDDLE);
+      heading->setWidthPercent(100);
+      heading->setWrap(true);
+      body->addView(heading);
+    }
+    const auto refreshSize = [this, input, sizeText, sizeMember]() {
+      const auto value = std::to_string(context.settings.presentation().*sizeMember);
+      if (input) input->setEditingText(value);
+      if (sizeText) sizeText->setText(value + "%");
+    };
+    refreshSize();
     auto *row = new View();
     row->setWidthPercent(100);
     row->setFlexDirection(FlexDirection::Row);
     row->setFlexWrap(YGWrapWrap);
     row->setAlignItems(YGAlignCenter);
-    row->setGap(8);
-    auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
-    input->setEditingText(std::to_string(context.settings.presentation().*sizeMember));
-    input->onEditingFinished([this, input, sizeMember](const std::string &) {
-      auto &value = context.settings.presentation().*sizeMember;
-      const auto &text = input->getText();
-      int parsed = value;
-      const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
-      if (result.ec == std::errc{} && result.ptr == text.data() + text.size()) {
-        value = std::clamp(parsed, AppSettings::kMinJudgementFeedbackSizePercent,
-                           AppSettings::kMaxJudgementFeedbackSizePercent);
+    row->setGap(previewStyle ? (metrics.compact ? 8.0f : 10.0f) : 8.0f);
+    if (previewStyle) {
+      row->setJustifyContent(YGJustifyCenter);
+      for (const int delta : {-10, 10}) {
+        auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                    delta < 0 ? "-10%" : "+10%");
+        step->setOnClickListener([this, sizeMember, delta, refreshSize]() {
+          auto &value = context.settings.presentation().*sizeMember;
+          value = std::clamp(value + delta, AppSettings::kMinJudgementFeedbackSizePercent,
+                             AppSettings::kMaxJudgementFeedbackSizePercent);
+          refreshSize();
+          persistSettings();
+        });
+        row->addView(step);
       }
-      input->setEditingText(std::to_string(value));
-      persistSettings();
-    });
-    row->addView(input);
+    } else {
+      input->onEditingFinished([this, input, sizeMember, refreshSize](const std::string &) {
+        auto &value = context.settings.presentation().*sizeMember;
+        const auto &text = input->getText();
+        int parsed = value;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+        if (result.ec == std::errc{} && result.ptr == text.data() + text.size()) {
+          value = std::clamp(parsed, AppSettings::kMinJudgementFeedbackSizePercent,
+                             AppSettings::kMaxJudgementFeedbackSizePercent);
+        }
+        refreshSize();
+        persistSettings();
+      });
+      row->addView(input);
+    }
     auto *weightText = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
                                 TextView::CENTER, TextView::MIDDLE);
     const auto refreshWeight = [this, weightText, boldMember]() {
@@ -1102,7 +1131,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
           ? "settings.skins.feedback.bold.label" : "settings.skins.feedback.regular.label"));
     };
     refreshWeight();
-    auto *weight = makeControlButton(metrics.compact ? 132 : 156,
+    auto *weight = makeControlButton(previewStyle ? metrics.actionButtonWidth : (metrics.compact ? 132 : 156),
                                      metrics.actionButtonHeight, weightText);
     weight->setOnClickListener([this, boldMember, refreshWeight]() {
       auto &bold = context.settings.presentation().*boldMember;
@@ -1110,17 +1139,25 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
       refreshWeight();
       persistSettings();
     });
-    row->addView(weight);
+    if (!previewStyle) row->addView(weight);
     auto *reset = makeResetButton(metrics);
-    reset->setOnClickListener([this, input, sizeMember, boldMember, refreshWeight]() {
+    reset->setOnClickListener([this, sizeMember, boldMember, refreshSize, refreshWeight]() {
       context.settings.presentation().*sizeMember = AppSettings::kDefaultJudgementFeedbackSizePercent;
       context.settings.presentation().*boldMember = false;
-      input->setEditingText(std::to_string(AppSettings::kDefaultJudgementFeedbackSizePercent));
+      refreshSize();
       refreshWeight();
       persistSettings();
     });
     row->addView(reset);
     body->addView(row);
+    if (previewStyle) {
+      auto *weightRow = new View();
+      weightRow->setFlexDirection(FlexDirection::Row);
+      weightRow->setJustifyContent(YGJustifyCenter);
+      weightRow->setWidthPercent(100);
+      weightRow->addView(weight);
+      body->addView(weightRow);
+    }
   };
   appendStyle(i18n::message("settings.skins.feedback.judgement_size.percent_label"),
               &AppSettings::PresentationSettings::judgementTextSizePercent,
