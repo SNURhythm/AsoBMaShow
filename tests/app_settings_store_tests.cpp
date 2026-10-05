@@ -1855,6 +1855,7 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   portrait["skin"]["entries"][0]["settings"]["options"]["Style"] = 7;
   portrait["playAreaWidth7K"] = 15;
   portrait["laneLength"] = 32;
+  portrait["scratchLaneOnRight"] = true;
   portrait["judgementTextSizePercent"] = 150;
   portrait["judgementTextBold"] = true;
   portrait["judgementTimingSizePercent"] = 75;
@@ -1873,6 +1874,9 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   expect(document["presentations"]["landscape"]["playAreaWidth7K"] == 8 &&
              document["presentations"]["landscape"]["laneLength"] == 12,
          "landscape uses its own values and accepted bounds");
+  expect(document["presentations"]["portrait"]["scratchLaneOnRight"] == true &&
+             document["presentations"]["landscape"]["scratchLaneOnRight"] == false,
+         "scratch position persists independently for each orientation");
   expect(document["presentations"]["portrait"]["judgementTextSizePercent"] == 150 &&
              document["presentations"]["portrait"]["judgementTextBold"] == true &&
              document["presentations"]["portrait"]["judgementTimingSizePercent"] == 75 &&

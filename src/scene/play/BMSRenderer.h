@@ -286,7 +286,10 @@ private:
   std::atomic<uint32_t> judgementCounterRevision{1};
   uint32_t renderedJudgementCounterRevision = 0;
   JudgementCounterSnapshot renderedJudgementCounterSnapshot;
+  // Input state and replay identities keep the chart's canonical order.
   std::vector<int> laneOrder;
+  std::vector<int> displayedLaneOrder;
+  bool scratchLaneOnRight = false;
   std::vector<AtomicLaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
@@ -518,6 +521,7 @@ private:
   std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
+  void setScratchLaneOnRight(bool enabled);
   float laneToX(int lane) const;
   const NoteSheet &sheetForLane(int lane) const;
   rendering::TexBatchRenderer &
@@ -679,6 +683,9 @@ public:
   void setStartLaneIndicators(std::vector<int> lanes);
   void setStartLaneIndicatorsVisible(bool visible);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  [[nodiscard]] bool lanePressedForTesting(int lane) const {
+    return laneIsCurrentlyPressed(lane);
+  }
   [[nodiscard]] std::array<const TextView *, 3>
   judgementFeedbackTextViewsForTesting() const {
     return {judgeText.get(), judgementTimingDirectionText.get(),

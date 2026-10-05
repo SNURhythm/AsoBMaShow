@@ -340,6 +340,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
       .visibleTimeUseMilliseconds = true,
       .hispeedFixMode = AppSettings::HiSpeedFixMode::Main,
       .playAreaWidth = 6.5F,
+      .scratchLaneOnRight = true,
       .laneBeamsEnabled = false,
       .laneCoverHispeedFactor = 0.78F,
       .laneBeamLengthPercent = 73,

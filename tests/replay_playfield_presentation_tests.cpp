@@ -438,6 +438,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.presentation().judgementIndicatorRenderMode =
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
   settings.presentation().judgementIndicatorRangeMilliseconds = 123;
+  settings.presentation().scratchLaneOnRight = true;
   settings.presentation().judgementTextY = 0.6F;
   settings.presentation().judgementTextSizePercent = 150;
   settings.presentation().judgementTextBold = true;
@@ -501,6 +502,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.judgementIndicatorWidthScale == 0.75F &&
              configuration.judgementIndicatorHudMode &&
              configuration.judgementIndicatorRangeMilliseconds == 123 &&
+             configuration.scratchLaneOnRight &&
              configuration.judgementTextY == 0.6F &&
              configuration.judgementTextSizePercent == 150 &&
              configuration.judgementTextBold == true &&

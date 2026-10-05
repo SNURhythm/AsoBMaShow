@@ -670,6 +670,7 @@ BMSRenderer::BMSRenderer(
 
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
+  displayedLaneOrder = laneOrder;
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
   laneStateSnapshot.reserve(laneOrder.size());
@@ -4399,6 +4400,7 @@ void BMSRenderer::configure(
   configuredLaneLength = std::isfinite(configuration.laneLength)
       ? std::clamp(configuration.laneLength, geometryPolicy.length.minimum, geometryPolicy.length.maximum)
       : geometryPolicy.length.defaultValue;
+  setScratchLaneOnRight(configuration.scratchLaneOnRight);
   setPlayAreaWidth(configuration.playAreaWidth);
   if (presentationOrientation == player_settings::PresentationOrientation::Portrait) {
     const float angle = std::isfinite(configuration.laneAngleDegrees)
@@ -4481,9 +4483,9 @@ gameplay::RealtimeTouchLayout BMSRenderer::touchLayout() const {
   layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
   layout.laneCount = laneOrder.size();
   layout.keyMode = chart->Meta.KeyMode;
-  layout.lanes = laneOrder;
-  layout.scratch.reserve(laneOrder.size());
-  for (const int lane : laneOrder) {
+  layout.lanes = displayedLaneOrder;
+  layout.scratch.reserve(displayedLaneOrder.size());
+  for (const int lane : displayedLaneOrder) {
     layout.scratch.push_back(chartLaneIsScratch(chart->Meta, lane));
   }
   return layout;
@@ -5390,6 +5392,19 @@ inline bool BMSRenderer::isRightScratch(int lane) const {
 inline bool BMSRenderer::isScratch(int lane) const {
   return isLeftScratch(lane) || isRightScratch(lane);
 }
+void BMSRenderer::setScratchLaneOnRight(bool enabled) {
+  // Keep the existing two-player arrangement and scratchless key modes.
+  enabled = enabled && scratchLaneCount == 1;
+  if (scratchLaneOnRight == enabled) return;
+  scratchLaneOnRight = enabled;
+  displayedLaneOrder = laneOrder;
+  if (enabled) {
+    std::stable_partition(displayedLaneOrder.begin(), displayedLaneOrder.end(),
+                          [this](int lane) { return !isScratch(lane); });
+  }
+  rebuildPlayAreaGeometry();
+}
+
 void BMSRenderer::rebuildPlayAreaGeometry() {
   playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
   noteRenderWidth =
@@ -5418,9 +5433,9 @@ void BMSRenderer::rebuildPlayAreaGeometry() {
   advanceTouchRevision(touchHitRegionsRevision_);
 }
 inline float BMSRenderer::computeLaneX(int lane) const {
-  if (const auto it = laneToOrderIndex.find(lane);
-      it != laneToOrderIndex.end()) {
-    return playAreaLeftX + static_cast<float>(it->second) * noteRenderWidth;
+  const auto it = std::ranges::find(displayedLaneOrder, lane);
+  if (it != displayedLaneOrder.end()) {
+    return playAreaLeftX + static_cast<float>(it - displayedLaneOrder.begin()) * noteRenderWidth;
   }
 
   return playAreaLeftX;

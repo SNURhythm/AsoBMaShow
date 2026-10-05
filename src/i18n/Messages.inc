@@ -1870,6 +1870,7 @@
 {"settings.skins.scan_cancelled.message", "Skin scan cancelled.", "스킨 검색을 취소했습니다.", "スキンのスキャンをキャンセルしました。"},
 {"settings.skins.scanning_skin_packages.label", "Scanning skin packages", "스킨 패키지 검색 중", "スキンパッケージをスキャン中"},
 {"settings.skins.scanning_skin_packages.progress", "Scanning skin packages…", "스킨 패키지를 검색하는 중…", "スキンパッケージをスキャン中…"},
+{"settings.skins.scratch_position.label", "Scratch Position (Single Play)", "스크래치 위치 (싱글 플레이)", "スクラッチ位置（シングルプレイ）"},
 {"settings.skins.select_validated_skin_first.message", "Select a validated gameplay skin first.", "먼저 검증된 게임플레이 스킨을 선택하세요.", "まず検証済みのプレイスキンを選択してください。"},
 {"settings.skins.selected_configuration_not_validated.message", "A selected skin configuration is not validated.", "선택한 스킨 설정이 검증되지 않았습니다.", "選択したスキン設定は検証されていません。"},
 {"settings.skins.selected_skin_failed_activated.message", "Selected skin could not be activated.", "선택한 스킨을 활성화하지 못했습니다.", "選択したスキンを有効化できませんでした。"},

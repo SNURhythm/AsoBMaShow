@@ -3099,6 +3099,7 @@ void GamePlayScene::init() {
       .orientation = context.settings.activePresentationOrientation(),
       .laneLength = context.settings.presentation().laneLength,
       .laneAngleDegrees = context.settings.presentation().laneAngleDegrees,
+      .scratchLaneOnRight = context.settings.presentation().scratchLaneOnRight,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,

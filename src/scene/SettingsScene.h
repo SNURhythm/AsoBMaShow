@@ -390,6 +390,7 @@ private:
   void initView();
   void resetViewState();
   void ensureLayoutUpToDate();
+  View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
                                  bool includeDescription,

@@ -198,6 +198,7 @@ public:
   NotePriorityMode notePriorityMode = NotePriorityMode::Combo;
   using PresentationOrientation = player_settings::PresentationOrientation;
   struct PresentationSettings {
+    bool scratchLaneOnRight = false;
     float laneAngleDegrees = kDefaultLaneAngleDegrees;
     float laneLength = kDefaultLaneLength;
     int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;

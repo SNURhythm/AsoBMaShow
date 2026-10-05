@@ -830,6 +830,9 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         body->addView(row);
       };
 
+  if (keyMode == 5 || keyMode == 7) {
+    body->addView(buildScratchLanePositionControl(metrics));
+  }
   appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
                 formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
                 formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1),

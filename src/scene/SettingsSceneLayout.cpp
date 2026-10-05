@@ -591,6 +591,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     noteStartControls->addView(resetNoteStart);
     previewControls->addView(noteStartControls);
   } else if (previewPanelPage == 1) {
+    previewControls->addView(buildScratchLanePositionControl(metrics));
     previewControls->addView(
         makeSummaryRow(metrics, i18n::message("settings.preview_layout.lane_angle.label"), &summaryLaneAngleValueText));
     auto *angleControls = new View();
@@ -1029,6 +1030,35 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->applyYogaLayout();
   refreshSettingsText();
   return;
+}
+
+View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metrics) {
+  auto *row = new View();
+  row->setWidthPercent(100);
+  row->setFlexDirection(FlexDirection::Row);
+  row->setAlignItems(YGAlignCenter);
+  row->setGap(12);
+  auto *label = makeWrappedText(i18n::message("settings.skins.scratch_position.label"),
+                                metrics.smallTextSize, ui_theme::textSecondary());
+  label->setFlex(1)->setMinWidth(0);
+  row->addView(label);
+  auto *value = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+                         TextView::CENTER, TextView::MIDDLE);
+  const auto refresh = [this, value]() {
+    value->setLocalizedText(i18n::message(context.settings.presentation().scratchLaneOnRight
+        ? "settings.skins.right.label" : "settings.skins.left.label"));
+  };
+  refresh();
+  auto *toggle = makeControlButton(metrics.compact ? 132 : 156,
+                                   metrics.actionButtonHeight, value);
+  toggle->setOnClickListener([this, refresh]() {
+    auto &enabled = context.settings.presentation().scratchLaneOnRight;
+    enabled = !enabled;
+    refresh();
+    persistSettings();
+  });
+  row->addView(toggle);
+  return row;
 }
 
 View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &metrics) {
@@ -2037,6 +2067,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
   if (showLegacyBuiltInGameplayControls) {
+  cardsColumn->addView(makeCard(metrics,
+      i18n::message("settings.skins.scratch_position.label"), "",
+      buildScratchLanePositionControl(metrics), metrics.modeCardHeight, metrics.cardsWidth));
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);
   angleControls->setFlexWrap(YGWrapWrap);

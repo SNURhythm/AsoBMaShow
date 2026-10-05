@@ -524,6 +524,7 @@ void readSkinProfileSettings(const json &document,
 
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
   return {
+      {"scratchLaneOnRight", settings.scratchLaneOnRight},
       {"laneAngleDegrees", settings.laneAngleDegrees},
       {"laneLength", settings.laneLength},
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
@@ -686,6 +687,7 @@ json settingsToJson(const AppSettings &settings) {
 
 void readPresentation(const json &document, AppSettings::PresentationSettings &settings,
                       std::vector<std::string> &diagnostics) {
+  readValue(document, "scratchLaneOnRight", settings.scratchLaneOnRight, diagnostics);
   readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
             diagnostics);
   readValue(document, "laneLength", settings.laneLength, diagnostics);

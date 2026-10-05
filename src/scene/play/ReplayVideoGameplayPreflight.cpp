@@ -69,6 +69,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .orientation = settings.activePresentationOrientation(),
       .laneLength = settings.presentation().laneLength,
       .laneAngleDegrees = settings.presentation().laneAngleDegrees,
+      .scratchLaneOnRight = settings.presentation().scratchLaneOnRight,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = laneCoverEnabled,

@@ -687,7 +687,7 @@ ScenarioResult renderScenario(
     long long visualTimeMicros = kRenderMicros,
     std::uint64_t frameSerial = 0,
     bool seedPastInvisibleProbe = false,
-    bool primeRendererTraversal = false) {
+    bool primeRendererTraversal = false, bool scratchOnRight = false) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
@@ -704,7 +704,8 @@ ScenarioResult renderScenario(
   result.coverPercent = coverPercent;
   result.chart = chartJson(model);
 
-  const auto configuration = presentationConfig(coverPercent);
+  auto configuration = presentationConfig(coverPercent);
+  configuration.scratchLaneOnRight = scratchOnRight;
   const auto authority = authorityFor(*fixture.chart, coverPercent);
   store.setConfiguration(configuration);
   store.applyAuthorityUpdate(authority);
@@ -1916,6 +1917,67 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+void verifyScratchLanePosition(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  for (const int keyMode : {4, 5, 6, 7, 8, 10, 14}) {
+    SyntheticChartFixture fixture;
+    fixture.chart->Meta.KeyMode = keyMode;
+    const auto canonicalOrder = fixture.chart->Meta.GetTotalLaneIndices();
+    Judge judge(fixture.chart->Meta.Rank);
+    BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+    auto config = presentationConfig(0);
+    renderer.configure(config);
+    renderer.onLanePressed(7, JudgeResult(PGreat, 0), kRenderMicros);
+    auto previousRevision = renderer.touchLayoutRevision();
+    for (const bool right : {true, false, true}) {
+      config.scratchLaneOnRight = right;
+      renderer.configure(config);
+      const auto layout = renderer.touchLayout();
+      auto expected = canonicalOrder;
+      if (right && (keyMode == 5 || keyMode == 7)) {
+        std::rotate(expected.begin(), expected.begin() + 1, expected.end());
+      }
+      expect(layout.lanes == expected && layout.laneCount == expected.size(),
+             "scratch moves after single-play keys without changing double-play or scratchless order");
+      if (renderer.lanePressedForTesting(7) !=
+          (std::ranges::find(canonicalOrder, 7) != canonicalOrder.end()) ||
+          renderer.lanePressedForTesting(0)) {
+        std::cerr << "Held lane mismatch: mode " << keyMode << " right " << right
+                  << " lane7 " << renderer.lanePressedForTesting(7)
+                  << " lane0 " << renderer.lanePressedForTesting(0) << '\n';
+      }
+      expect(renderer.lanePressedForTesting(7) ==
+                 (std::ranges::find(canonicalOrder, 7) != canonicalOrder.end()) &&
+                 !renderer.lanePressedForTesting(0),
+             "moving scratch preserves held input by raw chart lane identity");
+      if (keyMode == 5 || keyMode == 7) {
+        expect(layout.revision > previousRevision &&
+                   layout.scratch[right ? layout.scratch.size() - 1 : 0],
+               "touch layout publishes a new revision with scratch at the displayed edge");
+      }
+      previousRevision = layout.revision;
+      if (keyMode != 7) continue;
+      Recorder recorder;
+      renderer.setCharacterizationRecorder(&recorder);
+      rendering::UiBatchRenderer batch;
+      batch.beginFrame();
+      RenderContext context(batch);
+      {
+        RenderContext::UiBatchScope scope(context);
+        renderer.render(context, kRenderMicros, kRenderMicros);
+      }
+      const auto scratch = std::ranges::find_if(recorder.submissions, [](const auto &submission) {
+        return submission.kind == characterization::SubmissionKind::NormalNote && submission.lane == 7;
+      });
+      expect(scratch != recorder.submissions.end() &&
+                 std::abs(scratch->rect.x - (right ? 7.0F : 0.0F)) < 0.001F,
+             "scratch note rendering follows the same lane order as touch input");
+      renderer.setCharacterizationRecorder(nullptr);
+      bgfx::frame();
+    }
+  }
+}
+
 void verifyJudgementFeedbackStyles(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -2114,6 +2176,14 @@ int main() {
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
       verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();
+      const auto legacyRightScratch = renderScenario(
+          target, kAfterCoverPercent, true, ScenarioRenderPath::Legacy,
+          kRenderMicros, 41, true, false, true);
+      const auto capturedRightScratch = renderScenario(
+          target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
+          kRenderMicros, 41, true, false, true);
+      verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
+      verifyScratchLanePosition(target);
       verifyJudgementFeedbackStyles(target);
       verifyNoteBoundsReachScreenEdgesAfterRotation();
     } catch (const std::exception &error) {
