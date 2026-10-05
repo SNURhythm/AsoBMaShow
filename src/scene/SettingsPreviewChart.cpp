@@ -63,8 +63,7 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
 
   auto appendTimeline = [&measure](long long timingMicros,
                                    bool firstInMeasure = false) {
-    // The original first note is at 0.5 s; add half a second of lead-in.
-    auto timeline = makePreviewTimeline(timingMicros + 500'000, firstInMeasure);
+    auto timeline = makePreviewTimeline(timingMicros, firstInMeasure);
     auto *timelinePtr = timeline.get();
     measure->TimeLines.push_back(timelinePtr);
     (void)timeline.release();
@@ -77,7 +76,7 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
   const auto laneFor = [&](int legacyLane) {
     return keyMode == 7 ? legacyLane : lanes[legacyLane % lanes.size()];
   };
-  addPreviewNote(appendTimeline(500000, true), laneFor(0));
+  addPreviewNote(appendTimeline(500000), laneFor(0));
   addPreviewNote(appendTimeline(850000), laneFor(2));
   addPreviewNote(appendTimeline(1200000), laneFor(4));
   addPreviewNote(appendTimeline(1550000), laneFor(6));
@@ -145,6 +144,13 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
     noteAt(30'000'000 + step * 250'000, step);
   chordAt(31'500'000, {0, laneCount / 2, laneCount - 1});
 
+  // Delay the complete pattern, including long-note tails, by one second.
+  for (auto *timeline : measure->TimeLines) {
+    timeline->Timing += 1'000'000;
+    timeline->BeatPosition = static_cast<double>(timeline->Timing) / 2'000'000.0;
+  }
+  // A normal empty chart origin keeps all rows scrolling before the first note.
+  appendTimeline(0, true);
   std::ranges::sort(measure->TimeLines, {}, &bms_parser::TimeLine::Timing);
   const auto scratches = chart->Meta.GetScratchLaneIndices();
   for (const auto *timeline : measure->TimeLines) {

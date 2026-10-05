@@ -2281,6 +2281,47 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
   }
 }
 
+void verifyPreviewNotesMoveThroughoutOpening() {
+  for (const int mode : settings_scene::kPreviewKeyModes) {
+    const auto chart = settings_scene::makePreviewChart(mode);
+    const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+    PlayfieldProjection projection;
+    PlayfieldVisualState state;
+    const PlayfieldProjectionRequest request{
+        .visibleScrollAfter = 20.0,
+        .builtInTraversal = BuiltInRendererTraversal{
+            .judgeY = 0.0F, .upperBound = 20.0F, .rxhs = 1.0F,
+            .hispeed = 1.0F, .noteVisibleUpperBound = 20.0F}};
+    state.clock.visualTimeMicros = 250'000;
+    const auto before = projection.project(model, state, request);
+    state.clock.visualTimeMicros = 750'000;
+    const auto after = projection.project(model, state, request);
+    const auto skinBefore = adaptPlayfieldProjectionForSkin(before);
+    const auto skinAfter = adaptPlayfieldProjectionForSkin(after);
+    expect(skinBefore.notes.size() > 2 &&
+               skinBefore.notes.size() == skinAfter.notes.size() &&
+               !skinBefore.longNotes.empty() &&
+               skinBefore.longNotes.size() == skinAfter.longNotes.size() &&
+               before.builtInPlan.entries.size() == after.builtInPlan.entries.size(),
+           "the opening retains every sample note before its judgement time");
+    for (std::size_t i = 0; i < std::min(skinBefore.notes.size(), skinAfter.notes.size()); ++i)
+      expect(std::abs(skinBefore.notes[i].authoredYDisplacement -
+                      skinAfter.notes[i].authoredYDisplacement - 0.25) < 0.00001,
+             "every custom-skin note moves during the empty opening");
+    for (std::size_t i = 0; i < std::min(skinBefore.longNotes.size(), skinAfter.longNotes.size()); ++i) {
+      expect(std::abs(skinBefore.longNotes[i].headAuthoredYDisplacement -
+                      skinAfter.longNotes[i].headAuthoredYDisplacement - 0.25) < 0.00001 &&
+                 std::abs(skinBefore.longNotes[i].tailAuthoredYDisplacement -
+                          skinAfter.longNotes[i].tailAuthoredYDisplacement - 0.25) < 0.00001,
+             "both long-note endpoints move together during the empty opening");
+    }
+    for (std::size_t i = 0; i < std::min(before.builtInPlan.entries.size(), after.builtInPlan.entries.size()); ++i)
+      expect(std::abs(before.builtInPlan.entries[i].renderY -
+                      after.builtInPlan.entries[i].renderY - 0.25F) < 0.00001F,
+             "every built-in note moves during the empty opening");
+  }
+}
+
 void verifyPreviewScoreUsesRealJudgements() {
   const auto chart = settings_scene::makePreviewChart(7);
   const auto model = buildPlayfieldChartVisualModel(*chart, 0);
@@ -2309,14 +2350,14 @@ void verifyPreviewScoreUsesRealJudgements() {
   expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
              scene.previewCombo == 0 && scene.previewMaximumCombo == 0,
          "a fresh preview has no invented score or completed notes");
-  for (const auto [lane, time] : {std::pair{0, 1'000'000LL},
-                                  std::pair{2, 1'390'000LL},
-                                  std::pair{4, 1'800'000LL}}) {
+  for (const auto [lane, time] : {std::pair{0, 1'500'000LL},
+                                  std::pair{2, 1'890'000LL},
+                                  std::pair{4, 2'300'000LL}}) {
     scene.previewElapsedMicros = time;
     scene.pressLane(lane, 0);
     scene.releaseLane(lane, 0);
   }
-  scene.previewElapsedMicros = 2'300'000;
+  scene.previewElapsedMicros = 2'800'000;
   scene.advancePreviewSimulation();
   const auto state = store.capture({.serial = 1});
   expect(scene.previewScore == 3 && scene.previewPassedNotes == 4 &&
@@ -2352,7 +2393,7 @@ void verifyPreviewMissesAndFullCombo() {
     scene.previewElapsedMicros = 900'000;
     scene.advancePreviewSimulation();
     expect(scene.previewPassedNotes == 0 && scene.previewJudgeCount.at(Poor) == 0,
-           "the one-second preview lead-in never judges a note before it arrives");
+           "the empty opening never judges a note before it arrives");
     scene.previewElapsedMicros = 33'000'000;
     scene.advancePreviewSimulation();
     scene.capturePreviewVisualState();
@@ -2926,6 +2967,7 @@ int main() {
       verifyPreviewKeyModeTouchRouting(target);
       verifyPreviewPacemakerDiff(target);
       verifyPreviewPacemakerMatchesChartScore();
+  verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
   verifyPreviewMissesAndFullCombo();
       verifyIndividualJudgementLabelVisibility(target);
