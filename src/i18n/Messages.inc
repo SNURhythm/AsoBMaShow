@@ -1801,7 +1801,7 @@
 {"settings.skins.hud.position.overlay.label", "2D HUD", "2D HUD", "2D HUD"},
 {"settings.skins.hud.position.world.label", "3D Space", "3D 공간", "3D空間"},
 {"settings.skins.import_archive.label", "Import Archive", "압축 파일 가져오기", "アーカイブをインポート"},
-{"settings.skins.import_zip_unpacked_folder.message", "Import a .zip or an unpacked folder.", ".zip 파일이나 압축이 풀린 폴더를 가져오세요.", ".zipファイルまたは展開済みのフォルダーをインポートします。"},
+{"settings.skins.import_zip_unpacked_folder.message", "Import a supported archive or an unpacked folder.", "지원하는 압축 파일이나 압축이 풀린 폴더를 가져오세요.", "対応するアーカイブまたは展開済みのフォルダーをインポートします。"},
 {"settings.skins.indicator_layout.label", "Indicator Layout", "타이밍 표시 방식", "インジケーターのレイアウト"},
 {"settings.skins.indicator_range_ms.label", "Indicator Range (ms)", "타이밍 표시 범위 (ms)", "インジケーターの範囲 (ms)"},
 {"settings.skins.indicator_width.percent_label", "Indicator Width (%)", "타이밍 표시 너비 (%)", "インジケーターの幅 (%)"},

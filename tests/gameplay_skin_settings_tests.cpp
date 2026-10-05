@@ -527,6 +527,13 @@ void testSourceNameSuggestionPreservesTypedSemantics() {
       suggestSkinPackageName("ModernChic.ZIP", PlatformTemporaryPathKind::File);
   expect(archive.ok() && archive.suggestedPackageName == "ModernChic",
          "archive suggestion strips one case-insensitive zip suffix");
+  for (const auto suffix : {".7z", ".RAR", ".lzh", ".tar.gz", ".TAR.BZ2",
+                            ".tar.xz", ".tar.zst", ".tgz", ".zipx", ".cb7"}) {
+    const auto name = suggestSkinPackageName(std::string("ModernChic") + suffix,
+                                            PlatformTemporaryPathKind::File);
+    expect(name.ok() && name.suggestedPackageName == "ModernChic",
+           "archive suggestion removes the complete supported archive suffix");
+  }
   const auto repeated = suggestSkinPackageName("ModernChic.zip.zip",
                                                PlatformTemporaryPathKind::File);
   expect(repeated.ok() && repeated.suggestedPackageName == "ModernChic.zip",

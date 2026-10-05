@@ -1,6 +1,7 @@
 #include "../i18n/Localization.h"
 #include "GameplaySkinSettingsController.h"
 
+#include "../ArchiveFile.h"
 #include "../skin/SkinTargetTraits.h"
 #include "../skin/package/SkinPathPolicy.h"
 
@@ -13,16 +14,6 @@
 
 namespace skin {
 namespace {
-
-bool endsWithZipAsciiCaseInsensitive(std::string_view value) {
-  if (value.size() < 4) {
-    return false;
-  }
-  const auto suffix = value.substr(value.size() - 4);
-  return suffix[0] == '.' && (suffix[1] == 'z' || suffix[1] == 'Z') &&
-         (suffix[2] == 'i' || suffix[2] == 'I') &&
-         (suffix[3] == 'p' || suffix[3] == 'P');
-}
 
 ControllerActionResult rejected(i18n::Text message) {
   return {.message = std::move(message)};
@@ -95,9 +86,9 @@ suggestSkinPackageName(std::string originalSourceName,
   }
 
   std::string proposed = std::move(*normalized.value);
-  if (pathKind == PlatformTemporaryPathKind::File &&
-      endsWithZipAsciiCaseInsensitive(proposed)) {
-    proposed.resize(proposed.size() - 4);
+  if (pathKind == PlatformTemporaryPathKind::File) {
+    const auto extension = archive_file::archiveExtensionFromName(proposed);
+    proposed.resize(proposed.size() - extension.size());
   }
   auto package = normalizePackageId(proposed);
   if (!package.package) {

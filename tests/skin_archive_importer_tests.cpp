@@ -441,6 +441,95 @@ std::vector<std::string> entryPaths(const PreparedPackage &prepared) {
   return paths;
 }
 
+fs::path makeNonZipArchive(const fs::path &path, int format, int filter,
+                          const std::vector<ZipMember> &members) {
+  archive *writer = archive_write_new();
+  expect(archive_write_set_format(writer, format) == ARCHIVE_OK,
+         "test archive format is supported");
+  expect(archive_write_add_filter(writer, filter) == ARCHIVE_OK,
+         "test archive compression is supported");
+  expect(archive_write_open_filename(writer, path.string().c_str()) == ARCHIVE_OK,
+         "test archive opens");
+  for (const auto &member : members) {
+    archive_entry *entry = archive_entry_new();
+    archive_entry_set_pathname(entry, member.path.c_str());
+    archive_entry_set_filetype(entry, member.type);
+    archive_entry_set_perm(entry, 0755);
+    archive_entry_set_size(entry, member.type == AE_IFREG ? member.bytes.size() : 0);
+    if (member.type == AE_IFLNK) archive_entry_set_symlink(entry, "../../outside");
+    expect(archive_write_header(writer, entry) == ARCHIVE_OK, "test archive header writes");
+    if (member.type == AE_IFREG && !member.bytes.empty()) {
+      expect(archive_write_data(writer, member.bytes.data(), member.bytes.size()) ==
+                 static_cast<la_ssize_t>(member.bytes.size()), "test archive payload writes");
+    }
+    archive_entry_free(entry);
+  }
+  expect(archive_write_close(writer) == ARCHIVE_OK, "test archive closes");
+  archive_write_free(writer);
+  return path;
+}
+
+void testSupportedArchiveFormatsPrepareIdenticalSkins() {
+  const std::vector<ZipMember> members{{"Wrapper", {}, AE_IFDIR},
+      {"Wrapper/play.luaskin", "return {type = 0}\n"},
+      {"Wrapper/assets/image.txt", "asset bytes"}};
+  std::string expectedDigest;
+  for (const auto [format, filter] : {
+           std::pair{ARCHIVE_FORMAT_7ZIP, ARCHIVE_FILTER_NONE},
+           std::pair{ARCHIVE_FORMAT_TAR_PAX_RESTRICTED, ARCHIVE_FILTER_NONE},
+           std::pair{ARCHIVE_FORMAT_TAR_PAX_RESTRICTED, ARCHIVE_FILTER_GZIP},
+           std::pair{ARCHIVE_FORMAT_TAR_PAX_RESTRICTED, ARCHIVE_FILTER_BZIP2},
+           std::pair{ARCHIVE_FORMAT_TAR_PAX_RESTRICTED, ARCHIVE_FILTER_XZ},
+           std::pair{ARCHIVE_FORMAT_TAR_PAX_RESTRICTED, ARCHIVE_FILTER_ZSTD}}) {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    // Native document handoff uses a private .zip name for every picked format.
+    const auto path = makeNonZipArchive(temp.root() / "imported-document.zip",
+                                        format, filter, members);
+    auto result = prepareZip(path, roots);
+    expect(result.prepared.has_value(), "supported archive imports by content despite staged extension");
+    if (!result.prepared) continue;
+    expect(entryPaths(*result.prepared) == std::vector<std::string>{"play.luaskin"} &&
+               readText(result.prepared->readView().root() / "assets/image.txt") == "asset bytes",
+           "non-ZIP archives strip the wrapper and preserve skin files");
+    const auto digest = result.prepared->candidateRevision().lowercaseSha256;
+    if (expectedDigest.empty()) expectedDigest = digest;
+    expect(digest == expectedDigest, "equivalent archives have the same installed skin identity");
+  }
+}
+
+void testRarAndLhaSkinArchives() {
+  for (const auto name : {"minimal-rar5.rar", "minimal-lh0.lzh"}) {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const auto source = fs::path(ASOBMASHOW_SOURCE_DIR) /
+        "tests/fixtures/skin_archives" / name;
+    const auto staged = temp.root() / "imported-document.zip";
+    fs::copy_file(source, staged);
+    auto result = prepareZip(staged, roots);
+    expect(result.prepared.has_value(), std::string("real archive imports: ") + name);
+    if (result.prepared) {
+      expect(entryPaths(*result.prepared) == std::vector<std::string>{"play.luaskin"} &&
+                 readText(result.prepared->readView().root() / "assets/image.txt") == "asset bytes",
+             "RAR and LHA imports retain skin entries and assets");
+    }
+  }
+}
+
+void testNonZipArchiveRejectsUnsafeEntries() {
+  for (const auto &member : std::vector<ZipMember>{
+           {"../outside.luaskin", "return {}"},
+           {"Wrapper/link", {}, AE_IFLNK}}) {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    auto path = makeNonZipArchive(temp.root() / "unsafe.tar.gz",
+        ARCHIVE_FORMAT_TAR_PAX_RESTRICTED, ARCHIVE_FILTER_GZIP,
+        {{"Wrapper/play.luaskin", "return {}"}, member});
+    auto result = prepareZip(path, roots);
+    expectRejectedAndClean(result, roots, "unsafe non-ZIP entries never publish a skin");
+  }
+}
+
 void testMoveOnlyPreparationContract() {
   static_assert(std::is_move_constructible_v<PreparedPackage>);
   static_assert(std::is_move_assignable_v<PreparedPackage>);
@@ -816,12 +905,9 @@ void testEncryptedTruncatedCrcAndUnsupportedCompressionReject() {
         makeZip(temp.root() / "unsupported.zip",
                 {{"play.luaskin", "return {type = 0}\n"}}, true);
     expect(centralCompressionMethods(zip) == std::vector<std::uint16_t>{14},
-           "unsupported-compression fixture really uses ZIP LZMA");
+           "extended-compression fixture really uses ZIP LZMA");
     auto result = prepareZip(zip, roots);
-    expectRejectedAndClean(result, roots,
-                           "unsupported ZIP compression rejects the archive");
-    expect(hasDiagnosticCode(result, "skin_archive_member_metadata_invalid"),
-           "unsupported compression has a stable diagnostic code");
+    expect(result.prepared.has_value(), "ZIP LZMA compression imports successfully");
   }
 }
 
@@ -1609,6 +1695,9 @@ void testCancellationAndPreparedDestructionCleanAllStaging() {
 } // namespace
 
 int main() {
+  testSupportedArchiveFormatsPrepareIdenticalSkins();
+  testNonZipArchiveRejectsUnsafeEntries();
+  testRarAndLhaSkinArchives();
   testMoveOnlyPreparationContract();
   testZipFolderAndManualTreeHaveOneIdentity();
   testCandidateInventoryRecognizesEveryGameplayDocumentExtension();

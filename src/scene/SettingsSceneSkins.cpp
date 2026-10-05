@@ -306,7 +306,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
             .beginArchiveHandoff =
                 [this]() {
                   return platform_document_handoff::ImportDocumentAsync(
-                      {.mimeType = "application/zip",
+                      {.mimeType = "*/*",
                        .maxBytes = skin::SkinPackagePolicy::maxArchiveBytes},
                       context.temporaryPathCleanupService);
                 },

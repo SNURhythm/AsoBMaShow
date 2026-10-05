@@ -3924,7 +3924,9 @@ bool WaitForIOSDocumentPicker(std::uint64_t operationToken,
                             asCopy:YES];
         } else {
           UTType *contentType =
-              directoryImport ? UTTypeFolder : [UTType typeWithMIMEType:mimeType];
+              directoryImport ? UTTypeFolder
+                  : [mimeType isEqualToString:@"*/*"] ? UTTypeData
+                  : [UTType typeWithMIMEType:mimeType];
           if (contentType == nil) {
             [delegate finishWithURL:nil
                               error:@"The requested document type is unsupported."
