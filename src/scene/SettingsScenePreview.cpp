@@ -481,7 +481,7 @@ void SettingsScene::destroyPreviewRenderer() {
 }
 
 void SettingsScene::ensurePreviewInputHandler() {
-  if (!previewActive || previewAutoPlay) {
+  if (!previewActive || previewAutoPlay || appearanceColorPopup) {
     return;
   }
   ensurePreviewRenderer();

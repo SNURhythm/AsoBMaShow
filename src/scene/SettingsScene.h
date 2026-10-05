@@ -10,7 +10,7 @@
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
-#include "../view/ColorPickerModel.h"
+#include "../view/ColorPickerPopup.h"
 #include "SettingsPreviewAutoPlay.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
@@ -102,14 +102,18 @@ public:
 
 private:
   std::map<std::string, color_picker::Hsv> appearanceColorPickers;
-  bool appearanceColorEditPending = false;
+  std::unique_ptr<ColorPickerPopup> appearanceColorPopup;
+  std::string appearanceColorPopupId;
+  std::function<void(std::uint32_t)> appearanceColorApply;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
   std::string builtInNoteDropdown;
   void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
                                    const std::string &id, std::uint32_t color,
+                                   std::vector<ColorPickerPopup::Sample> samples,
                                    std::function<void(std::uint32_t)> apply);
-  void commitPendingAppearanceColor();
+  void closeAppearanceColorPopup();
+  void syncAppearanceColorPopup();
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   void appendBuiltInLaneControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);

@@ -13,6 +13,8 @@ class SettingsRotationEditTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         methods = extract((root / "src/scene/SettingsScene.cpp").read_text(),
                           "void SettingsScene::onPresentationOrientationWillChange()")
+        methods += "\n" + extract((root / "src/scene/SettingsSceneControls.cpp").read_text(),
+                                   "void SettingsScene::closeAppearanceColorPopup()")
         methods += "\n" + extract((root / "src/view/ScrollView.cpp").read_text(),
                                    "void ScrollView::setContentView(View *view)")
         text_input = (root / "src/view/TextInputBox.cpp").read_text()
@@ -51,8 +53,16 @@ struct TextInputBox : View {
   void finishEditing();
   void notifyEditingFinished();
 };
+struct OverlayPortal {
+  bool dismissed = false;
+  void dismiss(int *) { dismissed = true; }
+};
 struct SettingsScene {
   std::vector<View *> views;
+  std::unique_ptr<int> appearanceColorPopup = std::make_unique<int>(1);
+  std::function<void(int)> appearanceColorApply = [](int) {};
+  OverlayPortal *overlayPortal = nullptr;
+  void closeAppearanceColorPopup();
   void onPresentationOrientationWillChange();
 };
 PRODUCTION_METHODS
@@ -77,6 +87,8 @@ int main() {
     }
     container->children.push_back(&input);
     SettingsScene scene{{&root}};
+    OverlayPortal portal;
+    scene.overlayPortal = &portal;
     int orientation = 0;
     int commits = 0;
     std::array<int, 2> storedValues{10, 20};
@@ -85,6 +97,10 @@ int main() {
       ++commits;
     });
     scene.onPresentationOrientationWillChange();
+    if (scene.appearanceColorPopup || scene.appearanceColorApply || !portal.dismissed) {
+      std::cerr << "Rotation must discard the color draft before changing orientation";
+      return 1;
+    }
     orientation = 1;
     scene.onPresentationOrientationWillChange();
     if (storedValues[0] != 37 || storedValues[1] != 20 || commits != 1 ||

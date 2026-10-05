@@ -10,6 +10,7 @@
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
 #include "view/ColorPickerView.h"
+#include "view/ColorPickerPopup.h"
 #include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
@@ -2028,6 +2029,35 @@ void verifyColorPickerPixels(const RenderTarget &target) {
   }
 }
 
+void verifyColorPickerPopupPixels(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+  std::vector<ColorPickerPopup::Sample> samples{{.label = "S", .style = ColorPickerPopup::SampleStyle::Scratch}};
+  for (int lane = 1; lane <= 7; ++lane) samples.push_back({.label = std::to_string(lane)});
+  ColorPickerPopup popup(color_picker::fromRgb(0x3399CC), samples);
+  popup.fitToViewport(rendering::window_width, rendering::window_height);
+  rendering::UiBatchRenderer batch;
+  batch.beginFrame();
+  RenderContext context(batch);
+  {
+    RenderContext::UiBatchScope scope(context);
+    popup.render(context);
+  }
+  const auto pixels = readPixels(target);
+  auto *sample = popup.getChildren().front()->getChildren()[2]->getChildren()[1];
+  const int x = int((sample->getX() + sample->getWidth() / 2) * rendering::ui_scale_x);
+  const int y = int((sample->getY() + sample->getHeight() / 2) * rendering::ui_scale_y);
+  const auto offset = (y * kDrawableWidth + x) * 4;
+  expect(pixels[offset] == 0x33 && pixels[offset + 1] == 0x99 && pixels[offset + 2] == 0xCC,
+         "popup note sample renders the exact draft RGB above the picker");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "color-picker-popup.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "color picker popup inspection image encodes");
+  }
+}
+
 void verifyCustomLaneAppearance(const RenderTarget &target) {
   using Kind = characterization::SubmissionKind;
   const built_in_lane::Style style{0x44EE88, 500, 100};
@@ -3349,6 +3379,7 @@ int main() {
       verifyCustomNoteAppearance(target);
       verifyCustomLaneAppearance(target);
       verifyColorPickerPixels(target);
+      verifyColorPickerPopupPixels(target);
       verifyScratchGradientAndPlainMines(target);
       verifyScratchlessChartEligibility();
       verifyEmptyScratchLanePresentation(target);

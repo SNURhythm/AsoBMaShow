@@ -56,7 +56,6 @@ int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
 } // namespace
 
 void SettingsScene::resetViewState() {
-  commitPendingAppearanceColor();
   previewKeyModeDropdown = nullptr;
   for (auto *view : views) {
     delete view;

@@ -14,6 +14,7 @@
 #include "view/ScrollView.h"
 #include "view/SnappedSlider.h"
 #include "view/ColorPickerView.h"
+#include "view/ColorPickerPopup.h"
 #include "view/TextView.h"
 #include "view/TextInputBox.h"
 #include "i18n/Localization.h"
@@ -139,6 +140,76 @@ void testColorPickerDragAndRelease() {
     picker.handleEvents(lost);
     require(commits == 3 && picker.handleEvents(move),
             "focus loss commits the last previewed value and clears dragging");
+  }
+}
+
+void testColorPickerPopup() {
+  for (const auto [width, height] : {std::pair{1280, 720}, {390, 844}, {640, 360}}) {
+    std::vector<ColorPickerPopup::Sample> samples;
+    for (int i = 0; i < 48; ++i) samples.push_back({.label = std::to_string(i + 1)});
+    ColorPickerPopup popup({0, 1, 1}, samples);
+    popup.fitToViewport(width, height, 12, 20, 12, 16);
+    ColorPickerView *picker = nullptr;
+    std::vector<Button *> buttons;
+    const auto inspect = [&](auto &&self, View *view) -> void {
+      require(dynamic_cast<ScrollView *>(view) == nullptr, "popup has no competing scroll gestures");
+      require(view->getX() >= 0 && view->getY() >= 0 &&
+              view->getX() + view->getWidth() <= width &&
+              view->getY() + view->getHeight() <= height,
+              "popup controls and all 48 samples fit portrait and landscape viewports");
+      if (auto *p = dynamic_cast<ColorPickerView *>(view)) picker = p;
+      if (auto *b = dynamic_cast<Button *>(view)) buttons.push_back(b);
+      for (auto *child : view->getChildren()) self(self, child);
+    };
+    inspect(inspect, &popup);
+    require(picker && buttons.size() == 2 && picker->getHeight() >= 136,
+            "popup provides a usable picker and two actions");
+    auto *panel = popup.getChildren().front();
+    for (int i = 0; i < 48; ++i) {
+      auto *sample = panel->getChildren()[i + 1];
+      require(sample->getY() + sample->getHeight() <= picker->getY(),
+              "every note preview is above the picker");
+      auto *note = sample->getChildren()[1];
+      require(note->getWidth() > 0 && note->getHeight() > 0,
+              "all 48 note previews retain visible dimensions on short screens");
+    }
+    for (auto *button : buttons)
+      require(button->getY() >= picker->getY() + picker->getHeight(),
+              "confirmation actions remain below the picker");
+    SDL_Event wheel{};
+    wheel.type = SDL_MOUSEWHEEL;
+    require(!popup.handleEvents(wheel), "modal consumes scrolling over the background");
+    SDL_Event down{};
+    down.type = SDL_MOUSEBUTTONDOWN;
+    down.button.button = SDL_BUTTON_LEFT;
+    down.button.x = picker->getX() + picker->getWidth() / 2;
+    down.button.y = picker->getY() + 15;
+    popup.handleEvents(down);
+    SDL_Event up = down;
+    up.type = SDL_MOUSEBUTTONUP;
+    popup.handleEvents(up);
+    require(!popup.result() && color_picker::toRgb(picker->value()) != 0xFF0000,
+            "dragging and releasing edits only the draft until confirmed");
+    click(*buttons.back());
+    require(popup.result() && popup.result()->confirmed &&
+                color_picker::toRgb(popup.result()->color) == color_picker::toRgb(picker->value()),
+            "Confirm returns precisely the previewed draft");
+  }
+  for (const bool escape : {false, true}) {
+    ColorPickerPopup popup({0.5F, 1, 1}, {{.label = "S", .style = ColorPickerPopup::SampleStyle::Scratch}});
+    popup.fitToViewport(800, 600);
+    if (escape) {
+      SDL_Event event{};
+      event.type = SDL_KEYDOWN;
+      event.key.keysym.sym = SDLK_ESCAPE;
+      require(!popup.handleEvents(event), "Escape is consumed by the modal");
+    } else {
+      for (auto *child : popup.getChildren().front()->getChildren()) {
+        if (auto *button = dynamic_cast<Button *>(child)) { click(*button); break; }
+      }
+    }
+    require(popup.result() && !popup.result()->confirmed,
+            "Cancel and Escape discard the draft without applying a color");
   }
 }
 
@@ -415,6 +486,7 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testColorPickerPopup();
   testColorPickerColorSpace();
   testColorPickerDragAndRelease();
   testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture();

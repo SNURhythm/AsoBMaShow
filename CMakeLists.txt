@@ -713,6 +713,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
             src/view/ColorPickerView.cpp
+            src/view/ColorPickerPopup.cpp
+            src/view/Button.cpp
             ${settings_preview_input_source}
             src/scene/SettingsPreviewChart.cpp
             src/scene/play/RealtimeTouchInputRouter.cpp
@@ -5309,6 +5311,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/SimpleBatchRenderer.cpp
         src/rendering/UniformCache.cpp
         src/view/ColorPickerView.cpp
+        src/view/ColorPickerPopup.cpp
         src/view/Button.cpp
         src/view/CheckboxButtonContent.cpp
         src/view/DropdownView.cpp
