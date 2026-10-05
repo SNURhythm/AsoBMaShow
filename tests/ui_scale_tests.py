@@ -71,7 +71,7 @@ struct MainMenuScene {
   ScrollView *detailsControlsScroll_, *tutorialRightScroll_=nullptr;
   ChartDetails* chartDetailsView_;
   Button *readyPlayOptionsButton;
-  View *chartActionsRow,*unzipButtonSlot,*findBmsButtonSlot,*replayStatusText,*replayButtonSlot;
+  View *chartActionsRow,*unzipButtonSlot,*findBmsButtonSlot,*replayButtonSlot;
   Button *replayButton,*rankingsButton,*startButton,*unzipButton,*findBmsButton;
   View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
   void updatePanelLayout(); void updateMenuPresentation(bool portrait);
@@ -79,7 +79,7 @@ struct MainMenuScene {
 };
 PRODUCTION_METHOD
 int main() {
-  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),title("mainMenuTitle"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),status("status"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
+  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),title("mainMenuTitle"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
@@ -103,9 +103,9 @@ int main() {
   records.setFlexDirection(FlexDirection::Row);records.add(replaySlot);records.add(ranking);
   replaySlot.setFlex(1)->setMinWidth(0);ranking.setFlex(1)->setMinWidth(0);
   replaySlot.add(replay);replay.setWidthPercent(100);
-  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);content.add(findSlot);content.add(status);
+  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);content.add(findSlot);
   unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);
-  MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&status,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
+  MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
   for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);

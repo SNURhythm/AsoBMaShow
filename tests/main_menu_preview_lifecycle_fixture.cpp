@@ -47,7 +47,6 @@ struct MainMenuScene {
   struct { bool inProgress() const { return false; } } replayExportJob_;
   View view;
   View *jacketView = &view;
-  View *replayStatusText = nullptr;
   RecyclerView recycler;
   RecyclerView *recyclerView = &recycler;
   MainMenuPreviewController *previewWorker_ = nullptr;

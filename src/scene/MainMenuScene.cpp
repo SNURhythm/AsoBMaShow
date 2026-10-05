@@ -711,16 +711,7 @@ void MainMenuScene::onPause() {
 
 void MainMenuScene::onApplicationBackgroundChanged(bool background) {
   if (background && archiveUnzipModal_ != nullptr) {
-    const bool wasRunning = archiveUnzipInProgress();
     archiveUnzipModal_->cancelAndWait();
-    if (wasRunning) {
-      if (unzipButtonText != nullptr) {
-        unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
-      }
-      if (replayStatusText != nullptr) {
-        replayStatusText->setLocalizedText(i18n::message("menu.unzip_cancelled.label"));
-      }
-    }
   }
 }
 
@@ -980,7 +971,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
-  replayStatusText = nullptr;
   recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
@@ -1153,9 +1143,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     refreshPlayOptionButtons();
     refreshLongNoteModeButtons();
     refreshAssistOptionButtons();
-    if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-      replayStatusText->setText("");
-    }
     if (item.courseStart) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
@@ -1185,11 +1172,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     if (item.solidArchive) {
       jacketView->freeImage();
-      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setText(
-            "Skipped solid archive. Estimated unzip: " +
-            formatFindBmsBytes(item.archiveUncompressedSize));
-      }
       archive_file::appendDebugLogLine(
           "Solid archive selected without chart probing: " +
           fspath_to_utf8(meta.BmsPath) +
@@ -1205,9 +1187,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
     if (archiveVirtualPath && !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
-      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setLocalizedText(i18n::message("menu.archive_preview_disabled.label"));
-      }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
           fspath_to_utf8(meta.BmsPath));
@@ -1228,9 +1207,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
       jacketView->freeImage();
     }
     if (suppressPreview) {
-      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setLocalizedText(i18n::message("menu.unzipped_chart_selected.label"));
-      }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
           fspath_to_utf8(meta.BmsPath));
@@ -1878,12 +1854,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
 
-  replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  replayStatusText->setText("");
-  replayStatusText->setThemedColor(ui_theme::textSecondary);
-  replayStatusText->setAlign(TextView::CENTER);
-  replayStatusText->setHeight(20);
-
   rankingsButton = new Button(0, 0, 224, kMenuActionHeight);
   rankingsButton->setFlex(1)->setMinWidth(0);
   rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
@@ -1952,7 +1922,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   rightContent->addView(unzipButtonSlot);
   rightContent->addView(findBmsButtonSlot);
-  rightContent->addView(replayStatusText);
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   settingsButton->setName("mainMenuSettings");
@@ -2097,8 +2066,8 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
   auto *target = portrait ? detailsControlsContent_ : detailsContent_;
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
-  for (auto *view : std::array<View *, 5>{readyPlayOptionsButton, chartActionsRow,
-           unzipButtonSlot, findBmsButtonSlot, replayStatusText}) {
+  for (auto *view : std::array<View *, 4>{readyPlayOptionsButton, chartActionsRow,
+           unzipButtonSlot, findBmsButtonSlot}) {
     view->moveTo(*target);
   }
   settings->moveTo(portrait ? *records : *primary);
@@ -3934,9 +3903,6 @@ void MainMenuScene::startSelectedCourse() {
 
   const CourseValidationCache &validation = courseValidationForActiveFolder();
   if (validation.empty) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setLocalizedText(i18n::message("menu.no_course_charts.label"));
-    }
     refreshStartButtonForActiveFolder();
     return;
   }
@@ -3944,9 +3910,6 @@ void MainMenuScene::startSelectedCourse() {
   const auto &records = validation.records;
   const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setLocalizedText(i18n::message("menu.course_has_missing_charts.label"));
-    }
     int visibleMissingIndex = -1;
     const auto &missingRecord =
         records[static_cast<std::size_t>(firstMissingIndex)];
@@ -4053,10 +4016,11 @@ void MainMenuScene::startCourseDirect(
               fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
         }
         if (preparedChart == nullptr || parseCancelled) {
-          if (replayStatusText != nullptr) {
-            replayStatusText->setLocalizedText(i18n::message("menu.course_start_failed.label"));
+          finishStart();
+          if (startButtonText != nullptr) {
+            startButtonText->setLocalizedText(i18n::message("menu.course_start_failed.label"));
           }
-          return finishStart();
+          return true;
         }
         applyCourseConstraintsToChart(*preparedChart, session->constraints);
 
@@ -4590,12 +4554,8 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
     return;
   }
 
-  const bool show = visible || archiveUnzipInProgress();
-  unzipButtonSlot->setVisible(show);
-  unzipButtonSlot->setHeight(show ? currentMenuActionHeight() : 0.0f);
-  if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
-    unzipButtonText->setLocalizedText(i18n::message("library.archive.unzipping.progress"));
-  }
+  unzipButtonSlot->setVisible(visible);
+  unzipButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -4608,7 +4568,7 @@ void MainMenuScene::refreshUnzipButtonForSelection(
       (record->unzipAll || !record->meta.BmsPath.empty())) {
     visible = record->solidArchive;
   }
-  if (unzipButtonText != nullptr && !archiveUnzipInProgress()) {
+  if (unzipButtonText != nullptr) {
     unzipButtonText->setLocalizedText(record != nullptr && record->unzipAll
                                 ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzip.label"));
   }
@@ -4647,20 +4607,11 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     previewWorker_->stop();
   }
   stopAndClearSelectedChart();
-  const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
-                                      : archiveUnzipModal_->start(record);
-  if (!started) {
-    return;
+  if (record.unzipAll) {
+    archiveUnzipModal_->startAll();
+  } else {
+    archiveUnzipModal_->start(record);
   }
-  if (unzipButtonText != nullptr) {
-    unzipButtonText->setLocalizedText(record.unzipAll ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzipping.progress"));
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setLocalizedText(record.unzipAll
-                                 ? i18n::message("library.archive.choose_whether_keep_delete_archives.message")
-                                 : i18n::message("library.archive.unzipping_full_archive.progress"));
-  }
-  setUnzipButtonVisible(true);
 }
 
 bool MainMenuScene::archiveUnzipInProgress() const {
@@ -4671,14 +4622,8 @@ void MainMenuScene::buildUnzipProgressModal() {
   ArchiveUnzipModalCallbacks callbacks;
   callbacks.libraryChanged = [this]() { requestLibraryReload(true); };
   callbacks.finished = [this](const ArchiveUnzipResult &result) {
-    if (unzipButtonText != nullptr) {
-      unzipButtonText->setLocalizedText(result.success ? i18n::message("library.archive.unzipped.label") : i18n::message("library.archive.unzip.label"));
-    }
     if (result.success && !result.chartPath.empty()) {
       pendingSelectChartPath = result.chartPath;
-    }
-    if (replayStatusText != nullptr) {
-      replayStatusText->setLocalizedText(result.message);
     }
     archive_file::appendDebugLogLine(
         result.message.resolve() + (result.chartPath.empty()
@@ -6491,9 +6436,6 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
     recordsModal_->setStatus(safeDiagnostic);
     recordsModal_->reloadRecords(true);
   }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setText(safeDiagnostic);
-  }
   return true;
 }
 
@@ -6569,9 +6511,6 @@ bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,
     recordsModal_->setExportInProgress(true);
     recordsModal_->showExportProgress(progressTitle, progressMessage);
     recordsModal_->setStatus(statusMessage);
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setLocalizedText(statusMessage);
   }
   return true;
 }
@@ -7076,17 +7015,6 @@ void MainMenuScene::applyReplayExportResult() {
     }
   }
 
-  if (replayStatusText != nullptr) {
-    if (result->success) {
-      replayStatusText->setLocalizedText(
-          result->message == "Saved to Photos" ? i18n::message("menu.saved.label") : i18n::message("menu.exported.label"));
-    } else if (result->message == "No Chart") {
-      replayStatusText->setLocalizedText(i18n::message("menu.no_chart.label"));
-    } else {
-      replayStatusText->setText(replay_records::diagnosticOr(
-          result->message, i18n::tr("menu.replay_export_failed.message")));
-    }
-  }
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(false);
     recordsModal_->returnToList(
@@ -7107,15 +7035,6 @@ void MainMenuScene::applyReplayExportResult() {
     SDL_Log("Replay video export failed: %s (%s)", result->message.c_str(),
             fspath_to_utf8(result->outputPath).c_str());
   }
-
-  defer(
-      [this]() {
-        if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-          replayStatusText->setText("");
-        }
-        return true;
-      },
-      result->success ? 1800 : 1400, true);
 }
 
 void MainMenuScene::update(float dt) {
@@ -7304,7 +7223,6 @@ void MainMenuScene::cleanupScene() {
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
-  replayStatusText = nullptr;
   recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;

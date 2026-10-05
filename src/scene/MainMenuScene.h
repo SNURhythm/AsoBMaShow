@@ -228,7 +228,6 @@ private:
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
-  TextView *replayStatusText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   PlayOptionsPanelView *playOptionsPanel = nullptr;

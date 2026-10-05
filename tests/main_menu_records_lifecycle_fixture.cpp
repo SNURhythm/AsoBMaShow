@@ -240,7 +240,7 @@ struct MainMenuScene {
   bool replayResultRecallInProgress = false, replayIrUploadInProgress = false;
   std::atomic_bool selectedChartMediaReady = true, selectedChartReusableForStart = true;
   Recycler *recyclerView = nullptr;
-  View *replayStatusText = nullptr, *revealContextMenu = nullptr, *rankingsModal = nullptr;
+  View *revealContextMenu = nullptr, *rankingsModal = nullptr;
   struct Cache { void releasePages() {} } chartListCache;
   std::vector<int> replayIrObservedRevisions;
   int scoreClearRanks = 0, scoreBestScores = 0, folderClearData = 0, scoreClearRanksRevision = 0;
@@ -406,10 +406,8 @@ void testExportStartupFailureRestoresRecordsAndPreview() {
   recycler.selectedIndex = 0;
   recycler.itemCount = 1;
   recycler.onSelected = [&](const auto &, int) { ++previewRestarts; };
-  View status;
   MainMenuScene scene;
   scene.recyclerView = &recycler;
-  scene.replayStatusText = &status;
   expect(scene.beginReplayExport("Export", "Preparing", "Exporting"),
          "startup failure fixture reserves the export and UI");
   replay::ReplayExportJob::Work work = [&](const auto &, auto &) {
@@ -431,7 +429,7 @@ void testExportStartupFailureRestoresRecordsAndPreview() {
          "failed startup retains UI ownership until result consumption");
   scene.applyReplayExportResult();
   expect(!scene.replayExportJob_.inProgress() && !scene.willStart &&
-             scene.modal.canHide() && !scene.modal.status.empty() && !status.text.empty(),
+             scene.modal.canHide() && !scene.modal.status.empty(),
          "startup failure clears Main Menu busy state and publishes its diagnostic");
   expect(previewRestarts == 1, "startup failure restores preview for the selected chart");
   scene.applyReplayExportResult();
