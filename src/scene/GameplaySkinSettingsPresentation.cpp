@@ -157,6 +157,9 @@ void encodeViewport(PresentationKeyEncoder &encoder,
   encoder.floatingPoint(viewport.scaleY);
   encoder.floatingPoint(viewport.translateX);
   encoder.floatingPoint(viewport.translateY);
+  encoder.boolean(viewport.centerPlayArea);
+  encoder.boolean(viewport.keepHudFixed);
+  encoder.floatingPoint(viewport.playAreaZoom);
 }
 
 void encodeSettings(PresentationKeyEncoder &encoder,

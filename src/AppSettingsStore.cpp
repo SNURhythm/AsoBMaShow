@@ -225,7 +225,10 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
              {"scaleX", settings.viewport.scaleX},
              {"scaleY", settings.viewport.scaleY},
              {"translateX", settings.viewport.translateX},
-             {"translateY", settings.viewport.translateY}}}}}});
+             {"translateY", settings.viewport.translateY},
+             {"centerPlayArea", settings.viewport.centerPlayArea},
+             {"keepHudFixed", settings.viewport.keepHudFixed},
+             {"playAreaZoom", settings.viewport.playAreaZoom}}}}}});
   }
   json selectedSkinEntries = json::object();
   for (const auto &[skinType, entry] : skinSettings.selectedSkinEntries) {
@@ -317,6 +320,9 @@ void readViewport(const json &encoded, skin::ViewportSettings &viewport,
   readValue(encoded, "scaleY", viewport.scaleY, diagnostics);
   readValue(encoded, "translateX", viewport.translateX, diagnostics);
   readValue(encoded, "translateY", viewport.translateY, diagnostics);
+  readValue(encoded, "centerPlayArea", viewport.centerPlayArea, diagnostics);
+  readValue(encoded, "keepHudFixed", viewport.keepHudFixed, diagnostics);
+  readValue(encoded, "playAreaZoom", viewport.playAreaZoom, diagnostics);
 }
 
 void readSkinProfileSettings(const json &document,

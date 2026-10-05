@@ -226,7 +226,10 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .scaleX = 1.25F,
                    .scaleY = 0.75F,
                    .translateX = 123.0F,
-                   .translateY = -456.0F},
+                   .translateY = -456.0F,
+                   .centerPlayArea = true,
+                   .keepHudFixed = true,
+                   .playAreaZoom = 1.25F},
   };
   const std::string expectedConfigurationDigest =
       skin::skinConfigurationDigest(expected.presentation().skin.entries.at(*entry.entry));

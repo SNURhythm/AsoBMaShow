@@ -878,7 +878,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     const PlaySkinViewport viewport = evaluatePlaySkinViewport(
         {.width = static_cast<double>(header.width),
          .height = static_cast<double>(header.height)},
-        context.safeUiBounds, context.viewport);
+        context.safeUiBounds, context.viewport,
+        playSkinAuthoredPlayArea(document.model));
     if (!viewport.valid) {
       result.diagnostics.push_back(sessionDiagnostic(
           "skin.session.viewport_invalid",
@@ -1044,6 +1045,16 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     return result;
   }
 
+  std::optional<PlaySkinViewport> fixedHudViewport;
+  if (context_.viewportSettings.centerPlayArea &&
+      context_.viewportSettings.keepHudFixed) {
+    auto hudSettings = context_.viewportSettings;
+    hudSettings.centerPlayArea = false;
+    const auto &header = context_.model.model.header;
+    fixedHudViewport = evaluatePlaySkinViewport(
+        {static_cast<double>(header.width), static_cast<double>(header.height)},
+        context_.viewport.safeUiBounds, hudSettings);
+  }
   result.evaluation = context_.renderer.evaluateFrame(
       {.frameSerial = state.clock.serial,
        .sessionSerial = context_.sessionSerial,
@@ -1058,7 +1069,8 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
        .markProcessedNotes = state.configuration.markProcessedNotes,
        .safetyPolicy = context_.safetyPolicy,
        .gaugeRandomSource = context_.gaugeRandomSource,
-       .pointerUiPosition = pointerUiPosition_},
+       .pointerUiPosition = pointerUiPosition_,
+       .fixedHudViewport = fixedHudViewport},
       std::move(ownership));
   appendDiagnostics(result.diagnostics, context_.bridge.diagnostics());
   if (!result.evaluation.submitReady) {
@@ -1587,7 +1599,8 @@ void PlaySkinSession::updateViewportGeometry(UiLogicalRect safeUiBounds) {
   context_.viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),
        .height = static_cast<double>(header.height)},
-      safeUiBounds, context_.viewportSettings);
+      safeUiBounds, context_.viewportSettings,
+      playSkinAuthoredPlayArea(context_.model));
   if (owned_) {
     owned_->safeUiBounds = safeUiBounds;
     owned_->viewport = context_.viewport;

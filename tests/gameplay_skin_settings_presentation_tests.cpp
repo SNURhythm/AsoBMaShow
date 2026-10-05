@@ -552,6 +552,17 @@ void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
           "viewport edits reload even though the skin configuration digest excludes viewport");
   changed = snapshot;
+  changed.entries.front().settings.viewport.centerPlayArea = true;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "play area framing updates the live preview");
+  const auto focusedKey = skin::gameplaySkinPreviewConfigurationKey(changed, 7);
+  changed.entries.front().settings.viewport.keepHudFixed = true;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != focusedKey,
+          "HUD framing changes update the live preview");
+  changed.entries.front().settings.viewport.playAreaZoom = 1.5F;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != focusedKey,
+          "play area zoom updates the live preview");
+  changed = snapshot;
   changed.entries.front().revisionDigest = "new-revision";
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
           "skin revalidation reloads a changed installed revision");
@@ -582,6 +593,9 @@ void testViewportModeChangesPreserveEveryOtherField() {
       .scaleY = 0.625F,
       .translateX = 23.0F,
       .translateY = -31.0F,
+      .centerPlayArea = true,
+      .keepHudFixed = true,
+      .playAreaZoom = 1.4F,
   };
 
   for (const auto mode : {skin::ViewportMode::Fit, skin::ViewportMode::Stretch,

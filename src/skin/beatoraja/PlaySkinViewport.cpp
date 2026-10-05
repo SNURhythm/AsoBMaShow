@@ -22,6 +22,12 @@ ViewportSettings effectiveSettings(const ViewportSettings &settings) {
     return {};
   }
   auto effective = settings;
+  effective.playAreaZoom =
+      std::isfinite(effective.playAreaZoom) && effective.playAreaZoom > 0.0F
+          ? std::clamp(effective.playAreaZoom,
+                       SkinProfileSettingsPolicy::minPlayAreaZoom,
+                       SkinProfileSettingsPolicy::maxPlayAreaZoom)
+          : 1.0F;
   effective.scaleX = std::clamp(effective.scaleX,
                                 SkinProfileSettingsPolicy::minCustomScale,
                                 SkinProfileSettingsPolicy::maxCustomScale);
@@ -73,9 +79,42 @@ UiLogicalRect intersectUiRects(const UiLogicalRect &left,
 
 } // namespace
 
+std::optional<AuthoredRect>
+playSkinAuthoredPlayArea(const ValidatedBeatorajaSkinModel &model) {
+  const SkinNoteObject *source = nullptr;
+  for (const auto &object : model.model.objects) {
+    if (std::find(model.disabledOptionalObjects.begin(),
+                  model.disabledOptionalObjects.end(), object.id) !=
+        model.disabledOptionalObjects.end()) continue;
+    if (const auto *note = std::get_if<SkinNoteObject>(&object.payload)) {
+      source = note;
+    }
+  }
+  std::optional<AuthoredRect> bounds;
+  if (!source) return bounds;
+  for (const auto &lane : source->lanes) {
+    const auto &rect = lane.laneDestination;
+    if (lane.authoredLane < 0 || !finite(rect.x) || !finite(rect.y) ||
+        !finite(rect.width) || !finite(rect.height) ||
+        rect.width <= 0.0 || rect.height <= 0.0) continue;
+    if (!bounds) {
+      bounds = rect;
+    } else {
+      const double right = std::max(bounds->x + bounds->width, rect.x + rect.width);
+      const double top = std::max(bounds->y + bounds->height, rect.y + rect.height);
+      bounds->x = std::min(bounds->x, rect.x);
+      bounds->y = std::min(bounds->y, rect.y);
+      bounds->width = right - bounds->x;
+      bounds->height = top - bounds->y;
+    }
+  }
+  return bounds;
+}
+
 PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
                                           UiLogicalRect safeUiBounds,
-                                          const ViewportSettings &settings) {
+                                          const ViewportSettings &settings,
+                                          std::optional<AuthoredRect> playArea) {
   PlaySkinViewport result;
   result.safeUiBounds = safeUiBounds;
   if (!finite(authoredSize.width) || !finite(authoredSize.height) ||
@@ -100,6 +139,22 @@ PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
   double tx = safeUiBounds.x + (safeUiBounds.width - authoredSize.width * scaleX) / 2.0;
   double ty = safeUiBounds.y + (safeUiBounds.height - authoredSize.height * scaleY) / 2.0 +
               authoredSize.height * scaleY;
+
+  // Frame the authored lanes with one camera transform, shared by all skin
+  // rendering and interaction. Preserve base destination scaling for authored
+  // operations that explicitly use the skin's original logical canvas.
+  if (effective.centerPlayArea && playArea &&
+      finite(playArea->x) && finite(playArea->y) &&
+      finite(playArea->width) && finite(playArea->height) &&
+      playArea->width > 0.0 && playArea->height > 0.0) {
+    scaleX = scaleY = std::min(safeUiBounds.width / playArea->width,
+                              safeUiBounds.height / playArea->height) *
+                      effective.playAreaZoom;
+    tx = safeUiBounds.x + safeUiBounds.width / 2.0 -
+         (playArea->x + playArea->width / 2.0) * scaleX;
+    ty = safeUiBounds.y + safeUiBounds.height / 2.0 +
+         (playArea->y + playArea->height / 2.0) * scaleY;
+  }
 
   if (effective.mode == ViewportMode::Custom) {
     const double centerX = safeUiBounds.x + safeUiBounds.width / 2.0;

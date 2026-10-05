@@ -47,9 +47,14 @@ struct PlaySkinViewport {
   double destinationScaleY = 1.0;
 };
 
+// Same last enabled Note source used by the renderer for lane interaction.
+std::optional<AuthoredRect>
+playSkinAuthoredPlayArea(const ValidatedBeatorajaSkinModel &model);
+
 PlaySkinViewport evaluatePlaySkinViewport(AuthoredSize authoredSize,
                                           UiLogicalRect safeUiBounds,
-                                          const ViewportSettings &settings);
+                                          const ViewportSettings &settings,
+                                          std::optional<AuthoredRect> playArea = std::nullopt);
 
 inline const UiLogicalRect &
 projectedSkinScissorBounds(const PlaySkinViewport &viewport) noexcept {

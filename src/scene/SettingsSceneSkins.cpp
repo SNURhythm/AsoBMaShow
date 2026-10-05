@@ -922,6 +922,61 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
 void SettingsScene::appendGameplaySkinViewportSettings(
     View *entryBody, const LayoutMetrics &metrics,
     const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled) {
+  const auto target = skin::skinTargetTraitForType(gameplaySkinActiveTraitSkinType);
+  if (target && target->kind == skin::SkinTargetKind::Gameplay) {
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.label"), metrics.smallTextSize,
+        ui_theme::textSecondary()));
+    auto *framing = new View();
+    framing->setFlexDirection(FlexDirection::Row);
+    framing->setFlexWrap(YGWrapWrap);
+    framing->setGap(metrics.compact ? 8.0f : 10.0f);
+    const auto &saved = row.settings.viewport;
+    for (int mode = 0; mode < 3; ++mode) {
+      const bool selected = mode == 0 ? !saved.centerPlayArea
+                            : saved.centerPlayArea && saved.keepHudFixed == (mode == 2);
+      framing->addView(makeGameplaySkinAction(
+          metrics, i18n::message(mode == 0 ? "settings.skins.play_area.original"
+                                 : mode == 1 ? "settings.skins.play_area.whole"
+                                             : "settings.skins.play_area.only"),
+          ordinaryActionsEnabled,
+          [this, entry = row.entry, mode]() {
+            auto viewport = gameplaySkinViewportForEntry(entry);
+            viewport.centerPlayArea = mode != 0;
+            viewport.keepHudFixed = mode == 2;
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport));
+          }, selected ? ui_theme::lime() : ui_theme::textSecondary()));
+    }
+    entryBody->addView(framing);
+    auto *zoomRow = new View();
+    zoomRow->setFlexDirection(FlexDirection::Row);
+    zoomRow->setFlexWrap(YGWrapWrap);
+    zoomRow->setGap(metrics.compact ? 8.0f : 10.0f);
+    zoomRow->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.zoom",
+                      {{"percent", std::to_string(static_cast<int>(std::lround(saved.playAreaZoom * 100.0F)))}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    for (const float step : {-0.1F, 0.1F}) {
+      zoomRow->addView(makeGameplaySkinAction(
+          metrics, i18n::message(step < 0 ? "settings.skins.play_area.zoom_out"
+                                         : "settings.skins.play_area.zoom_in"),
+          ordinaryActionsEnabled && saved.centerPlayArea,
+          [this, entry = row.entry, step]() {
+            auto viewport = gameplaySkinViewportForEntry(entry);
+            viewport.playAreaZoom = std::clamp(
+                std::round((viewport.playAreaZoom + step) * 10.0F) / 10.0F,
+                skin::SkinProfileSettingsPolicy::minPlayAreaZoom,
+                skin::SkinProfileSettingsPolicy::maxPlayAreaZoom);
+            handleGameplaySkinActionResult(
+                gameplaySkinSettingsController->setViewport(entry, viewport));
+          }));
+    }
+    entryBody->addView(zoomRow);
+    entryBody->addView(makeWrappedText(
+        i18n::message("settings.skins.play_area.hint"), metrics.smallTextSize,
+        ui_theme::textMuted()));
+  }
   auto *customViewport = new View();
   customViewport->setFlexDirection(FlexDirection::Row);
   customViewport->setFlexWrap(YGWrapWrap);

@@ -7340,6 +7340,84 @@ void testImageActTouchQueuesPinnedEventOnDown() {
          "the queued Image act event reaches the next frame transaction");
 }
 
+void testPlayAreaFramingKeepsDrawingAndInteractionTogether() {
+  for (const bool keepHudFixed : {false, true}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry(SkinFloatWriterId{1}, std::nullopt, 900.0);
+    fixture.addClickableImage();
+    ViewportSettings settings;
+    settings.centerPlayArea = true;
+    settings.keepHudFixed = keepHudFixed;
+    fixture.session().setViewport(settings);
+    const auto frame = fixture.session().prepareFrame(stateAt(1), projectionAt(1), {});
+    expect(frame.ready() && frame.evaluation.interactionLayout &&
+               frame.evaluation.submitReady,
+           "both play area framing modes evaluate successfully");
+    if (!frame.evaluation.interactionLayout || !frame.evaluation.submitReady) continue;
+    const auto &layout = *frame.evaluation.interactionLayout;
+    // Authored lanes span (100,20)-(300,520), fitting at 1.44x into 1280x720.
+    const UiLogicalPoint laneControl{524.8F, 590.4F};
+    expect(layout.hitTestUiControl(laneControl).sourceObject == 82,
+           "lane-local artwork and its touch target move with the play area");
+    bool foundMovedImage = false;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+      if (command.sourceObject == 82 && quad) {
+        foundMovedImage = std::abs(quad->vertices[0].x - 496.0F) < 0.001F &&
+                          std::abs(quad->vertices[0].y - 604.8F) < 0.001F;
+      }
+    }
+    expect(foundMovedImage, "lane-local image draws under the same transform as touch");
+    const UiLogicalPoint hudPoint{950.0F, 610.0F};
+    const auto hudHit = layout.hitTestUiControl(hudPoint);
+    if (keepHudFixed) {
+      const auto writer = layout.writerInvocationFor(hudHit, hudPoint, 1);
+      expect(hudHit.sourceObject == 80 && writer &&
+                 std::abs(writer->normalizedValue - 0.5F) < 0.001F,
+             "fixed HUD slider retains its screen position and value mapping");
+    } else {
+      expect(hudHit.sourceObject != 80,
+             "whole-skin framing moves the surrounding HUD with the lanes");
+    }
+
+    SessionBgaSubmitter bga;
+    RenderContext context;
+    expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                   PresentationFrameOutcome::Ready &&
+               fixture.session().render(context, bgaFrame(2), bga).outcome ==
+                   PresentationFrameOutcome::Ready,
+           "framed session publishes gameplay touch geometry");
+    auto touch = fixture.session().touchLayout();
+    const auto normalize = [](double value, bool horizontal) {
+      return (value * (horizontal ? rendering::ui_scale_x : rendering::ui_scale_y) +
+              (horizontal ? rendering::ui_offset_x : rendering::ui_offset_y)) /
+             (horizontal ? rendering::render_width : rendering::render_height);
+    };
+    expect(touch.laneRegions.size() == 2 &&
+               std::abs(touch.laneRegions[0].bottomLeft.x - normalize(496.0, true)) < 0.0001 &&
+               std::abs(touch.laneRegions[0].bottomLeft.y - normalize(720.0, false)) < 0.0001,
+           "published gameplay touch lanes follow centered rendering");
+    const auto revision = touch.revision;
+    settings.playAreaZoom = 1.5F;
+    fixture.session().setViewport(settings);
+    fixture.session().updateViewportGeometry({20.0, 40.0, 360.0, 760.0});
+    expect(fixture.session().touchLayout().laneRegions.empty() &&
+               fixture.session().touchLayoutRevision() != revision,
+           "zoom and orientation changes discard stale touch geometry");
+    expect(fixture.session().prepareFrame(stateAt(3), projectionAt(3)) ==
+                   PresentationFrameOutcome::Ready &&
+               fixture.session().render(context, bgaFrame(3), bga).outcome ==
+                   PresentationFrameOutcome::Ready,
+           "zoomed portrait viewport republishes geometry");
+    touch = fixture.session().touchLayout();
+    expect(touch.laneRegions.size() == 2 &&
+               std::abs(touch.laneRegions[0].bottomLeft.x - normalize(-28.0, true)) < 0.0001 &&
+               std::abs(touch.laneRegions[0].bottomLeft.y - normalize(990.0, false)) < 0.0001,
+           "zoomed portrait touch bounds use the exact visible lane transform");
+  }
+}
+
 void testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -10680,6 +10758,7 @@ int main(int argc, char **argv) {
   testEditableTextCancellationTeardownAndNoneditableRejection();
   testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
+  testPlayAreaFramingKeepsDrawingAndInteractionTogether();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
   testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();

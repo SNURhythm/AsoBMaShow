@@ -247,7 +247,7 @@ struct SkinFrameInputs {
   const BeatorajaSkinConfiguration &configuration;
   const SkinPreparedResourceView &resources;
   const SkinPreparedMovieView *movies = nullptr;
-  const PlaySkinViewport &viewport;
+  PlaySkinViewport viewport;
   LuaSkinRuntime *runtime = nullptr;
   ISkinFrameState &state;
   // Pinned PlayerConfig.markprocessednote; false by Beatoraja default.
@@ -264,6 +264,8 @@ struct SkinFrameInputs {
   std::function<void(SkinObjectId, std::string_view)> observedTextValue;
   // No pointer sample yet retains Beatoraja's authored (0, 0) default.
   std::optional<UiLogicalPoint> pointerUiPosition;
+  // Optional original framing for objects outside the authored play area.
+  std::optional<PlaySkinViewport> fixedHudViewport;
 };
 
 [[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(

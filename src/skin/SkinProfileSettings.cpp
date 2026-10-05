@@ -116,6 +116,12 @@ void sanitizeViewport(ViewportSettings &viewport) {
     viewport = {};
     return;
   }
+  viewport.playAreaZoom =
+      std::isfinite(viewport.playAreaZoom) && viewport.playAreaZoom > 0.0F
+          ? std::clamp(viewport.playAreaZoom,
+                       SkinProfileSettingsPolicy::minPlayAreaZoom,
+                       SkinProfileSettingsPolicy::maxPlayAreaZoom)
+          : 1.0F;
   viewport.scaleX =
       std::clamp(viewport.scaleX, SkinProfileSettingsPolicy::minCustomScale,
                  SkinProfileSettingsPolicy::maxCustomScale);

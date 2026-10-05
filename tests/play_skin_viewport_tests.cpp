@@ -64,6 +64,69 @@ void testFitUsesSafeAreaAndBars() {
   expect(near(viewport.drawableAuthoredBounds.height, 1200.0), "fit inverse bounds include letterbox extent");
 }
 
+void testFocusedPlayAreaUsesSafeAreaAndSharedInverse() {
+  const AuthoredSize canvas{1920.0, 1080.0};
+  const UiLogicalRect safe{20.0, 40.0, 360.0, 760.0};
+  const AuthoredRect lanes{100.0, 80.0, 400.0, 800.0};
+  ViewportSettings settings;
+  settings.centerPlayArea = true;
+  const auto viewport = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
+  const auto center = apply(viewport.authoredToUi, 300.0, 480.0);
+  expect(viewport.valid && near(center[0], 200.0) && near(center[1], 420.0),
+         "off-center lanes are centered in the portrait safe area");
+  expect(near(viewport.authoredToUi.m00, 0.9) &&
+             near(viewport.authoredToUi.m11, -0.9),
+         "play area fits uniformly without stretching lanes");
+  const auto touch = apply(viewport.uiToAuthored, center[0], center[1]);
+  expect(near(touch[0], 300.0) && near(touch[1], 480.0),
+         "focused drawing and touch mapping share an inverse");
+  settings.playAreaZoom = 1.5F;
+  const auto zoomed = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
+  const auto zoomCenter = apply(zoomed.authoredToUi, 300.0, 480.0);
+  expect(near(zoomed.authoredToUi.m00, 1.35) &&
+             near(zoomCenter[0], 200.0) && near(zoomCenter[1], 420.0),
+         "additional zoom stays centered on the play area");
+  settings.playAreaZoom = std::numeric_limits<float>::quiet_NaN();
+  const auto invalidZoom = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
+  expect(invalidZoom.valid && near(invalidZoom.authoredToUi.m00, 0.9),
+         "invalid zoom falls back to a usable centered viewport");
+  settings.playAreaZoom = 100.0F;
+  const auto limitedZoom = evaluatePlaySkinViewport(canvas, safe, settings, lanes);
+  expect(near(limitedZoom.authoredToUi.m00, 2.7),
+         "zoom is bounded before drawing and touch projection");
+  const auto fallback = evaluatePlaySkinViewport(canvas, safe, settings);
+  const auto normal = evaluatePlaySkinViewport(canvas, safe, {});
+  expect(near(fallback.authoredToUi.m00, normal.authoredToUi.m00) &&
+             near(fallback.authoredToUi.tx, normal.authoredToUi.tx),
+         "skins without usable lane geometry retain normal framing");
+  const auto invalid = evaluatePlaySkinViewport(
+      canvas, safe, settings, AuthoredRect{0.0, 0.0, 0.0, 100.0});
+  expect(near(invalid.authoredToUi.m00, normal.authoredToUi.m00),
+         "zero-sized lane geometry cannot break the viewport");
+}
+
+void testPlayAreaBoundsFollowSelectedNoteSource() {
+  ValidatedBeatorajaSkinModel model;
+  SkinNoteObject notes;
+  notes.lanes = {{.authoredLane = 0,
+                  .laneDestination = {100.0, 20.0, 80.0, 500.0}},
+                 {.authoredLane = 1,
+                  .laneDestination = {200.0, 40.0, 100.0, 480.0}},
+                 {.authoredLane = 7,
+                  .laneDestination = {900.0, 20.0, 0.0, 500.0}}};
+  model.model.objects.push_back({.id = 1, .payload = notes});
+  const auto bounds = playSkinAuthoredPlayArea(model);
+  expect(bounds && near(bounds->x, 100.0) && near(bounds->y, 20.0) &&
+             near(bounds->width, 200.0) && near(bounds->height, 500.0),
+         "play area unions usable lanes and ignores zero-width scratch");
+  model.model.objects.push_back({.id = 2, .payload = SkinNoteObject{}});
+  expect(!playSkinAuthoredPlayArea(model),
+         "last enabled Note owns the lane layout even when empty");
+  model.disabledOptionalObjects.push_back(2);
+  expect(playSkinAuthoredPlayArea(model).has_value(),
+         "disabled optional Note cannot replace the active lane layout");
+}
+
 void testStretchAndCustomComposeOverSelectedBase() {
   ViewportSettings stretch;
   stretch.mode = ViewportMode::Stretch;
@@ -210,6 +273,8 @@ void testOffsetsPrecedeViewportProjection() {
 
 int main() {
   testFitUsesSafeAreaAndBars();
+  testFocusedPlayAreaUsesSafeAreaAndSharedInverse();
+  testPlayAreaBoundsFollowSelectedNoteSource();
   testStretchAndCustomComposeOverSelectedBase();
   testCustomFitClampingAndLogicalScaleEquivalence();
   testNormalizedTouchUsesRenderingConversion();

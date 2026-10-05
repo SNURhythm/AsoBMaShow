@@ -22,6 +22,7 @@
 #include <memory>
 #include <numeric>
 #include <ranges>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -4265,9 +4266,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrame(
 }
 
 SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
-    const SkinFrameInputs &inputs, bool beginRuntimeFrame) {
+    const SkinFrameInputs &frameInputs, bool beginRuntimeFrame) {
   SkinFrameEvaluationResult result;
   try {
+    auto inputs = frameInputs;
     if (inputs.state.frameSerial() != inputs.frameSerial) {
       result.diagnostics.push_back(diagnostic(
           "skin.renderer.frame.serial",
@@ -4289,7 +4291,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         return result;
       }
     }
-    if (!invertibleViewport(inputs.viewport)) {
+    if (!invertibleViewport(inputs.viewport) ||
+        (inputs.fixedHudViewport && !invertibleViewport(*inputs.fixedHudViewport))) {
       result.diagnostics.push_back(
           diagnostic("skin.renderer.viewport.invalid",
                      "Gameplay skin viewport is not projectable."));
@@ -4401,6 +4404,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     deferredNotes.reserve(inputs.model.model.destinations.size());
     std::map<const SkinDestination *, SkinBlendMode> blendAfterDestination;
 
+    const auto playArea = inputs.fixedHudViewport
+                              ? playSkinAuthoredPlayArea(inputs.model)
+                              : std::nullopt;
+    std::set<std::uint32_t> fixedHudOrdinals;
     for (const auto &destination : inputs.model.model.destinations) {
       const auto *object = findObject(objects, destination.object);
       if (!object) {
@@ -4411,6 +4418,29 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
       if (disabledOptionalObject(lookupIndex, object->id)) {
         continue;
+      }
+      inputs.viewport = frameInputs.viewport;
+      if (playArea && inputs.fixedHudViewport) {
+        bool followsPlayArea = std::holds_alternative<SkinNoteObject>(object->payload) ||
+                               std::holds_alternative<SkinCoverObject>(object->payload) ||
+                               std::holds_alternative<SkinJudgeObject>(object->payload);
+        // Skins have no universal HUD grouping. Move lane-local artwork with
+        // the lanes, retaining the original camera for surrounding objects.
+        if (!followsPlayArea && !destination.presentation.frames.empty()) {
+          followsPlayArea = std::ranges::all_of(
+              destination.presentation.frames, [&](const auto &frame) {
+                const double margin = playArea->width * 0.05;
+                return frame.width > 0.0 && frame.height >= 0.0 &&
+                       frame.x >= playArea->x - margin &&
+                       frame.x + frame.width <= playArea->x + playArea->width + margin &&
+                       frame.y >= playArea->y - playArea->height * 0.1 &&
+                       frame.y + frame.height <= playArea->y + playArea->height * 1.1;
+              });
+        }
+        if (!followsPlayArea) {
+          inputs.viewport = *inputs.fixedHudViewport;
+          fixedHudOrdinals.insert(destination.presentation.authoredOrdinal);
+        }
       }
       if (const auto *songList =
               std::get_if<SkinSongListObject>(&object->payload)) {
@@ -6092,6 +6122,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
     }
 
+    inputs.viewport = frameInputs.viewport;
     std::size_t insertedNoteCommands = 0;
     for (auto &deferred : deferredNotes) {
       auto lowered = lowerNoteObject(
@@ -6254,6 +6285,45 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             found != blendAfterDestination.end()) {
           nextRetainedBlend = found->second;
         }
+      }
+    }
+    // Publish every control in the common play-area coordinate space. This
+    // keeps hit testing, slider values and text editing aligned with each
+    // object's selected camera without evaluating any callbacks twice.
+    if (inputs.fixedHudViewport && !fixedHudOrdinals.empty()) {
+      const auto &forward = inputs.fixedHudViewport->authoredToUi;
+      const auto &inverse = frameInputs.viewport.uiToAuthored;
+      const auto mapPoint = [&](AuthoredPoint point) {
+        const double x = forward.m00 * point.x + forward.tx;
+        const double y = forward.m11 * point.y + forward.ty;
+        return AuthoredPoint{inverse.m00 * x + inverse.tx,
+                             inverse.m11 * y + inverse.ty};
+      };
+      const auto mapRect = [&](AuthoredRect rect) {
+        const auto lower = mapPoint({rect.x, rect.y});
+        const auto upper = mapPoint({rect.x + rect.width, rect.y + rect.height});
+        return AuthoredRect{lower.x, lower.y, upper.x - lower.x, upper.y - lower.y};
+      };
+      const auto mapControl = [&](auto &control) {
+        if (!fixedHudOrdinals.contains(control.authoredOrdinal)) return;
+        using Control = std::decay_t<decltype(control)>;
+        if constexpr (std::is_same_v<Control, SkinSliderInteractionGeometry>) {
+          control.authoredDestination = mapRect(control.authoredDestination);
+          control.authoredHitRegion = mapRect(control.authoredHitRegion);
+          control.valueZero = mapPoint(control.valueZero);
+          control.valueOne = mapPoint(control.valueOne);
+          control.range *= (control.direction == 0 || control.direction == 2)
+                               ? forward.m11 * inverse.m11
+                               : forward.m00 * inverse.m00;
+        } else {
+          control.authoredRegion = mapRect(control.authoredRegion);
+        }
+      };
+      for (auto &control : interactionLayout.slidersTopmostFirst) mapControl(control);
+      for (auto &control : interactionLayout.imagesTopmostFirst) mapControl(control);
+      for (auto &control : interactionLayout.textsTopmostFirst) mapControl(control);
+      for (auto &control : interactionLayout.controlsTopmostFirst) {
+        std::visit(mapControl, control);
       }
     }
     buildAdjacentBatches(buffer);
