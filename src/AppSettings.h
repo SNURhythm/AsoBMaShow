@@ -5,6 +5,7 @@
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
 #include "settings/BuiltInNotes.h"
+#include "settings/BuiltInJudgeLine.h"
 #include "settings/JudgementTextVisibility.h"
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
@@ -174,6 +175,13 @@ public:
     static const built_in_notes::ModeStyles empty;
     return found == notes.end() ? empty : found->second;
   }
+  built_in_judge_line::Style builtInJudgeLineForKeyMode(int mode) const {
+    if (mode == -5 && presentation().skin.follow5K1S) mode = 5;
+    if (mode == -7 && presentation().skin.follow7K1S) mode = 7;
+    const auto &lines = presentation().builtInJudgeLines;
+    const auto found = lines.find(mode);
+    return found == lines.end() ? built_in_judge_line::Style{} : found->second;
+  }
   bool showInvisibleNotes = false;
   // PlayerConfig.showpastnote. Its narrow LaneRenderer condition is applied
   // by playfield projection rather than broadening past-note rendering.
@@ -267,6 +275,7 @@ public:
         JudgementTimingDisplayCriteria::GreatOrBelow;
     GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
     built_in_notes::Settings builtInNotes;
+    built_in_judge_line::Settings builtInJudgeLines;
     skin::SkinProfileSettings skin;
     explicit PresentationSettings(PresentationOrientation orientation =
                                       PresentationOrientation::Landscape) {

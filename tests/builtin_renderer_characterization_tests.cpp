@@ -706,11 +706,17 @@ ScenarioResult renderScenario(
     std::uint64_t frameSerial = 0,
     bool seedPastInvisibleProbe = false,
     bool primeRendererTraversal = false, bool scratchOnRight = false,
-    const built_in_notes::ModeStyles &noteStyles = {}) {
+    const built_in_notes::ModeStyles &noteStyles = {},
+    built_in_judge_line::Style judgeLineStyle = {}, bool scratchMineProbe = false) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
   SyntheticChartFixture fixture;
+  if (scratchMineProbe) {
+    for (auto *timeline : fixture.chart->Measures.front()->TimeLines)
+      if (timeline->Timing == 2'250'000)
+        timeline->SetLandmineNote(7, new bms_parser::LandmineNote(12.0F));
+  }
   if (seedPastInvisibleProbe) {
     fixture.invisibleProbeNote->IsDead = false;
     fixture.invisibleProbeNote->IsPlayed = true;
@@ -726,6 +732,7 @@ ScenarioResult renderScenario(
   auto configuration = presentationConfig(coverPercent);
   configuration.scratchLaneOnRight = scratchOnRight;
   configuration.builtInNotes = noteStyles;
+  configuration.builtInJudgeLine = judgeLineStyle;
   const auto authority = authorityFor(*fixture.chart, coverPercent);
   store.setConfiguration(configuration);
   store.applyAuthorityUpdate(authority);
@@ -1925,16 +1932,16 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
   using Type = built_in_notes::Type;
   using Kind = characterization::SubmissionKind;
   built_in_notes::ModeStyles styles;
-  styles[0][Type::Normal] = {0x12ABEF, 200};
+  styles[0][Type::Normal] = {0x12ABEF, 500};
   styles[5][Type::Mine] = {0x77CC55, 150};
   styles[4][Type::LongBodyOn] = {0xAA55EE, 50};
-  styles[4][Type::LongTail] = {0xEECC11, 175};
+  styles[4][Type::LongTail] = {0xEECC11, 500};
   styles[6][Type::HellDamage] = {0xDD3366, 75};
   styles[7][Type::Normal] = {0x66DD88, 300};
   const auto legacy = renderScenario(target, kAfterCoverPercent, true,
-      ScenarioRenderPath::Legacy, 2'200'000, 43, true, false, false, styles);
+      ScenarioRenderPath::Legacy, 2'200'000, 43, true, false, false, styles, {0x14EBCB, 500});
   const auto captured = renderScenario(target, kAfterCoverPercent, true,
-      ScenarioRenderPath::Captured, 2'200'000, 43, true, false, false, styles);
+      ScenarioRenderPath::Captured, 2'200'000, 43, true, false, false, styles, {0x14EBCB, 500});
   verifyCapturedOverloadEquivalence(legacy, captured);
   const auto find = [&](Kind kind, int lane) {
     return std::ranges::find_if(legacy.recorder.submissions, [=](const auto &submission) {
@@ -1946,8 +1953,8 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
   const auto body = find(Kind::LongBody, 4);
   const auto tail = find(Kind::LongTail, 4);
   expect(normal != legacy.recorder.submissions.end() &&
-             std::abs(normal->rect.height - 40.0F / 128.0F) < 0.00001F,
-         "normal thickness scales the 20-pixel visible region, not the 40-pixel sprite");
+             std::abs(normal->rect.height - 100.0F / 128.0F) < 0.00001F,
+         "normal thickness supports 500 percent of the unchanged 20-pixel base");
   expect(mine != legacy.recorder.submissions.end() &&
              std::abs(mine->rect.height - 30.0F / 128.0F) < 0.00001F,
          "mine thickness uses its own padded sprite region and lane setting");
@@ -1956,8 +1963,12 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
              std::abs(body->rect.x - 5.25F) < 0.00001F,
          "custom long-note bodies are centered and narrowed within the lane");
   expect(tail != legacy.recorder.submissions.end() &&
-             std::abs(tail->rect.height - 35.0F / 128.0F) < 0.00001F,
-         "long-note tails scale the shared 20-pixel base height independently");
+             std::abs(tail->rect.height - 100.0F / 128.0F) < 0.00001F,
+         "long-note tails support 500 percent of the shared 20-pixel base");
+  const auto judgeLine = find(Kind::JudgeLine, -1);
+  expect(judgeLine != legacy.recorder.submissions.end() &&
+             std::abs(judgeLine->rect.height - 100.0F / 128.0F) < 0.00001F,
+         "custom judge-line height reaches both rendering paths");
   const auto countColor = [](const auto &pixels, std::uint32_t rgb) {
     std::size_t count = 0;
     for (std::size_t i = 0; i + 3 < pixels.size(); i += 4)
@@ -1965,11 +1976,60 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
           pixels[i + 2] == (rgb & 255)) ++count;
     return count;
   };
-  for (const auto rgb : {0x12ABEFU, 0x77CC55U, 0xAA55EEU}) {
+  for (const auto rgb : {0x12ABEFU, 0x77CC55U, 0xAA55EEU, 0x14EBCBU}) {
     expect(countColor(legacy.rgba, rgb) > 10 && countColor(captured.rgba, rgb) > 10,
            "custom RGB " + built_in_notes::colorHex(rgb) + " reaches both render paths (" +
                std::to_string(countColor(legacy.rgba, rgb)) + ", " +
                std::to_string(countColor(captured.rgba, rgb)) + " pixels)");
+  }
+}
+
+void verifyScratchGradientAndPlainMines(const RenderTarget &target) {
+  using Type = built_in_notes::Type;
+  using Kind = characterization::SubmissionKind;
+  built_in_notes::ModeStyles styles;
+  styles[7][Type::Normal] = {0x3399CC, 300};
+  styles[7][Type::Mine] = {0x12ABEF, 300};
+  for (const bool mine : {false, true}) {
+    const auto time = mine ? 2'200'000 : 1'500'000;
+    const auto legacy = renderScenario(target, kAfterCoverPercent, true,
+        ScenarioRenderPath::Legacy, time, 44, true, false, false, styles, {}, mine);
+    const auto captured = renderScenario(target, kAfterCoverPercent, true,
+        ScenarioRenderPath::Captured, time, 44, true, false, false, styles, {}, mine);
+    verifyCapturedOverloadEquivalence(legacy, captured);
+    if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+      std::filesystem::create_directories(directory);
+      const auto path = std::filesystem::path(directory) /
+          (mine ? "scratch-mine.png" : "scratch-gradient.png");
+      expect(lodepng::encode(path.string(), legacy.rgba, kDrawableWidth, kDrawableHeight) == 0,
+             "scratch appearance inspection image encodes");
+    }
+    const auto submission = std::ranges::find_if(legacy.recorder.submissions, [mine](const auto &value) {
+      return value.kind == (mine ? Kind::Mine : Kind::NormalNote) && value.lane == 7;
+    });
+    expect(submission != legacy.recorder.submissions.end(), "scratch appearance probe is visible");
+    if (submission == legacy.recorder.submissions.end()) continue;
+    const auto pixel = [&](float fraction) {
+      const auto &rect = submission->rect;
+      const auto screen = rendering::game_camera.project(
+          {rect.x + rect.width * fraction, rect.y + rect.height * 0.5F, 0});
+      const int x = std::clamp(static_cast<int>(screen.x), 0, int(kDrawableWidth) - 1);
+      const int y = std::clamp(static_cast<int>(screen.y), 0, int(kDrawableHeight) - 1);
+      const auto index = (y * kDrawableWidth + x) * 4;
+      return std::array<int, 3>{legacy.rgba[index], legacy.rgba[index + 1], legacy.rgba[index + 2]};
+    };
+    if (mine) {
+      for (const float position : {0.10F, 0.27F, 0.31F, 0.50F, 0.73F, 0.90F})
+        expect(pixel(position) == std::array<int, 3>{0x12, 0xAB, 0xEF},
+               "scratch mines stay flat across former stripe and gradient positions");
+    } else {
+      const auto left = pixel(0.10F);
+      const auto sheen = pixel(0.31F);
+      const auto right = pixel(0.75F);
+      expect(sheen[0] > left[0] + 100 && sheen[0] > right[0] + 100 &&
+                 sheen[1] > left[1] + 50 && sheen[2] > right[2] + 50,
+             "scratch sheen visibly peaks near one-third width and fades to darker edges");
+    }
   }
 }
 
@@ -3141,6 +3201,7 @@ int main() {
           kRenderMicros, 41, true, false, true);
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
       verifyCustomNoteAppearance(target);
+      verifyScratchGradientAndPlainMines(target);
       verifyScratchlessChartEligibility();
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);

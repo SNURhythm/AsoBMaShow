@@ -24,7 +24,7 @@ inline constexpr std::array<const char *, 12> kTypeNames{
     "hcn_head", "hcn_tail", "hcn_body_off", "hcn_body_on", "hcn_damage",
     "mine", "invisible"};
 inline constexpr int kMinThickness = 25;
-inline constexpr int kMaxThickness = 300;
+inline constexpr int kMaxThickness = 500;
 struct Style {
   std::uint32_t color = 0xCCCCCC;
   int thickness = 100;

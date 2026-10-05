@@ -2,6 +2,7 @@
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
 #include "../src/settings/BuiltInNoteEditing.h"
+#include "../src/settings/BuiltInScratchGradient.h"
 #include "../src/skin/GameplaySkinTraits.h"
 #include "../src/skin/SkinTargetTraits.h"
 #include "../src/skin/SkinProfileSettings.h"
@@ -2190,6 +2191,10 @@ void testBuiltInNoteGeometryAndIsolation() {
              height(128, Type::HellHead, gray) == 20 &&
              height(128, Type::HellTail, gray) == 20,
          "normal notes, mines, and all long-note endpoints share the same default height");
+  expect(height(128, Type::Normal, {0, 500}) == 100 &&
+             height(128, Type::LongHead, {0, 500}) == 100 &&
+             height(128, Type::HellTail, {0, 500}) == 100,
+         "note heights support 500 percent without changing their default size");
   auto &notes = settings.presentation().builtInNotes;
   notes[7][0][Type::Normal] = {0x123456, 150};
   notes[7][0][Type::LongHead] = {0xABCDEF, 75};
@@ -2226,7 +2231,7 @@ void testBuiltInNoteGeometryAndIsolation() {
              notes.at(48).contains(47),
          "every exposed gameplay mode and its last lane remains customizable");
   expect(notes[7][0][Type::Normal].thickness == 25 &&
-             notes[7][0][Type::LongHead].thickness == 300 &&
+             notes[7][0][Type::LongHead].thickness == 500 &&
              notes[7][0][Type::LongBodyOn] == Style{0xFFFFFF, 100} &&
              !notes.contains(999) && !notes[7].contains(-1),
          "invalid style dimensions and identities are bounded");
@@ -2275,7 +2280,7 @@ void testBuiltInNoteBulkEditing() {
          "shared thickness is displayed even when colors are mixed");
   editSelected(mode, selected, Type::Normal, EditKind::Thickness, 999);
   editSelected(mode, selected, Type::LongBodyOn, EditKind::Thickness, 999);
-  expect(mode[1][Type::Normal] == Style{0x3399CC, 300} &&
+  expect(mode[1][Type::Normal] == Style{0x3399CC, 500} &&
              mode[1][Type::LongBodyOn] == Style{0x3399CC, 100},
          "bulk absolute thickness respects endpoint and body bounds");
   editSelected(mode, selected, Type::Normal, EditKind::Thickness, -10);
@@ -2297,7 +2302,68 @@ void testBuiltInNoteBulkEditing() {
          "bulk note edits survive save and reload");
 }
 
+void testBuiltInJudgeLineAppearance() {
+  using Style = built_in_judge_line::Style;
+  AppSettings settings;
+  expect(settings.builtInJudgeLineForKeyMode(7) == Style{0xFFFFFF, 100} &&
+             built_in_judge_line::height(128, {}) == 20,
+         "judge line retains its original white color and base height");
+  settings.presentation().builtInJudgeLines[7] = {0x12ABEF, 500};
+  settings.presentation().builtInJudgeLines[-7] = {0x654321, 75};
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInJudgeLines[7] =
+      {0x112233, 125};
+  expect(built_in_judge_line::height(128, settings.builtInJudgeLineForKeyMode(7)) == 100 &&
+             settings.builtInJudgeLineForKeyMode(5) == Style{},
+         "judge-line height supports 500 percent and stays independent by mode");
+  settings.presentation().skin.follow7K1S = true;
+  expect(settings.builtInJudgeLineForKeyMode(-7) == Style{0x12ABEF, 500},
+         "scratchless follow uses the parent judge line");
+  settings.presentation().skin.follow7K1S = false;
+  expect(settings.builtInJudgeLineForKeyMode(-7) == Style{0x654321, 75},
+         "leaving follow restores the independent judge line");
+  TempDirectory temporary;
+  const auto path = temporary.path() / "judge-lines.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save judge-line appearance");
+  const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.builtInJudgeLineForKeyMode(7) == Style{0x12ABEF, 500} &&
+             loaded.builtInJudgeLineForKeyMode(-7) == Style{0x654321, 75} &&
+             loaded.presentation(AppSettings::PresentationOrientation::Portrait).builtInJudgeLines.at(7) ==
+                 Style{0x112233, 125},
+         "judge-line color and height persist by mode and orientation");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &lines = document["presentations"]["landscape"]["builtInJudgeLines"];
+  lines["7"] = {{"color", "not-a-color"}, {"heightPercent", 999}};
+  lines["5"] = {{"color", "123456"}, {"heightPercent", -20}};
+  lines["999"] = {{"color", "123456"}, {"heightPercent", 100}};
+  writeFile(path, document.dump());
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(invalid.settings.builtInJudgeLineForKeyMode(7) == Style{0xFFFFFF, 500} &&
+             invalid.settings.builtInJudgeLineForKeyMode(5) == Style{0x123456, 25} &&
+             !invalid.settings.presentation().builtInJudgeLines.contains(999),
+         "invalid judge-line colors fall back and heights and modes are bounded");
+}
+
+void testBuiltInScratchGradient() {
+  using namespace built_in_notes;
+  for (const auto type : {Type::Normal, Type::LongHead, Type::LongTail, Type::HellHead, Type::HellTail})
+    expect(hasScratchGradient(type), "scratch notes and endpoints receive the gradient");
+  for (const auto type : {Type::Mine, Type::Invisible, Type::LongBodyOff, Type::LongBodyOn,
+                          Type::HellBodyOff, Type::HellBodyOn, Type::HellDamage})
+    expect(!hasScratchGradient(type), "mines, outlines and bodies have no scratch decoration");
+  const auto stops = scratchGradient(0x3399CC);
+  expect(stops.front().position == 0 && stops.back().position == 1 &&
+             stops.front().color == 0x287AA3 && stops[4].color == 0xEAF4F9 &&
+             stops[6].color == 0x3399CC,
+         "scratch sheen shades the selected color and peaks near one-third width");
+  expect(scratchGradient(0).at(4).color == 0xE5E5E5 &&
+             scratchGradient(0xFFFFFF).front().color == 0xCCCCCC,
+         "scratch gradients remain visible on black and white custom colors");
+}
+
 int main() {
+  testBuiltInJudgeLineAppearance();
+  testBuiltInScratchGradient();
   testBuiltInNoteBulkEditing();
   testBuiltInNoteAppearancePersists();
   testBuiltInNoteGeometryAndIsolation();

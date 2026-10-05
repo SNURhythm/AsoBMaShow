@@ -82,6 +82,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = noteStartPositionPercent,
       .builtInNotes = settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)),
+      .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .showPastNotes = settings.showPastNotes,

@@ -5,6 +5,7 @@
 //
 
 #include "BMSRenderer.h"
+#include "../../settings/BuiltInScratchGradient.h"
 #include "../../rendering/UiSafeArea.h"
 #include "../../rendering/PortraitPlayfieldFraming.h"
 
@@ -2986,8 +2987,9 @@ void BMSRenderer::renderFrame(
   drawRect(playAreaWidth, upperBound - judgeY, playAreaLeftX,
            judgeY, Color(20, 20, 20, 122));
   // judge line
-  drawRect(playAreaWidth, noteRenderHeight * 0.5f, playAreaLeftX, judgeY,
-           Color(255, 255, 255, 255));
+  const float judgeLineHeight = built_in_judge_line::height(noteRenderWidth, builtInJudgeLine);
+  drawRect(playAreaWidth, judgeLineHeight, playAreaLeftX, judgeY,
+           Color(0xFF000000U | builtInJudgeLine.color));
   const BuiltInRendererTraversal builtInTraversal =
       builtInProjectionTraversal();
   const float hispeed = builtInTraversal.hispeed;
@@ -3047,7 +3049,7 @@ void BMSRenderer::renderFrame(
         {.x = playAreaLeftX,
          .y = judgeY,
          .width = playAreaWidth,
-         .height = noteRenderHeight * 0.5f});
+         .height = judgeLineHeight});
   }
 #endif
   if (projection != nullptr) {
@@ -4147,6 +4149,7 @@ void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
   if (builtInNotes != configuration.builtInNotes)
     builtInNotes = configuration.builtInNotes;
+  builtInJudgeLine = built_in_judge_line::sanitizeStyle(configuration.builtInJudgeLine);
   setVisibleTimeDurationMilliseconds(
       configuration.visibleTimeDurationMilliseconds);
   if (configuration.configuredHispeed &&
@@ -5309,20 +5312,23 @@ void BMSRenderer::drawBuiltInNote(int lane, NoteType type, float x, float y,
     activeNoteDepth = depth;
   }
   const auto style = builtInNoteStyle(lane, type);
-  noteBatchRenderer.addRect(x, y, width, height, built_in_notes::abgr(style.color));
-  if (isScratch(lane) && !built_in_notes::isBody(type) &&
-      chartEntityRenderBudget.remaining() >= 2 &&
-      chartEntityRenderBudget.tryConsume(2)) {
-    // Two inset grip marks remain legible on either light or dark colors.
-    const auto rgb = style.color;
-    const auto luminance = ((rgb >> 16) & 255) * 299 + ((rgb >> 8) & 255) * 587 +
-                           (rgb & 255) * 114;
-    const auto ink = luminance > 140000 ? 0xFF202020U : 0xFFF5F5F5U;
-    for (const float offset : {0.24F, 0.70F}) {
-      noteBatchRenderer.addRect(x + width * offset, y + height * 0.2F,
-                                width * 0.06F, height * 0.6F, ink);
+  if (isScratch(lane) && built_in_notes::hasScratchGradient(type)) {
+    const auto stops = built_in_notes::scratchGradient(style.color);
+    // The caller already reserved one rectangle for the note itself.
+    const auto extraRects = static_cast<std::uint32_t>(stops.size() - 2);
+    if (chartEntityRenderBudget.remaining() >= extraRects &&
+        chartEntityRenderBudget.tryConsume(extraRects)) {
+      for (std::size_t i = 1; i < stops.size(); ++i) {
+        const auto left = built_in_notes::abgr(stops[i - 1].color);
+        const auto right = built_in_notes::abgr(stops[i].color);
+        noteBatchRenderer.addRectColors(x + width * stops[i - 1].position, y,
+            width * (stops[i].position - stops[i - 1].position), height,
+            left, right, right, left);
+      }
+      return;
     }
   }
+  noteBatchRenderer.addRect(x, y, width, height, built_in_notes::abgr(style.color));
 }
 
 void BMSRenderer::setInvisibleBatchDepth(uint32_t submitDepth) {

@@ -873,6 +873,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     previewControls->addView(playAreaWidthControls);
   } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
     appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
+    appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
   } else {
     appendSelectedSkinHudSettings(previewControls, metrics, !previewHasSelectedSkin);
   }

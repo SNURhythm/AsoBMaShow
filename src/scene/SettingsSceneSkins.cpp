@@ -630,6 +630,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                   persistSettings();
                 });
   appendBuiltInNoteControls(body, metrics, keyMode);
+  appendBuiltInJudgeLineControls(body, metrics, keyMode);
   appendSelectedSkinHudSettings(body, metrics, true);
 }
 

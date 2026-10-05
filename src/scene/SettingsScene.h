@@ -104,6 +104,7 @@ private:
   int builtInNoteType = 0;
   std::string builtInNoteDropdown;
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {
     Profile,

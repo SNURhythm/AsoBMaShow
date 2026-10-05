@@ -5,12 +5,43 @@
 #include "play/StartLaneIndicatorGeometry.h"
 #include "../view/UiTheme.h"
 #include "../settings/BuiltInNoteEditing.h"
+#include "../settings/BuiltInScratchGradient.h"
 
 #include <charconv>
 
 using namespace settings_scene;
 
 namespace {
+class ScratchNoteSample : public View {
+public:
+  explicit ScratchNoteSample(std::uint32_t color) : color(color) {}
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    const auto stops = built_in_notes::scratchGradient(color);
+    const auto program = rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+    const auto state = context.makeUiBatchState(program, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    constexpr std::array<std::uint16_t, 6> indices{0, 1, 2, 2, 3, 0};
+    for (std::size_t i = 1; i < stops.size(); ++i) {
+      const float x0 = getX() + getWidth() * stops[i - 1].position;
+      const float x1 = getX() + getWidth() * stops[i].position;
+      const float y0 = getY();
+      const float y1 = getY() + getHeight();
+      const auto left = built_in_notes::abgr(stops[i - 1].color);
+      const auto right = built_in_notes::abgr(stops[i].color);
+      const std::array vertices{
+          rendering::PosColorVertex{x0, y0, 0, left},
+          rendering::PosColorVertex{x1, y0, 0, right},
+          rendering::PosColorVertex{x1, y1, 0, right},
+          rendering::PosColorVertex{x0, y1, 0, left}};
+      context.appendUiColor(vertices, indices, state);
+    }
+  }
+
+private:
+  std::uint32_t color;
+};
+
 enum class SettingsButtonTone {
   Neutral,
   Primary,
@@ -1116,7 +1147,8 @@ void SettingsScene::appendBuiltInNoteControls(
     sampleFrame->setAlignItems(YGAlignCenter);
     sampleFrame->setJustifyContent(YGJustifyCenter);
     sampleFrame->setBackgroundColor(Color(20, 24, 30));
-    auto *sample = new View();
+    View *sample = target.palette == Palette::Scratch && hasScratchGradient(type)
+        ? static_cast<View *>(new ScratchNoteSample(style.color)) : new View();
     sample->setWidth(isBody(type) ? bodyWidth(80.0F, style) : 160.0F);
     sample->setHeight(isBody(type) ? 64.0F : height(160.0F, type, style));
     sample->setFlexShrink(0);
@@ -1125,18 +1157,6 @@ void SettingsScene::appendBuiltInNoteControls(
       sample->setBackgroundColor(Color(0, 0, 0, 0));
       sample->setBorderColor(Color(0xE0000000U | style.color));
       sample->setBorderWidth(std::max(1, int(height(160.0F, type, style) * 0.15F)));
-    }
-    if (target.palette == Palette::Scratch && !isBody(type) && type != Type::Invisible) {
-      sample->setFlexDirection(FlexDirection::Row);
-      sample->setJustifyContent(YGJustifySpaceEvenly);
-      sample->setAlignItems(YGAlignCenter);
-      for (int i = 0; i < 2; ++i) {
-        auto *stripe = new View();
-        stripe->setWidth(9.6F);
-        stripe->setHeight(height(160.0F, type, style) * 0.6F);
-        stripe->setBackgroundColor(ui_theme::textOn(Color(0xFF000000U | style.color)));
-        sample->addView(stripe);
-      }
     }
     sampleFrame->addView(sample);
     sampleColumn->addView(sampleFrame);
@@ -1209,5 +1229,84 @@ void SettingsScene::appendBuiltInNoteControls(
   }
   steps->addView(makePropertyReset(i18n::message(isBody(type)
       ? "settings.notes.reset_width" : "settings.notes.reset_thickness"), EditKind::ResetThickness));
+  body->addView(steps);
+}
+
+void SettingsScene::appendBuiltInJudgeLineControls(
+    View *body, const LayoutMetrics &metrics, int keyMode) {
+  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
+  const auto style = context.settings.builtInJudgeLineForKeyMode(keyMode);
+  const auto apply = [this, keyMode](std::optional<std::uint32_t> color,
+                                    std::optional<int> height) {
+    auto next = context.settings.builtInJudgeLineForKeyMode(keyMode);
+    if (color) next.color = *color;
+    if (height) next.heightPercent = *height;
+    context.settings.presentation().builtInJudgeLines[keyMode] =
+        built_in_judge_line::sanitizeStyle(next);
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  };
+  body->addView(makeWrappedText(i18n::message("settings.judge_line.title"),
+                               metrics.bodyTextSize, ui_theme::textPrimary()));
+  auto *sampleFrame = new View();
+  sampleFrame->setWidthPercent(100.0F);
+  sampleFrame->setHeight(std::max(48.0F, built_in_judge_line::height(160.0F, style) + 16.0F));
+  sampleFrame->setAlignItems(YGAlignCenter);
+  sampleFrame->setJustifyContent(YGJustifyCenter);
+  sampleFrame->setBackgroundColor(Color(20, 24, 30));
+  auto *sample = new View();
+  sample->setWidthPercent(90.0F);
+  sample->setHeight(built_in_judge_line::height(160.0F, style));
+  sample->setFlexShrink(0);
+  sample->setBackgroundColor(Color(0xFF000000U | style.color));
+  sampleFrame->addView(sample);
+  body->addView(sampleFrame);
+
+  body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *colorInput = makeTextInput(metrics, 140);
+  colorInput->setEditingText("#" + built_in_notes::colorHex(style.color));
+  colorInput->onEditingFinished([this, apply](const std::string &text) {
+    if (const auto color = built_in_notes::parseColor(text)) apply(*color, std::nullopt);
+    else lastLayoutWidth = -1;
+  });
+  body->addView(colorInput);
+  const auto makeReset = [&metrics](const i18n::Text &label) {
+    return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE));
+  };
+  auto *resetColor = makeReset(i18n::message("settings.notes.reset_color"));
+  resetColor->setOnClickListener([apply] { apply(0xFFFFFF, std::nullopt); });
+  body->addView(resetColor);
+  body->addView(makeWrappedText(i18n::message("settings.judge_line.height"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *heightInput = makeTextInput(metrics, 140);
+  heightInput->setEditingText(std::to_string(style.heightPercent));
+  heightInput->onEditingFinished([this, apply](const std::string &text) {
+    int value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+      apply(std::nullopt, value);
+    else lastLayoutWidth = -1;
+  });
+  body->addView(heightInput);
+  auto *steps = new View();
+  steps->setFlexDirection(FlexDirection::Row);
+  steps->setFlexWrap(YGWrapWrap);
+  steps->setGap(8.0F);
+  for (const int delta : {-10, 10}) {
+    auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                  delta < 0 ? "-10%" : "+10%");
+    button->setOnClickListener([this, keyMode, apply, delta] {
+      apply(std::nullopt, context.settings.builtInJudgeLineForKeyMode(keyMode).heightPercent + delta);
+    });
+    steps->addView(button);
+  }
+  auto *resetHeight = makeReset(i18n::message("settings.judge_line.reset_height"));
+  resetHeight->setOnClickListener([apply] { apply(std::nullopt, 100); });
+  steps->addView(resetHeight);
   body->addView(steps);
 }

@@ -3126,6 +3126,7 @@ void GamePlayScene::init() {
       .laneBeamLengthPercent = context.settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
       .builtInNotes = context.settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(*chart)),
+      .builtInJudgeLine = context.settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(*chart)),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
       .showPastNotes = context.settings.showPastNotes,
