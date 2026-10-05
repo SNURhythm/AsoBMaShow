@@ -171,9 +171,9 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   bestHeading->addView(bestLabel_);
   auto *clearRow = new View();
   clearRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(8);
-  clearRow->setFlex(1)->setMinWidth(0);
+  clearRow->setFlex(2)->setMinWidth(0);
   clearLamp_ = new View();
-  clearLamp_->setWidth(6)->setHeight(22)->setCornerRadius(3);
+  clearLamp_->setWidth(10)->setHeight(22)->setCornerRadius(3)->setFlexShrink(0);
   clearRow->addView(clearLamp_);
   clear_ = label("chartDetailsClear", 20, 28);
   clear_->setFlex(1);
