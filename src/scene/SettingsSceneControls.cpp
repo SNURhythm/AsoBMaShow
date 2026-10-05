@@ -12,6 +12,26 @@
 using namespace settings_scene;
 
 namespace {
+View *makeAppearanceColorPresets(const LayoutMetrics &metrics, std::uint32_t defaultColor,
+                                 std::optional<std::uint32_t> selectedColor,
+                                 std::function<void(std::uint32_t)> apply) {
+  auto *swatches = new View();
+  swatches->setFlexDirection(FlexDirection::Row);
+  swatches->setFlexWrap(YGWrapWrap);
+  swatches->setGap(6.0F);
+  for (const auto rgb : built_in_notes::colorPresets(defaultColor)) {
+    const Color color(0xFF000000U | rgb);
+    auto *button = makeButton(78, metrics.actionButtonHeight,
+        makeText(built_in_notes::colorHex(rgb), metrics.smallTextSize, ui_theme::textOn(color),
+                 TextView::CENTER, TextView::MIDDLE),
+        color, color, color, selectedColor == rgb ? ui_theme::textPrimary() : color,
+        ui_theme::textPrimary(), ui_theme::textPrimary());
+    button->setOnClickListener([apply, rgb] { apply(rgb); });
+    swatches->addView(button);
+  }
+  return swatches;
+}
+
 class ScratchNoteSample : public View {
 public:
   explicit ScratchNoteSample(std::uint32_t color) : color(color) {}
@@ -1061,12 +1081,12 @@ void SettingsScene::appendBuiltInNoteControls(
                                metrics.bodyTextSize, ui_theme::textPrimary()));
   body->addView(makeWrappedText(i18n::message("settings.notes.help"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
-  const auto laneLabel = [&scratches, &keys](int candidate) {
+  const auto laneLabel = [&scratches, &keys](int candidate) -> std::string {
     const auto scratchIt = std::find(scratches.begin(), scratches.end(), candidate);
     const auto keyIt = std::find(keys.begin(), keys.end(), candidate);
-    return scratchIt != scratches.end()
-        ? i18n::message("settings.notes.scratch", {{"number", std::to_string(scratchIt - scratches.begin() + 1)}})
-        : i18n::message("settings.notes.key", {{"number", std::to_string(keyIt - keys.begin() + 1)}});
+    if (scratchIt != scratches.end())
+      return scratches.size() == 1 ? "S" : scratchIt == scratches.begin() ? "LS" : "RS";
+    return std::to_string(keyIt - keys.begin() + 1);
   };
   body->addView(makeWrappedText(i18n::message("settings.notes.lanes"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
@@ -1075,7 +1095,7 @@ void SettingsScene::appendBuiltInNoteControls(
   laneToggles->setFlexWrap(YGWrapWrap);
   laneToggles->setGap(6.0F);
   for (const int candidate : lanes) {
-    auto *toggle = makeControlButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
+    auto *toggle = makeControlButton(metrics.actionButtonHeight, metrics.actionButtonHeight,
         makeText(laneLabel(candidate), metrics.smallTextSize, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE));
     styleGameplaySkinChoiceButton(toggle, selectedLanes.contains(candidate));
@@ -1166,24 +1186,8 @@ void SettingsScene::appendBuiltInNoteControls(
 
   body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
-  auto *swatches = new View();
-  swatches->setFlexDirection(FlexDirection::Row);
-  swatches->setFlexWrap(YGWrapWrap);
-  swatches->setGap(6.0F);
-  const std::array<std::uint32_t, 12> colors{
-      defaultStyle(targets.front().palette, type).color, 0xCCCCCC, 0xFFFFFF, 0x3399CC,
-      0x33BFCC, 0xDB3625, 0xCC0000, 0xFF9524, 0xFFDD55, 0x66DD88, 0xAA88FF, 0xFF77BB};
-  for (const auto rgb : colors) {
-    const Color color(0xFF000000U | rgb);
-    auto *button = makeButton(78, metrics.actionButtonHeight,
-        makeText(colorHex(rgb), metrics.smallTextSize, ui_theme::textOn(color),
-                 TextView::CENTER, TextView::MIDDLE),
-        color, color, color, common.color == rgb ? ui_theme::textPrimary() : color,
-        ui_theme::textPrimary(), ui_theme::textPrimary());
-    button->setOnClickListener([apply, rgb] { apply(EditKind::Color, rgb); });
-    swatches->addView(button);
-  }
-  body->addView(swatches);
+  body->addView(makeAppearanceColorPresets(metrics, defaultStyle(targets.front().palette, type).color,
+      common.color, [apply](std::uint32_t rgb) { apply(EditKind::Color, rgb); }));
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
@@ -1264,6 +1268,10 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   sampleFrame->addView(sample);
   body->addView(sampleFrame);
 
+  body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  body->addView(makeAppearanceColorPresets(metrics, built_in_judge_line::Style{}.color,
+      style.color, [apply](std::uint32_t rgb) { apply(rgb, std::nullopt); }));
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);

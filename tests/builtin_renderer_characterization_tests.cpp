@@ -2024,11 +2024,15 @@ void verifyScratchGradientAndPlainMines(const RenderTarget &target) {
                "scratch mines stay flat across former stripe and gradient positions");
     } else {
       const auto left = pixel(0.10F);
-      const auto sheen = pixel(0.31F);
-      const auto right = pixel(0.75F);
-      expect(sheen[0] > left[0] + 100 && sheen[0] > right[0] + 100 &&
-                 sheen[1] > left[1] + 50 && sheen[2] > right[2] + 50,
-             "scratch sheen visibly peaks near one-third width and fades to darker edges");
+      const auto sheenLeft = pixel(0.40F);
+      const auto sheenRight = pixel(0.60F);
+      const auto right = pixel(0.90F);
+      expect(sheenLeft[0] > left[0] + 30 && sheenRight[0] > right[0] + 30 &&
+                 std::abs(sheenLeft[0] - sheenRight[0]) < 30 &&
+                 sheenLeft[0] < 150 && sheenRight[0] < 150,
+             "scratch sheen is broad and softly shaded without a sharp white hotspot");
+      expect(pixel(0.30F)[0] > pixel(0.22F)[0] + 10,
+             "scratch colors interpolate within a segment instead of forming flat bands");
     }
   }
 }

@@ -13,13 +13,13 @@ struct GradientStop {
   std::uint32_t color;
 };
 
-inline std::array<GradientStop, 10> scratchGradient(std::uint32_t rgb) {
-  // orange.png's horizontal sheen peaks around x=40/128, with darker edges.
-  // Mix with white/black so custom colors retain the same highlight profile.
-  constexpr std::array<float, 10> positions{
-      0.0F, 0.125F, 0.1875F, 0.25F, 0.3125F, 0.375F, 0.5F, 0.625F, 0.75F, 1.0F};
-  constexpr std::array<int, 10> lightness{-20, -5, 15, 50, 90, 30, 0, -18, -32, -20};
-  std::array<GradientStop, 10> result{};
+inline std::array<GradientStop, 7> scratchGradient(std::uint32_t rgb) {
+  // A broad, slightly asymmetric satin sheen keeps the chosen hue visible.
+  // The GPU interpolates between stops; these are not flat color bands.
+  constexpr std::array<float, 7> positions{
+      0.0F, 0.18F, 0.38F, 0.52F, 0.66F, 0.84F, 1.0F};
+  constexpr std::array<int, 7> lightness{-18, -6, 18, 32, 26, 2, -14};
+  std::array<GradientStop, 7> result{};
   for (std::size_t i = 0; i < result.size(); ++i) {
     std::uint32_t color = 0;
     for (const int shift : {16, 8, 0}) {

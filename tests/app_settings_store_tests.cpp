@@ -2352,16 +2352,40 @@ void testBuiltInScratchGradient() {
                           Type::HellBodyOff, Type::HellBodyOn, Type::HellDamage})
     expect(!hasScratchGradient(type), "mines, outlines and bodies have no scratch decoration");
   const auto stops = scratchGradient(0x3399CC);
+  std::uint32_t peakRed = 0;
+  for (const auto &stop : stops) peakRed = std::max(peakRed, (stop.color >> 16) & 255U);
   expect(stops.front().position == 0 && stops.back().position == 1 &&
-             stops.front().color == 0x287AA3 && stops[4].color == 0xEAF4F9 &&
-             stops[6].color == 0x3399CC,
-         "scratch sheen shades the selected color and peaks near one-third width");
-  expect(scratchGradient(0).at(4).color == 0xE5E5E5 &&
-             scratchGradient(0xFFFFFF).front().color == 0xCCCCCC,
+             peakRed >= 100 && peakRed <= 130 &&
+             ((stops.front().color >> 16) & 255U) < 51 &&
+             ((stops.back().color >> 16) & 255U) < 51,
+         "scratch sheen keeps the chosen hue with a restrained highlight and gentle edge shading");
+  expect(scratchGradient(0).at(3).color > 0x404040 &&
+             scratchGradient(0xFFFFFF).front().color < 0xEEEEEE,
          "scratch gradients remain visible on black and white custom colors");
 }
 
+void testBuiltInAppearancePresetColors() {
+  using namespace built_in_notes;
+  const auto check = [](std::uint32_t defaultColor) {
+    auto colors = colorPresets(defaultColor);
+    expect(!colors.empty() && colors.front() == defaultColor,
+           "appearance presets keep the current type's default first");
+    std::sort(colors.begin(), colors.end());
+    expect(std::adjacent_find(colors.begin(), colors.end()) == colors.end(),
+           "appearance presets never repeat the default or a fixed swatch");
+    expect(std::binary_search(colors.begin(), colors.end(), 0xFFFFFF) &&
+               std::binary_search(colors.begin(), colors.end(), 0x3399CC) &&
+               std::binary_search(colors.begin(), colors.end(), 0xCC0000),
+           "deduplicating presets preserves the shared palette");
+  };
+  for (const auto palette : {Palette::Gray, Palette::Blue, Palette::Scratch})
+    for (std::size_t i = 0; i < kTypeNames.size(); ++i)
+      check(defaultStyle(palette, static_cast<Type>(i)).color);
+  check(built_in_judge_line::Style{}.color);
+}
+
 int main() {
+  testBuiltInAppearancePresetColors();
   testBuiltInJudgeLineAppearance();
   testBuiltInScratchGradient();
   testBuiltInNoteBulkEditing();

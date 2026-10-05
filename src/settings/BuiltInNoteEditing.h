@@ -2,8 +2,19 @@
 
 #include "BuiltInNotes.h"
 #include <span>
+#include <vector>
 
 namespace built_in_notes {
+inline std::vector<std::uint32_t> colorPresets(std::uint32_t defaultColor) {
+  constexpr std::array<std::uint32_t, 11> colors{
+      0xCCCCCC, 0xFFFFFF, 0x3399CC, 0x33BFCC, 0xDB3625, 0xCC0000,
+      0xFF9524, 0xFFDD55, 0x66DD88, 0xAA88FF, 0xFF77BB};
+  std::vector<std::uint32_t> result{defaultColor};
+  for (const auto color : colors)
+    if (std::find(result.begin(), result.end(), color) == result.end()) result.push_back(color);
+  return result;
+}
+
 struct LaneTarget {
   int lane;
   Palette palette;
