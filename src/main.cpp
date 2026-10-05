@@ -619,6 +619,11 @@ int main(int argv, char **args) {
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
   uint32_t windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+  if (TARGET_PLATFORM == iOS) {
+    // Use the current screen size in either launch orientation. An exclusive
+    // mode based on the initial landscape dimensions can fail in portrait.
+    windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
+  }
   if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS) {
     windowFlags |= SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI;
   } else if (TARGET_PLATFORM == Android) {
@@ -644,7 +649,9 @@ int main(int argv, char **args) {
                 windowLogicalHeight);
 
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID
   SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
+#endif
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
   if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
     windowLogicalWidth = windowCreateWidth;
