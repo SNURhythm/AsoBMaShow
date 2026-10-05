@@ -24,7 +24,7 @@ struct Metrics {
   float infoTilePadding = 7.0f;
   float detailsHeight = 108.0f;
   float detailsTilePadding = 8.0f;
-  float visualHeight = 250.0f;
+  float visualHeight = 236.0f;
   float visualMinimumHeight = 236.0f;
   float visualGap = 12.0f;
   float graphFlex = 2.0f;

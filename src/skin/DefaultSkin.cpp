@@ -147,7 +147,7 @@ void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
   if (auto *actions = root->findViewByName("resultActions")) {
     actions->setWidthPercent(100);
     actions->setPadding(Edge::Right, portrait ? 1 : 0);
-    const auto sizeActions = [&](auto &&self, View *view) -> void {
+    const auto sizeActions = [&](auto &&self, View *view) -> int {
       if (auto *button = dynamic_cast<Button *>(view)) {
         auto *text = dynamic_cast<TextView *>(button->getContentView());
         const float regularWidth = button->getName() == "resultPracticeSectionButton" ? 280 : 232;
@@ -156,23 +156,31 @@ void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
             : regularWidth;
         button->setWidth(width)->setHeight(portrait ? 56 : 64);
         button->setMinWidth(portrait ? 64 : 0)->setFlexShrink(portrait ? 1 : 0);
+        button->setFlexGrow(1);
         if (text) {
           text->setPadding(Edge::Left, portrait ? 12 : 0);
           text->setPadding(Edge::Right, portrait ? 12 : 0);
         }
-        return;
+        return YGNodeStyleGetDisplay(button->getNode()) == YGDisplayNone ? 0 : 1;
       }
       view->setFlexWrap(portrait ? YGWrapNoWrap : YGWrapWrap);
       view->setGap(portrait ? 8 : 14);
       view->setMinWidth(0)->setFlexShrink(portrait && view != actions ? 1 : 0);
-      for (auto *child : view->getChildren()) self(self, child);
+      int buttonCount = 0;
+      for (auto *child : view->getChildren()) buttonCount += self(self, child);
+      // Match each nested group's share to its buttons so free space is
+      // distributed evenly without discarding label-based preferred widths.
+      view->setFlexGrow(view == actions ? 0 : buttonCount);
+      return YGNodeStyleGetDisplay(view->getNode()) == YGDisplayNone ? 0 : buttonCount;
     };
     sizeActions(sizeActions, actions);
   }
   if (auto *visuals = root->findViewByName("resultVisuals")) {
     visuals->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
-    visuals->setHeight(portrait ? metrics.visualHeight * 2 + metrics.visualGap : metrics.visualHeight);
-    visuals->setMinHeight(portrait ? metrics.visualHeight * 2 + metrics.visualGap : metrics.visualMinimumHeight);
+    const float visualHeight = portrait ? metrics.visualHeight * 1.8F + metrics.visualGap
+                                        : metrics.visualHeight;
+    visuals->setHeight(visualHeight);
+    visuals->setMinHeight(portrait ? visualHeight : metrics.visualMinimumHeight);
   }
 }
 

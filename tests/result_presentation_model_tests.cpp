@@ -982,7 +982,11 @@ void testPortraitResultKeepsComparisonCardsReadable() {
 }
 
 void testPortraitResultTimingAndActionsFit() {
-  const auto model = makeLocalResultPresentation(localMeta(), localState(), localOptions());
+  auto options = localOptions();
+  bms_parser::Chart chart;
+  chart.Meta = localMeta();
+  options.timingAnalytics.emplace(chart, std::span<const ReplayData>{}, 2);
+  const auto model = makeLocalResultPresentation(localMeta(), localState(), std::move(options));
   for (const auto language : {i18n::Language::English, i18n::Language::Korean,
                               i18n::Language::Japanese}) {
     i18n::setLanguage(language);
@@ -1031,13 +1035,30 @@ void testPortraitResultTimingAndActionsFit() {
                    button->getX() + button->getWidth() <= actions->getX() + actions->getWidth(),
                "autosized result buttons stay inside the portrait viewport");
       }
+      // One pixel of safe inset plus nested Yoga rounding may leave two pixels.
+      expect(buttons.front()->getX() == actions->getX() &&
+                 std::abs(buttons.back()->getX() + buttons.back()->getWidth() -
+                          actions->getX() - actions->getWidth()) <= 2,
+             "portrait actions fill the parent width including nested groups");
+      auto *visuals = root->findViewByName("resultVisuals");
+      auto *gauge = root->findViewByName("graph");
+      auto *analytics = root->findViewByName("timingAnalytics");
+      expect(visuals->getHeight() < 450 && gauge->getHeight() >= 150 &&
+                 analytics->getHeight() >= 236 &&
+                 analytics->getY() >= gauge->getY() + gauge->getHeight() &&
+                 analytics->getY() + analytics->getHeight() <=
+                     visuals->getY() + visuals->getHeight(),
+             "portrait graphs are compact while retaining readable analytics space");
       expect(buttons[1]->getWidth() < buttons.back()->getWidth(),
              "button widths follow label length rather than a fixed equal width");
       root->setSize(1920, 1080);
       DefaultSkin::resizeResultLayout(root.get(), 1920, 1080);
       root->applyYogaLayout();
-      expect(buttons.front()->getWidth() == 232 && buttons.front()->getHeight() == 64,
-             "returning to landscape restores the regular action dimensions");
+      expect(buttons.front()->getHeight() == 64 &&
+                 buttons.front()->getX() == actions->getX() &&
+                 std::abs(buttons.back()->getX() + buttons.back()->getWidth() -
+                          actions->getX() - actions->getWidth()) <= 1,
+             "landscape actions retain their height and fill the parent width");
       bgfx::frame();
     }
   }
