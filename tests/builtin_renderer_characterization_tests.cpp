@@ -2043,15 +2043,19 @@ struct SettingsScene {
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::map<Judgement, int> previewJudgeCount;
   int previewComboBreak = 0;
   int previewMaximumCombo = 24;
   int previewCombo = 24;
   int previewPassedNotes = 12;
+  int previewScore = 0;
   std::map<Judgement, PlayfieldJudgementFastSlowCount> previewJudgeFastSlowCount;
   void syncPreviewInputLayout();
   void syncPreviewTouchLayout();
   void syncPreviewAuthority();
+  void resetPreviewHudSample();
+  void publishPreviewJudgement(const JudgeResult &, long long);
 };
 using settings_scene::kPreviewBpm;
 using settings_scene::previewLaneCoverAuthority;
@@ -2262,6 +2266,62 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
   }
 }
 
+void verifyPreviewScoreUsesRealJudgements() {
+  const auto chart = settings_scene::makePreviewChart(7);
+  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = &renderer;
+  scene.previewVisualStateStore = &store;
+  scene.previewPresentationEvents =
+      std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+  scene.resetPreviewHudSample();
+  expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
+             scene.previewCombo == 0 && scene.previewMaximumCombo == 0,
+         "a fresh preview has no invented score or completed notes");
+  for (const auto judgement : {PGreat, Great, Good, Bad, Poor, Kpoor})
+    scene.publishPreviewJudgement(JudgeResult(judgement, 0), 1'000'000);
+  const auto state = store.capture({.serial = 1});
+  expect(scene.previewScore == 3 && scene.previewPassedNotes == 5 &&
+             state.authority.pacemakerStatus.currentScore == 3 &&
+             state.authority.pacemakerStatus.playedNotes == 5,
+         "preview EX score awards two for PGREAT, one for GREAT, and none for other judgements");
+  scene.resetPreviewHudSample();
+  expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
+             scene.previewJudgeCount.at(PGreat) == 0 &&
+             scene.previewJudgeFastSlowCount.empty(),
+         "restarting clears preview score, note progression, and timing counters");
+}
+
+void verifyPreviewPacemakerMatchesChartScore() {
+  for (const auto mode : settings_scene::kPreviewKeyModes) {
+    const auto chart = settings_scene::makePreviewChart(mode);
+    const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+    PlayfieldVisualStateStore store(model);
+    SettingsScene scene;
+    scene.previewChart = chart.get();
+    scene.previewVisualStateStore = &store;
+    scene.previewJudgeCount = {{PGreat, 2}, {Great, 1}, {Good, 1}};
+    scene.previewPassedNotes = 4;
+    scene.previewScore = 5;
+    scene.syncPreviewAuthority();
+    const auto state = store.capture({.serial = 1});
+    const auto &target = state.authority.pacemakerTarget;
+    const auto &status = state.authority.pacemakerStatus;
+    expect(target.totalNotes == chart->Meta.TotalNotes &&
+               target.maxScore == 2 * chart->Meta.TotalNotes &&
+               status.totalNotes == target.totalNotes &&
+               status.maxScore == target.maxScore,
+           "preview pacemaker and skin graph share the sample chart's note count and maximum EX score");
+    expect(status.currentScore == 5 && status.playedNotes == 4 &&
+               status.targetScore <= 8 && status.delta == 5 - status.targetScore,
+           "preview pacemaker uses actual judgement score and passed notes");
+  }
+}
+
 void verifyPreviewPacemakerDiff(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -2273,6 +2333,8 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
   scene.previewChart = fixture.chart.get();
   scene.previewRenderer = &renderer;
   scene.previewVisualStateStore = &store;
+  scene.previewPassedNotes = 1;
+  scene.previewScore = 1;
   rendering::UiBatchRenderer batch;
   for (const int height : {1080, 1920}) {
     rendering::window_width = height == 1080 ? 1920 : 1080;
@@ -2287,7 +2349,7 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
     scene.syncPreviewAuthority();
     const auto captured = store.capture({.serial = 1});
     expect(captured.authority.pacemakerStatus.enabled &&
-               captured.authority.pacemakerStatus.delta == 12,
+               captured.authority.pacemakerStatus.delta == 0,
            "preview capture retains its pacemaker sample");
     expect(captured.authority.loadingState == PlayfieldLoadingState::Loaded &&
                captured.authority.gameplayMode == PlayfieldGameplayMode::Play &&
@@ -2296,7 +2358,7 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
                captured.authority.applicationUptimeMillis == 1234 &&
                captured.authority.maximumCombo == 24 &&
                captured.authority.stageCombo == 24 &&
-               captured.authority.stagePassedNotes == 12 &&
+               captured.authority.stagePassedNotes == 1 &&
                captured.authority.judgementFastSlowCounters.at(Great).slow == 3,
            "preview capture provides loaded gameplay, profile, telemetry, and judgement authority");
     batch.beginFrame();
@@ -2307,7 +2369,7 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
       renderer.render(context, kRenderMicros);
     }
     const auto *diff = renderer.judgementFeedbackTextViewsForTesting()[3];
-    expect(diff->getVisible() && diff->getText() == "+12",
+    expect(diff->getVisible() && diff->getText() == "+0",
            "settings preview renders its pacemaker difference through the live renderer");
     expect(diff->pointSize() == (height == 1080 ? 24 : 48) &&
                (diff->fontWeight() == TextView::FontWeight::Bold) == config.pacemakerDiffBold &&
@@ -2770,6 +2832,8 @@ int main() {
       verifyPreviewInputLanePosition(target);
       verifyPreviewKeyModeTouchRouting(target);
       verifyPreviewPacemakerDiff(target);
+      verifyPreviewPacemakerMatchesChartScore();
+  verifyPreviewScoreUsesRealJudgements();
       verifyIndividualJudgementLabelVisibility(target);
       verifySeparatedJudgementCombo(target);
       verifyJudgementFeedbackStyles(target);

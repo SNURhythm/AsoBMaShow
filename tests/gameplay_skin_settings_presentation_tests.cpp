@@ -538,6 +538,12 @@ void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
   changed.progress.completedBytes++;
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) == key,
           "validation progress does not restart the active preview");
+  require(!skin::gameplaySkinPreviewCanReload(changed, true),
+          "a pending profile commit cannot replace the active preview");
+  require(!skin::gameplaySkinPreviewCanReload(snapshot, false),
+          "preview waits for activation revalidation after persistence");
+  require(skin::gameplaySkinPreviewCanReload(snapshot, true),
+          "ready committed configuration can replace the preview");
   changed.entries.front().configurationDigest = "new-option-file-or-offset";
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
           "committed catalog settings reload the preview");

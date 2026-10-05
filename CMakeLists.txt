@@ -6500,11 +6500,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${_gameplay_skin_benchmark_links}
         )
 
+        set(settings_preview_restart_source
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_preview_restart.inc)
+        add_custom_command(
+            OUTPUT ${settings_preview_restart_source}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_preview_input_extract.py
+                    --root ${CMAKE_SOURCE_DIR} --output ${settings_preview_restart_source}
+                    --restart-only
+            DEPENDS tests/settings_preview_input_extract.py tests/gameplay_terminal_scene_extract.py
+                    src/scene/SettingsScenePreview.cpp
+            VERBATIM
+        )
         add_executable(playfield_presentation_coordinator_tests
             tests/playfield_presentation_coordinator_tests.cpp
+            ${settings_preview_restart_source}
             src/scene/play/PlayfieldPresentationCoordinator.cpp
         )
         target_include_directories(playfield_presentation_coordinator_tests PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/generated
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(playfield_presentation_coordinator_tests PRIVATE

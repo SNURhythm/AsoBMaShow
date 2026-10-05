@@ -442,6 +442,7 @@ private:
   void buildDisplayPreviewOverlay(const settings_scene::LayoutMetrics &metrics);
   void startLanePreview();
   void stopLanePreview();
+  bool previewSkinReloadReady() const;
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
   void syncPreviewPresentationConfiguration();
@@ -487,6 +488,10 @@ private:
   void refreshSettingsText(bool syncInputs = true);
   void refreshIrSettingsPresentation();
   void ensureProfileController();
+  void appendSelectedSkinHudSettings(View *body,
+                                     const settings_scene::LayoutMetrics &metrics,
+                                     bool includeBuiltInOnlySettings);
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
@@ -501,9 +506,6 @@ private:
   [[nodiscard]] skin::ViewportSettings
   gameplaySkinViewportForEntry(const skin::SkinEntryId &entry) const;
   [[nodiscard]] bool gameplaySkinTraitsRuntimeAvailable() const noexcept;
-  void appendSelectedSkinHudSettings(View *body,
-                                     const settings_scene::LayoutMetrics &metrics,
-                                     bool includeBuiltInOnlySettings);
   void appendGameplaySkinCatalogSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);

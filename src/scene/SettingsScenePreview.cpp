@@ -10,6 +10,7 @@
 #include "play/PlayfieldProjection.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../ArchiveFile.h"
+#include "GameplaySkinSettingsPresentation.h"
 #include "play/GameplaySkinSessionFactory.h"
 #include "play/PlayfieldPresentationCoordinator.h"
 #include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
@@ -23,8 +24,6 @@
 using namespace settings_scene;
 
 namespace {
-constexpr int kPreviewSampleCombo = 24;
-constexpr int kPreviewSampleScore = 123456;
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 // The synthetic chart has no BGA; never borrow the song selector's media state.
@@ -175,7 +174,21 @@ void SettingsScene::stopLanePreview() {
   lastLayoutWidth = -1;
 }
 
+bool SettingsScene::previewSkinReloadReady() const {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinSettingsController &&
+      !skin::gameplaySkinPreviewCanReload(
+          gameplaySkinSettingsController->snapshot(),
+          !context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady()))
+    return false;
+#endif
+  return true;
+}
+
 void SettingsScene::ensurePreviewRenderer() {
+  // Profile edits are visible before their prepared activation is published.
+  // Keep the current session until the matching activation can be acquired.
+  if (!previewSkinReloadReady()) return;
   if (previewRendererDirty) {
     destroyPreviewRenderer();
     previewRendererDirty = false;
@@ -355,6 +368,9 @@ void SettingsScene::syncPreviewAuthority() {
                                   GaugeProfile::Standard));
   }
   const auto laneCover = previewLaneCoverAuthority(context.settings);
+  const auto target = pacemaker::targetFromGrade(previewChart->Meta, pacemaker::kTargetAAA);
+  const int playedNotes = std::clamp(previewPassedNotes, 0, target.totalNotes);
+  const int targetScore = pacemaker::targetScoreAtPlayedNotes(target, playedNotes);
   const PlayfieldAuthorityUpdate authority{
       .currentBpm = kPreviewBpm,
       .judgementCounters = previewJudgeCount,
@@ -367,12 +383,12 @@ void SettingsScene::syncPreviewAuthority() {
       .gaugeAutoShift = GaugeAutoShiftMode::None,
       .currentGauge = 74.0F,
       .gaugeRules = *previewGaugeRules,
-      .pacemakerTarget = {.enabled = true, .label = "AAA", .finalScore = 888,
-                          .maxScore = 1000, .totalNotes = 500},
-      .pacemakerStatus = {.enabled = true, .label = "AAA", .currentScore = 180,
-                          .targetScore = 168, .finalTargetScore = 888,
-                          .maxScore = 1000, .delta = 12, .playedNotes = 100,
-                          .totalNotes = 500},
+      .pacemakerTarget = target,
+      .pacemakerStatus = {.enabled = target.enabled, .label = target.label,
+                          .currentScore = previewScore, .targetScore = targetScore,
+                          .finalTargetScore = target.finalScore,
+                          .maxScore = target.maxScore, .delta = previewScore - targetScore,
+                          .playedNotes = playedNotes, .totalNotes = target.totalNotes},
       .playerName = context.profileManager.activeProfile().displayName,
       .irProviderName = gameplaySkinFirstIrProviderName(context.settings.irProviders),
       .irAccountName = context.irAccountNameSnapshot(),
@@ -601,17 +617,12 @@ void SettingsScene::resetPreviewHudSample() {
   for (int i = 0; i < JudgementCount; ++i) {
     previewJudgeCount[static_cast<Judgement>(i)] = 0;
   }
-  previewJudgeCount[PGreat] = 8;
-  previewJudgeCount[Great] = 3;
-  previewJudgeCount[Good] = 1;
-  previewCombo = kPreviewSampleCombo;
-  previewScore = kPreviewSampleScore;
+  previewCombo = 0;
+  previewScore = 0;
   previewComboBreak = 0;
-  previewMaximumCombo = previewCombo;
-  previewPassedNotes = 12;
-  previewJudgeFastSlowCount = {{PGreat, {.fast = 4, .slow = 4}},
-                              {Great, {.fast = 1, .slow = 2}},
-                              {Good, {.fast = 0, .slow = 1}}};
+  previewMaximumCombo = 0;
+  previewPassedNotes = 0;
+  previewJudgeFastSlowCount.clear();
 
   if (previewRenderer == nullptr) {
     return;
@@ -645,9 +656,8 @@ void SettingsScene::publishPreviewJudgement(
   } else if (judgeResult.judgement != Kpoor) {
     previewCombo++;
   }
-  if (!judgeResult.isComboBreak() && judgeResult.judgement != Kpoor) {
-    previewScore += 2;
-  }
+  if (judgeResult.judgement == PGreat) previewScore += 2;
+  else if (judgeResult.judgement == Great) ++previewScore;
   previewJudgeCount[judgeResult.judgement]++;
   previewMaximumCombo = std::max(previewMaximumCombo, previewCombo);
   if (judgeResult.judgement != Kpoor && judgeResult.judgement != None)
@@ -723,49 +733,8 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
 }
 
 void SettingsScene::resetPreviewSimulation() {
-  if (previewTouchRouter)
-    (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks64()) * 1000);
-  previewElapsedMicros = 0;
-  previewFrameSerial = 0;
-  if (previewLaneController != nullptr) {
-    previewLaneController->resetLaneStates();
-  }
-  if (previewPresentation != nullptr) {
-    previewPresentation->reset();
-  }
-  if (previewVisualStateStore != nullptr &&
-      previewChartVisualModel != nullptr) {
-    previewVisualStateStore->resetModel(*previewChartVisualModel);
-    previewVisualStateStore->setSceneStartMicros(0);
-    previewVisualStateStore->setPlayStartMicros(0);
-  }
-  resetPreviewHudSample();
-  if (previewChart == nullptr) {
-    return;
-  }
-  for (const auto *measure : previewChart->Measures) {
-    if (measure == nullptr) {
-      continue;
-    }
-    for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr) {
-        continue;
-      }
-      for (auto *note : timeline->Notes) {
-        if (note != nullptr) {
-          note->Reset();
-        }
-      }
-      for (auto *note : timeline->InvisibleNotes) {
-        if (note != nullptr) {
-          note->Reset();
-        }
-      }
-      for (auto *note : timeline->LandmineNotes) {
-        if (note != nullptr) {
-          note->Reset();
-        }
-      }
-    }
-  }
+  // A skin session owns its timers and script state. Coordinator::reset tears
+  // it down, so restarting requires a fresh session of the selected skin.
+  previewRendererDirty = true;
+  ensurePreviewRenderer();
 }

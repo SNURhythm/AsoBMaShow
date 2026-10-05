@@ -16,6 +16,12 @@
 #include <utility>
 
 namespace skin {
+
+bool gameplaySkinPreviewCanReload(const GameplaySkinSettingsSnapshot &snapshot,
+                                bool presentationReady) noexcept {
+  return snapshot.state != GameplaySkinSettingsState::Busy && presentationReady;
+}
+
 namespace {
 
 class PresentationKeyEncoder {

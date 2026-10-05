@@ -49,6 +49,9 @@ gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata);
 [[nodiscard]] std::string gameplaySkinPreviewConfigurationKey(
     const GameplaySkinSettingsSnapshot &snapshot, int keyMode);
 
+[[nodiscard]] bool gameplaySkinPreviewCanReload(
+    const GameplaySkinSettingsSnapshot &snapshot, bool presentationReady) noexcept;
+
 // Resolve the preview's effective gameplay selection, including scratchless
 // modes which follow their original skin. The returned row belongs to snapshot.
 [[nodiscard]] const GameplaySkinEntryRow *gameplaySkinSettingsEntryForKeyMode(

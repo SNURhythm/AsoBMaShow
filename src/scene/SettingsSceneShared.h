@@ -22,6 +22,8 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace settings_scene {
 // Let Yoga size the button from its content and horizontal padding.
@@ -931,5 +933,22 @@ inline AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {
   }
   return AppSettings::UiThemeMode::Dark;
 }
+
+} // namespace settings_scene
+
+namespace settings_scene {
+
+struct GameplaySkinChoiceButton {
+  i18n::Text label;
+  bool selected = false;
+  std::function<void()> action;
+  std::function<bool()> tryAction;
+};
+
+void styleGameplaySkinChoiceButton(Button *button, bool selected);
+View *makeGameplaySkinChoiceRow(const LayoutMetrics &metrics,
+                                const i18n::Text &label, bool enabled,
+                                std::vector<GameplaySkinChoiceButton> choices);
+int sanitizeOffsetComponent(std::string_view text, int fallback);
 
 } // namespace settings_scene
