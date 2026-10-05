@@ -1384,7 +1384,8 @@ void BMSRenderer::drawJudgementAccentBar() {
     return;
   }
 
-  const float width = 6.0f;
+  const float width = (judgementTextBold ? 12.0f : 6.0f) *
+                      judgementTextSizePercent / 100.0f;
   const float height =
       std::max(16.0f, static_cast<float>(judgeText->getHeight()) - 28.0f);
   const float y = static_cast<float>(judgeText->getY()) +
@@ -1399,7 +1400,7 @@ void BMSRenderer::drawJudgementAccentBar() {
       (!renderedTimingFastShown && !renderedTimingSlowShown);
   if (showLeft) {
     const float x =
-        std::max(0.0f, static_cast<float>(judgeText->getX()) - 15.0f);
+        std::max(0.0f, static_cast<float>(judgeText->getX()) - width - 9.0f);
     simpleBatchRenderer.addRoundedRect(x, y, width, height, width * 0.5f,
                                        color);
   }
@@ -1830,15 +1831,16 @@ void BMSRenderer::layoutCenteredJudgementText() {
   judgementLayoutHasPacemakerDelta = hasPacemakerDelta;
 
   const int maxAvailableWidth = std::max(1, judgementLayoutWidth - 48);
-  const float judgeScale = judgementTextSizePercent / 100.0f;
-  const float timingScale = judgementTimingSizePercent / 100.0f;
+  const float judgeScale = judgementTextSizePercent / 50.0f;
+  const float timingScale = judgementTimingSizePercent / 50.0f;
   const int judgeLineHeight = std::max(static_cast<int>(std::lround(68 * judgeScale)),
                                       judgeText ? judgeText->textureHeight() : 0);
   const int timingLineHeight = std::max({static_cast<int>(std::lround(28 * timingScale)),
       judgementTimingDirectionText ? judgementTimingDirectionText->textureHeight() : 0,
       judgementTimingMsText ? judgementTimingMsText->textureHeight() : 0});
-  const int pacemakerDeltaLineHeight = 40;
-  const int lineGap = 2;
+  const float pacemakerScale = pacemakerDiffSizePercent / 100.0f;
+  const int pacemakerDeltaLineHeight = std::max(static_cast<int>(std::lround(40 * pacemakerScale)),
+      pacemakerDeltaText ? pacemakerDeltaText->textureHeight() : 0);
   const float normalizedY =
       std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
                  AppSettings::kMaxJudgementTextY);
@@ -1869,12 +1871,23 @@ void BMSRenderer::layoutCenteredJudgementText() {
       std::min(maxAvailableWidth, static_cast<int>(std::lround(
           (kTimingDirectionMaxWidth + kTimingInnerGap + kTimingMsMaxWidth) * timingScale)));
   const int timingX = (judgementLayoutWidth - timingWidth) / 2;
-  const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
-  const int pacemakerDeltaWidth = std::min(maxAvailableWidth, 220);
+  const int timingGap = std::min(timingWidth - 2, static_cast<int>(std::lround(kTimingInnerGap * timingScale)));
+  const int directionWidth = (timingWidth - timingGap) * kTimingDirectionMaxWidth /
+                             (kTimingDirectionMaxWidth + kTimingMsMaxWidth);
+  const int millisecondsWidth = timingWidth - timingGap - directionWidth;
+  const int timingCenterY = static_cast<int>(std::lround(
+      judgementLayoutHeight * (1.0f - judgementTimingY)));
+  const int timingY = std::clamp(timingCenterY - timingLineHeight / 2, 0,
+                                std::max(0, judgementLayoutHeight - timingLineHeight));
+  const int pacemakerDeltaWidth = std::min(maxAvailableWidth, std::max(
+      static_cast<int>(std::lround(220 * pacemakerScale)),
+      pacemakerDeltaText ? pacemakerDeltaText->textureWidth() : 0));
   const int pacemakerDeltaX =
       (judgementLayoutWidth - pacemakerDeltaWidth) / 2;
-  const int pacemakerDeltaY =
-      std::max(0, timingY - pacemakerDeltaLineHeight - lineGap);
+  const int pacemakerDeltaY = std::clamp(
+      static_cast<int>(std::lround(judgementLayoutHeight * (1.0f - pacemakerDiffY))) -
+          pacemakerDeltaLineHeight / 2,
+      0, std::max(0, judgementLayoutHeight - pacemakerDeltaLineHeight));
   if (hasPacemakerDelta) {
     pacemakerDeltaText->setPosition(pacemakerDeltaX, pacemakerDeltaY);
     pacemakerDeltaText->setSize(pacemakerDeltaWidth,
@@ -1885,16 +1898,16 @@ void BMSRenderer::layoutCenteredJudgementText() {
   }
   if (hasTimingDirection) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
-    judgementTimingDirectionText->setSize(timingWidth, timingLineHeight);
+    judgementTimingDirectionText->setSize(directionWidth, timingLineHeight);
   } else if (judgementTimingDirectionText != nullptr) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
     judgementTimingDirectionText->setSize(1, 1);
   }
   if (hasTimingMs) {
-    judgementTimingMsText->setPosition(timingX, timingY);
-    judgementTimingMsText->setSize(timingWidth, timingLineHeight);
+    judgementTimingMsText->setPosition(timingX + directionWidth + timingGap, timingY);
+    judgementTimingMsText->setSize(millisecondsWidth, timingLineHeight);
   } else if (judgementTimingMsText != nullptr) {
-    judgementTimingMsText->setPosition(timingX, timingY);
+    judgementTimingMsText->setPosition(timingX + directionWidth + timingGap, timingY);
     judgementTimingMsText->setSize(1, 1);
   }
 }
@@ -4444,6 +4457,9 @@ void BMSRenderer::configure(
       configuration.judgementIndicatorHudMode,
       configuration.judgementIndicatorRangeMilliseconds);
   setJudgementTextY(configuration.judgementTextY);
+  setJudgementTimingY(configuration.judgementTimingY);
+  setPacemakerDiffStyle(configuration.pacemakerDiffY, configuration.pacemakerDiffSizePercent,
+                       configuration.pacemakerDiffBold);
   setJudgementFeedbackStyle(configuration.judgementTextSizePercent,
                            configuration.judgementTextBold,
                            configuration.judgementTimingSizePercent,
@@ -4914,6 +4930,27 @@ void BMSRenderer::setJudgementTextY(float y) {
   judgementLayoutHeight = 0;
 }
 
+void BMSRenderer::setJudgementTimingY(float y) {
+  const float clamped = std::isfinite(y) ? std::clamp(y, 0.0f, 1.0f)
+                                       : AppSettings::kDefaultJudgementTimingY;
+  if (std::abs(judgementTimingY - clamped) <= 0.0001f) return;
+  judgementTimingY = clamped;
+  judgementLayoutWidth = 0;
+  judgementLayoutHeight = 0;
+}
+
+void BMSRenderer::setPacemakerDiffStyle(float y, int sizePercent, bool bold) {
+  y = std::isfinite(y) ? std::clamp(y, 0.0f, 1.0f) : AppSettings::kDefaultPacemakerDiffY;
+  sizePercent = std::clamp(sizePercent, AppSettings::kMinJudgementFeedbackSizePercent,
+                          AppSettings::kMaxJudgementFeedbackSizePercent);
+  if (pacemakerDiffY == y && pacemakerDiffSizePercent == sizePercent &&
+      pacemakerDiffBold == bold) return;
+  pacemakerDiffY = y;
+  pacemakerDiffSizePercent = sizePercent;
+  pacemakerDiffBold = bold;
+  refreshJudgementFeedbackTextStyle();
+}
+
 void BMSRenderer::setJudgementFeedbackStyle(int textSizePercent, bool textBold,
                                            int timingSizePercent, bool timingBold) {
   textSizePercent = std::clamp(textSizePercent,
@@ -4944,15 +4981,17 @@ void BMSRenderer::refreshJudgementFeedbackTextStyle() {
     replacement->setAlign(align);
     replacement->setVAlign(TextView::MIDDLE);
     replacement->setOverflow(TextView::TextOverflow::Hidden);
+    replacement->setAutoFitText(true);
     replacement->setText(view->getText());
     replacement->setColor(view->currentColor());
     replacement->setVisible(view->getVisible());
     view = std::move(replacement);
   };
-  restyle(judgeText, 38, judgementTextSizePercent, judgementTextBold, TextView::CENTER);
-  restyle(judgementTimingDirectionText, 21, judgementTimingSizePercent,
+  restyle(pacemakerDeltaText, 32, pacemakerDiffSizePercent, pacemakerDiffBold, TextView::CENTER);
+  restyle(judgeText, 76, judgementTextSizePercent, judgementTextBold, TextView::CENTER);
+  restyle(judgementTimingDirectionText, 42, judgementTimingSizePercent,
           judgementTimingBold, TextView::LEFT);
-  restyle(judgementTimingMsText, 21, judgementTimingSizePercent,
+  restyle(judgementTimingMsText, 42, judgementTimingSizePercent,
           judgementTimingBold, TextView::RIGHT);
   judgementLayoutWidth = 0;
   judgementLayoutHeight = 0;

@@ -1372,6 +1372,14 @@ Json configurationJson(const PlayfieldPresentationConfig &config) {
       {"judgementIndicatorRangeMilliseconds",
        config.judgementIndicatorRangeMilliseconds},
       {"judgementTextY", canonical(config.judgementTextY)},
+      {"judgementTimingY", canonical(config.judgementTimingY)},
+      {"judgementTextSizePercent", config.judgementTextSizePercent},
+      {"judgementTextBold", config.judgementTextBold},
+      {"judgementTimingSizePercent", config.judgementTimingSizePercent},
+      {"judgementTimingBold", config.judgementTimingBold},
+      {"pacemakerDiffY", canonical(config.pacemakerDiffY)},
+      {"pacemakerDiffSizePercent", config.pacemakerDiffSizePercent},
+      {"pacemakerDiffBold", config.pacemakerDiffBold},
       {"judgementCounterEnabled", config.judgementCounterEnabled},
       {"judgementCounterPosition",
        static_cast<int>(config.judgementCounterPosition)},
@@ -2097,50 +2105,87 @@ void verifyJudgementFeedbackStyles(const RenderTarget &target) {
   BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
   rendering::UiBatchRenderer batch;
   auto config = presentationConfig(0);
-  for (const auto textPercent : {50, 100, 150, 200, 100}) {
+  renderer.setPacemakerTarget({.enabled = true, .label = "AAA", .finalScore = 9999,
+                                .maxScore = 9999, .totalNotes = 1000});
+  renderer.setPacemakerStatus({.enabled = true, .label = "AAA", .currentScore = 1234,
+                                .targetScore = 1200, .delta = 34, .playedNotes = 600});
+  const auto render = [&]() {
+    renderer.configure(config);
+    renderer.onJudge(JudgeResult(Great, -15'000), 1234, 9999,
+                     {.songTimeMicros = kRenderMicros,
+                      .visualTimeMicros = kRenderMicros,
+                      .bgaTimeMicros = kRenderMicros});
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    bgfx::frame();
+    return renderer.judgementFeedbackTextViewsForTesting();
+  };
+  for (const auto textPercent : {25, 50, 100, 200, 500, 100}) {
     config.judgementTextSizePercent = textPercent;
     config.judgementTextBold = textPercent != 100;
-    config.judgementTimingSizePercent = 250 - textPercent;
+    config.judgementTimingSizePercent = 525 - textPercent;
     config.judgementTimingBold = !config.judgementTextBold;
+    config.pacemakerDiffSizePercent = textPercent;
+    config.pacemakerDiffBold = !config.judgementTextBold;
     for (const int width : {1080, 1920}) {
       rendering::window_width = width;
-      renderer.configure(config);
-      renderer.onJudge(JudgeResult(Great, -15'000), 1234, 9999,
-                       {.songTimeMicros = kRenderMicros,
-                        .visualTimeMicros = kRenderMicros,
-                        .bgaTimeMicros = kRenderMicros});
-      batch.beginFrame();
-      RenderContext context(batch);
-      {
-        RenderContext::UiBatchScope scope(context);
-        renderer.render(context, kRenderMicros, kRenderMicros);
-      }
-      const auto views = renderer.judgementFeedbackTextViewsForTesting();
-      expect(views[0]->pointSize() == std::lround(38 * textPercent / 100.0f) &&
-                 views[1]->pointSize() == std::lround(21 * (250 - textPercent) / 100.0f) &&
-                 views[2]->pointSize() == views[1]->pointSize(),
-             "judgement and timing feedback scale independently during live reconfiguration");
+      rendering::window_height = width == 1080 ? 1920 : 1080;
+      const auto views = render();
+      expect(views[0]->pointSize() == std::lround(76 * textPercent / 100.0f) &&
+                 views[1]->pointSize() == std::lround(42 * (525 - textPercent) / 100.0f) &&
+                 views[2]->pointSize() == views[1]->pointSize() &&
+                 views[3]->pointSize() == std::lround(32 * textPercent / 100.0f),
+             "all feedback sizes update live across the complete range");
       expect((views[0]->fontWeight() == TextView::FontWeight::Bold) == config.judgementTextBold &&
                  (views[1]->fontWeight() == TextView::FontWeight::Bold) == config.judgementTimingBold &&
-                 views[2]->fontWeight() == views[1]->fontWeight(),
-             "judgement and timing boldness update independently");
+                 views[2]->fontWeight() == views[1]->fontWeight() &&
+                 (views[3]->fontWeight() == TextView::FontWeight::Bold) == config.pacemakerDiffBold,
+             "feedback boldness updates independently");
       for (const auto *view : views) {
-        if (!view->getVisible() || view->getText().empty() ||
-            view->textureWidth() > view->getContentWidth() ||
-            view->textureHeight() > view->getContentHeight()) {
-          std::cerr << "Feedback bounds: " << view->getText() << " font " << view->pointSize()
-                    << " texture " << view->textureWidth() << 'x' << view->textureHeight()
-                    << " content " << view->getContentWidth() << 'x' << view->getContentHeight() << '\n';
-        }
         expect(view->getVisible() && !view->getText().empty() &&
-                   view->textureWidth() <= view->getContentWidth() &&
-                   view->textureHeight() <= view->getContentHeight(),
-               "resized feedback remains visible and fits its text box");
+                   view->getContentWidth() > 0 && view->getContentHeight() > 0 &&
+                   view->getX() >= 0 && view->getY() >= 0 &&
+                   view->getX() + view->getWidth() <= rendering::window_width &&
+                   view->getY() + view->getHeight() <= rendering::window_height,
+               "feedback text boxes remain visible and within both viewport orientations");
       }
-      expect(views[1]->getY() + views[1]->getHeight() <= views[0]->getY(),
-             "timing feedback stays above the independently sized judgement");
-      bgfx::frame();
+      expect(views[1]->getX() + views[1]->getWidth() <= views[2]->getX(),
+             "large FAST/SLOW and millisecond text have separate fitting bounds");
     }
+  }
+  config.judgementTextSizePercent = 100;
+  config.judgementTimingSizePercent = 100;
+  config.pacemakerDiffSizePercent = 100;
+  for (const int height : {1080, 1920}) {
+    rendering::window_height = height;
+    config.judgementTextY = 0.3F;
+    config.judgementTimingY = 0.5F;
+    config.pacemakerDiffY = 0.7F;
+    const auto initial = render();
+    const int judgeY = initial[0]->getY();
+    const int timingY = initial[1]->getY();
+    const int pacemakerY = initial[3]->getY();
+    config.judgementTextY = 0.4F;
+    auto views = render();
+    expect(views[0]->getY() < judgeY && views[1]->getY() == timingY &&
+               views[3]->getY() == pacemakerY,
+           "moving judgment leaves FAST/SLOW and pacemaker unchanged");
+    const int movedJudgeY = views[0]->getY();
+    config.judgementTimingY = 0.6F;
+    views = render();
+    expect(views[0]->getY() == movedJudgeY && views[1]->getY() < timingY &&
+               views[2]->getY() == views[1]->getY() && views[3]->getY() == pacemakerY,
+           "moving FAST/SLOW and milliseconds leaves judgment and pacemaker unchanged");
+    const int movedTimingY = views[1]->getY();
+    config.pacemakerDiffY = 0.8F;
+    views = render();
+    expect(views[0]->getY() == movedJudgeY && views[1]->getY() == movedTimingY &&
+               views[3]->getY() < pacemakerY,
+           "moving pacemaker leaves judgment and FAST/SLOW unchanged");
   }
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
 }

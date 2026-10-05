@@ -715,17 +715,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
 
   appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
   body->addView(buildJudgementFeedbackStyleControls(metrics));
-  appendNumeric(
-      i18n::message("settings.skins.judge_text_y.percent_label"),
-      std::to_string(judgementTextYToPercent(context.settings.presentation().judgementTextY)),
-      std::to_string(judgementTextYToPercent(AppSettings::kDefaultJudgementTextY)),
-      [this](const std::string &text) {
-        context.settings.presentation().judgementTextY = judgementTextPercentToY(std::clamp(
-            sanitizeOffsetComponent(
-                text, judgementTextYToPercent(context.settings.presentation().judgementTextY)),
-            0, 100));
-        persistSettings();
-      });
+  body->addView(buildJudgementFeedbackPositionControls(metrics));
   const auto timingChoices =
       [this](AppSettings::JudgementTimingDisplayCriteria value, auto assign) {
         std::vector<GameplaySkinChoiceButton> choices;

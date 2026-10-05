@@ -440,6 +440,10 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.presentation().judgementIndicatorRangeMilliseconds = 123;
   settings.presentation().scratchLaneOnRight = true;
   settings.presentation().judgementTextY = 0.6F;
+  settings.presentation().judgementTimingY = 0.4F;
+  settings.presentation().pacemakerDiffY = 0.2F;
+  settings.presentation().pacemakerDiffSizePercent = 350;
+  settings.presentation().pacemakerDiffBold = false;
   settings.presentation().judgementTextSizePercent = 150;
   settings.presentation().judgementTextBold = true;
   settings.presentation().judgementTimingSizePercent = 75;
@@ -504,6 +508,10 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.judgementIndicatorRangeMilliseconds == 123 &&
              configuration.scratchLaneOnRight &&
              configuration.judgementTextY == 0.6F &&
+             configuration.judgementTimingY == 0.4F &&
+             configuration.pacemakerDiffY == 0.2F &&
+             configuration.pacemakerDiffSizePercent == 350 &&
+             !configuration.pacemakerDiffBold &&
              configuration.judgementTextSizePercent == 150 &&
              configuration.judgementTextBold == true &&
              configuration.judgementTimingSizePercent == 75 &&

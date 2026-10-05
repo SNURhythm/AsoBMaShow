@@ -123,7 +123,6 @@ private:
   TextView *summaryLaneBeamLengthValueText = nullptr;
   TextView *summaryNoteStartPositionValueText = nullptr;
   TextView *summaryPreviewPlayAreaWidthValueText = nullptr;
-  TextView *summaryJudgementTextYValueText = nullptr;
   TextView *summaryJudgementIndicatorYValueText = nullptr;
   TextView *summaryJudgementIndicatorWidthValueText = nullptr;
   TextView *summaryJudgementIndicatorRangeValueText = nullptr;
@@ -391,6 +390,8 @@ private:
   void resetViewState();
   void ensureLayoutUpToDate();
   View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
+  View *buildJudgementFeedbackPositionControls(const settings_scene::LayoutMetrics &metrics,
+                                              bool previewStyle = false);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,

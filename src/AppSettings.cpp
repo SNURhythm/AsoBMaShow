@@ -434,6 +434,12 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
           judgementIndicatorRangeMilliseconds);
   judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
+  judgementTimingY = sanitizeFloat(judgementTimingY, kDefaultJudgementTimingY,
+                                   kMinJudgementTextY, kMaxJudgementTextY);
+  pacemakerDiffY = sanitizeFloat(pacemakerDiffY, kDefaultPacemakerDiffY,
+                                 kMinJudgementTextY, kMaxJudgementTextY);
+  pacemakerDiffSizePercent = std::clamp(pacemakerDiffSizePercent,
+      kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
   judgementTextSizePercent = std::clamp(judgementTextSizePercent,
       kMinJudgementFeedbackSizePercent, kMaxJudgementFeedbackSizePercent);
   judgementTimingSizePercent = std::clamp(judgementTimingSizePercent,

@@ -366,10 +366,14 @@ private:
   double mainBpm = 0.0;
   bool renderHud = true;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
+  float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool judgementTextBold = false;
+  bool judgementTextBold = true;
   int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool judgementTimingBold = false;
+  bool judgementTimingBold = true;
+  float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
+  int pacemakerDiffSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool pacemakerDiffBold = true;
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
@@ -645,6 +649,8 @@ public:
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode, int rangeMilliseconds);
   void setJudgementTextY(float y);
+  void setJudgementTimingY(float y);
+  void setPacemakerDiffStyle(float y, int sizePercent, bool bold);
   void setJudgementFeedbackStyle(int textSizePercent, bool textBold,
                                 int timingSizePercent, bool timingBold);
   void setJudgementCounterEnabled(bool enabled);
@@ -686,10 +692,10 @@ public:
   [[nodiscard]] bool lanePressedForTesting(int lane) const {
     return laneIsCurrentlyPressed(lane);
   }
-  [[nodiscard]] std::array<const TextView *, 3>
+  [[nodiscard]] std::array<const TextView *, 4>
   judgementFeedbackTextViewsForTesting() const {
     return {judgeText.get(), judgementTimingDirectionText.get(),
-            judgementTimingMsText.get()};
+            judgementTimingMsText.get(), pacemakerDeltaText.get()};
   }
   void setCharacterizationRecorder(
       bms_renderer_characterization::Recorder *recorder) {

@@ -1545,6 +1545,7 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.presentation().hiddenEnabled = false;
   expectedV0.presentation().hiddenRatio = 0.1F;
   expectedV0.skinSafetyLevel = skin::SkinSafetyLevel::Standard;
+  expectedV0.presentation().judgementTimingY = 0.83f;
   expectedV0.sanitize();
   expect(v0.settings == expectedV0, "v0 migration is lossless");
 
@@ -1864,8 +1865,8 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
   portrait["judgementTextBold"] = true;
   portrait["judgementTimingSizePercent"] = 75;
   portrait["judgementTimingBold"] = false;
-  landscape["judgementTextSizePercent"] = 25;
-  landscape["judgementTimingSizePercent"] = 400;
+  landscape["judgementTextSizePercent"] = 10;
+  landscape["judgementTimingSizePercent"] = 900;
   landscape["judgementTimingBold"] = true;
   landscape["laneLength"] = 100;
   writeFile(path, document.dump());
@@ -1886,9 +1887,9 @@ void testOrientationPresentationMigrationAndIndependentRoundTrip() {
              document["presentations"]["portrait"]["judgementTimingSizePercent"] == 75 &&
              document["presentations"]["portrait"]["judgementTimingBold"] == false,
          "judgement and timing text styles persist independently");
-  expect(document["presentations"]["landscape"]["judgementTextSizePercent"] == 50 &&
-             document["presentations"]["landscape"]["judgementTextBold"] == false &&
-             document["presentations"]["landscape"]["judgementTimingSizePercent"] == 200 &&
+  expect(document["presentations"]["landscape"]["judgementTextSizePercent"] == 25 &&
+             document["presentations"]["landscape"]["judgementTextBold"] == true &&
+             document["presentations"]["landscape"]["judgementTimingSizePercent"] == 500 &&
              document["presentations"]["landscape"]["judgementTimingBold"] == true,
          "feedback styles use independent orientation values and clamp invalid sizes");
   expect(loaded.settings.audioOffsetMs == 23 &&
@@ -1947,7 +1948,50 @@ void testPresentationValidationAndRuntimeSelection() {
          "saving from portrait retains both blocks without persisting runtime selection");
 }
 
+void testFeedbackDefaultsAndScaleMigration() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), error);
+  auto document = nlohmann::json::parse(readFile(path));
+  const auto &defaults = document["presentations"]["landscape"];
+  expect(defaults["judgementTextBold"] == true && defaults["judgementTimingBold"] == true,
+         "new feedback defaults are bold");
+  writeFile(path, R"({"schemaVersion":7,"judgementTextY":0.4,
+      "judgementTextSizePercent":200,"judgementTimingSizePercent":50,
+      "judgementTextBold":false})");
+  const auto migrated = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, migrated.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  auto &landscape = document["presentations"]["landscape"];
+  expect(landscape["judgementTextSizePercent"] == 100 &&
+             landscape["judgementTimingSizePercent"] == 25 &&
+             landscape["judgementTextBold"] == false,
+         "legacy feedback sizes convert once while preserving explicit weight");
+  landscape["pacemakerDiffY"] = 0.9;
+  landscape["pacemakerDiffSizePercent"] = 500;
+  landscape["pacemakerDiffBold"] = false;
+  landscape["judgementTextY"] = 0.2;
+  landscape["judgementTimingY"] = 0.8;
+  landscape["judgementTextSizePercent"] = 25;
+  landscape["judgementTimingSizePercent"] = 500;
+  writeFile(path, document.dump());
+  const auto reloaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, reloaded.settings, error), error);
+  document = nlohmann::json::parse(readFile(path));
+  const auto &saved = document["presentations"]["landscape"];
+  expect(saved["judgementTextY"] == 0.2f && saved.value("judgementTimingY", -1.0f) == 0.8f,
+         "judgement and timing positions round trip independently");
+  expect(saved.value("pacemakerDiffY", -1.0f) == 0.9f &&
+             saved.value("pacemakerDiffSizePercent", 0) == 500 &&
+             !saved.value("pacemakerDiffBold", true),
+         "pacemaker difference settings persist independently");
+  expect(saved["judgementTextSizePercent"] == 25 && saved["judgementTimingSizePercent"] == 500,
+         "new feedback scale supports both endpoints without repeated migration");
+}
+
 int main() {
+  testFeedbackDefaultsAndScaleMigration();
   testOrientationPresentationMigrationAndIndependentRoundTrip();
   testPresentationValidationAndRuntimeSelection();
   testLegacyFixtureLoadsEverySetting();

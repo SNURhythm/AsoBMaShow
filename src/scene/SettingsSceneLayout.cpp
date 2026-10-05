@@ -75,7 +75,6 @@ void SettingsScene::resetViewState() {
   summaryLaneBeamLengthValueText = nullptr;
   summaryNoteStartPositionValueText = nullptr;
   summaryPreviewPlayAreaWidthValueText = nullptr;
-  summaryJudgementTextYValueText = nullptr;
   summaryJudgementIndicatorYValueText = nullptr;
   summaryJudgementIndicatorWidthValueText = nullptr;
   summaryJudgementIndicatorRangeValueText = nullptr;
@@ -573,14 +572,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     };
     auto *minusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5%");
     minusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
+        [updateNoteStartPosition]() { updateNoteStartPosition(-5); });
     noteStartControls->addView(minusNoteStart);
     auto *plusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5%");
     plusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(10); });
+        [updateNoteStartPosition]() { updateNoteStartPosition(5); });
     noteStartControls->addView(plusNoteStart);
     auto *resetNoteStart = makeResetButton(metrics);
     resetNoteStart->setOnClickListener([this]() {
@@ -671,14 +670,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     };
     auto *minusBeam =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5%");
     minusBeam->setOnClickListener(
-        [updateLaneBeamLength]() { updateLaneBeamLength(-10); });
+        [updateLaneBeamLength]() { updateLaneBeamLength(-5); });
     beamControls->addView(minusBeam);
     auto *plusBeam =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5%");
     plusBeam->setOnClickListener(
-        [updateLaneBeamLength]() { updateLaneBeamLength(10); });
+        [updateLaneBeamLength]() { updateLaneBeamLength(5); });
     beamControls->addView(plusBeam);
     auto *resetBeam = makeResetButton(metrics);
     resetBeam->setOnClickListener([this]() {
@@ -741,30 +740,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       return row;
     };
 
-    previewControls->addView(makeSummaryRow(metrics, i18n::message("settings.preview_layout.judge_text_y.label"),
-                                            &summaryJudgementTextYValueText));
-    auto updateJudgementTextY = [this](int deltaPercent) {
-      const int currentPercent =
-          judgementTextYToPercent(context.settings.presentation().judgementTextY);
-      const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-      context.settings.presentation().judgementTextY = judgementTextPercentToY(nextPercent);
-      persistSettings();
-    };
-    auto *minusJudgementTextY =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
-    minusJudgementTextY->setOnClickListener(
-        [updateJudgementTextY]() { updateJudgementTextY(-10); });
-    auto *plusJudgementTextY =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
-    plusJudgementTextY->setOnClickListener(
-        [updateJudgementTextY]() { updateJudgementTextY(10); });
-    auto *resetJudgementTextY = makeResetButton(metrics);
-    resetJudgementTextY->setOnClickListener([this]() {
-      context.settings.presentation().judgementTextY = AppSettings::kDefaultJudgementTextY;
-      persistSettings();
-    });
-    previewControls->addView(makePreviewStepRow(
-        minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
+    previewControls->addView(buildJudgementFeedbackPositionControls(metrics, true));
     previewControls->addView(buildJudgementFeedbackStyleControls(metrics, true));
 
     previewControls->addView(makeSummaryRow(
@@ -863,13 +839,13 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     };
     auto *minusIndicatorY =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5%");
     minusIndicatorY->setOnClickListener(
-        [updateIndicatorY]() { updateIndicatorY(-10); });
+        [updateIndicatorY]() { updateIndicatorY(-5); });
     auto *plusIndicatorY =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5%");
     plusIndicatorY->setOnClickListener(
-        [updateIndicatorY]() { updateIndicatorY(10); });
+        [updateIndicatorY]() { updateIndicatorY(5); });
     auto *resetIndicatorY = makeResetButton(metrics);
     resetIndicatorY->setOnClickListener([this]() {
       context.settings.presentation().judgementIndicatorY =
@@ -895,13 +871,13 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     };
     auto *minusIndicatorWidth =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5%");
     minusIndicatorWidth->setOnClickListener(
-        [updateIndicatorWidth]() { updateIndicatorWidth(-10); });
+        [updateIndicatorWidth]() { updateIndicatorWidth(-5); });
     auto *plusIndicatorWidth =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5%");
     plusIndicatorWidth->setOnClickListener(
-        [updateIndicatorWidth]() { updateIndicatorWidth(10); });
+        [updateIndicatorWidth]() { updateIndicatorWidth(5); });
     auto *resetIndicatorWidth = makeResetButton(metrics);
     resetIndicatorWidth->setOnClickListener([this]() {
       context.settings.presentation().judgementIndicatorWidthScale =
@@ -1061,6 +1037,74 @@ View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metric
   return row;
 }
 
+View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics &metrics,
+                                                            bool previewStyle) {
+  auto *body = new View();
+  body->setFlexDirection(FlexDirection::Column);
+  body->setWidthPercent(100);
+  body->setGap(metrics.compact ? 12.0f : 16.0f);
+  const auto appendPosition = [this, body, &metrics, previewStyle](const i18n::Text &label,
+      float AppSettings::PresentationSettings::*member, float defaultValue) {
+    TextView *valueText = nullptr;
+    body->addView(makeSummaryRow(metrics, label, &valueText));
+    auto *row = new View();
+    row->setWidthPercent(100);
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setAlignItems(YGAlignCenter);
+    row->setGap(metrics.compact ? 8.0f : 10.0f);
+    if (previewStyle) row->setJustifyContent(YGJustifyCenter);
+    auto *input = previewStyle ? nullptr
+        : makeTextInput(metrics, metrics.compact ? 116 : 136);
+    const auto refresh = [this, valueText, input, member]() {
+      const auto value = std::to_string(judgementTextYToPercent(context.settings.presentation().*member));
+      valueText->setText(value + "%");
+      if (input) input->setEditingText(value);
+    };
+    refresh();
+    if (previewStyle) {
+      for (const int delta : {-5, 5}) {
+        auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                    delta < 0 ? "-5%" : "+5%");
+        step->setOnClickListener([this, member, delta, refresh]() {
+          auto &value = context.settings.presentation().*member;
+          value = judgementTextPercentToY(judgementTextYToPercent(value) + delta);
+          refresh();
+          persistSettings();
+        });
+        row->addView(step);
+      }
+    } else {
+      input->onEditingFinished([this, input, member, refresh](const std::string &) {
+        auto &value = context.settings.presentation().*member;
+        const auto &text = input->getText();
+        int parsed = judgementTextYToPercent(value);
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+        if (result.ec == std::errc{} && result.ptr == text.data() + text.size())
+          value = judgementTextPercentToY(parsed);
+        refresh();
+        persistSettings();
+      });
+      row->addView(input);
+    }
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([this, member, defaultValue, refresh]() {
+      context.settings.presentation().*member = defaultValue;
+      refresh();
+      persistSettings();
+    });
+    row->addView(reset);
+    body->addView(row);
+  };
+  appendPosition(i18n::message("settings.preview_layout.judge_text_y.label"),
+                 &AppSettings::PresentationSettings::judgementTextY, AppSettings::kDefaultJudgementTextY);
+  appendPosition(i18n::message("settings.feedback.timing_y.label"),
+                 &AppSettings::PresentationSettings::judgementTimingY, AppSettings::kDefaultJudgementTimingY);
+  appendPosition(i18n::message("settings.feedback.pacemaker_y.label"),
+                 &AppSettings::PresentationSettings::pacemakerDiffY, AppSettings::kDefaultPacemakerDiffY);
+  return body;
+}
+
 View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &metrics,
                                                          bool previewStyle) {
   auto *body = new View();
@@ -1097,9 +1141,9 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
     row->setGap(previewStyle ? (metrics.compact ? 8.0f : 10.0f) : 8.0f);
     if (previewStyle) {
       row->setJustifyContent(YGJustifyCenter);
-      for (const int delta : {-10, 10}) {
+      for (const int delta : {-5, 5}) {
         auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
-                                    delta < 0 ? "-10%" : "+10%");
+                                    delta < 0 ? "-5%" : "+5%");
         step->setOnClickListener([this, sizeMember, delta, refreshSize]() {
           auto &value = context.settings.presentation().*sizeMember;
           value = std::clamp(value + delta, AppSettings::kMinJudgementFeedbackSizePercent,
@@ -1143,7 +1187,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
     auto *reset = makeResetButton(metrics);
     reset->setOnClickListener([this, sizeMember, boldMember, refreshSize, refreshWeight]() {
       context.settings.presentation().*sizeMember = AppSettings::kDefaultJudgementFeedbackSizePercent;
-      context.settings.presentation().*boldMember = false;
+      context.settings.presentation().*boldMember = true;
       refreshSize();
       refreshWeight();
       persistSettings();
@@ -1165,6 +1209,9 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   appendStyle(i18n::message("settings.skins.feedback.timing_size.percent_label"),
               &AppSettings::PresentationSettings::judgementTimingSizePercent,
               &AppSettings::PresentationSettings::judgementTimingBold);
+  appendStyle(i18n::message("settings.skins.feedback.pacemaker_size.percent_label"),
+              &AppSettings::PresentationSettings::pacemakerDiffSizePercent,
+              &AppSettings::PresentationSettings::pacemakerDiffBold);
   return body;
 }
 
@@ -1315,47 +1362,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
   judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
   judgementFeedbackControls->setAlignItems(YGAlignFlexStart);
-  judgementFeedbackControls->addView(
-      makeSummaryRow(metrics, i18n::message("settings.timing.judge_text_y.label"), &summaryJudgementTextYValueText));
-  auto *judgementTextYControls = new View();
-  judgementTextYControls->setFlexDirection(FlexDirection::Row);
-  judgementTextYControls->setFlexWrap(YGWrapWrap);
-  judgementTextYControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementTextYControls->setAlignItems(YGAlignFlexStart);
-  auto updateJudgementTextY = [this](int deltaPercent) {
-    const int currentPercent =
-        judgementTextYToPercent(context.settings.presentation().judgementTextY);
-    const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-    context.settings.presentation().judgementTextY = judgementTextPercentToY(nextPercent);
-    persistSettings();
-  };
-  auto *minusJudgementTextYLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
-  minusJudgementTextYLarge->setOnClickListener(
-      [updateJudgementTextY]() { updateJudgementTextY(-10); });
-  judgementTextYControls->addView(minusJudgementTextYLarge);
-  auto *minusJudgementTextYSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
-  minusJudgementTextYSmall->setOnClickListener(
-      [updateJudgementTextY]() { updateJudgementTextY(-1); });
-  judgementTextYControls->addView(minusJudgementTextYSmall);
-  auto *plusJudgementTextYSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
-  plusJudgementTextYSmall->setOnClickListener(
-      [updateJudgementTextY]() { updateJudgementTextY(1); });
-  judgementTextYControls->addView(plusJudgementTextYSmall);
-  auto *plusJudgementTextYLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
-  plusJudgementTextYLarge->setOnClickListener(
-      [updateJudgementTextY]() { updateJudgementTextY(10); });
-  judgementTextYControls->addView(plusJudgementTextYLarge);
-  auto *resetJudgementTextY = makeResetButton(metrics);
-  resetJudgementTextY->setOnClickListener([this]() {
-    context.settings.presentation().judgementTextY = AppSettings::kDefaultJudgementTextY;
-    persistSettings();
-  });
-  judgementTextYControls->addView(resetJudgementTextY);
-  judgementFeedbackControls->addView(judgementTextYControls);
+  judgementFeedbackControls->addView(buildJudgementFeedbackPositionControls(metrics));
   judgementFeedbackControls->addView(buildJudgementFeedbackStyleControls(metrics));
 
   auto *timingCriteriaControls = new View();
@@ -1467,9 +1474,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   };
 
   auto *minusIndicatorYLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
   minusIndicatorYLarge->setOnClickListener(
-      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(-10); });
+      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(-5); });
   judgementIndicatorYControls->addView(minusIndicatorYLarge);
   auto *minusIndicatorYSmall =
       makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
@@ -1487,9 +1494,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       [updateJudgementIndicatorY]() { updateJudgementIndicatorY(1); });
   judgementIndicatorYControls->addView(plusIndicatorYSmall);
   auto *plusIndicatorYLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
   plusIndicatorYLarge->setOnClickListener(
-      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(10); });
+      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(5); });
   judgementIndicatorYControls->addView(plusIndicatorYLarge);
   auto *resetIndicatorY = makeResetButton(metrics);
   resetIndicatorY->setOnClickListener([this]() {
@@ -1524,10 +1531,10 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   };
 
   auto *minusIndicatorWidthLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
   minusIndicatorWidthLarge->setOnClickListener(
       [updateJudgementIndicatorWidth]() {
-        updateJudgementIndicatorWidth(-10);
+        updateJudgementIndicatorWidth(-5);
       });
   judgementIndicatorWidthControls->addView(minusIndicatorWidthLarge);
   auto *minusIndicatorWidthSmall =
@@ -1546,9 +1553,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       [updateJudgementIndicatorWidth]() { updateJudgementIndicatorWidth(1); });
   judgementIndicatorWidthControls->addView(plusIndicatorWidthSmall);
   auto *plusIndicatorWidthLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
   plusIndicatorWidthLarge->setOnClickListener(
-      [updateJudgementIndicatorWidth]() { updateJudgementIndicatorWidth(10); });
+      [updateJudgementIndicatorWidth]() { updateJudgementIndicatorWidth(5); });
   judgementIndicatorWidthControls->addView(plusIndicatorWidthLarge);
   auto *resetIndicatorWidth = makeResetButton(metrics);
   resetIndicatorWidth->setOnClickListener([this]() {
@@ -1920,11 +1927,11 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
     persistSettings();
     syncBgaBrightnessInputText(true);
   };
-  auto *minusBrightnessTen =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
-  minusBrightnessTen->setOnClickListener(
-      [updateBgaBrightness]() { updateBgaBrightness(-10); });
-  brightnessControls->addView(minusBrightnessTen);
+  auto *minusBrightnessFive =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5");
+  minusBrightnessFive->setOnClickListener(
+      [updateBgaBrightness]() { updateBgaBrightness(-5); });
+  brightnessControls->addView(minusBrightnessFive);
   auto *minusBrightnessOne =
       makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
   minusBrightnessOne->setOnClickListener(
@@ -1939,11 +1946,11 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   plusBrightnessOne->setOnClickListener(
       [updateBgaBrightness]() { updateBgaBrightness(1); });
   brightnessControls->addView(plusBrightnessOne);
-  auto *plusBrightnessTen =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
-  plusBrightnessTen->setOnClickListener(
-      [updateBgaBrightness]() { updateBgaBrightness(10); });
-  brightnessControls->addView(plusBrightnessTen);
+  auto *plusBrightnessFive =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5");
+  plusBrightnessFive->setOnClickListener(
+      [updateBgaBrightness]() { updateBgaBrightness(5); });
+  brightnessControls->addView(plusBrightnessFive);
   auto *resetBrightness = makeResetButton(metrics);
   resetBrightness->setOnClickListener([this]() {
     context.settings.bgaBrightnessPercent =
@@ -2048,9 +2055,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     syncNoteStartPositionInputText(true);
   };
   auto *minusNoteStartLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
   minusNoteStartLarge->setOnClickListener(
-      [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
+      [updateNoteStartPosition]() { updateNoteStartPosition(-5); });
   noteStartControls->addView(minusNoteStartLarge);
   auto *minusNoteStartSmall =
       makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
@@ -2067,9 +2074,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       [updateNoteStartPosition]() { updateNoteStartPosition(1); });
   noteStartControls->addView(plusNoteStartSmall);
   auto *plusNoteStartLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
   plusNoteStartLarge->setOnClickListener(
-      [updateNoteStartPosition]() { updateNoteStartPosition(10); });
+      [updateNoteStartPosition]() { updateNoteStartPosition(5); });
   noteStartControls->addView(plusNoteStartLarge);
   auto *resetNoteStart = makeResetButton(metrics);
   resetNoteStart->setOnClickListener([this]() {
@@ -2291,9 +2298,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     syncLaneBeamLengthInputText(true);
   };
   auto *minusBeamLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
   minusBeamLarge->setOnClickListener(
-      [updateLaneBeamLength]() { updateLaneBeamLength(-10); });
+      [updateLaneBeamLength]() { updateLaneBeamLength(-5); });
   beamControls->addView(minusBeamLarge);
   auto *minusBeamSmall =
       makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
@@ -2310,9 +2317,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       [updateLaneBeamLength]() { updateLaneBeamLength(1); });
   beamControls->addView(plusBeamSmall);
   auto *plusBeamLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
   plusBeamLarge->setOnClickListener(
-      [updateLaneBeamLength]() { updateLaneBeamLength(10); });
+      [updateLaneBeamLength]() { updateLaneBeamLength(5); });
   beamControls->addView(plusBeamLarge);
   auto *resetBeam = makeResetButton(metrics);
   resetBeam->setOnClickListener([this]() {

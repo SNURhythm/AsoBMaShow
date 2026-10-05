@@ -547,10 +547,15 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementIndicatorRangeMilliseconds",
        settings.judgementIndicatorRangeMilliseconds},
       {"judgementTextY", settings.judgementTextY},
+      {"judgementTimingY", settings.judgementTimingY},
+      {"judgementFeedbackSizeVersion", 2},
       {"judgementTextSizePercent", settings.judgementTextSizePercent},
       {"judgementTextBold", settings.judgementTextBold},
       {"judgementTimingSizePercent", settings.judgementTimingSizePercent},
       {"judgementTimingBold", settings.judgementTimingBold},
+      {"pacemakerDiffY", settings.pacemakerDiffY},
+      {"pacemakerDiffSizePercent", settings.pacemakerDiffSizePercent},
+      {"pacemakerDiffBold", settings.pacemakerDiffBold},
       {"judgementIndicatorRenderMode",
        static_cast<int>(settings.judgementIndicatorRenderMode)},
       {"judgementCounterEnabled", settings.judgementCounterEnabled},
@@ -719,10 +724,27 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
   readValue(document, "judgementIndicatorRangeMilliseconds",
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
   readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
+  settings.judgementTimingY = std::clamp(settings.judgementTextY +
+      (AppSettings::kDefaultJudgementTimingY - AppSettings::kDefaultJudgementTextY), 0.0f, 1.0f);
+  readValue(document, "judgementTimingY", settings.judgementTimingY, diagnostics);
   readValue(document, "judgementTextSizePercent", settings.judgementTextSizePercent, diagnostics);
   readValue(document, "judgementTextBold", settings.judgementTextBold, diagnostics);
   readValue(document, "judgementTimingSizePercent", settings.judgementTimingSizePercent, diagnostics);
   readValue(document, "judgementTimingBold", settings.judgementTimingBold, diagnostics);
+  readValue(document, "pacemakerDiffY", settings.pacemakerDiffY, diagnostics);
+  readValue(document, "pacemakerDiffSizePercent", settings.pacemakerDiffSizePercent, diagnostics);
+  readValue(document, "pacemakerDiffBold", settings.pacemakerDiffBold, diagnostics);
+  int feedbackSizeVersion = 1;
+  readValue(document, "judgementFeedbackSizeVersion", feedbackSizeVersion, diagnostics);
+  if (feedbackSizeVersion < 2) {
+    // Version 2 makes the former 200% size the new 100% baseline.
+    if (document.contains("judgementTextSizePercent"))
+      settings.judgementTextSizePercent = static_cast<int>(std::lround(
+          std::clamp(settings.judgementTextSizePercent, 50, 200) / 2.0f));
+    if (document.contains("judgementTimingSizePercent"))
+      settings.judgementTimingSizePercent = static_cast<int>(std::lround(
+          std::clamp(settings.judgementTimingSizePercent, 50, 200) / 2.0f));
+  }
   readEnum(document, "judgementIndicatorRenderMode",
            settings.judgementIndicatorRenderMode, diagnostics);
   readValue(document, "judgementCounterEnabled",

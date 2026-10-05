@@ -180,8 +180,6 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
       formatNoteStartPositionLabel(context.settings.presentation().noteStartPositionPercent);
   const i18n::Text previewPlayAreaWidthLabel =
       formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(7));
-  const i18n::Text judgementTextYLabel = formatJudgementPercentLabel(
-      judgementTextYToPercent(context.settings.presentation().judgementTextY));
   const i18n::Text judgementIndicatorYLabel = formatJudgementPercentLabel(
       judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY));
   const i18n::Text judgementIndicatorWidthLabel =
@@ -298,9 +296,6 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   }
   if (summaryPreviewPlayAreaWidthValueText != nullptr) {
     summaryPreviewPlayAreaWidthValueText->setLocalizedText(previewPlayAreaWidthLabel);
-  }
-  if (summaryJudgementTextYValueText != nullptr) {
-    summaryJudgementTextYValueText->setLocalizedText(judgementTextYLabel);
   }
   if (summaryJudgementIndicatorYValueText != nullptr) {
     summaryJudgementIndicatorYValueText->setLocalizedText(judgementIndicatorYLabel);

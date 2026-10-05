@@ -326,9 +326,9 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     row->setGap(metrics.compact ? 8.0F : 10.0F);
     row->setAlignItems(YGAlignCenter);
     auto *minus =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10");
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5");
     minus->setOnClickListener(
-        [this, busIndex]() { adjustVolume(busIndex, -10); });
+        [this, busIndex]() { adjustVolume(busIndex, -5); });
     row->addView(minus);
     auto *input = makeNumericInput(metrics);
     input->onEditingFinished([this, input, busIndex](const std::string &) {
@@ -336,9 +336,9 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     });
     *inputOut = input;
     row->addView(makeInputFrame(metrics, input));
-    auto *plus = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10");
+    auto *plus = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5");
     plus->setOnClickListener(
-        [this, busIndex]() { adjustVolume(busIndex, 10); });
+        [this, busIndex]() { adjustVolume(busIndex, 5); });
     row->addView(plus);
     group->addView(row);
     return group;

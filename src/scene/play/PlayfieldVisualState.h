@@ -115,10 +115,14 @@ struct PlayfieldPresentationConfig {
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
   float judgementTextY = 0.0F;
+  float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
   int judgementTextSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool judgementTextBold = false;
+  bool judgementTextBold = true;
   int judgementTimingSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
-  bool judgementTimingBold = false;
+  bool judgementTimingBold = true;
+  float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
+  int pacemakerDiffSizePercent = AppSettings::kDefaultJudgementFeedbackSizePercent;
+  bool pacemakerDiffBold = true;
   bool judgementCounterEnabled = false;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
