@@ -12,11 +12,13 @@ class SettingsSoundSetLifecycleTests(unittest.TestCase):
     def test_late_picker_publication_after_real_layout_reset(self):
         layout = (ROOT / "src/scene/SettingsSceneLayout.cpp").read_text()
         skins = (ROOT / "src/scene/SettingsSceneSkins.cpp").read_text()
+        controls = (ROOT / "src/scene/SettingsSceneControls.cpp").read_text()
         reset = fixture_tools.function_body(layout, "void SettingsScene::resetViewState()")
         pointers = sorted(set(re.findall(r"^  (\w+) = nullptr;", reset, re.MULTILINE)) -
                           {"skinSelectSoundSetInput"})
         methods = "\n".join(signature + fixture_tools.function_body(source, signature)
                             for source, signature in (
+                                (controls, "void SettingsScene::commitPendingAppearanceColor()"),
                                 (layout, "void SettingsScene::resetViewState()"),
                                 (layout, "void SettingsScene::ensureLayoutUpToDate()"),
                                 (skins, "void SettingsScene::applyPendingSoundSetFolderPick()")))

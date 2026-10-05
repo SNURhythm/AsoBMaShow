@@ -9,6 +9,7 @@
 #include "scene/SettingsPreviewChart.h"
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
+#include "view/ColorPickerView.h"
 #include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
@@ -1987,6 +1988,46 @@ void verifyCustomNoteAppearance(const RenderTarget &target) {
   }
 }
 
+void verifyColorPickerPixels(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+  ColorPickerView picker({1.0F / 3, 0.8F, 0.3F}, {});
+  picker.setSize(600, 360);
+  picker.setPosition(120, 120, YGPositionTypeAbsolute);
+  picker.applyYogaLayout();
+  rendering::UiBatchRenderer batch;
+  batch.beginFrame();
+  RenderContext context(batch);
+  {
+    RenderContext::UiBatchScope scope(context);
+    picker.render(context);
+  }
+  const auto pixels = readPixels(target);
+  const auto probe = [&](float x, float y, bool hueStrip) {
+    const int px = static_cast<int>(x * rendering::ui_scale_x);
+    const int py = static_cast<int>(y * rendering::ui_scale_y);
+    const float uiX = (px + 0.5F) / rendering::ui_scale_x;
+    const float uiY = (py + 0.5F) / rendering::ui_scale_y;
+    const auto expected = hueStrip
+        ? color_picker::toRgb({(uiX - 130) / 580, 1, 1})
+        : color_picker::toRgb({1.0F / 3, (uiX - 130) / 580, 1 - (uiY - 130) / 288});
+    const auto offset = (py * kDrawableWidth + px) * 4;
+    for (int channel = 0; channel < 3; ++channel)
+      expect(std::abs(int(pixels[offset + channel]) - int((expected >> (16 - 8 * channel)) & 255)) <= 3,
+             "picker's rendered gradient matches the RGB color chosen at the same position");
+  };
+  for (const float x : {0.1F, 0.5F, 0.9F})
+    for (const float y : {0.1F, 0.5F, 0.9F}) probe(130 + 580 * x, 130 + 288 * y, false);
+  for (const float hue : {0.08F, 0.25F, 0.42F, 0.58F, 0.75F, 0.92F})
+    probe(130 + 580 * hue, 452, true);
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "color-picker.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "color picker inspection image encodes");
+  }
+}
+
 void verifyCustomLaneAppearance(const RenderTarget &target) {
   using Kind = characterization::SubmissionKind;
   const built_in_lane::Style style{0x44EE88, 500, 100};
@@ -3307,6 +3348,7 @@ int main() {
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
       verifyCustomNoteAppearance(target);
       verifyCustomLaneAppearance(target);
+      verifyColorPickerPixels(target);
       verifyScratchGradientAndPlainMines(target);
       verifyScratchlessChartEligibility();
       verifyEmptyScratchLanePresentation(target);

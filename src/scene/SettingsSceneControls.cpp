@@ -1,6 +1,7 @@
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
+#include "../view/ColorPickerView.h"
 #include "../view/DropdownView.h"
 #include "play/StartLaneIndicatorGeometry.h"
 #include "../view/UiTheme.h"
@@ -1038,6 +1039,51 @@ void SettingsScene::commitJudgementIndicatorRangeInput() {
   }
 }
 
+void SettingsScene::commitPendingAppearanceColor() {
+  if (!appearanceColorEditPending) return;
+  appearanceColorEditPending = false;
+  persistSettings();
+}
+
+void SettingsScene::appendAppearanceColorPicker(
+    View *body, const LayoutMetrics &metrics, const std::string &id, std::uint32_t color,
+    std::function<void(std::uint32_t)> apply) {
+  auto [state, inserted] = appearanceColorPickers.try_emplace(id, color_picker::fromRgb(color));
+  if (!inserted && color_picker::toRgb(state->second) != color)
+    state->second = color_picker::fromRgb(color, state->second);
+  body->addView(makeWrappedText(i18n::message("settings.color_picker.title"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *valueRow = new View();
+  valueRow->setFlexDirection(FlexDirection::Row);
+  valueRow->setAlignItems(YGAlignCenter);
+  valueRow->setGap(12.0F);
+  auto *swatch = new View();
+  swatch->setSize(48, 32);
+  swatch->setFlexShrink(0);
+  swatch->setBackgroundColor(Color(0xFF000000U | color));
+  swatch->setBorderWidth(1);
+  swatch->setThemedBorderColor(ui_theme::hairlineStrong);
+  valueRow->addView(swatch);
+  auto *hex = makeText("#" + built_in_notes::colorHex(color), metrics.smallTextSize,
+                        ui_theme::textPrimary());
+  valueRow->addView(hex);
+  body->addView(valueRow);
+  auto *picker = new ColorPickerView(state->second,
+      [this, id, apply = std::move(apply), swatch, hex](color_picker::Hsv hsv, bool finished) {
+        appearanceColorPickers[id] = hsv;
+        const auto rgb = color_picker::toRgb(hsv);
+        swatch->setBackgroundColor(Color(0xFF000000U | rgb));
+        hex->setText("#" + built_in_notes::colorHex(rgb));
+        apply(rgb);
+        appearanceColorEditPending = true;
+        if (finished) {
+          commitPendingAppearanceColor();
+          lastLayoutWidth = -1;
+        }
+      });
+  body->addView(picker);
+}
+
 void SettingsScene::appendBuiltInNoteControls(
     View *body, const LayoutMetrics &metrics, int keyMode) {
   using namespace built_in_notes;
@@ -1070,12 +1116,12 @@ void SettingsScene::appendBuiltInNoteControls(
   }
   const auto &modeStyles = context.settings.builtInNotesForKeyMode(keyMode);
   const auto common = commonStyle(modeStyles, targets, type);
-  const auto apply = [this, keyMode, targets, type](EditKind kind, int value = 0) {
+  const auto apply = [this, keyMode, targets, type](EditKind kind, int value = 0, bool commit = true) {
     if (targets.empty()) return;
     editSelected(context.settings.presentation().builtInNotes[keyMode], targets, type, kind, value);
-    persistSettings();
+    if (commit) persistSettings();
     syncPreviewPresentationConfiguration();
-    lastLayoutWidth = -1;
+    if (commit) lastLayoutWidth = -1;
   };
   body->addView(makeWrappedText(i18n::message("settings.notes.title"),
                                metrics.bodyTextSize, ui_theme::textPrimary()));
@@ -1205,6 +1251,10 @@ void SettingsScene::appendBuiltInNoteControls(
                                metrics.smallTextSize, ui_theme::textSecondary()));
   body->addView(makeAppearanceColorPresets(metrics, defaultStyle(targets.front().palette, type).color,
       common.color, [apply](std::uint32_t rgb) { apply(EditKind::Color, rgb); }));
+  appendAppearanceColorPicker(body, metrics,
+      "note-" + std::to_string(keyMode) + "-" + std::to_string(builtInNoteType),
+      common.color.value_or(resolve(modeStyles, targets.front().lane, type, targets.front().palette).color),
+      [apply](std::uint32_t rgb) { apply(EditKind::Color, rgb, false); });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
@@ -1259,15 +1309,15 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
   const auto style = context.settings.builtInJudgeLineForKeyMode(keyMode);
   const auto apply = [this, keyMode](std::optional<std::uint32_t> color,
-                                    std::optional<int> height) {
+                                    std::optional<int> height, bool commit = true) {
     auto next = context.settings.builtInJudgeLineForKeyMode(keyMode);
     if (color) next.color = *color;
     if (height) next.heightPercent = *height;
     context.settings.presentation().builtInJudgeLines[keyMode] =
         built_in_judge_line::sanitizeStyle(next);
-    persistSettings();
+    if (commit) persistSettings();
     syncPreviewPresentationConfiguration();
-    lastLayoutWidth = -1;
+    if (commit) lastLayoutWidth = -1;
   };
   body->addView(makeWrappedText(i18n::message("settings.judge_line.title"),
                                metrics.bodyTextSize, ui_theme::textPrimary()));
@@ -1289,6 +1339,8 @@ void SettingsScene::appendBuiltInJudgeLineControls(
                                metrics.smallTextSize, ui_theme::textSecondary()));
   body->addView(makeAppearanceColorPresets(metrics, built_in_judge_line::Style{}.color,
       style.color, [apply](std::uint32_t rgb) { apply(rgb, std::nullopt); }));
+  appendAppearanceColorPicker(body, metrics, "judge-" + std::to_string(keyMode), style.color,
+      [apply](std::uint32_t rgb) { apply(rgb, std::nullopt, false); });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
@@ -1341,13 +1393,13 @@ void SettingsScene::appendBuiltInLaneControls(
   if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
   if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
   const auto style = context.settings.builtInLaneForKeyMode(keyMode);
-  const auto apply = [this, keyMode](std::function<void(built_in_lane::Style &)> edit) {
+  const auto apply = [this, keyMode](std::function<void(built_in_lane::Style &)> edit, bool commit = true) {
     auto next = context.settings.builtInLaneForKeyMode(keyMode);
     edit(next);
     context.settings.presentation().builtInLanes[keyMode] = built_in_lane::sanitizeStyle(next);
-    persistSettings();
+    if (commit) persistSettings();
     syncPreviewPresentationConfiguration();
-    lastLayoutWidth = -1;
+    if (commit) lastLayoutWidth = -1;
   };
   const auto makeReset = [&metrics](const i18n::Text &label) {
     return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1363,6 +1415,10 @@ void SettingsScene::appendBuiltInLaneControls(
   };
   body->addView(makeAppearanceColorPresets(metrics, built_in_lane::Style{}.measureLineColor,
                                           style.measureLineColor, setColor));
+  appendAppearanceColorPicker(body, metrics, "measure-" + std::to_string(keyMode), style.measureLineColor,
+      [apply](std::uint32_t rgb) {
+        apply([rgb](auto &next) { next.measureLineColor = rgb; }, false);
+      });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);

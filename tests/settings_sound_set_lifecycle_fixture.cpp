@@ -87,6 +87,7 @@ struct SettingsScene {
   float lastLayoutScrollOffset = 0.0F;
   int previewPanelPage = 0, lastLaidOutPreviewPanelPage = 0;
   View *visibleScroll = nullptr;
+  bool appearanceColorEditPending = false;
   int saves = 0;
   void persistSettings() { ++saves; }
   void initView() {
@@ -114,6 +115,7 @@ struct SettingsScene {
       views.push_back(gameplaySkinUiMessageText);
     }
   }
+  void commitPendingAppearanceColor();
   void resetViewState();
   void ensureLayoutUpToDate();
   void applyPendingSoundSetFolderPick();
@@ -125,6 +127,16 @@ void expect(bool condition, const char *message) {
   if (!condition) { ++failures; std::cerr << message << '\n'; }
 }
 int main() {
+  {
+    SettingsScene scene;
+    scene.ensureLayoutUpToDate();
+    scene.appearanceColorEditPending = true;
+    scene.resetViewState();
+    expect(scene.saves == 1 && !scene.appearanceColorEditPending,
+           "rebuilding a picker saves its unfinished live color edit");
+    scene.resetViewState();
+    expect(scene.saves == 1, "repeated teardown does not save an already committed color again");
+  }
   {
     SettingsScene scene;
     scene.previewActive = true;

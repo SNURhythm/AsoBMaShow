@@ -10,6 +10,7 @@
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
+#include "../view/ColorPickerModel.h"
 #include "SettingsPreviewAutoPlay.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
@@ -100,9 +101,15 @@ public:
                                 bool isBackSpin = false) override;
 
 private:
+  std::map<std::string, color_picker::Hsv> appearanceColorPickers;
+  bool appearanceColorEditPending = false;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
   std::string builtInNoteDropdown;
+  void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
+                                   const std::string &id, std::uint32_t color,
+                                   std::function<void(std::uint32_t)> apply);
+  void commitPendingAppearanceColor();
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   void appendBuiltInLaneControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);

@@ -329,6 +329,7 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
 }
 
 void SettingsScene::cleanupScene() {
+  commitPendingAppearanceColor();
   context.profileSwitchBlockers.scene = nullptr;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (gameplaySkinSettingsController != nullptr) {

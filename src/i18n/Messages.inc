@@ -1170,6 +1170,7 @@
 {"settings.clean_up.label", "Clean Up", "정리", "整理"},
 {"settings.cleaning.progress", "Cleaning...", "정리 중...", "整理中..."},
 {"settings.cleaning_temporary_archive_cache.progress", "Cleaning temporary archive cache...", "임시 압축 파일 캐시를 정리하는 중...", "一時アーカイブキャッシュを整理中..."},
+{"settings.color_picker.title", "Color picker", "색상 선택", "カラーピッカー"},
 {"settings.controls.archive_chart_preview.disabled.label", "Disabled", "사용 안 함", "無効"},
 {"settings.controls.archive_chart_preview.enabled.label", "Enabled", "사용", "有効"},
 {"settings.controls.bga.disabled.label", "Disabled", "사용 안 함", "無効"},
