@@ -48,6 +48,7 @@
         android:name=".AsoBMaShowApplication"
         android:allowNativeHeapPointerTagging="false"
         android:allowBackup="true"
+        android:appCategory="game"
         android:backupAgent=".AsoBMaShowBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
