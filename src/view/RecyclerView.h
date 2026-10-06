@@ -207,6 +207,8 @@ private:
         return true;
       }
       touchMomentum.stop();
+      touchPressX = touchX;
+      touchPressY = touchY;
       touchLastY = touchY;
       touchDragging = false;
       touchId = event.tfinger.fingerId;
@@ -230,6 +232,12 @@ private:
         touchDragging = true;
         touchPressIndex = -1;
         return true;
+      }
+      // Match ScrollView's logical-coordinate slop: stationary motion events
+      // and small finger jitter must not cancel a row tap or move the list.
+      if (!touchDragging && std::fabs(touchX - touchPressX) < 12.0F &&
+          std::fabs(touchY - touchPressY) < 12.0F) {
+        break;
       }
       const float delta = touchLastY - touchY;
       revealScrollbar();
@@ -457,6 +465,8 @@ private:
   std::deque<View *> recycledViewEntries; // Pool of recycled views
   std::map<int, View *> idxToView;
   float touchLastY = 0;
+  float touchPressX = 0;
+  float touchPressY = 0;
   ScrollMomentum touchMomentum;
   SDL_FingerID touchId = -1;
   int touchPressIndex = -1;
