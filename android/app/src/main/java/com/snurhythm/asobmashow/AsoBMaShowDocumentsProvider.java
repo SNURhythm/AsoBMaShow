@@ -24,6 +24,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 /** Publishes Documents without putting SAF on the game's native file-reading path. */
@@ -135,6 +138,25 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
     @Override public boolean isChildDocument(String parentId, String documentId) {
         try { return paths().isChild(parentId, documentId); }
         catch (IOException error) { return false; }
+    }
+
+    @Override public DocumentsContract.Path findDocumentPath(String parentId, String documentId)
+            throws FileNotFoundException {
+        try {
+            DocumentsPathPolicy policy = paths();
+            File parent = policy.resolve(parentId != null ? parentId : DocumentsPathPolicy.ROOT_DOCUMENT_ID);
+            File child = policy.resolve(documentId);
+            if (!child.toPath().startsWith(parent.toPath())) {
+                throw new FileNotFoundException("Document is outside the requested parent");
+            }
+            List<String> ids = new ArrayList<>();
+            for (File current = child; ; current = current.getParentFile()) {
+                ids.add(policy.documentId(current));
+                if (current.equals(parent)) break;
+            }
+            Collections.reverse(ids);
+            return new DocumentsContract.Path(parentId == null ? DocumentsPathPolicy.ROOT_ID : null, ids);
+        } catch (IOException error) { throw failure(error); }
     }
 
     @Override public ParcelFileDescriptor openDocument(String documentId, String mode, CancellationSignal signal)

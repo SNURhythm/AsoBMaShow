@@ -1052,11 +1052,22 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String openDocumentsFolder() {
         try {
+            File bms = documentsBmsDirectory();
+            if (!bms.isDirectory() && !bms.mkdirs()) {
+                throw new IOException("Could not create BMS folder.");
+            }
+            DocumentsPathPolicy paths = new DocumentsPathPolicy(
+                    AsoBMaShowDocumentsProvider.documentsDirectory(this));
+            Uri tree = DocumentsContract.buildTreeDocumentUri(
+                    AsoBMaShowDocumentsProvider.AUTHORITY, DocumentsPathPolicy.ROOT_DOCUMENT_ID);
             Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(DocumentsContract.buildRootUri(
-                    AsoBMaShowDocumentsProvider.AUTHORITY, DocumentsPathPolicy.ROOT_ID),
-                    DocumentsContract.Root.MIME_TYPE_ITEM);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.setDataAndType(DocumentsContract.buildDocumentUriUsingTree(tree, paths.documentId(bms)),
+                    DocumentsContract.Document.MIME_TYPE_DIR);
+            // Grant the whole Documents tree so compatible explorers can also navigate above BMS.
+            intent.setClipData(android.content.ClipData.newRawUri("AsoBMaShow Documents", tree));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
             startActivity(intent);
             return SUCCESS_RESULT;
         } catch (Exception error) {

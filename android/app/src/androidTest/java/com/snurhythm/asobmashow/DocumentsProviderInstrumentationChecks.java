@@ -3,6 +3,7 @@ package com.snurhythm.asobmashow;
 import android.app.Instrumentation;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
@@ -72,6 +73,7 @@ final class DocumentsProviderInstrumentationChecks {
         }
 
         verifyPrivateBoundary(context, resolver, authority, nativeRoot);
+        verifyOpenFilesIntent(context, instrumentation, authority);
         verifySelfImportRejected(authority, instrumentation);
         verifyWriterBatch(context, resolver, authority, nativeRoot);
         String fixtureName = "DocumentsProviderTest-" + UUID.randomUUID();
@@ -94,6 +96,29 @@ final class DocumentsProviderInstrumentationChecks {
             Uri skins = create(resolver, fixture, Document.MIME_TYPE_DIR, "Skins");
             Uri database = create(resolver, databases, "application/octet-stream", "library.db");
             Uri skin = create(resolver, skins, "application/json", "skin.json");
+            // Files needs the complete ancestor stack to open a folder and navigate back up.
+            try (android.content.ContentProviderClient client = resolver.acquireContentProviderClient(authority)) {
+                AsoBMaShowDocumentsProvider provider =
+                        (AsoBMaShowDocumentsProvider) client.getLocalContentProvider();
+                String fixtureId = DocumentsContract.getDocumentId(fixture);
+                String databasesId = DocumentsContract.getDocumentId(databases);
+                String databaseId = DocumentsContract.getDocumentId(database);
+                DocumentsContract.Path path = provider.findDocumentPath(null, databaseId);
+                require(ROOT_ID.equals(path.getRootId()) && path.getPath().equals(
+                        Arrays.asList(ROOT_DOCUMENT_ID, fixtureId, databasesId, databaseId)),
+                        "Folder launch path does not preserve Documents ancestors");
+                DocumentsContract.Path subtree = provider.findDocumentPath(fixtureId, databaseId);
+                require(subtree.getRootId() == null && subtree.getPath().equals(
+                        Arrays.asList(fixtureId, databasesId, databaseId)), "Subtree path leaks ancestors");
+                require(provider.findDocumentPath(null, ROOT_DOCUMENT_ID).getPath().equals(
+                        Arrays.asList(ROOT_DOCUMENT_ID)), "Root path is incorrect");
+                requireRejected(() -> provider.findDocumentPath(
+                        DocumentsContract.getDocumentId(skins), databaseId), "Sibling path accepted");
+                requireRejected(() -> provider.findDocumentPath(null, ROOT_DOCUMENT_ID + "../"),
+                        "Traversal path accepted");
+                requireRejected(() -> provider.findDocumentPath(null, fixtureId + "/missing"),
+                        "Missing path accepted");
+            }
             require(new File(nativeFixture, "DBs/library.db").isFile(), "Database path differs from native storage");
             require(new File(nativeFixture, "Skins/skin.json").isFile(), "Skin path differs from native storage");
             Map<String, String> entries = children(resolver, authority, DocumentsContract.getDocumentId(fixture));
@@ -183,6 +208,36 @@ final class DocumentsProviderInstrumentationChecks {
                 require(outside.delete(), "Could not clean owned outside-root sentinel");
             }
         }
+    }
+
+    static Intent verifyOpenFilesIntent(Context context, Instrumentation instrumentation,
+                                             String authority) {
+        AtomicReference<Intent> captured = new AtomicReference<>();
+        instrumentation.runOnMainSync(() -> {
+            class FolderLaunchActivity extends AsoBMaShowActivity {
+                Intent launched;
+                FolderLaunchActivity() { attachBaseContext(context); }
+                @Override public void startActivity(Intent intent) { launched = intent; }
+            }
+            FolderLaunchActivity activity = new FolderLaunchActivity();
+            String result = activity.openDocumentsFolder();
+            require("__OK__".equals(result), "Open in Files failed: " + result);
+            Intent launched = activity.launched;
+            Uri tree = DocumentsContract.buildTreeDocumentUri(authority, ROOT_DOCUMENT_ID);
+            require(launched != null && Intent.ACTION_VIEW.equals(launched.getAction())
+                    && Document.MIME_TYPE_DIR.equals(launched.getType())
+                    && DocumentsContract.buildDocumentUriUsingTree(tree, ROOT_DOCUMENT_ID + "BMS")
+                            .equals(launched.getData()), "Open in Files did not target BMS");
+            require(launched.getComponent() == null && launched.getPackage() == null,
+                    "Open in Files excludes third-party explorers");
+            int grants = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+            require((launched.getFlags() & grants) == grants && launched.getClipData() != null
+                    && tree.equals(launched.getClipData().getItemAt(0).getUri()),
+                    "Explorer does not receive access to the Documents tree");
+            captured.set(launched);
+        });
+        return captured.get();
     }
 
     private static void verifyPrivateBoundary(Context context, ContentResolver resolver,

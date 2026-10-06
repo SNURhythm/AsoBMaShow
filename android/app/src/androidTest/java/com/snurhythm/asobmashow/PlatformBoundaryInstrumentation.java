@@ -48,6 +48,27 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            if ("documents-open-files".equals(arguments.getString("mode"))) {
+                Intent intent = DocumentsProviderInstrumentationChecks.verifyOpenFilesIntent(
+                        getTargetContext(), this, BuildConfig.APPLICATION_ID + ".documents");
+                intent.setPackage(arguments.getString("explorerPackage"));
+                java.util.concurrent.CountDownLatch completed = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.atomic.AtomicInteger probeResult = new java.util.concurrent.atomic.AtomicInteger();
+                boolean probe = getContext().getPackageName().equals(intent.getPackage());
+                if (probe) intent.putExtra("explorerResult", new android.os.ResultReceiver(
+                        new android.os.Handler(android.os.Looper.getMainLooper())) {
+                    @Override protected void onReceiveResult(int code, Bundle data) {
+                        probeResult.set(code);
+                        completed.countDown();
+                    }
+                });
+                getTargetContext().startActivity(intent);
+                if (probe) require(completed.await(30, java.util.concurrent.TimeUnit.SECONDS)
+                        && probeResult.get() == Activity.RESULT_OK, "Separate-UID explorer probe failed");
+                result.putString("result", "PASS dispatched Documents tree to explorer");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             if ("documents-provider".equals(arguments.getString("mode")) ||
                     "documents-refresh".equals(arguments.getString("mode"))) {
                 DocumentsProviderInstrumentationChecks.run(getTargetContext(), this);
