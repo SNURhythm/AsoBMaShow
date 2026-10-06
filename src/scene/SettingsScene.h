@@ -105,6 +105,7 @@ private:
   std::unique_ptr<ColorPickerPopup> appearanceColorPopup;
   std::string appearanceColorPopupId;
   std::function<void(std::uint32_t)> appearanceColorApply;
+  std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
   int builtInLaneOpacityMode = 7;
@@ -112,7 +113,8 @@ private:
   void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
                                    const std::string &id, std::uint32_t color,
                                    std::vector<ColorPickerPopup::Sample> samples,
-                                   std::function<void(std::uint32_t)> apply);
+                                   std::function<void(std::uint32_t)> apply,
+                                   std::function<void(std::uint32_t)> preview);
   void closeAppearanceColorPopup();
   void syncAppearanceColorPopup();
   void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
@@ -328,6 +330,7 @@ private:
   std::unique_ptr<bms_parser::Chart> previewChart;
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
+  built_in_notes::SharedModeStyles previewNoteStyles;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;

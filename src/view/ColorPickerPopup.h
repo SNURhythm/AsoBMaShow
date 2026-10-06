@@ -3,6 +3,7 @@
 #include "BlockingOverlayView.h"
 #include "ColorPickerModel.h"
 #include "TextView.h"
+#include <functional>
 
 class ColorPickerView;
 class Button;
@@ -19,7 +20,8 @@ public:
   };
   struct Result { bool confirmed; color_picker::Hsv color; };
 
-  ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample> samples);
+  ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample> samples,
+                   std::function<void(std::uint32_t)> onPreviewColor = {});
   void fitToViewport(int width, int height, int left = 0, int top = 0,
                      int right = 0, int bottom = 0);
   [[nodiscard]] const std::optional<Result> &result() const { return outcome; }
@@ -27,6 +29,7 @@ public:
 private:
   class SampleView;
   color_picker::Hsv draft;
+  std::function<void(std::uint32_t)> onPreviewColor;
   std::optional<Result> outcome;
   View *panel;
   TextView *title;

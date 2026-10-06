@@ -5,12 +5,10 @@
 
 namespace settings_scene {
 namespace {
-constexpr int kPreviewTimelineLanes = 16;
-
 std::unique_ptr<bms_parser::TimeLine>
-makePreviewTimeline(long long timingMicros, bool firstInMeasure = false) {
+makePreviewTimeline(int lanes, long long timingMicros, bool firstInMeasure = false) {
   auto timeline =
-      std::make_unique<bms_parser::TimeLine>(kPreviewTimelineLanes, false);
+      std::make_unique<bms_parser::TimeLine>(lanes, false);
   timeline->Timing = timingMicros;
   timeline->BeatPosition = static_cast<double>(timingMicros) / 2000000.0;
   timeline->Bpm = kPreviewBpm;
@@ -56,23 +54,24 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
   chart->Meta.Rank = 3;
   chart->Meta.PlayLength = 0;
   chart->Meta.TotalLength = kPreviewLoopMicros;
+  const auto lanes = keyMode < 0 ? chart->Meta.GetKeyLaneIndices()
+                                 : chart->Meta.GetTotalLaneIndices();
+  const int timelineLanes = std::max(16, *std::ranges::max_element(lanes) + 1);
 
   auto measure = std::make_unique<bms_parser::Measure>();
   measure->Timing = 0;
   measure->Scale = 16.0;
   measure->Pos = 0.0;
 
-  auto appendTimeline = [&measure](long long timingMicros,
+  auto appendTimeline = [&measure, timelineLanes](long long timingMicros,
                                    bool firstInMeasure = false) {
-    auto timeline = makePreviewTimeline(timingMicros, firstInMeasure);
+    auto timeline = makePreviewTimeline(timelineLanes, timingMicros, firstInMeasure);
     auto *timelinePtr = timeline.get();
     measure->TimeLines.push_back(timelinePtr);
     (void)timeline.release();
     return timelinePtr;
   };
 
-  const auto lanes = keyMode < 0 ? chart->Meta.GetKeyLaneIndices()
-                                 : chart->Meta.GetTotalLaneIndices();
   constexpr std::array longTypes{bms_parser::LongNoteType::LongNote,
                                  bms_parser::LongNoteType::ChargeNote,
                                  bms_parser::LongNoteType::HellChargeNote};

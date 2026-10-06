@@ -81,7 +81,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneCoverEnabled = laneCoverEnabled,
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = noteStartPositionPercent,
-      .builtInNotes = settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)),
+      .builtInNotes = built_in_notes::snapshotModeStyles(
+          settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart))),
       .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
       .builtInLane = settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(chart)),
       .laneBeamClockUsesRenderTime = true,

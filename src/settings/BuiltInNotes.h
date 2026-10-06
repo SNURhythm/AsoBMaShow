@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -33,6 +34,17 @@ struct Style {
 using LaneStyles = std::map<Type, Style>;
 using ModeStyles = std::map<int, LaneStyles>;
 using Settings = std::map<int, ModeStyles>;
+using SharedModeStyles = std::shared_ptr<const ModeStyles>;
+
+// Presentation frames share immutable styles; only a settings change copies
+// the maps. Preview configuration is refreshed every frame, so reuse its last
+// snapshot when the editable settings have not changed.
+inline SharedModeStyles snapshotModeStyles(
+    const ModeStyles &settings, const SharedModeStyles &previous = {}) {
+  if (settings.empty()) return {};
+  if (previous && *previous == settings) return previous;
+  return std::make_shared<const ModeStyles>(settings);
+}
 
 inline bool isBody(Type type) {
   return type == Type::LongBodyOff || type == Type::LongBodyOn ||
@@ -62,6 +74,10 @@ inline Style resolve(const ModeStyles &settings, int lane, Type type,
               std::clamp(style->second.thickness, kMinThickness, kMaxThickness)};
   }
   return defaultStyle(palette, type);
+}
+inline Style resolve(const SharedModeStyles &settings, int lane, Type type,
+                     Palette palette) {
+  return settings ? resolve(*settings, lane, type, palette) : defaultStyle(palette, type);
 }
 inline float height(float laneWidth, Type type, const Style &style) {
   // Match the visible 20-pixel normal-note region for every endpoint.

@@ -28,7 +28,10 @@ namespace {
 
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
-                                 const bms_parser::Chart &chart) {
+                                 const bms_parser::Chart &chart,
+                                 built_in_notes::SharedModeStyles &noteStyles) {
+  noteStyles = built_in_notes::snapshotModeStyles(
+      settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)), noteStyles);
   const gameplay_hispeed::State hispeed(
       {.mode = gameplay_hispeed::fixModeFromEncoded(
            static_cast<int>(settings.hispeedFixMode)),
@@ -57,7 +60,7 @@ previewPresentationConfiguration(const AppSettings &settings,
       .laneCoverEnabled = settings.presentation().laneCoverEnabled,
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = settings.presentation().noteStartPositionPercent,
-      .builtInNotes = settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)),
+      .builtInNotes = noteStyles,
       .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
       .builtInLane = settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(chart)),
       .laneBeamClockUsesRenderTime = true,
@@ -266,8 +269,9 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
       previewRenderer == nullptr) {
     return;
   }
-  const auto configuration =
-      previewPresentationConfiguration(context.settings, *previewChart);
+  auto configuration =
+      previewPresentationConfiguration(context.settings, *previewChart, previewNoteStyles);
+  if (appearanceColorPreview) appearanceColorPreview(configuration);
   previewVisualStateStore->setConfiguration(configuration);
   previewPresentation->configure(configuration);
   syncPreviewInputLayout();
@@ -472,6 +476,7 @@ void SettingsScene::destroyPreviewRenderer() {
   previewAutoPlayEvents.clear();
   previewAutoPlayNextEvent = 0;
   previewVisualStateStore.reset();
+  previewNoteStyles.reset();
   previewChartVisualModel.reset();
   previewVisualNoteSources.clear();
   previewFrameSerial = 0;

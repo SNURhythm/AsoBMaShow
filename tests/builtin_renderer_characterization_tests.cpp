@@ -11,6 +11,8 @@
 #include "scene/SettingsPreviewPlayback.h"
 #include "view/ColorPickerView.h"
 #include "view/ColorPickerPopup.h"
+#include "view/OverlayPortal.h"
+#include "scene/play/BeatorajaHiSpeedChart.h"
 #include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
@@ -735,7 +737,7 @@ ScenarioResult renderScenario(
 
   auto configuration = presentationConfig(coverPercent);
   configuration.scratchLaneOnRight = scratchOnRight;
-  configuration.builtInNotes = noteStyles;
+  configuration.builtInNotes = built_in_notes::snapshotModeStyles(noteStyles);
   configuration.builtInJudgeLine = judgeLineStyle;
   configuration.builtInLane = laneStyle;
   const auto authority = authorityFor(*fixture.chart, coverPercent);
@@ -2276,6 +2278,11 @@ struct SettingsScene {
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
+  built_in_notes::SharedModeStyles previewNoteStyles;
+  std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
+  std::function<void(std::uint32_t)> appearanceColorApply;
+  std::unique_ptr<ColorPickerPopup> appearanceColorPopup;
+  OverlayPortal *overlayPortal = nullptr;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
   std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
@@ -2299,6 +2306,8 @@ struct SettingsScene {
   int previewScore = 0;
   std::map<Judgement, PlayfieldJudgementFastSlowCount> previewJudgeFastSlowCount;
   void syncPreviewInputLayout();
+  void syncPreviewPresentationConfiguration();
+  void closeAppearanceColorPopup();
   void syncPreviewTouchLayout();
   void syncPreviewAuthority();
   void resetPreviewHudSample();
@@ -2318,7 +2327,53 @@ using settings_scene::kPreviewBpm;
 using settings_scene::kPreviewLoopMicros;
 using settings_scene::previewLaneCoverAuthority;
 using settings_scene::previewFrameClock;
+using settings_scene::applyPreviewPlayerConfiguration;
 #include "settings_preview_input.inc"
+
+void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
+  const auto chart = settings_scene::makePreviewChart(7);
+  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(chart->Meta.Rank);
+  SettingsScene scene;
+  scene.previewPaused = true;
+  scene.previewChart = chart.get();
+  scene.previewVisualStateStore = &store;
+  auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+  scene.previewRenderer = renderer.get();
+  scene.previewPresentation = std::move(renderer);
+  auto &saved = scene.context.settings.presentation();
+  saved.builtInNotes[7][0][built_in_notes::Type::Normal] = {0x123456, 140};
+  saved.builtInJudgeLines[7] = {0x234567, 150};
+  saved.builtInLanes[7].measureLineColor = 0x345678;
+  scene.syncPreviewPresentationConfiguration();
+  auto notes = saved.builtInNotes.at(7);
+  notes[0][built_in_notes::Type::Normal].color = 0xFF0000;
+  scene.appearanceColorPreview = [draft = built_in_notes::snapshotModeStyles(notes)](auto &config) {
+    config.builtInNotes = draft;
+    config.builtInJudgeLine.color = 0x00FF00;
+    config.builtInLane.measureLineColor = 0x0000FF;
+  };
+  scene.syncPreviewPresentationConfiguration();
+  const auto draft = store.captureForPresentation({.serial = 1});
+  expect(built_in_notes::resolve(draft.configuration.builtInNotes, 0,
+             built_in_notes::Type::Normal, built_in_notes::Palette::Gray).color == 0xFF0000 &&
+             draft.configuration.builtInJudgeLine.color == 0x00FF00 &&
+             draft.configuration.builtInLane.measureLineColor == 0x0000FF,
+         "paused gameplay preview receives draft note, judge-line, and measure-line colors");
+  expect(saved.builtInNotes.at(7).at(0).at(built_in_notes::Type::Normal).color == 0x123456 &&
+             saved.builtInJudgeLines.at(7).color == 0x234567 &&
+             saved.builtInLanes.at(7).measureLineColor == 0x345678,
+         "live color previews never modify persisted settings before Confirm");
+  scene.closeAppearanceColorPopup();
+  const auto restored = store.captureForPresentation({.serial = 2});
+  expect(!scene.appearanceColorPreview &&
+             built_in_notes::resolve(restored.configuration.builtInNotes, 0,
+                 built_in_notes::Type::Normal, built_in_notes::Palette::Gray).color == 0x123456 &&
+             restored.configuration.builtInJudgeLine.color == 0x234567 &&
+             restored.configuration.builtInLane.measureLineColor == 0x345678,
+         "closing the popup restores saved colors in the paused preview");
+}
 
 struct PreviewRecordingControl : IRhythmControl {
   std::vector<int> presses;
@@ -3392,6 +3447,7 @@ int main() {
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
   verifyPreviewPause();
+  verifyPausedAppearanceDraftUpdatesAndRestoresPreview();
   verifyPreviewAutoPlay();
   verifyPreviewMissesAndFullCombo();
       verifyIndividualJudgementLabelVisibility(target);

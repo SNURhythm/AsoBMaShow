@@ -3125,7 +3125,8 @@ void GamePlayScene::init() {
       .laneCoverEnabled = playfieldLaneCoverEnabled,
       .laneBeamLengthPercent = context.settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
-      .builtInNotes = context.settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(*chart)),
+      .builtInNotes = built_in_notes::snapshotModeStyles(
+          context.settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(*chart))),
       .builtInJudgeLine = context.settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(*chart)),
       .builtInLane = context.settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(*chart)),
       .laneBeamClockUsesRenderTime = true,

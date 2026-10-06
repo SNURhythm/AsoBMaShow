@@ -1041,9 +1041,12 @@ void SettingsScene::commitJudgementIndicatorRangeInput() {
 }
 
 void SettingsScene::closeAppearanceColorPopup() {
+  const bool restorePreview = bool(appearanceColorPreview);
   if (overlayPortal && appearanceColorPopup) overlayPortal->dismiss(appearanceColorPopup.get());
   appearanceColorPopup.reset();
   appearanceColorApply = {};
+  appearanceColorPreview = {};
+  if (restorePreview) syncPreviewPresentationConfiguration();
 }
 
 void SettingsScene::syncAppearanceColorPopup() {
@@ -1063,14 +1066,16 @@ void SettingsScene::syncAppearanceColorPopup() {
 
 void SettingsScene::appendAppearanceColorPicker(
     View *body, const LayoutMetrics &metrics, const std::string &id, std::uint32_t color,
-    std::vector<ColorPickerPopup::Sample> samples, std::function<void(std::uint32_t)> apply) {
+    std::vector<ColorPickerPopup::Sample> samples, std::function<void(std::uint32_t)> apply,
+    std::function<void(std::uint32_t)> preview) {
   auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, metrics.bodyTextSize);
   icon->setText(ui_icons::textForCodepoint(ui_icons::kPalette));
   icon->setThemedColor(ui_theme::textPrimary);
   icon->setAlign(TextView::CENTER);
   icon->setVAlign(TextView::MIDDLE);
   auto *button = makeControlButton(78, metrics.actionButtonHeight, icon);
-  button->setOnClickListener([this, id, color, samples = std::move(samples), apply = std::move(apply)] {
+  button->setOnClickListener([this, id, color, samples = std::move(samples),
+                             apply = std::move(apply), preview = std::move(preview)] {
     auto [state, inserted] = appearanceColorPickers.try_emplace(id, color_picker::fromRgb(color));
     if (!inserted && color_picker::toRgb(state->second) != color)
       state->second = color_picker::fromRgb(color, state->second);
@@ -1078,7 +1083,11 @@ void SettingsScene::appendAppearanceColorPicker(
     if (!previewAutoPlay) destroyPreviewInputHandler();
     appearanceColorPopupId = id;
     appearanceColorApply = apply;
-    appearanceColorPopup = std::make_unique<ColorPickerPopup>(state->second, samples);
+    appearanceColorPopup = std::make_unique<ColorPickerPopup>(state->second, samples,
+        [this, preview](std::uint32_t rgb) {
+          preview(rgb);
+          syncPreviewPresentationConfiguration();
+        });
     syncAppearanceColorPopup();
   });
   body->addView(button);
@@ -1087,8 +1096,9 @@ void SettingsScene::appendAppearanceColorPicker(
 void SettingsScene::appendBuiltInNoteControls(
     View *body, const LayoutMetrics &metrics, int keyMode) {
   using namespace built_in_notes;
-  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
-  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
+  int settingsKeyMode = keyMode;
+  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) settingsKeyMode = 5;
+  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) settingsKeyMode = 7;
   bms_parser::ChartMeta meta;
   meta.KeyMode = std::abs(keyMode);
   meta.IsDP = keyMode == 10 || keyMode == 14;
@@ -1116,9 +1126,9 @@ void SettingsScene::appendBuiltInNoteControls(
   }
   const auto &modeStyles = context.settings.builtInNotesForKeyMode(keyMode);
   const auto common = commonStyle(modeStyles, targets, type);
-  const auto apply = [this, keyMode, targets, type](EditKind kind, int value = 0) {
+  const auto apply = [this, settingsKeyMode, targets, type](EditKind kind, int value = 0) {
     if (targets.empty()) return;
-    editSelected(context.settings.presentation().builtInNotes[keyMode], targets, type, kind, value);
+    editSelected(context.settings.presentation().builtInNotes[settingsKeyMode], targets, type, kind, value);
     persistSettings();
     syncPreviewPresentationConfiguration();
     lastLayoutWidth = -1;
@@ -1262,7 +1272,14 @@ void SettingsScene::appendBuiltInNoteControls(
   appendAppearanceColorPicker(presets, metrics,
       "note-" + std::to_string(keyMode) + "-" + std::to_string(builtInNoteType),
       common.color.value_or(resolve(modeStyles, targets.front().lane, type, targets.front().palette).color),
-      std::move(popupSamples), [apply](std::uint32_t rgb) { apply(EditKind::Color, rgb); });
+      std::move(popupSamples), [apply](std::uint32_t rgb) { apply(EditKind::Color, rgb); },
+      [this, keyMode, targets, type](std::uint32_t rgb) {
+        auto draft = context.settings.builtInNotesForKeyMode(keyMode);
+        editSelected(draft, targets, type, EditKind::Color, rgb);
+        appearanceColorPreview = [styles = snapshotModeStyles(draft)](auto &configuration) {
+          configuration.builtInNotes = styles;
+        };
+      });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
@@ -1350,7 +1367,14 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   body->addView(presets);
   appendAppearanceColorPicker(presets, metrics, "judge-" + std::to_string(keyMode), style.color,
       {{.label = "", .width = 512, .height = built_in_judge_line::height(160.0F, style)}},
-      [apply](std::uint32_t rgb) { apply(rgb, std::nullopt); });
+      [apply](std::uint32_t rgb) { apply(rgb, std::nullopt); },
+      [this, style](std::uint32_t rgb) {
+        auto draft = style;
+        draft.color = rgb;
+        appearanceColorPreview = [draft](auto &configuration) {
+          configuration.builtInJudgeLine = draft;
+        };
+      });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
@@ -1428,7 +1452,13 @@ void SettingsScene::appendBuiltInMeasureLineControls(
   body->addView(presets);
   appendAppearanceColorPicker(presets, metrics, "measure-" + std::to_string(keyMode), style.measureLineColor,
       {{.label = "", .width = 512, .height = 4.0F * style.measureLineThicknessPercent / 100.0F,
-        .alpha = 128}}, setColor);
+        .alpha = 128}}, setColor, [this, style](std::uint32_t rgb) {
+        auto draft = style;
+        draft.measureLineColor = rgb;
+        appearanceColorPreview = [draft](auto &configuration) {
+          configuration.builtInLane = draft;
+        };
+      });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);

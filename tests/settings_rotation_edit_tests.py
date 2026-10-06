@@ -61,6 +61,9 @@ struct SettingsScene {
   std::vector<View *> views;
   std::unique_ptr<int> appearanceColorPopup = std::make_unique<int>(1);
   std::function<void(int)> appearanceColorApply = [](int) {};
+  std::function<void(int)> appearanceColorPreview = [](int) {};
+  int previewRestores = 0;
+  void syncPreviewPresentationConfiguration() { ++previewRestores; }
   OverlayPortal *overlayPortal = nullptr;
   void closeAppearanceColorPopup();
   void onPresentationOrientationWillChange();
@@ -97,7 +100,8 @@ int main() {
       ++commits;
     });
     scene.onPresentationOrientationWillChange();
-    if (scene.appearanceColorPopup || scene.appearanceColorApply || !portal.dismissed) {
+    if (scene.appearanceColorPopup || scene.appearanceColorApply || scene.appearanceColorPreview ||
+        scene.previewRestores != 1 || !portal.dismissed) {
       std::cerr << "Rotation must discard the color draft before changing orientation";
       return 1;
     }

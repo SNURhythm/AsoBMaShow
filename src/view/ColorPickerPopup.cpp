@@ -56,8 +56,9 @@ private:
   }
 };
 
-ColorPickerPopup::ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample> samples)
-    : draft(initial), samples(std::move(samples)) {
+ColorPickerPopup::ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample> samples,
+                                   std::function<void(std::uint32_t)> onPreviewColor)
+    : draft(initial), onPreviewColor(std::move(onPreviewColor)), samples(std::move(samples)) {
   setThemedBackgroundColor(ui_theme::scrim);
   panel = new View();
   panel->setThemedBackgroundColor(ui_theme::panelStrong);
@@ -83,6 +84,7 @@ ColorPickerPopup::ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample
   picker = new ColorPickerView(draft, [this](color_picker::Hsv color, bool) {
     draft = color;
     refreshDraft();
+    if (this->onPreviewColor) this->onPreviewColor(color_picker::toRgb(draft));
   });
   panel->addView(picker);
   TextView *buttonText = nullptr;

@@ -314,7 +314,7 @@ private:
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;
 
-  built_in_notes::ModeStyles builtInNotes;
+  built_in_notes::SharedModeStyles builtInNotes;
   built_in_judge_line::Style builtInJudgeLine;
   built_in_lane::Style builtInLane;
   long long currentRenderMicros = 0;

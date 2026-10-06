@@ -147,7 +147,12 @@ void testColorPickerPopup() {
   for (const auto [width, height] : {std::pair{1280, 720}, {390, 844}, {640, 360}}) {
     std::vector<ColorPickerPopup::Sample> samples;
     for (int i = 0; i < 48; ++i) samples.push_back({.label = std::to_string(i + 1)});
-    ColorPickerPopup popup({0, 1, 1}, samples);
+    int previewChanges = 0;
+    std::uint32_t previewColor = 0xFF0000;
+    ColorPickerPopup popup({0, 1, 1}, samples, [&](std::uint32_t rgb) {
+      ++previewChanges;
+      previewColor = rgb;
+    });
     popup.fitToViewport(width, height, 12, 20, 12, 16);
     ColorPickerView *picker = nullptr;
     std::vector<Button *> buttons;
@@ -185,6 +190,9 @@ void testColorPickerPopup() {
     down.button.x = picker->getX() + picker->getWidth() / 2;
     down.button.y = picker->getY() + 15;
     popup.handleEvents(down);
+    require(previewChanges > 0 && previewColor == color_picker::toRgb(picker->value()) &&
+                previewColor != 0xFF0000 && !popup.result(),
+            "picker forwards live draft colors before release or confirmation");
     SDL_Event up = down;
     up.type = SDL_MOUSEBUTTONUP;
     popup.handleEvents(up);

@@ -60,7 +60,7 @@ void testAllLaneChordCycles() {
         assert(timeline->Timing == cycle * 16'000'000LL + offsets[phase]);
         assert(timeline->BeatPosition == static_cast<double>(timeline->Timing) / 2'000'000.0);
         assert(timeline->Bpm == 120 && timeline->Scroll == 1 && !timeline->IsFirstInMeasure);
-        for (int lane = 0; lane < 16; ++lane) {
+        for (int lane = 0; lane < static_cast<int>(timeline->Notes.size()); ++lane) {
           const bool active = std::ranges::find(lanes, lane) != lanes.end();
           const auto *note = timeline->Notes[lane];
           const auto *mine = timeline->LandmineNotes[lane];
@@ -106,7 +106,7 @@ void testKeyModes() {
     for (const auto *timeline : chart->Measures.front()->TimeLines) {
       for (const auto *note : timeline->Notes) {
         if (!note) continue;
-        assert(note->Lane < 16 && note->Timeline == timeline);
+        assert(note->Lane < static_cast<int>(timeline->Notes.size()) && note->Timeline == timeline);
         seen.insert(note->Lane);
         const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
         if (!longNote || !longNote->IsTail() ||
@@ -127,7 +127,29 @@ void testKeyModes() {
   }
 }
 
+void testDenseAppearanceModesHaveCompletePreviewCharts() {
+  for (const int mode : {9, 24, 48}) {
+    assert(std::ranges::find(settings_scene::kPreviewKeyModes, mode) !=
+           settings_scene::kPreviewKeyModes.end());
+    const auto chart = settings_scene::makePreviewChart(mode);
+    assert(chart->Meta.KeyMode == mode && !chart->Meta.IsDP);
+    assert(chart->Meta.TotalNotes == mode * 12);
+    assert(chart->Meta.TotalLongNotes == mode * 10);
+    assert(chart->Meta.TotalLandmineNotes == mode * 2);
+    assert(chart->Meta.TotalScratchNotes == 0 && chart->Meta.TotalBackSpinNotes == 0);
+    int lastLaneNotes = 0, lastLaneMines = 0;
+    for (const auto *timeline : chart->Measures.front()->TimeLines) {
+      assert(timeline->Notes.size() >= static_cast<std::size_t>(mode));
+      assert(timeline->LandmineNotes.size() >= static_cast<std::size_t>(mode));
+      if (timeline->Notes[mode - 1]) ++lastLaneNotes;
+      if (timeline->LandmineNotes[mode - 1]) ++lastLaneMines;
+    }
+    assert(lastLaneNotes == 14 && lastLaneMines == 2);
+  }
+}
+
 int main() {
+  testDenseAppearanceModesHaveCompletePreviewCharts();
   testAllLaneChordCycles();
   testRecipe();
   testEveryConstructionAllocation();

@@ -707,11 +707,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_preview_input_extract.py
                     --root ${CMAKE_SOURCE_DIR} --output ${settings_preview_input_source}
             DEPENDS tests/settings_preview_input_extract.py tests/gameplay_terminal_scene_extract.py
-                    src/scene/SettingsScenePreview.cpp
+                    src/scene/SettingsScenePreview.cpp src/scene/SettingsSceneControls.cpp
             VERBATIM
         )
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
+            src/AppSettings.cpp
+            src/FileChecksum.cpp
+            src/ir/IrProfileSettings.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/package/SkinPathPolicy.cpp
             src/view/ColorPickerView.cpp
             src/view/ColorPickerPopup.cpp
             src/view/Button.cpp
@@ -6048,6 +6053,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(playfield_visual_state_tests
         tests/playfield_visual_state_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/bms_parser.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/scene/play/Judge.cpp
@@ -8972,6 +8978,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(result_layout_geometry_tests)
     add_test(NAME settings_rotation_edit_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_rotation_edit_tests.py)
+    add_test(NAME settings_note_editing_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_note_editing_tests.py)
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES

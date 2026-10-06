@@ -4147,8 +4147,7 @@ void BMSRenderer::updateJudgementCounterText() {
 
 void BMSRenderer::configure(
     const PlayfieldPresentationConfig &configuration) {
-  if (builtInNotes != configuration.builtInNotes)
-    builtInNotes = configuration.builtInNotes;
+  builtInNotes = configuration.builtInNotes;
   builtInJudgeLine = built_in_judge_line::sanitizeStyle(configuration.builtInJudgeLine);
   builtInLane = built_in_lane::sanitizeStyle(configuration.builtInLane);
   setVisibleTimeDurationMilliseconds(
