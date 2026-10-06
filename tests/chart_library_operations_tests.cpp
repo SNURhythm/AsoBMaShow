@@ -890,6 +890,8 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
   const std::vector<std::string> expectedUrls = {
       "https://rattoto10.jounin.jp/table.html",
       "https://rattoto10.jounin.jp/table_insane.html",
+      "https://miraiscarlet.github.io/bms/table/genocide_normal/normal_bms.html",
+      "https://miraiscarlet.github.io/bms/table/genocide_insane/insane_bms.html",
       "https://stellabms.xyz/sl/table.html",
       "https://stellabms.xyz/st/table.html",
   };

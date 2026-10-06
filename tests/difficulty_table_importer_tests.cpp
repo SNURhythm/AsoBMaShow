@@ -654,8 +654,16 @@ void testPackagedDefaultsImportWithoutNetwork() {
     assert(false && "Bundled defaults must never access the network");
     return std::nullopt;
   });
-  assert(importer.SeedBundledDefaults(*session) == 4);
+  assert(importer.SeedBundledDefaults(*session) == 6);
   const auto tables = session->SelectDifficultyTables();
+  for (const std::string kind : {"normal", "insane"}) {
+    const std::string source =
+        "https://miraiscarlet.github.io/bms/table/genocide_" + kind + "/" +
+        kind + "_bms.html";
+    assert(std::any_of(tables.begin(), tables.end(), [&](const auto &table) {
+      return table.sourceUrl == source && table.chartCount > 0;
+    }));
+  }
   for (const auto &table : tables) {
     assert(!table.name.empty());
     assert(table.sourceUrl.starts_with("https://"));
