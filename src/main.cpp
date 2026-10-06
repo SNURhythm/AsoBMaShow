@@ -33,6 +33,7 @@
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include "view/TextInputBox.h"
+#include "view/FontCacheSession.h"
 #include "view/ImageView.h"
 #include <cstdlib>
 #include <iostream>
@@ -1672,6 +1673,7 @@ static void runReadyApplication(ApplicationContext &context) {
 }
 
 int run() {
+  text_runtime::FontCacheSession fontCacheSession;
   ApplicationContext context;
   return application_startup::execute(
       context.profileReady(),

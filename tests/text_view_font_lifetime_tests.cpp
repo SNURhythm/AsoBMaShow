@@ -1,5 +1,6 @@
 #include "rendering/UniformCache.h"
 #include "view/SdlTtfRuntime.h"
+#include "view/FontCacheSession.h"
 #include "view/TextView.h"
 #include "support/AllocationFailure.h"
 
@@ -42,6 +43,7 @@ public:
 };
 
 void testConstructorRollback(const std::string &path) {
+  const auto initialReferences = text_runtime::activeReferencesForTesting();
   for (const bool shareExisting : {false, true}) {
     std::unique_ptr<FontProbeView> survivor;
     if (shareExisting) survivor = std::make_unique<FontProbeView>(path, 16);
@@ -78,7 +80,80 @@ void testConstructorRollback(const std::string &path) {
     std::cout << (shareExisting ? "Shared" : "Fresh") << " font construction: "
               << failures << " allocation failures passed\n";
   }
+  assert(text_runtime::activeReferencesForTesting() == initialReferences);
+}
+
+void testWarmFontCache(const std::string &path) {
+  std::unique_ptr<FontProbeView> survivor;
+  {
+    text_runtime::FontCacheSession session;
+    {
+      FontProbeView first(path, 16);
+      assert(TTF_GlyphIsProvided32(first.primaryFont(), 'A'));
+    }
+    const auto warm = text_runtime::fontCacheStatsForTesting();
+    assert(warm.active == 0 && warm.idle == 1);
+    {
+      text_runtime::FontCacheSession nested;
+      auto reused = std::make_unique<FontProbeView>(path, 16);
+      assert(text_runtime::fontCacheStatsForTesting().opens == warm.opens);
+      // Returning a font to the cache must not allocate, including on rollback.
+      test_support::FailNextAllocation failure;
+      reused.reset();
+    }
+    assert(text_runtime::fontCacheStatsForTesting().idle == 1);
+    testConstructorRollback(path);
+    {
+      FontProbeView bold(path, 16, TextView::FontWeight::Bold);
+    }
+    const auto styled = text_runtime::fontCacheStatsForTesting().opens;
+    {
+      FontProbeView bold(path, 16, TextView::FontWeight::Bold);
+      FontProbeView regular(path, 16);
+      assert(bold.primaryFont() != regular.primaryFont());
+      assert(text_runtime::fontCacheStatsForTesting().opens == styled);
+    }
+    survivor = std::make_unique<FontProbeView>(path, 16);
+    for (int size = 20; size < 30; ++size) {
+      FontProbeView other(path, size);
+    }
+    auto full = text_runtime::fontCacheStatsForTesting();
+    assert(full.active == 1 && full.idle == 8);
+    {
+      FontProbeView recent(path, 22);
+      FontProbeView pinned(path, 16);
+      assert(pinned.primaryFont() == survivor->primaryFont());
+      assert(text_runtime::fontCacheStatsForTesting().opens == full.opens);
+    }
+    {
+      FontProbeView evicted(path, 20);
+      assert(text_runtime::fontCacheStatsForTesting().opens == full.opens + 1);
+    }
+    {
+      FontProbeView promoted(path, 22);
+      assert(text_runtime::fontCacheStatsForTesting().opens == full.opens + 1);
+    }
+    {
+      FontProbeView large(path, 100);
+    }
+    assert(text_runtime::fontCacheStatsForTesting().idle == 8);
+  }
+  // A view can outlive the session; only idle fonts are closed at teardown.
+  assert(text_runtime::fontCacheStatsForTesting().idle == 0);
+  assert(text_runtime::fontCacheStatsForTesting().active == 1);
+  assert(TTF_FontHeight(survivor->primaryFont()) > 0);
+  survivor.reset();
   assert(text_runtime::activeReferencesForTesting() == 0);
+  assert(TTF_WasInit() == 0);
+  {
+    auto session = std::make_unique<text_runtime::FontCacheSession>();
+    { FontProbeView cached(path, 16); }
+    assert(text_runtime::fontCacheStatsForTesting().idle == 1);
+    test_support::FailNextAllocation failure;
+    session.reset();
+  }
+  assert(text_runtime::fontCacheStatsForTesting().idle == 0);
+  assert(TTF_WasInit() == 0);
 }
 
 void testFullStaticFonts() {
@@ -183,6 +258,7 @@ int main() {
   testFullStaticFonts();
   assert(text_runtime::activeReferencesForTesting() == 0);
   testConstructorRollback(path);
+  testWarmFontCache(path);
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
 }
