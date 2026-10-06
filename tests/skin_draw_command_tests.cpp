@@ -1610,6 +1610,54 @@ void testBindingAndDisabledLookupsStayLogarithmicAtModelLimits() {
          "binding and disabled-object lookup work is logarithmically bounded");
 }
 
+void testDenseBindingLookupAndSparseObjectIds() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.integerResult = {.value = 0, .supported = true};
+  ValidatedBeatorajaSkinModel model;
+  for (std::uint32_t id = 1000; id < 9192; ++id) {
+    model.model.integerProperties.push_back(
+        {.id = SkinIntegerPropertyId{id},
+         .domain = SkinIntegerPropertyDomain::ImageIndex,
+         .source = SkinBuiltinPropertySelector{.value = 0}});
+  }
+  const auto maximum = std::numeric_limits<SkinObjectId>::max();
+  for (SkinObjectId id : {maximum, SkinObjectId{7}, SkinObjectId{5}}) {
+    auto object = imageObject(id, 1, true);
+    std::get<SkinImageObject>(object.payload).stateIndex = SkinIntegerPropertyId{9191};
+    model.model.objects.push_back(std::move(object));
+    model.model.destinations.push_back(destination(id,
+        static_cast<std::uint32_t>(model.model.destinations.size() + 1), 10.0));
+  }
+  resetSkinRendererLookupComparisonsForTesting();
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 3 &&
+             result.submitReady->commands[0].sourceObject == maximum &&
+             result.submitReady->commands[1].sourceObject == 7 &&
+             result.submitReady->commands[2].sourceObject == 5,
+         "unsorted sparse object IDs retain authored draw order and maximum ID");
+  const auto comparisons = skinRendererLookupComparisonsForTesting();
+  expect(comparisons > 0 && comparisons <= 3,
+         "dense binding IDs require at most one comparison per destination");
+
+  model.model.integerProperties[0].id = SkinIntegerPropertyId{0};
+  model.model.integerProperties[1].id = SkinIntegerPropertyId{maximum};
+  for (auto &object : model.model.objects) {
+    std::get<SkinImageObject>(object.payload).stateIndex = SkinIntegerPropertyId{maximum};
+  }
+  const auto sparse = evaluate(renderer, runtime, model, resources, state, 2);
+  expect(sparse.submitReady && sparse.submitReady->commands.size() == 3,
+         "sparse binding IDs use the fallback search, including maximum ID");
+  model.model.destinations[0].object = 6;
+  const auto missing = evaluate(renderer, runtime, model, resources, state, 3);
+  expect(!missing.submitReady &&
+             hasDiagnostic(missing, "skin.renderer.model.destination_object"),
+         "a hole in object IDs never resolves to the neighboring object");
+}
+
 void testImageCommandsPreserveOrderAndBatchOnlyAdjacentCompatibility() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -7632,6 +7680,7 @@ int main(int argc, char **argv) {
   testProjectionOrdinalIrregularitiesNeverDiscardAGameplayFrame();
   testLargeProjectionDoesNotHitAnAppSpecificFrameLimit();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();
+  testDenseBindingLookupAndSparseObjectIds();
   testImageCommandsPreserveOrderAndBatchOnlyAdjacentCompatibility();
   testNumberUsesSignedGlyphSetPaddingAndNegativeAlignmentShift();
   testFloatTruncatesAndUsesPositiveAlignmentShift();

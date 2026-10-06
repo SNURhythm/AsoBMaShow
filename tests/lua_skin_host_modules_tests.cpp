@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinFileIo.h"
+#include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/LuaSkinAudioHost.h"
 #include "skin/beatoraja/LuaSkinHostModules.h"
 #include "gameplay_skin_ledger_evidence.h"
@@ -2292,6 +2293,39 @@ end
   lua_close(state);
 }
 
+void testIndexedNumericCatalogMatchesExactAdmission() {
+  const auto catalog = gameplaySkinBuiltinCatalog();
+  const SkinBindingType types[] = {
+      {.kind = SkinBindingKind::BooleanProperty},
+      {.kind = SkinBindingKind::IntegerProperty},
+      {.kind = SkinBindingKind::IntegerProperty,
+       .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+      {.kind = SkinBindingKind::FloatProperty},
+      {.kind = SkinBindingKind::FloatProperty,
+       .floatDomain = SkinFloatPropertyDomain::FloatValue},
+      {.kind = SkinBindingKind::StringProperty},
+      {.kind = SkinBindingKind::TimerProperty},
+      {.kind = SkinBindingKind::FloatWriter},
+      {.kind = SkinBindingKind::StringWriter},
+      {.kind = SkinBindingKind::Event},
+  };
+  for (const auto type : types) {
+    for (int selector = -1; selector <= 4100; ++selector) {
+      if (gameplaySkinBuiltinNumericContains(type, selector) !=
+          catalog.contains(type, SkinBuiltinPropertySelector{selector})) {
+        expect(false, "indexed catalog preserves numeric selectors and typed domains");
+        return;
+      }
+    }
+    for (int selector : {std::numeric_limits<int>::min(), -65536,
+                         65535, 65536, std::numeric_limits<int>::max()}) {
+      expect(gameplaySkinBuiltinNumericContains(type, selector) ==
+                 catalog.contains(type, SkinBuiltinPropertySelector{selector}),
+             "indexed catalog preserves timer/event ranges and integer boundaries");
+    }
+  }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2299,6 +2333,7 @@ int main(int argc, char **argv) {
     benchmarkFileHelpers();
     return failures == 0 ? 0 : 1;
   }
+  testIndexedNumericCatalogMatchesExactAdmission();
   testAudioAndHttpArgumentsUsePinnedLuaJConversions();
   testMainStateArgumentsUsePinnedLuaJConversions();
   testTimerAndEventUtilityClosures();

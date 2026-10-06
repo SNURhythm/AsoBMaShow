@@ -81,12 +81,15 @@ public:
       std::function<std::unique_ptr<IRendererDisplayTransaction>(
           std::uint32_t, std::string &errorMessage)>;
 
+  // Mobile platforms may keep native geometry while allowing renderer VSync.
   SDLDisplayBackend(SDL_Window *window, bool fixedMobileDisplay,
                     ResetFlagsReader readResetFlags,
-                    RendererTransactionFactory beginRendererTransaction);
+                    RendererTransactionFactory beginRendererTransaction,
+                    bool allowMobileVsync = false);
   SDLDisplayBackend(std::shared_ptr<ISDLDisplayAdapter>,
                     bool fixedMobileDisplay, ResetFlagsReader readResetFlags,
-                    RendererTransactionFactory beginRendererTransaction);
+                    RendererTransactionFactory beginRendererTransaction,
+                    bool allowMobileVsync = false);
 
   Capabilities capabilities() const override;
   void observeRuntimeState() const override;
@@ -120,6 +123,7 @@ private:
 
   std::shared_ptr<ISDLDisplayAdapter> adapter;
   bool fixedMobileDisplay = false;
+  bool allowMobileVsync = false;
   ResetFlagsReader readResetFlags;
   RendererTransactionFactory beginRendererTransaction;
   mutable std::optional<WindowedGeometry> lastWindowedGeometry;

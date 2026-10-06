@@ -572,7 +572,11 @@ std::optional<SkinBuiltinPropertySelector>
 mainStatePropertyArgument(lua_State *state, int index, SkinBindingType type) {
   SkinBuiltinPropertySelector selector;
   if (const auto number = utilityNumberValue(state, index)) {
-    selector.value = luaJToInt(*number);
+    const int numeric = luaJToInt(*number);
+    return gameplaySkinBuiltinNumericContains(type, numeric)
+               ? std::optional<SkinBuiltinPropertySelector>(
+                     SkinBuiltinPropertySelector{numeric})
+               : std::nullopt;
   } else if (lua_type(state, index) == LUA_TSTRING) {
     std::size_t size = 0;
     const char *name = lua_tolstring(state, index, &size);

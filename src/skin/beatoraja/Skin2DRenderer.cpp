@@ -342,6 +342,14 @@ bool validateAndMergeProjection(const ISkinFrameState &state,
 const SkinObjectDefinition *
 findObject(std::span<const SkinObjectDefinition *const> objects,
            SkinObjectId id) noexcept {
+  // Decoders normally assign consecutive IDs. Verify the candidate so sparse
+  // or externally authored models retain the exact binary-search behavior.
+  if (!objects.empty() && id >= objects.front()->id) {
+    const auto offset = id - objects.front()->id;
+    if (offset < objects.size() && objects[offset]->id == id) {
+      return objects[offset];
+    }
+  }
   const auto found =
       std::lower_bound(objects.begin(), objects.end(), id,
                        [](const SkinObjectDefinition *object,
@@ -407,6 +415,15 @@ buildFrameLookupIndex(const ValidatedBeatorajaSkinModel &model,
 template <typename Binding, typename Id>
 const Binding *findBinding(const std::vector<const Binding *> &bindings,
                            Id id) noexcept {
+  if (!bindings.empty() && id.value >= bindings.front()->id.value) {
+    const auto offset = id.value - bindings.front()->id.value;
+    if (offset < bindings.size()) {
+      recordLookupComparison();
+      if (bindings[offset]->id == id) {
+        return bindings[offset];
+      }
+    }
+  }
   const auto found = std::lower_bound(bindings.begin(), bindings.end(), id,
                                       [](const Binding *binding, Id value) {
                                         recordLookupComparison();

@@ -37,6 +37,15 @@ function(asobmashow_fix_bgfx_vulkan)
     string(REPLACE "${suboptimal_error}" "${suboptimal_error_fixed}" source "${source}")
     string(REPLACE "${swapchain_success}" "${swapchain_success_fixed}" source "${source}")
     string(REPLACE "${present_result}" "${present_result_fixed}" source "${source}")
+    # Android usually exposes FIFO and MAILBOX without IMMEDIATE. Mailbox lets
+    # the producer run freely, replacing queued frames at the display boundary.
+    set(immediate "\t\t{ VK_PRESENT_MODE_IMMEDIATE_KHR,    false, \"VK_PRESENT_MODE_IMMEDIATE_KHR\"    },")
+    set(android_mailbox "#if BX_PLATFORM_ANDROID\n\t\t{ VK_PRESENT_MODE_MAILBOX_KHR,      false, \"VK_PRESENT_MODE_MAILBOX_KHR\"      },\n#endif\n${immediate}")
+    string(FIND "${source}" "${immediate}" match)
+    if(match EQUAL -1)
+        message(FATAL_ERROR "bgfx Vulkan source changed; review Android VSync-off presentation")
+    endif()
+    string(REPLACE "${immediate}" "${android_mailbox}" source "${source}")
     # configure_file preserves the timestamp when the resulting source is unchanged.
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/bgfx")
     file(WRITE "${corrected}.in" "${source}")

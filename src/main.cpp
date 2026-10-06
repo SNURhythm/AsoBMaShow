@@ -956,7 +956,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               context.framePacer.reset(std::chrono::steady_clock::now());
               return true;
             });
-      });
+      }, TARGET_PLATFORM == Android);
+#if TARGET_OS_ANDROID
+  // Android owns native geometry; only apply the persisted renderer preference.
+  auto startupVideo = context.displayBackend->capture().settings;
+  startupVideo.vsync = context.settings.audioVideo.video.vsync;
+  std::string startupVsyncError;
+  if (!context.displayBackend->apply(startupVideo, startupVsyncError)) {
+    SDL_Log("Could not apply Android VSync preference: %s",
+            startupVsyncError.c_str());
+  }
+#endif
   context.displaySettingsManager =
       std::make_unique<display::DisplaySettingsManager>(
           *context.displayBackend, context.framePacer,

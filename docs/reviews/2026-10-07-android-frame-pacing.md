@@ -3,7 +3,7 @@
 Measured on 2026-10-07 KST using the connected SM-G781N (Android 13), its
 120 Hz display mode, Vulkan, and a native 2400 × 1080 landscape surface.
 The workload was the existing `simple-play-simple` custom skin with
-`"Fresco" [Type 38]`, 3,431 notes, Easy gauge and BGA enabled. VSync remained
+`"Fresco" [Type 38]`, 3,431 notes, Easy gauge and BGA enabled. For the initial swapchain investigation below, VSync remained
 on, the app frame cap remained unlimited, and render scale remained 1.0.
 The measurements cover unattended gameplay rendering, not a human input-latency test.
 
@@ -82,3 +82,60 @@ Vulkan recreation loop, without forcing a Samsung performance policy.
 - Device DocumentsProvider, native refresh and skin-directory import instrumentation all passed again on the final APK. Coverage includes protected database/profile trees, destination reservations through source deletion, skin progress, cancellation, ownership and cleanup.
 - The earlier release Java unit-test run passed all 41 tests.
 - No iOS rebuild was run for this Android-only Vulkan behavior change. No Firebase upload was performed.
+
+## Follow-up: configurable Android VSync and three optimization rounds
+
+Android now exposes the existing VSync setting, still enabled by default.
+The connected phone was explicitly set to Off with an unlimited frame cap,
+and that preference survives a cold restart. Android continues to own native
+window geometry; preview, confirmation and rollback change renderer flags
+without requesting desktop display modes. Rollback uses the current drawable
+if the device rotates during preview. iOS retains its existing VSync policy.
+
+With VSync off, Android Vulkan prefers supported MAILBOX presentation, then
+IMMEDIATE, with FIFO as the supported fallback. This phone selected MAILBOX.
+MAILBOX permits the producer to replace a pending frame while the display
+still consumes frames at its refresh rate; rendered FPS and displayed FPS
+are therefore different measurements. Other platforms retain the existing
+presentation preference order. See the
+[Vulkan presentation-mode specification](https://docs.vulkan.org/refpages/latest/refpages/source/VkPresentModeKHR.html).
+
+Each round below used 12 consecutive five-second gameplay timing windows
+(about 60 seconds) on the same device, chart, custom skin and BGA at native
+2400 × 1080 and render scale 1.0. FPS is the mean of those window rates.
+Temporary timing hooks were identical across the three builds and removed
+from the final release. These are sequential device measurements, not a
+randomized thermal-controlled benchmark or a measured input-latency result.
+
+| Round | Change | Rendered FPS | Five-second FPS range | CPU draw time/frame |
+| --- | --- | ---: | ---: | ---: |
+| 1 | VSync off, MAILBOX; uncapped baseline | 469.35 | 443.4–478.5 | 1.966 ms |
+| 2 | Index numeric Lua built-in catalog admission | 564.21 | 559.5–570.7 | 1.633 ms |
+| 3 | Checked direct lookup for consecutive renderer IDs | 608.23 | 593.8–623.5 | 1.477 ms |
+
+Round 2 replaces repeated linear catalog membership scans with a sorted
+index keyed by binding kind, relevant domain and selector. Explicit sparse
+admission and range semantics remain authoritative. Round 3 checks the
+expected array offset for consecutive object/binding IDs and retains binary
+search for sparse or mismatched IDs. Together these changes raised measured
+render throughput by 29.6% over the uncapped baseline and reduced CPU draw
+time by 24.9%. Both optimizations are shared skin code; iOS performance was
+not measured.
+
+The final release, with probes removed, displayed 664 FPS in a gameplay
+screenshot; that is a point sample, not another sustained benchmark.
+SurfaceFlinger independently recorded 3,156 presented frames over 26.695
+seconds: 118.186 displayed FPS, p95 8.521 ms, p99 8.594 ms, longest 8.838 ms,
+and no interval above 12 ms. The display remains in its 120 Hz mode. At the
+end of the instrumented third round, Android reported thermal status 2 and
+an AP sensor of 48.5 °C. Long-session thermal behavior was not measured.
+VSync remains enabled by default; the test phone retains the requested Off
+preference and the app was stopped after verification.
+
+### Follow-up validation
+
+- Final signed restricted-file-access Android release build and desktop `main` build passed.
+- All nine focused CTests passed: audio/video settings, settings UI, display manager, SDL display backend, Vulkan MSAA, Vulkan swapchain/presentation policy, Lua skin host modules, skin draw commands and renderer golden images.
+- Regression cases cover native geometry, failed renderer transactions, VSync rollback after rotation, Android versus iOS capabilities, supported presentation-mode fallbacks, exact typed catalog admission, consecutive IDs, sparse IDs and duplicate rejection. The new behavior regressions were observed failing before their fixes.
+- On the final phone build, VSync preview/cancel, landscape/portrait restoration, background/resume and gameplay rendering passed. Persisted VSync Off was also verified through cold restart during the measured rounds.
+- Temporary native timing hooks, profiling manifest changes and device profiling files were removed. No iOS build or Firebase upload was performed for this follow-up.

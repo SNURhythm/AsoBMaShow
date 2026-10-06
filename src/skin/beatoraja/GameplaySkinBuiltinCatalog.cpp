@@ -719,8 +719,13 @@ bool isPinnedBeatorajaBooleanPropertyId(int selector) noexcept {
                             kPinnedBooleanPropertyIds.end(), selector);
 }
 
-SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
+namespace {
+const auto &builtinEntries() {
   static const auto entries = makeCatalog();
+  return entries;
+}
+
+const auto &builtinRanges() {
   static constexpr auto ranges = std::to_array<SkinBuiltinBindingCatalogRange>({
       // IntegerPropertyFactory's two 65,536-entry caches make every selector
       // in 0..65535 loadable in Beatoraja, but the catalog intentionally
@@ -740,8 +745,43 @@ SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
        .first = std::numeric_limits<int>::min(),
        .last = std::numeric_limits<int>::max()},
   });
-  return SkinBuiltinBindingCatalogView(entries, ranges,
+  return ranges;
+}
+
+std::array<int, 4> numericCatalogKey(SkinBindingType type, int selector) {
+  return {static_cast<int>(type.kind),
+          type.kind == SkinBindingKind::IntegerProperty
+              ? static_cast<int>(type.integerDomain) : 0,
+          type.kind == SkinBindingKind::FloatProperty
+              ? static_cast<int>(type.floatDomain) : 0,
+          selector};
+}
+} // namespace
+
+SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
+  return SkinBuiltinBindingCatalogView(builtinEntries(), builtinRanges(),
                                        matchesBeatorajaBuiltinName);
+}
+
+bool gameplaySkinBuiltinNumericContains(SkinBindingType type, int selector) {
+  // Keep the sparse catalog authoritative: unknown numeric properties must
+  // not become supported just because a neighboring ID is implemented.
+  static const auto index = [] {
+    std::vector<std::array<int, 4>> keys;
+    keys.reserve(builtinEntries().size());
+    for (const auto &entry : builtinEntries()) {
+      if (const auto *numeric = std::get_if<int>(&entry.selector.value)) {
+        keys.push_back(numericCatalogKey(entry.type, *numeric));
+      }
+    }
+    std::ranges::sort(keys);
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    return keys;
+  }();
+  return std::binary_search(index.begin(), index.end(),
+                            numericCatalogKey(type, selector)) ||
+         SkinBuiltinBindingCatalogView({}, builtinRanges()).contains(
+             type, SkinBuiltinPropertySelector{selector});
 }
 
 } // namespace skin
