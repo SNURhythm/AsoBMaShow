@@ -75,7 +75,7 @@ void testEveryModeAndAuthoredPositionRoundTrips() {
 void testLanguagePreferenceRoundTripsAndMigrates() {
   TempDirectory temp;
   const auto path = applicationUiStatePath(temp.path());
-  for (const std::string preference : {"system", "en", "ko", "ja"}) {
+  for (const std::string preference : {"system", "en", "ko", "ja", "zh-Hans", "zh-Hant"}) {
     ApplicationUiState state;
     state.language = preference;
     state.musicSelectToolbar.x = 42.0F;

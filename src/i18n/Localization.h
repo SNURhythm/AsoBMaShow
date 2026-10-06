@@ -3,30 +3,56 @@
 #include <initializer_list>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 namespace i18n {
-enum class Language { English, Korean, Japanese };
+enum class Language { English, Korean, Japanese, SimplifiedChinese, TraditionalChinese };
 
 // The preference is device-wide. Unknown preferences behave like System.
 inline bool isLanguagePreference(std::string_view preference) {
   return preference == "system" || preference == "en" ||
-         preference == "ko" || preference == "ja";
+         preference == "ko" || preference == "ja" ||
+         preference == "zh-Hans" || preference == "zh-Hant";
+}
+
+inline std::optional<Language> languageForLocale(std::string_view locale) {
+  std::string normalized(locale);
+  for (char &character : normalized) {
+    if (character == '_') character = '-';
+    else if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+  }
+  locale = normalized;
+  const auto base = locale.substr(0, locale.find('-'));
+  if (base == "en") return Language::English;
+  if (base == "ko") return Language::Korean;
+  if (base == "ja") return Language::Japanese;
+  if (base != "zh") return std::nullopt;
+
+  // Explicit script takes priority over region (for example zh-Hans-TW).
+  bool traditionalRegion = false;
+  auto separator = locale.find('-');
+  while (separator != std::string_view::npos) {
+    locale.remove_prefix(separator + 1);
+    separator = locale.find('-');
+    const auto component = locale.substr(0, separator);
+    if (component == "hans") return Language::SimplifiedChinese;
+    if (component == "hant") return Language::TraditionalChinese;
+    if (component == "tw" || component == "hk" || component == "mo")
+      traditionalRegion = true;
+  }
+  return traditionalRegion ? Language::TraditionalChinese : Language::SimplifiedChinese;
 }
 
 inline Language resolveLanguage(
     std::string_view preference,
     std::initializer_list<std::string_view> preferredLanguages) {
-  if (preference == "ko") return Language::Korean;
-  if (preference == "en") return Language::English;
-  if (preference == "ja") return Language::Japanese;
-  for (auto locale : preferredLanguages) {
-    locale = locale.substr(0, locale.find_first_of("-_"));
-    if (locale == "ko") return Language::Korean;
-    if (locale == "en") return Language::English;
-    if (locale == "ja") return Language::Japanese;
+  if (isLanguagePreference(preference) && preference != "system")
+    return *languageForLocale(preference);
+  for (const auto locale : preferredLanguages) {
+    if (const auto resolved = languageForLocale(locale)) return *resolved;
   }
   return Language::English;
 }
