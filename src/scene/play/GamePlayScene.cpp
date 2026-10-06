@@ -4547,6 +4547,8 @@ lane_cover::State GamePlayScene::laneCoverState() const noexcept {
 }
 
 void GamePlayScene::adjustLaneCoverFromInput(float deltaPercent) {
+  // Replay covers belong to the recording, not to the viewer's saved options.
+  if (isReplayPlayback()) return;
   const long long chartTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
   if (!practiceInputAllowed(chartTimeMicros) || courseNoSpeed() ||
