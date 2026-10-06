@@ -70,6 +70,7 @@ public:
   FolderActionService &operator=(const FolderActionService &) = delete;
 
   void requestAddFolder();
+  void requestImportFolder(bool moveSource = false);
   void requestImportArchive();
   void poll();
   [[nodiscard]] bool active() const noexcept;

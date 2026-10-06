@@ -674,7 +674,14 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
           : "Imported " + importType + ". Library already current.";
   SDL_Log("Android import task result: %s", message.c_str());
   archive_file::appendDebugLogLine(message);
-  return {.detail = i18n::message("library.tasks.complete.label")};
+  if (!request.androidImportRetainedError.empty()) {
+    return {.disposition = TaskRunDisposition::Failed,
+            .detail = i18n::message(request.androidImportMove ? "library.tasks.move_incomplete"
+                                                            : "library.tasks.import_error",
+                                    {{"detail", request.androidImportRetainedError}})};
+  }
+  return {.detail = i18n::message(request.androidImportMove ? "library.tasks.moved"
+                                                           : "library.tasks.complete.label")};
 #else
   (void)request;
   (void)stopToken;

@@ -749,13 +749,28 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDocumentsRefreshStatus(
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeBeginChartImport(
-    JNIEnv *env, jclass, jstring token, jboolean folder) {
+    JNIEnv *env, jclass, jstring token, jboolean folder, jboolean moveSource) {
   std::lock_guard lock(gAndroidImportTasksMutex);
   if (gAndroidImportTasks == nullptr) {
     return 0;
   }
   return gAndroidImportTasks->beginAndroidImport(jstringToUtf8(env, token),
-                                                folder == JNI_TRUE) ? 1 : -1;
+                                                folder == JNI_TRUE, moveSource == JNI_TRUE) ? 1 : -1;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportProgress(
+    JNIEnv *env, jclass, jstring token, jint files, jint totalFiles,
+    jlong bytes, jlong totalBytes, jstring name, jint phase) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) return;
+  try {
+    gAndroidImportTasks->updateAndroidImportProgress(jstringToUtf8(env, token),
+        files, totalFiles, bytes > 0 ? static_cast<std::uint64_t>(bytes) : 0,
+        totalBytes, jstringToUtf8(env, name), phase);
+  } catch (...) {
+    SDL_Log("Could not publish Android import progress");
+  }
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -770,13 +785,13 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportCopyState(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeFinishChartImport(
     JNIEnv *env, jclass, jstring token, jboolean folder, jstring path,
-    jstring error) {
+    jstring error, jstring retainedError) {
   std::lock_guard lock(gAndroidImportTasksMutex);
   return gAndroidImportTasks != nullptr &&
                  gAndroidImportTasks->finishAndroidImport(
                      jstringToUtf8(env, token), folder == JNI_TRUE,
                      std::filesystem::path(jstringToUtf8(env, path)),
-                     jstringToUtf8(env, error))
+                     jstringToUtf8(env, error), jstringToUtf8(env, retainedError))
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -1068,7 +1083,7 @@ bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
 }
 
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
-                                std::string &errorMessage) {
+                                std::string &errorMessage, bool moveSource) {
   folderPath.clear();
   RequestAndroidExternalActivityRenderPause();
   struct ExternalActivityPauseReset {
@@ -1077,7 +1092,8 @@ bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
 
   std::string callError;
   const std::string result = callActivityStringMethod(
-      "pickFolderForImport", "()Ljava/lang/String;", nullptr, callError);
+      "pickFolderForImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      moveSource ? "move" : "copy", callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

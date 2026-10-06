@@ -16,5 +16,10 @@ public final class AsoBMaShowApplication extends Application {
         } catch (ErrnoException error) {
             throw new IllegalStateException("Could not configure private temporary storage", error);
         }
+        try {
+            AsoBMaShowDocumentsProvider.initializeDocuments(this);
+        } catch (java.io.IOException error) {
+            android.util.Log.e("AsoBMaShow", "Could not initialize Documents/Skins", error);
+        }
     }
 }

@@ -64,7 +64,8 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
 bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
                                  std::string &errorMessage);
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
-                                std::string &errorMessage);
+                                std::string &errorMessage,
+                                bool moveSource = false);
 bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
                                     std::string &errorMessage);
 void RetireAndroidDocumentHandoff(std::uint64_t operationToken);

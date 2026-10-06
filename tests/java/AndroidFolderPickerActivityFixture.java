@@ -280,8 +280,9 @@ class Intent {
     int getFlags() { return flags; }
     static final String ACTION_OPEN_DOCUMENT_TREE = "tree";
     static final int FLAG_GRANT_READ_URI_PERMISSION = 1;
-    static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 2;
-    static final int FLAG_GRANT_PREFIX_URI_PERMISSION = 4;
+    static final int FLAG_GRANT_WRITE_URI_PERMISSION = 2;
+    static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 64;
+    static final int FLAG_GRANT_PREFIX_URI_PERMISSION = 128;
     Intent(String action) {}
     void setData(Uri uri) { data = uri; }
     void addFlags(int flags) { this.flags |= flags; }

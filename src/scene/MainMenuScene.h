@@ -235,6 +235,11 @@ private:
   View *parseLogModalRoot = nullptr;
   View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
+#if TARGET_OS_ANDROID
+  View *fileActionsModalRoot_ = nullptr;
+  View *fileActionsPanel_ = nullptr;
+  View *folderImportPanel_ = nullptr;
+#endif
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   RecyclerView<MainMenuParseLogRow> *parseLogRecyclerView = nullptr;
   TextView *parseLogExportStatusText = nullptr;
@@ -511,6 +516,12 @@ private:
   void playNextMusicTrack();
   void playPreviousMusicTrack();
   void stopMusicPlayback();
+#if TARGET_OS_ANDROID
+  void buildFileActionsModal();
+  void resizeFileActionsModal();
+  void resizeTasksModal();
+  void showFileActionsModal();
+#endif
   void buildTasksModal();
   void showTasksModal();
   void hideTasksModal();

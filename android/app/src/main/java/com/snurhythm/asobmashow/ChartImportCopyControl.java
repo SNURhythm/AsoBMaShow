@@ -6,6 +6,7 @@ import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
+import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
 final class ChartImportCopyControl {
@@ -13,6 +14,7 @@ final class ChartImportCopyControl {
     static final long ARCHIVE_RESERVED_BYTES = 256L * 1024 * 1024;
     private final IntSupplier copyState;
     private final BooleanSupplier cancelled;
+    private long pauseGeneration;
 
     ChartImportCopyControl(IntSupplier copyState, BooleanSupplier cancelled) {
         this.copyState = copyState;
@@ -20,16 +22,15 @@ final class ChartImportCopyControl {
     }
 
     void checkpoint() throws InterruptedIOException {
+        boolean waited = false;
         while (true) {
-            if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
-                throw new InterruptedIOException("Chart import cancelled.");
-            }
-            int state = copyState.getAsInt();
-            if (state < 0) {
-                throw new InterruptedIOException("Chart import cancelled.");
-            }
+            int state = currentState();
             if (state > 0) {
                 return;
+            }
+            if (!waited) {
+                pauseGeneration++;
+                waited = true;
             }
             try {
                 Thread.sleep(20);
@@ -40,8 +41,31 @@ final class ChartImportCopyControl {
         }
     }
 
+    long pauseGeneration() {
+        return pauseGeneration;
+    }
+
+    boolean continueWithoutWaiting(long validatedGeneration) throws InterruptedIOException {
+        // Never suspend between validating a source snapshot and deleting it. If
+        // validation (including a provider cursor) paused, the caller must list again.
+        return currentState() > 0 && pauseGeneration == validatedGeneration;
+    }
+
+    private int currentState() throws InterruptedIOException {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Chart import cancelled.");
+        }
+        int state = copyState.getAsInt();
+        if (state < 0) throw new InterruptedIOException("Chart import cancelled.");
+        return state;
+    }
+
     void copy(InputStream input, OutputStream output) throws IOException {
-        copy(input, output, Long.MAX_VALUE, 0, null);
+        copy(input, output, null);
+    }
+
+    void copy(InputStream input, OutputStream output, LongConsumer bytesCopied) throws IOException {
+        copy(input, output, Long.MAX_VALUE, 0, null, bytesCopied);
     }
 
     void copyArchive(InputStream input, OutputStream output, LongSupplier usableSpace)
@@ -54,11 +78,11 @@ final class ChartImportCopyControl {
         if (maximumBytes < 0 || reservedBytes < 0 || usableSpace == null) {
             throw new IllegalArgumentException("Invalid archive copy budget.");
         }
-        copy(input, output, maximumBytes, reservedBytes, usableSpace);
+        copy(input, output, maximumBytes, reservedBytes, usableSpace, null);
     }
 
     private void copy(InputStream input, OutputStream output, long maximumBytes,
-                      long reservedBytes, LongSupplier usableSpace) throws IOException {
+                      long reservedBytes, LongSupplier usableSpace, LongConsumer bytesCopied) throws IOException {
         byte[] buffer = new byte[1024 * 1024];
         long copiedBytes = 0;
         while (true) {
@@ -79,6 +103,9 @@ final class ChartImportCopyControl {
             }
             output.write(buffer, 0, count);
             copiedBytes += count;
+            if (bytesCopied != null && count > 0) {
+                bytesCopied.accept(count);
+            }
         }
     }
 }

@@ -56,6 +56,7 @@ final class DocumentsProviderInstrumentationChecks {
                 Document.FLAG_SUPPORTS_DELETE | Document.FLAG_SUPPORTS_RENAME);
         // No game Activity is launched and the test must not create Documents itself.
         require(nativeRoot.isDirectory(), "Provider did not initialize Documents before game launch");
+        require(new File(nativeRoot, "Skins").isDirectory(), "Provider did not initialize Documents/Skins");
         Map<String, String> rootChildren = children(resolver, authority, ROOT_DOCUMENT_ID);
         File[] nativeChildren = nativeRoot.listFiles();
         require(nativeChildren != null, "Cannot enumerate native documents directory");
@@ -75,6 +76,8 @@ final class DocumentsProviderInstrumentationChecks {
         verifyPrivateBoundary(context, resolver, authority, nativeRoot);
         verifyOpenFilesIntent(context, instrumentation, authority);
         verifySelfImportRejected(authority, instrumentation);
+        verifyIncompleteFolderListings();
+        verifyFolderTransfers(context, resolver, authority, nativeRoot);
         verifyWriterBatch(context, resolver, authority, nativeRoot);
         String fixtureName = "DocumentsProviderTest-" + UUID.randomUUID();
         File nativeFixture = new File(nativeRoot, fixtureName);
@@ -210,6 +213,45 @@ final class DocumentsProviderInstrumentationChecks {
         }
     }
 
+    private static void verifyIncompleteFolderListings() throws Exception {
+        Uri tree = DocumentsContract.buildTreeDocumentUri("incomplete.test", "root");
+        ChartFolderImport.Entry folder = new ChartFolderImport.Entry("root", "root", true, 0, 0);
+        for (boolean loading : new boolean[]{true, false}) {
+            for (boolean late : new boolean[]{false, true}) {
+                android.content.ContentProvider provider = new android.content.ContentProvider() {
+                    @Override public boolean onCreate() { return true; }
+                    @Override public String getType(Uri uri) { return Document.MIME_TYPE_DIR; }
+                    @Override public Uri insert(Uri uri, android.content.ContentValues values) { return null; }
+                    @Override public int update(Uri uri, android.content.ContentValues values,
+                                                String selection, String[] args) { return 0; }
+                    @Override public int delete(Uri uri, String selection, String[] args) {
+                        throw new AssertionError("Incomplete listing triggered source deletion");
+                    }
+                    @Override public Cursor query(Uri uri, String[] projection, String selection,
+                                                  String[] args, String order) {
+                        android.database.MatrixCursor cursor = new android.database.MatrixCursor(projection) {
+                            int extrasReads;
+                            @Override public android.os.Bundle getExtras() {
+                                android.os.Bundle extras = new android.os.Bundle();
+                                if (!late || extrasReads++ > 0) {
+                                    if (loading) extras.putBoolean(DocumentsContract.EXTRA_LOADING, true);
+                                    else extras.putString(DocumentsContract.EXTRA_ERROR, "Provider unavailable");
+                                }
+                                return extras;
+                            }
+                        };
+                        cursor.addRow(new Object[]{"root", "root", Document.MIME_TYPE_DIR, 0L, 0L});
+                        return cursor;
+                    }
+                };
+                SafChartFolderSource source = new SafChartFolderSource(ContentResolver.wrap(provider),
+                        tree, new ChartImportCopyControl(() -> 1, () -> false));
+                requireRejected(() -> source.root(), "Incomplete root metadata was accepted");
+                requireRejected(() -> source.children(folder), "Partial folder listing was accepted");
+            }
+        }
+    }
+
     static Intent verifyOpenFilesIntent(Context context, Instrumentation instrumentation,
                                              String authority) {
         AtomicReference<Intent> captured = new AtomicReference<>();
@@ -223,18 +265,15 @@ final class DocumentsProviderInstrumentationChecks {
             String result = activity.openDocumentsFolder();
             require("__OK__".equals(result), "Open in Files failed: " + result);
             Intent launched = activity.launched;
-            Uri tree = DocumentsContract.buildTreeDocumentUri(authority, ROOT_DOCUMENT_ID);
             require(launched != null && Intent.ACTION_VIEW.equals(launched.getAction())
                     && Document.MIME_TYPE_DIR.equals(launched.getType())
-                    && DocumentsContract.buildDocumentUriUsingTree(tree, ROOT_DOCUMENT_ID + "BMS")
+                    && DocumentsContract.buildDocumentUri(authority, ROOT_DOCUMENT_ID + "BMS")
                             .equals(launched.getData()), "Open in Files did not target BMS");
-            require(launched.getComponent() == null && launched.getPackage() == null,
-                    "Open in Files excludes third-party explorers");
-            int grants = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                    | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
-            require((launched.getFlags() & grants) == grants && launched.getClipData() != null
-                    && tree.equals(launched.getClipData().getItemAt(0).getUri()),
-                    "Explorer does not receive access to the Documents tree");
+            require(launched.getComponent() != null, "Open in Files did not select the system browser");
+            android.content.pm.ResolveInfo resolved = context.getPackageManager().resolveActivity(launched, 0);
+            require(resolved != null && (resolved.activityInfo.applicationInfo.flags
+                    & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
+                    "Open in Files selected a third-party explorer");
             captured.set(launched);
         });
         return captured.get();
@@ -283,7 +322,8 @@ final class DocumentsProviderInstrumentationChecks {
 
     private static void verifySelfImportRejected(String authority, Instrumentation instrumentation) throws Exception {
         Method copy = AsoBMaShowActivity.class.getDeclaredMethod(
-                "copyTreeUriToBmsFolder", Uri.class, String.class, ChartImportCopyControl.class);
+                "copyTreeUriToBmsFolder", Uri.class, File.class, boolean.class,
+                ChartImportCopyControl.class, ChartFolderImport.Progress.class);
         copy.setAccessible(true);
         AtomicReference<AsoBMaShowActivity> activity = new AtomicReference<>();
         instrumentation.runOnMainSync(() -> activity.set(new AsoBMaShowActivity()));
@@ -291,13 +331,64 @@ final class DocumentsProviderInstrumentationChecks {
             // Rejection must happen before any copy/checkpoint or Activity storage access.
             copy.invoke(activity.get(),
                     DocumentsContract.buildTreeDocumentUri(authority, ROOT_DOCUMENT_ID),
-                    "AsoBMaShow", null);
+                    new File("unused"), false, null, null);
             throw new AssertionError("Own Documents tree can be imported recursively into itself");
         } catch (InvocationTargetException error) {
             require(error.getCause() instanceof IOException &&
                     error.getCause().getMessage().contains("already in AsoBMaShow"),
                     "Own Documents tree did not fail before starting the copy");
         }
+    }
+
+    private static void verifyFolderTransfers(Context context, ContentResolver resolver,
+                                               String authority, File nativeRoot) throws Exception {
+        String name = "FolderTransferTest-" + UUID.randomUUID();
+        File sourceFile = new File(nativeRoot, name);
+        File copied = new File(context.getCacheDir(), name + "-copy");
+        File moved = new File(context.getCacheDir(), name + "-move");
+        Uri source = create(resolver, DocumentsContract.buildDocumentUri(authority, ROOT_DOCUMENT_ID),
+                Document.MIME_TYPE_DIR, name);
+        try {
+            Uri first = create(resolver, source, Document.MIME_TYPE_DIR, "Album One");
+            Uri second = create(resolver, source, Document.MIME_TYPE_DIR, "Album Two");
+            byte[] firstBytes = {1, 2, 3, 4};
+            byte[] secondBytes = {5, 6, 7};
+            write(resolver, create(resolver, first, "application/octet-stream", "chart.bms"), firstBytes);
+            write(resolver, create(resolver, second, "application/octet-stream", "audio.wav"), secondBytes);
+            Uri tree = DocumentsContract.buildTreeDocumentUri(authority, DocumentsContract.getDocumentId(source));
+            ChartImportCopyControl control = new ChartImportCopyControl(() -> 1, () -> false);
+            java.util.concurrent.atomic.AtomicInteger deletionSteps = new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicInteger completedFiles = new java.util.concurrent.atomic.AtomicInteger();
+            ChartFolderImport.Progress progress = (files, total, bytes, totalBytes, current, phase) -> {
+                completedFiles.set(files);
+                require(bytes <= totalBytes, "SAF byte progress exceeds its discovered total");
+            };
+            ChartFolderImport.Result copy = ChartFolderImport.run(
+                    new SafChartFolderSource(resolver, tree, control), copied, false, control,
+                    progress, deletionSteps::incrementAndGet);
+            require(copy.complete && sourceFile.isDirectory() && deletionSteps.get() == 0,
+                    "SAF Copy failed or removed the source: " + copy.error);
+            require(Arrays.equals(firstBytes, read(new FileInputStream(new File(copied, "Album One/chart.bms")))),
+                    "SAF Copy changed chart bytes");
+            ChartFolderImport.Result move = ChartFolderImport.run(
+                    new SafChartFolderSource(resolver, tree, control), moved, true, control,
+                    progress, deletionSteps::incrementAndGet);
+            require(move.complete && !sourceFile.exists() && deletionSteps.get() == 3 && completedFiles.get() == 2,
+                    "SAF Move did not delete the completed subfolders and root: " + move.error);
+            require(Arrays.equals(firstBytes, read(new FileInputStream(new File(moved, "Album One/chart.bms"))))
+                    && Arrays.equals(secondBytes, read(new FileInputStream(new File(moved, "Album Two/audio.wav")))),
+                    "SAF Move did not preserve both subfolders");
+        } finally {
+            if (sourceFile.exists()) DocumentsContract.deleteDocument(resolver, source);
+            removeTransferFixture(copied);
+            removeTransferFixture(moved);
+        }
+    }
+
+    private static void removeTransferFixture(File file) throws IOException {
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) removeTransferFixture(child);
+        if (file.exists() && !file.delete()) throw new IOException("Could not clean transfer fixture " + file);
     }
 
     private static void verifyWriterBatch(Context context, ContentResolver resolver,
@@ -383,7 +474,7 @@ final class DocumentsProviderInstrumentationChecks {
     private static void requireRejected(CheckedOperation operation, String message) throws Exception {
         try {
             operation.run();
-        } catch (java.io.FileNotFoundException | SecurityException | IllegalArgumentException
+        } catch (IOException | SecurityException | IllegalArgumentException
                  | UnsupportedOperationException | Rejected expected) {
             return;
         }

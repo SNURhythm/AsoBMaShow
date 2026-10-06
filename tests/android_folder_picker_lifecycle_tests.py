@@ -36,7 +36,8 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
                       "protected void onDestroy()", "public String pickChartFolder(",
                       "public String ensureManageExternalStorageAccess(",
                       "private boolean hasManageExternalStorageAccess()",
-                      "private String directPathForTree(", "private boolean isChartFile("]
+                      "private String directPathForTree(", "private String storagePathForTree(",
+                      "private boolean isChartFile("]
         for optional in ["private void finishPicker()",
                          "private void finishManageStorageRequest()"]:
             if optional in activity:

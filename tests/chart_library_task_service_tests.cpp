@@ -773,6 +773,46 @@ void testAndroidImportsKeepOriginAcrossInterleavedResults() {
          "archive and folder retain their own ID, path, and type");
 }
 
+void testAndroidFolderCopyProgressAndRetainedMove() {
+  using namespace chart_library_tasks;
+  std::atomic_bool sawRetainedMove = false;
+  ChartLibraryTaskService service([&](const TaskRequest &request, const auto &, auto, auto) {
+    sawRetainedMove = request.androidImportFolder && request.androidImportMove &&
+        request.androidImportPath == "BMS/partial" && request.androidImportRetainedError == "provider denied deletion";
+    return TaskRunResult{.disposition = TaskRunDisposition::Failed,
+                         .detail = i18n::message("library.tasks.move_incomplete",
+                                                 {{"detail", request.androidImportRetainedError}})};
+  });
+  expect(service.beginAndroidImport("moving", true, true), "move reserves a task before discovery");
+  expect(service.beginAndroidImport("other", true), "unrelated copy reserves independently");
+  expect(service.updateAndroidImportProgress("moving", 2, 4, 1024, 4096, "kick.wav", 1),
+         "copy progress reaches the reserved task before indexing starts");
+  const auto progress = service.snapshot();
+  const auto &move = progress.tasks.at(0);
+  expect(move.fraction == 0.25 && move.current == 2 && move.total == 4 &&
+             move.detail.resolve().find("kick.wav") != std::string::npos,
+         "Tasks exposes byte fraction, file counts and the current filename");
+  expect(progress.tasks.at(1).fraction == 0 && progress.tasks.at(1).current == 0,
+         "copy progress cannot update another reserved import");
+  service.setGameplayPaused(true);
+  expect(service.updateAndroidImportProgress("moving", 3, 4, 2048, -1, "song.bms", 1),
+         "unknown byte totals use file progress");
+  const auto paused = service.snapshot();
+  expect(paused.tasks.at(0).status == TaskStatus::Paused && paused.tasks.at(0).fraction == 0.75,
+         "copy progress does not undo a gameplay pause");
+  expect(service.finishAndroidImport("moving", true, "BMS/partial", "", "provider denied deletion"),
+         "partial move keeps its destination and schedules indexing");
+  expect(!service.updateAndroidImportProgress("moving", 4, 4, 4096, 4096, "late", 1),
+         "late copy callbacks cannot overwrite indexing progress");
+  service.setGameplayPaused(false);
+  expect(waitUntil([&] { return service.snapshot().tasks.at(0).status == TaskStatus::Failed; }),
+         "partial move finishes as a visible failure after its retained content is indexed");
+  expect(sawRetainedMove.load(), "indexer receives the retained path, move choice and source error");
+  service.shutdown();
+  expect(!service.updateAndroidImportProgress("other", 1, 1, 1, 1, "cancelled", 1),
+         "destroyed imports reject late progress");
+}
+
 void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
   chart_library_tasks::ChartLibraryTaskService service(
       [](const auto &, const auto &, auto, auto) {
@@ -869,6 +909,7 @@ int main() {
   testFailuresCompletionsAndHistoryRemainObservable();
   testReservedPlatformCopyTaskCanBeQueuedOrFailed();
   testAndroidImportsKeepOriginAcrossInterleavedResults();
+  testAndroidFolderCopyProgressAndRetainedMove();
   testAndroidCopyCheckpointsFollowPauseAndLifecycle();
   if (failures != 0) {
     std::cerr << failures << " chart library task test(s) failed\n";

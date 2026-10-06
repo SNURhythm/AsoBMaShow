@@ -61,12 +61,21 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
 
     @Override public boolean onCreate() { return true; }
 
-    private DocumentsPathPolicy paths() throws IOException {
-        File documents = documentsDirectory(getContext());
+    static DocumentsPathPolicy initializeDocuments(Context context) throws IOException {
+        File documents = documentsDirectory(context);
         if (!documents.isDirectory() && !documents.mkdirs()) {
             throw new FileNotFoundException("Could not create Documents folder");
         }
-        return new DocumentsPathPolicy(documents);
+        DocumentsPathPolicy policy = new DocumentsPathPolicy(documents);
+        File skins = policy.child(documents, "Skins");
+        if (!skins.isDirectory() && !skins.mkdirs()) {
+            throw new FileNotFoundException("Could not create Skins folder");
+        }
+        return policy;
+    }
+
+    private DocumentsPathPolicy paths() throws IOException {
+        return initializeDocuments(getContext());
     }
 
     private static FileNotFoundException failure(IOException cause) {

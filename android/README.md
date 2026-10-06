@@ -6,9 +6,17 @@ so loading thousands of WAV files does not require individual SAF calls. Import
 Archive uses the same managed library. Both flavors use the same Documents
 subtree and application ID.
 
-**Open in Files** opens Documents/BMS in Android's Files UI or a compatible
-third-party explorer. The chosen explorer receives read/write access to the
-Documents tree and may retain that grant. Navigate up to reach the Documents root.
+Android's **Manage files** button offers folder import, archive import and
+**Open in Files**, with a short explanation of each. Folder import offers Copy
+(keep the originals) or Move. Move frees space after each subfolder is fully
+copied and synced, then removes that source subfolder before continuing. It needs
+space for the current subfolder, rather than another copy of the entire tree.
+Tasks shows discovery, copied files/bytes, source removal and library indexing.
+If a move is interrupted or source deletion fails, completed destination copies
+remain in BMS and remaining source content is kept; the task reports the failure.
+
+**Open in Files** always uses the system Files browser, opening Documents/BMS.
+Navigate up to reach the Documents root. Documents/Skins is created when missing.
 The AsoBMaShow root exposes the entire Documents directory, including
 BMS, databases, Skins and other user files. Files-aware apps can browse, copy,
 export, rename and delete these files through Android's permission grants. The
@@ -153,9 +161,8 @@ This checks full-root browsing, CRUD, truncation, native-path equivalence and
 root/path protection. It removes only its uniquely named fixture folder and
 cache sentinel. Mode `documents-refresh` runs those checks, launches the app and
 also waits for the native library refresh to complete and clear the persisted
-pending-change flag. Mode `documents-open-files` dispatches the production folder
-intent to `-e explorerPackage <package>`. Use `com.snurhythm.asobmashow.test` for
-the separate-UID probe, which verifies BMS/root browsing, persisted grants and
-create/read/write/delete access without the system file manager's privileges.
-Other explorer packages can be checked manually; handling directory links is
-explorer-dependent even when they advertise the directory MIME type.
+pending-change flag. These checks also cover SAF folder Copy/Move and the system
+Files launch intent. Mode `documents-open-files` opens the production BMS link
+in system Files for manual navigation checks. Run
+`python3 tests/android_folder_import_tests.py` for incremental move, interruption,
+source-change, deletion-failure and progress cases without a device.

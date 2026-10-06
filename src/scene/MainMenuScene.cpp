@@ -636,6 +636,19 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
     (void)recordsModal_->handleEvents(event);
     return {};
   }
+#if TARGET_OS_ANDROID
+  if (fileActionsModalRoot_ != nullptr && fileActionsModalRoot_->getVisible() &&
+      event.type == SDL_KEYUP &&
+      (event.key.keysym.sym == SDLK_ESCAPE ||
+       event.key.keysym.sym == SDLK_AC_BACK)) {
+    if (folderImportPanel_->getVisible()) {
+      showFileActionsModal();
+    } else {
+      fileActionsModalRoot_->setVisible(false);
+    }
+    return {};
+  }
+#endif
   return Scene::handleEvents(event);
 }
 
@@ -979,6 +992,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicModalRoot = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
+#if TARGET_OS_ANDROID
+  fileActionsModalRoot_ = nullptr;
+  fileActionsPanel_ = nullptr;
+  folderImportPanel_ = nullptr;
+#endif
   parseLogRecyclerView = nullptr;
   parseLogExportStatusText = nullptr;
   parseLogExportButton = nullptr;
@@ -1399,80 +1417,34 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryActions->setFlexShrink(0);
   nav->addView(libraryActions);
 
-  bool showAddFolderButton = true;
-  i18n::Text addFolderButtonLabel = i18n::message("menu.add_folder.label");
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  showAddFolderButton = true;
-#elif TARGET_OS_ANDROID
-  const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
-  showAddFolderButton = true;
-  addFolderButtonLabel =
-      androidFullFileAccessBuild ? i18n::message("menu.add_folder.label") : i18n::message("menu.import_folder.label");
-#endif
-  if (showAddFolderButton) {
-    auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
-    addFolderButton_ = addFolderButton;
-    auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-    addFolderText->setLocalizedText(addFolderButtonLabel);
-    addFolderText->setAlign(TextView::CENTER);
-    addFolderText->setVAlign(TextView::MIDDLE);
-    addFolderButton->setContentView(addFolderText);
-    styleThemedActionButton(addFolderButton, addFolderText, true,
-                            ui_theme::primaryAction,
-                            ui_theme::primaryActionHover,
-                            ui_theme::primaryActionPressed,
-                            ui_theme::accentBorderStrong);
-    addFolderButton->setCornerRadius(ui_theme::controlRadius());
-    addFolderButton->setStyledBorderWidth(1);
-    addFolderButton->setOnClickListener([this]() {
-      if (this->context.requestAddChartFolderFromFiles) {
-        this->context.requestAddChartFolderFromFiles();
-      }
-    });
-    libraryActions->addView(addFolderButton);
-  }
+  auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
+  addFolderButton_ = addFolderButton;
+  auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
 #if TARGET_OS_ANDROID
-  auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
-  auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  importArchiveText->setLocalizedText(i18n::message("menu.import_archive.label"));
-  importArchiveText->setAlign(TextView::CENTER);
-  importArchiveText->setVAlign(TextView::MIDDLE);
-  importArchiveButton->setContentView(importArchiveText);
-  styleThemedActionButton(importArchiveButton, importArchiveText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
-  importArchiveButton->setCornerRadius(ui_theme::controlRadius());
-  importArchiveButton->setStyledBorderWidth(1);
-  importArchiveButton->setOnClickListener(
-      [this]() {
-        if (this->context.chartLibraryFolderActions) {
-          this->context.chartLibraryFolderActions->requestImportArchive();
-        }
-      });
-  libraryActions->addView(importArchiveButton);
-
-  auto *openFilesButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
-  auto *openFilesText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  openFilesText->setLocalizedText(i18n::message("menu.open_files.label"));
-  openFilesText->setAlign(TextView::CENTER);
-  openFilesText->setVAlign(TextView::MIDDLE);
-  openFilesButton->setContentView(openFilesText);
-  styleThemedActionButton(openFilesButton, openFilesText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
-  openFilesButton->setCornerRadius(ui_theme::controlRadius());
-  openFilesButton->setStyledBorderWidth(1);
-  openFilesButton->setOnClickListener([]() {
-    std::string error;
-    if (!OpenAndroidDocumentsFolder(error)) {
-      SDL_Log("Open Documents: %s", error.c_str());
-      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow",
-                               i18n::tr("menu.open_files.failed"), nullptr);
-    }
-  });
-  libraryActions->addView(openFilesButton);
+  addFolderText->setLocalizedText(i18n::message("menu.manage_files.label"));
+#else
+  addFolderText->setLocalizedText(i18n::message("menu.add_folder.label"));
 #endif
+  addFolderText->setAlign(TextView::CENTER);
+  addFolderText->setVAlign(TextView::MIDDLE);
+  addFolderButton->setContentView(addFolderText);
+  styleThemedActionButton(addFolderButton, addFolderText, true,
+                          ui_theme::primaryAction,
+                          ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
+  addFolderButton->setCornerRadius(ui_theme::controlRadius());
+  addFolderButton->setStyledBorderWidth(1);
+  addFolderButton->setOnClickListener([this]() {
+#if TARGET_OS_ANDROID
+    showFileActionsModal();
+#else
+    if (this->context.requestAddChartFolderFromFiles) {
+      this->context.requestAddChartFolderFromFiles();
+    }
+#endif
+  });
+  libraryActions->addView(addFolderButton);
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
@@ -1999,6 +1971,9 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
   buildParseLogModal();
   buildTasksModal();
+#if TARGET_OS_ANDROID
+  buildFileActionsModal();
+#endif
   buildFindBmsModal();
   buildUnzipProgressModal();
   rootLayout->addView(overlayPortal);
@@ -4722,6 +4697,199 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   return findBmsDownloadRoot(chartSession ? &*chartSession : nullptr);
 }
 
+#if TARGET_OS_ANDROID
+void MainMenuScene::buildFileActionsModal() {
+  if (rootLayout == nullptr) return;
+
+  // The scene view tree owns both panels for their entire lifetime. Switching
+  // panels only changes visibility, including inside button callbacks.
+  fileActionsModalRoot_ = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  fileActionsModalRoot_->setPositionType(YGPositionTypeAbsolute);
+  fileActionsModalRoot_->setPosition(Edge::Left, 0);
+  fileActionsModalRoot_->setPosition(Edge::Top, 0);
+  fileActionsModalRoot_->setZIndex(1000);
+  fileActionsModalRoot_->setVisible(false);
+  fileActionsModalRoot_->setFlexDirection(FlexDirection::Column);
+  fileActionsModalRoot_->setAlignItems(YGAlignCenter);
+  fileActionsModalRoot_->setJustifyContent(YGJustifyCenter);
+  fileActionsModalRoot_->setThemedBackgroundColor(ui_theme::scrim);
+
+  auto makePanel = [this](const char *titleKey, const char *introKey,
+                          const char *footerKey,
+                          std::function<void()> onClose, View **panelOut) {
+    auto *panel = new View();
+    panel->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch)
+        ->setGap(14)
+        ->setPadding(Edge::All, 20)
+        ->setThemedBackgroundColor(ui_theme::panelStrong)
+        ->setCornerRadius(ui_theme::panelRadius())
+        ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+        ->setThemedBorderColor(modal_view::modalPanelBorder)
+        ->setBorderWidth(1);
+    auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    title->setLocalizedText(i18n::message(titleKey));
+    title->setThemedColor(ui_theme::textPrimary);
+    title->setWrap(true);
+    title->setFlexShrink(0);
+    panel->addView(title);
+
+    auto *scroll = new ScrollView();
+    scroll->setFlex(1)->setMinHeight(0);
+    scroll->setContentPadding(Edge::Right, 12);
+    auto *content = new View();
+    content->setFlexDirection(FlexDirection::Column);
+    content->setAlignItems(YGAlignStretch);
+    content->setGap(14);
+    auto *intro = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    intro->setLocalizedText(i18n::message(introKey));
+    intro->setThemedColor(ui_theme::textSecondary);
+    intro->setWrap(true);
+    intro->setFlexShrink(0);
+    content->addView(intro);
+    scroll->setContentView(content);
+    panel->addView(scroll);
+
+    TextView *closeText = nullptr;
+    auto *close = makeModalButton(i18n::message(footerKey), 20, &closeText);
+    close->setWidthPercent(100)->setFlexShrink(0);
+    close->setOnClickListener(std::move(onClose));
+    styleThemedActionButton(close, closeText, true, ui_theme::control,
+                            ui_theme::controlHover, ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
+    panel->addView(close);
+    fileActionsModalRoot_->addView(panel);
+    *panelOut = panel;
+    return content;
+  };
+  auto addAction = [](View *content, const char *labelKey,
+                      const char *descriptionKey, bool primary,
+                      std::function<void()> onClick) {
+    auto *card = new View();
+    card->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch)
+        ->setFlexShrink(0)
+        ->setGap(10)
+        ->setPadding(Edge::All, 14)
+        ->setThemedBackgroundColor(ui_theme::insetSurface)
+        ->setCornerRadius(ui_theme::controlRadius())
+        ->setThemedBorderColor(ui_theme::hairline)
+        ->setBorderWidth(1);
+    auto *description = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    description->setLocalizedText(i18n::message(descriptionKey));
+    description->setThemedColor(ui_theme::textSecondary);
+    description->setWrap(true);
+    description->setFlexShrink(0);
+    TextView *buttonText = nullptr;
+    auto *button = makeModalButton(i18n::message(labelKey), 20, &buttonText);
+    button->setWidthPercent(100)->setFlexShrink(0);
+    buttonText->setWrap(true);
+    button->setOnClickListener(std::move(onClick));
+    styleThemedActionButton(
+        button, buttonText, true,
+        primary ? ui_theme::primaryAction : ui_theme::control,
+        primary ? ui_theme::primaryActionHover : ui_theme::controlHover,
+        primary ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
+        primary ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
+    card->addView(button);
+    card->addView(description);
+    content->addView(card);
+  };
+
+  auto *actions = makePanel(
+      "menu.manage_files.label", "menu.manage_files.intro",
+      "menu.manage_files.close.label",
+      [this]() { fileActionsModalRoot_->setVisible(false); }, &fileActionsPanel_);
+  addAction(actions, "menu.import_folder.label", "menu.manage_files.folder", true,
+            [this]() {
+              fileActionsPanel_->setVisible(false);
+              fileActionsPanel_->setDisplay(YGDisplayNone);
+              folderImportPanel_->setVisible(true);
+              folderImportPanel_->setDisplay(YGDisplayFlex);
+              fileActionsModalRoot_->applyYogaLayout();
+            });
+  addAction(actions, "menu.import_archive.label", "menu.manage_files.archive", false,
+            [this]() {
+              fileActionsModalRoot_->setVisible(false);
+              if (context.chartLibraryFolderActions) {
+                showTasksModal();
+                context.chartLibraryFolderActions->requestImportArchive();
+              }
+            });
+  addAction(actions, "menu.open_files.label", "menu.manage_files.open", false,
+            [this]() {
+              fileActionsModalRoot_->setVisible(false);
+              std::string error;
+              if (!OpenAndroidDocumentsFolder(error)) {
+                SDL_Log("Open Documents: %s", error.c_str());
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow",
+                                         i18n::tr("menu.open_files.failed"), nullptr);
+              }
+            });
+
+  auto *folderActions = makePanel(
+      "menu.import_folder.label", "menu.manage_files.folder_choice",
+      "library.tasks.back.label", [this]() { showFileActionsModal(); },
+      &folderImportPanel_);
+  auto importFolder = [this](bool moveSource) {
+    fileActionsModalRoot_->setVisible(false);
+    if (context.chartLibraryFolderActions) {
+      showTasksModal();
+      context.chartLibraryFolderActions->requestImportFolder(moveSource);
+    }
+  };
+  addAction(folderActions, "menu.manage_files.copy.label", "menu.manage_files.copy",
+            true, [importFolder]() { importFolder(false); });
+  addAction(folderActions, "menu.manage_files.move.label", "menu.manage_files.move",
+            false, [importFolder]() { importFolder(true); });
+  folderImportPanel_->setVisible(false);
+  folderImportPanel_->setDisplay(YGDisplayNone);
+  rootLayout->addView(fileActionsModalRoot_);
+  resizeFileActionsModal();
+}
+
+void MainMenuScene::resizeFileActionsModal() {
+  if (fileActionsModalRoot_ == nullptr) return;
+  const auto safe = getSafeAreaInsetsUi();
+  fileActionsModalRoot_->setSize(rendering::window_width, rendering::window_height);
+  fileActionsModalRoot_->setPadding(Edge::Top, safe.top);
+  fileActionsModalRoot_->setPadding(Edge::Bottom, safe.bottom);
+  fileActionsModalRoot_->setPadding(Edge::Left, safe.left);
+  fileActionsModalRoot_->setPadding(Edge::Right, safe.right);
+  const float width = std::min(720.0f, std::max(
+      0.0f, rendering::window_width - safe.left - safe.right - 32.0f));
+  const float height = std::min(780.0f, std::max(
+      0.0f, rendering::window_height - safe.top - safe.bottom - 32.0f));
+  for (auto *panel : {fileActionsPanel_, folderImportPanel_}) {
+    panel->setWidth(width)->setHeight(height);
+  }
+}
+
+void MainMenuScene::resizeTasksModal() {
+  if (tasksModalRoot == nullptr || tasksScrollView == nullptr) return;
+  auto *panel = tasksModalRoot->findViewByName("mainMenuTasksPanel");
+  if (panel == nullptr) return;
+  const float width = std::min(760.0f, std::max(
+      0.0f, static_cast<float>(rendering::window_width) - 32.0f));
+  const float height = std::min(460.0f, std::max(
+      0.0f, static_cast<float>(rendering::window_height) - 32.0f));
+  panel->setWidth(width)->setHeight(height);
+  tasksScrollView->setWidth(std::max(0.0f, width - 44.0f));
+}
+
+void MainMenuScene::showFileActionsModal() {
+  if (fileActionsModalRoot_ == nullptr) return;
+  resizeFileActionsModal();
+  fileActionsPanel_->setVisible(true);
+  fileActionsPanel_->setDisplay(YGDisplayFlex);
+  folderImportPanel_->setVisible(false);
+  folderImportPanel_->setDisplay(YGDisplayNone);
+  fileActionsModalRoot_->setVisible(true);
+  fileActionsModalRoot_->applyYogaLayout();
+}
+#endif
+
 void MainMenuScene::buildParseLogModal() {
   if (rootLayout == nullptr) {
     return;
@@ -5443,6 +5611,9 @@ void MainMenuScene::buildTasksModal() {
   tasksModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
+#if TARGET_OS_ANDROID
+  panel->setName("mainMenuTasksPanel");
+#endif
   panel->setWidth(kModalPanelWidth)
       ->setHeight(460)
       ->setFlexDirection(FlexDirection::Column)
@@ -5465,6 +5636,9 @@ void MainMenuScene::buildTasksModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 400);
   tasksScrollView->setWidth(kModalContentWidth);
   tasksScrollView->setFlex(1);
+#if TARGET_OS_ANDROID
+  tasksScrollView->setMinHeight(0);
+#endif
   tasksScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
   tasksScrollView->setCornerRadius(ui_theme::controlRadius());
   tasksScrollView->setThemedBorderColor(ui_theme::hairline);
@@ -5511,12 +5685,22 @@ void MainMenuScene::buildTasksModal() {
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
 
+#if TARGET_OS_ANDROID
+  footer->setFlexShrink(0);
+  tasksRefreshButton->setWidth(0)->setFlex(1)->setMinWidth(0);
+  tasksCloseButton->setWidth(0)->setFlex(1)->setMinWidth(0);
+  tasksRefreshButtonText->setWrap(true);
+  tasksCloseButtonText->setWrap(true);
+#endif
   footer->addView(tasksRefreshButton);
   footer->addView(tasksCloseButton);
   panel->addView(footer);
 
   tasksModalRoot->addView(panel);
   rootLayout->addView(tasksModalRoot);
+#if TARGET_OS_ANDROID
+  resizeTasksModal();
+#endif
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
   refreshTasksModal();
@@ -5528,6 +5712,10 @@ void MainMenuScene::showTasksModal() {
   }
   tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
   tasksModalRoot->setVisible(true);
+#if TARGET_OS_ANDROID
+  resizeTasksModal();
+  tasksModalRoot->applyYogaLayout();
+#endif
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
   refreshTasksModal();
@@ -7177,6 +7365,12 @@ void MainMenuScene::renderScene() {
   if (tasksModalRoot != nullptr) {
     tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
   }
+#if TARGET_OS_ANDROID
+  if (layoutChanged) {
+    resizeFileActionsModal();
+    resizeTasksModal();
+  }
+#endif
   if (findBmsModal_ != nullptr) {
     findBmsModal_->resize(rendering::window_width, rendering::window_height);
   }
@@ -7271,6 +7465,11 @@ void MainMenuScene::cleanupScene() {
   musicModalRoot = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
+#if TARGET_OS_ANDROID
+  fileActionsModalRoot_ = nullptr;
+  fileActionsPanel_ = nullptr;
+  folderImportPanel_ = nullptr;
+#endif
   parseLogRecyclerView = nullptr;
   parseLogExportStatusText = nullptr;
   parseLogExportButton = nullptr;

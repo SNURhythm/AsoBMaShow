@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <exception>
+#include <iomanip>
+#include <sstream>
 #include <type_traits>
 #include <utility>
 
@@ -87,7 +89,7 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
         if (queued == queue_.end() &&
             std::none_of(androidImports_.begin(), androidImports_.end(),
                          [&task](const auto &entry) {
-                           return entry.second.first == task.id;
+                           return entry.second.id == task.id;
                          })) {
           continue;
         }
@@ -187,7 +189,7 @@ bool ChartLibraryTaskService::enqueueReservedLocked(std::uint64_t id,
 }
 
 bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
-                                                bool folder) {
+                                                bool folder, bool moveSource) {
   std::lock_guard lock(stateMutex_);
   if (!acceptingAndroidImports_ || token.empty() || androidImports_.contains(token)) {
     return false;
@@ -195,12 +197,14 @@ bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
   const std::uint64_t id = nextTaskId_;
   tasks_.push_back(TaskInfo{
       .id = id,
-      .title = i18n::message(folder ? "menu.import_folder.label" : "menu.import_archive.label"),
+      .title = i18n::message(folder ? (moveSource ? "library.tasks.moving_folder.label"
+                                                 : "menu.import_folder.label")
+                                    : "menu.import_archive.label"),
       .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
       .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : i18n::message("library.tasks.copying"),
   });
   try {
-    androidImports_.emplace(token, std::pair{id, folder});
+    androidImports_.emplace(token, AndroidImportReservation{id, folder, folder && moveSource});
   } catch (...) {
     tasks_.pop_back();
     throw;
@@ -219,17 +223,42 @@ int ChartLibraryTaskService::androidImportCopyState(const std::string &token) co
   return gameplayPaused_ ? 0 : 1;
 }
 
+bool ChartLibraryTaskService::updateAndroidImportProgress(
+    const std::string &token, int copiedFiles, int totalFiles,
+    std::uint64_t copiedBytes, std::int64_t totalBytes, const std::string &name,
+    int phase) {
+  std::lock_guard lock(stateMutex_);
+  const auto found = androidImports_.find(token);
+  if (!acceptingAndroidImports_ || found == androidImports_.end()) return false;
+  copiedFiles = std::max(0, copiedFiles);
+  totalFiles = std::max(copiedFiles, totalFiles);
+  const double fraction = totalBytes > 0
+      ? std::clamp(static_cast<double>(copiedBytes) / static_cast<double>(totalBytes), 0.0, 1.0)
+      : (totalFiles > 0 ? static_cast<double>(copiedFiles) / totalFiles : 0.0);
+  std::ostringstream size;
+  size << std::fixed << std::setprecision(1) << static_cast<double>(copiedBytes) / (1024.0 * 1024.0)
+       << " MiB";
+  i18n::Text detail = phase == 0 ? i18n::message("library.tasks.counting_import")
+      : phase == 2 ? i18n::message("library.tasks.removing_source")
+      : i18n::message("library.tasks.copying_progress",
+                      {{"files", std::to_string(copiedFiles)}, {"size", size.str()}, {"name", name}});
+  setTaskStateLocked(found->second.id, gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
+                     fraction, copiedFiles, totalFiles,
+                     gameplayPaused_ ? i18n::message("library.tasks.paused.label") : detail);
+  return true;
+}
+
 bool ChartLibraryTaskService::finishAndroidImport(
     const std::string &token, bool folder, const std::filesystem::path &path,
-    const std::string &error) {
+    const std::string &error, const std::string &retainedError) {
   std::uint64_t id = 0;
   {
     std::lock_guard lock(stateMutex_);
     const auto found = androidImports_.find(token);
-    if (found == androidImports_.end() || found->second.second != folder) {
+    if (found == androidImports_.end() || found->second.folder != folder) {
       return false;
     }
-    id = found->second.first;
+    id = found->second.id;
     if (!error.empty() || path.empty()) {
       setTaskStateLocked(id, TaskStatus::Failed, 0.0, 0, 0,
                          error.empty() ? i18n::message("library.tasks.import_empty")
@@ -248,15 +277,19 @@ bool ChartLibraryTaskService::finishAndroidImport(
   {
     std::lock_guard lock(stateMutex_);
     const auto found = androidImports_.find(token);
-    if (found == androidImports_.end() || found->second.first != id ||
-        found->second.second != folder) {
+    if (found == androidImports_.end() || found->second.id != id ||
+        found->second.folder != folder) {
       return false;
     }
     queued = enqueueReservedLocked(
         id, {.kind = TaskKind::AndroidImport,
-             .title = i18n::message(folder ? "menu.import_folder.label" : "menu.import_archive.label"),
+             .title = i18n::message(folder ? (found->second.moveSource ? "library.tasks.moving_folder.label"
+                                                                       : "menu.import_folder.label")
+                                          : "menu.import_archive.label"),
              .androidImportPath = path,
-             .androidImportFolder = folder});
+             .androidImportFolder = folder,
+             .androidImportMove = found->second.moveSource,
+             .androidImportRetainedError = retainedError});
     androidImports_.erase(found);
   }
   if (queued) {
@@ -269,7 +302,7 @@ void ChartLibraryTaskService::cancelAndroidImports() {
   std::lock_guard lock(stateMutex_);
   acceptingAndroidImports_ = false;
   for (const auto &[token, reservation] : androidImports_) {
-    setTaskStateLocked(reservation.first, TaskStatus::Failed, 0.0, 0, 0,
+    setTaskStateLocked(reservation.id, TaskStatus::Failed, 0.0, 0, 0,
                        i18n::message("library.tasks.import_cancelled"));
   }
   androidImports_.clear();

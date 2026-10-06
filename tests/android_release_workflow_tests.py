@@ -73,7 +73,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     def test_android_import_results_keep_the_originating_token_and_type(self):
         worker = self.activity.split("private void startNextPendingImportCopyLocked()", 1)[1]
         worker = worker.split("private Uri archiveUriFromIntent", 1)[0]
-        self.assertIn("nativeBeginChartImport(request.token, request.isTree)", worker)
+        self.assertIn("nativeBeginChartImport(request.token, request.isTree, request.moveSource)", worker)
         self.assertIn("nativeFinishChartImport(request.token, request.isTree", worker)
         self.assertNotIn("pendingArchiveImportResults", self.activity)
         platform = read("src/library/ChartLibraryPlatform.cpp")
@@ -82,7 +82,9 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     def test_android_copy_checkpoints_cover_storage_and_destroy(self):
         copying = self.activity.split("private String copyArchiveUriToInternalStorage", 1)[1]
         copying = copying.split("private File uniqueFile", 1)[0]
-        self.assertIn("control.copy(input, outputStream)", copying)
+        folder_copy = read("android/app/src/main/java/com/snurhythm/asobmashow/ChartFolderImport.java")
+        self.assertIn("control.copy(input, stream,", folder_copy)
+        self.assertIn("ChartFolderImport.run", copying)
         self.assertIn("control.checkpoint()", copying)
         self.assertIn("ChartImportCopyControl control", copying)
         destruction = self.activity.split("protected void onDestroy()", 1)[1]
@@ -159,7 +161,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             ("pickArchiveForImport", "pickFolderForImport"),
             ("pickFolderForImport", "importDocument"),
         ):
-            picker = self.activity.split(f"public String {method}()", 1)[1]
+            picker = self.activity.split(f"public String {method}(", 1)[1]
             picker = picker.split(f"public String {next_method}", 1)[0]
             self.assertIn("pendingArchiveImportsDestroyed", picker)
             cancelled = picker.split("if (uri == null)", 1)[1]
@@ -442,7 +444,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("checkSelfPermission", self.music_service)
         self.assertIn("Manifest.permission.POST_NOTIFICATIONS", self.music_service)
 
-    def test_persisted_uri_permissions_use_explicit_read_grants(self):
+    def test_persisted_uri_permissions_are_limited_to_granted_read_write_access(self):
         permission_calls = re.findall(
             r"takePersistableUriPermission\(\s*\w+,\s*([^\)]+)\)",
             self.activity,
@@ -451,9 +453,11 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             permission_calls,
             [
                 "Intent.FLAG_GRANT_READ_URI_PERMISSION",
-                "Intent.FLAG_GRANT_READ_URI_PERMISSION",
+                "persistedFlags",
             ],
         )
+        self.assertIn("int persistedFlags = flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION\n"
+                      "                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);", self.activity)
 
     def test_sdl_dynamic_receivers_are_android_13_compatible(self):
         self.assertIn("registerReceiverCompat(mUsbBroadcast, filter)",
