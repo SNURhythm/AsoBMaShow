@@ -46,6 +46,22 @@ final class DocumentsPathPolicy {
         return checked(new File(checked(parent), name));
     }
 
+    boolean isReadOnly(File file) throws IOException {
+        File canonical = checked(file);
+        if (canonical.equals(root)) return false;
+        String topLevel = root.toPath().relativize(canonical.toPath()).getName(0).toString();
+        // These trees contain live SQLite databases and their WAL/SHM files.
+        // Reserve the names even before initialization, including case aliases
+        // on external storage. Reading and listing remain available for export.
+        return topLevel.equalsIgnoreCase("db") || topLevel.equalsIgnoreCase("profiles");
+    }
+
+    void requireWritable(File file) throws IOException {
+        if (isReadOnly(file)) {
+            throw new FileNotFoundException("Application database and profile storage is read-only");
+        }
+    }
+
     private File checked(File file) throws IOException {
         Path path = file.getAbsoluteFile().toPath();
         Path rootPath = root.toPath();

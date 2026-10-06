@@ -83,7 +83,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         copying = self.activity.split("private String copyArchiveUriToInternalStorage", 1)[1]
         copying = copying.split("private File uniqueFile", 1)[0]
         folder_copy = read("android/app/src/main/java/com/snurhythm/asobmashow/ChartFolderImport.java")
-        self.assertIn("control.copy(input, stream,", folder_copy)
+        self.assertIn("control.copy(copiedInput, stream,", folder_copy)
         self.assertIn("ChartFolderImport.run", copying)
         self.assertIn("control.checkpoint()", copying)
         self.assertIn("ChartImportCopyControl control", copying)

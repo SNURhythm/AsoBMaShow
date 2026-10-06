@@ -3034,9 +3034,14 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .startsWith(new File(directSource).getCanonicalFile().toPath())) {
             throw new IOException("The selected source contains the BMS import destination.");
         }
-        return ChartFolderImport.run(new SafChartFolderSource(getContentResolver(), treeUri, control),
-                output, moveSource, control, progress,
-                () -> AsoBMaShowDocumentsProvider.changes(this).changed(SystemClock.elapsedRealtime()));
+        // Reserve before creation so no Files client can hold a writable descriptor
+        // to any destination inode. Keep the lease through cleanup and partial moves.
+        try (DocumentsMutationGuard.Reservation reservation = DocumentsMutationGuard.reserveNewDestination(output)) {
+            return ChartFolderImport.run(new SafChartFolderSource(getContentResolver(), treeUri, control),
+                    reservation.canonicalOutput, moveSource, control, progress,
+                    () -> AsoBMaShowDocumentsProvider.changes(this).changed(SystemClock.elapsedRealtime()),
+                    AsoBMaShowDocumentsProvider.DOCUMENT_MUTATION_LOCK);
+        }
     }
 
     private File uniqueFile(File directory, String fileName) {

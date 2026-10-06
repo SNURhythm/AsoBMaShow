@@ -49,6 +49,8 @@ struct Camera {
 // unchanged from production below.
 class RhythmInputHandler {
 public:
+  struct TouchSource { void discardPendingEvents() {} };
+  TouchSource *touchInputSource = nullptr;
   int totalLaneCount = 8, scratchLaneCount = 1;
   float playAreaWidth = 8, playAreaLeftX = 0;
   bool dragModeEnabled = false;
@@ -58,13 +60,16 @@ public:
   std::map<SDL_FingerID, bool> fingerLanePressed;
   std::map<SDL_FingerID, FlickState> flickStates;
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
+  std::map<SDL_FingerID, Vector3> activeTouchPoints;
+  std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> touchEventCallback;
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
   std::vector<int> presses, releases;
   bms_parser::Note *applyTouchLane(int lane, bool pressed, std::optional<int>) {
     (pressed ? presses : releases).push_back(lane);
     return nullptr;
   }
-  bool notifyTouchEvent(SDL_FingerID, ReplayTouchAction, Vector3) { return false; }
+  bool notifyTouchEvent(SDL_FingerID, ReplayTouchAction, Vector3);
+  void discardPendingTouchEvents();
   Vector3 normalizedTouchToRenderLocation(Vector3) const;
   bool isLaneOccupied(int, SDL_FingerID) const;
   void beginFingerLane(SDL_FingerID, int, Vector3);
@@ -80,6 +85,47 @@ public:
   int touchToLane(Vector3);
   void setTouchLaneLayout(std::optional<gameplay::RealtimeTouchLayout>);
   std::optional<int> authoredTouchLane(Vector3, bool) const;
+};
+
+struct TouchVisualState {
+  std::map<long long, Vector3> active;
+  void setLiveTouchPoint(long long finger, ReplayTouchAction action,
+                         float x, float y, long long) {
+    if (action == ReplayTouchAction::Cancel || action == ReplayTouchAction::Up) {
+      active.erase(finger);
+    } else {
+      active[finger] = {x, y, 0};
+    }
+  }
+};
+
+class GamePlayScene {
+public:
+  struct State { bool isPlaying = true, isEnding = false; } ownedState;
+  State *state = &ownedState;
+  struct Context {
+    struct Jukebox {
+      bool paused = false;
+      bool isPaused() const { return paused; }
+    } jukebox;
+  } context;
+  TouchVisualState visualState;
+  TouchVisualState *playfieldVisualStateStore = &visualState;
+  bool practiceAllowed = true;
+  bool floatingLaneCoverDragActive = false;
+  bool floatingLaneCoverDragChanged = false;
+  SDL_FingerID floatingLaneCoverFinger = -1;
+  float floatingLaneCoverDragOffsetY = 0;
+  int persisted = 0;
+  bool practiceInputAllowed(long long) { return practiceAllowed; }
+  void persistFloatingLaneCoverSettings() { ++persisted; }
+  void appendReplayTouchSample(SDL_FingerID, ReplayTouchAction, Vector3, long long) {}
+  bool handleFloatingLaneCoverInput(SDL_FingerID, ReplayTouchAction, Vector3, long long) {
+    return false;
+  }
+  bool handleTouchInputAtGameplayTime(SDL_FingerID, ReplayTouchAction,
+                                      Vector3, long long, bool = true);
+  void cancelLegacyFloatingLaneCoverTouch();
 };
 
 // PRODUCTION_METHODS
@@ -179,5 +225,74 @@ int main() {
   handler.onFingerDown(10, {.09375F, 3.0F, 0});
   handler.onFingerUp(10, {.09375F, 3.0F, 0});
   expect(handler.presses.empty(), "drag mode does not vertically clamp outside skin lanes");
+
+  RhythmInputHandler interrupted;
+  interrupted.setTouchLaneLayout(skinLayout());
+  bool callbackCapture = false;
+  int callbackCancels = 0;
+  Vector3 cancelledPoint{};
+  interrupted.touchEventCallback = [&](SDL_FingerID finger, ReplayTouchAction action,
+                                       Vector3 point) {
+    if (finger != 20) return false;
+    if (action == ReplayTouchAction::Down) callbackCapture = true;
+    if (action == ReplayTouchAction::Cancel) {
+      callbackCapture = false;
+      ++callbackCancels;
+      cancelledPoint = point;
+    }
+    if (action == ReplayTouchAction::Up) callbackCapture = false;
+    return true;
+  };
+  interrupted.onFingerDown(20, firstLane);
+  interrupted.onFingerMove(20, secondLane);
+  expect(interrupted.fingerToLane.empty() && callbackCapture,
+         "callback-consumed Down owns no gameplay lane");
+  interrupted.discardPendingTouchEvents();
+  expect(!callbackCapture && callbackCancels == 1 &&
+             cancelledPoint.x == secondLane.x && cancelledPoint.y == secondLane.y,
+         "background discard cancels callback-owned touch at its latest location");
+  interrupted.discardPendingTouchEvents();
+  expect(callbackCancels == 1, "repeated background/foreground discard cancels once");
+  interrupted.onFingerDown(20, firstLane);
+  interrupted.onFingerUp(20, firstLane);
+  interrupted.discardPendingTouchEvents();
+  expect(callbackCancels == 1,
+         "a reused pointer ID that already lifted receives no stale cancellation");
+
+  rendering::ui_scale_x = rendering::ui_scale_y = 1.0F;
+  std::vector<ReplayTouchAction> laneCallbacks;
+  interrupted.touchEventCallback = [&](SDL_FingerID, ReplayTouchAction action,
+                                       Vector3) {
+    laneCallbacks.push_back(action);
+    return action == ReplayTouchAction::Cancel;
+  };
+  interrupted.onFingerDown(21, firstLane);
+  interrupted.discardPendingTouchEvents();
+  interrupted.discardPendingTouchEvents();
+  expect(laneCallbacks == std::vector<ReplayTouchAction>({ReplayTouchAction::Down,
+                                                        ReplayTouchAction::Cancel}) &&
+             interrupted.presses == std::vector<int>{3} &&
+             interrupted.releases == std::vector<int>{3},
+         "discard closes callback lifecycle and releases a held lane once even if Cancel is consumed");
+
+  for (int blocked = 0; blocked < 3; ++blocked) {
+    GamePlayScene scene;
+    scene.context.jukebox.paused = blocked == 0;
+    scene.practiceAllowed = blocked != 1;
+    scene.ownedState.isEnding = blocked == 2;
+    scene.floatingLaneCoverDragActive = true;
+    scene.floatingLaneCoverDragChanged = true;
+    scene.floatingLaneCoverFinger = 20;
+    scene.floatingLaneCoverDragOffsetY = 15;
+    scene.visualState.active[20] = firstLane;
+    (void)scene.handleTouchInputAtGameplayTime(20, ReplayTouchAction::Cancel,
+                                              firstLane, 1'000);
+    expect(!scene.floatingLaneCoverDragActive &&
+               scene.floatingLaneCoverFinger == -1 &&
+               scene.floatingLaneCoverDragOffsetY == 0 && scene.persisted == 1,
+           "Cancel retires lane-cover capture even when gameplay input is gated");
+    expect(scene.visualState.active.empty(),
+           "Cancel closes published live-touch visualization while paused or gated");
+  }
   return failures ? 1 : 0;
 }

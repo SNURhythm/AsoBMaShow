@@ -8069,11 +8069,24 @@ bool GamePlayScene::handleTouchInputAtGameplayTime(
     SDL_FingerID fingerIndex, ReplayTouchAction action,
     Vector3 normalizedLocation, long long gameplayTimeMicros,
     bool allowBuiltInControl) {
+  const bool activeFloatingDrag =
+      floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
+  if (action == ReplayTouchAction::Cancel) {
+    // Cancellation closes an existing pointer stream even after gameplay
+    // becomes paused, ends, or crosses a practice-input boundary.
+    if (playfieldVisualStateStore != nullptr) {
+      playfieldVisualStateStore->setLiveTouchPoint(
+          static_cast<long long>(fingerIndex), action, normalizedLocation.x,
+          normalizedLocation.y, gameplayTimeMicros);
+    }
+    appendReplayTouchSample(fingerIndex, action, normalizedLocation,
+                            gameplayTimeMicros);
+    if (activeFloatingDrag) cancelLegacyFloatingLaneCoverTouch();
+    return !allowBuiltInControl || activeFloatingDrag;
+  }
   if (!practiceInputAllowed(gameplayTimeMicros)) {
     return false;
   }
-  const bool activeFloatingDrag =
-      floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
   if (state == nullptr || !state->isPlaying || state->isEnding ||
       context.jukebox.isPaused()) {
     if (activeFloatingDrag && (action == ReplayTouchAction::Up ||

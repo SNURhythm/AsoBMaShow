@@ -39,6 +39,16 @@ bool hasActiveLongNote(FlickState &flickState) {
 bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
                                           ReplayTouchAction action,
                                           Vector3 normalizedLocation) {
+  if (action == ReplayTouchAction::Down) {
+    activeTouchPoints[fingerIndex] = normalizedLocation;
+  } else if (action == ReplayTouchAction::Move) {
+    if (auto active = activeTouchPoints.find(fingerIndex);
+        active != activeTouchPoints.end()) {
+      active->second = normalizedLocation;
+    }
+  } else {
+    activeTouchPoints.erase(fingerIndex);
+  }
   if (touchEventCallback != nullptr) {
     return touchEventCallback(fingerIndex, action, normalizedLocation);
   }
@@ -349,6 +359,7 @@ void RhythmInputHandler::stopListen() {
     touchInputSource.reset();
   }
   fingerToLane.clear();
+  activeTouchPoints.clear();
   fingerLanePressed.clear();
   flickStates.clear();
   cancelGraceExpiry.clear();
@@ -356,6 +367,13 @@ void RhythmInputHandler::stopListen() {
 void RhythmInputHandler::discardPendingTouchEvents() {
   if (touchInputSource != nullptr) {
     touchInputSource->discardPendingEvents();
+  }
+  // A callback-owned drag may never enter fingerToLane. Close its published
+  // touch lifecycle before releasing gameplay lanes, even during a pause.
+  auto cancelledTouches = std::move(activeTouchPoints);
+  activeTouchPoints.clear();
+  for (const auto &[finger, point] : cancelledTouches) {
+    (void)notifyTouchEvent(finger, ReplayTouchAction::Cancel, point);
   }
   std::vector<SDL_FingerID> activeFingers;
   activeFingers.reserve(fingerToLane.size());

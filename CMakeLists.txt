@@ -699,6 +699,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_documents_mutability_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_mutability_tests.py -v)
+    add_test(NAME android_documents_mutation_guard_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_mutation_guard_tests.py -v)
+    set_tests_properties(android_documents_mutability_tests android_documents_mutation_guard_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     add_test(NAME android_folder_import_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_folder_import_tests.py -v)
@@ -7168,7 +7180,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/legacy_skin_touch_extract.py
                 --root ${CMAKE_SOURCE_DIR} --output ${legacy_skin_touch_source}
         DEPENDS tests/legacy_skin_touch_extract.py tests/legacy_skin_touch_fixture.cpp
-                tests/gameplay_terminal_scene_extract.py src/input/RhythmInputHandler.cpp
+                tests/gameplay_terminal_scene_extract.py src/input/RhythmInputHandler.cpp src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
     add_executable(legacy_skin_touch_tests

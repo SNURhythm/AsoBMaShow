@@ -353,6 +353,57 @@ public final class ChartFolderImportTests {
         }
     }
 
+    private static void testChangedDestinationNeverDeletesSource() throws Exception {
+        for (String mutation : new String[] {"delete", "rename", "overwrite", "symlink"}) {
+            FakeSource source = new FakeSource();
+            source.file(source.root, "chart", "chart.bms");
+            File output = output();
+            ChartFolderImport.Result result = ChartFolderImport.run(source, output, true, control(),
+                    (copied, total, bytes, totalBytes, name, phase) -> {}, () -> {
+                        try {
+                            java.nio.file.Path copied = new File(output, "chart.bms").toPath();
+                            if (mutation.equals("overwrite")) {
+                                Files.write(copied, new byte[] {9, 8, 7});
+                            } else if (mutation.equals("rename")) {
+                                Files.move(copied, copied.resolveSibling("renamed.bms"));
+                            } else if (mutation.equals("symlink")) {
+                                java.nio.file.Path replacement = copied.resolveSibling("replacement.bms");
+                                Files.move(copied, replacement);
+                                Files.createSymbolicLink(copied, replacement);
+                            } else {
+                                Files.delete(copied);
+                            }
+                        } catch (IOException error) { throw new java.io.UncheckedIOException(error); }
+                    });
+            require(!result.complete && !source.events.contains("delete:root")
+                            && source.root.children.size() == 1,
+                    "Changed destination must preserve its source: " + mutation);
+        }
+    }
+
+    private static void testSourceChangeDuringDestinationHashIsRevalidated() throws Exception {
+        FakeSource source = new FakeSource();
+        source.file(source.root, "chart", "chart.bms", new byte[1024 * 1024]);
+        Object mutationLock = new Object();
+        AtomicBoolean checkingCopy = new AtomicBoolean();
+        AtomicInteger checks = new AtomicInteger();
+        AtomicBoolean changed = new AtomicBoolean();
+        ChartImportCopyControl control = new ChartImportCopyControl(() -> {
+            if (checkingCopy.get() && source.listings.get("root") == 1 && checks.incrementAndGet() == 5) {
+                require(!Thread.holdsLock(mutationLock), "Large copy verification must not block unrelated Files operations");
+                source.file(source.root, "new", "added-during-verification.bms");
+                changed.set(true);
+            }
+            return 1;
+        }, () -> false);
+        ChartFolderImport.Result result = ChartFolderImport.run(source, output(), true, control,
+                (copied, total, bytes, totalBytes, name, phase) -> {},
+                () -> checkingCopy.set(true), mutationLock);
+        require(changed.get(), "Regression must edit source during copy verification before final source listing");
+        require(!result.complete && !source.events.contains("delete:root") && source.root.children.size() == 2,
+                "A source edit during destination verification must prevent source deletion");
+    }
+
     private static void testCancellationImmediatelyBeforeDeletion() throws Exception {
         FakeSource source = new FakeSource();
         source.file(source.root, "chart", "chart.bms");
@@ -567,6 +618,8 @@ public final class ChartFolderImportTests {
             testUnknownSizeAndEmptyRoot();
             testMoveRejectsMissingFileMetadataBeforeCopying();
             testMetadataLossBeforeDeletionPreservesSource();
+            testChangedDestinationNeverDeletesSource();
+            testSourceChangeDuringDestinationHashIsRevalidated();
             testCancellationImmediatelyBeforeDeletion();
             testNestedMoveRemovesChildrenBeforeParentFiles();
             testRootMutationAfterChildMoveRetainsOutput();
@@ -577,7 +630,7 @@ public final class ChartFolderImportTests {
             testPauseAfterValidationRequiresFreshSourceListing();
             testPauseInsideProviderListingRequiresFreshSnapshot();
             testPauseDuringValidationCanResumeUnchangedMove();
-            System.out.println("22 chart folder import tests passed");
+            System.out.println("24 chart folder import tests passed");
         } finally {
             cleanup(temporary);
         }

@@ -9,6 +9,8 @@ parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
 source = (args.root / "src/input/RhythmInputHandler.cpp").read_text()
 signatures = (
+    "bool RhythmInputHandler::notifyTouchEvent(",
+    "void RhythmInputHandler::discardPendingTouchEvents()",
     "Vector3 RhythmInputHandler::normalizedTouchToRenderLocation(",
     "bool RhythmInputHandler::isLaneOccupied(",
     "void RhythmInputHandler::beginFingerLane(",
@@ -26,6 +28,11 @@ signatures = (
     "std::optional<int> RhythmInputHandler::authoredTouchLane(",
 )
 methods = "\n\n".join(extract(source, signature) for signature in signatures)
+scene_source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
+methods += "\n\n" + "\n\n".join(extract(scene_source, signature) for signature in (
+    "bool GamePlayScene::handleTouchInputAtGameplayTime(",
+    "void GamePlayScene::cancelLegacyFloatingLaneCoverTouch()",
+))
 fixture = (args.root / "tests/legacy_skin_touch_fixture.cpp").read_text()
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(fixture.replace("// PRODUCTION_METHODS", methods))

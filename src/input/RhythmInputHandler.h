@@ -47,6 +47,8 @@ private:
   std::vector<int> laneOrder;
   std::optional<gameplay::RealtimeTouchLayout> touchLaneLayout;
   std::map<SDL_FingerID, int> fingerToLane;
+  // Includes touches captured by the scene callback before lane ownership.
+  std::map<SDL_FingerID, Vector3> activeTouchPoints;
   std::map<SDL_FingerID, bool> fingerLanePressed;
   int clampLane(int lane) const;
   bool isScratchLane(int lane) const;

@@ -2,9 +2,16 @@ package com.snurhythm.asobmashow;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -61,6 +68,8 @@ final class ChartFolderImport {
         final Entry entry;
         final String destinationName;
         final List<PlannedEntry> children;
+        byte[] copiedDigest;
+        long copiedLength;
 
         PlannedEntry(Entry entry, String destinationName, List<PlannedEntry> children) {
             this.entry = entry;
@@ -71,7 +80,13 @@ final class ChartFolderImport {
 
     static Result run(Source source, File output, boolean move, ChartImportCopyControl control,
                       Progress progress, Runnable beforeSourceDeletion) {
-        return new Transfer(source, output, move, control, progress, beforeSourceDeletion).run();
+        return run(source, output, move, control, progress, beforeSourceDeletion, new Object());
+    }
+
+    static Result run(Source source, File output, boolean move, ChartImportCopyControl control,
+                      Progress progress, Runnable beforeSourceDeletion, Object destinationMutationLock) {
+        return new Transfer(source, output, move, control, progress, beforeSourceDeletion,
+                destinationMutationLock).run();
     }
 
     private static final class Transfer {
@@ -81,6 +96,7 @@ final class ChartFolderImport {
         private final ChartImportCopyControl control;
         private final Progress progress;
         private final Runnable beforeSourceDeletion;
+        private final Object destinationMutationLock;
         private final Set<String> discoveredIds = new HashSet<>();
         private File output;
         private boolean ownsOutput;
@@ -91,13 +107,14 @@ final class ChartFolderImport {
         private long copiedBytes;
 
         Transfer(Source source, File output, boolean move, ChartImportCopyControl control,
-                 Progress progress, Runnable beforeSourceDeletion) {
+                 Progress progress, Runnable beforeSourceDeletion, Object destinationMutationLock) {
             this.source = source;
             this.requestedOutput = output;
             this.move = move;
             this.control = control;
             this.progress = progress;
             this.beforeSourceDeletion = beforeSourceDeletion;
+            this.destinationMutationLock = destinationMutationLock;
         }
 
         Result run() {
@@ -192,11 +209,22 @@ final class ChartFolderImport {
                 while (true) {
                     control.checkpoint();
                     long generation = control.pauseGeneration();
+                    // Hash outside the shared monitor: the reservation prevents Files
+                    // writes, while unrelated folders remain usable during large moves.
+                    if (!verifyCopiedDestination(directory, destination, generation)) continue;
                     verifyRemainingSource(directory);
-                    if (control.continueWithoutWaiting(generation)) break;
+                    synchronized (destinationMutationLock) {
+                        // The caller reserves this new destination for the whole transfer.
+                        // Serialize the final check and delete with Files mutations, without
+                        // ever waiting for a paused import while holding their monitor.
+                        if (!control.continueWithoutWaiting(generation)) continue;
+                        verifyCopiedPaths(directory, destination);
+                        if (!control.continueWithoutWaiting(generation)) continue;
+                        deletionAttempted = true;
+                        source.delete(directory.entry);
+                        break;
+                    }
                 }
-                deletionAttempted = true;
-                source.delete(directory.entry);
             }
         }
 
@@ -206,11 +234,13 @@ final class ChartFolderImport {
             if (!destination.createNewFile()) throw new IOException("Destination already exists: " + destination.getName());
             boolean complete = false;
             long startBytes = copiedBytes;
+            MessageDigest digest = move ? newDigest() : null;
             try {
                 try (InputStream input = source.open(file.entry);
                      FileOutputStream stream = new FileOutputStream(destination)) {
                     if (input == null) throw new IOException("Cannot read source file: " + file.entry.name);
-                    control.copy(input, stream, count -> {
+                    InputStream copiedInput = move ? new DigestInputStream(input, digest) : input;
+                    control.copy(copiedInput, stream, count -> {
                         copiedBytes = Math.addExact(copiedBytes, count);
                         report(file.entry.name, Phase.COPYING);
                     });
@@ -220,6 +250,10 @@ final class ChartFolderImport {
                     }
                     if (move) stream.getFD().sync();
                 }
+                if (move) {
+                    file.copiedDigest = digest.digest();
+                    file.copiedLength = copiedBytes - startBytes;
+                }
                 complete = true;
                 copiedFiles++;
                 report(file.entry.name, Phase.COPYING);
@@ -227,6 +261,52 @@ final class ChartFolderImport {
                 if (!complete && !destination.delete() && destination.exists()) {
                     throw new IOException("Cannot remove incomplete destination file: " + destination.getName());
                 }
+            }
+        }
+
+        private static MessageDigest newDigest() throws IOException {
+            try { return MessageDigest.getInstance("SHA-256"); }
+            catch (NoSuchAlgorithmException error) { throw new IOException("Cannot verify copied data", error); }
+        }
+
+        private boolean verifyCopiedDestination(PlannedEntry directory, File destination, long generation)
+                throws IOException {
+            verifyCopiedPaths(directory, destination);
+            byte[] buffer = new byte[64 * 1024];
+            for (PlannedEntry child : directory.children) {
+                if (!control.continueWithoutWaiting(generation)) return false;
+                File copied = childPath(destination, child.destinationName);
+                if (child.entry.directory) continue;
+                MessageDigest digest = newDigest();
+                try (InputStream input = new FileInputStream(copied)) {
+                    while (true) {
+                        if (!control.continueWithoutWaiting(generation)) return false;
+                        int count = input.read(buffer);
+                        if (count < 0) break;
+                        digest.update(buffer, 0, count);
+                    }
+                }
+                if (!Arrays.equals(child.copiedDigest, digest.digest())) {
+                    throw new IOException("Copied file contents changed before source removal: " + child.entry.name);
+                }
+            }
+            return true;
+        }
+
+        private void verifyCopiedPaths(PlannedEntry directory, File destination) throws IOException {
+            if (!destination.equals(destination.getCanonicalFile())
+                    || !Files.isDirectory(destination.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Copied folder changed before source removal: " + directory.entry.name);
+            }
+            for (PlannedEntry child : directory.children) {
+                File copied = childPath(destination, child.destinationName);
+                // Child contents were verified before their own source deletion. The
+                // reservation protects every copied subtree until the root completes.
+                boolean valid = child.entry.directory
+                        ? Files.isDirectory(copied.toPath(), LinkOption.NOFOLLOW_LINKS)
+                        : Files.isRegularFile(copied.toPath(), LinkOption.NOFOLLOW_LINKS)
+                                && copied.length() == child.copiedLength;
+                if (!valid) throw new IOException("Copied entry changed before source removal: " + child.entry.name);
             }
         }
 

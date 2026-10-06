@@ -32,7 +32,7 @@ import java.util.Locale;
 /** Publishes Documents without putting SAF on the game's native file-reading path. */
 public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
     // Also held by native skin publication on Android FUSE without renameat2 flags.
-    static final Object DOCUMENT_MUTATION_LOCK = new Object();
+    static final Object DOCUMENT_MUTATION_LOCK = DocumentsMutationGuard.LOCK;
 
     static final String AUTHORITY = BuildConfig.APPLICATION_ID + ".documents";
     private static final String[] ROOT_COLUMNS = {
@@ -130,6 +130,7 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
         boolean root = DocumentsPathPolicy.ROOT_DOCUMENT_ID.equals(id);
         int flags = root ? 0 : Document.FLAG_SUPPORTS_DELETE | Document.FLAG_SUPPORTS_RENAME;
         flags |= file.isDirectory() ? Document.FLAG_DIR_SUPPORTS_CREATE : Document.FLAG_SUPPORTS_WRITE;
+        if (policy.isReadOnly(file)) flags = 0;
         cursor.newRow().add(Document.COLUMN_DOCUMENT_ID, id)
                 .add(Document.COLUMN_DISPLAY_NAME, root ? getContext().getString(R.string.app_name) : file.getName())
                 .add(Document.COLUMN_MIME_TYPE, mimeType(file))
@@ -182,12 +183,15 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             throws FileNotFoundException {
         if (signal != null) signal.throwIfCanceled();
         try {
-            File file = paths().resolve(documentId);
+            DocumentsPathPolicy policy = paths();
+            File file = policy.resolve(documentId);
             if (!file.isFile()) throw new FileNotFoundException("Not a regular file");
             int access = ParcelFileDescriptor.parseMode(mode);
             if ((access & ParcelFileDescriptor.MODE_WRITE_ONLY) == 0) {
                 return ParcelFileDescriptor.open(file, access);
             }
+            policy.requireWritable(file);
+            DocumentsMutationGuard.requireUnreserved(file, false);
             boolean bms = DocumentsPathPolicy.affectsBms(documentId);
             DocumentsLibraryChanges changes = changes(getContext());
             if (bms) changes.writerOpened(SystemClock.elapsedRealtime());
@@ -214,9 +218,14 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             DocumentsPathPolicy policy = paths();
             File parent = policy.resolve(parentId);
             if (!parent.isDirectory()) throw new FileNotFoundException("Not a folder");
+            policy.requireWritable(parent);
             File file = policy.child(parent, displayName);
+            // Check the requested name before suffixing an existing document;
+            // reserved root names must not become writable replacement trees.
+            policy.requireWritable(file);
             // Never overwrite an existing user file when a manager copies a duplicate name.
             for (int suffix = 1; ; ++suffix) {
+                DocumentsMutationGuard.requireUnreserved(file, false);
                 boolean created = Document.MIME_TYPE_DIR.equals(mimeType) ? file.mkdir() : file.createNewFile();
                 if (created) break;
                 if (!file.exists()) throw new IOException("Could not create document");
@@ -224,6 +233,7 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
                 String base = dot > 0 && !Document.MIME_TYPE_DIR.equals(mimeType) ? displayName.substring(0, dot) : displayName;
                 String extension = base.length() < displayName.length() ? displayName.substring(base.length()) : "";
                 file = policy.child(parent, base + " (" + suffix + ")" + extension);
+                policy.requireWritable(file);
             }
             String id = policy.documentId(file);
             changed(id);
@@ -243,6 +253,10 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             DocumentsPathPolicy policy = paths();
             File source = policy.resolve(documentId);
             File destination = policy.child(source.getParentFile(), displayName);
+            policy.requireWritable(source);
+            policy.requireWritable(destination);
+            DocumentsMutationGuard.requireUnreserved(source, true);
+            DocumentsMutationGuard.requireUnreserved(destination, false);
             if (source.equals(destination)) return documentId;
             if (destination.exists()) throw new IOException("A document with that name already exists");
             Files.move(source.toPath(), destination.toPath());
@@ -262,8 +276,12 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
     private void deleteDocumentLocked(String documentId) throws FileNotFoundException {
         requireMutable(documentId);
         try {
+            DocumentsPathPolicy policy = paths();
+            File file = policy.resolve(documentId);
+            policy.requireWritable(file);
+            DocumentsMutationGuard.requireUnreserved(file, true);
             // walkFileTree does not follow symbolic links within a deleted directory.
-            Files.walkFileTree(paths().resolve(documentId).toPath(), new SimpleFileVisitor<Path>() {
+            Files.walkFileTree(file.toPath(), new SimpleFileVisitor<Path>() {
                 @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                     Files.delete(file);
                     return FileVisitResult.CONTINUE;
