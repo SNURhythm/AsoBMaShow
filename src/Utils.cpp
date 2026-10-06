@@ -175,7 +175,7 @@ Utils::GetDocumentsPath(const std::filesystem::path &SubPath) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return GetIOSDocumentsPath() / SubPath;
 #elif TARGET_OS_ANDROID
-  return GetAndroidExternalFilesDir() / SubPath;
+  return std::filesystem::path(GetAndroidExternalFilesDir()) / "Documents" / SubPath;
 #else
 #ifdef _WIN32
   static std::wstring WindowsUserDir;

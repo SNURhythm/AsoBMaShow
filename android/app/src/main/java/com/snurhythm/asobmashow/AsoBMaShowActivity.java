@@ -22,6 +22,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.SystemClock;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
@@ -72,6 +74,44 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
     private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
     private boolean notificationPermissionRequestStarted;
+    private final Handler documentsRefreshHandler = new Handler(Looper.getMainLooper());
+    private long documentsRefreshTask;
+    private long documentsRefreshRevision;
+    private final Runnable documentsRefreshPoll = new Runnable() {
+        @Override public void run() {
+            long delay = 1000;
+            DocumentsLibraryChanges changes = AsoBMaShowDocumentsProvider.changes(AsoBMaShowActivity.this);
+            try {
+                if (documentsRefreshTask != 0) {
+                    int status = nativeDocumentsRefreshStatus(documentsRefreshTask);
+                    if (status != 0) {
+                        if (status > 0) changes.acknowledge(documentsRefreshRevision);
+                        else delay = 30000;
+                        documentsRefreshTask = 0;
+                    }
+                } else {
+                    long revision = changes.readyRevision(SystemClock.elapsedRealtime());
+                    if (revision != 0) {
+                        documentsRefreshTask = nativeRefreshDocumentsLibrary();
+                        if (documentsRefreshTask != 0) documentsRefreshRevision = revision;
+                    }
+                }
+            } catch (UnsatisfiedLinkError ignored) {
+                // The provider can run before SDL has loaded the native library.
+            }
+            documentsRefreshHandler.postDelayed(this, delay);
+        }
+    };
+
+    private void startDocumentsLibraryRefresh() {
+        documentsRefreshHandler.removeCallbacks(documentsRefreshPoll);
+        documentsRefreshHandler.postDelayed(documentsRefreshPoll, 1000);
+    }
+
+    private void stopDocumentsLibraryRefresh() {
+        documentsRefreshHandler.removeCallbacks(documentsRefreshPoll);
+    }
+
 
     private final NativeFolderPickerRequests folderPickerRequests =
             new NativeFolderPickerRequests();
@@ -198,10 +238,12 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
         nativeGyroscopeActivityResumed();
         folderPickerRequests.onResume(this::hasManageExternalStorageAccess);
+        startDocumentsLibraryRefresh();
     }
 
     @Override
     protected void onPause() {
+        stopDocumentsLibraryRefresh();
         folderPickerRequests.onPause();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = false;
@@ -222,6 +264,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        stopDocumentsLibraryRefresh();
         folderPickerRequests.destroy();
         cancelPendingChartImports();
         synchronized (gyroscopeTurntableLock) {
@@ -302,6 +345,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static native boolean nativeChartFolderPickerCancelled(String cancellationToken);
     private static native boolean nativeDownloadUrlTextCheckpoint(long checkpointToken);
     private static native boolean nativeDownloadUrlTextPauseRequested(long checkpointToken);
+    private static native long nativeRefreshDocumentsLibrary();
+    private static native int nativeDocumentsRefreshStatus(long task);
     private static native int nativeBeginChartImport(String token, boolean isTree);
     private static native int nativeChartImportCopyState(String token);
     private static native boolean nativeFinishChartImport(
@@ -1002,6 +1047,20 @@ public class AsoBMaShowActivity extends SDLActivity {
         } catch (Exception e) {
             return ERROR_PREFIX + messageForException(
                     e, "Temporary document cleanup failed.");
+        }
+    }
+
+    public String openDocumentsFolder() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(DocumentsContract.buildRootUri(
+                    AsoBMaShowDocumentsProvider.AUTHORITY, DocumentsPathPolicy.ROOT_ID),
+                    DocumentsContract.Root.MIME_TYPE_ITEM);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            return SUCCESS_RESULT;
+        } catch (Exception error) {
+            return ERROR_PREFIX + messageForException(error, "Could not open the Files app.");
         }
     }
 
@@ -2720,15 +2779,14 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private File documentsBmsDirectory() {
-        File base = getExternalFilesDir(null);
-        if (base == null) {
-            base = getFilesDir();
-        }
-        return new File(base, "BMS");
+        return new File(AsoBMaShowDocumentsProvider.documentsDirectory(this), "BMS");
     }
 
     private String copyTreeUriToBmsFolder(Uri treeUri, String displayName,
                                          ChartImportCopyControl control) throws Exception {
+        if (AsoBMaShowDocumentsProvider.AUTHORITY.equals(treeUri.getAuthority())) {
+            throw new IOException("This folder is already in AsoBMaShow. Place charts in its BMS folder instead.");
+        }
         control.checkpoint();
         File directory = documentsBmsDirectory();
         if (!directory.isDirectory() && !directory.mkdirs()) {

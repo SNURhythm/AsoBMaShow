@@ -6,6 +6,8 @@
 #include "StableHash.h"
 #include "audio/NativeMusicPlayer.h"
 #include "library/ChartLibraryTaskService.h"
+#include "library/DocumentsLibraryRefresh.h"
+#include "repositories/ChartRepository.h"
 #include "platform/ScreenOrientation.h"
 
 #include <SDL2/SDL_events.h>
@@ -711,6 +713,40 @@ void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &
   }
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeRefreshDocumentsLibrary(
+    JNIEnv *, jclass) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) return 0;
+  try {
+    const auto id = chart_library_tasks::enqueueDocumentsLibraryRefresh(
+        *gAndroidImportTasks, ChartRepository::DefaultBmsFolderPath());
+    if (id != 0) {
+      SDL_Log("Android Documents library refresh queued: %llu", static_cast<unsigned long long>(id));
+    }
+    return static_cast<jlong>(id);
+  } catch (...) {
+    return 0;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDocumentsRefreshStatus(
+    JNIEnv *, jclass, jlong taskId) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) return -1;
+  try {
+    for (const auto &task : gAndroidImportTasks->snapshot().tasks) {
+      if (task.id != static_cast<std::uint64_t>(taskId)) continue;
+      if (task.status == chart_library_tasks::TaskStatus::Complete) return 1;
+      if (task.status == chart_library_tasks::TaskStatus::Failed) return -1;
+      return 0;
+    }
+  } catch (...) {
+  }
+  return -1;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeBeginChartImport(
     JNIEnv *env, jclass, jstring token, jboolean folder) {
@@ -1398,6 +1434,18 @@ std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &pa
     return std::nullopt;
   }
   return fd;
+}
+
+bool OpenAndroidDocumentsFolder(std::string &errorMessage) {
+  std::string callError;
+  const auto result = callActivityStringMethod(
+      "openDocumentsFolder", "()Ljava/lang/String;", nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
 }
 
 bool OpenURLInAndroidBrowser(const std::string &url,

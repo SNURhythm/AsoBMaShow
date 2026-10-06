@@ -1451,6 +1451,27 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
         }
       });
   libraryActions->addView(importArchiveButton);
+
+  auto *openFilesButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
+  auto *openFilesText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  openFilesText->setLocalizedText(i18n::message("menu.open_files.label"));
+  openFilesText->setAlign(TextView::CENTER);
+  openFilesText->setVAlign(TextView::MIDDLE);
+  openFilesButton->setContentView(openFilesText);
+  styleThemedActionButton(openFilesButton, openFilesText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  openFilesButton->setCornerRadius(ui_theme::controlRadius());
+  openFilesButton->setStyledBorderWidth(1);
+  openFilesButton->setOnClickListener([]() {
+    std::string error;
+    if (!OpenAndroidDocumentsFolder(error)) {
+      SDL_Log("Open Documents: %s", error.c_str());
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow",
+                               i18n::tr("menu.open_files.failed"), nullptr);
+    }
+  });
+  libraryActions->addView(openFilesButton);
 #endif
 
   folderRecyclerView->setFlex(1);

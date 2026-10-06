@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.security.NetworkSecurityPolicy;
 import android.system.Os;
@@ -47,6 +48,25 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            if ("documents-provider".equals(arguments.getString("mode")) ||
+                    "documents-refresh".equals(arguments.getString("mode"))) {
+                DocumentsProviderInstrumentationChecks.run(getTargetContext(), this);
+                if ("documents-refresh".equals(arguments.getString("mode"))) {
+                    startActivitySync(new Intent(getTargetContext(), AsoBMaShowActivity.class)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    long deadline = SystemClock.elapsedRealtime() + 120000;
+                    while (getTargetContext().getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                            .getBoolean("library-dirty", false) && SystemClock.elapsedRealtime() < deadline) {
+                        SystemClock.sleep(100);
+                    }
+                    require(!getTargetContext().getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                            .getBoolean("library-dirty", false),
+                            "Foreground native refresh never completed/acknowledged provider edits");
+                }
+                result.putString("result", "PASS " + arguments.getString("mode") + " " + BuildConfig.FLAVOR);
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             File cacheDirectory = getTargetContext().getCacheDir();
             require(cacheDirectory.getAbsolutePath().equals(Os.getenv("TMPDIR")),
                     "Target application did not configure native private temporary storage");

@@ -564,6 +564,8 @@
 {"menu.no_parsing_logs_yet.message", "No parsing logs yet.", "아직 분석 로그가 없습니다.", "解析ログはまだありません。"},
 {"menu.no_parsing_tasks.message", "No parsing tasks.", "분석 작업이 없습니다.", "解析タスクはありません。"},
 {"menu.no_track_selected.label", "No track selected", "선택한 곡 없음", "曲が選択されていません"},
+{"menu.open_files.failed", "Could not open the Files app.", "파일 앱을 열지 못했습니다.", "ファイルアプリを開けませんでした。"},
+{"menu.open_files.label", "Open in Files", "파일 앱에서 열기", "ファイルで開く"},
 {"menu.parse_log.close.label", "Close", "닫기", "閉じる"},
 {"menu.parsing_charts.label", "Parsing charts", "채보 분석 중", "譜面を解析中"},
 {"menu.parsing_logs.label", "Parsing Logs", "분석 로그", "解析ログ"},

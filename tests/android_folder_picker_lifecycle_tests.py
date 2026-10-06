@@ -99,7 +99,7 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
 
     def test_storage_tree_access_matches_actual_permission(self):
         for scenario in ("storage-28", "storage-29", "storage-30-denied",
-                         "storage-30-granted", "storage-play"):
+                         "storage-30-granted", "storage-restricted-file-access"):
             self.run_scenario(scenario)
 
 

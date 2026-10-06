@@ -63,6 +63,32 @@ public class AsoBMaShowBackupPathPolicyTest {
         }
     }
 
+    @Test
+    public void excludesCredentialArtifactsFromDocumentsProfilesButKeepsUserData()
+            throws Exception {
+        for (String storage : List.of("credential", "device", "external")) {
+            Path filesRoot = temporary.newFolder(storage).toPath();
+            Path profilesRoot = Files.createDirectories(filesRoot.resolve("Documents/profiles"));
+            Path profileRoot = Files.createDirectories(profilesRoot.resolve("profile-id"));
+            Path scores = write(profileRoot.resolve("scores.db"), "scores");
+            Path skin = write(Files.createDirectories(filesRoot.resolve("Documents/Skins"))
+                    .resolve("skin.json"), "{}");
+            List<Path> credentials = List.of(
+                    write(profileRoot.resolve("ir-credentials.json"), "secret"),
+                    write(profileRoot.resolve("ir-credentials.json.bak.pending"), "secret"));
+            List<Path> selected = new ArrayList<>();
+            AsoBMaShowBackupPathPolicy.visitBackupEntries(
+                    filesRoot, List.of(), List.of(profilesRoot), selected::add);
+            assertTrue(selected.contains(scores));
+            assertTrue(selected.contains(skin));
+            assertFalse(AsoBMaShowBackupPathPolicy.isCredentialArtifact(scores, List.of(profilesRoot)));
+            for (Path credential : credentials) {
+                assertFalse(selected.contains(credential));
+                assertTrue(AsoBMaShowBackupPathPolicy.isCredentialArtifact(credential, List.of(profilesRoot)));
+            }
+        }
+    }
+
     private static Path write(Path path, String contents) throws Exception {
         return Files.write(path, contents.getBytes(StandardCharsets.UTF_8));
     }

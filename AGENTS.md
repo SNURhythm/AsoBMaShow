@@ -28,17 +28,28 @@
 - For a fast local release compile check without upload, run with Android signing env configured:
   `scripts/android_firebase_deploy.sh --build-only`
 - The Android deploy script loads `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
-- The script defaults to the `firebaseRelease` flavor and will use `/usr/libexec/java_home -v 17` on this machine if the active shell Java is too new for Gradle.
+- The script defaults to the `restricted_file_accessRelease` variant and will use `/usr/libexec/java_home -v 17` on this machine if the active shell Java is too new for Gradle.
 - Android native builds are pinned to NDK `28.2.13676358` for reproducible 16 KiB page-size support. Install that exact side-by-side NDK or point `ANDROID_NDK_HOME` to it.
 - Use `scripts/android_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
 - Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.
 - Android release builds require `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The same release signing config is used for Firebase App Distribution and Google Play builds. Keep real values in private env files, runner environment, or GitHub Actions secrets only.
-- Firebase Android builds request `MANAGE_EXTERNAL_STORAGE`; Play builds opt out via the `play` flavor. For a local Play compile check, run:
-  `scripts/android_firebase_deploy.sh --build-only --variant playDebug`
+- The `restricted_file_access` flavor omits `MANAGE_EXTERNAL_STORAGE` and is the default for Firebase testing and Google Play. The `all_file_access` flavor requests that permission. For an explicit all-files release compile check, run:
+  `scripts/android_firebase_deploy.sh --build-only --variant all_file_accessRelease`
 - Debug variants remain debug-signed. Do not use debug signing for Firebase or Play release builds.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
 - GitHub Actions deploys Android only through a manual `workflow_dispatch` run of `.github/workflows/android-beta-deploy.yml`. It does not run on pushes, tags, or pull requests. The job reads Android signing values from GitHub Actions secrets, and the self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
+
+## Android Documents Storage
+
+- User-visible documents live in `getExternalFilesDir(null)/Documents`, with
+  `getFilesDir()/Documents` as fallback. Native `Utils::GetDocumentsPath` and the
+  Android DocumentsProvider must resolve the same directory.
+- The provider exposes that entire subtree (BMS, db, profiles, Skins, exports).
+  Keep caches, import staging, credentials and private skin state outside it.
+  Rendered music and archive indexes use Android's private cache directory.
+- This Android testing layout intentionally has no migration from the earlier
+  flat files-root layout; the user explicitly does not require compatibility.
 
 ## Android Emulator Testing
 
@@ -56,7 +67,7 @@
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell getprop sys.boot_completed`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell dumpsys user | sed -n '1,35p'`
 - Install and launch with the explicit component. `monkey -p` may fail to resolve the launcher in headless emulator tests:
-  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb install -r android/app/build/outputs/apk/firebase/release/app-firebase-release.apk`
+  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb install -r android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb logcat -c`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell am start --user 0 -n com.snurhythm.asobmashow/.AsoBMaShowActivity`
 - Useful runtime checks:
@@ -64,7 +75,7 @@
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell dumpsys activity activities | rg -n "ResumedActivity|com.snurhythm|documentsui|AsoBMaShow"`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell logcat -d -v time | rg -i "AsoBMaShow|SDL|bgfx|AndroidRuntime|FATAL EXCEPTION|Fatal signal|tombstone|ANR|renderer|Vulkan|OpenGLES"`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb exec-out screencap -p > /tmp/asobmashow-android.png`
-- In Firebase builds, Add Folder requests Android all-files access first, then opens `ACTION_OPEN_DOCUMENT_TREE`; if access is granted and the picker returns primary external storage, the app stores a direct `/storage/emulated/0/...` path instead of an `@androidtree@` SAF path. In logs, a good real-device graphics startup includes `bgfx renderer: Vulkan`; the Android emulator may intentionally use OpenGL ES.
+- In `all_file_access` builds on Android 11+, Add Folder requests Android all-files access first, then opens `ACTION_OPEN_DOCUMENT_TREE`; if access is granted and the picker returns primary external storage, the app stores a direct `/storage/emulated/0/...` path instead of an `@androidtree@` SAF path. In logs, a good real-device graphics startup includes `bgfx renderer: Vulkan`; the Android emulator may intentionally use OpenGL ES.
 - Archive import can be tested without tapping UI by pushing a zip to Downloads, resolving its MediaStore `content://media/external/file/<id>` URI, then launching either:
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell am start --user 0 --grant-read-uri-permission -a android.intent.action.VIEW -d content://media/external/file/<id> -t application/zip -n com.snurhythm.asobmashow/.AsoBMaShowActivity`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell am start --user 0 --grant-read-uri-permission -a android.intent.action.SEND -t application/zip --eu android.intent.extra.STREAM content://media/external/file/<id> -n com.snurhythm.asobmashow/.AsoBMaShowActivity`

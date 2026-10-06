@@ -142,14 +142,14 @@ android {
         }
     }
 
-    flavorDimensions 'distribution'
+    flavorDimensions 'fileAccess'
     productFlavors {
-        play {
-            dimension 'distribution'
+        restricted_file_access {
+            dimension 'fileAccess'
             buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'false'
         }
-        firebase {
-            dimension 'distribution'
+        all_file_access {
+            dimension 'fileAccess'
             buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'true'
         }
     }

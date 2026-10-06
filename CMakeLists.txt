@@ -690,6 +690,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_documents_provider_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_provider_tests.py -v)
+    set_tests_properties(android_documents_provider_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     add_test(NAME android_temporary_storage_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_temporary_storage_tests.py -v)

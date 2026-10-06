@@ -105,6 +105,7 @@ bool ReadAndroidTreeFile(const std::filesystem::path &path,
                          std::string &errorMessage);
 std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &path,
                                                  std::string &errorMessage);
+bool OpenAndroidDocumentsFolder(std::string &errorMessage);
 bool OpenURLInAndroidBrowser(const std::string &url,
                              std::string &errorMessage);
 bool DownloadURLTextAndroid(const std::string &url, std::string &body,

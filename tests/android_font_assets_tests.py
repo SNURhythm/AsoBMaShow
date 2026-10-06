@@ -1,6 +1,6 @@
 """Check font random-access support after assembling an Android APK.
 
-Run with --apk android/app/build/outputs/apk/firebase/release/app-firebase-release.apk.
+Run with --apk android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk.
 Compressed fonts cause AAsset_seek64 to repeatedly inflate large font files.
 """
 

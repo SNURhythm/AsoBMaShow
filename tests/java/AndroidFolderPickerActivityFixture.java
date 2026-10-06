@@ -127,8 +127,8 @@ public final class AndroidFolderPickerActivityFixture {
             throws Exception {
         Build.VERSION.SDK_INT = scenario.equals("storage-28") ? 28
                 : scenario.equals("storage-29") ? 29 : 30;
-        BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = !scenario.equals("storage-play");
-        Environment.permissionGranted = scenario.endsWith("granted") || scenario.equals("storage-play");
+        BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = !scenario.equals("storage-restricted-file-access");
+        Environment.permissionGranted = scenario.endsWith("granted") || scenario.equals("storage-restricted-file-access");
         Method direct = PickerActivity.class.getDeclaredMethod("directPathForTree", Uri.class);
         direct.setAccessible(true);
         String path = (String) direct.invoke(activity, Uri.parse("content://tree"));
@@ -229,6 +229,8 @@ class PickerActivity extends FakeSdlActivity {
     void stopMidiInput() {}
     void releaseNativeMusicPlayerLocked() {}
     static boolean nativeChartFolderPickerCancelled(String token) { return false; }
+    void startDocumentsLibraryRefresh() {}
+    void stopDocumentsLibraryRefresh() {}
     ACTIVITY_FIELDS
     ACTIVITY_METHODS
 }

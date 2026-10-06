@@ -1,5 +1,6 @@
 #include "library/ChartLibraryTaskTypes.h"
 #include "library/ChartLibraryTaskService.h"
+#include "library/DocumentsLibraryRefresh.h"
 #include "support/AllocationFailure.h"
 #include "i18n/Localization.h"
 
@@ -805,9 +806,54 @@ void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
          "cancelled Java copies do not leave permanent active rows");
 }
 
+void testDocumentsRefreshUsesIdleWorkerAndRestoresRemovedRoot() {
+  using namespace chart_library_tasks;
+  const auto temporary = std::filesystem::temp_directory_path() /
+      ("asobmashow-documents-refresh-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto bms = temporary / "BMS";
+  std::filesystem::create_directories(bms);
+  std::atomic_int scans = 0;
+  std::atomic_bool sawMissingRoot = false;
+  ChartLibraryTaskService service([&](const TaskRequest &request, const auto &, auto, auto) {
+    if (request.kind != TaskKind::RefreshPath || request.refreshPath != bms ||
+        !std::filesystem::is_directory(request.refreshPath)) sawMissingRoot = true;
+    ++scans;
+    return TaskRunResult{};
+  });
+  service.start();
+  expect(service.active() && service.snapshot().activeCount == 0,
+         "an existing worker can be idle before a Documents edit");
+  expect(enqueueDocumentsLibraryRefresh(service, bms) != 0,
+         "Documents refresh is admitted to an already-started idle worker");
+  expect(waitUntil([&] { return scans == 1 && service.snapshot().activeCount == 0; }),
+         "Documents refresh completes after normal writes");
+  std::filesystem::rename(bms, temporary / "Renamed BMS");
+  expect(enqueueDocumentsLibraryRefresh(service, bms) != 0,
+         "renaming BMS still schedules reconciliation");
+  expect(waitUntil([&] { return scans == 2 && service.snapshot().activeCount == 0; }),
+         "renamed BMS reconciles through an empty canonical root");
+  std::filesystem::remove_all(bms);
+  expect(enqueueDocumentsLibraryRefresh(service, bms) != 0,
+         "deleting BMS still schedules reconciliation");
+  expect(waitUntil([&] { return scans == 3 && service.snapshot().activeCount == 0; }),
+         "deleted BMS reconciles through an empty canonical root");
+  expect(!sawMissingRoot, "the scoped scanner always receives an existing BMS directory");
+  expect(std::filesystem::is_directory(temporary / "Renamed BMS"),
+         "refresh does not alter the renamed user folder");
+  service.setGameplayPaused(true);
+  expect(enqueueDocumentsLibraryRefresh(service, bms) != 0,
+         "Documents refresh can wait for gameplay to finish");
+  expect(enqueueDocumentsLibraryRefresh(service, bms) == 0,
+         "Documents edits do not queue duplicate work while a task is pending");
+  service.shutdown();
+  std::filesystem::remove_all(temporary);
+}
+
 } // namespace
 
 int main() {
+  testDocumentsRefreshUsesIdleWorkerAndRestoresRemovedRoot();
   testTaskTitlesRetainMessagesAcrossLanguageChanges();
   testTaskDetailsRetainProducerMessages();
   testSnapshotCarriesQueueAndProgressAsValues();

@@ -175,6 +175,44 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertIn(expected_wrapper, self.android_readme)
         self.assertTrue((ROOT / expected_wrapper).is_file())
 
+    def test_android_file_access_flavors_are_independent_of_distribution(self):
+        self.assertIn("flavorDimensions 'fileAccess'", self.gradle)
+        for flavor, enabled in (("restricted_file_access", "false"),
+                                ("all_file_access", "true")):
+            body = re.search(r"\b" + flavor + r"\s*\{([^}]+)\}", self.gradle)
+            self.assertIsNotNone(body)
+            self.assertIn("dimension 'fileAccess'", body.group(1))
+            self.assertIn(
+                "buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', "
+                f"'{enabled}'", body.group(1),
+            )
+        self.assertNotRegex(self.gradle, r"(?m)^\s*(?:play|firebase)\s*\{")
+        self.assertNotIn("android.permission.MANAGE_EXTERNAL_STORAGE", self.manifest)
+        self.assertIn("android.permission.MANAGE_EXTERNAL_STORAGE",
+                      read("android/app/src/all_file_access/AndroidManifest.xml"))
+        self.assertIn('VARIANT="restricted_file_accessRelease"', self.deploy_script)
+        self.assertIn("android_firebase_deploy.sh --variant restricted_file_accessRelease",
+                      self.workflow)
+
+    def test_android_variant_tasks_and_artifacts_preserve_underscores(self):
+        functions = self.deploy_script.split("variant_task_name() {", 1)[1]
+        functions = "variant_task_name() {" + functions.split("run_gradle_build() {", 1)[0]
+        command = (functions + '\nVARIANT="$1"\nANDROID_DIR="$2"\nAPK_PATH=""\n'
+                   'variant_task_name\nartifact_path_for_variant\n')
+        for flavor in ("restricted_file_access", "all_file_access"):
+            for build_type in ("Debug", "Release"):
+                with self.subTest(flavor=flavor, build_type=build_type):
+                    variant = flavor + build_type
+                    output = subprocess.check_output(
+                        ["bash", "-c", command, "variant-fixture", variant, "/fixture/android"],
+                        text=True,
+                    ).splitlines()
+                    self.assertEqual(output, [
+                        "assemble" + variant[0].upper() + variant[1:],
+                        f"/fixture/android/app/build/outputs/apk/{flavor}/"
+                        f"{build_type.lower()}/app-{flavor}-{build_type.lower()}.apk",
+                    ])
+
     def test_android_build_enables_lua_skin_runtime(self):
         self.assertIn(
             "'-DASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=ON'",
@@ -305,7 +343,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                     "--build-only",
                     "--skip-build",
                     "--variant",
-                    "firebaseDebug",
+                    "restricted_file_accessDebug",
                 ],
                 cwd=ROOT,
                 env=environment,
@@ -318,7 +356,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     def test_android_artifact_upload_does_not_require_build_toolchains(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            apk = root / "app-firebase-debug.apk"
+            apk = root / "app-restricted_file_access-debug.apk"
             apk.write_bytes(b"fixture")
             firebase = root / "firebase"
             firebase.write_text(
@@ -356,7 +394,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                     "--apk",
                     str(apk),
                     "--variant",
-                    "firebaseDebug",
+                    "restricted_file_accessDebug",
                     "--firebase-cli",
                     str(firebase),
                 ],
@@ -390,10 +428,10 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
 
         android_job = self.workflow.split("  android-firebase:", 1)[1]
         self.assertIn(
-            "android/gradlew -p android lintFirebaseDebug",
+            "android/gradlew -p android lintRestricted_file_accessDebug",
             android_job,
         )
-        lint_index = android_job.index("lintFirebaseDebug")
+        lint_index = android_job.index("lintRestricted_file_accessDebug")
         deploy_index = android_job.index("android_firebase_deploy.sh")
         self.assertLess(lint_index, deploy_index)
 
