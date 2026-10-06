@@ -48,6 +48,12 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            if ("skin-directory".equals(arguments.getString("mode"))) {
+                SkinDirectoryInstrumentationChecks.run(getTargetContext(), this);
+                result.putString("result", "PASS skin directory import, bounds, cancellation, ownership and cleanup");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             if ("documents-open-files".equals(arguments.getString("mode"))) {
                 Intent intent = DocumentsProviderInstrumentationChecks.verifyOpenFilesIntent(
                         getTargetContext(), this, BuildConfig.APPLICATION_ID + ".documents");

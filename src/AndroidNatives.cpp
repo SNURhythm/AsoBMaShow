@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 
 #include "StableHash.h"
+#include "skin/package/SkinDirectoryRename.h"
 #include "audio/NativeMusicPlayer.h"
 #include "library/ChartLibraryTaskService.h"
 #include "library/DocumentsLibraryRefresh.h"
@@ -1178,6 +1179,81 @@ std::string ImportAndroidDocument(std::uint64_t operationToken,
                         : result;
 }
 
+namespace skin {
+int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
+                                               const char *sourceName,
+                                               int destinationParent,
+                                               const char *destinationName) noexcept {
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (env == nullptr || activity == nullptr) {
+    errno = EIO;
+    return -1;
+  }
+  jclass activityClass = env->GetObjectClass(activity);
+  jmethodID method = activityClass == nullptr ? nullptr : env->GetMethodID(
+      activityClass, "getDocumentsMutationLock", "()Ljava/lang/Object;");
+  jobject monitor = method == nullptr ? nullptr : env->CallObjectMethod(activity, method);
+  if (activityClass) env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  if (env->ExceptionCheck() || monitor == nullptr) {
+    env->ExceptionClear();
+    if (monitor) env->DeleteLocalRef(monitor);
+    errno = EIO;
+    return -1;
+  }
+  if (env->MonitorEnter(monitor) != JNI_OK) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(monitor);
+    errno = EIO;
+    return -1;
+  }
+  const int result = skinRenameDirectoryUnderMutationLock(
+      sourceParent, sourceName, destinationParent, destinationName);
+  const int renameError = errno;
+  // Keep the retained monitor, even if the Activity is destroyed during rename.
+  env->MonitorExit(monitor);
+  env->DeleteLocalRef(monitor);
+  errno = renameError;
+  return result;
+}
+} // namespace skin
+
+std::string ImportAndroidDirectory(std::uint64_t operationToken,
+                                   std::uint64_t maxBytes, std::uint64_t maxFiles,
+                                   std::uint64_t maxDepth, std::uint64_t maxPathBytes,
+                                   std::uint64_t maxRegularFileBytes,
+                                   std::string *originalSourceName) {
+  RequestAndroidExternalActivityRenderPause();
+  struct ExternalActivityPauseReset {
+    ~ExternalActivityPauseReset() {
+      FinishAndroidExternalActivityRenderPause();
+    }
+  } externalActivityPauseReset;
+  const auto tokenText = std::to_string(operationToken);
+  const auto limits = std::to_string(maxBytes) + "," + std::to_string(maxFiles) +
+                      "," + std::to_string(maxDepth) + "," +
+                      std::to_string(maxPathBytes) + "," +
+                      std::to_string(maxRegularFileBytes);
+  std::string callError;
+  auto result = callActivityStringMethod2(
+      "importDirectory", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      tokenText.c_str(), limits.c_str(), callError);
+  if (!callError.empty()) {
+    return std::string(kErrorPrefix) + callError;
+  }
+  const auto separator = result.find('\n');
+  if (!result.empty() && result.front() == '/' && separator != std::string::npos) {
+    if (originalSourceName) {
+      *originalSourceName = result.substr(separator + 1);
+    }
+    result.resize(separator);
+  }
+  return result.empty() ? std::string(kErrorPrefix) +
+                              "Android folder import returned no result."
+                        : result;
+}
+
 std::string ExportAndroidDocument(std::uint64_t operationToken,
                                   const std::filesystem::path &localPath,
                                   const std::string &mimeType,
@@ -1250,6 +1326,44 @@ bool CleanupAndroidTemporaryDocument(const std::filesystem::path &localPath,
       result.rfind(kErrorPrefix, 0) == 0
           ? result.substr(std::char_traits<char>::length(kErrorPrefix))
           : "Android could not clean up the temporary document.";
+  return false;
+}
+
+bool ValidateAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                      std::string &errorMessage) {
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod(
+      "validateDirectoryHandoffImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      pathText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android rejected temporary directory ownership.";
+  return false;
+}
+
+bool CleanupAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                     std::string &errorMessage) {
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod(
+      "cleanupDirectoryHandoffImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      pathText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android could not clean up the temporary directory.";
   return false;
 }
 

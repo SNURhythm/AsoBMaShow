@@ -708,6 +708,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_skin_directory_import_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_skin_directory_import_tests.py -v)
+    set_tests_properties(android_skin_directory_import_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     add_test(NAME android_temporary_storage_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_temporary_storage_tests.py -v)

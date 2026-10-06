@@ -31,6 +31,9 @@ import java.util.Locale;
 
 /** Publishes Documents without putting SAF on the game's native file-reading path. */
 public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
+    // Also held by native skin publication on Android FUSE without renameat2 flags.
+    static final Object DOCUMENT_MUTATION_LOCK = new Object();
+
     static final String AUTHORITY = BuildConfig.APPLICATION_ID + ".documents";
     private static final String[] ROOT_COLUMNS = {
             Root.COLUMN_ROOT_ID, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_TITLE,
@@ -170,6 +173,13 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
 
     @Override public ParcelFileDescriptor openDocument(String documentId, String mode, CancellationSignal signal)
             throws FileNotFoundException {
+        synchronized (DOCUMENT_MUTATION_LOCK) {
+            return openDocumentLocked(documentId, mode, signal);
+        }
+    }
+
+    private ParcelFileDescriptor openDocumentLocked(String documentId, String mode, CancellationSignal signal)
+            throws FileNotFoundException {
         if (signal != null) signal.throwIfCanceled();
         try {
             File file = paths().resolve(documentId);
@@ -193,8 +203,13 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
         } catch (IOException error) { throw failure(error); }
     }
 
-    @Override public synchronized String createDocument(String parentId, String mimeType, String displayName)
-            throws FileNotFoundException {
+    @Override public String createDocument(String parentId, String mimeType, String displayName) throws FileNotFoundException {
+        synchronized (DOCUMENT_MUTATION_LOCK) {
+            return createDocumentLocked(parentId, mimeType, displayName);
+        }
+    }
+
+    private String createDocumentLocked(String parentId, String mimeType, String displayName) throws FileNotFoundException {
         try {
             DocumentsPathPolicy policy = paths();
             File parent = policy.resolve(parentId);
@@ -216,8 +231,13 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
         } catch (IOException error) { throw failure(error); }
     }
 
-    @Override public synchronized String renameDocument(String documentId, String displayName)
-            throws FileNotFoundException {
+    @Override public String renameDocument(String documentId, String displayName) throws FileNotFoundException {
+        synchronized (DOCUMENT_MUTATION_LOCK) {
+            return renameDocumentLocked(documentId, displayName);
+        }
+    }
+
+    private String renameDocumentLocked(String documentId, String displayName) throws FileNotFoundException {
         requireMutable(documentId);
         try {
             DocumentsPathPolicy policy = paths();
@@ -233,7 +253,13 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
         } catch (IOException error) { throw failure(error); }
     }
 
-    @Override public synchronized void deleteDocument(String documentId) throws FileNotFoundException {
+    @Override public void deleteDocument(String documentId) throws FileNotFoundException {
+        synchronized (DOCUMENT_MUTATION_LOCK) {
+            deleteDocumentLocked(documentId);
+        }
+    }
+
+    private void deleteDocumentLocked(String documentId) throws FileNotFoundException {
         requireMutable(documentId);
         try {
             // walkFileTree does not follow symbolic links within a deleted directory.

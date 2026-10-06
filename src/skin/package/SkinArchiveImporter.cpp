@@ -37,6 +37,7 @@
 #endif
 
 #include "SkinDirectoryTraversal.h"
+#include "SkinDirectoryRename.h"
 #include "SkinIOSFileOpenCompatibility.h"
 
 namespace skin {
@@ -1341,24 +1342,20 @@ public:
         expected.st_ino == actual.st_ino;
     bool renamed = false;
     if (sourceMatches) {
-#if defined(__APPLE__)
-      renamed = ::renameatx_np(parentFd_, name_.c_str(), destinationParent,
-                               leaf.c_str(), RENAME_EXCL) == 0;
-#elif defined(__linux__)
-      renamed =
-          ::syscall(SYS_renameat2, parentFd_, name_.c_str(), destinationParent,
-                    leaf.c_str(), RENAME_NOREPLACE) == 0;
-#else
-      errno = ENOTSUP;
-#endif
+      renamed = skinRenameDirectoryNoReplace(parentFd_, name_.c_str(),
+                                               destinationParent, leaf.c_str()) == 0;
     }
     if (!renamed) {
+      const int renameError = errno;
       if (destinationParent >= 0) {
         ::close(destinationParent);
       }
-      diagnostics.push_back(
-          diagnostic("skin_import_publication_rename_failed",
-                     "unable to publish the exact prepared visible package"));
+      diagnostics.push_back(diagnostic(
+          "skin_import_publication_rename_failed",
+          "unable to publish the exact prepared visible package: " +
+              (sourceMatches
+                   ? std::error_code(renameError, std::generic_category()).message()
+                   : std::string("prepared directory identity could not be verified"))));
       return false;
     }
     const bool sourceParentSynchronized = ::fsync(parentFd_) == 0;

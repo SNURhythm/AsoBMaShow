@@ -43,6 +43,7 @@
 #endif
 
 #include "SkinDirectoryTraversal.h"
+#include "SkinDirectoryRename.h"
 #include "SkinIOSFileOpenCompatibility.h"
 
 namespace skin {
@@ -1247,29 +1248,13 @@ public:
       if (!destinationParent) {
         return false;
       }
-#if defined(__APPLE__)
-      int result = ::renameatx_np(
+      int result = skinRenameDirectoryNoReplace(
           parent_.get(), path_.filename().c_str(), destinationParent->get(),
-          retainedDestination.filename().c_str(), RENAME_EXCL);
-#elif defined(__linux__)
-      int result = static_cast<int>(
-          ::syscall(SYS_renameat2, parent_.get(), path_.filename().c_str(),
-                    destinationParent->get(),
-                    retainedDestination.filename().c_str(), RENAME_NOREPLACE));
-#else
-      int result = -1;
-#endif
+          retainedDestination.filename().c_str());
       if (result != 0 && errno == EACCES && ::fchmod(root_.get(), 0700) == 0) {
-#if defined(__APPLE__)
-        result = ::renameatx_np(
+        result = skinRenameDirectoryNoReplace(
             parent_.get(), path_.filename().c_str(), destinationParent->get(),
-            retainedDestination.filename().c_str(), RENAME_EXCL);
-#elif defined(__linux__)
-        result = static_cast<int>(::syscall(
-            SYS_renameat2, parent_.get(), path_.filename().c_str(),
-            destinationParent->get(), retainedDestination.filename().c_str(),
-            RENAME_NOREPLACE));
-#endif
+            retainedDestination.filename().c_str());
       }
       if (result != 0) {
         return false;

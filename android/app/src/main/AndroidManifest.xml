@@ -42,8 +42,11 @@
         </intent>
     </queries>
 
+    <!-- LuaJIT's GC64 pointers require clear high bits, including allocations
+         from the skin runtime's quota allocator. Android heap tags violate that ABI. -->
     <application
         android:name=".AsoBMaShowApplication"
+        android:allowNativeHeapPointerTagging="false"
         android:allowBackup="true"
         android:backupAgent=".AsoBMaShowBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"

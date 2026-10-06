@@ -2,6 +2,7 @@
 #include "skin/package/SkinPackageOperationService.h"
 #include "skin/package/SkinPackageStore.h"
 #include "skin/package/SkinPathPolicy.h"
+#include "skin/package/SkinDirectoryRename.h"
 #include "FileChecksum.h"
 #include "support/ReadOnlyTreeCleanup.h"
 
@@ -75,6 +76,52 @@ public:
 private:
   fs::path root_;
 };
+
+void testDirectoryPublicationFallbackPreservesRecoveryStates() {
+#if !defined(_WIN32)
+  TempDirectory temporary;
+  const auto &root = temporary.root();
+  fs::create_directory(root / "source");
+  std::ofstream(root / "source/payload") << "prepared package";
+  const int parent = ::open(root.c_str(), O_RDONLY | O_DIRECTORY);
+  const int source = ::openat(parent, "source", O_RDONLY | O_DIRECTORY);
+  struct stat original{};
+  expect(parent >= 0 && source >= 0 && ::fstat(source, &original) == 0,
+         "retain prepared package identity");
+  fs::create_directory(root / "existing");
+  expect(skinRenameDirectoryUnderMutationLock(parent, "source", parent,
+                                             "existing") != 0 &&
+             fs::is_directory(root / "existing") &&
+             fs::exists(root / "source/payload"),
+         "fallback never replaces an existing empty directory");
+  std::ofstream(root / "existing/sentinel") << "keep";
+  expect(skinRenameDirectoryUnderMutationLock(parent, "source", parent,
+                                             "existing") != 0 &&
+             fs::exists(root / "existing/sentinel"),
+         "fallback preserves populated destination");
+  fs::create_directory_symlink(root / "existing", root / "linked");
+  expect(skinRenameDirectoryUnderMutationLock(parent, "source", parent,
+                                             "linked") != 0 &&
+             fs::is_symlink(root / "linked"),
+         "fallback refuses a destination symlink");
+  expect(skinRenameDirectoryUnderMutationLock(parent, "source", source,
+                                             "nested") != 0 &&
+             !fs::exists(root / "source/nested"),
+         "failed rename leaves the destination absent for journal recovery");
+  expect(skinRenameDirectoryUnderMutationLock(parent, "source", parent,
+                                             "published") == 0 &&
+             !fs::exists(root / "source") &&
+             fs::exists(root / "published/payload"),
+         "fallback publishes the complete prepared tree");
+  struct stat published{};
+  expect(::fstatat(parent, "published", &published, AT_SYMLINK_NOFOLLOW) == 0 &&
+             original.st_dev == published.st_dev &&
+             original.st_ino == published.st_ino,
+         "publication retains the original directory identity");
+  ::close(source);
+  ::close(parent);
+#endif
+}
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
   return {.visiblePackages = root / "Documents/Skins",
@@ -2969,6 +3016,7 @@ int main(int argc, char **argv) {
   testRescanIgnoresLegacyRuntimeDirectory();
   testRescanFollowsVisiblePackageDirectorySymlink();
   testRescanAcceptsVisibleEditDuringValidation();
+  testDirectoryPublicationFallbackPreservesRecoveryStates();
   testLiveSourceStorageBelowSearchOnlyParent();
   testRecoveryStillRejectsLinkedStorageAncestor();
   testLiveSourceRecoveryUsesCatalogMetadataWithoutRevisionCopies();

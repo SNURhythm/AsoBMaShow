@@ -784,6 +784,75 @@ public class AsoBMaShowActivity extends SDLActivity {
         return startPendingImportCopy(uri, archivePickerName.get(), true, "", "move".equals(operation));
     }
 
+    public Object getDocumentsMutationLock() {
+        return AsoBMaShowDocumentsProvider.DOCUMENT_MUTATION_LOCK;
+    }
+
+    public String importDirectory(String operationToken, String limitsText) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Folder import cannot block the UI thread.";
+        }
+        SkinDirectoryImport.Limits limits;
+        try {
+            String[] values = limitsText.split(",");
+            if (operationToken == null || operationToken.isEmpty() || values.length != 5)
+                throw new IOException("Invalid folder import request.");
+            limits = new SkinDirectoryImport.Limits(Long.parseLong(values[0]), Long.parseLong(values[1]),
+                    Long.parseLong(values[2]), Long.parseLong(values[3]), Long.parseLong(values[4]));
+            if (limits.bytes <= 0 || limits.entries <= 0 || limits.depth <= 0 ||
+                    limits.pathBytes <= 0 || limits.fileBytes <= 0) throw new IOException("Invalid folder import limits.");
+        } catch (Exception e) {
+            return ERROR_PREFIX + "Invalid folder import limits.";
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        DocumentSelection selection = awaitDocumentSelection(DocumentHandoffKind.IMPORT, operationToken, intent);
+        if (!selection.result.isEmpty()) {
+            return finishDocumentHandoffOperation(selection.operation) ? selection.result : CANCELLED_RESULT;
+        }
+        Path issued = null;
+        CancellationSignal cancellation = new CancellationSignal();
+        ParcelFileDescriptor[] descriptor = {null};
+        try {
+            if (selection.uri == null || !ContentResolver.SCHEME_CONTENT.equals(selection.uri.getScheme()) ||
+                    !DocumentsContract.isTreeUri(selection.uri)) throw new IOException("Select a DocumentsProvider folder.");
+            if (!registerDocumentHandoffIo(selection.operation, cancellation, null))
+                throw new DocumentHandoffCancelledException();
+            issued = Files.createDirectory(createPrivateDocumentHandoffBase().toPath().resolve(UUID.randomUUID().toString()));
+            Path output = issued.resolve("imported-directory");
+            SafSkinDirectorySource source = new SafSkinDirectorySource(getContentResolver(), selection.uri, cancellation,
+                    new SafSkinDirectorySource.IoControl() {
+                        @Override public void checkpoint() throws IOException {
+                            throwIfDocumentHandoffCancelled(selection.operation);
+                        }
+                        @Override public void descriptor(ParcelFileDescriptor value) throws IOException {
+                            descriptor[0] = value;
+                            if (!registerDocumentHandoffIo(selection.operation, cancellation, value))
+                                throw new DocumentHandoffCancelledException();
+                        }
+                    });
+            String name = SkinDirectoryImport.copy(source, output, limits);
+            if (!finishDocumentHandoffOperation(selection.operation)) throw new DocumentHandoffCancelledException();
+            // Names reject control characters; the newline separates path from suggested package name.
+            String result = output.toString() + "\n" + name;
+            issued = null;
+            return result;
+        } catch (Exception e) {
+            if (!finishDocumentHandoffOperation(selection.operation) ||
+                    e instanceof DocumentHandoffCancelledException || cancellation.isCanceled()) return CANCELLED_RESULT;
+            return ERROR_PREFIX + messageForException(e, "Could not copy the selected folder.");
+        } finally {
+            clearDocumentHandoffIo(selection.operation, cancellation, descriptor[0]);
+            if (descriptor[0] != null) {
+                try { descriptor[0].close(); } catch (IOException ignored) { }
+            }
+            if (issued != null) {
+                try { SkinDirectoryImport.removeTree(issued); }
+                catch (IOException e) { Log.w("AsoBMaShow", "Could not remove cancelled skin folder import", e); }
+            }
+        }
+    }
+
     public String importDocument(String operationToken, String mimeType,
                                  long maxBytes) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -1055,6 +1124,26 @@ public class AsoBMaShowActivity extends SDLActivity {
         } catch (Exception e) {
             return ERROR_PREFIX + messageForException(
                     e, "Temporary document cleanup failed.");
+        }
+    }
+
+    public String validateDirectoryHandoffImport(String localPath) {
+        try {
+            validatedDocumentHandoffImport(localPath, false, false, true);
+            return SUCCESS_RESULT;
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(e, "Temporary folder ownership could not be verified.");
+        }
+    }
+
+    public String cleanupDirectoryHandoffImport(String localPath) {
+        try {
+            File owned = validatedDocumentHandoffImport(localPath, true, true, true);
+            SkinDirectoryImport.removeTree(owned.toPath());
+            try { Files.deleteIfExists(owned.toPath().getParent()); } catch (IOException ignored) { }
+            return SUCCESS_RESULT;
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(e, "Temporary folder cleanup failed.");
         }
     }
 
@@ -2223,6 +2312,12 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                 boolean allowMissing,
                                                 boolean allowFinalSymlink)
             throws IOException {
+        return validatedDocumentHandoffImport(localPath, allowMissing, allowFinalSymlink, false);
+    }
+
+    private File validatedDocumentHandoffImport(String localPath, boolean allowMissing,
+                                                boolean allowFinalSymlink, boolean directory)
+            throws IOException {
         if (localPath == null || localPath.isEmpty()) {
             throw new IOException("Temporary document path is empty.");
         }
@@ -2231,13 +2326,15 @@ public class AsoBMaShowActivity extends SDLActivity {
             throw new IOException("Temporary document path is invalid.");
         }
 
-        File baseFile = new File(getCacheDir(), "document-handoff");
+        // Match createPrivateDocumentHandoffBase: Android may expose /data/user/0
+        // while its canonical app-private cache is under /data/data.
+        File baseFile = new File(getCacheDir().getCanonicalFile(), "document-handoff");
         Path basePath = baseFile.toPath().toAbsolutePath().normalize();
         Path candidatePath = candidate.toPath().toAbsolutePath().normalize();
         Path parentPath = candidatePath.getParent();
         if (parentPath == null ||
-                !DocumentHandoffImportPathPolicy.isIssuedPath(
-                        basePath, candidatePath)) {
+                !(directory ? DocumentHandoffImportPathPolicy.isIssuedDirectoryPath(basePath, candidatePath)
+                        : DocumentHandoffImportPathPolicy.isIssuedPath(basePath, candidatePath))) {
             throw new IOException("Temporary document is outside private storage.");
         }
         if (Files.isSymbolicLink(basePath)) {
@@ -2268,8 +2365,8 @@ public class AsoBMaShowActivity extends SDLActivity {
             throw new IOException("Temporary document no longer exists.");
         }
         if ((!allowFinalSymlink && finalSymlink) ||
-                (!finalSymlink && !Files.isRegularFile(
-                        candidatePath, LinkOption.NOFOLLOW_LINKS))) {
+                (!finalSymlink && !(directory ? Files.isDirectory(candidatePath, LinkOption.NOFOLLOW_LINKS)
+                        : Files.isRegularFile(candidatePath, LinkOption.NOFOLLOW_LINKS)))) {
             throw new IOException("Temporary document is not a regular file.");
         }
         return candidatePath.toFile();

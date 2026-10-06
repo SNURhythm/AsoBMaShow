@@ -75,6 +75,15 @@ void UnregisterAndroidDocumentCommit(std::uint64_t operationToken);
 std::string ImportAndroidDocument(std::uint64_t operationToken,
                                   const std::string &mimeType,
                                   std::uint64_t maxBytes);
+std::string ImportAndroidDirectory(std::uint64_t operationToken,
+                                   std::uint64_t maxBytes, std::uint64_t maxFiles,
+                                   std::uint64_t maxDepth, std::uint64_t maxPathBytes,
+                                   std::uint64_t maxRegularFileBytes,
+                                   std::string *originalSourceName);
+bool ValidateAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                       std::string &errorMessage);
+bool CleanupAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                      std::string &errorMessage);
 std::string ExportAndroidDocument(std::uint64_t operationToken,
                                   const std::filesystem::path &localPath,
                                   const std::string &mimeType,

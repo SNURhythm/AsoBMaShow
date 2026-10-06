@@ -936,8 +936,9 @@ bool validatePlatformTemporaryPath(const std::filesystem::path &path,
                                    PlatformTemporaryPathKind kind,
                                    std::string &errorMessage) {
 #if TARGET_OS_ANDROID
-  return kind == PlatformTemporaryPathKind::File &&
-         ValidateAndroidTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File
+             ? ValidateAndroidTemporaryDocument(path, errorMessage)
+             : ValidateAndroidTemporaryDirectory(path, errorMessage);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return kind == PlatformTemporaryPathKind::File
              ? ValidateIOSTemporaryDocument(path, errorMessage)
@@ -951,8 +952,9 @@ bool cleanupPlatformTemporaryPath(const std::filesystem::path &path,
                                   PlatformTemporaryPathKind kind) {
   std::string errorMessage;
 #if TARGET_OS_ANDROID
-  return kind == PlatformTemporaryPathKind::File &&
-         CleanupAndroidTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File
+             ? CleanupAndroidTemporaryDocument(path, errorMessage)
+             : CleanupAndroidTemporaryDirectory(path, errorMessage);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return kind == PlatformTemporaryPathKind::File
              ? CleanupIOSTemporaryDocument(path, errorMessage)
@@ -1397,9 +1399,13 @@ importDirectory(std::uint64_t operationToken,
     return cancellation();
   }
 #if TARGET_OS_ANDROID
-  (void)operationToken;
-  return failure("Directory import is not supported on Android in this "
-                 "release.");
+  std::string originalSourceName;
+  const std::string bridgeResult = ImportAndroidDirectory(
+      operationToken, request.maxBytes, request.maxFiles, request.maxDepth,
+      request.maxPathBytes, request.maxRegularFileBytes, &originalSourceName);
+  return detail::ParseBridgeResult(bridgeResult, true, true,
+                                   PlatformTemporaryPathKind::Directory,
+                                   std::move(originalSourceName));
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
   std::string originalSourceName;
   const std::string bridgeResult = ImportIOSDirectory(
