@@ -1860,6 +1860,43 @@ void testDetachedPartnerCannotReplaceActiveReplayPresentationIdentity() {
          "active normal judgement must not resolve to the detached classic head");
 }
 
+void testReplayDoublePlayJudgementsPreserveLaneIdentity() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 14;
+  chart.Meta.Bpm = 120;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  auto *timeline = new bms_parser::TimeLine(16, false);
+  timeline->Timing = 1'000;
+  measure->TimeLines.push_back(timeline);
+  for (int lane : {0, 8, 15}) {
+    timeline->SetNote(lane, new bms_parser::Note(bms_parser::Parser::NoWav));
+  }
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  expect(created.presentation != nullptr, "DP replay presentation is created");
+  if (!created.presentation) return;
+  for (int lane : {0, 8, 15}) {
+    const ReplayEvent event{.action = lane == 15 ? ReplayEventAction::Miss
+                                               : ReplayEventAction::Press,
+        .lane = lane, .noteTimeMicros = 1'000, .judgeTimeMicros = 1'000,
+        .judgement = lane == 15 ? Poor : PGreat,
+        .combo = lane == 15 ? 0 : lane + 1};
+    expect(created.presentation->applyReplayEvent(
+               event, {.visualTimeMicros = 2'000}, true),
+           "DP replay hit or miss produces a judgement");
+  }
+  const auto state = created.presentation->captureVisualStateForTesting({});
+  expect(state.lanes[1].lastJudgement.combo == 1 &&
+             state.lanes[8].lastJudgement.combo == 9 &&
+             state.lanes[15].lastJudgement.judgement == Poor &&
+             state.lanes[15].lastJudgement.sequence == 3,
+         "replay hits and scratch misses preserve independent DP lane events");
+}
+
 void testBuiltInReplayPresentationPreprocessesGhostsAndMisses() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2570,6 +2607,7 @@ int main() {
   testReplayGraphAuthorityMatchesTheGameplayProducer();
   testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
   testDetachedPartnerCannotReplaceActiveReplayPresentationIdentity();
+  testReplayDoublePlayJudgementsPreserveLaneIdentity();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testMultiBadLeavesChargeTailForItsOwnMiss();

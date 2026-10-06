@@ -566,8 +566,8 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
       skinGameplayGraph_.applyJudge(resolvedGraphNote->id, recordedJudge);
       skinGameplayGraphDirty_ = true;
     }
-    events_->onJudge(recordedJudge, event.combo, event.score, clock,
-                     event.action != ReplayEventAction::Miss);
+    events_->onLaneJudge(event.lane, recordedJudge, event.combo, event.score,
+                         clock, event.action != ReplayEventAction::Miss);
     setReplayGauge(event, resolvedGraphNote);
     return true;
   };

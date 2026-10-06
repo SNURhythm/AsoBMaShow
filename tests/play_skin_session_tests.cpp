@@ -7718,6 +7718,84 @@ void testFocusedLaneCoverAndAttachedArtwork() {
   }
 }
 
+void testDoublePlayRightSideEffectsProduceDrawCommands() {
+  for (const int keys : {10, 14}) {
+    for (const int timer : {111, 61}) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      bms_parser::ChartMeta meta;
+      meta.KeyMode = keys;
+      fixture.chart().keyCount = keys;
+      fixture.chart().laneOrder = meta.GetTotalLaneIndices();
+      fixture.addClickableImage();
+      fixture.configureLaneEffect(timer, timer == 61);
+      auto state = stateAt(1);
+      state.sceneStartMicros = 0;
+      state.lanes.assign(fixture.chart().laneOrder.size(), {});
+      const auto lane = std::ranges::find(fixture.chart().laneOrder, 8);
+      auto &right = state.lanes[lane - fixture.chart().laneOrder.begin()];
+      right.pressed = true;
+      right.pressMicros = 0;
+      right.bombMicros = 0;
+      const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+      expect(frame.ready() && frame.evaluation.submitReady &&
+                 std::ranges::any_of(frame.evaluation.submitReady->commands,
+                     [](const auto &command) { return command.sourceObject == 82; }),
+             "DP right key beam and bomb reach the custom skin draw list");
+    }
+  }
+}
+
+void testDoublePlayRightJudgeAndComboProduceDrawCommands() {
+  SessionFixture fixture;
+  if (!fixture.ready()) return;
+  fixture.chart().keyCount = 10;
+  fixture.chart().laneOrder = {7, 0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 15};
+  fixture.addClickableImage();
+  auto &model = fixture.model().model;
+  auto destination = model.destinations.back();
+  model.destinations.pop_back();
+  auto sprite = std::get<SkinImageObject>(model.objects.back().payload).orderedStates.front();
+  sprite.frames.assign(10, SkinSourceRect{.x = 0, .y = 0, .w = 10, .h = 10});
+  SkinNumberObject combo;
+  combo.digits.positive = sprite;
+  combo.digits.glyphsPerAnimationFrame = 10;
+  combo.digitCount = 3;
+  combo.relativeToJudgeImage = true;
+  model.objects.push_back({.id = 91, .payload = combo});
+  SkinJudgeObject judge;
+  judge.player = 1;
+  judge.grades.resize(7);
+  judge.grades[PGreat].image = SkinNestedObjectPresentation{
+      .object = 82, .destination = destination.presentation};
+  judge.grades[PGreat].detailNumber = SkinNestedObjectPresentation{
+      .object = 91, .destination = destination.presentation};
+  model.objects.push_back({.id = 90, .payload = judge, .critical = true});
+  destination.object = 90;
+  model.destinations.push_back(destination);
+  auto state = stateAt(1);
+  state.sceneStartMicros = 0;
+  state.lanes.assign(12, {});
+  state.lanes[6].lastJudgement = {.judgement = PGreat, .combo = 42,
+      .visualMicros = 0, .sequence = 1};
+  const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+  expect(frame.ready() && frame.evaluation.submitReady,
+         "right-side DP judgement frame prepares");
+  if (!frame.evaluation.submitReady) {
+    for (const auto &diagnostic : frame.diagnostics)
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    for (const auto &diagnostic : frame.evaluation.diagnostics)
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    return;
+  }
+  const auto &commands = frame.evaluation.submitReady->commands;
+  expect(std::ranges::count_if(commands, [](const auto &command) {
+           return command.sourceObject == 82; }) == 1 &&
+             std::ranges::count_if(commands, [](const auto &command) {
+           return command.sourceObject == 91; }) == 2,
+         "right-side DP judgement emits its image and two combo digits");
+}
+
 void testFocusedLaneEffectsFollowTimers() {
   for (const int timer : {121, 51}) {
     SessionFixture fixture;
@@ -11177,6 +11255,8 @@ int main(int argc, char **argv) {
   testFocusedMirroredLaneBackgrounds();
   testFocusedOverlappingArtworkKeepsNoteAreaFraming();
   testFocusedLaneCoverAndAttachedArtwork();
+  testDoublePlayRightSideEffectsProduceDrawCommands();
+  testDoublePlayRightJudgeAndComboProduceDrawCommands();
   testFocusedLaneEffectsFollowTimers();
   testPlayAreaFramingKeepsDrawingAndInteractionTogether();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();

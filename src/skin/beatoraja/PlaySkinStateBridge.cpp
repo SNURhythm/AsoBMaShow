@@ -1,4 +1,5 @@
 #include "PlaySkinStateBridge.h"
+#include "SkinNoteLaneMapping.h"
 #include "../GameplaySkinTraits.h"
 
 #include "BeatorajaBooleanPropertyNames.h"
@@ -183,81 +184,52 @@ int bestScoreAtPassedNotes(const PlayfieldVisualState &snapshot) {
       target, passedNotes(snapshot, target.totalNotes));
 }
 
+// Encode the player separately from the key offset. DP chart lane IDs are
+// canonical BMS channels, while skin properties use groups of ten per player.
+std::optional<int>
+beatorajaSkinLaneOffset(const PlayfieldChartVisualModel &chart,
+                        int lane) noexcept {
+  const int mode = skin::compatibleGameplaySkinKeyMode(chart.keyCount);
+  if (mode == 5 || mode == 7 || mode == 10 || mode == 14) {
+    const bool doublePlay = mode == 10 || mode == 14;
+    if (lane < 0 || lane >= (doublePlay ? 16 : 8)) return std::nullopt;
+    const int player = lane / 8;
+    const int key = lane % 8;
+    if (key == 7) return player * 100;
+    if (key < (mode == 5 || mode == 10 ? 5 : 7))
+      return player * 100 + key + 1;
+    return std::nullopt;
+  }
+  if (mode == 9 && lane >= 0 && lane < 9) return lane + 1;
+  if ((mode == 24 || mode == 48) && lane >= 0 &&
+      lane < (mode == 48 ? 52 : 26))
+    return (lane / 26) * 100 + lane % 26 + 1;
+  return std::nullopt;
+}
+
 std::optional<std::size_t> skinInputLaneIndex(
     const PlayfieldChartVisualModel &chart, const PlayfieldVisualState &snapshot,
-    int skinOffset) {
-  if (chart.keyCount == 4 || chart.keyCount == 6 || chart.keyCount == 8) {
-    // Sparse charts omit channels; their compact state-vector positions must
-    // not become the skin's scratch/key timer numbers.
-    if (skinOffset < 0 || skinOffset > 7) return std::nullopt;
-    const int rawLane = skinOffset == 0 ? 7 : skinOffset - 1;
-    const auto found = std::ranges::find(chart.laneOrder, rawLane);
-    if (found == chart.laneOrder.end()) return std::nullopt;
-    const auto index = static_cast<std::size_t>(found - chart.laneOrder.begin());
-    return index < snapshot.lanes.size() ? std::optional{index} : std::nullopt;
+    int player, int key) {
+  if (chart.laneOrder.empty()) {
+    return player == 0 && key >= 0 &&
+                   static_cast<std::size_t>(key) < snapshot.lanes.size()
+               ? std::optional{static_cast<std::size_t>(key)} : std::nullopt;
   }
-  return skinOffset >= 0 && static_cast<std::size_t>(skinOffset) < snapshot.lanes.size()
-             ? std::optional{static_cast<std::size_t>(skinOffset)} : std::nullopt;
+  for (std::size_t index = 0;
+       index < chart.laneOrder.size() && index < snapshot.lanes.size(); ++index) {
+    const auto offset = beatorajaSkinLaneOffset(chart, chart.laneOrder[index]);
+    if (offset && *offset == player * 100 + key) return index;
+  }
+  return std::nullopt;
 }
 
 std::int64_t beatorajaKeyJudgeValue(const PlayfieldChartVisualModel &chart,
                                     const PlayfieldVisualState &snapshot,
                                     int selector) {
-  // SkinPropertyMapper maps 500-519 as two groups of ten: player then key.
-  // Gameplay is currently single-player, so the absent 2P group follows
-  // JudgeManager.getJudge() and reports -1.
-  const int player = (selector - 500) / 10;
-  const int key = (selector - 500) % 10;
-  const auto index = skinInputLaneIndex(chart, snapshot, key);
-  if (player != 0 || !index) return -1;
-  return snapshot.lanes[*index].beatorajaJudgeValue;
-}
-
-std::optional<int>
-beatorajaPlayerOneSkinLaneOffset(const PlayfieldChartVisualModel &chart,
-                                 int lane) noexcept {
-  // Pinned LaneProperty.java maps BMS lane identities to a skin offset rather
-  // than using their physical chart order. Aso's parser retains the original
-  // BMS lane IDs, including scratch at 7 (and 15 for 2P), so preserve that
-  // distinction here. 2P has no gameplay authority yet and is intentionally
-  // not projected into 1P timer IDs.
-  switch (skin::compatibleGameplaySkinKeyMode(chart.keyCount)) {
-  case 5:
-    if (lane == 7) {
-      return 0;
-    }
-    return lane >= 0 && lane < 5 ? std::optional<int>(lane + 1)
-                                 : std::nullopt;
-  case 7:
-    if (lane == 7) {
-      return 0;
-    }
-    return lane >= 0 && lane < 7 ? std::optional<int>(lane + 1)
-                                 : std::nullopt;
-  case 9:
-    return lane >= 0 && lane < 9 ? std::optional<int>(lane + 1)
-                                 : std::nullopt;
-  case 10:
-    if (lane == 7) {
-      return 0;
-    }
-    return lane >= 0 && lane < 5 ? std::optional<int>(lane + 1)
-                                 : std::nullopt;
-  case 14:
-    if (lane == 7) {
-      return 0;
-    }
-    return lane >= 0 && lane < 7 ? std::optional<int>(lane + 1)
-                                 : std::nullopt;
-  case 24:
-    // LaneProperty.KEYBOARD_24K assigns skin offsets one through 26 in
-    // physical lane order. The source timer mapper changes to its extended
-    // ranges at offset 10, so retain the offset rather than the display index.
-    return lane >= 0 && lane < 26 ? std::optional<int>(lane + 1)
-                                  : std::nullopt;
-  default:
-    return std::nullopt;
-  }
+  const auto index = skinInputLaneIndex(chart, snapshot,
+                                      (selector - 500) / 10,
+                                      (selector - 500) % 10);
+  return index ? snapshot.lanes[*index].beatorajaJudgeValue : -1;
 }
 
 std::string
@@ -813,21 +785,21 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
   // is processing or an HCN is actively increasing. NotePresentationState
   // carries that active truth for legacy surfaces. Realtime gameplay provides
   // lane aggregates so this frame does not rescan every chart note.
-  std::array<bool, 100> playerOneLongHeld{};
-  std::array<bool, 100> playerOneHcnActive{};
-  std::array<bool, 100> playerOneHcnDamaged{};
+  std::array<bool, 200> longHeld{};
+  std::array<bool, 200> hcnActive{};
+  std::array<bool, 200> hcnDamaged{};
   const std::span<const NotePresentationState> noteStates =
       snapshot->noteStates();
   if (snapshot->realtimeLongNoteLanes) {
     for (const auto &lane : *snapshot->realtimeLongNoteLanes) {
-      const auto offset = beatorajaPlayerOneSkinLaneOffset(context_.chartModel, lane.lane);
-      if (!offset || *offset < 0 || static_cast<std::size_t>(*offset) >= playerOneLongHeld.size()) {
+      const auto offset = beatorajaSkinLaneOffset(context_.chartModel, lane.lane);
+      if (!offset || *offset < 0 || static_cast<std::size_t>(*offset) >= longHeld.size()) {
         continue;
       }
       const auto index = static_cast<std::size_t>(*offset);
-      playerOneLongHeld[index] = lane.active;
-      playerOneHcnActive[index] = lane.reactive;
-      playerOneHcnDamaged[index] = lane.damaged;
+      longHeld[index] = lane.active;
+      hcnActive[index] = lane.reactive;
+      hcnDamaged[index] = lane.damaged;
     }
   } else if (noteStates.size() == context_.chartModel.notes.size()) {
     for (std::size_t index = 0; index < noteStates.size(); ++index) {
@@ -837,21 +809,21 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
         continue;
       }
       const auto offset =
-          beatorajaPlayerOneSkinLaneOffset(context_.chartModel, note.lane);
+          beatorajaSkinLaneOffset(context_.chartModel, note.lane);
       if (offset && *offset >= 0 &&
-          static_cast<std::size_t>(*offset) < playerOneLongHeld.size() &&
+          static_cast<std::size_t>(*offset) < longHeld.size() &&
           noteStates[index].longActive) {
         const auto skinOffset = static_cast<std::size_t>(*offset);
-        playerOneLongHeld[skinOffset] = true;
-        playerOneHcnActive[skinOffset] =
-            playerOneHcnActive[skinOffset] || noteStates[index].longReactive;
-        playerOneHcnDamaged[skinOffset] =
-            playerOneHcnDamaged[skinOffset] || noteStates[index].longDamaged;
+        longHeld[skinOffset] = true;
+        hcnActive[skinOffset] =
+            hcnActive[skinOffset] || noteStates[index].longReactive;
+        hcnDamaged[skinOffset] =
+            hcnDamaged[skinOffset] || noteStates[index].longDamaged;
       } else if (offset && *offset >= 0 &&
                  static_cast<std::size_t>(*offset) <
-                     playerOneHcnDamaged.size()) {
-        playerOneHcnDamaged[static_cast<std::size_t>(*offset)] =
-            playerOneHcnDamaged[static_cast<std::size_t>(*offset)] ||
+                     hcnDamaged.size()) {
+        hcnDamaged[static_cast<std::size_t>(*offset)] =
+            hcnDamaged[static_cast<std::size_t>(*offset)] ||
             noteStates[index].longDamaged;
       }
     }
@@ -865,16 +837,18 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
   };
   const auto laneTimerId = [](int first, int extendedFirst,
                               std::size_t offset) -> int {
-    return offset < 10 ? first + static_cast<int>(offset)
-                       : extendedFirst + static_cast<int>(offset) - 10;
+    const int player = static_cast<int>(offset / 100);
+    const int key = static_cast<int>(offset % 100);
+    return key < 10 ? first + player * 10 + key
+                    : extendedFirst + player * 100 + key - 10;
   };
-  for (std::size_t offset = 0; offset < playerOneLongHeld.size(); ++offset) {
+  for (std::size_t offset = 0; offset < longHeld.size(); ++offset) {
     switchLaneTimer(laneTimerId(70, 1210, offset),
-                    playerOneLongHeld[offset]);
+                    longHeld[offset]);
     switchLaneTimer(laneTimerId(250, 1810, offset),
-                    playerOneHcnActive[offset]);
+                    hcnActive[offset]);
     switchLaneTimer(laneTimerId(270, 2010, offset),
-                    playerOneHcnDamaged[offset]);
+                    hcnDamaged[offset]);
   }
 
   const bool fullCombo = totalNotes > 0 &&
@@ -950,6 +924,47 @@ void PlaySkinStateBridge::updatePinnedLaneCoverOffsets() {
   }
 }
 
+void PlaySkinStateBridge::updateJudgeRegions() {
+  judgeRegions_ = {};
+  exclusiveComboRegion_ = -1;
+  int regionCount = 1;
+  if (context_.model != nullptr) {
+    for (const auto &object : context_.model->model.objects) {
+      if (const auto *judge = std::get_if<SkinJudgeObject>(&object.payload)) {
+        regionCount = std::max(regionCount, std::clamp(judge->player + 1, 1, 3));
+      }
+    }
+  }
+  const auto &snapshot = *state_;
+  if (regionCount == 1) {
+    judgeRegions_[0] = {.judgement = snapshot.lastJudge.judgement,
+        .combo = snapshot.combo, .fastSlowMicros = snapshot.fastSlowMicros,
+        .visualMicros = snapshot.lastJudgeVisualMicros};
+    return;
+  }
+  const auto &chart = context_.chartModel;
+  const auto lanesPerRegion = chart.laneOrder.size() / regionCount;
+  if (lanesPerRegion == 0) return;
+  const int mode = compatibleGameplaySkinKeyMode(chart.keyCount);
+  for (std::size_t index = 0;
+       index < chart.laneOrder.size() && index < snapshot.lanes.size(); ++index) {
+    const int lane = chart.laneOrder[index];
+    const int compactLane = mode == 10 ? skinNoteLaneForChartLane(3, lane)
+                           : mode == 5 ? skinNoteLaneForChartLane(1, lane) : lane;
+    if (compactLane < 0) continue;
+    const auto region = static_cast<std::size_t>(compactLane) / lanesPerRegion;
+    if (region >= static_cast<std::size_t>(regionCount)) continue;
+    const auto &event = snapshot.lanes[index].lastJudgement;
+    if (event.sequence > judgeRegions_[region].sequence) {
+      judgeRegions_[region] = event;
+    }
+  }
+  if (regionCount == 3) {
+    exclusiveComboRegion_ = static_cast<int>(std::ranges::max_element(
+        judgeRegions_, {}, &LaneJudgePresentationState::sequence) - judgeRegions_.begin());
+  }
+}
+
 void PlaySkinStateBridge::beginFrame(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
@@ -980,6 +995,7 @@ void PlaySkinStateBridge::beginFrame(
   staged_ = {.frameSerial = frameSerial_};
   phase_ = FramePhase::Active;
   customObjectsUpdated_ = false;
+  updateJudgeRegions();
   updatePinnedLaneCoverOffsets();
   updatePinnedPlayTimers();
 
@@ -2070,16 +2086,24 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
             .supported = true};
   }
   case 241:
-    return {.value = snapshot->lastJudge.judgement == PGreat,
-            .supported = true};
+  case 261:
+  case 361: {
+    const int region = *id == 241 ? 0 : *id == 261 ? 1 : 2;
+    return {.value = judgeRegions_[region].judgement == PGreat, .supported = true};
+  }
   case 1242:
-    return {.value = snapshot->lastJudge.judgement != None &&
-                     snapshot->fastSlowMicros < 0,
-            .supported = true};
   case 1243:
-    return {.value = snapshot->lastJudge.judgement != None &&
-                     snapshot->fastSlowMicros > 0,
+  case 1262:
+  case 1263:
+  case 1362:
+  case 1363: {
+    const int region = *id < 1260 ? 0 : *id < 1360 ? 1 : 2;
+    const auto &judge = judgeRegions_[region];
+    return {.value = judge.judgement != None &&
+                     (*id % 2 == 0 ? judge.fastSlowMicros < 0
+                                   : judge.fastSlowMicros > 0),
             .supported = true};
+  }
   case 2243:
     return {.value = capturedJudgeCount(*snapshot, Good) > 0,
             .supported = true};
@@ -2885,21 +2909,12 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = context_.chartModel.staticMetadata.judgeRank,
             .supported = true};
   case 525:
-    // IntegerPropertyFactory's judge_duration1 reads
-    // JudgeManager.getRecentJudgeTiming().  Beatoraja stores an early input
-    // as positive mfast; AsoBMaShow's Judge.Diff (captured in
-    // fastSlowMicros) stores that same input as negative.  Convert both its
-    // sign and unit here. C++ signed division has Java's
-    // truncation-toward-zero rule.
-    return {.value = -static_cast<std::int64_t>(snapshot->fastSlowMicros) /
-                         1'000,
-            .supported = true};
   case 526:
   case 527:
-    // JudgeManager.getRecentJudgeTiming(player) returns zero when `player`
-    // lies outside its populated judgefast array. Aso has only the captured
-    // 1P slot, so 2P and 3P preserve that exact source fallback.
-    return {.value = 0, .supported = true};
+    // Beatoraja's recent timing uses the opposite sign and milliseconds.
+    return {.value = -static_cast<std::int64_t>(
+                         judgeRegions_[*id - 525].fastSlowMicros) / 1'000,
+            .supported = true};
   case 165:
     // Gameplay rendering starts after BMSResource has completed its audio/BGA
     // load. The equivalent resource progress is therefore 100%; Unknown and
@@ -3380,7 +3395,8 @@ std::int64_t PlaySkinStateBridge::timerProperty(
       return std::nullopt;
     }
     const auto index = skinInputLaneIndex(context_.chartModel, *snapshot,
-                                         static_cast<int>(wide - first));
+                                         static_cast<int>(wide - first) / 10,
+                                         static_cast<int>(wide - first) % 10);
     if (!index) return INT64_MIN;
     const auto &lane = snapshot->lanes[*index];
     // KeyInputProccessor starts key-off and clears key-on on release, then
@@ -3414,16 +3430,17 @@ std::int64_t PlaySkinStateBridge::timerProperty(
           -> std::optional<std::int64_t> {
     const auto wide = static_cast<std::int64_t>(timerId);
     const auto first = static_cast<std::int64_t>(firstId);
-    if (wide < first || wide >= first + 90) {
+    if (wide < first || wide >= first + 190) {
       return std::nullopt;
     }
-    const int requestedOffset =
-        10 + static_cast<int>(wide - first);
+    const int delta = static_cast<int>(wide - first);
+    if (delta % 100 >= 90) return INT64_MIN;
+    const int requestedOffset = 10 + delta;
     for (std::size_t index = 0;
          index < context_.chartModel.laneOrder.size() &&
          index < snapshot->lanes.size();
          ++index) {
-      const auto offset = beatorajaPlayerOneSkinLaneOffset(
+      const auto offset = beatorajaSkinLaneOffset(
           context_.chartModel, context_.chartModel.laneOrder[index]);
       if (!offset || *offset != requestedOffset) {
         continue;
@@ -3451,9 +3468,11 @@ std::int64_t PlaySkinStateBridge::timerProperty(
                             false)) {
     return *value;
   }
-  if ((*id >= 1210 && *id <= 1299) ||
-      (*id >= 1810 && *id <= 1899) ||
-      (*id >= 2010 && *id <= 2099)) {
+  if ((*id >= 70 && *id <= 89) ||
+      (*id >= 250 && *id <= 289) ||
+      (*id >= 1210 && *id <= 1399) ||
+      (*id >= 1810 && *id <= 1999) ||
+      (*id >= 2010 && *id <= 2199)) {
     const auto found = pinnedSwitchTimerStarts_.find(*id);
     return found == pinnedSwitchTimerStarts_.end() ? INT64_MIN
                                                     : found->second;
@@ -3476,9 +3495,17 @@ std::int64_t PlaySkinStateBridge::timerProperty(
                                 snapshot->clock.playTimer.startMicros)))
                : INT64_MIN;
   case 46:
+  case 47:
+  case 247:
   case 446:
-    return skinStateTimestampMicros(*snapshot,
-                                    snapshot->lastJudgeVisualMicros);
+  case 447:
+  case 448: {
+    const int region = *id == 46 || *id == 446 ? 0
+                       : *id == 47 || *id == 447 ? 1 : 2;
+    if (*id >= 446 && exclusiveComboRegion_ >= 0 &&
+        region != exclusiveComboRegion_) return INT64_MIN;
+    return skinStateTimestampMicros(*snapshot, judgeRegions_[region].visualMicros);
+  }
   case 48:
     return fullComboTimerStartMicros_;
   case 140:
@@ -3600,15 +3627,15 @@ SkinGaugeStateView PlaySkinStateBridge::gaugeState() const noexcept {
 
 SkinJudgeStateView PlaySkinStateBridge::judgeState(int player) const noexcept {
   const auto *snapshot = state();
-  if (snapshot == nullptr || player != 0 ||
-      snapshot->lastJudge.judgement == None) {
+  if (snapshot == nullptr || player < 0 || player >= 3 ||
+      judgeRegions_[player].judgement == None) {
     return {};
   }
   const auto gauge = gaugeState();
   return {.supported = true,
           .optionalZeroBasedGrade =
-              static_cast<int>(snapshot->lastJudge.judgement),
-          .combo = snapshot->combo,
+              static_cast<int>(judgeRegions_[player].judgement),
+          .combo = judgeRegions_[player].combo,
           .maximumGauge = gauge.supported && gauge.value >= gauge.maximum};
 }
 
@@ -3793,6 +3820,12 @@ std::optional<int> PlaySkinStateBridge::numericSelector(
     return 4;
   if (name == "lanecover2")
     return 5;
+  if (name == "judge_2p_perfect") return 261;
+  if (name == "judge_2p_early") return 1262;
+  if (name == "judge_2p_late") return 1263;
+  if (name == "judge_3p_perfect") return 361;
+  if (name == "judge_3p_early") return 1362;
+  if (name == "judge_3p_late") return 1363;
   if (name == "judge_1p_perfect")
     return 241;
   if (name == "judge_1p_early")
