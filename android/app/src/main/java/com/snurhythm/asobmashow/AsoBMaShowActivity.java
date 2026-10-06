@@ -361,6 +361,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         return gyroscopeTurntableManager;
     }
 
+    public String getPreferredLanguageTags() {
+        return getResources().getConfiguration().getLocales().toLanguageTags();
+    }
+
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
     }

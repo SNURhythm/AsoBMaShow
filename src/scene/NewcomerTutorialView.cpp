@@ -10,8 +10,8 @@
 #include <utility>
 
 namespace {
-constexpr std::array<const char *, 3> kLanguages{"en", "ko", "ja"};
-constexpr std::array<const char *, 3> kLanguageNames{"English", "한국어", "日本語"};
+constexpr std::array<const char *, 5> kLanguages{"en", "ko", "ja", "zh-Hans", "zh-Hant"};
+constexpr std::array<const char *, 5> kLanguageNames{"English", "한국어", "日本語", "简体中文", "繁體中文"};
 
 TextView *label(int size) {
   auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", size);
@@ -49,7 +49,9 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
     : callbacks_(std::move(callbacks)), folderImportCopies_(folderImportCopies) {
   View::LayoutBatchScope batch;
   language_ = i18n::language() == i18n::Language::Korean ? "ko"
-              : i18n::language() == i18n::Language::Japanese ? "ja" : "en";
+              : i18n::language() == i18n::Language::Japanese ? "ja"
+              : i18n::language() == i18n::Language::SimplifiedChinese ? "zh-Hans"
+              : i18n::language() == i18n::Language::TraditionalChinese ? "zh-Hant" : "en";
   setPositionType(YGPositionTypeAbsolute);
   setPosition(Edge::Left, 0);
   setPosition(Edge::Top, 0);
@@ -75,7 +77,8 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
   progress_->setThemedColor(ui_theme::textSecondary);
   panel_->addView(progress_);
   title_ = label(30);
-  title_->setHeight(46)->setFlexShrink(0);
+  title_->setWrap(true);
+  title_->setFlexShrink(0);
   panel_->addView(title_);
   body_ = label(22);
   body_->setWrap(true);
@@ -89,11 +92,17 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
   panel_->addView(bodySpace);
 
   languages_ = new View();
-  languages_->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+  languages_->setFlexDirection(FlexDirection::Column)->setGap(8)->setFlexShrink(0);
+  View *languageRow = nullptr;
   for (std::size_t i = 0; i < kLanguages.size(); ++i) {
+    if (i == 0 || i == 3) {
+      languageRow = new View();
+      languageRow->setFlexDirection(FlexDirection::Row)->setGap(8)->setHeight(52);
+      languages_->addView(languageRow);
+    }
     auto *choice = button(kLanguageNames[i]);
     choice->setOnClickListener([this, i] { chooseLanguage(kLanguages[i]); });
-    languages_->addView(choice);
+    languageRow->addView(choice);
     languageButtons_[i] = choice;
   }
   panel_->addView(languages_);
@@ -178,7 +187,7 @@ void NewcomerTutorialView::refresh() {
   progress_->setLocalizedText(language ? i18n::message("tutorial.welcome.title")
       : i18n::message("tutorial.progress.label", {{"step", std::to_string(static_cast<int>(step_))}}));
   if (language) {
-    title_->setText("Language · 언어 · 言語");
+    title_->setText("Language · 언어 · 言語 · 语言");
     body_->setLocalizedText(i18n::message("tutorial.language.body"));
   } else {
     constexpr std::array<const char *, 4> titles{
@@ -191,7 +200,7 @@ void NewcomerTutorialView::refresh() {
         ? "tutorial.folder.copy_body" : bodies[index]));
   }
   languages_->setVisible(language);
-  languages_->setHeight(language ? 52 : 0);
+  languages_->setHeight(language ? 112 : 0);
   for (std::size_t i = 0; i < kLanguages.size(); ++i) {
     const bool selected = language_ == kLanguages[i];
     languageButtons_[i]->setSelected(selected);
@@ -235,8 +244,9 @@ void NewcomerTutorialView::updateLayout(int width, int height) {
     const float sideWidth = std::max(left - 40, width - right - 40);
     if (sideWidth >= 340) panelWidth = std::min(panelWidth, sideWidth);
   }
-  const float desiredHeight = panelWidth < 440 ? 500.0F
-      : step_ == NewcomerTutorialStep::Language ? 440.0F : 400.0F;
+  const float desiredHeight = step_ == NewcomerTutorialStep::Language
+      ? (panelWidth < 440 ? 640.0F : 500.0F)
+      : (panelWidth < 440 ? 500.0F : 400.0F);
   const float panelHeight = std::min(desiredHeight + (saveFailed_ ? 46 : 0), std::max(0.0F, height - 40.0F));
   float x = (width - panelWidth) / 2;
   float y = (height - panelHeight) / 2;
@@ -260,6 +270,8 @@ bool NewcomerTutorialView::handleEventsImpl(SDL_Event &event) {
     case SDLK_1: if (step_ == NewcomerTutorialStep::Language) chooseLanguage("en"); break;
     case SDLK_2: if (step_ == NewcomerTutorialStep::Language) chooseLanguage("ko"); break;
     case SDLK_3: if (step_ == NewcomerTutorialStep::Language) chooseLanguage("ja"); break;
+    case SDLK_4: if (step_ == NewcomerTutorialStep::Language) chooseLanguage("zh-Hans"); break;
+    case SDLK_5: if (step_ == NewcomerTutorialStep::Language) chooseLanguage("zh-Hant"); break;
     default: break;
     }
   }

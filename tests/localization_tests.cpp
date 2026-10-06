@@ -10,6 +10,8 @@ struct Translation {
   std::string_view english;
   std::string_view korean;
   std::string_view japanese;
+  std::string_view simplifiedChinese;
+  std::string_view traditionalChinese;
 };
 constexpr Translation catalog[] = {
 #include "i18n/Messages.inc"
@@ -61,12 +63,22 @@ int main() {
   assert(!(gameplayRetry == irRetry));
   assert(Text("Settings") != message("settings.navigation.settings.label"));
   assert(isLanguagePreference("ja"));
+  assert(isLanguagePreference("zh-Hans"));
+  assert(isLanguagePreference("zh-Hant"));
   assert(resolveLanguage("system", {"ko-KR", "en-US"}) == Language::Korean);
   assert(resolveLanguage("system", {"ja-JP", "en-US", "ko"}) == Language::Japanese);
   assert(resolveLanguage("system", {"fr-FR", "ja_JP", "ko_KR"}) == Language::Japanese);
   assert(resolveLanguage("system", {"en-US", "ja-JP"}) == Language::English);
   assert(resolveLanguage("ja", {"en"}) == Language::Japanese);
   assert(resolveLanguage("invalid", {"ja"}) == Language::Japanese);
+  assert(resolveLanguage("zh-Hans", {"zh-TW"}) == Language::SimplifiedChinese);
+  assert(resolveLanguage("zh-Hant", {"zh-CN"}) == Language::TraditionalChinese);
+  for (const auto locale : {"zh", "zh-CN", "zh_SG", "zh-Hans", "zh-Hans-TW", "ZH_hans_HK"})
+    assert(resolveLanguage("system", {locale}) == Language::SimplifiedChinese);
+  for (const auto locale : {"zh-TW", "zh_HK", "zh-MO", "zh-Hant", "zh-Hant-CN", "ZH_hant_SG"})
+    assert(resolveLanguage("system", {"fr-FR", locale, "en-US"}) == Language::TraditionalChinese);
+  assert(resolveLanguage("system", {"en-US", "zh-TW"}) == Language::English);
+  assert(resolveLanguage("invalid", {"zh-TW"}) == Language::TraditionalChinese);
   assert(resolveLanguage("system", {}) == Language::English);
   assert(resolveLanguage("en", {"ko"}) == Language::English);
   assert(resolveLanguage("ko", {"en"}) == Language::Korean);
@@ -102,6 +114,19 @@ int main() {
   assert(format("music_player.display_option.enabled", {{"name", "Custom {seconds}"}}) ==
          "Custom {seconds}: オン");
   assert(std::string(tr("unknown.message")) == "unknown.message");
+  for (const auto chinese : {Language::SimplifiedChinese, Language::TraditionalChinese}) {
+    setLanguage(chinese);
+    for (const auto &entry : catalog) {
+      const auto translated = chinese == Language::SimplifiedChinese
+          ? entry.simplifiedChinese : entry.traditionalChinese;
+      assert(!translated.empty());
+      assert(placeholders(entry.english) == placeholders(translated));
+      assert(tr(std::string(entry.key)) == translated);
+    }
+    assert(ownedMessage.resolve().find('7') != std::string::npos);
+    assert(nestedMessage.resolve().find(tr("settings.navigation.settings.label")) != std::string::npos);
+    assert(rawRetry.resolve() == "Retry");
+  }
   setLanguage(Language::English);
   for (const auto &entry : catalog) {
     assert(tr(std::string(entry.key)) == entry.english);
@@ -128,5 +153,19 @@ int main() {
   assert(SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "fr_FR"));
   initializePlatformLanguage("system");
   assert(language() == Language::English);
+  for (const auto locale : {"zh_CN,en_US", "zh_SG", "zh-Hans_TW", "zh_Hans"}) {
+    assert(SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, locale));
+    initializePlatformLanguage("system");
+    assert(language() == Language::SimplifiedChinese);
+    initializePlatformLanguage("zh-Hant");
+    assert(language() == Language::TraditionalChinese);
+  }
+  for (const auto locale : {"fr_FR,zh_TW,en_US", "zh_HK", "zh_MO", "zh-Hant_CN", "zh_Hant"}) {
+    assert(SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, locale));
+    initializePlatformLanguage("system");
+    assert(language() == Language::TraditionalChinese);
+    initializePlatformLanguage("zh-Hans");
+    assert(language() == Language::SimplifiedChinese);
+  }
   SDL_ResetHint(SDL_HINT_PREFERRED_LOCALES);
 }

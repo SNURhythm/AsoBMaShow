@@ -2339,8 +2339,10 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
                     .label = i18n::message("settings.language.system.label")},
                    {.id = "en", .label = "English"},
                    {.id = "ko", .label = "한국어"},
-                   {.id = "ja", .label = "日本語"}},
-       .maxVisibleItems = 4});
+                   {.id = "ja", .label = "日本語"},
+                   {.id = "zh-Hans", .label = "简体中文"},
+                   {.id = "zh-Hant", .label = "繁體中文"}},
+       .maxVisibleItems = 6});
   languageControls->addView(languageDropdown);
   languageControls->addView(languageStatus);
   cardsColumn->addView(makeCard(

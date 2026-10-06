@@ -30,6 +30,8 @@ struct Translation {
   const char *english;
   const char *korean;
   const char *japanese;
+  const char *simplifiedChinese;
+  const char *traditionalChinese;
 };
 // Sorted by stable ID so lookup allocates nothing. Display text is never used
 // as an identifier; equal English values can have distinct contextual IDs.
@@ -49,6 +51,8 @@ const char *tr(const char *key) {
   switch (language()) {
   case Language::Korean: translated = found->korean; break;
   case Language::Japanese: translated = found->japanese; break;
+  case Language::SimplifiedChinese: translated = found->simplifiedChinese; break;
+  case Language::TraditionalChinese: translated = found->traditionalChinese; break;
   case Language::English: break;
   }
   return translated[0] != '\0' ? translated : found->english;

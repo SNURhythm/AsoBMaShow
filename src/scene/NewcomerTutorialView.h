@@ -47,7 +47,7 @@ private:
   View *highlight_ = nullptr;
   View *panel_ = nullptr;
   View *languages_ = nullptr;
-  std::array<Button *, 3> languageButtons_{};
+  std::array<Button *, 5> languageButtons_{};
   TextView *progress_ = nullptr;
   TextView *title_ = nullptr;
   TextView *body_ = nullptr;

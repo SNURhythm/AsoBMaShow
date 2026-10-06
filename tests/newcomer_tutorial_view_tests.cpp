@@ -73,6 +73,30 @@ void testLanguagePrecedesTourAndCompletionRequiresSave() {
   require(!tour.getVisible() && completed, "Finish persists completion and dismisses tutorial");
 }
 
+void testChineseLanguageChoicesAndInitialSelection() {
+  for (const auto preference : {"zh-Hans", "zh-Hant"}) {
+    i18n::setLanguage(i18n::resolveLanguage(preference, {}));
+    std::string saved;
+    NewcomerTutorialView tour({
+        .saveLanguage = [&](const std::string &value) {
+          saved = value;
+          i18n::setLanguage(i18n::resolveLanguage(value, {}));
+          return true;
+        }});
+    tour.advance();
+    require(saved == preference, "onboarding preserves the system's Chinese variant");
+    tour.back();
+    for (const auto key : {SDLK_4, SDLK_5}) {
+      SDL_Event event{};
+      event.type = SDL_KEYDOWN;
+      event.key.keysym.sym = key;
+      tour.handleEvents(event);
+      require(saved == (key == SDLK_4 ? "zh-Hans" : "zh-Hant"),
+              "Chinese keyboard choices persist their distinct language codes");
+    }
+  }
+}
+
 void testSkipAndInputBlocking() {
   bool completed = false;
   NewcomerTutorialView tour({
@@ -92,22 +116,25 @@ void testSkipAndInputBlocking() {
 
 void testTranslatedTipsFitAndLeaveTargetsVisible() {
   for (const auto language : {i18n::Language::English, i18n::Language::Korean,
-                              i18n::Language::Japanese}) {
+                              i18n::Language::Japanese, i18n::Language::SimplifiedChinese,
+                              i18n::Language::TraditionalChinese}) {
     i18n::setLanguage(language);
-    for (const auto width : {1920, 1280, 800}) {
+    for (const auto width : {1920, 1280, 800, 390}) {
+      const int height = width == 390 ? 844 : 720;
       rendering::window_width = width;
-      rendering::window_height = 720;
+      rendering::window_height = height;
       View target(20, 100, 200, 580);
       NewcomerTutorialView tour({
           .saveLanguage = [](const std::string &) { return true; },
           .complete = [] { return true; },
           .target = [&](NewcomerTutorialStep) { return &target; }});
-      for (int step = 0; step <= 4; ++step) {
-        tour.updateLayout(width, 720);
+      // Portrait coverage exercises the language chooser without a spotlight.
+      for (int step = 0; step <= (width == 390 ? 0 : 4); ++step) {
+        tour.updateLayout(width, height);
         const auto *panel = tour.getChildren().back();
         require(panel->getX() >= 0 && panel->getY() >= 0 &&
                     panel->getX() + panel->getWidth() <= width &&
-                    panel->getY() + panel->getHeight() <= 720,
+                    panel->getY() + panel->getHeight() <= height,
                 "tutorial card must remain inside the viewport");
         require(step == 0 || panel->getX() >= target.getX() + target.getWidth() ||
                     panel->getX() + panel->getWidth() <= target.getX(),
@@ -183,6 +210,7 @@ int main() {
   init.resolution.height = 64;
   if (!bgfx::init(init)) return 1;
   testLanguagePrecedesTourAndCompletionRequiresSave();
+  testChineseLanguageChoicesAndInitialSelection();
   testSkipAndInputBlocking();
   testTranslatedTipsFitAndLeaveTargetsVisible();
   testSpotlightDoesNotActivateTheUnderlyingButton();
