@@ -1403,6 +1403,14 @@ void testLiftHiddenOffsetsFollowPinnedLaneRenderer() {
          "disabled HIDDEN keeps LaneRenderer's prior y while suppressing "
          "draws through alpha");
   bridge.discardFrame();
+
+  state.clock.serial = 210;
+  state.authority.laneCoverPercent = 40.1F;
+  bridge.beginFrame(state, projectionAt(210));
+  const auto fineCover = bridge.integerProperty(SkinBuiltinPropertySelector{14});
+  expect(fineCover.supported && fineCover.value == 401,
+         "white number retains a single fine START+scratch adjustment");
+  bridge.discardFrame();
 }
 
 void testRemainingDirectGameplayStatePropertyWiring() {

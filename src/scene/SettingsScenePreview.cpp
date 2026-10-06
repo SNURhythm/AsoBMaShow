@@ -413,6 +413,10 @@ void SettingsScene::syncPreviewAuthority() {
       .loadingState = PlayfieldLoadingState::Loaded,
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
+      .liftEnabled = context.settings.presentation().liftEnabled,
+      .liftRatio = context.settings.presentation().liftRatio,
+      .hiddenEnabled = context.settings.presentation().hiddenEnabled,
+      .hiddenRatio = context.settings.presentation().hiddenRatio,
   };
   previewVisualStateStore->applyAuthorityUpdate(authority);
   if (previewSimulation)

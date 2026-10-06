@@ -461,7 +461,7 @@ PlayfieldPresentationConfig presentationConfig(int coverPercent) {
       .laneCoverHispeedFactor =
           1.0F - static_cast<float>(coverPercent) / 100.0F,
       .laneBeamLengthPercent = 82,
-      .noteStartPositionPercent = coverPercent,
+      .noteStartPositionPercent = static_cast<float>(coverPercent),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = true,
       .judgementIndicatorEnabled = true,
@@ -3456,6 +3456,70 @@ void verifyExplicitZeroConfiguredHispeedDoesNotFallBack() {
          "a fully covered zero Hi-Speed follows Java currentduration");
 }
 
+void verifyBuiltInLiftMovesJudgementAndScrollOrigin(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, false);
+  PlayfieldVisualState state;
+  state.configuration = presentationConfig(20);
+  state.authority = authorityFor(*fixture.chart, 20);
+  renderer.configure(state.configuration);
+  const auto original = renderer.projectionTraversal();
+  state.clock.serial = 1;
+  state.authority.liftEnabled = true;
+  state.authority.liftRatio = 0.25F;
+  expect(renderer.prepareFrame(state, {.frameSerial = 1,
+                                       .useParserBackedBuiltInTraversal = true}) ==
+             PresentationFrameOutcome::Ready,
+         "lift frame prepares successfully");
+  const auto lifted = renderer.projectionTraversal();
+  expect(std::abs(lifted.judgeY - (original.judgeY +
+             (original.upperBound - original.judgeY) * 0.25F)) < 0.0001F,
+         "LIFT raises the built-in judgement line by a quarter of the lane");
+  expect(std::abs(lifted.rxhs - original.rxhs * 0.75F) < 0.0001F,
+         "LIFT scales note travel to the remaining lane height");
+  expect(std::abs(lifted.noteVisibleUpperBound - (lifted.judgeY +
+             (lifted.upperBound - lifted.judgeY) * 0.8F)) < 0.0001F,
+         "SUDDEN+ is measured relative to the lifted judgement line");
+
+  state.clock.serial = 2;
+  state.authority.hiddenEnabled = true;
+  state.authority.hiddenRatio = 0.25F;
+  bgfx::touch(rendering::clear_view);
+  rendering::UiBatchRenderer batch;
+  batch.beginFrame();
+  RenderContext context(batch);
+  {
+    RenderContext::UiBatchScope scope(context);
+    renderer.render(context, state, {.frameSerial = 2,
+                                     .useParserBackedBuiltInTraversal = true});
+  }
+  const auto pixels = readPixels(target);
+  const float remaining = lifted.upperBound - lifted.judgeY;
+  const auto pixelAt = [&](float y) {
+    const auto screen = rendering::game_camera.project(
+        {gameplay_geometry::kPlayAreaCenterX, y, 0});
+    const int px = std::clamp(static_cast<int>(screen.x), 0, int(kDrawableWidth) - 1);
+    const int py = std::clamp(static_cast<int>(screen.y), 0, int(kDrawableHeight) - 1);
+    const auto offset = (py * kDrawableWidth + px) * 4;
+    return std::array<int, 3>{pixels[offset], pixels[offset + 1], pixels[offset + 2]};
+  };
+  const std::array coverColor{9, 12, 18};
+  expect(pixelAt(lifted.judgeY * 0.5F) == coverColor,
+         "LIFT paints the area below the raised judgement line");
+  expect(pixelAt(lifted.judgeY + remaining * 0.1F) == coverColor,
+         "HIDDEN+ masks the lane above the lifted judgement line");
+  expect(pixelAt(lifted.judgeY + remaining * 0.5F) != coverColor,
+         "combined covers retain a visible window between their edges");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "lane-covers.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "combined lane cover inspection image encodes");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -3545,6 +3609,7 @@ int main() {
       verifyVisibleTimeDurationUsesMilliseconds();
       verifyGreenNumberUsesLiveConfiguredHispeed();
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
+      verifyBuiltInLiftMovesJudgementAndScrollOrigin(target);
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();

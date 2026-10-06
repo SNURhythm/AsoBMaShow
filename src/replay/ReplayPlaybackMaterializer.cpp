@@ -540,7 +540,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
          .noteStartPositionPercent = event.noteStartPositionPercent,
          .laneCoverEnabled = event.laneCoverEnabled,
          .changeKind = event.changeKind,
-         .resetVisibleTimeReference = event.resetVisibleTimeReference});
+         .resetVisibleTimeReference = event.resetVisibleTimeReference,
+         .coverState = event.coverState});
   }
   replay.consumerIdentityCompatible = outcome.consumerIdentityCompatible;
   outcome.replayData = std::make_shared<ReplayData>(std::move(replay));

@@ -174,7 +174,8 @@ private:
   void persistAutoAdjustedNotesDisplayTiming();
   void persistSkinAudioSettings();
   void abortPlayFromStartSelectControl();
-  void adjustLaneCoverFromInput(int deltaPercent);
+  [[nodiscard]] lane_cover::State laneCoverState() const noexcept;
+  void adjustLaneCoverFromInput(float deltaPercent);
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
   void retryWithNewPattern();
@@ -191,7 +192,7 @@ private:
   [[nodiscard]] bool isCoursePlayback() const;
   [[nodiscard]] bool courseNoSpeed() const;
   [[nodiscard]] int effectiveVisibleTimeDurationMilliseconds() const;
-  [[nodiscard]] int effectiveNoteStartPositionPercent() const;
+  [[nodiscard]] float effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
   [[nodiscard]] bool usesModernCourseContinuation() const;
@@ -281,7 +282,7 @@ private:
                          bool checkGaugeFailure = true);
   void recordPreparationLaneEvent(ReplayEventAction action, int lane,
                                   long long songTimeMicros);
-  void appendReplayLaneCoverEvent(int noteStartPositionPercent,
+  void appendReplayLaneCoverEvent(float noteStartPositionPercent,
                                   long long songTimeMicros,
                                   bool resetVisibleTimeReference,
                                   ReplayLaneCoverChangeKind changeKind);
@@ -404,8 +405,7 @@ private:
   PlayfieldVisualState capturedPlayfieldVisualState;
   PlayfieldProjectionResult capturedPlayfieldProjection;
   std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
-  int playfieldLaneCoverPercent = 0;
-  float playfieldLaneCoverPercentExact = 0.0F;
+  float playfieldLaneCoverPercent = 0.0F;
   bool playfieldLaneCoverResetPending = false;
   bool gameplaySkinSafeBoundsInitialized = false;
   double gameplaySkinSafeBoundsX = 0.0;

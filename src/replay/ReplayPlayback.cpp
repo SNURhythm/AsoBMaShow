@@ -197,7 +197,13 @@ validateLaneCover(std::span<const ReplayLaneCoverEvent> events,
     previous = event.songTimeMicros;
     hasPrevious = true;
     if (event.noteStartPositionPercent < 0 ||
-        event.noteStartPositionPercent > 100) {
+        event.noteStartPositionPercent > 100 ||
+        (event.coverState && (!lane_cover::valid(*event.coverState) ||
+         std::lround(event.coverState->laneCoverPercent) != event.noteStartPositionPercent ||
+         event.coverState->laneCoverEnabled != event.laneCoverEnabled)) ||
+        static_cast<int>(event.changeKind) > static_cast<int>(ReplayLaneCoverChangeKind::Hidden) ||
+        ((event.changeKind == ReplayLaneCoverChangeKind::Lift ||
+          event.changeKind == ReplayLaneCoverChangeKind::Hidden) && !event.coverState)) {
       return ReplayPlaybackIssue::LaneCoverPercent;
     }
   }

@@ -49,22 +49,42 @@ InputProfile makeGameplayInputProfileWithEscapeFallback(
     const InputProfile &profile,
     std::span<const input::InputScope> activeScopes) {
   InputProfile result = profile;
-  if (activeScopes.empty() ||
-      hasActiveKeyboardActionBinding(result, activeScopes, SDL_SCANCODE_ESCAPE,
-                                     input::LogicalActionKind::Pause)) {
-    return result;
-  }
+  if (activeScopes.empty()) return result;
   const auto scope = activeScopes.front();
-  result.bindings.push_back(
-      {.id = "compat-keyboard-escape-pause-p" + std::to_string(scope.player) +
-             "-k" + std::to_string(scope.keyMode),
-       .scope = scope,
-       .action = {.kind = input::LogicalActionKind::Pause},
-       .control = {.deviceId = "keyboard",
-                   .deviceClass = input::DeviceClass::Keyboard,
-                   .kind = input::ControlKind::Key,
-                   .index = SDL_SCANCODE_ESCAPE,
-                   .direction = input::ControlDirection::Any}});
+  if (!hasActiveKeyboardActionBinding(result, activeScopes, SDL_SCANCODE_ESCAPE,
+                                      input::LogicalActionKind::Pause)) {
+    result.bindings.push_back(
+        {.id = "compat-keyboard-escape-pause-p" + std::to_string(scope.player) +
+               "-k" + std::to_string(scope.keyMode),
+         .scope = scope,
+         .action = {.kind = input::LogicalActionKind::Pause},
+         .control = {.deviceId = "keyboard",
+                     .deviceClass = input::DeviceClass::Keyboard,
+                     .kind = input::ControlKind::Key,
+                     .index = SDL_SCANCODE_ESCAPE,
+                     .direction = input::ControlDirection::Any}});
+  }
+  // Keyboard defaults are transient and yield to custom actions or occupied
+  // keys in either player's active scope. Never rewrite the saved profile.
+  for (const auto [key, action] : {
+           std::pair{SDL_SCANCODE_Q, input::LogicalActionKind::Start},
+           std::pair{SDL_SCANCODE_W, input::LogicalActionKind::Select},
+           std::pair{SDL_SCANCODE_UP, input::LogicalActionKind::LaneCoverDecrease},
+           std::pair{SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease}}) {
+    const bool occupied = std::ranges::any_of(result.bindings, [&](const auto &binding) {
+      return std::ranges::find(activeScopes, binding.scope) != activeScopes.end() &&
+             (binding.action.kind == action ||
+              (binding.control.deviceClass == input::DeviceClass::Keyboard &&
+               binding.control.kind == input::ControlKind::Key && binding.control.index == key));
+    });
+    if (occupied) continue;
+    result.bindings.push_back({
+        .id = "compat-keyboard-cover-" + std::to_string(key),
+        .scope = scope, .action = {.kind = action},
+        .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                    .kind = input::ControlKind::Key, .index = key,
+                    .direction = input::ControlDirection::Any}});
+  }
   return result;
 }
 

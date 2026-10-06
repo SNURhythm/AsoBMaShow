@@ -2465,9 +2465,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = value, .supported = true};
   }
   case 14:
-    return {.value = static_cast<std::int64_t>(
-                snapshot->authority.laneCoverPercent) *
-                    10,
+    return {.value = javaDoubleToInt(snapshot->authority.laneCoverPercent * 10.0F),
             .supported = true};
   case 314:
     return {.value = javaDoubleToInt(snapshot->authority.liftRatio * 1000.0F),

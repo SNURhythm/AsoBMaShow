@@ -1,11 +1,12 @@
 #pragma once
 
 #include <string>
+#include <cmath>
 
 namespace lane_cover_number {
 
-inline std::string whiteNumberLabel(int noteStartPositionPercent) {
-  return std::to_string(noteStartPositionPercent * 10);
+inline std::string whiteNumberLabel(float noteStartPositionPercent) {
+  return std::to_string(std::lround(noteStartPositionPercent * 10));
 }
 
 struct PairLayout {

@@ -6,6 +6,7 @@
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "../view/LaneCoverControlsView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
@@ -703,36 +704,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
     previewControls->addView(makeSummaryRow(
         metrics, i18n::message("settings.preview_layout.note_start.label"), &summaryNoteStartPositionValueText));
-    auto *noteStartControls = new View();
-    noteStartControls->setFlexDirection(FlexDirection::Row);
-    noteStartControls->setFlexWrap(YGWrapWrap);
-    noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    noteStartControls->setAlignItems(YGAlignCenter);
-    noteStartControls->setWidthPercent(100.0f);
-    noteStartControls->setJustifyContent(YGJustifyCenter);
-    auto updateNoteStartPosition = [this](int deltaPercent) {
-      context.settings.presentation().noteStartPositionPercent = clampNoteStartPositionPercent(
-          context.settings.presentation().noteStartPositionPercent + deltaPercent);
-      persistSettings();
-    };
-    auto *minusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5%");
-    minusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(-5); });
-    noteStartControls->addView(minusNoteStart);
-    auto *plusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5%");
-    plusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(5); });
-    noteStartControls->addView(plusNoteStart);
-    auto *resetNoteStart = makeResetButton(metrics);
-    resetNoteStart->setOnClickListener([this]() {
-      context.settings.presentation().noteStartPositionPercent =
-          AppSettings::kDefaultNoteStartPositionPercent;
+    auto *covers = new LaneCoverControlsView([this](const lane_cover::State &value) {
+      context.settings.presentation().setLaneCoverState(value);
       persistSettings();
     });
-    noteStartControls->addView(resetNoteStart);
-    previewControls->addView(noteStartControls);
+    covers->refresh(context.settings.presentation().laneCoverState());
+    previewControls->addView(covers);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   } else if (previewPanelPage == 1 && previewSkinRow != nullptr) {
     previewControls->addView(makeWrappedText(
@@ -2067,50 +2044,13 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   noteStartPanel->setGap(metrics.compact ? 12.0f : 16.0f);
   noteStartPanel->setAlignItems(YGAlignFlexStart);
 
-  auto *noteStartControls = new View();
-  noteStartControls->setFlexDirection(FlexDirection::Row);
-  noteStartControls->setFlexWrap(YGWrapWrap);
-  noteStartControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  noteStartControls->setAlignItems(YGAlignFlexStart);
-  auto updateNoteStartPosition = [this](int deltaPercent) {
-    context.settings.presentation().noteStartPositionPercent = clampNoteStartPositionPercent(
-        context.settings.presentation().noteStartPositionPercent + deltaPercent);
+  auto *covers = new LaneCoverControlsView([this](const lane_cover::State &value) {
+    context.settings.presentation().setLaneCoverState(value);
     persistSettings();
-    syncNoteStartPositionInputText(true);
-  };
-  auto *minusNoteStartLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
-  minusNoteStartLarge->setOnClickListener(
-      [updateNoteStartPosition]() { updateNoteStartPosition(-5); });
-  noteStartControls->addView(minusNoteStartLarge);
-  auto *minusNoteStartSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
-  minusNoteStartSmall->setOnClickListener(
-      [updateNoteStartPosition]() { updateNoteStartPosition(-1); });
-  noteStartControls->addView(minusNoteStartSmall);
-  noteStartPositionInput = makeNumericInput(metrics);
-  noteStartPositionInput->onEditingFinished(
-      [this](const std::string &) { commitNoteStartPositionInput(); });
-  noteStartControls->addView(makeInputFrame(metrics, noteStartPositionInput));
-  auto *plusNoteStartSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
-  plusNoteStartSmall->setOnClickListener(
-      [updateNoteStartPosition]() { updateNoteStartPosition(1); });
-  noteStartControls->addView(plusNoteStartSmall);
-  auto *plusNoteStartLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
-  plusNoteStartLarge->setOnClickListener(
-      [updateNoteStartPosition]() { updateNoteStartPosition(5); });
-  noteStartControls->addView(plusNoteStartLarge);
-  auto *resetNoteStart = makeResetButton(metrics);
-  resetNoteStart->setOnClickListener([this]() {
-    context.settings.presentation().noteStartPositionPercent =
-        AppSettings::kDefaultNoteStartPositionPercent;
-    persistSettings();
-    syncNoteStartPositionInputText(true);
   });
-  noteStartControls->addView(resetNoteStart);
-  noteStartPanel->addView(noteStartControls);
+  covers->setWidthPercent(100);
+  covers->refresh(context.settings.presentation().laneCoverState());
+  noteStartPanel->addView(covers);
 
   hispeedAutoAdjustModeText =
       makeText(i18n::message("settings.lane.hi_speed_auto_adjust_off.label"), metrics.bodyTextSize + 6,
@@ -2131,7 +2071,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   });
   noteStartPanel->addView(hispeedAutoAdjustModeButton);
   cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.lane.note_start_position.label"), i18n::message("settings.lane.set_where_notes_enter_lane.message"),
+      metrics, i18n::message("settings.lane.covers.title"), "",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
   if (showLegacyBuiltInGameplayControls) {

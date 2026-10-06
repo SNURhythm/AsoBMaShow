@@ -178,7 +178,10 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
     return invalid(ReplaySetupIssue::StartingGauge);
   }
   if (setup.initialLaneCoverPercent < 0 ||
-      setup.initialLaneCoverPercent > 100) {
+      setup.initialLaneCoverPercent > 100 ||
+      (setup.coverState && (!lane_cover::valid(*setup.coverState) ||
+       std::lround(setup.coverState->laneCoverPercent) != setup.initialLaneCoverPercent ||
+       setup.coverState->laneCoverEnabled != setup.laneCoverEnabled))) {
     return invalid(ReplaySetupIssue::InitialLaneCover);
   }
   return {};

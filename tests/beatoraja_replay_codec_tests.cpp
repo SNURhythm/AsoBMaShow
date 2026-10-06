@@ -628,6 +628,43 @@ void testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState() {
          "legacy lane-cover events inherit their recorded setup state");
 }
 
+void testFineAndLowerCoverStateRoundTrip() {
+  replay::BeatorajaReplayCodec codec;
+  auto source = chartDocument();
+  lane_cover::State covers{.laneCoverPercent = 37.4F, .laneCoverEnabled = true,
+                           .liftEnabled = true, .liftRatio = 0.25F,
+                           .hiddenEnabled = true, .hiddenRatio = 0.15F};
+  source.playback.setup.coverState = covers;
+  covers.liftRatio = 0.251F;
+  source.playback.laneCoverEvents = {{
+      .songTimeMicros = -1'000, .noteStartPositionPercent = 37,
+      .laneCoverEnabled = true, .changeKind = ReplayLaneCoverChangeKind::Lift,
+      .coverState = covers}};
+  covers.hiddenRatio = 0.151F;
+  source.playback.laneCoverEvents.push_back({
+      .songTimeMicros = 2'000, .noteStartPositionPercent = 37,
+      .laneCoverEnabled = true, .changeKind = ReplayLaneCoverChangeKind::Hidden,
+      .resetVisibleTimeReference = true, .coverState = covers});
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(source, 1, diagnostic);
+  expect(encoded.has_value(), "full fine-grained cover state encodes");
+  if (!encoded) return;
+  expect(codec.decode(*encoded, context(source)).chart == std::optional(source),
+         "initial covers and lift/hidden adjustment events round-trip exactly");
+  auto malformed = outerJson(*encoded);
+  malformed["asobmashow"]["laneCoverEvents"][0].erase("coverState");
+  expect(!codec.decode(encodeJson(malformed), context(source)).chart,
+         "lower cover transitions require their recorded state");
+  malformed = outerJson(*encoded);
+  malformed["asobmashow"]["setup"]["coverState"]["liftRatio"] = 1.1;
+  expect(!codec.decode(encodeJson(malformed), context(source)).chart,
+         "out-of-range lift state is rejected");
+  malformed = outerJson(*encoded);
+  malformed["asobmashow"]["laneCoverEvents"][0]["coverState"]["laneCoverPercent"] = 38.0;
+  expect(!codec.decode(encodeJson(malformed), context(source)).chart,
+         "contradictory fine and legacy cover values are rejected");
+}
+
 void testContextAndUntrustedStructureFailClosed() {
   replay::BeatorajaReplayCodec codec;
   const auto source = chartDocument();
@@ -666,6 +703,34 @@ void testContextAndUntrustedStructureFailClosed() {
   }
   expect(!codec.decode(encodeJson(tooDeep), context(source)).chart,
          "JSON nesting beyond shared limit is rejected");
+}
+
+void testStockLiftAndHiddenSurviveImportAndExport() {
+  replay::BeatorajaReplayCodec codec;
+  const auto source = chartDocument();
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(source, 1, diagnostic);
+  expect(encoded.has_value(), "stock cover fixture encodes");
+  if (!encoded) return;
+  auto stock = outerJson(*encoded);
+  stock.erase("asobmashow");
+  stock["config"] = {{"lanecover", 0.371F}, {"enablelanecover", true},
+                     {"lift", 0.245F}, {"enablelift", true},
+                     {"hidden", 0.153F}, {"enablehidden", true}};
+  const auto imported = codec.decode(encodeJson(stock), context(source));
+  expect(imported.chart.has_value(), "stock lift/hidden fixture imports");
+  if (!imported.chart) return;
+  auto local = source;
+  local.playback.setup.coverState = imported.chart->playback.setup.coverState;
+  const auto reencoded = codec.encodeChart(local, 1, diagnostic);
+  expect(reencoded.has_value(), "imported stock covers can be retained in a local capture");
+  if (!reencoded) return;
+  const auto config = outerJson(*reencoded)["config"];
+  expect(config.value("enablelift", false) && config.value("enablehidden", false) &&
+             std::abs(config.value("lift", 0.0F) - 0.245F) < 0.00001F &&
+             std::abs(config.value("hidden", 0.0F) - 0.153F) < 0.00001F &&
+             std::abs(config.value("lanecover", 0.0F) - 0.371F) < 0.00001F,
+         "stock import/export preserves lift, hidden, and fine sudden values");
 }
 
 } // namespace
@@ -801,6 +866,8 @@ int main() {
   testOldRulesetIsExplicitlyObsolete();
   testSupportedAsoExtensionIsAuthoritative();
   testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState();
+  testFineAndLowerCoverStateRoundTrip();
+  testStockLiftAndHiddenSurviveImportAndExport();
   testContextAndUntrustedStructureFailClosed();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

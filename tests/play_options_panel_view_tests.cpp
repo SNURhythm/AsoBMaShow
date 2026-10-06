@@ -326,6 +326,41 @@ void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testLaneCoverControlsAreAvailableInPlayOptions() {
+  lane_cover::State selected;
+  int changes = 0;
+  PlayOptionsPanelView panel(
+      {.onLaneCoversChanged = [&](const lane_cover::State &state) {
+        selected = state;
+        ++changes;
+      }}, {.width = 340.0F}, nullptr);
+  panel.refresh({.laneCovers = {.laneCoverPercent = 20.1F}});
+  panel.applyYogaLayout();
+  for (const auto name : {"lane-cover-sudden", "lane-cover-hidden", "lane-cover-lift"}) {
+    auto *button = dynamic_cast<Button *>(panel.findViewByName(name));
+    require(button != nullptr && button->getHeight() == 48,
+            "play options expose all cover toggles at usable heights");
+    click(*button);
+  }
+  require(changes == 3 && selected.laneCoverEnabled && selected.hiddenEnabled &&
+              selected.liftEnabled && selected.laneCoverPercent == 20.1F,
+          "cover toggles are independent and preserve fine amounts");
+  auto *slider = dynamic_cast<SnappedSlider *>(panel.findViewByName("lane-cover-hidden-amount"));
+  require(slider != nullptr, "hidden cover exposes a fine amount slider");
+  SDL_Event down{};
+  down.type = SDL_MOUSEBUTTONDOWN;
+  down.button.button = SDL_BUTTON_LEFT;
+  down.button.x = slider->getX() + slider->getWidth() / 2;
+  down.button.y = slider->getY() + slider->getHeight() / 2;
+  slider->handleEvents(down);
+  SDL_Event up = down;
+  up.type = SDL_MOUSEBUTTONUP;
+  slider->handleEvents(up);
+  require(changes > 3 && std::abs(selected.hiddenRatio - 0.5F) < 0.02F &&
+              selected.liftRatio == 0.1F && selected.laneCoverPercent == 20.1F,
+          "dragging hidden amount updates only the selected cover");
+}
+
 void testLaneOrderDraftTracksAuthoritativeSelectionAndProfile() {
   PlayOptionsPanelView panel(
       {}, {.width = 340.0f, .showLaneOrder = true}, nullptr);
@@ -499,6 +534,7 @@ int main() {
   testColorPickerDragAndRelease();
   testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture();
   testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
+  testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
   testDropdownDefersOptionViewsUntilOpen();

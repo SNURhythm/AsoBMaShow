@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../AppSettings.h"
+#include "../../LaneCover.h"
 #include "../../JudgementIndicatorRange.h"
 #include "../../ReplayData.h"
 #include "../../audio/GameplayBgaMissStateTracker.h"
@@ -76,7 +77,11 @@ struct PlayfieldPresentationConfig {
   float laneCoverHispeedFactor = 1.0F;
   bool laneCoverEnabled = true;
   int laneBeamLengthPercent = 100;
-  int noteStartPositionPercent = 0;
+  float noteStartPositionPercent = 0;
+  bool liftEnabled = false;
+  float liftRatio = 0.1F;
+  bool hiddenEnabled = false;
+  float hiddenRatio = 0.1F;
   built_in_notes::SharedModeStyles builtInNotes;
   built_in_judge_line::Style builtInJudgeLine;
   built_in_lane::Style builtInLane;
@@ -327,7 +332,7 @@ struct PlayfieldAuthorityUpdate {
   std::vector<std::string> courseStageTitles;
   std::vector<int> startLaneIndicators;
   bool startLaneIndicatorsVisible = false;
-  int laneCoverPercent = 0;
+  float laneCoverPercent = 0;
   bool laneCoverEnabled = false;
   bool liftEnabled = false;
   float liftRatio = 0.0F;
@@ -348,6 +353,12 @@ struct PlayfieldAuthorityUpdate {
   bool practiceMenuActive = false;
   std::optional<practice::SkinMenuState> practiceMenu;
 
+  [[nodiscard]] lane_cover::State laneCoverState() const noexcept {
+    return {.laneCoverPercent = laneCoverPercent,
+            .laneCoverEnabled = laneCoverEnabled,
+            .liftEnabled = liftEnabled, .liftRatio = liftRatio,
+            .hiddenEnabled = hiddenEnabled, .hiddenRatio = hiddenRatio};
+  }
   bool operator==(const PlayfieldAuthorityUpdate &other) const;
 };
 
@@ -361,12 +372,12 @@ gameplaySkinFirstIrProviderName(
 }
 
 struct GameplayLaneCoverAuthority {
-  int percent = 0;
+  float percent = 0;
   bool enabled = true;
 };
 
 inline constexpr GameplayLaneCoverAuthority
-gameplayLaneCoverAuthority(int percent, bool enabled = true) noexcept {
+gameplayLaneCoverAuthority(float percent, bool enabled = true) noexcept {
   return {.percent = percent, .enabled = enabled};
 }
 

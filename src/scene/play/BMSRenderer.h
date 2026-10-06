@@ -154,7 +154,7 @@ struct FrameSnapshot {
   float judgeY = 0.0F;
   float upperBound = 0.0F;
   float noteVisibleUpperBound = 0.0F;
-  int laneCoverPercent = 0;
+  float laneCoverPercent = 0;
   Rect laneCoverHandle;
 };
 
@@ -332,6 +332,7 @@ private:
   double currentScrollRate = 1.0;
   double currentSpeedMultiplier = 1.0;
   bool laneCoverEnabled = true;
+  lane_cover::State coverState;
   std::optional<double> floatingVisibleTimeReferenceBpm;
   AppSettings::HiSpeedFixMode hispeedFixMode =
       AppSettings::HiSpeedFixMode::Main;
@@ -375,7 +376,7 @@ private:
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
   int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
-  int noteStartPositionPercent =
+  float noteStartPositionPercent =
       AppSettings::kDefaultNoteStartPositionPercent;
   size_t replayTouchCursor = 0;
   long long lastReplayTouchTimeMicros = -1;
@@ -608,9 +609,11 @@ public:
   [[nodiscard]] std::optional<std::array<std::pair<float, float>, 4>>
   gameplayTouchBoundsUi() const;
   void setLaneBeamLengthPercent(int percent);
-  void setNoteStartPositionPercent(int percent);
-  void applyLaneCoverState(int percent, bool resetVisibleTimeReference);
-  void applyLaneCoverState(int percent, bool enabled,
+  void setNoteStartPositionPercent(float percent);
+  void applyLaneCoverState(const lane_cover::State &state,
+                           bool resetVisibleTimeReference = false);
+  void applyLaneCoverState(float percent, bool resetVisibleTimeReference);
+  void applyLaneCoverState(float percent, bool enabled,
                            bool resetVisibleTimeReference);
   bool isLaneCoverHandleHit(float renderX, float renderY) const;
   std::optional<float> laneCoverHandleGrabOffset(float renderX,

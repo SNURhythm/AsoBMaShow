@@ -5,6 +5,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "../../input/SDLPointerEvent.h"
 #include "BestReplayLoad.h"
 
 #include "../../BeatorajaScoreMetrics.h"
@@ -2992,13 +2993,18 @@ void GamePlayScene::init() {
                 .enabled = context.settings.presentation().laneCoverEnabled};
   playfieldLaneCoverEnabled = replayInitialLaneCover.enabled;
   playfieldLaneCoverPercent = replayInitialLaneCover.percent;
-  playfieldLaneCoverPercentExact =
-      static_cast<float>(playfieldLaneCoverPercent);
   playfieldLiftEnabled = context.settings.presentation().liftEnabled;
   playfieldLiftRatio = courseNoSpeed() ? 0.0F : context.settings.presentation().liftRatio;
   playfieldHiddenEnabled = context.settings.presentation().hiddenEnabled;
   playfieldHiddenRatio =
       courseNoSpeed() ? 0.0F : context.settings.presentation().hiddenRatio;
+  if (isReplayPlayback() && !courseNoSpeed() && options.replayData->initialCoverState) {
+    const auto &covers = *options.replayData->initialCoverState;
+    playfieldLiftEnabled = covers.liftEnabled;
+    playfieldLiftRatio = covers.liftRatio;
+    playfieldHiddenEnabled = covers.hiddenEnabled;
+    playfieldHiddenRatio = covers.hiddenRatio;
+  }
   playfieldChangeLiftTarget = true;
   playfieldHispeedState.emplace(
       gameplay_hispeed::Settings{
@@ -3124,7 +3130,11 @@ void GamePlayScene::init() {
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
       .laneBeamLengthPercent = context.settings.presentation().laneBeamLengthPercent,
-      .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
+      .noteStartPositionPercent = playfieldLaneCoverPercent,
+      .liftEnabled = playfieldLiftEnabled,
+      .liftRatio = playfieldLiftRatio,
+      .hiddenEnabled = playfieldHiddenEnabled,
+      .hiddenRatio = playfieldHiddenRatio,
       .builtInNotes = built_in_notes::snapshotModeStyles(
           context.settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(*chart))),
       .builtInJudgeLine = context.settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(*chart)),
@@ -4393,10 +4403,6 @@ void GamePlayScene::consumeStartSelectInput(
 
 void GamePlayScene::applyStartSelectControlActions(
     const std::vector<gameplay::StartSelectControlAction> &actions) {
-  const auto currentNoteDisplayBpm = [this] {
-    return noteDisplayBpmAtGameplayTime(
-        getGameplayTimeMicros(context.jukebox.getTimeMicros()));
-  };
   for (const auto &action : actions) {
     switch (action.kind) {
     case gameplay::StartSelectControlActionKind::AdjustHispeed:
@@ -4421,65 +4427,7 @@ void GamePlayScene::applyStartSelectControlActions(
       }
       break;
     case gameplay::StartSelectControlActionKind::AdjustLaneCover:
-      if (!courseNoSpeed() && action.delta != 0) {
-        // This is ControlInputProcessor.setCoverValue's exact priority:
-        // lane cover while enabled (or when neither alternate plane is
-        // enabled), then Lift, then HIDDEN. Its low margin is 0.001; the
-        // existing Aso percent lane-cover state therefore advances by 0.1.
-        if (playfieldLaneCoverEnabled ||
-            (!playfieldLiftEnabled && !playfieldHiddenEnabled)) {
-          const float next = std::clamp(
-              playfieldLaneCoverPercentExact +
-                  static_cast<float>(action.delta) * 0.1F,
-              static_cast<float>(AppSettings::kMinNoteStartPositionPercent),
-              static_cast<float>(AppSettings::kMaxNoteStartPositionPercent));
-          const int nextPercent = static_cast<int>(std::lround(next));
-          if (next != playfieldLaneCoverPercentExact) {
-            playfieldLaneCoverPercentExact = next;
-            context.settings.presentation().noteStartPositionPercent = nextPercent;
-            playfieldLaneCoverPercent = nextPercent;
-            playfieldHispeedState->setLaneCover(
-                nextPercent, currentNoteDisplayBpm(),
-                context.settings.hispeedAutoAdjust);
-            playfieldLaneCoverResetPending = false;
-            refreshRuntimePresentationConfiguration();
-            appendReplayLaneCoverEvent(
-                nextPercent,
-                getGameplayTimeMicros(context.jukebox.getTimeMicros()),
-                context.settings.hispeedAutoAdjust,
-                ReplayLaneCoverChangeKind::Value);
-            (void)context.saveSettings();
-          }
-        } else if (playfieldLiftEnabled &&
-                   (!playfieldHiddenEnabled || playfieldChangeLiftTarget)) {
-          const float next = std::clamp(
-              playfieldLiftRatio - static_cast<float>(action.delta) * 0.001F,
-              0.0F, 1.0F);
-          if (next != playfieldLiftRatio) {
-            playfieldLiftRatio = next;
-            context.settings.presentation().liftRatio = next;
-            playfieldHispeedState->setLaneCover(
-                playfieldLaneCoverPercent, currentNoteDisplayBpm(),
-                context.settings.hispeedAutoAdjust);
-            refreshRuntimePresentationConfiguration();
-            (void)context.saveSettings();
-          }
-        } else {
-          const float next = std::clamp(
-              playfieldHiddenRatio -
-                  static_cast<float>(action.delta) * 0.001F,
-              0.0F, 1.0F);
-          if (next != playfieldHiddenRatio) {
-            playfieldHiddenRatio = next;
-            context.settings.presentation().hiddenRatio = next;
-            playfieldHispeedState->setLaneCover(
-                playfieldLaneCoverPercent, currentNoteDisplayBpm(),
-                context.settings.hispeedAutoAdjust);
-            refreshRuntimePresentationConfiguration();
-            (void)context.saveSettings();
-          }
-        }
-      }
+      adjustLaneCoverFromInput(static_cast<float>(action.delta) * 0.1F);
       break;
     case gameplay::StartSelectControlActionKind::ToggleLaneCover:
       if (!courseNoSpeed()) {
@@ -4517,6 +4465,11 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
   playfieldPresentationConfiguration.laneCoverHispeedFactor = 1.0F;
   playfieldPresentationConfiguration.laneCoverEnabled =
       playfieldLaneCoverEnabled;
+  playfieldPresentationConfiguration.noteStartPositionPercent = playfieldLaneCoverPercent;
+  playfieldPresentationConfiguration.liftEnabled = playfieldLiftEnabled;
+  playfieldPresentationConfiguration.liftRatio = playfieldLiftRatio;
+  playfieldPresentationConfiguration.hiddenEnabled = playfieldHiddenEnabled;
+  playfieldPresentationConfiguration.hiddenRatio = playfieldHiddenRatio;
   playfieldPresentationConfiguration.notesDisplayTimingMilliseconds =
       context.settings.notesDisplayTimingMilliseconds;
   playfieldVisualStateStore->setConfiguration(
@@ -4586,34 +4539,40 @@ void GamePlayScene::abortPlayFromStartSelectControl() {
   scheduleResultTransition(0);
 }
 
-void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
+lane_cover::State GamePlayScene::laneCoverState() const noexcept {
+  return {.laneCoverPercent = playfieldLaneCoverPercent,
+          .laneCoverEnabled = playfieldLaneCoverEnabled,
+          .liftEnabled = playfieldLiftEnabled, .liftRatio = playfieldLiftRatio,
+          .hiddenEnabled = playfieldHiddenEnabled, .hiddenRatio = playfieldHiddenRatio};
+}
+
+void GamePlayScene::adjustLaneCoverFromInput(float deltaPercent) {
   const long long chartTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
-  if (!practiceInputAllowed(chartTimeMicros)) {
-    return;
+  if (!practiceInputAllowed(chartTimeMicros) || courseNoSpeed() ||
+      !playfieldHispeedState) return;
+  auto covers = laneCoverState();
+  const auto target = lane_cover::adjustmentTarget(covers, playfieldChangeLiftTarget);
+  if (!lane_cover::adjust(covers, deltaPercent, playfieldChangeLiftTarget)) return;
+  playfieldLaneCoverPercent = covers.laneCoverPercent;
+  playfieldLiftRatio = covers.liftRatio;
+  playfieldHiddenRatio = covers.hiddenRatio;
+  context.settings.presentation().setLaneCoverState(covers);
+  const auto bpm = noteDisplayBpmAtGameplayTime(chartTimeMicros);
+  if (target == lane_cover::Target::Sudden) {
+    playfieldHispeedState->setLaneCover(playfieldLaneCoverPercent, bpm,
+                                       context.settings.hispeedAutoAdjust);
+  } else if (context.settings.hispeedAutoAdjust) {
+    playfieldHispeedState->resetHispeed(bpm);
   }
-  if (courseNoSpeed() || deltaPercent == 0) {
-    return;
-  }
-  const int previous = context.settings.presentation().noteStartPositionPercent;
-  const int next = std::clamp(previous + deltaPercent,
-                              AppSettings::kMinNoteStartPositionPercent,
-                              AppSettings::kMaxNoteStartPositionPercent);
-  if (next == previous) {
-    return;
-  }
-  context.settings.presentation().noteStartPositionPercent = next;
-  playfieldLaneCoverPercent = next;
-  playfieldLaneCoverPercentExact = static_cast<float>(next);
-  playfieldHispeedState->setLaneCover(
-      next, noteDisplayBpmAtGameplayTime(chartTimeMicros),
-      context.settings.hispeedAutoAdjust);
   playfieldLaneCoverResetPending = false;
   refreshRuntimePresentationConfiguration();
   floatingLaneCoverSettingsDirty = true;
-  appendReplayLaneCoverEvent(next, chartTimeMicros,
-                              context.settings.hispeedAutoAdjust,
-                              ReplayLaneCoverChangeKind::Value);
+  appendReplayLaneCoverEvent(playfieldLaneCoverPercent, chartTimeMicros,
+      context.settings.hispeedAutoAdjust,
+      target == lane_cover::Target::Sudden ? ReplayLaneCoverChangeKind::Value :
+      target == lane_cover::Target::Lift ? ReplayLaneCoverChangeKind::Lift :
+                                           ReplayLaneCoverChangeKind::Hidden);
   persistFloatingLaneCoverSettings();
 }
 
@@ -4784,7 +4743,7 @@ int GamePlayScene::effectiveVisibleTimeDurationMilliseconds() const {
   return context.settings.visibleTimeDurationMilliseconds;
 }
 
-int GamePlayScene::effectiveNoteStartPositionPercent() const {
+float GamePlayScene::effectiveNoteStartPositionPercent() const {
   return courseNoSpeed() ? AppSettings::kDefaultNoteStartPositionPercent
                          : context.settings.presentation().noteStartPositionPercent;
 }
@@ -5232,8 +5191,9 @@ void GamePlayScene::beginReplayRecording() {
       static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
   recordedReplay.touchSamples.reserve(1024);
   recordedReplay.laneCoverEvents.reserve(128);
+  recordedReplay.initialCoverState = laneCoverState();
   appendReplayLaneCoverEvent(
-      effectiveNoteStartPositionPercent(),
+      playfieldLaneCoverPercent,
       getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros), false,
       ReplayLaneCoverChangeKind::Value);
 }
@@ -5305,6 +5265,7 @@ GamePlayScene::completeModernReplayCapture() {
         .laneCoverEnabled = event.laneCoverEnabled,
         .changeKind = event.changeKind,
         .resetVisibleTimeReference = event.resetVisibleTimeReference,
+        .coverState = event.coverState,
     });
   }
   std::string auxiliaryDiagnostic;
@@ -5384,7 +5345,9 @@ void GamePlayScene::recordModernCourseStage(
 
   const int initialLaneCover =
       recordedReplay.laneCoverEvents.empty()
-          ? effectiveNoteStartPositionPercent()
+          ? static_cast<int>(std::lround(recordedReplay.initialCoverState
+                    ? recordedReplay.initialCoverState->laneCoverPercent
+                    : effectiveNoteStartPositionPercent()))
           : recordedReplay.laneCoverEvents.front().noteStartPositionPercent;
   const replay::LocalReplaySetupFacts setupFacts{
       .chart = {.md5 = result->score.chartMd5,
@@ -5399,6 +5362,7 @@ void GamePlayScene::recordModernCourseStage(
                               ? playfieldLaneCoverEnabled
                               : recordedReplay.laneCoverEvents.front()
                                     .laneCoverEnabled,
+      .coverState = recordedReplay.initialCoverState,
   };
   auto setup = replay::captureLocalReplaySetup(
       setupFacts, result->score.provenance, diagnostic);
@@ -6221,7 +6185,9 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
               .value_or(-1);
       const int initialLaneCover =
           recordedReplay.laneCoverEvents.empty()
-              ? effectiveNoteStartPositionPercent()
+              ? static_cast<int>(std::lround(recordedReplay.initialCoverState
+                    ? recordedReplay.initialCoverState->laneCoverPercent
+                    : effectiveNoteStartPositionPercent()))
               : recordedReplay.laneCoverEvents.front().noteStartPositionPercent;
       const auto timing = beatorajaResultTimingStatistics(
           &recordedReplay, chart->Meta.TotalNotes, chart);
@@ -6235,7 +6201,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                .laneCoverEnabled = recordedReplay.laneCoverEvents.empty()
                                        ? playfieldLaneCoverEnabled
                                        : recordedReplay.laneCoverEvents.front()
-                                             .laneCoverEnabled},
+                                             .laneCoverEnabled,
+               .coverState = recordedReplay.initialCoverState},
           .acceptedInput = modernCapture->acceptedInput,
           .touchSamples = modernCapture->touchSamples,
           .laneCoverEvents = modernCapture->laneCoverEvents,
@@ -7622,16 +7589,23 @@ void GamePlayScene::applyReplayLaneCoverEvent(
     return;
   }
   playfieldLaneCoverPercent = event.noteStartPositionPercent;
-  playfieldLaneCoverPercentExact =
-      static_cast<float>(event.noteStartPositionPercent);
   playfieldLaneCoverEnabled = event.laneCoverEnabled;
+  if (event.coverState) {
+    playfieldLaneCoverPercent = event.coverState->laneCoverPercent;
+    playfieldLiftEnabled = event.coverState->liftEnabled;
+    playfieldLiftRatio = event.coverState->liftRatio;
+    playfieldHiddenEnabled = event.coverState->hiddenEnabled;
+    playfieldHiddenRatio = event.coverState->hiddenRatio;
+  }
   if (event.changeKind == ReplayLaneCoverChangeKind::Enabled) {
     playfieldHispeedState->setLaneCoverEnabled(event.laneCoverEnabled);
-  } else {
-    playfieldHispeedState->setLaneCover(event.noteStartPositionPercent,
+  } else if (event.changeKind == ReplayLaneCoverChangeKind::Value) {
+    playfieldHispeedState->setLaneCover(playfieldLaneCoverPercent,
                                         noteDisplayBpmAtGameplayTime(
                                             event.songTimeMicros),
                                         event.resetVisibleTimeReference);
+  } else if (event.resetVisibleTimeReference) {
+    playfieldHispeedState->resetHispeed(noteDisplayBpmAtGameplayTime(event.songTimeMicros));
   }
   playfieldLaneCoverResetPending = false;
   refreshRuntimePresentationConfiguration();
@@ -8033,7 +8007,7 @@ void GamePlayScene::recordPreparationLaneEvent(ReplayEventAction action,
   });
 }
 
-void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
+void GamePlayScene::appendReplayLaneCoverEvent(float noteStartPositionPercent,
                                                long long songTimeMicros,
                                                bool resetVisibleTimeReference,
                                                ReplayLaneCoverChangeKind
@@ -8048,11 +8022,12 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
   ReplayLaneCoverEvent event;
   event.songTimeMicros = songTimeMicros;
   event.noteStartPositionPercent = std::clamp(
-      noteStartPositionPercent, AppSettings::kMinNoteStartPositionPercent,
+      static_cast<int>(std::lround(noteStartPositionPercent)), AppSettings::kMinNoteStartPositionPercent,
       AppSettings::kMaxNoteStartPositionPercent);
   event.laneCoverEnabled = playfieldLaneCoverEnabled;
   event.changeKind = changeKind;
   event.resetVisibleTimeReference = resetVisibleTimeReference;
+  event.coverState = laneCoverState();
   recordedReplay.laneCoverEvents.push_back(event);
 }
 
@@ -8120,12 +8095,11 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
       floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
 
   auto applyDrag = [&]() -> bool {
-    const int previous = context.settings.presentation().noteStartPositionPercent;
+    const float previous = playfieldLaneCoverPercent;
     const int next = builtInPresentation->dragLaneCoverHandleTo(
         renderX, renderY, floatingLaneCoverDragOffsetY);
     context.settings.presentation().noteStartPositionPercent = next;
     playfieldLaneCoverPercent = next;
-    playfieldLaneCoverPercentExact = static_cast<float>(next);
     if (next == previous) {
       return false;
     }
@@ -8425,6 +8399,10 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   }
 
   Scene::handleEvents(event);
+  if (event.type == SDL_MOUSEWHEEL && !context.jukebox.isPaused() &&
+      !practiceMenuActive && !(pauseLayout && pauseLayout->getVisible())) {
+    adjustLaneCoverFromInput(sdl_pointer_event::verticalWheelScrollDelta(event.wheel, 0.5F));
+  }
   if (event.type == SDL_KEYDOWN) {
     if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE &&
         !escapeHandledByInputPipeline) {

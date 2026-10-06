@@ -119,6 +119,7 @@ struct ReplayLaneCoverEvent {
   bool laneCoverEnabled = false;
   ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
+  std::optional<lane_cover::State> coverState;
 
   bool operator==(const ReplayLaneCoverEvent &) const = default;
 };

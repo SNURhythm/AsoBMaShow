@@ -45,6 +45,7 @@ std::optional<ReplayData> makeReplayDataFromSetup(
     result.gaugeAutoShift = setup.gaugeAutoShift;
     result.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
     result.initialLaneCoverPercent = setup.initialLaneCoverPercent;
+    result.initialCoverState = setup.coverState;
     result.initialLaneCoverEnabled = setup.laneCoverEnabled;
     result.hasInitialLaneCoverState = true;
     result.provenance = provenance;

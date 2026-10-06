@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ReplayLimits.h"
+#include "../LaneCover.h"
 
 #include "../AssistOptionUtils.h"
 #include "../ResultContracts.h"
@@ -55,6 +56,7 @@ struct ReplaySetup {
   int initialLaneCoverPercent = 0;
   bool laneCoverEnabled = false;
   bool clubMode = false;
+  std::optional<lane_cover::State> coverState;
 
   bool operator==(const ReplaySetup &) const = default;
 };
@@ -67,6 +69,7 @@ struct LocalReplaySetupFacts {
   std::optional<std::vector<int>> player2LaneShufflePattern;
   int initialLaneCoverPercent = 0;
   bool laneCoverEnabled = false;
+  std::optional<lane_cover::State> coverState;
 };
 
 enum class ReplaySetupSource : std::uint8_t {

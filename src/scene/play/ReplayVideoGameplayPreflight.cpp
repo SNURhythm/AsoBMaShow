@@ -43,14 +43,17 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
     bool touchVisualizationEnabled,
     bool replayGhostRenderingEnabled,
     const CourseConstraintRules &constraints,
-    const std::string &assistOption) noexcept {
+    const std::string &assistOption, const ReplayData *replay) noexcept {
   const bool noSpeed = constraints.noSpeed;
+  const auto covers = replay
+      ? replayLaneCoverInitialState(*replay, settings, noSpeed).coverState
+      : settings.presentation().laneCoverState();
   const int visibleTimeDurationMilliseconds =
       settings.visibleTimeDurationMilliseconds;
-  const int noteStartPositionPercent =
+  const float noteStartPositionPercent =
       noSpeed ? AppSettings::kDefaultNoteStartPositionPercent
-              : settings.presentation().noteStartPositionPercent;
-  const bool laneCoverEnabled = settings.presentation().laneCoverEnabled;
+              : covers.laneCoverPercent;
+  const bool laneCoverEnabled = covers.laneCoverEnabled;
   const gameplay_hispeed::State hispeed(
       {.mode = noSpeed ? gameplay_hispeed::FixMode::Off
                        : gameplay_hispeed::fixModeFromEncoded(
@@ -81,6 +84,10 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneCoverEnabled = laneCoverEnabled,
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = noteStartPositionPercent,
+      .liftEnabled = covers.liftEnabled,
+      .liftRatio = noSpeed ? 0.0F : covers.liftRatio,
+      .hiddenEnabled = covers.hiddenEnabled,
+      .hiddenRatio = noSpeed ? 0.0F : covers.hiddenRatio,
       .builtInNotes = built_in_notes::snapshotModeStyles(
           settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart))),
       .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
@@ -351,6 +358,13 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
          events[cursor_].songTimeMicros <= songTimeMicros) {
     percent_ = events[cursor_].noteStartPositionPercent;
     enabled_ = events[cursor_].laneCoverEnabled;
+    if (events[cursor_].coverState) {
+      coverState_ = events[cursor_].coverState;
+      percent_ = coverState_->laneCoverPercent;
+    } else if (coverState_) {
+      coverState_->laneCoverPercent = percent_;
+      coverState_->laneCoverEnabled = enabled_;
+    }
     changed = true;
     changeKind = events[cursor_].changeKind;
     resetVisibleTimeReference = events[cursor_].resetVisibleTimeReference;
@@ -358,7 +372,8 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
                            .enabled = enabled_,
                            .changeKind = changeKind,
                            .resetVisibleTimeReference =
-                               resetVisibleTimeReference});
+                               resetVisibleTimeReference,
+                           .coverState = coverState_});
     ++cursor_;
   }
   return {.percent = percent_,
@@ -366,19 +381,27 @@ ReplayLaneCoverFrameState ReplayLaneCoverPlayback::advance(
           .changed = changed,
           .changeKind = changeKind,
           .resetVisibleTimeReference = resetVisibleTimeReference,
-          .transitions = std::move(transitions)};
+          .transitions = std::move(transitions),
+          .coverState = coverState_};
 }
 
 ReplayLaneCoverInitialState replayLaneCoverInitialState(
     const ReplayData &replay, const AppSettings &settings,
     bool noSpeed) noexcept {
   if (noSpeed) {
+    auto covers = settings.presentation().laneCoverState();
+    covers.laneCoverPercent = AppSettings::kDefaultNoteStartPositionPercent;
+    covers.liftRatio = covers.hiddenRatio = 0;
     return {.percent = AppSettings::kDefaultNoteStartPositionPercent,
-            .enabled = settings.presentation().laneCoverEnabled};
+            .enabled = settings.presentation().laneCoverEnabled,
+            .coverState = covers};
   }
   const auto state = replayInitialLaneCoverState(
       replay, settings.presentation().noteStartPositionPercent, settings.presentation().laneCoverEnabled);
-  return {.percent = state.percent, .enabled = state.enabled};
+  auto covers = replay.initialCoverState.value_or(settings.presentation().laneCoverState());
+  covers.laneCoverPercent = state.percent;
+  covers.laneCoverEnabled = state.enabled;
+  return {.percent = state.percent, .enabled = state.enabled, .coverState = covers};
 }
 
 ReplayJudgementAuthorityPlayback::ReplayJudgementAuthorityPlayback() {
@@ -468,6 +491,10 @@ preflightReplayGameplayPresentationWithReservedRenderer(
   initialState.authority.laneCoverPercent =
       configuration.noteStartPositionPercent;
   initialState.authority.laneCoverEnabled = configuration.laneCoverEnabled;
+  initialState.authority.liftEnabled = configuration.liftEnabled;
+  initialState.authority.liftRatio = configuration.liftRatio;
+  initialState.authority.hiddenEnabled = configuration.hiddenEnabled;
+  initialState.authority.hiddenRatio = configuration.hiddenRatio;
   Judge judge(chart.Meta.Rank);
   auto created = ReplayPlayfieldPresentation::create({
       .chart = chart,

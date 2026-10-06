@@ -326,7 +326,7 @@
     "laneBeamsEnabled": true,
     "laneCoverHispeedFactor": 0.76,
     "laneBeamLengthPercent": 82,
-    "noteStartPositionPercent": 24,
+    "noteStartPositionPercent": 24.0,
     "laneBeamClockUsesRenderTime": true,
     "showInvisibleNotes": true,
     "judgementIndicatorEnabled": true,

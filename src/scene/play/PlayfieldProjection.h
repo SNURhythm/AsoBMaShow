@@ -18,7 +18,7 @@ namespace gameplay_visible_time {
 // Mirrors LaneRenderer.currentduration: the live, cover-adjusted duration is
 // derived from the same configured Hi-Speed that determines note travel.
 [[nodiscard]] inline std::optional<int> currentDurationMilliseconds(
-    double bpm, float configuredHispeed, int laneCoverPercent,
+    double bpm, float configuredHispeed, float laneCoverPercent,
     bool laneCoverEnabled, double scrollRate = 1.0,
     double speedMultiplier = 1.0) {
   return gameplay_hispeed::liveDurationMilliseconds(
