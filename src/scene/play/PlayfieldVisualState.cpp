@@ -161,6 +161,7 @@ void PlayfieldVisualStateStore::resetModel(
   liveTouches_ = {};
   touches_.clear();
   bgaMissTracker_.reset();
+  judgeSequence_ = 0;
   lastJudge_ = JudgeResult(None, 0);
   lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
   judgementIndicatorSamples_ = {};
@@ -485,6 +486,20 @@ void PlayfieldVisualStateStore::onLaneReleased(int lane,
   state.releaseMicros = eventMicros;
 }
 
+void PlayfieldVisualStateStore::onLaneJudge(
+    int lane, JudgeResult judge, int combo, int score,
+    PlayfieldJudgeEventClock clock, bool recordTimingSample) {
+  onJudge(judge, combo, score, clock, recordTimingSample);
+  const auto found = laneIndices_.find(lane);
+  if (judge.judgement == None || found == laneIndices_.end()) return;
+  lanes_[found->second].lastJudgement = {
+      .judgement = judge.judgement,
+      .combo = combo,
+      .fastSlowMicros = fastSlowMicros_,
+      .visualMicros = clock.visualTimeMicros,
+      .sequence = ++judgeSequence_};
+}
+
 void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
                                         int score,
                                         PlayfieldJudgeEventClock clock,
@@ -543,4 +558,11 @@ void PlayfieldPresentationEventFanout::onJudge(
     bool recordTimingSample) {
   state_.onJudge(judge, combo, score, clock, recordTimingSample);
   presentation_->onJudge(judge, combo, score, clock, recordTimingSample);
+}
+
+void PlayfieldPresentationEventFanout::onLaneJudge(
+    int lane, JudgeResult judge, int combo, int score,
+    PlayfieldJudgeEventClock clock, bool recordTimingSample) {
+  state_.onLaneJudge(lane, judge, combo, score, clock, recordTimingSample);
+  presentation_->onLaneJudge(lane, judge, combo, score, clock, recordTimingSample);
 }

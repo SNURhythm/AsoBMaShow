@@ -32,18 +32,19 @@ std::string formatPlayLevel(double level) {
   return stream.str();
 }
 
-std::string keyModeDescription(int keyMode) {
-  switch (keyMode) {
+std::string keyModeDescription(const bms_parser::ChartMeta &meta) {
+  const bool hasScratch = meta.TotalScratchNotes > 0 || meta.TotalBackSpinNotes > 0;
+  switch (meta.KeyMode) {
   case 5:
-    return "5K1S";
+    return hasScratch ? "5K1S" : "5K";
   case 7:
-    return "7K1S";
+    return hasScratch ? "7K1S" : "7K";
   case 10:
     return "5KDP";
   case 14:
     return "7KDP";
   default:
-    return std::to_string(keyMode) + "K";
+    return std::to_string(meta.KeyMode) + "K";
   }
 }
 } // namespace
@@ -294,7 +295,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
                            ? formatPlayLevel(meta.PlayLevel)
                            : record.difficultyTableLabels);
     keyModeView->setLocalizedText(unavailable ? i18n::message("library.chart.missing.badge")
-                                     : keyModeDescription(meta.KeyMode));
+                                     : keyModeDescription(meta));
   }
   if (!unavailable && !solidArchive && !meta.StageFile.empty()) {
     jacketImage->setImageAsync(meta.Folder / meta.StageFile,

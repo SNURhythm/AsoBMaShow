@@ -236,6 +236,7 @@ private:
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
   void updatePinnedLaneCoverOffsets();
   void updatePinnedPlayTimers();
+  void updateJudgeRegions();
   void updatePinnedPomyuTimers();
   [[nodiscard]] std::optional<int>
   numericSelector(const SkinBuiltinPropertySelector &) const noexcept;
@@ -254,6 +255,8 @@ private:
   SkinRuntimeOffset laneCoverOffset_;
   SkinRuntimeOffset hiddenCoverOffset_;
   PlayfieldSkinProjectionViews projection_;
+  std::array<LaneJudgePresentationState, 3> judgeRegions_{};
+  int exclusiveComboRegion_ = -1;
   // StringPropertyFactory resolves target neighbours from a PlayerConfig
   // target ring. Keep their source names stable for every lookup in a frame.
   std::vector<std::string> targetNeighbourNames_;

@@ -384,6 +384,16 @@ gameplayLaneCoverAuthority(float percent, bool enabled = true) noexcept {
 inline constexpr long long kPlayfieldTimestampOff =
     std::numeric_limits<long long>::min();
 
+struct LaneJudgePresentationState {
+  Judgement judgement = None;
+  int combo = 0;
+  int fastSlowMicros = 0;
+  long long visualMicros = kPlayfieldTimestampOff;
+  std::uint64_t sequence = 0;
+
+  bool operator==(const LaneJudgePresentationState &) const = default;
+};
+
 struct LanePresentationState {
   bool pressed = false;
   JudgeResult lastPressedJudge = JudgeResult(None, 0);
@@ -393,6 +403,7 @@ struct LanePresentationState {
   long long pressMicros = kPlayfieldTimestampOff;
   long long releaseMicros = kPlayfieldTimestampOff;
   long long bombMicros = kPlayfieldTimestampOff;
+  LaneJudgePresentationState lastJudgement;
 
   bool operator==(const LanePresentationState &other) const {
     return pressed == other.pressed &&
@@ -401,7 +412,8 @@ struct LanePresentationState {
            beatorajaJudgeValue == other.beatorajaJudgeValue &&
            pressMicros == other.pressMicros &&
            releaseMicros == other.releaseMicros &&
-           bombMicros == other.bombMicros;
+           bombMicros == other.bombMicros &&
+           lastJudgement == other.lastJudgement;
   }
 };
 
@@ -564,6 +576,9 @@ public:
   void onJudge(JudgeResult judge, int combo, int score,
                PlayfieldJudgeEventClock clock,
                bool recordTimingSample) override;
+  void onLaneJudge(int lane, JudgeResult judge, int combo, int score,
+                   PlayfieldJudgeEventClock clock,
+                   bool recordTimingSample) override;
 
 private:
   struct TouchLifecycle {
@@ -614,6 +629,7 @@ private:
   mutable TouchLifecycle liveTouches_;
   mutable std::vector<PresentationTouchPoint> touches_;
   GameplayBgaMissStateTracker bgaMissTracker_;
+  std::uint64_t judgeSequence_ = 0;
   JudgeResult lastJudge_ = JudgeResult(None, 0);
   long long lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
   std::array<PlayfieldJudgementIndicatorSample,
@@ -641,6 +657,9 @@ public:
   void onJudge(JudgeResult judge, int combo, int score,
                PlayfieldJudgeEventClock clock,
                bool recordTimingSample) override;
+  void onLaneJudge(int lane, JudgeResult judge, int combo, int score,
+                   PlayfieldJudgeEventClock clock,
+                   bool recordTimingSample) override;
 
 private:
   PlayfieldVisualStateStore &state_;

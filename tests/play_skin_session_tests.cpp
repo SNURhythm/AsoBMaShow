@@ -6464,6 +6464,61 @@ void testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout() {
          "repeat render cannot resubmit the consumed frame or enqueue writes");
 }
 
+void testFiveKeySkinTouchLayoutMapsBackToChartLanes() {
+  for (const auto &[type, chartLanes] :
+       std::vector<std::pair<int, std::vector<int>>>{
+           {1, {0, 1, 2, 3, 4, 7}},
+           {3, {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 15}}}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.model().model.header.type = type;
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = type == 1 ? 5 : 10;
+    chart.Meta.TotalScratchNotes = 1;
+    fixture.chart() = buildPlayfieldChartVisualModel(chart, 0);
+    for (auto &object : fixture.model().model.objects) {
+      auto *notes = std::get_if<SkinNoteObject>(&object.payload);
+      if (!notes) continue;
+      notes->lanes.clear();
+      for (std::size_t i = 0; i < chartLanes.size(); ++i) {
+        notes->lanes.push_back({.authoredLane = static_cast<int>(i),
+            .laneDestination = {.x = 100.0 * i, .y = 20.0,
+                                .width = 80.0, .height = 500.0}});
+      }
+    }
+    expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+               PresentationFrameOutcome::Ready, "compact skin frame prepares");
+    RenderContext context;
+    SessionBgaSubmitter bga;
+    const auto rendered = fixture.session().render(context, bgaFrame(44), bga);
+    const auto layout = fixture.session().touchLayout();
+    expect(rendered.outcome == PresentationFrameOutcome::Ready &&
+               layout.lanes == chart.Meta.GetTotalLaneIndices(),
+           "compact 5K and DP skins publish every canonical touch lane");
+    for (const auto &region : layout.laneRegions) {
+      const auto found = std::ranges::find(chartLanes, region.lane);
+      expect(found != chartLanes.end(), "touch geometry uses a chart lane");
+      if (found == chartLanes.end()) continue;
+      const auto slot = found - chartLanes.begin();
+      expect(std::abs(region.bottomLeft.x - slot * 100.0F / 1920.0F) < 0.0001F &&
+                 region.scratch == (region.lane == 7 || region.lane == 15),
+             "touch position and scratch role match the compact authored lane");
+    }
+    fixture.quadBackend().captureVertices = true;
+    for (std::size_t i = 0; i < chartLanes.size(); ++i) {
+      fixture.quadBackend().submittedVertices.clear();
+      const std::array requested{chartLanes[i]};
+      fixture.session().submitSyntheticStartLaneIndicators(
+          context, {.frameSerial = 1, .lanes = requested});
+      const auto &vertices = fixture.quadBackend().submittedVertices;
+      expect(!vertices.empty() && std::ranges::all_of(vertices, [i](const auto &vertex) {
+               return vertex.x >= 100.0F * i && vertex.x <= 100.0F * i + 80.0F;
+             }), "start-lane cue uses the same mapped rectangle as notes and touch");
+    }
+  }
+}
+
 void testAuthoredScratchlessSkinTouchLayout() {
   for (int keys : {5, 7}) {
     // Missing scratch, zero-sized scratch, valid scratch, missing key,
@@ -6472,6 +6527,7 @@ void testAuthoredScratchlessSkinTouchLayout() {
       SessionFixture fixture;
       if (!fixture.ready()) return;
       fixture.addTouchGeometry();
+      fixture.model().model.header.type = keys == 5 ? 1 : 0;
       bms_parser::Chart chart;
       chart.Meta.KeyMode = keys;
       chart.Meta.TotalScratchNotes = scenario == 4 ? 1 : 0;
@@ -6486,7 +6542,7 @@ void testAuthoredScratchlessSkinTouchLayout() {
                                   .width = 80.0, .height = 500.0}});
         }
         if (scenario == 1 || scenario == 2) {
-          notes->lanes.push_back({.authoredLane = 7,
+          notes->lanes.push_back({.authoredLane = keys,
               .laneDestination = {.x = 800.0, .y = 20.0,
                                   .width = scenario == 1 ? 0.0 : 80.0, .height = 500.0}});
         }
@@ -7660,6 +7716,84 @@ void testFocusedLaneCoverAndAttachedArtwork() {
              "unrelated HUD retains its original camera");
     }
   }
+}
+
+void testDoublePlayRightSideEffectsProduceDrawCommands() {
+  for (const int keys : {10, 14}) {
+    for (const int timer : {111, 61}) {
+      SessionFixture fixture;
+      if (!fixture.ready()) return;
+      bms_parser::ChartMeta meta;
+      meta.KeyMode = keys;
+      fixture.chart().keyCount = keys;
+      fixture.chart().laneOrder = meta.GetTotalLaneIndices();
+      fixture.addClickableImage();
+      fixture.configureLaneEffect(timer, timer == 61);
+      auto state = stateAt(1);
+      state.sceneStartMicros = 0;
+      state.lanes.assign(fixture.chart().laneOrder.size(), {});
+      const auto lane = std::ranges::find(fixture.chart().laneOrder, 8);
+      auto &right = state.lanes[lane - fixture.chart().laneOrder.begin()];
+      right.pressed = true;
+      right.pressMicros = 0;
+      right.bombMicros = 0;
+      const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+      expect(frame.ready() && frame.evaluation.submitReady &&
+                 std::ranges::any_of(frame.evaluation.submitReady->commands,
+                     [](const auto &command) { return command.sourceObject == 82; }),
+             "DP right key beam and bomb reach the custom skin draw list");
+    }
+  }
+}
+
+void testDoublePlayRightJudgeAndComboProduceDrawCommands() {
+  SessionFixture fixture;
+  if (!fixture.ready()) return;
+  fixture.chart().keyCount = 10;
+  fixture.chart().laneOrder = {7, 0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 15};
+  fixture.addClickableImage();
+  auto &model = fixture.model().model;
+  auto destination = model.destinations.back();
+  model.destinations.pop_back();
+  auto sprite = std::get<SkinImageObject>(model.objects.back().payload).orderedStates.front();
+  sprite.frames.assign(10, SkinSourceRect{.x = 0, .y = 0, .w = 10, .h = 10});
+  SkinNumberObject combo;
+  combo.digits.positive = sprite;
+  combo.digits.glyphsPerAnimationFrame = 10;
+  combo.digitCount = 3;
+  combo.relativeToJudgeImage = true;
+  model.objects.push_back({.id = 91, .payload = combo});
+  SkinJudgeObject judge;
+  judge.player = 1;
+  judge.grades.resize(7);
+  judge.grades[PGreat].image = SkinNestedObjectPresentation{
+      .object = 82, .destination = destination.presentation};
+  judge.grades[PGreat].detailNumber = SkinNestedObjectPresentation{
+      .object = 91, .destination = destination.presentation};
+  model.objects.push_back({.id = 90, .payload = judge, .critical = true});
+  destination.object = 90;
+  model.destinations.push_back(destination);
+  auto state = stateAt(1);
+  state.sceneStartMicros = 0;
+  state.lanes.assign(12, {});
+  state.lanes[6].lastJudgement = {.judgement = PGreat, .combo = 42,
+      .visualMicros = 0, .sequence = 1};
+  const auto frame = fixture.session().prepareFrame(state, projectionAt(1), {});
+  expect(frame.ready() && frame.evaluation.submitReady,
+         "right-side DP judgement frame prepares");
+  if (!frame.evaluation.submitReady) {
+    for (const auto &diagnostic : frame.diagnostics)
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    for (const auto &diagnostic : frame.evaluation.diagnostics)
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    return;
+  }
+  const auto &commands = frame.evaluation.submitReady->commands;
+  expect(std::ranges::count_if(commands, [](const auto &command) {
+           return command.sourceObject == 82; }) == 1 &&
+             std::ranges::count_if(commands, [](const auto &command) {
+           return command.sourceObject == 91; }) == 2,
+         "right-side DP judgement emits its image and two combo digits");
 }
 
 void testFocusedLaneEffectsFollowTimers() {
@@ -11097,6 +11231,7 @@ int main(int argc, char **argv) {
   testPassiveCustomTimerUsesTheSharedSessionFrame();
   testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();
   testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout();
+  testFiveKeySkinTouchLayoutMapsBackToChartLanes();
   testAuthoredScratchlessSkinTouchLayout();
   testSparseModeTouchLayoutKeepsOriginalChannels();
   testSkinLaneTouchLayoutUsesDrawableScreenCoordinates();
@@ -11120,6 +11255,8 @@ int main(int argc, char **argv) {
   testFocusedMirroredLaneBackgrounds();
   testFocusedOverlappingArtworkKeepsNoteAreaFraming();
   testFocusedLaneCoverAndAttachedArtwork();
+  testDoublePlayRightSideEffectsProduceDrawCommands();
+  testDoublePlayRightJudgeAndComboProduceDrawCommands();
   testFocusedLaneEffectsFollowTimers();
   testPlayAreaFramingKeepsDrawingAndInteractionTogether();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();

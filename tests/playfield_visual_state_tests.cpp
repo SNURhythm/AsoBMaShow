@@ -630,6 +630,43 @@ void testPlayTimerAuthorityIsAnImmutablePartOfTheGameplayClock() {
           "present");
 }
 
+void testLaneJudgementsSurviveCaptureAndForwardOnce() {
+  PlayfieldChartVisualModel model;
+  model.keyCount = 14;
+  model.laneOrder = {7, 0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+  PlayfieldVisualStateStore store(model);
+  struct Sink final : IPlayfieldPresentationEvents {
+    int judges = 0;
+    void onLanePressed(int, JudgeResult, long long) override {}
+    void onLaneReleased(int, long long) override {}
+    void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) override {
+      ++judges;
+    }
+  } sink;
+  PlayfieldPresentationEventFanout fanout(store, sink);
+  fanout.onLaneJudge(0, JudgeResult(PGreat, -100), 1, 2,
+                    {.visualTimeMicros = 500}, true);
+  fanout.onLaneJudge(8, JudgeResult(Great, 200), 2, 3,
+                    {.visualTimeMicros = 500}, true);
+  const auto captured = store.capture({});
+  require(captured.lanes[1].lastJudgement.combo == 1 &&
+              captured.lanes[8].lastJudgement.combo == 2 &&
+              captured.lanes[8].lastJudgement.sequence == 2 && sink.judges == 2,
+          "same-frame DP events preserve lane identity and forward once");
+  fanout.onLaneReleased(8, 600);
+  fanout.onLaneJudge(15, JudgeResult(Poor, 0), 0, 3,
+                    {.visualTimeMicros = 700}, false);
+  const auto missed = store.capture({});
+  require(missed.lanes[15].lastJudgement.judgement == Poor &&
+              missed.lanes[8].lastJudgement.combo == 2 &&
+              captured.lanes[15].lastJudgement.judgement == None &&
+              missed.lastJudge.judgement == Poor && sink.judges == 3,
+          "misses and releases retain independent immutable lane judgements");
+  store.resetModel(model);
+  require(store.capture({}).lanes[8].lastJudgement.sequence == 0,
+          "reset clears lane judgement history");
+}
+
 void testJudgeTimingIsClampedToThePublicStateWidth() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -1173,6 +1210,7 @@ int main() {
   testLaneCoverAuthorityRemainsEnabledAtZeroAmount();
   testLifecycleClocksDefaultAndResetToTheOffSentinel();
   testPlayTimerAuthorityIsAnImmutablePartOfTheGameplayClock();
+  testLaneJudgementsSurviveCaptureAndForwardOnce();
   testJudgeTimingIsClampedToThePublicStateWidth();
   testCapturedBgaMissStateTracksJudgesAndResets();
   testBgaMissStatePropagatesThroughEventFanoutBeforeCapture();

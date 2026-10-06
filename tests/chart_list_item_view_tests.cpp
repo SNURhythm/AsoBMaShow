@@ -100,6 +100,30 @@ int main() {
                 card->getChildren().front() == banner,
             "chart banner renders behind row content");
 
+    for (const int keys : {5, 7}) {
+      record.meta.KeyMode = keys;
+      for (const auto [scratch, backspin] :
+           {std::pair{0, 0}, std::pair{1, 0}, std::pair{0, 1}}) {
+        record.meta.TotalScratchNotes = scratch;
+        record.meta.TotalBackSpinNotes = backspin;
+        row.setMeta(record);
+        const auto expected = std::to_string(keys) +
+                              (scratch || backspin ? "K1S" : "K");
+        require(keyMode->getText() == expected,
+                "chart list distinguishes scratchless charts and long scratches");
+        require(record.meta.KeyMode == keys,
+                "display labels preserve the canonical chart identity");
+      }
+    }
+    record.meta.TotalScratchNotes = 0;
+    record.meta.TotalBackSpinNotes = 0;
+    for (const auto [keys, label] : {std::pair{10, "5KDP"}, std::pair{14, "7KDP"},
+                                    std::pair{9, "9K"}}) {
+      record.meta.KeyMode = keys;
+      row.setMeta(record);
+      require(keyMode->getText() == label, "DP and non-beat labels remain intact");
+    }
+
     row.setBestScoreRank(2451, 2700);
     row.applyYogaLayout();
     auto *bestScore = dynamic_cast<TextView *>(

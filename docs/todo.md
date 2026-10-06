@@ -83,9 +83,10 @@ source default are not compatibility work for gameplay skins.
 - [x] `SongInformation` analysis: density/peak/end-density/total
   (`360`–`365`, `368`) is retained in immutable chart state. Missing analysis
   continues to return the upstream `Integer.MIN_VALUE` sentinel.
-- [x] Player 2/3 judge-duration values (`526`–`527`) return zero. Pinned
-  `JudgeManager.getRecentJudgeTiming(player)` has the same fallback for the
-  absent 2P/3P slots in Aso's single-player authority.
+- [x] Player 2/3 judge-duration values (`526`–`527`) use the latest captured
+  event in each authored judgement region. Unpopulated regions return zero,
+  matching `JudgeManager.getRecentJudgeTiming(player)`. DP regions retain
+  independent grades, combos, timing predicates, and animation timers.
 
 ### Image-index properties
 

@@ -272,7 +272,7 @@ private:
   void expireGimmickNote(bms_parser::Note *note, long long judgeTimeMicros);
   void onJudge(const JudgeResult &judgeResult, PlayfieldJudgeEventClock clock,
                bool recordTimingSample = true,
-               const bms_parser::Note *graphNote = nullptr);
+               const bms_parser::Note *graphNote = nullptr, int lane = -1);
   [[nodiscard]] PlayfieldJudgeEventClock
   judgeEventClock(long long songTimeMicros) const;
   void appendReplayEvent(ReplayEventAction action, int lane,

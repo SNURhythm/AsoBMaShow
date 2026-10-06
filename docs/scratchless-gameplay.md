@@ -32,5 +32,7 @@ custom bindings for the original modes are preserved. Scratchless gameplay
 uses these bindings regardless of the selected skin or hidden-lane setting.
 
 Chart identities, judgements, scores, replay formats, and IR protocol key
-modes remain canonical. Canonical chart-mode labels explicitly include `1S`;
-the separate settings targets are labeled `5K` and `7K`.
+modes remain canonical. The chart list labels single-play charts with no counted
+scratch or backspin notes `5K` / `7K`; charts with either are labeled `5K1S` / `7K1S`. This
+metadata-only label does not change gameplay skin selection, which also checks
+invisible scratch keysounds and scratch mines in the loaded chart.

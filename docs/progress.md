@@ -257,9 +257,14 @@ work from [`docs/todo.md`](todo.md). The pinned authority is Beatoraja commit
   same evaluation boundary as `MainController.getCurrnetTime()`. Verified by
   `play_skin_state_bridge_tests`.
 
-- Player-2 and player-3 judge-duration properties `526`–`527` retain the
-  pinned `JudgeManager.getRecentJudgeTiming()` out-of-range value of zero,
-  matching Aso's absent 2P/3P authority slots.
+- Player-2 and player-3 judge-duration properties `526`–`527` now read the
+  latest lane event in each authored judgement region, retaining zero for
+  unpopulated regions. Live and replay snapshots preserve per-region grades,
+  combos, timing, and judgement timers. DP key beams, bombs, hold/HCN effects,
+  and key-judge images resolve canonical lanes through player/key offsets.
+  Single-region skins retain the global judgement; three-region skins keep
+  only the latest combo timer active, matching Beatoraja. Covered by state,
+  replay, bridge, and session draw-command tests.
 
 - Play-level aliases `45`–`49` now share property `96`'s immutable chart
   play-level value, matching `IntegerPropertyFactory.createPlayLevelProperty`.
