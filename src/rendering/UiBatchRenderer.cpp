@@ -1,4 +1,9 @@
 #include "UiBatchRenderer.h"
+#include "../targets.h"
+
+#if TARGET_OS_ANDROID
+#include "UiBatchUploadCache.h"
+#endif
 
 #include <SDL2/SDL.h>
 
@@ -85,6 +90,34 @@ public:
       if (bufferSlot == nullptr) {
         return false;
       }
+      const auto vertexBuffer = color ? bufferSlot->colorVertexBuffer
+                                      : bufferSlot->texturedVertexBuffer;
+#if TARGET_OS_ANDROID
+      // Each slot owns persistent GPU storage. Reuse exact small-batch content
+      // across frames, while still submitting every draw with its current state.
+      auto &vertexCache = color ? bufferSlot->colorUpload
+                                : bufferSlot->texturedUpload;
+      const auto vertexBytes = color
+                                   ? std::as_bytes(submission.colorVertices)
+                                   : std::as_bytes(submission.texturedVertices);
+      const auto uploadVertex = [vertexBuffer](std::span<const std::byte> bytes) {
+        const auto *memory = bgfx::copy(bytes.data(),
+                                       static_cast<std::uint32_t>(bytes.size()));
+        if (memory == nullptr) return false;
+        bgfx::update(vertexBuffer, 0, memory);
+        return true;
+      };
+      const auto uploadIndex = [bufferSlot](std::span<const std::byte> bytes) {
+        const auto *memory = bgfx::copy(bytes.data(),
+                                       static_cast<std::uint32_t>(bytes.size()));
+        if (memory == nullptr) return false;
+        bgfx::update(bufferSlot->indexBuffer, 0, memory);
+        return true;
+      };
+      if (!vertexCache.uploadIfChanged(vertexBytes, uploadVertex) ||
+          !bufferSlot->indexUpload.uploadIfChanged(
+              std::as_bytes(submission.indices), uploadIndex)) return false;
+#else
       const bgfx::Memory *vertexMemory =
           color ? bgfx::copy(submission.colorVertices.data(),
                              submission.colorVertices.size_bytes())
@@ -95,10 +128,9 @@ public:
       if (vertexMemory == nullptr || indexMemory == nullptr) {
         return false;
       }
-      const auto vertexBuffer = color ? bufferSlot->colorVertexBuffer
-                                      : bufferSlot->texturedVertexBuffer;
       bgfx::update(vertexBuffer, 0, vertexMemory);
       bgfx::update(bufferSlot->indexBuffer, 0, indexMemory);
+#endif
       bgfx::setVertexBuffer(0, vertexBuffer, 0,
                             static_cast<std::uint32_t>(vertexCount));
       if (!color && submission.state.textureOpacity < 1.0f) {
@@ -114,16 +146,25 @@ public:
           }
           bufferSlot->opacityVertexBuffer = replacement;
           bufferSlot->opacityCapacity = newCapacity;
+#if TARGET_OS_ANDROID
+          bufferSlot->opacityUpload.invalidate();
+#endif
         }
-        opacityVertices_.assign(vertexCount,
-                                {1.0f, 1.0f, 1.0f,
-                                 submission.state.textureOpacity});
-        const auto *opacityMemory = bgfx::copy(
-            opacityVertices_.data(), static_cast<std::uint32_t>(
-                                         opacityVertices_.size() *
-                                         sizeof(opacityVertices_[0])));
-        if (opacityMemory == nullptr) return false;
-        bgfx::update(bufferSlot->opacityVertexBuffer, 0, opacityMemory);
+#if TARGET_OS_ANDROID
+        // Every opacity vertex is the same constant. Count and alpha completely
+        // describe this stream without retaining another vertex-sized array.
+        const std::array opacityKey{static_cast<float>(vertexCount),
+                                    submission.state.textureOpacity};
+        if (!bufferSlot->opacityUpload.uploadIfChanged(
+                std::as_bytes(std::span{opacityKey}),
+                [&](std::span<const std::byte>) {
+                  return uploadOpacity(*bufferSlot, vertexCount,
+                                       submission.state.textureOpacity);
+                })) return false;
+#else
+        if (!uploadOpacity(*bufferSlot, vertexCount,
+                           submission.state.textureOpacity)) return false;
+#endif
         bgfx::setVertexBuffer(1, bufferSlot->opacityVertexBuffer, 0,
                               static_cast<std::uint32_t>(vertexCount));
       }
@@ -190,7 +231,24 @@ private:
     std::size_t texturedCapacity = 0;
     std::size_t opacityCapacity = 0;
     std::size_t indexCapacity = 0;
+#if TARGET_OS_ANDROID
+    UiBatchUploadCache colorUpload;
+    UiBatchUploadCache texturedUpload;
+    UiBatchUploadCache indexUpload;
+    UiBatchUploadCache opacityUpload;
+#endif
   };
+
+  bool uploadOpacity(BufferSlot &slot, std::size_t vertexCount, float opacity) {
+    opacityVertices_.assign(vertexCount, {1.0f, 1.0f, 1.0f, opacity});
+    const auto *memory = bgfx::copy(
+        opacityVertices_.data(), static_cast<std::uint32_t>(
+                                     opacityVertices_.size() *
+                                     sizeof(opacityVertices_[0])));
+    if (memory == nullptr) return false;
+    bgfx::update(slot.opacityVertexBuffer, 0, memory);
+    return true;
+  }
 
   BufferSlot *nextBufferSlot(UiBatchVertexFormat format, std::size_t vertexCount,
                              std::size_t indexCount) noexcept {
@@ -223,6 +281,10 @@ private:
       if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
       vertexBuffer = replacement;
       capacity = newCapacity;
+#if TARGET_OS_ANDROID
+      (format == UiBatchVertexFormat::Color ? slot.colorUpload
+                                            : slot.texturedUpload).invalidate();
+#endif
     }
     if (!bgfx::isValid(slot.indexBuffer) || slot.indexCapacity < indexCount) {
       const auto newCapacity = std::max(indexCount, std::min(
@@ -233,6 +295,9 @@ private:
       if (bgfx::isValid(slot.indexBuffer)) bgfx::destroy(slot.indexBuffer);
       slot.indexBuffer = replacement;
       slot.indexCapacity = newCapacity;
+#if TARGET_OS_ANDROID
+      slot.indexUpload.invalidate();
+#endif
     }
     return bgfx::isValid(vertexBuffer) && bgfx::isValid(slot.indexBuffer)
                ? &slot

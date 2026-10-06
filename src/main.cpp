@@ -185,7 +185,9 @@ void changeWorkingDirectoryToExecutableDir(
 }
 
 uint32_t resolveResetFlags() {
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX || TARGET_OS_ANDROID
+  // Avoid a multisampled native-resolution backbuffer and its resolve on
+  // Android. Text and skin images retain their own texture filtering.
   constexpr int msaaSamples = 0;
 #else
   constexpr int msaaSamples = 2;
@@ -620,7 +622,7 @@ int main(int argv, char **args) {
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
   uint32_t windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-  if (TARGET_PLATFORM == iOS) {
+  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
     // Use the current screen size in either launch orientation. An exclusive
     // mode based on the initial landscape dimensions can fail in portrait.
     windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
@@ -650,9 +652,6 @@ int main(int argv, char **args) {
                 windowLogicalHeight);
 
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-#if TARGET_OS_ANDROID
-  SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
-#endif
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
   if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
     windowLogicalWidth = windowCreateWidth;
@@ -990,6 +989,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (previous == background) {
       return;
     }
+#if TARGET_OS_ANDROID
+    // The miniaudio device is independent of SDL's paused audio devices.
+    context.jukebox.audioRuntime().setApplicationSuspended(background);
+#endif
     scene_event_routing::dispatchApplicationBackgroundChange(
         sceneManager.currentScene, background);
     context.setIrApplicationActive(!background);

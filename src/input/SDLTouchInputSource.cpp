@@ -1,7 +1,85 @@
 #include "SDLTouchInputSource.h"
 #include "../rendering/common.h"
+#include <utility>
 int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
-  auto *InputSource = (SDLTouchInputSource *)userdata;
+  auto *source = static_cast<SDLTouchInputSource *>(userdata);
+  if (!source->deferEvents) {
+    return source->dispatchEvent(event);
+  }
+  switch (event->type) {
+  case SDL_FINGERDOWN: case SDL_FINGERUP: case SDL_FINGERMOTION:
+  case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: case SDL_MOUSEMOTION:
+    break;
+  default:
+    return 0;
+  }
+  std::lock_guard lock(source->pendingMutex);
+  if (!source->pendingOverflow) {
+    if (source->pendingEvents.size() == 4096) {
+      source->pendingEvents.clear();
+      source->pendingOverflow = true;
+    } else {
+      source->pendingEvents.push_back(*event);
+    }
+  }
+  return 0;
+}
+
+void SDLTouchInputSource::pumpPendingEvents() {
+  drainingEvents.clear();
+  bool overflow = false;
+  std::size_t serial = 0;
+  {
+    std::lock_guard lock(pendingMutex);
+    drainingEvents.swap(pendingEvents);
+    overflow = std::exchange(pendingOverflow, false);
+    serial = discardSerial;
+  }
+  if (overflow) {
+    auto cancelled = std::move(activeTouches);
+    activeTouches.clear();
+    if (handler != nullptr) {
+      for (const auto &[finger, point] : cancelled) {
+        handler->onFingerUp(finger, point);
+      }
+    }
+    return;
+  }
+  for (auto &event : drainingEvents) {
+    // A callback can pause/reset gameplay while this batch is being drained.
+    if (discardSerial != serial) break;
+    dispatchEvent(&event);
+  }
+}
+
+void SDLTouchInputSource::discardPendingEvents() {
+  std::lock_guard lock(pendingMutex);
+  pendingEvents.clear();
+  pendingOverflow = false;
+  ++discardSerial;
+  activeTouches.clear();
+}
+
+void SDLTouchInputSource::dispatchFinger(Uint32 phase, SDL_FingerID finger,
+                                        Vector3 point) {
+  if (deferEvents) {
+    if (phase == SDL_FINGERDOWN) {
+      activeTouches[finger] = point;
+    } else if (!activeTouches.contains(finger)) {
+      return;
+    } else if (phase == SDL_FINGERUP) {
+      activeTouches.erase(finger);
+    } else {
+      activeTouches[finger] = point;
+    }
+  }
+  if (phase == SDL_FINGERDOWN) handler->onFingerDown(finger, point);
+  else if (phase == SDL_FINGERUP) handler->onFingerUp(finger, point);
+  else handler->onFingerMove(finger, point);
+}
+
+int SDLTouchInputSource::dispatchEvent(SDL_Event *event) {
+  auto *InputSource = this;
   if (InputSource->handler == nullptr) {
     return 0;
   }
@@ -11,7 +89,7 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event->tfinger.x, event->tfinger.y,
                                         uiNormX, uiNormY);
-    InputSource->handler->onFingerDown(event->tfinger.fingerId,
+    InputSource->dispatchFinger(SDL_FINGERDOWN, event->tfinger.fingerId,
                                        Vector3(uiNormX, uiNormY, 0.0f));
     break;
   }
@@ -20,7 +98,7 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event->tfinger.x, event->tfinger.y,
                                         uiNormX, uiNormY);
-    InputSource->handler->onFingerUp(event->tfinger.fingerId,
+    InputSource->dispatchFinger(SDL_FINGERUP, event->tfinger.fingerId,
                                      Vector3(uiNormX, uiNormY, 0.0f));
     break;
   }
@@ -29,7 +107,7 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event->tfinger.x, event->tfinger.y,
                                         uiNormX, uiNormY);
-    InputSource->handler->onFingerMove(event->tfinger.fingerId,
+    InputSource->dispatchFinger(SDL_FINGERMOTION, event->tfinger.fingerId,
                                        Vector3(uiNormX, uiNormY, 0.0f));
     break;
   }
@@ -41,7 +119,7 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->handler->onFingerDown(static_cast<SDL_FingerID>(0),
+    InputSource->dispatchFinger(SDL_FINGERDOWN, static_cast<SDL_FingerID>(0),
                                        Vector3(uiNormX, uiNormY, 0.0f));
   } break;
   case SDL_MOUSEBUTTONUP: {
@@ -51,7 +129,7 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->handler->onFingerUp(static_cast<SDL_FingerID>(0),
+    InputSource->dispatchFinger(SDL_FINGERUP, static_cast<SDL_FingerID>(0),
                                      Vector3(uiNormX, uiNormY, 0.0f));
   } break;
   case SDL_MOUSEMOTION: {
@@ -61,7 +139,7 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->handler->onFingerMove(static_cast<SDL_FingerID>(0),
+    InputSource->dispatchFinger(SDL_FINGERMOTION, static_cast<SDL_FingerID>(0),
                                        Vector3(uiNormX, uiNormY, 0.0f));
   } break;
     // case SDL_FINGERMOTION:
@@ -73,7 +151,8 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
   return 0;
 }
 
-SDLTouchInputSource::SDLTouchInputSource() { handler = nullptr; }
+SDLTouchInputSource::SDLTouchInputSource(bool deferEvents)
+    : deferEvents(deferEvents) {}
 
 SDLTouchInputSource::~SDLTouchInputSource() {
   if (isListening) {
@@ -97,6 +176,7 @@ void SDLTouchInputSource::stopListen() {
   }
   isListening = false;
   SDL_DelEventWatch(EventHandler, this);
+  discardPendingEvents();
 }
 
 void SDLTouchInputSource::setHandler(IInputHandler *handler) {

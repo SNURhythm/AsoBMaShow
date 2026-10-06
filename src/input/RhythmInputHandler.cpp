@@ -187,8 +187,9 @@ void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
   const Vector3 renderLocation =
       normalizedTouchToRenderLocation(normalizedLocation);
   const std::optional<int> lane =
-      dragModeEnabled ? touchToLaneIfInside(renderLocation)
-                      : std::optional<int>(touchToLane(renderLocation));
+      touchLaneLayout ? authoredTouchLane(normalizedLocation, dragModeEnabled)
+                      : dragModeEnabled ? touchToLaneIfInside(renderLocation)
+                                        : std::optional<int>(touchToLane(renderLocation));
   if (!lane.has_value() || isLaneOccupied(*lane, fingerIndex)) {
     return;
   }
@@ -224,7 +225,8 @@ void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
     const Vector3 renderLocation =
         normalizedTouchToRenderLocation(normalizedLocation);
     const std::optional<int> targetLane =
-        touchToLaneIfInside(renderLocation);
+        touchLaneLayout ? authoredTouchLane(normalizedLocation, true)
+                        : touchToLaneIfInside(renderLocation);
     const auto currentLaneIt = fingerToLane.find(fingerIndex);
     if (currentLaneIt == fingerToLane.end()) {
       if (targetLane.has_value() &&
@@ -322,7 +324,9 @@ bool RhythmInputHandler::startListenTouch() {
   if (touchInputSource != nullptr) {
     return false;
   }
-  touchInputSource = std::make_unique<SDLTouchInputSource>();
+  // Android's SDL watcher runs on the Java touch thread. Drain its raw events
+  // on the gameplay thread before simulation, alongside layout publication.
+  touchInputSource = std::make_unique<SDLTouchInputSource>(TARGET_OS_ANDROID);
   touchInputSource->setHandler(this);
   return touchInputSource->startListen();
 }
@@ -350,6 +354,9 @@ void RhythmInputHandler::stopListen() {
   cancelGraceExpiry.clear();
 }
 void RhythmInputHandler::discardPendingTouchEvents() {
+  if (touchInputSource != nullptr) {
+    touchInputSource->discardPendingEvents();
+  }
   std::vector<SDL_FingerID> activeFingers;
   activeFingers.reserve(fingerToLane.size());
   for (const auto &[fingerId, lane] : fingerToLane) {
@@ -370,6 +377,9 @@ void RhythmInputHandler::discardPendingTouchEvents() {
 #endif
 }
 void RhythmInputHandler::pumpPendingTouchEvents() {
+  if (touchInputSource != nullptr) {
+    touchInputSource->pumpPendingEvents();
+  }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::array<IOSRawTouchEvent, 64> pendingEvents{};
   while (true) {
@@ -443,6 +453,45 @@ void RhythmInputHandler::setTouchLaneOrder(
 void RhythmInputHandler::setTouchEventCallback(
     std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback) {
   touchEventCallback = std::move(callback);
+}
+
+void RhythmInputHandler::setTouchLaneLayout(
+    std::optional<gameplay::RealtimeTouchLayout> layout) {
+  if (touchLaneLayout.has_value() != layout.has_value() ||
+      (touchLaneLayout && layout &&
+       touchLaneLayout->revision != layout->revision)) {
+    // Preserve held touches across ordinary frames, releasing their original
+    // lanes only when the selected layout/topology changes.
+    while (!fingerToLane.empty()) {
+      releaseFingerLane(fingerToLane.begin()->first);
+    }
+    cancelGraceExpiry.clear();
+  }
+  touchLaneLayout = std::move(layout);
+}
+
+std::optional<int> RhythmInputHandler::authoredTouchLane(
+    Vector3 normalizedLocation, bool requireInside) const {
+  if (!touchLaneLayout || rendering::render_width <= 0 ||
+      rendering::render_height <= 0 || rendering::window_width <= 0 ||
+      rendering::window_height <= 0 ||
+      !std::isfinite(rendering::ui_scale_x) ||
+      !std::isfinite(rendering::ui_scale_y) || rendering::ui_scale_x <= 0 ||
+      rendering::ui_scale_y <= 0) {
+    return std::nullopt;
+  }
+  // SDLTouchInputSource has converted the event to UI-normalized coordinates.
+  // PlaySkinSession publishes lane quads in drawable-normalized coordinates.
+  const float x = (normalizedLocation.x * rendering::window_width *
+                       rendering::ui_scale_x + rendering::ui_offset_x) /
+                  rendering::render_width;
+  const float y = (normalizedLocation.y * rendering::window_height *
+                       rendering::ui_scale_y + rendering::ui_offset_y) /
+                  rendering::render_height;
+  const auto index = gameplay::hitTestRealtimeTouchLayout(
+      *touchLaneLayout, x, y, requireInside);
+  return index ? std::optional<int>(touchLaneLayout->laneRegions[*index].lane)
+               : std::nullopt;
 }
 
 int RhythmInputHandler::clampLane(int lane) const {

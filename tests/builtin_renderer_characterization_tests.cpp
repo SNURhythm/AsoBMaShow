@@ -2517,6 +2517,49 @@ struct PreviewRecordingControl : IRhythmControl {
   }
 };
 
+void verifyLegacyAuthoredSkinTouchRouting() {
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  SyntheticChartFixture fixture;
+  fixture.chart->Meta.KeyMode = 7;
+  const auto profile = makeDefaultInputProfile();
+  PreviewRecordingControl control;
+  RhythmInputHandler handler(&control, fixture.chart->Meta, registry, profile,
+                             makeGameplayInputScopes(7));
+  gameplay::RealtimeTouchLayout layout;
+  layout.revision = 1;
+  layout.laneRegions = {
+      {.bottomLeft = {.2F, .8F}, .bottomRight = {.3F, .8F},
+       .topLeft = {.2F, .2F}, .topRight = {.3F, .2F}, .lane = 3},
+      {.bottomLeft = {.7F, .8F}, .bottomRight = {.8F, .8F},
+       .topLeft = {.7F, .2F}, .topRight = {.8F, .2F}, .lane = 7,
+       .scratch = true}};
+  handler.setTouchLaneLayout(layout);
+  const auto uiPoint = [](float x, float y) {
+    Vector3 point{0, 0, 0};
+    rendering::normalizedToUiNormalized(x, y, point.x, point.y);
+    return point;
+  };
+  const auto key = uiPoint(.25F, .5F);
+  handler.onFingerDown(100, key);
+  handler.setTouchLaneLayout(layout);
+  expect(control.presses == std::vector<int>{3} && control.releases.empty(),
+         "legacy touch presses authored skin lane and survives frame publication");
+  handler.onFingerUp(100, key);
+  expect(control.releases == std::vector<int>{3},
+         "legacy authored touch releases its original logical lane");
+  control.presses.clear(); control.releases.clear();
+  handler.onFingerDown(101, uiPoint(.5F, .5F));
+  handler.onFingerUp(101, uiPoint(.5F, .5F));
+  expect(control.presses.empty(), "legacy touch in authored skin gap remains inert");
+  handler.onFingerDown(102, uiPoint(.75F, .5F));
+  expect(control.presses.empty(), "legacy authored scratch waits for movement");
+  handler.onFingerMove(102, uiPoint(.75F, .4F));
+  handler.onFingerUp(102, uiPoint(.75F, .4F));
+  expect(control.presses == std::vector<int>{7} &&
+             control.releases == std::vector<int>{7},
+         "authored scratch flick retains logical input ownership through lift");
+}
+
 void verifyPreviewInputLanePosition(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
@@ -3631,6 +3674,7 @@ int main() {
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);
+      verifyLegacyAuthoredSkinTouchRouting();
       verifyLegacyScratchlessTouchLayout(target);
   verifyPreviewKeyModeTouchRouting(target);
       verifyPreviewPacemakerDiff(target);

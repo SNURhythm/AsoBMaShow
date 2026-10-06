@@ -1925,6 +1925,7 @@ void GamePlayScene::applySkinAudioVolume(
 #endif
 
 void GamePlayScene::refreshGameplayPresentationGeometry() {
+  refreshLegacyTouchLayout();
   if (inputHandler != nullptr && presentation != nullptr &&
       presentation->activeMode() == PresentationMode::BuiltIn) {
     inputHandler->setPlayAreaWidth(playfieldPresentationConfiguration.playAreaWidth);
@@ -1952,6 +1953,17 @@ void GamePlayScene::refreshGameplayPresentationGeometry() {
   gameplaySkinSafeBoundsWidth = safeUiBounds.width;
   gameplaySkinSafeBoundsHeight = safeUiBounds.height;
 #endif
+}
+
+void GamePlayScene::refreshLegacyTouchLayout() {
+  if (inputHandler == nullptr || presentation == nullptr ||
+      realtimeGameplayAuthorityActive()) {
+    return;
+  }
+  inputHandler->setTouchLaneLayout(
+      presentation->activeMode() == PresentationMode::Skin
+          ? std::optional<gameplay::RealtimeTouchLayout>(presentation->touchLayout())
+          : std::nullopt);
 }
 
 void GamePlayScene::updateSkinResetLayoutVisibility() {
@@ -2228,6 +2240,11 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 
 void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   if (!realtimeGameplayAuthorityActive()) {
+#if TARGET_OS_ANDROID
+    // Pause/resume also forms a boundary for the deferred SDL touch stream.
+    // A queued Down from the overlay must not enter the resumed attempt.
+    if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+#endif
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(nullptr, nullptr);
 #endif
@@ -3800,6 +3817,9 @@ bool GamePlayScene::isGuidedAccessEnabled() const {
 }
 
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
+#if TARGET_OS_ANDROID
+  if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+#endif
   guidedAccessReminderBackground = background;
   if (!background && skinIrRankingRequest) {
     // Application backgrounding closes the service's active generation.
@@ -6713,6 +6733,9 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+  // Skin lane quads are published by rendering, including after viewport or
+  // presentation changes. SDL input must see that newly published geometry.
+  refreshLegacyTouchLayout();
   // The gameplay presentation can queue ordinary UI text before subsequent
   // direct overlay submissions.
   renderContext.flushUiBatch();

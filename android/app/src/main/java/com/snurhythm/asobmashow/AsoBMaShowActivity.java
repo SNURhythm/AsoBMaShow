@@ -7,6 +7,7 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -31,6 +32,12 @@ import android.provider.DocumentsContract.Document;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.View;
+import android.view.SurfaceHolder;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
 
@@ -227,7 +234,64 @@ public class AsoBMaShowActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // SDL queues a windowed-style command during onCreate. Restore immersive
+        // mode after that command, without its blocking native resize handshake.
+        getWindow().getDecorView().post(this::restoreImmersiveMode);
+        AndroidDisplayRefreshRate.requestHighestRefreshRate(getWindow());
+        if (mSurface != null) {
+            mSurface.getHolder().addCallback(new SurfaceHolder.Callback() {
+                @Override public void surfaceCreated(SurfaceHolder holder) {
+                    AndroidDisplayRefreshRate.requestHighestRefreshRate(
+                            getWindow(), holder.getSurface());
+                }
+
+                @Override public void surfaceChanged(SurfaceHolder holder, int format,
+                                                     int width, int height) {
+                    AndroidDisplayRefreshRate.requestHighestRefreshRate(
+                            getWindow(), holder.getSurface());
+                }
+
+                @Override public void surfaceDestroyed(SurfaceHolder holder) {}
+            });
+        }
         handleArchiveImportIntent(getIntent());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            restoreImmersiveMode();
+            AndroidDisplayRefreshRate.requestHighestRefreshRate(getWindow(), getNativeSurface());
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        AndroidDisplayRefreshRate.requestHighestRefreshRate(getWindow(), getNativeSurface());
+    }
+
+    private void restoreImmersiveMode() {
+        Window window = getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        mFullscreenModeActive = true;
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+            WindowInsetsController insets = window.getInsetsController();
+            if (insets != null) {
+                insets.setSystemBarsBehavior(
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                insets.hide(WindowInsets.Type.systemBars());
+            }
+        }
     }
 
     @Override

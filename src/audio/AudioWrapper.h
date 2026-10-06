@@ -105,6 +105,7 @@ constexpr size_t kAudioPresentationHistoryCapacity = 1024;
 
 struct UserData {
   audio::RenderTiming pendingRenderTiming{};
+  std::atomic_bool applicationSuspended{false};
   // Atomic tuples share the anchor's seqlock. Readers can inspect old native
   // presentation intervals while the callback replaces the oldest ring slot.
   std::array<AudioPresentationSegment, kAudioPresentationHistoryCapacity>
@@ -216,6 +217,11 @@ public:
   songTimeMicrosAtSteadyMicros(long long steadyMicros) const noexcept;
   void pauseClock();
   void resumeClock();
+  // Platform lifecycle suspension covers System sounds as well as chart audio.
+  // The callback still drains commands so owners can retire sounds safely.
+  void setApplicationSuspended(bool suspended) noexcept {
+    userData.applicationSuspended.store(suspended, std::memory_order_release);
+  }
   [[nodiscard]] bool isClockPaused() const noexcept {
     return audioClockFrozen.load(std::memory_order_acquire);
   }

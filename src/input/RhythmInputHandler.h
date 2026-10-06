@@ -11,6 +11,7 @@
 #include "IInputSource.h"
 #include "InputDeviceRegistry.h"
 #include "LogicalGameplayInputAdapter.h"
+#include "../scene/play/RealtimeTouchInputRouter.h"
 #include <functional>
 #include <array>
 #include <memory>
@@ -25,9 +26,10 @@ struct FlickState {
   int lastFlickDirection; // 0: none, 1: up, -1: down
   bms_parser::LongNote *activeLongNote;
 };
+class SDLTouchInputSource;
 class RhythmInputHandler : public IInputHandler {
 private:
-  std::unique_ptr<IInputSource> touchInputSource;
+  std::unique_ptr<SDLTouchInputSource> touchInputSource;
   InputDeviceRegistry *inputDeviceRegistry = nullptr;
   std::unique_ptr<LogicalGameplayInputPipeline> logicalInputPipeline;
   std::uint64_t inputSubscriptionToken = 0;
@@ -43,6 +45,7 @@ private:
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
   std::vector<int> chartLaneOrder;
   std::vector<int> laneOrder;
+  std::optional<gameplay::RealtimeTouchLayout> touchLaneLayout;
   std::map<SDL_FingerID, int> fingerToLane;
   std::map<SDL_FingerID, bool> fingerLanePressed;
   int clampLane(int lane) const;
@@ -50,6 +53,8 @@ private:
   bool isLaneOccupied(int lane, SDL_FingerID exceptFinger) const;
   int touchToLaneIndex(Vector3 location) const;
   std::optional<int> touchToLaneIfInside(Vector3 location) const;
+  std::optional<int> authoredTouchLane(Vector3 normalizedLocation,
+                                      bool requireInside) const;
   Vector3 normalizedTouchToRenderLocation(Vector3 normalizedLocation) const;
   void beginFingerLane(SDL_FingerID fingerIndex, int lane,
                        Vector3 normalizedLocation);
@@ -97,6 +102,9 @@ public:
                    std::vector<input::InputScope> activeScopes);
   void setPlayAreaWidth(float configuredPlayAreaWidth);
   void setTouchLaneOrder(const std::vector<int> &displayedLaneOrder);
+  // nullopt selects built-in camera routing; an empty skin layout blocks
+  // input until the presentation publishes its first valid lane geometry.
+  void setTouchLaneLayout(std::optional<gameplay::RealtimeTouchLayout> layout);
   void setDragModeEnabled(bool enabled);
   void setRegistryDeviceClassEnabled(input::DeviceClass deviceClass,
                                      bool enabled);

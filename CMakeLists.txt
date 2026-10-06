@@ -726,6 +726,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_window_presentation_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_window_presentation_tests.py -v)
+    add_test(NAME android_display_refresh_rate_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_display_refresh_rate_tests.py -v)
+    set_tests_properties(android_window_presentation_tests
+                         android_display_refresh_rate_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     if (NOT IOS)
         add_executable(curl_redirect_policy_tests
             tests/curl_redirect_policy_tests.cpp
@@ -7148,6 +7161,42 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
 
+    set(legacy_skin_touch_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/legacy_skin_touch_tests.cpp)
+    add_custom_command(
+        OUTPUT ${legacy_skin_touch_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/legacy_skin_touch_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${legacy_skin_touch_source}
+        DEPENDS tests/legacy_skin_touch_extract.py tests/legacy_skin_touch_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/input/RhythmInputHandler.cpp
+        VERBATIM
+    )
+    add_executable(legacy_skin_touch_tests
+        ${legacy_skin_touch_source}
+        src/scene/play/RealtimeTouchInputRouter.cpp
+    )
+    target_include_directories(legacy_skin_touch_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(legacy_skin_touch_tests PRIVATE cxx_std_23)
+
+    add_executable(sdl_touch_input_source_tests
+        tests/sdl_touch_input_source_tests.cpp
+        src/input/SDLTouchInputSource.cpp
+    )
+    target_include_directories(sdl_touch_input_source_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
+    target_compile_features(sdl_touch_input_source_tests PRIVATE cxx_std_23)
+    target_compile_definitions(sdl_touch_input_source_tests PRIVATE SDL_MAIN_HANDLED)
+    if(TARGET SDL2::SDL2)
+        target_include_directories(sdl_touch_input_source_tests PRIVATE
+            $<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>)
+    elseif(TARGET SDL2::SDL2-static)
+        target_include_directories(sdl_touch_input_source_tests PRIVATE
+            $<TARGET_PROPERTY:SDL2::SDL2-static,INTERFACE_INCLUDE_DIRECTORIES>)
+    elseif(TARGET SDL2)
+        target_include_directories(sdl_touch_input_source_tests PRIVATE
+            $<TARGET_PROPERTY:SDL2,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+
     add_executable(replay_keysound_schedule_tests
         tests/replay_keysound_schedule_tests.cpp
         src/bms_parser.cpp
@@ -8725,6 +8774,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if (TARGET skin_quad_batch_renderer_tests)
         asobmashow_register_test(skin_quad_batch_renderer_tests)
     endif()
+    add_executable(ui_batch_upload_cache_tests tests/ui_batch_upload_cache_tests.cpp)
+    target_include_directories(ui_batch_upload_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ui_batch_upload_cache_tests PRIVATE cxx_std_20)
+    asobmashow_register_test(ui_batch_upload_cache_tests)
+
     add_executable(ui_batch_renderer_tests
         tests/ui_batch_renderer_tests.cpp
         src/rendering/UiBatchRenderer.cpp
@@ -8755,6 +8809,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ui_batch_metal_tests PRIVATE ${COMMON_LIBS} bgfx)
         asobmashow_register_test(ui_batch_metal_tests)
         set_tests_properties(ui_batch_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
+        # Exercise Android's upload reuse against real GPU buffers without an
+        # emulator or Android build; keep the host's Metal backend and SDK.
+        add_executable(ui_batch_android_upload_metal_tests
+            tests/ui_batch_metal_tests.cpp
+            src/rendering/UiBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+        )
+        target_include_directories(ui_batch_android_upload_metal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(ui_batch_android_upload_metal_tests PRIVATE cxx_std_23)
+        target_compile_definitions(ui_batch_android_upload_metal_tests PRIVATE TARGET_OS_ANDROID=1)
+        target_link_libraries(ui_batch_android_upload_metal_tests PRIVATE ${COMMON_LIBS} bgfx)
+        asobmashow_register_test(ui_batch_android_upload_metal_tests)
+        set_tests_properties(ui_batch_android_upload_metal_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
@@ -9013,6 +9083,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(realtime_gameplay_authority_policy_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)
+    asobmashow_register_test(legacy_skin_touch_tests)
+    asobmashow_register_test(sdl_touch_input_source_tests)
     asobmashow_register_test(replay_keysound_schedule_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)

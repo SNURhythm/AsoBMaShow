@@ -134,6 +134,7 @@ private:
   bool inputInterruptionPause = false;
   void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
+  void refreshLegacyTouchLayout();
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
