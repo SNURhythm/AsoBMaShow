@@ -146,6 +146,12 @@ final class ChartFolderImport {
                     children.add(discover(child, uniqueName(child.name, names), depth + 1));
                 }
             } else {
+                // Admit the entire move before deleting any completed subtree. Without
+                // both fields, a later edit can be indistinguishable from the copied file.
+                if (move && (entry.size < 0 || entry.lastModified <= 0)) {
+                    throw new IOException("Cannot safely move a file without its size and modification time: "
+                            + entry.name + ". Use Copy instead.");
+                }
                 if (totalFiles == Integer.MAX_VALUE) throw new IOException("Too many source files.");
                 totalFiles++;
                 if (entry.size < 0) totalBytes = -1;
@@ -236,8 +242,8 @@ final class ChartFolderImport {
                 // Completed child directories have already been removed. A surviving or
                 // newly added directory must never be recursively deleted by the parent.
                 if (original == null || current.directory || !original.name.equals(current.name)
-                        || (original.size >= 0 && original.size != current.size)
-                        || (original.lastModified >= 0 && original.lastModified != current.lastModified)) {
+                        || original.size != current.size
+                        || original.lastModified != current.lastModified) {
                     throw new IOException("Source folder changed while copying: " + directory.entry.name);
                 }
             }

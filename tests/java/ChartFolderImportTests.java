@@ -304,13 +304,53 @@ public final class ChartFolderImportTests {
         file.entry = new ChartFolderImport.Entry("unknown", "unknown.bms", false, -1, -1);
         List<Long> totals = new ArrayList<>();
         File output = output();
-        ChartFolderImport.Result result = ChartFolderImport.run(unknown, output, true, control(),
+        ChartFolderImport.Result result = ChartFolderImport.run(unknown, output, false, control(),
                 (copied, total, bytes, totalBytes, name, phase) -> {
                     if (phase != ChartFolderImport.Phase.COUNTING) totals.add(totalBytes);
                 }, () -> {});
         require(result.complete && totals.stream().allMatch(total -> total == -1),
                 "Unknown sizes must remain unknown, with actual copied bytes still tracked");
         contents(new File(output, "unknown.bms"), new byte[] {1, 2, 3});
+    }
+
+    private static void testMoveRejectsMissingFileMetadataBeforeCopying() throws Exception {
+        for (long[] metadata : new long[][] {{-1, -1}, {-1, 100}, {3, -1}, {3, 0}}) {
+            FakeSource source = twoAlbums();
+            Node file = source.nodes.get("second-chart");
+            file.entry = new ChartFolderImport.Entry(file.entry.id, file.entry.name, false,
+                    metadata[0], metadata[1]);
+            File output = output();
+            ChartFolderImport.Result result = run(source, output, true);
+            require(!result.complete && !result.retainedOutput && !output.exists(),
+                    "Move must reject unavailable file metadata before creating any destination");
+            require(source.events.isEmpty() && source.root.children.size() == 3,
+                    "A later file with unknown metadata must not allow an earlier subtree to be moved");
+            require(result.error.contains("Copy"), "Explain the safe Copy alternative");
+            File copied = output();
+            require(run(source, copied, false).complete, "Copy must still accept missing metadata");
+            contents(new File(copied, "Second/chart.bms"), new byte[] {1, 2, 3});
+            require(source.events.stream().noneMatch(event -> event.startsWith("delete:")),
+                    "Copy with unknown metadata must preserve source files");
+        }
+    }
+
+    private static void testMetadataLossBeforeDeletionPreservesSource() throws Exception {
+        for (long[] metadata : new long[][] {{-1, 100}, {3, -1}, {3, 0}}) {
+            FakeSource source = new FakeSource();
+            Node file = source.file(source.root, "chart", "chart.bms");
+            File output = output();
+            ChartFolderImport.Result result = ChartFolderImport.run(source, output, true, control(),
+                    (copied, total, bytes, totalBytes, name, phase) -> {}, () -> {
+                        file.bytes = new byte[] {4, 5, 6};
+                        file.entry = new ChartFolderImport.Entry("chart", "chart.bms", false,
+                                metadata[0], metadata[1]);
+                    });
+            require(!result.complete && !result.retainedOutput && !output.exists(),
+                    "Metadata disappearing after copy must prevent deletion");
+            require(source.root.children.size() == 1 && Arrays.equals(file.bytes, new byte[] {4, 5, 6})
+                    && !source.events.contains("delete:root"),
+                    "The newer source contents must survive an uncertain final validation");
+        }
     }
 
     private static void testCancellationImmediatelyBeforeDeletion() throws Exception {
@@ -525,6 +565,8 @@ public final class ChartFolderImportTests {
             testUnsafePlansRejectedBeforeAnyDeletion();
             testConflictingNamesNeverOverwrite();
             testUnknownSizeAndEmptyRoot();
+            testMoveRejectsMissingFileMetadataBeforeCopying();
+            testMetadataLossBeforeDeletionPreservesSource();
             testCancellationImmediatelyBeforeDeletion();
             testNestedMoveRemovesChildrenBeforeParentFiles();
             testRootMutationAfterChildMoveRetainsOutput();
@@ -535,7 +577,7 @@ public final class ChartFolderImportTests {
             testPauseAfterValidationRequiresFreshSourceListing();
             testPauseInsideProviderListingRequiresFreshSnapshot();
             testPauseDuringValidationCanResumeUnchangedMove();
-            System.out.println("20 chart folder import tests passed");
+            System.out.println("22 chart folder import tests passed");
         } finally {
             cleanup(temporary);
         }

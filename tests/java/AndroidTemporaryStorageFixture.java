@@ -18,13 +18,22 @@ public final class AndroidTemporaryStorageFixture {
 
     public static void main(String[] arguments) {
         String scenario = arguments[0];
-        if ("fresh".equals(scenario) || "inherited".equals(scenario)) {
+        if ("fresh".equals(scenario) || "inherited".equals(scenario)
+                || "documents-failure".equals(scenario)) {
+            if ("documents-failure".equals(scenario)) {
+                AsoBMaShowDocumentsProvider.failure = new java.io.IOException("documents unavailable");
+            }
             if ("inherited".equals(scenario)) {
                 Os.environment.put("TMPDIR", "/data/local/tmp");
                 Os.environment.put("SQLITE_TMPDIR", "/unavailable/sqlite-temp");
             }
             new AsoBMaShowApplication().onCreate();
             startNativeActivity();
+            require(AsoBMaShowDocumentsProvider.calls == 1
+                    && AsoBMaShowDocumentsProvider.privateEnvironmentReady,
+                    "Documents initialization must follow private temporary-storage setup");
+            require(android.util.Log.lastError == AsoBMaShowDocumentsProvider.failure,
+                    "Documents initialization failure must be logged without breaking temporary storage");
             return;
         }
 
@@ -34,6 +43,8 @@ public final class AndroidTemporaryStorageFixture {
         try {
             new AsoBMaShowApplication().onCreate();
         } catch (IllegalStateException expected) {
+            require(AsoBMaShowDocumentsProvider.calls == 0,
+                    "Failed environment setup must stop before Documents initialization");
             require(expected.getCause() == Os.failure,
                     "Startup failure must retain the actual setenv failure");
             return;
