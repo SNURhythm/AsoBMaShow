@@ -345,6 +345,76 @@ void testParseAndReplacementRollback() {
   assert(snapshotDifficultyTables(databasePath) == before);
 }
 
+void testGenocideLegacyUrlsImportAndUpdateMirrorTables() {
+  for (const std::string kind : {"normal", "insane"}) {
+    TempDirectory temporary;
+    ChartRepository repository(temporary.path() / "chart.db");
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session.has_value());
+    Fixture fixture;
+    const std::string legacy =
+        "https://nekokan.dyndns.info/~lobsak/genocide/" + kind + ".html";
+    const std::string directory =
+        "https://miraiscarlet.github.io/bms/table/genocide_" + kind + "/";
+    const std::string mirror = directory + kind + "_bms.html";
+    const std::string listUrl = "https://example.test/tables.json";
+    std::string list = nlohmann::json::array({legacy, mirror}).dump();
+    bool failData = false;
+    DifficultyTableImporter importer(
+        [&](const std::string &url, std::string *) -> std::optional<std::string> {
+          if (url == listUrl) return list;
+          if (url == mirror) {
+            return "<meta name=\"bmstable\" content=\"header_" + kind +
+                   ".json\">";
+          }
+          if (url == directory + "header_" + kind + ".json") {
+            return fixture.headerJson;
+          }
+          if (url == directory + "data.json" && !failData) {
+            return fixture.dataJson;
+          }
+          return std::nullopt;
+        });
+    std::string error;
+    assert(importer.ImportFromUrl(*session, legacy, &error));
+    auto tables = session->SelectDifficultyTables();
+    assert(tables.size() == 1);
+    assert(tables.front().sourceUrl == mirror);
+    assert(tables.front().chartCount == 1);
+    const int tableId = tables.front().id;
+
+    // Both schemes and page anchors resolve to the same stored source.
+    assert(importer.ImportFromUrl(
+        *session, " HTTP://NEKOKAN.DYNDNS.INFO/~lobsak/genocide/" + kind +
+                      ".html?view=all#1 ", &error));
+    assert(session->SelectDifficultyTables().size() == 1);
+    assert(importer.UpdateFromSourceUrl(*session, tableId, &error));
+    assert(session->SelectDifficultyTables().front().id == tableId);
+    const auto before = snapshotDifficultyTables(repository.DatabasePath());
+    failData = true;
+    assert(!importer.ImportFromUrl(*session, legacy, &error));
+    assert(snapshotDifficultyTables(repository.DatabasePath()) == before);
+    failData = false;
+
+    assert(importer.ImportFromUrl(*session, listUrl, &error));
+    assert(error == "Imported 0, skipped 1 of 1 tables.");
+    assert(session->DeleteDifficultyTable(tableId));
+    assert(importer.ImportFromUrl(*session, listUrl, &error));
+    assert(error == "Imported 1, skipped 0 of 1 tables.");
+    assert(session->SelectDifficultyTables().size() == 1);
+    assert(session->SelectDifficultyTables().front().sourceUrl == mirror);
+    assert(session->DeleteDifficultyTable(
+        session->SelectDifficultyTables().front().id));
+    // HTTPS lists may link the HTTP original, but only fetch its HTTPS mirror.
+    list = nlohmann::json::array({"http://nekokan.dyndns.info/~lobsak/genocide/" +
+                                 kind + ".html"}).dump();
+    assert(importer.ImportFromUrl(*session, listUrl, &error));
+    assert(session->SelectDifficultyTables().size() == 1);
+    assert(session->SelectDifficultyTables().front().sourceUrl == mirror);
+  }
+}
+
 void testInjectedFetcherAndProgress() {
   const Fixture fixture;
   TempDirectory temporary;
@@ -595,6 +665,7 @@ void testPackagedDefaultsImportWithoutNetwork() {
 }
 
 int main() {
+  testGenocideLegacyUrlsImportAndUpdateMirrorTables();
   testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson();
   testBundledDefaultsSurviveOfflineAndYieldToUpdates();
   testPackagedDefaultsImportWithoutNetwork();

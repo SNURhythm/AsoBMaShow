@@ -277,6 +277,35 @@ bool startsWithAsciiCaseInsensitive(std::string_view value,
   return true;
 }
 
+std::string canonicalDifficultyTableUrl(const std::string &url) {
+  std::string_view page = url;
+  if (startsWithAsciiCaseInsensitive(page, "https://")) {
+    page.remove_prefix(8);
+  } else if (startsWithAsciiCaseInsensitive(page, "http://")) {
+    page.remove_prefix(7);
+  } else {
+    return url;
+  }
+  constexpr std::string_view host = "nekokan.dyndns.info";
+  if (!startsWithAsciiCaseInsensitive(page, host) ||
+      page.size() <= host.size() || page[host.size()] != '/') {
+    return url;
+  }
+  page.remove_prefix(host.size());
+  page = page.substr(0, page.find_first_of("?#"));
+  // The original GENOCIDE pages contain LR2 ranking IDs, not chart hashes.
+  // Use the JSON mirrors selected by beatoraja's Config.DEFAULT_TABLEURL.
+  if (page == "/~lobsak/genocide/normal.html") {
+    return "https://miraiscarlet.github.io/bms/table/genocide_normal/"
+           "normal_bms.html";
+  }
+  if (page == "/~lobsak/genocide/insane.html") {
+    return "https://miraiscarlet.github.io/bms/table/genocide_insane/"
+           "insane_bms.html";
+  }
+  return url;
+}
+
 std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
   const bool linkUsesHttp =
       startsWithAsciiCaseInsensitive(link, "http://");
@@ -417,7 +446,9 @@ readDifficultyTableListEntries(const json &document, const std::string &url) {
     if (tableUrl.empty()) {
       continue;
     }
-    const std::string resolvedUrl = resolveUrl(url, tableUrl);
+    const std::string resolvedUrl =
+        canonicalDifficultyTableUrl(
+            resolveUrl(url, canonicalDifficultyTableUrl(tableUrl)));
     if (resolvedUrl.empty()) {
       continue;
     }
@@ -1058,7 +1089,7 @@ bool DifficultyTableImporter::ImportFromUrl(
   if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
     return false;
   }
-  const std::string trimmedUrl = trimCopy(pageUrl);
+  const std::string trimmedUrl = canonicalDifficultyTableUrl(trimCopy(pageUrl));
   if (trimmedUrl.empty()) {
     if (errorMessage != nullptr) {
       *errorMessage = "Table URL is empty";
