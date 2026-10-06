@@ -221,6 +221,23 @@ void testLiveSourceSnapshotAcceptsFilesEditsDuringInspection() {
          "live-source scans do not reject a concurrent Files edit");
 }
 
+void testSnapshotReadsAuthoredUnicodePaths() {
+  TempDirectory temp;
+  const fs::path source = temp.root() / "source";
+  const auto authored = fs::path("カスタマイズ用") / "cafe\xCC\x81.txt";
+  const auto normalized = fs::path("カスタマイズ用") / "caf\xC3\xA9.txt";
+  writeBytes(source / authored, "unchanged bytes");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  auto result = snapshotter.snapshot(source, packageId(), {}, {});
+  expect(result.prepared.has_value(),
+         "decomposed source paths are opened with their authored spelling");
+  if (result.prepared) {
+    expect(readBytes(result.prepared->stagingRoot() / normalized) == "unchanged bytes",
+           "the private revision stores normalized paths and unchanged content");
+  }
+}
+
 void testTask1PythonAuditFixtureMatchesCppSnapshotter() {
   TempDirectory temp;
   const fs::path fixtureRoot =
@@ -1087,6 +1104,7 @@ int main() {
   testDigestUsesExactTreeV1FramingAndStableSorting();
   testLiveSourceSnapshotNeverCopiesThePackageTree();
   testLiveSourceSnapshotAcceptsFilesEditsDuringInspection();
+  testSnapshotReadsAuthoredUnicodePaths();
   testTask1PythonAuditFixtureMatchesCppSnapshotter();
   testEmptyTreeIsRejectedForDigestParity();
   testRevisionStoresTheNormalizedCanonicalPackageIdentity();

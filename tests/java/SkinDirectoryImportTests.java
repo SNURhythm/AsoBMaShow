@@ -38,7 +38,13 @@ public final class SkinDirectoryImportTests {
         source.entries.put("folder", List.of(entry("image", "note.png", false, 3)));
         Path temp = Files.createTempDirectory("skin-directory-test");
         try {
-            require(SkinDirectoryImport.copy(source, temp.resolve("copy"), limits(6,3,2,64,3)).equals("My Skin"));
+            List<long[]> progress = new ArrayList<>();
+            require(SkinDirectoryImport.copy(source, temp.resolve("copy"), limits(6,3,2,64,3),
+                    (bytes, files) -> progress.add(new long[]{bytes, files})).equals("My Skin"));
+            require(progress.get(0)[0] == 0 && progress.get(0)[1] == 0);
+            require(progress.stream().anyMatch(p -> p[0] == 3 && p[1] == 0));
+            require(progress.get(progress.size() - 1)[0] == 6);
+            require(progress.get(progress.size() - 1)[1] == 2);
             require(Arrays.equals(Files.readAllBytes(temp.resolve("copy/이미지/note.png")), new byte[]{1,2,3}));
         } finally { SkinDirectoryImport.removeTree(temp); }
         reject(source, limits(5,3,2,64,3)); // actual aggregate size, including unknown sizes

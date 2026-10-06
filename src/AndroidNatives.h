@@ -9,6 +9,9 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <memory>
+
+struct PlatformDirectoryImportProgress;
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,7 +82,8 @@ std::string ImportAndroidDirectory(std::uint64_t operationToken,
                                    std::uint64_t maxBytes, std::uint64_t maxFiles,
                                    std::uint64_t maxDepth, std::uint64_t maxPathBytes,
                                    std::uint64_t maxRegularFileBytes,
-                                   std::string *originalSourceName);
+                                   std::string *originalSourceName,
+                                   std::shared_ptr<PlatformDirectoryImportProgress> progress);
 bool ValidateAndroidTemporaryDirectory(const std::filesystem::path &localPath,
                                        std::string &errorMessage);
 bool CleanupAndroidTemporaryDirectory(const std::filesystem::path &localPath,

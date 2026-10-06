@@ -602,6 +602,9 @@ std::string gameplaySkinPackageProgressDisplayText(const SkinProgress &progress)
             formatProgressBytes(progress.completedBytes) + " / " +
             formatProgressBytes(progress.totalBytes) + ")";
   }
+  if (progress.totalBytes == 0 && progress.completedBytes > 0) {
+    text += " — " + formatProgressBytes(progress.completedBytes);
+  }
   if (progress.completedFiles > 0) {
     text += " • " + std::to_string(progress.completedFiles) +
             (progress.completedFiles == 1 ? " file" : " files");

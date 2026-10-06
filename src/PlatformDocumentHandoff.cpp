@@ -1402,7 +1402,8 @@ importDirectory(std::uint64_t operationToken,
   std::string originalSourceName;
   const std::string bridgeResult = ImportAndroidDirectory(
       operationToken, request.maxBytes, request.maxFiles, request.maxDepth,
-      request.maxPathBytes, request.maxRegularFileBytes, &originalSourceName);
+      request.maxPathBytes, request.maxRegularFileBytes, &originalSourceName,
+      request.progress);
   return detail::ParseBridgeResult(bridgeResult, true, true,
                                    PlatformTemporaryPathKind::Directory,
                                    std::move(originalSourceName));

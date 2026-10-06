@@ -356,6 +356,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             long bytes, long totalBytes, String name, int phase);
     private static native boolean nativeFinishChartImport(
             String token, boolean isTree, String path, String error, String retainedError);
+    private static native void nativeSkinDirectoryImportProgress(String token, long bytes, long files);
     private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
     private static native void nativeGyroscopeActivityPaused();
@@ -810,6 +811,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         if (!selection.result.isEmpty()) {
             return finishDocumentHandoffOperation(selection.operation) ? selection.result : CANCELLED_RESULT;
         }
+        nativeSkinDirectoryImportProgress(operationToken, 0, 0);
         Path issued = null;
         CancellationSignal cancellation = new CancellationSignal();
         ParcelFileDescriptor[] descriptor = {null};
@@ -831,7 +833,19 @@ public class AsoBMaShowActivity extends SDLActivity {
                                 throw new DocumentHandoffCancelledException();
                         }
                     });
-            String name = SkinDirectoryImport.copy(source, output, limits);
+            long[] nextProgressAt = {0};
+            long[] lastProgress = {0, 0};
+            String name = SkinDirectoryImport.copy(source, output, limits, (bytes, files) -> {
+                long now = System.nanoTime();
+                lastProgress[0] = bytes;
+                lastProgress[1] = files;
+                if (now >= nextProgressAt[0]) {
+                    nativeSkinDirectoryImportProgress(operationToken, bytes, files);
+                    nextProgressAt[0] = now + 100_000_000L;
+
+                }
+            });
+            nativeSkinDirectoryImportProgress(operationToken, lastProgress[0], lastProgress[1]);
             if (!finishDocumentHandoffOperation(selection.operation)) throw new DocumentHandoffCancelledException();
             // Names reject control characters; the newline separates path from suggested package name.
             String result = output.toString() + "\n" + name;

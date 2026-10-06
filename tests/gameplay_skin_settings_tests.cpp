@@ -468,6 +468,13 @@ struct Fixture {
             .beginFolderHandoff =
                 [&](PlatformDirectoryImportRequest request) {
                   lastFolderRequest = request;
+                  if (holdFolderCopy) {
+                    return platform_document_handoff::detail::StartOperation(
+                        [](const std::atomic_bool &cancelled) {
+                          while (!cancelled.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                          return PlatformDocumentHandoffResult{.status = PlatformDocumentHandoffStatus::Cancelled};
+                        }, [] {});
+                  }
                   if (folderResults.empty()) {
                     return platform_document_handoff::
                         PlatformDocumentHandoffOperation{};
@@ -496,6 +503,7 @@ struct Fixture {
   std::deque<PlatformDocumentHandoffResult> archiveResults;
   std::deque<PlatformDocumentHandoffResult> folderResults;
   PlatformDirectoryImportRequest lastFolderRequest;
+  bool holdFolderCopy = false;
   int rescanRequests = 0;
   int rescanCancellations = 0;
   SkinRescanProgress rescanProgress;
@@ -545,6 +553,28 @@ void testSourceNameSuggestionPreservesTypedSemantics() {
   const auto invalid = suggestSkinPackageName("../ModernChic.zip",
                                               PlatformTemporaryPathKind::File);
   expect(!invalid.ok(), "source-name path components fail typed validation");
+}
+
+void testFolderCopyProgressIsNonblockingAndOutlivesController() {
+  Fixture fixture;
+  fixture.holdFolderCopy = true;
+  auto controller = fixture.makeController();
+  expect(controller->beginFolderImport().accepted, "folder copy starts asynchronously");
+  auto progress = fixture.lastFolderRequest.progress;
+  expect(progress != nullptr, "folder handoff receives a progress mailbox");
+  if (!progress) return;
+  progress->completedBytes = 65536;
+  progress->completedFiles = 2;
+  progress->started = true;
+  controller->poll();
+  auto snapshot = controller->snapshot();
+  expect(snapshot.state == GameplaySkinSettingsState::Busy && snapshot.hasPackageProgress &&
+             snapshot.progress.phase == SkinProgressPhase::Copying &&
+             snapshot.progress.completedBytes == 65536 && snapshot.progress.completedFiles == 2,
+         "poll projects provider copy progress before handoff completes");
+  controller.reset();
+  progress->completedBytes = 131072;
+  expect(progress->completedBytes == 131072, "late worker progress does not retain or access a closed UI");
 }
 
 void testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll() {
@@ -1832,6 +1862,7 @@ int main() {
   testSourceNameSuggestionPreservesTypedSemantics();
   testFallbackPackageIdentityIsStableAcrossLanguages();
   testOperationMessagesFollowLanguage();
+  testFolderCopyProgressIsNonblockingAndOutlivesController();
   testSnapshotUsesCachedSettingsProjectionUntilTheNextPoll();
   testArchiveFolderSelectionAndDurableLayoutFlow();
   testActivationPreparationDoesNotExposeCancellation();

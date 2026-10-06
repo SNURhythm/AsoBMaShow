@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 
 #include "StableHash.h"
+#include "PlatformDocumentHandoff.h"
 #include "skin/package/SkinDirectoryRename.h"
 #include "audio/NativeMusicPlayer.h"
 #include "library/ChartLibraryTaskService.h"
@@ -48,6 +49,12 @@ constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
 std::mutex gAndroidDocumentCommitMutex;
 std::unordered_map<std::string, std::function<bool()>>
     gAndroidDocumentCommitHandlers;
+struct DirectoryImportProgressBridge {
+  std::shared_ptr<PlatformDirectoryImportProgress> progress;
+  bool renderPaused = true;
+};
+std::mutex gDirectoryImportProgressMutex;
+std::unordered_map<std::string, DirectoryImportProgressBridge> gDirectoryImportProgress;
 std::mutex gAndroidImportTasksMutex;
 chart_library_tasks::ChartLibraryTaskService *gAndroidImportTasks = nullptr;
 
@@ -1219,18 +1226,48 @@ int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
 }
 } // namespace skin
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeSkinDirectoryImportProgress(
+    JNIEnv *env, jclass, jstring token, jlong bytes, jlong files) {
+  std::lock_guard lock(gDirectoryImportProgressMutex);
+  const auto found = gDirectoryImportProgress.find(jstringToUtf8(env, token));
+  if (found == gDirectoryImportProgress.end()) return;
+  auto &bridge = found->second;
+  // The picker has returned. I/O continues on this worker while SDL renders.
+  if (bridge.renderPaused) {
+    bridge.renderPaused = false;
+    FinishAndroidExternalActivityRenderPause();
+  }
+  if (bridge.progress) {
+    bridge.progress->completedBytes.store(std::max<jlong>(0, bytes));
+    bridge.progress->completedFiles.store(std::max<jlong>(0, files));
+    bridge.progress->started.store(true, std::memory_order_release);
+  }
+}
+
 std::string ImportAndroidDirectory(std::uint64_t operationToken,
                                    std::uint64_t maxBytes, std::uint64_t maxFiles,
                                    std::uint64_t maxDepth, std::uint64_t maxPathBytes,
                                    std::uint64_t maxRegularFileBytes,
-                                   std::string *originalSourceName) {
+                                   std::string *originalSourceName,
+                                   std::shared_ptr<PlatformDirectoryImportProgress> progress) {
   RequestAndroidExternalActivityRenderPause();
-  struct ExternalActivityPauseReset {
-    ~ExternalActivityPauseReset() {
-      FinishAndroidExternalActivityRenderPause();
-    }
-  } externalActivityPauseReset;
   const auto tokenText = std::to_string(operationToken);
+  {
+    std::lock_guard lock(gDirectoryImportProgressMutex);
+    gDirectoryImportProgress.emplace(tokenText, DirectoryImportProgressBridge{std::move(progress)});
+  }
+  struct ProgressReset {
+    const std::string &token;
+    ~ProgressReset() {
+      std::lock_guard lock(gDirectoryImportProgressMutex);
+      const auto found = gDirectoryImportProgress.find(token);
+      if (found != gDirectoryImportProgress.end()) {
+        if (found->second.renderPaused) FinishAndroidExternalActivityRenderPause();
+        gDirectoryImportProgress.erase(found);
+      }
+    }
+  } progressReset{tokenText};
   const auto limits = std::to_string(maxBytes) + "," + std::to_string(maxFiles) +
                       "," + std::to_string(maxDepth) + "," +
                       std::to_string(maxPathBytes) + "," +

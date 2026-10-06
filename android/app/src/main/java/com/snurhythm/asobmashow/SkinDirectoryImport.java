@@ -26,6 +26,7 @@ final class SkinDirectoryImport {
         InputStream open(Entry file) throws IOException;
         void checkpoint() throws IOException;
     }
+    interface Progress { void update(long bytes, long files); }
     static final class Limits {
         final long bytes, entries, depth, pathBytes, fileBytes;
         Limits(long bytes, long entries, long depth, long pathBytes, long fileBytes) {
@@ -36,20 +37,27 @@ final class SkinDirectoryImport {
     private final Source source;
     private final Limits limits;
     private final Set<String> seen = new HashSet<>();
-    private long entries, bytes;
-    private SkinDirectoryImport(Source source, Limits limits) { this.source = source; this.limits = limits; }
+    private long entries, bytes, files;
+    private final Progress progress;
+    private SkinDirectoryImport(Source source, Limits limits, Progress progress) {
+        this.source = source; this.limits = limits; this.progress = progress;
+    }
 
     static String copy(Source source, Path output, Limits limits) throws IOException {
+        return copy(source, output, limits, (bytes, files) -> {});
+    }
+    static String copy(Source source, Path output, Limits limits, Progress progress) throws IOException {
         if (limits.bytes <= 0 || limits.entries <= 0 || limits.depth <= 0 ||
                 limits.pathBytes <= 0 || limits.fileBytes <= 0) throw new IOException("Invalid folder import limits.");
         // CREATE_NEW semantics: never remove an existing path on failure.
         Files.createDirectory(output);
         try {
+            progress.update(0, 0);
             source.checkpoint();
             Entry root = source.root();
             if (root == null || !root.directory) throw new IOException("Select a folder to import.");
             requireName(root.name);
-            SkinDirectoryImport copy = new SkinDirectoryImport(source, limits);
+            SkinDirectoryImport copy = new SkinDirectoryImport(source, limits, progress);
             copy.requireUnique(root);
             copy.copyChildren(root, output, "", 1);
             source.checkpoint();
@@ -107,8 +115,10 @@ final class SkinDirectoryImport {
                         stream.write(buffer, 0, count);
                         fileBytes += count;
                         bytes += count;
+                        progress.update(bytes, files);
                     }
                 }
+                progress.update(bytes, ++files);
             }
         }
     }
