@@ -4,6 +4,7 @@
 #include "GameplaySkinBuiltinCatalog.h"
 #include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
+#include "SkinNoteLaneMapping.h"
 #include "../SkinTargetTraits.h"
 #include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
@@ -1532,10 +1533,12 @@ void PlaySkinSession::submitSyntheticStartLaneIndicators(
       if (lane < 0) {
         continue;
       }
+      const int skinLane = skinNoteLaneForChartLane(
+          context_.model.model.header.type, lane);
       const auto region = std::ranges::find_if(
           publishedLayout_->laneRegions,
-          [lane](const SkinLaneInteractionRegion &candidate) {
-            return candidate.authoredLane == lane;
+          [skinLane](const SkinLaneInteractionRegion &candidate) {
+            return candidate.authoredLane == skinLane;
           });
       if (region == publishedLayout_->laneRegions.end() ||
           !finiteRect(region->authoredRegion)) {
@@ -1666,10 +1669,12 @@ gameplay::RealtimeTouchLayout PlaySkinSession::touchLayout() const {
     result.scratch.reserve(context_.chartModel.laneOrder.size());
     result.laneRegions.reserve(context_.chartModel.laneOrder.size());
     for (const int chartLane : context_.chartModel.laneOrder) {
+      const int skinLane = skinNoteLaneForChartLane(
+          context_.model.model.header.type, chartLane);
       const auto found = std::ranges::find_if(
           publishedLayout_->laneRegions,
-          [chartLane](const SkinLaneInteractionRegion &region) {
-            return region.authoredLane == chartLane;
+          [skinLane](const SkinLaneInteractionRegion &region) {
+            return region.authoredLane == skinLane;
           });
       if (context_.chartModel.scratchlessSinglePlay && chartLane == 7) {
         if (found == publishedLayout_->laneRegions.end()) continue;
