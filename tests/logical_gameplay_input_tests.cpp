@@ -930,7 +930,9 @@ void testEscapeFallbackYieldsToAnActiveLogicalPauseBinding() {
 
   const auto withFallback =
       makeGameplayInputProfileWithEscapeFallback(profile, activeScopes);
-  require(withFallback.bindings.size() == profile.bindings.size(),
+  require(std::ranges::count_if(withFallback.bindings, [](const auto &binding) {
+            return binding.action.kind == input::LogicalActionKind::Pause;
+          }) == 1,
           "an explicit active Escape pause binding is not duplicated");
 }
 
@@ -960,6 +962,29 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
               commands.front().action.kind == input::LogicalActionKind::Pause &&
               controlCallsAtPause == 1,
           "the lane edge is applied before the queued Escape pause fallback");
+}
+
+void testCoverShortcutsRespectCustomBindings() {
+  const auto scopes = makeGameplayInputScopes(14);
+  auto profile = makeGameplayInputProfileWithEscapeFallback(makeDefaultInputProfile(), scopes);
+  require(hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_Q, input::LogicalActionKind::Start) &&
+              hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_W, input::LogicalActionKind::Select) &&
+              hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_UP, input::LogicalActionKind::LaneCoverDecrease) &&
+              hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease),
+          "keyboard fallback provides Beatoraja START, SELECT, and cover arrows once for DP");
+  InputProfile custom;
+  custom.bindings.push_back({.id = "custom-q", .scope = {2, 14},
+      .action = {input::LogicalActionKind::Lane, 8},
+      .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key, .index = SDL_SCANCODE_Q}});
+  custom.bindings.push_back({.id = "custom-select", .scope = {1, 14},
+      .action = {input::LogicalActionKind::Select, 0},
+      .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key, .index = SDL_SCANCODE_E}});
+  const auto merged = makeGameplayInputProfileWithEscapeFallback(custom, scopes);
+  require(!hasActiveKeyboardActionBinding(merged, scopes, SDL_SCANCODE_Q, input::LogicalActionKind::Start) &&
+              !hasActiveKeyboardActionBinding(merged, scopes, SDL_SCANCODE_W, input::LogicalActionKind::Select),
+          "cover defaults never steal another player's key or duplicate a rebound command");
 }
 
 void testIndependentScratchlessGameplayBindings() {
@@ -1523,6 +1548,7 @@ int main() {
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testCoverShortcutsRespectCustomBindings();
   testIndependentScratchlessGameplayBindings();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testNonStockKeyModesCaptureBmsChannelReplayControls();

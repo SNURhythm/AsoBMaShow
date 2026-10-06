@@ -52,7 +52,7 @@ struct Settings {
   int durationMilliseconds = 500;
   float hispeed = 1.0F;
   float margin = 0.25F;
-  int laneCoverPercent = 0;
+  float laneCoverPercent = 0;
   bool laneCoverEnabled = true;
 };
 
@@ -80,7 +80,7 @@ struct Settings {
 // LaneRenderer's frame-local `currentduration` computation. `scrollRate` is
 // TimeLine.getScroll() and `speedMultiplier` is getCurrentSpeed().
 [[nodiscard]] inline std::optional<double>
-liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
+liveDurationValue(double bpm, float hispeed, float laneCoverPercent,
                   bool laneCoverEnabled, double scrollRate = 1.0,
                   double speedMultiplier = 1.0) {
   if (!std::isfinite(bpm) || bpm <= 0.0 ||
@@ -93,7 +93,7 @@ liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
   }
   const double cover = laneCoverEnabled
                            ? static_cast<double>(
-                                 std::clamp(laneCoverPercent, 0, 100)) /
+                                 std::clamp(laneCoverPercent, 0.0F, 100.0F)) /
                                  100.0
                            : 0.0;
   const double duration =
@@ -123,7 +123,7 @@ liveDurationValue(double bpm, float hispeed, int laneCoverPercent,
 }
 
 [[nodiscard]] inline std::optional<int>
-liveDurationMilliseconds(double bpm, float hispeed, int laneCoverPercent,
+liveDurationMilliseconds(double bpm, float hispeed, float laneCoverPercent,
                          bool laneCoverEnabled, double scrollRate = 1.0,
                          double speedMultiplier = 1.0) {
   const auto duration = liveDurationValue(bpm, hispeed, laneCoverPercent,
@@ -176,12 +176,12 @@ public:
     setLaneCover(settings_.laneCoverPercent);
   }
 
-  void setLaneCover(int percent) {
-    settings_.laneCoverPercent = std::clamp(percent, 0, 100);
+  void setLaneCover(float percent) {
+    settings_.laneCoverPercent = std::clamp(percent, 0.0F, 100.0F);
     resetHispeed(baseBpm_);
   }
 
-  void setLaneCover(int percent, double currentBpm, bool autoAdjust) {
+  void setLaneCover(float percent, double currentBpm, bool autoAdjust) {
     setLaneCover(percent);
     // ControlInputProcessor.setCoverValue: fixed-speed reset to the current
     // BPM occurs *after* the ordinary setLanecover(basebpm) reset.
@@ -224,7 +224,7 @@ public:
 private:
   [[nodiscard]] static Settings sanitize(Settings settings) noexcept {
     settings.durationMilliseconds = std::max(1, settings.durationMilliseconds);
-    settings.laneCoverPercent = std::clamp(settings.laneCoverPercent, 0, 100);
+    settings.laneCoverPercent = std::isfinite(settings.laneCoverPercent) ? std::clamp(settings.laneCoverPercent, 0.0F, 100.0F) : 0.0F;
     if (!std::isfinite(settings.hispeed)) {
       settings.hispeed = 1.0F;
     }

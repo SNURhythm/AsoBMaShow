@@ -2649,6 +2649,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(lane_cover_number_geometry_tests PRIVATE cxx_std_23)
 
+    add_executable(lane_cover_controls_tests tests/lane_cover_controls_tests.cpp)
+    target_include_directories(lane_cover_controls_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(lane_cover_controls_tests PRIVATE cxx_std_23)
+
     include(cmake/ChartViewerTests.cmake)
 
     add_executable(gameplay_scroll_geometry_tests
@@ -8377,6 +8381,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         preparation_plan_tests
         start_lane_indicator_geometry_tests
         lane_cover_number_geometry_tests
+        lane_cover_controls_tests
         chart_viewer_note_geometry_tests
         chart_viewer_lifecycle_tests
         gameplay_scroll_geometry_tests
@@ -8984,6 +8989,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_rotation_edit_tests.py)
     add_test(NAME settings_note_editing_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_note_editing_tests.py)
+    add_test(NAME lane_cover_scene_input_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/lane_cover_scene_input_tests.py)
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES

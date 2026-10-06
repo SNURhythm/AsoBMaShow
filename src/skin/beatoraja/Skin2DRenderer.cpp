@@ -4451,22 +4451,22 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           followsPlayArea = followsPlayArea ||
                             laneCoverRateProperty(inputs.model, *slider);
         }
-        // Skins have no universal HUD grouping. Move lane-local artwork with
-        // the lanes, retaining the original camera for surrounding objects.
+        // Skins have no universal HUD grouping. Move artwork that overlaps
+        // the detected note area, without expanding the camera's focus bounds.
+        // Use any authored frame so entrance animations keep the same camera.
         if (!followsPlayArea && !destination.presentation.frames.empty()) {
-          followsPlayArea = std::ranges::all_of(
+          followsPlayArea = std::ranges::any_of(
               destination.presentation.frames, [&](const auto &frame) {
-                const double margin = playArea->width * 0.05;
-                // Mirrored backgrounds use signed sizes, and their entrance
-                // animation may begin collapsed. Classify their visible bounds.
+                // Mirrored artwork uses signed sizes. Require positive overlap
+                // so objects merely touching a lane edge remain in the HUD.
                 const auto [left, right] =
                     std::minmax({frame.x, frame.x + frame.width});
                 const auto [bottom, top] =
                     std::minmax({frame.y, frame.y + frame.height});
-                return left >= playArea->x - margin &&
-                       right <= playArea->x + playArea->width + margin &&
-                       bottom >= playArea->y - playArea->height * 0.1 &&
-                       top <= playArea->y + playArea->height * 1.1;
+                return std::max(left, playArea->x) <
+                           std::min(right, playArea->x + playArea->width) &&
+                       std::max(bottom, playArea->y) <
+                           std::min(top, playArea->y + playArea->height);
               });
         }
         if (!followsPlayArea) {

@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "PlayOptionsPanelView.h"
+#include "LaneCoverControlsView.h"
 
 #include "../AssistOptionUtils.h"
 #include "../LongNoteModeUtils.h"
@@ -299,6 +300,13 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   }
   addView(assistRow);
 
+  addView(makeLabel(i18n::message("settings.lane.covers.title")));
+  laneCoverControls = new LaneCoverControlsView([this](const lane_cover::State &covers) {
+    state.laneCovers = covers;
+    if (callbacks.onLaneCoversChanged) callbacks.onLaneCoversChanged(covers);
+  });
+  addView(laneCoverControls);
+
   auto *playbackGroup = new View();
   playbackGroup->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -382,6 +390,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 }
 
 void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
+  if (laneCoverControls) laneCoverControls->refresh(newState.laneCovers);
   if (playOptionSection != nullptr &&
       (state.profileId != newState.profileId || state.ruleset != newState.ruleset)) {
     playOptionSection->resetLaneOrderDraft();

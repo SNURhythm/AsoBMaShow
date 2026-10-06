@@ -445,6 +445,34 @@ Json encodePlayerOption(const ReplayPlayerOption &option) {
           {"laneShufflePattern", optionalJson(option.laneShufflePattern)}};
 }
 
+Json encodeCoverState(const std::optional<lane_cover::State> &state) {
+  if (!state) return nullptr;
+  return {{"laneCoverPercent", state->laneCoverPercent},
+          {"laneCoverEnabled", state->laneCoverEnabled},
+          {"liftEnabled", state->liftEnabled}, {"liftRatio", state->liftRatio},
+          {"hiddenEnabled", state->hiddenEnabled}, {"hiddenRatio", state->hiddenRatio}};
+}
+
+bool decodeCoverState(const Json &source, std::optional<lane_cover::State> &output,
+                      std::string &diagnostic) {
+  const auto found = source.find("coverState");
+  output.reset();
+  if (found == source.end() || found->is_null()) return true;
+  lane_cover::State state;
+  if (!found->is_object() ||
+      !readRequired(*found, "laneCoverPercent", state.laneCoverPercent, diagnostic) ||
+      !readRequired(*found, "laneCoverEnabled", state.laneCoverEnabled, diagnostic) ||
+      !readRequired(*found, "liftEnabled", state.liftEnabled, diagnostic) ||
+      !readRequired(*found, "liftRatio", state.liftRatio, diagnostic) ||
+      !readRequired(*found, "hiddenEnabled", state.hiddenEnabled, diagnostic) ||
+      !readRequired(*found, "hiddenRatio", state.hiddenRatio, diagnostic) ||
+      !lane_cover::valid(state)) {
+    return fail(diagnostic, "Replay cover state is invalid");
+  }
+  output = state;
+  return true;
+}
+
 Json encodeSetup(const ReplaySetup &setup) {
   return {
       {"chartMd5", setup.chart.md5},
@@ -478,6 +506,7 @@ Json encodeSetup(const ReplaySetup &setup) {
       {"initialLaneCoverPercent", setup.initialLaneCoverPercent},
       {"laneCoverEnabled", setup.laneCoverEnabled},
       {"clubMode", setup.clubMode},
+      {"coverState", encodeCoverState(setup.coverState)},
   };
 }
 
@@ -549,7 +578,8 @@ bool decodeSetup(const Json &source, ReplaySetup &output,
                     output.initialLaneCoverPercent, diagnostic) ||
       !readRequired(source, "laneCoverEnabled", output.laneCoverEnabled,
                     diagnostic) ||
-      !readRequired(source, "clubMode", output.clubMode, diagnostic)) {
+      !readRequired(source, "clubMode", output.clubMode, diagnostic) ||
+      !decodeCoverState(source, output.coverState, diagnostic)) {
     return false;
   }
   output.doublePlayOption = static_cast<DoublePlayOption>(doubleOption);
@@ -605,6 +635,7 @@ Json encodeLaneCover(std::span<const ReplayLaneCoverEvent> events) {
         {"laneCoverEnabled", event.laneCoverEnabled},
         {"changeKind", static_cast<int>(event.changeKind)},
         {"resetVisibleTimeReference", event.resetVisibleTimeReference},
+        {"coverState", encodeCoverState(event.coverState)},
     });
   }
   return output;
@@ -705,11 +736,12 @@ bool decodeLaneCover(const Json &source,
       int encoded = 0;
       if (!readRequired(item, "changeKind", encoded, diagnostic) ||
           encoded < static_cast<int>(ReplayLaneCoverChangeKind::Value) ||
-          encoded > static_cast<int>(ReplayLaneCoverChangeKind::Enabled)) {
+          encoded > static_cast<int>(ReplayLaneCoverChangeKind::Hidden)) {
         return fail(diagnostic, "Replay lane-cover change kind is invalid");
       }
       event.changeKind = static_cast<ReplayLaneCoverChangeKind>(encoded);
     }
+    if (!decodeCoverState(item, event.coverState, diagnostic)) return false;
     output.push_back(event);
   }
   return true;
@@ -862,6 +894,16 @@ bool decodeStockSetup(const Json &stage, int keyMode, bool course,
     setup.initialLaneCoverPercent =
         static_cast<int>(std::lround(cover * 100.0F));
     setup.laneCoverEnabled = enabled;
+    lane_cover::State covers{.laneCoverPercent = cover * 100,
+                             .laneCoverEnabled = enabled};
+    if (!readStock(*config, "lift", covers.liftRatio, 0.1F, diagnostic) ||
+        !readStock(*config, "enablelift", covers.liftEnabled, false, diagnostic) ||
+        !readStock(*config, "hidden", covers.hiddenRatio, 0.1F, diagnostic) ||
+        !readStock(*config, "enablehidden", covers.hiddenEnabled, false, diagnostic) ||
+        !lane_cover::valid(covers)) {
+      return fail(diagnostic, "Replay stock lift/hidden configuration is invalid");
+    }
+    setup.coverState = covers;
   }
   const auto layout = replayKeyModeLayout(keyMode);
   if (setup.doublePlayOption == DoublePlayOption::Flip &&
@@ -936,6 +978,9 @@ encodeStage(const ReplayPlaybackData &playback, ReplayTimeBounds timeBounds,
   if (timeBounds.aborted.has_value()) {
     extension["aborted"] = *timeBounds.aborted;
   }
+  const auto covers = playback.setup.coverState.value_or(lane_cover::State{
+      .laneCoverPercent = static_cast<float>(playback.setup.initialLaneCoverPercent),
+      .laneCoverEnabled = playback.setup.laneCoverEnabled});
   return Json{
       {"player", "AsoBMaShow"},
       {"sha256", playback.setup.chart.sha256},
@@ -952,8 +997,10 @@ encodeStage(const ReplayPlaybackData &playback, ReplayTimeBounds timeBounds,
       {"randomoption2seed", playback.setup.player2.seed.value_or(-1)},
       {"doubleoption", static_cast<int>(playback.setup.doublePlayOption)},
       {"config",
-       {{"lanecover", playback.setup.initialLaneCoverPercent / 100.0F},
-        {"enablelanecover", playback.setup.laneCoverEnabled}}},
+       {{"lanecover", covers.laneCoverPercent / 100.0F},
+        {"enablelanecover", covers.laneCoverEnabled},
+        {"lift", covers.liftRatio}, {"enablelift", covers.liftEnabled},
+        {"hidden", covers.hiddenRatio}, {"enablehidden", covers.hiddenEnabled}}},
       {"asobmashow", std::move(extension)},
   };
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../scene/play/GameplayRuleset.h"
+#include "../LaneCover.h"
 #include "../scene/play/RhythmState.h"
 #include "View.h"
 
@@ -15,6 +16,7 @@ class OverlayPortal;
 class PlayOptionSectionView;
 class SnappedSlider;
 class TextView;
+class LaneCoverControlsView;
 
 struct PlayOptionsPanelState {
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
@@ -33,6 +35,7 @@ struct PlayOptionsPanelState {
   bool clubMode = false;
   std::string pacemakerTarget = "BEST";
   std::string profileId;
+  lane_cover::State laneCovers;
 };
 
 struct PlayOptionsPanelCallbacks {
@@ -48,6 +51,7 @@ struct PlayOptionsPanelCallbacks {
   std::function<void(const std::string &)> onPlaybackModeSelected;
   std::function<void()> onClubModeToggled;
   std::function<void(const std::string &)> onPacemakerSelected;
+  std::function<void(const lane_cover::State &)> onLaneCoversChanged;
 };
 
 struct PlayOptionsPanelLayout {
@@ -81,6 +85,7 @@ private:
   PlayOptionsPanelCallbacks callbacks;
   PlayOptionsPanelState state;
   PlayOptionSectionView *playOptionSection = nullptr;
+  LaneCoverControlsView *laneCoverControls = nullptr;
   std::vector<SelectionButton> rulesetButtons;
   std::vector<SelectionButton> gaugeButtons;
   std::vector<SelectionButton> gaugeAutoShiftButtons;

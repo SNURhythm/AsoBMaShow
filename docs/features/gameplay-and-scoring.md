@@ -38,6 +38,30 @@ cleanup, and destruction discard pending work. Missing/unreadable replays keep
 the fallback, and the selected pacemaker target remains proportional even when
 the personal-best ghost gains replay progression.
 
+## Lane covers
+
+Song play options and Settings → Lane expose independent **SUDDEN+**, **HIDDEN+**,
+and **LIFT** switches and amounts (0–1000). They can be combined. SUDDEN+ covers
+the top of the lane; HIDDEN+ covers the bottom above the judgement line; LIFT
+raises the judgement line and shortens the scrolling lane. Both covers use the
+lane height remaining above LIFT. These are Beatoraja's adjustable covers;
+there is no separate classic fading HIDDEN/SUDDEN mode in the reference player.
+
+Default keyboard controls are **Q = START**, **W = SELECT**, **Up/Down = move
+cover**. Defaults yield to configured actions or occupied keys. Mouse wheel also
+moves the cover. Hold START and turn scratch to adjust in fine steps; holding a
+digital scratch accelerates after 500 ms. Double-tap START to toggle SUDDEN+.
+When SUDDEN+ is off, adjustment targets LIFT, or HIDDEN+ if LIFT is off. With both
+lower modes enabled, START+SELECT switches which one is adjusted (release promptly;
+holding both is the existing exit shortcut). START+keys changes hi-speed;
+SELECT+keys/scratch changes the green number.
+
+Built-in rendering and compatible Lua/LR2 skins receive the same cover state,
+including fine white-number values, lift/hidden offsets and enabled options.
+Skins still supply their own cover artwork. Replays record initial amounts and
+subsequent adjustments; older replays retain their existing fallback behavior.
+NOSPEED courses suppress cover amounts and their adjustment controls.
+
 ## Verification
 
 Use `gameplay_ruleset_tests`, `gameplay_score_state_tests`,

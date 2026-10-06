@@ -523,9 +523,8 @@ inline int clampLaneBeamLengthPercent(int value) {
                     AppSettings::kMaxLaneBeamLengthPercent);
 }
 
-inline int clampNoteStartPositionPercent(int value) {
-  return std::clamp(value, AppSettings::kMinNoteStartPositionPercent,
-                    AppSettings::kMaxNoteStartPositionPercent);
+inline float clampNoteStartPositionPercent(float value) {
+  return lane_cover::ratio(value / 100.0F) * 100.0F;
 }
 
 inline float clampPlayAreaWidth(const AppSettings &settings, float value) {
@@ -677,8 +676,10 @@ inline std::string formatLaneBeamLengthLabel(int percent) {
   return std::to_string(clampLaneBeamLengthPercent(percent)) + "%";
 }
 
-inline std::string formatNoteStartPositionLabel(int percent) {
-  return std::to_string(clampNoteStartPositionPercent(percent)) + "%";
+inline std::string formatNoteStartPositionLabel(float percent) {
+  std::ostringstream text;
+  text << clampNoteStartPositionPercent(percent) << '%';
+  return text.str();
 }
 
 inline std::string formatJudgementPercentLabel(int percent) {

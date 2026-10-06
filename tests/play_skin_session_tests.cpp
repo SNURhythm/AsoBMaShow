@@ -3155,6 +3155,10 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
     }
     initialState.clock = settings_scene::previewFrameClock(
         2, 4'000'000, sampleChart->Meta.PlayLength);
+    ViewportSettings viewportSettings;
+    viewportSettings.centerPlayArea = true;
+    viewportSettings.keepHudFixed = true;
+    created.session->setViewport(viewportSettings);
     const auto frame = created.session->prepareFrame(initialState, projectionAt(2), {});
     expect(frame.ready() && frame.evaluation.submitReady,
            "external gameplay skin prepares a frame with real preview chart data");
@@ -5591,6 +5595,23 @@ return {
     }
   }
 
+  void configureOverlappingArtwork(double x, double width, double height,
+                                   bool flipX, bool startsOutside) {
+    auto &destination = model_.model.destinations.back().presentation;
+    destination.loop = 1000;
+    destination.frames = {
+        {.timeMillis = 0, .x = startsOutside ? 900.0 : x, .y = 20.0,
+         .width = width, .height = startsOutside ? 0.0 : height},
+        {.timeMillis = 1000, .x = x, .y = 20.0,
+         .width = width, .height = height}};
+    if (flipX) {
+      for (auto &frame : destination.frames) {
+        frame.x += frame.width;
+        frame.width = -frame.width;
+      }
+    }
+  }
+
   void addOrderedClickableImage(double destinationX) {
     resources_.addImage(86);
     model_.model.events.push_back(
@@ -7533,6 +7554,63 @@ void testFocusedMirroredLaneBackgrounds() {
       }
       expect(moved && frame.evaluation.submitReady->commands.back().sourceObject == 82,
              "mirrored and growing lane backgrounds follow the foreground play area");
+    }
+  }
+}
+
+void testFocusedOverlappingArtworkKeepsNoteAreaFraming() {
+  struct Case {
+    double x, width, height;
+    float expectedLeft;
+    bool moves;
+  };
+  // Lanes span (100,20)-(300,520). Artwork must not change their 1.44x
+  // camera, including backgrounds extending past the authored canvas.
+  for (const auto &test : {Case{100, 200, 1024, 496.0F, true},
+                           Case{50, 100, 500, 424.0F, true},
+                           Case{250, 100, 500, 712.0F, true},
+                           Case{350, 100, 500, 350.0F, false},
+                           Case{300, 40, 500, 300.0F, false}}) {
+    for (const bool flipX : {false, true}) {
+      for (const bool startsOutside : {false, true}) {
+        SessionFixture fixture;
+        if (!fixture.ready()) return;
+        fixture.addTouchGeometry();
+        fixture.addClickableImage();
+        fixture.configureOverlappingArtwork(test.x, test.width, test.height,
+                                            flipX, startsOutside);
+        fixture.addOrderedClickableImage(900.0);
+        ViewportSettings settings;
+        settings.centerPlayArea = true;
+        settings.keepHudFixed = true;
+        fixture.session().setViewport(settings);
+        const auto frame = fixture.session().prepareFrame(stateAt(100), projectionAt(100), {});
+        expect(frame.ready() && frame.evaluation.submitReady,
+               "overlapping artwork frame prepares");
+        if (!frame.evaluation.submitReady) continue;
+        bool artworkCorrect = false, hudFixed = false, laneCameraUnchanged = false;
+        for (const auto &command : frame.evaluation.submitReady->commands) {
+          const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+          if (!quad) continue;
+          float left = quad->vertices[0].x, bottom = quad->vertices[0].y;
+          for (const auto &vertex : quad->vertices) {
+            left = std::min(left, vertex.x);
+            bottom = std::max(bottom, vertex.y);
+          }
+          if (command.sourceObject == 82) {
+            artworkCorrect = std::abs(left - test.expectedLeft) < 0.001F &&
+                             std::abs(bottom - (test.moves ? 720.0F : 700.0F)) < 0.001F;
+          } else if (command.sourceObject == 86) {
+            hudFixed = std::abs(left - 900.0F) < 0.001F;
+          } else if (command.sourceObject == 80) {
+            laneCameraUnchanged = std::abs(left - 496.0F) < 0.001F;
+          }
+        }
+        expect(artworkCorrect,
+               "overlapping artwork follows lanes across mirrored and entrance frames; disjoint artwork stays fixed");
+        expect(hudFixed && laneCameraUnchanged,
+               "artwork overlap does not expand the detected note area or move separate HUD");
+      }
     }
   }
 }
@@ -11040,6 +11118,7 @@ int main(int argc, char **argv) {
   testImageActTouchQueuesPinnedEventOnDown();
   testCroppedPlayAreaReappliesCoverAndVisibleDuration();
   testFocusedMirroredLaneBackgrounds();
+  testFocusedOverlappingArtworkKeepsNoteAreaFraming();
   testFocusedLaneCoverAndAttachedArtwork();
   testFocusedLaneEffectsFollowTimers();
   testPlayAreaFramingKeepsDrawingAndInteractionTogether();

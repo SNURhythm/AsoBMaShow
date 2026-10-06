@@ -49,7 +49,8 @@ replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
                                  bool replayGhostRenderingEnabled,
                                  const CourseConstraintRules &constraints = {},
                                  const std::string &assistOption =
-                                     assist_options::kOff)
+                                     assist_options::kOff,
+                                 const ReplayData *replay = nullptr)
     noexcept;
 
 // Export failures occur after BGA preparation but before either selected-skin
@@ -126,17 +127,19 @@ void applyReplayGameplayTargetOptionAuthority(
     std::optional<skin::SkinGameplayTiming>) noexcept;
 
 struct ReplayLaneCoverFrameState {
-  int percent = 0;
+  float percent = 0;
   bool enabled = false;
   bool changed = false;
   ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
   std::vector<ReplayLaneCoverTransition> transitions;
+  std::optional<lane_cover::State> coverState;
 };
 
 struct ReplayLaneCoverInitialState {
-  int percent = 0;
+  float percent = 0;
   bool enabled = false;
+  lane_cover::State coverState;
 };
 
 [[nodiscard]] ReplayLaneCoverInitialState replayLaneCoverInitialState(
@@ -144,16 +147,18 @@ struct ReplayLaneCoverInitialState {
 
 class ReplayLaneCoverPlayback final {
 public:
-  explicit ReplayLaneCoverPlayback(int initialPercent, bool initialEnabled) noexcept
-      : percent_(initialPercent), enabled_(initialEnabled) {}
+  explicit ReplayLaneCoverPlayback(float initialPercent, bool initialEnabled,
+      std::optional<lane_cover::State> covers = std::nullopt) noexcept
+      : percent_(initialPercent), enabled_(initialEnabled), coverState_(covers) {}
 
   [[nodiscard]] ReplayLaneCoverFrameState
   advance(std::span<const ReplayLaneCoverEvent>, long long songTimeMicros);
 
 private:
   std::size_t cursor_ = 0;
-  int percent_ = 0;
+  float percent_ = 0;
   bool enabled_ = false;
+  std::optional<lane_cover::State> coverState_;
 };
 
 // Replay watch feeds each applied judgement through GameplayScoreState, which

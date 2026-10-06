@@ -963,7 +963,7 @@ void SettingsScene::commitNoteStartPositionInput() {
 
   try {
     context.settings.presentation().noteStartPositionPercent =
-        clampNoteStartPositionPercent(std::stoi(rawText));
+        clampNoteStartPositionPercent(std::stof(rawText));
     persistSettings();
     syncNoteStartPositionInputText(true);
   } catch (const std::exception &) {

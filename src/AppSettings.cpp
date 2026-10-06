@@ -416,8 +416,8 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
       std::clamp(laneBeamLengthPercent, kMinLaneBeamLengthPercent,
                  kMaxLaneBeamLengthPercent);
   noteStartPositionPercent =
-      std::clamp(noteStartPositionPercent, kMinNoteStartPositionPercent,
-                 kMaxNoteStartPositionPercent);
+      sanitizeFloat(noteStartPositionPercent, kDefaultNoteStartPositionPercent,
+                    kMinNoteStartPositionPercent, kMaxNoteStartPositionPercent);
   liftRatio = sanitizeFloat(liftRatio, 0.1F, 0.0F, 1.0F);
   hiddenRatio = sanitizeFloat(hiddenRatio, 0.1F, 0.0F, 1.0F);
   playAreaWidth4K = sanitizeFloat(playAreaWidth4K, policy.width.defaultValue, policy.width.minimum, policy.width.maximum);
@@ -844,7 +844,7 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
       } else if (key == "lane_beam_length_percent") {
         settings.presentation().laneBeamLengthPercent = std::stoi(value);
       } else if (key == "note_start_position_percent") {
-        settings.presentation().noteStartPositionPercent = std::stoi(value);
+        settings.presentation().noteStartPositionPercent = std::stof(value);
       } else if (key == "lane_cover_enabled") {
         bool parsed = settings.presentation().laneCoverEnabled;
         if (parseBool(value, parsed)) {

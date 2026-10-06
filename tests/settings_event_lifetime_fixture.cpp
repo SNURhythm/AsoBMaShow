@@ -81,6 +81,7 @@ struct Color { int r, g, b, a; };
 struct SettingsScene : Scene {
   using Scene::Scene;
   DisplaySession *audioVideoSession = nullptr;
+  View *appearanceColorPopup = nullptr;
   int displayDraft = 0;
   bool previewActive = false;
   int previewEvents = 0;

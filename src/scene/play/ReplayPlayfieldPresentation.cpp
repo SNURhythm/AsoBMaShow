@@ -272,8 +272,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
                        .hispeed = creation.settings.gameplayHispeed,
                        .margin = creation.settings.hispeedMargin,
                        .laneCoverPercent =
-                           creation.settings.presentation().noteStartPositionPercent,
-                       .laneCoverEnabled = creation.settings.presentation().laneCoverEnabled},
+                           creation.configuration.noteStartPositionPercent,
+                       .laneCoverEnabled = creation.configuration.laneCoverEnabled},
                       gameplay_hispeed::summarizeChartBpm(creation.chart)),
                   std::move(runtimeSkinConfigurationSelection),
                   graphJudgeWindows, graphGaugeHistoryCapacity)),
@@ -284,13 +284,21 @@ void ReplayPlayfieldPresentation::applyLaneCoverTransition(
     const ReplayLaneCoverTransition &transition, double bpm) {
   if (transition.changeKind == ReplayLaneCoverChangeKind::Enabled) {
     hispeed_.setLaneCoverEnabled(transition.enabled);
-  } else {
+  } else if (transition.changeKind == ReplayLaneCoverChangeKind::Value) {
     hispeed_.setLaneCover(transition.percent, bpm,
                           transition.resetVisibleTimeReference);
+  } else if (transition.resetVisibleTimeReference) {
+    hispeed_.resetHispeed(bpm);
   }
   configuration_.configuredHispeed = hispeed_.hispeed();
   configuration_.noteStartPositionPercent = transition.percent;
   configuration_.laneCoverEnabled = transition.enabled;
+  if (transition.coverState) {
+    configuration_.liftEnabled = transition.coverState->liftEnabled;
+    configuration_.liftRatio = transition.coverState->liftRatio;
+    configuration_.hiddenEnabled = transition.coverState->hiddenEnabled;
+    configuration_.hiddenRatio = transition.coverState->hiddenRatio;
+  }
   state_->setConfiguration(configuration_);
   coordinator_->configure(configuration_);
 }
@@ -304,7 +312,8 @@ void ReplayPlayfieldPresentation::applyAuthorityUpdate(
          .enabled = authority_.laneCoverEnabled,
          .changeKind = authority_.laneCoverChangeKind,
          .resetVisibleTimeReference =
-             authority_.resetLaneCoverVisibleTimeReference},
+             authority_.resetLaneCoverVisibleTimeReference,
+         .coverState = authority_.laneCoverState()},
         authority_.currentBpm);
   }
   authority_.stageCombo = stageCombo_;
@@ -693,7 +702,7 @@ void ReplayPlayfieldPresentation::releaseDueClassicLongNoteTails(
 PresentationFrameResult ReplayPlayfieldPresentation::renderFrame(
     RenderContext &context, PlayfieldFrameClock clock,
     const PlayfieldProjectionRequest &request) {
-  builtIn_->refreshGeometry();
+  builtIn_->applyLaneCoverState(authority_.laneCoverState());
   state_->applyAuthorityUpdate(authority_);
   advanceGameplayGraphTo(clock.gameplayTimeMicros);
   publishGameplayGraphState();

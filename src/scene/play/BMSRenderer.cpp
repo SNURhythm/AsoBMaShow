@@ -2198,9 +2198,7 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
       static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
   const float speedMultiplier = static_cast<float>(currentSpeedMultiplier);
   const float laneHeight = std::max(0.001F, upperBound - judgeY);
-  const float hiddenRatio =
-      static_cast<float>(noteStartPositionPercent) / 100.0F;
-  const float visibleUpper = judgeY + laneHeight * (1.0F - hiddenRatio);
+  const float visibleUpper = noteVisibleUpperBound;
   BuiltInRendererTraversal traversal{
       .lowerBound = lowerBound,
       .judgeY = judgeY,
@@ -2730,7 +2728,12 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
     setStartLaneIndicators(authority.startLaneIndicators);
     setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
-    applyLaneCoverState(authority.laneCoverPercent, authority.laneCoverEnabled,
+    applyLaneCoverState({.laneCoverPercent = authority.laneCoverPercent,
+                         .laneCoverEnabled = authority.laneCoverEnabled,
+                         .liftEnabled = authority.liftEnabled,
+                         .liftRatio = authority.liftRatio,
+                         .hiddenEnabled = authority.hiddenEnabled,
+                         .hiddenRatio = authority.hiddenRatio},
                         authority.resetLaneCoverVisibleTimeReference);
 
     const std::size_t laneCount =
@@ -4205,6 +4208,11 @@ void BMSRenderer::configure(
   setLaneBeamsEnabled(configuration.laneBeamsEnabled);
   setLaneCoverHispeedFactor(configuration.laneCoverHispeedFactor);
   laneCoverEnabled = configuration.laneCoverEnabled;
+  coverState.laneCoverEnabled = laneCoverEnabled;
+  coverState.liftEnabled = configuration.liftEnabled;
+  coverState.liftRatio = lane_cover::ratio(configuration.liftRatio);
+  coverState.hiddenEnabled = configuration.hiddenEnabled;
+  coverState.hiddenRatio = lane_cover::ratio(configuration.hiddenRatio);
   setLaneBeamLengthPercent(configuration.laneBeamLengthPercent);
   setNoteStartPositionPercent(configuration.noteStartPositionPercent);
   setLaneBeamClockUsesRenderTime(
@@ -4409,17 +4417,16 @@ std::optional<PresentationFailure> BMSRenderer::lastFailure() const {
 
 void BMSRenderer::refreshGeometry() {
   const auto [nextLowerBound, nextUpperBound] = calculateLanePlaneScreenBounds();
-  const float hiddenRatio =
-      static_cast<float>(noteStartPositionPercent) / 100.0F;
-  const float nextVisibleUpperBound =
-      judgeY + std::max(0.0F, nextUpperBound - judgeY) * (1.0F - hiddenRatio);
+  const auto covers = lane_cover::geometry(coverState, 0.0F, nextUpperBound);
+  const float nextVisibleUpperBound = covers.suddenY;
   if (nextLowerBound != lowerBound || nextUpperBound != upperBound ||
-      nextVisibleUpperBound != noteVisibleUpperBound) {
+      nextVisibleUpperBound != noteVisibleUpperBound || judgeY != covers.judgeY) {
     advanceTouchRevision(touchLayoutRevision_);
     advanceTouchRevision(touchHitRegionsRevision_);
   }
   lowerBound = nextLowerBound;
   upperBound = nextUpperBound;
+  judgeY = covers.judgeY;
   noteVisibleUpperBound = nextVisibleUpperBound;
 }
 
@@ -4488,33 +4495,42 @@ void BMSRenderer::setLaneBeamLengthPercent(int percent) {
                  AppSettings::kMaxLaneBeamLengthPercent);
 }
 
-void BMSRenderer::setNoteStartPositionPercent(int percent) {
-  const int next =
-      std::clamp(percent, AppSettings::kMinNoteStartPositionPercent,
-                 AppSettings::kMaxNoteStartPositionPercent);
+void BMSRenderer::setNoteStartPositionPercent(float percent) {
+  coverState.laneCoverEnabled = laneCoverEnabled;
+  const float next = lane_cover::ratio(percent / 100.0F) * 100.0F;
+  coverState.laneCoverPercent = next;
   if (noteStartPositionPercent == next) {
     return;
   }
   noteStartPositionPercent = next;
-  const float hiddenRatio =
-      static_cast<float>(noteStartPositionPercent) / 100.0F;
-  noteVisibleUpperBound =
-      judgeY + std::max(0.0F, upperBound - judgeY) * (1.0F - hiddenRatio);
+  noteVisibleUpperBound = lane_cover::geometry(coverState, 0.0F, upperBound).suddenY;
   advanceTouchRevision(touchHitRegionsRevision_);
 }
 
-void BMSRenderer::applyLaneCoverState(int percent,
+void BMSRenderer::applyLaneCoverState(float percent,
                                       bool resetVisibleTimeReference) {
   applyLaneCoverState(percent, true, resetVisibleTimeReference);
 }
 
-void BMSRenderer::applyLaneCoverState(int percent, bool enabled,
+void BMSRenderer::applyLaneCoverState(float percent, bool enabled,
                                       bool resetVisibleTimeReference) {
-  setNoteStartPositionPercent(enabled ? percent : 0);
+  laneCoverEnabled = enabled;
+  coverState.laneCoverEnabled = enabled;
+  setNoteStartPositionPercent(percent);
+  refreshGeometry();
   if (resetVisibleTimeReference) {
     floatingVisibleTimeReferenceBpm =
         currentBpm > 0.0 ? currentBpm : visibleTimeReferenceBpm();
   }
+}
+
+void BMSRenderer::applyLaneCoverState(const lane_cover::State &state,
+                                     bool resetVisibleTimeReference) {
+  coverState = state;
+  coverState.liftRatio = lane_cover::ratio(state.liftRatio);
+  coverState.hiddenRatio = lane_cover::ratio(state.hiddenRatio);
+  applyLaneCoverState(state.laneCoverPercent, state.laneCoverEnabled,
+                      resetVisibleTimeReference);
 }
 
 std::optional<bx::Vec3>
@@ -5180,6 +5196,19 @@ void BMSRenderer::layoutLaneCoverNumberTexts() {
 }
 
 void BMSRenderer::drawLaneCover() {
+  const auto covers = lane_cover::geometry(coverState, 0.0F, upperBound);
+  if (coverState.liftEnabled || coverState.hiddenEnabled) {
+    const float bottom = coverState.liftEnabled ? lowerBound : judgeY;
+    if (covers.hiddenY > bottom) {
+      drawRect(playAreaWidth, covers.hiddenY - bottom, playAreaLeftX, bottom,
+               Color(9, 12, 18, 255));
+    }
+    if (coverState.hiddenEnabled && covers.hiddenY > judgeY) {
+      const float edge = std::max(0.025F, noteRenderHeight * 0.12F);
+      drawRect(playAreaWidth, edge, playAreaLeftX, covers.hiddenY - edge * 0.5F,
+               Color(214, 224, 236, 255));
+    }
+  }
   const float coverHeight = upperBound - noteVisibleUpperBound;
   if (coverHeight > 0.001f) {
     drawRect(playAreaWidth, coverHeight, playAreaLeftX, noteVisibleUpperBound,

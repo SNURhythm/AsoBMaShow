@@ -421,7 +421,7 @@ preflightReplayGameplayPresentation(
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
       settings, settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(chart)), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
-      constraints, replay.assistOption);
+      constraints, replay.assistOption, &replay);
   const auto result =
       rendererReservationAlreadyHeld
           ? replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
@@ -1343,7 +1343,7 @@ preflightCourseReplayGameplayPresentations(
              *stage.chart,
              resolvedOptions.renderTouchPoints,
              resolvedOptions.renderReplayGhosts, stage.constraints,
-             stage.replay.assistOption),
+             stage.replay.assistOption, &stage.replay),
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .initialAuthority = {
@@ -2926,7 +2926,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto initialLaneCover =
       replay_video_export::replayLaneCoverInitialState(replay, settings, false);
   replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-      initialLaneCover.percent, initialLaneCover.enabled);
+      initialLaneCover.percent, initialLaneCover.enabled, initialLaneCover.coverState);
   const GaugeProfile gaugeProfile =
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
@@ -3256,6 +3256,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             exportChartVisualModel, presentationFrameState, settings);
     const auto laneCover = laneCoverPlayback.advance(
         replay.laneCoverEvents, frameTiming.gameplayTimeMicros);
+    const auto covers = laneCover.coverState.value_or(
+        settings.presentation().laneCoverState());
     for (const auto &transition : laneCover.transitions) {
       preparedGameplay.presentation->applyLaneCoverTransition(
           transition, timelineAuthority.bpm);
@@ -3311,10 +3313,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
         .laneCoverPercent = laneCover.percent,
         .laneCoverEnabled = laneCover.enabled,
-        .liftEnabled = settings.presentation().liftEnabled,
-        .liftRatio = settings.presentation().liftRatio,
-        .hiddenEnabled = settings.presentation().hiddenEnabled,
-        .hiddenRatio = settings.presentation().hiddenRatio,
+        .liftEnabled = covers.liftEnabled,
+        .liftRatio = covers.liftRatio,
+        .hiddenEnabled = covers.hiddenEnabled,
+        .hiddenRatio = covers.hiddenRatio,
         .failureAnimationActive =
             replay_video_export::replayGameplayFailureAnimationActive(
                 frameTiming.gameplayTimeMicros, failureMicros),
@@ -3990,7 +3992,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         replay_video_export::replayLaneCoverInitialState(
             stageReplay, settings, stage.constraints.noSpeed);
     replay_video_export::ReplayLaneCoverPlayback laneCoverPlayback(
-        initialLaneCover.percent, initialLaneCover.enabled);
+        initialLaneCover.percent, initialLaneCover.enabled, initialLaneCover.coverState);
     const auto replayPersistedScore =
         replayExportPersistedScore(context, chart.Meta);
     const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
@@ -4107,6 +4109,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                  : laneCoverPlayback.advance(
                                        stageReplay.laneCoverEvents,
                                        frameTiming.gameplayTimeMicros);
+      const auto covers = laneCover.coverState.value_or(
+          settings.presentation().laneCoverState());
       for (const auto &transition : laneCover.transitions) {
         presentation.applyLaneCoverTransition(transition,
                                               timelineAuthority.bpm);
@@ -4165,11 +4169,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
               stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros),
           .laneCoverPercent = laneCover.percent,
           .laneCoverEnabled = laneCover.enabled,
-          .liftEnabled = settings.presentation().liftEnabled,
-          .liftRatio = stage.constraints.noSpeed ? 0.0F : settings.presentation().liftRatio,
-          .hiddenEnabled = settings.presentation().hiddenEnabled,
-          .hiddenRatio = stage.constraints.noSpeed ? 0.0F
-                                                   : settings.presentation().hiddenRatio,
+          .liftEnabled = covers.liftEnabled,
+          .liftRatio = stage.constraints.noSpeed ? 0.0F : covers.liftRatio,
+          .hiddenEnabled = covers.hiddenEnabled,
+          .hiddenRatio = stage.constraints.noSpeed ? 0.0F : covers.hiddenRatio,
           .failureAnimationActive =
               replay_video_export::replayGameplayFailureAnimationActive(
                   frameTiming.gameplayTimeMicros, stage.failureMicros),

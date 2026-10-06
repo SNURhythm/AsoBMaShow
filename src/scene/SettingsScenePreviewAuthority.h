@@ -16,6 +16,10 @@ previewLaneCoverAuthority(const AppSettings &settings) noexcept {
 inline void applyPreviewPlayerConfiguration(PlayfieldPresentationConfig &config,
                                             const AppSettings &settings) {
   config.showPastNotes = settings.showPastNotes;
+  config.liftEnabled = settings.presentation().liftEnabled;
+  config.liftRatio = settings.presentation().liftRatio;
+  config.hiddenEnabled = settings.presentation().hiddenEnabled;
+  config.hiddenRatio = settings.presentation().hiddenRatio;
   config.masterVolume = settings.audioVideo.audio.masterVolume;
   config.keysoundVolume = settings.audioVideo.audio.keysoundVolume;
   config.bgmVolume = settings.audioVideo.audio.bgmVolume;

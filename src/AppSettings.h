@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JudgementIndicatorRange.h"
+#include "LaneCover.h"
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
@@ -238,7 +239,7 @@ public:
     float laneAngleDegrees = kDefaultLaneAngleDegrees;
     float laneLength = kDefaultLaneLength;
     int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
-    int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
+    float noteStartPositionPercent = kDefaultNoteStartPositionPercent;
     bool laneCoverEnabled = true;
     // PlayConfig's Lift/HIDDEN configuration. The pinned source defaults each
     // ratio to 0.1 while both planes begin disabled.
@@ -304,6 +305,20 @@ public:
       }
     }
     void sanitize(PresentationOrientation orientation);
+    [[nodiscard]] lane_cover::State laneCoverState() const noexcept {
+      return {.laneCoverPercent = noteStartPositionPercent,
+              .laneCoverEnabled = laneCoverEnabled,
+              .liftEnabled = liftEnabled, .liftRatio = liftRatio,
+              .hiddenEnabled = hiddenEnabled, .hiddenRatio = hiddenRatio};
+    }
+    void setLaneCoverState(const lane_cover::State &state) noexcept {
+      noteStartPositionPercent = state.laneCoverPercent;
+      laneCoverEnabled = state.laneCoverEnabled;
+      liftEnabled = state.liftEnabled;
+      liftRatio = state.liftRatio;
+      hiddenEnabled = state.hiddenEnabled;
+      hiddenRatio = state.hiddenRatio;
+    }
     bool operator==(const PresentationSettings &) const = default;
   };
 

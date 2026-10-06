@@ -1037,6 +1037,23 @@ void testReplayLaneCoverInitialStateUsesReplaySetup() {
 
   const auto replayInitial = replay_video_export::replayLaneCoverInitialState(
       replay, settings, false);
+  replay.initialCoverState = {.laneCoverPercent = 37.4F, .laneCoverEnabled = true,
+                              .liftEnabled = true, .liftRatio = 0.25F,
+                              .hiddenEnabled = true, .hiddenRatio = 0.15F};
+  const auto fineInitial = replay_video_export::replayLaneCoverInitialState(
+      replay, settings, false);
+  replay_video_export::ReplayLaneCoverPlayback playback(
+      fineInitial.percent, fineInitial.enabled, fineInitial.coverState);
+  auto adjusted = *replay.initialCoverState;
+  adjusted.hiddenRatio = 0.2F;
+  const std::vector<ReplayLaneCoverEvent> events{{
+      .songTimeMicros = 0, .noteStartPositionPercent = 37, .laneCoverEnabled = true,
+      .changeKind = ReplayLaneCoverChangeKind::Hidden, .coverState = adjusted}};
+  const auto frame = playback.advance(events, 0);
+  expect(fineInitial.coverState == *replay.initialCoverState &&
+             frame.percent == 37.4F && frame.coverState == adjusted &&
+             frame.transitions.size() == 1 && frame.transitions[0].coverState == adjusted,
+         "export retains fine initial covers and lower-cover transitions");
   const auto noSpeedInitial = replay_video_export::replayLaneCoverInitialState(
       replay, settings, true);
   expect(replayInitial.percent == 37 && replayInitial.enabled &&
@@ -1088,6 +1105,8 @@ void testReplayLaneCoverChangesUseBeatorajaHiSpeedTransitions() {
   PlayfieldPresentationConfig configuration =
       replay_video_export::replayGameplayPresentationConfig(
           settings, 8.0F, chart, false, false);
+  // The recorded configuration must win over the viewer's current covers.
+  settings.presentation().laneCoverEnabled = false;
   TestBga bga;
   const auto created = ReplayPlayfieldPresentation::create(
       createInfo(chart, settings, configuration, bga));

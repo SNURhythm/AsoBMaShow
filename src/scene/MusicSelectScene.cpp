@@ -4101,7 +4101,8 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .pacemakerTarget = selections.pacemakerTarget,
-      .profileId = context.profileManager.activeProfile().id};
+      .profileId = context.profileManager.activeProfile().id,
+      .laneCovers = context.settings.presentation().laneCoverState()};
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return state;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
@@ -4214,6 +4215,12 @@ void MusicSelectScene::openPlayOptions() {
            updatePlayOptions([&target](auto &selections) {
              selections.pacemakerTarget = pacemaker::normalizeTargetId(target);
            });
+         },
+         .onLaneCoversChanged = [this](const lane_cover::State &covers) {
+           context.settings.presentation().setLaneCoverState(covers);
+           context.settings.sanitize();
+           (void)context.saveSettings();
+           refreshPlayOptionsModal();
          }},
         modalOverlayPortal_);
   }

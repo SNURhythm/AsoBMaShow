@@ -734,6 +734,16 @@ void testReplayFingerprintCoverage() {
   expectReplayFingerprintChange(
       fixture, [](auto &v) { v.laneCoverEvents.emplace_back(); },
       "laneCoverEvents vector length");
+  expectReplayFingerprintChange(
+      fixture, [](auto &v) {
+        v.initialCoverState = lane_cover::State{.liftEnabled = true, .liftRatio = 0.3F};
+      }, "initial lift/hidden cover state");
+  expectReplayFingerprintChange(
+      fixture, [](auto &v) {
+        v.laneCoverEvents.front().coverState =
+            lane_cover::State{.hiddenEnabled = true, .hiddenRatio = 0.3F};
+      }, "recorded lift/hidden adjustment state");
+
 
   const auto score = scoreFor(fixture);
   const std::string baseline =

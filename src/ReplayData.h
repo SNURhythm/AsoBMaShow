@@ -84,6 +84,7 @@ struct ReplayLaneCoverEvent {
   bool laneCoverEnabled = false;
   ReplayLaneCoverChangeKind changeKind = ReplayLaneCoverChangeKind::Value;
   bool resetVisibleTimeReference = false;
+  std::optional<lane_cover::State> coverState;
 };
 
 struct ReplayData {
@@ -115,6 +116,7 @@ struct ReplayData {
   int initialLaneCoverPercent = 0;
   bool initialLaneCoverEnabled = false;
   bool hasInitialLaneCoverState = false;
+  std::optional<lane_cover::State> initialCoverState;
   int finalScore = 0;
   int maxCombo = 0;
   float finalGauge = 0.0f;
@@ -132,15 +134,17 @@ struct ReplayData {
 };
 
 struct ReplayInitialLaneCoverState {
-  int percent = 0;
+  float percent = 0;
   bool enabled = false;
 };
 
 [[nodiscard]] inline ReplayInitialLaneCoverState replayInitialLaneCoverState(
-    const ReplayData &replay, int fallbackPercent,
+    const ReplayData &replay, float fallbackPercent,
     bool fallbackEnabled) noexcept {
   if (replay.hasInitialLaneCoverState) {
-    return {.percent = replay.initialLaneCoverPercent,
+    return {.percent = replay.initialCoverState
+                           ? replay.initialCoverState->laneCoverPercent
+                           : static_cast<float>(replay.initialLaneCoverPercent),
             .enabled = replay.initialLaneCoverEnabled};
   }
   return {.percent = fallbackPercent, .enabled = fallbackEnabled};

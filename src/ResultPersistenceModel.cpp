@@ -275,7 +275,25 @@ void appendReplay(CanonicalEncoder &encoder, const ReplayData &replay) {
         encoder.boolean(event.laneCoverEnabled);
         encoder.enumeration(event.changeKind);
         encoder.boolean(event.resetVisibleTimeReference);
+        if (event.coverState) {
+          encoder.string("lane-cover-state-v1");
+          encoder.float32(event.coverState->laneCoverPercent);
+          encoder.boolean(event.coverState->laneCoverEnabled);
+          encoder.boolean(event.coverState->liftEnabled);
+          encoder.float32(event.coverState->liftRatio);
+          encoder.boolean(event.coverState->hiddenEnabled);
+          encoder.float32(event.coverState->hiddenRatio);
+        }
       });
+  if (replay.initialCoverState) {
+    encoder.string("initial-lane-cover-state-v1");
+    encoder.float32(replay.initialCoverState->laneCoverPercent);
+    encoder.boolean(replay.initialCoverState->laneCoverEnabled);
+    encoder.boolean(replay.initialCoverState->liftEnabled);
+    encoder.float32(replay.initialCoverState->liftRatio);
+    encoder.boolean(replay.initialCoverState->hiddenEnabled);
+    encoder.float32(replay.initialCoverState->hiddenRatio);
+  }
   appendProvenance(encoder, replay.provenance);
 }
 

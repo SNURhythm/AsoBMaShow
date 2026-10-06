@@ -65,6 +65,7 @@ captureLocalReplaySetup(const LocalReplaySetupFacts &facts,
             : gaugeInitialValue(provenance.gaugeType, provenance.gaugeProfile);
     setup.initialLaneCoverPercent = facts.initialLaneCoverPercent;
     setup.laneCoverEnabled = facts.laneCoverEnabled;
+    setup.coverState = facts.coverState;
     setup.clubMode = provenance.clubMode;
 
     return setup;
