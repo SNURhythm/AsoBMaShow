@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
+#include "SettingsPreviewBga.h"
 #include "SettingsScenePreviewAuthority.h"
 #include "../library/ChartLibraryPlatform.h"
 #include "../input/InputCaptureController.h"
@@ -24,27 +25,13 @@ using namespace settings_scene;
 
 namespace {
 
-#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-// The synthetic chart has no BGA; never borrow the song selector's media state.
-class PreviewBga final : public IGameplayBgaSubmitter {
-public:
-  PreparedGameplayBgaFrame prepareVisualFrameAt(std::uint64_t serial, std::int64_t,
-                                                const GameplayBgaMissState &) override {
-    return {.sequence = serial};
-  }
-  BgaPreflightResult preflight(const PreparedGameplayBgaFrame &,
-                               std::span<const BgaDrawTarget>) override { return {.ready = true}; }
-  void commitPrepared(const PreparedGameplayBgaFrame &) noexcept override {}
-  void submitPrepared(const PreparedGameplayBgaFrame &, const BgaDrawTarget &) noexcept override {}
-  void finalizePrepared(const PreparedGameplayBgaFrame &) noexcept override {}
-  void submitFullscreen(const PreparedGameplayBgaFrame &) noexcept override {}
-};
-PreviewBga previewBga;
-#endif
 
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
-                                 const bms_parser::Chart &chart) {
+                                 const bms_parser::Chart &chart,
+                                 built_in_notes::SharedModeStyles &noteStyles) {
+  noteStyles = built_in_notes::snapshotModeStyles(
+      settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)), noteStyles);
   const gameplay_hispeed::State hispeed(
       {.mode = gameplay_hispeed::fixModeFromEncoded(
            static_cast<int>(settings.hispeedFixMode)),
@@ -73,6 +60,9 @@ previewPresentationConfiguration(const AppSettings &settings,
       .laneCoverEnabled = settings.presentation().laneCoverEnabled,
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = settings.presentation().noteStartPositionPercent,
+      .builtInNotes = noteStyles,
+      .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
+      .builtInLane = settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(chart)),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .markProcessedNotes = settings.markProcessedNotes,
@@ -156,6 +146,7 @@ SettingsScene::~SettingsScene() {
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
   previewActive = true;
+  previewPaused = false;
   previewPanelPage = 0;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();
@@ -213,10 +204,11 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.visibleTimeDurationMilliseconds, true);
     previewRenderer = builtIn.get();
     previewProjection = std::make_unique<PlayfieldProjection>();
+    previewBga = std::make_unique<PreviewBga>(context.jukebox, context.settings);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     previewPresentation = std::make_unique<PlayfieldPresentationCoordinator>(
         PlayfieldPresentationCoordinatorDependencies{
-            .builtIn = std::move(builtIn), .skin = {}, .bga = previewBga});
+            .builtIn = std::move(builtIn), .skin = {}, .bga = *previewBga});
 #else
     previewPresentation = std::move(builtIn);
 #endif
@@ -277,8 +269,9 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
       previewRenderer == nullptr) {
     return;
   }
-  const auto configuration =
-      previewPresentationConfiguration(context.settings, *previewChart);
+  auto configuration =
+      previewPresentationConfiguration(context.settings, *previewChart, previewNoteStyles);
+  if (appearanceColorPreview) appearanceColorPreview(configuration);
   previewVisualStateStore->setConfiguration(configuration);
   previewPresentation->configure(configuration);
   syncPreviewInputLayout();
@@ -314,12 +307,21 @@ void SettingsScene::renderPreview() {
   (void)previewPresentation->prepareFrame(*previewCapturedVisualState, projection);
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope uiBatchScope(renderContext);
-  const auto result = previewPresentation->render(renderContext);
+  auto result = previewPresentation->render(renderContext);
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  result.preparedBga = previewBga->prepareVisualFrameAt(
+      previewFrameSerial, previewElapsedMicros, {});
+#endif
+  context.gameplayBgaCompositeState = {
+      .frameSerial = previewFrameSerial,
+      .mode = result.bgaCompositeMode,
+      .prepared = result.preparedBga,
+  };
   if (result.failure) {
     previewError = result.failure->diagnostic.message;
     lastLayoutWidth = -1;
   }
-  if (result.outcome == PresentationFrameOutcome::Ready) {
+  if (!previewPaused && result.outcome == PresentationFrameOutcome::Ready) {
     if (const auto timing = previewPresentation->selectedSkinGameplayTiming())
       previewEndAnimation.observeRenderedFrame(
           previewElapsedMicros, previewChart->Meta.PlayLength, *timing);
@@ -464,6 +466,7 @@ void SettingsScene::destroyPreviewRenderer() {
   previewSkinStop.request_stop();
   previewRenderer = nullptr;
   previewPresentation.reset();
+  previewBga.reset();
   previewProjection.reset();
   previewError.clear();
   previewCapturedVisualState.reset();
@@ -473,6 +476,7 @@ void SettingsScene::destroyPreviewRenderer() {
   previewAutoPlayEvents.clear();
   previewAutoPlayNextEvent = 0;
   previewVisualStateStore.reset();
+  previewNoteStyles.reset();
   previewChartVisualModel.reset();
   previewVisualNoteSources.clear();
   previewFrameSerial = 0;
@@ -482,7 +486,7 @@ void SettingsScene::destroyPreviewRenderer() {
 }
 
 void SettingsScene::ensurePreviewInputHandler() {
-  if (!previewActive || previewAutoPlay) {
+  if (!previewActive || previewAutoPlay || appearanceColorPopup) {
     return;
   }
   ensurePreviewRenderer();
@@ -708,6 +712,19 @@ void SettingsScene::consumePreviewTransactions(
   }
 }
 
+void SettingsScene::advancePreviewPlayback(float dt) {
+  if (previewPaused) return;
+  previewElapsedMicros +=
+      static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
+  advancePreviewSimulation();
+  const bool skinEnding = previewPresentation &&
+                          previewPresentation->selectedSkinGameplayTiming().has_value();
+  if (skinEnding ? previewEndAnimation.complete
+                 : previewElapsedMicros >= kPreviewLoopMicros) {
+    resetPreviewSimulation();
+  }
+}
+
 void SettingsScene::advancePreviewSimulation() {
   if (!previewSimulation) return;
   while (previewAutoPlay && previewAutoPlayNextEvent < previewAutoPlayEvents.size() &&
@@ -718,7 +735,7 @@ void SettingsScene::advancePreviewSimulation() {
     const gameplay::GameplayInputContext clock{
         .songTimeMicros = event.timeMicros, .laneBeamTimeMicros = event.timeMicros};
     const auto result = event.press ? previewSimulation->pressLane(event.lane, clock)
-                                    : previewSimulation->releaseLane(event.lane, clock);
+                                    : previewSimulation->releaseLane(event.lane, clock, event.backSpin);
     consumePreviewTransactions(result.transactions);
   }
   consumePreviewTransactions(previewSimulation->advanceTo(

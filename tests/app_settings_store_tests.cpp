@@ -1,6 +1,8 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
+#include "../src/settings/BuiltInNoteEditing.h"
+#include "../src/settings/BuiltInScratchGradient.h"
 #include "../src/skin/GameplaySkinTraits.h"
 #include "../src/skin/SkinTargetTraits.h"
 #include "../src/skin/SkinProfileSettings.h"
@@ -2156,7 +2158,310 @@ void testScratchlessBuiltInPreferencesRoundTrip() {
          "leaving Follow restores the child width without overwriting its parent");
 }
 
+void testBuiltInNoteAppearancePersists() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "notes.json";
+  AppSettings defaults;
+  std::string error;
+  expect(AppSettingsStore::Save(path, defaults, error), "save note defaults");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &notes = document["presentations"]["landscape"]["builtInNotes"];
+  notes = {{"7", {{"0", {{"normal", {{"color", "12ABEF"}, {"thickness", 150}}}}}}}};
+  notes["48"]["47"]["normal"] = {{"color", "AB1234"}, {"thickness", 175}};
+  notes["7"]["0"]["long_body_off"] = {{"color", "123456"}};
+  notes["7"]["0"]["long_body_on"] = {{"color", "123456"}, {"thickness", 100}};
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.builtInNotesForKeyMode(7).at(0).at(built_in_notes::Type::LongBodyOff).thickness == 80 &&
+             loaded.settings.builtInNotesForKeyMode(7).at(0).at(built_in_notes::Type::LongBodyOn).thickness == 100,
+         "missing body widths use 80 percent while explicit saved widths remain unchanged");
+  notes["7"]["0"]["long_body_off"]["thickness"] = 80;
+  expect(AppSettingsStore::Save(path, loaded.settings, error), "save note overrides");
+  const auto saved = nlohmann::json::parse(readFile(path));
+  expect(saved["presentations"]["landscape"].contains("builtInNotes") &&
+             saved["presentations"]["landscape"]["builtInNotes"] == notes,
+         "lane and type note appearance survives load and save");
+}
+
+void testBuiltInNoteGeometryAndIsolation() {
+  using namespace built_in_notes;
+  AppSettings settings;
+  const auto gray = defaultStyle(Palette::Gray, Type::Normal);
+  const auto blue = defaultStyle(Palette::Blue, Type::Normal);
+  expect(gray.color == 0xCCCCCC && blue.color == 0x3399CC,
+         "normal defaults match raw sprite RGB pixels");
+  expect(height(128, Type::Normal, gray) == 20 &&
+             height(128, Type::Mine, gray) == 20 &&
+             height(128, Type::LongHead, gray) == 20 &&
+             height(128, Type::LongTail, gray) == 20 &&
+             height(128, Type::HellHead, gray) == 20 &&
+             height(128, Type::HellTail, gray) == 20,
+         "normal notes, mines, and all long-note endpoints share the same default height");
+  expect(height(128, Type::Normal, {0, 500}) == 100 &&
+             height(128, Type::LongHead, {0, 500}) == 100 &&
+             height(128, Type::HellTail, {0, 500}) == 100,
+         "note heights support 500 percent without changing their default size");
+  auto &notes = settings.presentation().builtInNotes;
+  notes[7][0][Type::Normal] = {0x123456, 150};
+  notes[7][0][Type::LongHead] = {0xABCDEF, 75};
+  notes[7][1][Type::Normal] = {0xABC123, 200};
+  const auto &mode = settings.builtInNotesForKeyMode(7);
+  expect(height(128, Type::Normal, resolve(mode, 0, Type::Normal, Palette::Gray)) == 30,
+         "custom thickness scales the visible height exactly once");
+  expect(resolve(mode, 0, Type::LongHead, Palette::Gray).color == 0xABCDEF &&
+             resolve(mode, 1, Type::Normal, Palette::Blue).color == 0xABC123 &&
+             resolve(mode, 2, Type::Normal, Palette::Gray) == gray,
+         "customization is isolated by lane and note type");
+  expect(settings.builtInNotesForKeyMode(5).empty(), "note settings do not leak across modes");
+  settings.presentation().skin.follow7K1S = true;
+  expect(settings.builtInNotesForKeyMode(-7) == mode, "scratchless follow resolves parent notes");
+  settings.presentation().skin.follow7K1S = false;
+  expect(settings.builtInNotesForKeyMode(-7).empty(), "independent scratchless notes stay independent");
+  expect(settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInNotes.empty(),
+         "portrait notes are independent from landscape");
+  for (const auto palette : {Palette::Gray, Palette::Blue, Palette::Scratch}) {
+    for (const auto type : {Type::LongBodyOff, Type::LongBodyOn, Type::HellBodyOff,
+                            Type::HellBodyOn, Type::HellDamage}) {
+      const auto body = defaultStyle(palette, type);
+      expect(body.thickness == 80 && std::abs(bodyWidth(100, body) - 80.0F) < 0.001F,
+             "all LN/CN/HCN body states default to 80 percent lane width");
+      ModeStyles custom;
+      const std::array<LaneTarget, 1> target{{{0, palette}}};
+      editSelected(custom, target, type, EditKind::Color, 0x123456);
+      expect(custom[0][type] == Style{0x123456, 80},
+             "color-only body edits retain the default 80 percent width");
+      editSelected(custom, target, type, EditKind::Thickness, 60);
+      expect(resolve(custom, 0, type, palette).thickness == 60,
+             "explicit custom body widths override the new default");
+      editSelected(custom, target, type, EditKind::ResetThickness);
+      expect(custom[0][type] == Style{0x123456, 80},
+             "body width reset restores 80 percent without changing custom color");
+    }
+  }
+  expect(bodyWidth(128, {0, 50}) == 64 && bodyWidth(128, {0, 300}) == 128,
+         "body width is adjustable without crossing lane boundaries");
+  expect(parseColor("#12abEF") == 0x12ABEF && !parseColor("12ZZ34") &&
+             !parseColor("#123") && !parseColor("1234567"),
+         "custom colors accept six hex digits and reject malformed input");
+  notes[7][0][Type::Normal].thickness = -10;
+  notes[7][0][Type::LongHead].thickness = 999;
+  notes[7][0][Type::LongBodyOn] = {0xFFFFFFFF, 999};
+  notes[9][8][Type::Normal] = {0x112233, 150};
+  notes[24][23][Type::Normal] = {0x445566, 175};
+  notes[48][47][Type::Normal] = {0x778899, 200};
+  notes[999][99][Type::Normal] = {};
+  notes[7][-1][Type::Normal] = {};
+  settings.sanitize();
+  expect(notes.contains(9) && notes.contains(24) && notes.contains(48) &&
+             notes.at(48).contains(47),
+         "every exposed gameplay mode and its last lane remains customizable");
+  expect(notes[7][0][Type::Normal].thickness == 25 &&
+             notes[7][0][Type::LongHead].thickness == 500 &&
+             notes[7][0][Type::LongBodyOn] == Style{0xFFFFFF, 100} &&
+             !notes.contains(999) && !notes[7].contains(-1),
+         "invalid style dimensions and identities are bounded");
+}
+
+void testBuiltInNoteBulkEditing() {
+  using namespace built_in_notes;
+  AppSettings settings;
+  auto &mode = settings.presentation().builtInNotes[7];
+  mode[0][Type::Normal] = {0x123456, 150};
+  mode[1][Type::Normal] = {0x654321, 200};
+  mode[2][Type::Normal] = {0xABCDEF, 75};
+  mode[0][Type::LongHead] = {0x112233, 125};
+  const std::array<LaneTarget, 3> selected{{
+      {0, Palette::Gray}, {1, Palette::Blue}, {7, Palette::Scratch}}};
+  expect(!commonStyle(mode, selected, Type::Normal).color &&
+             !commonStyle(mode, selected, Type::Normal).thickness,
+         "bulk editor reports mixed properties independently");
+  editSelected(mode, selected, Type::Normal, EditKind::Color, 0xFF9524);
+  expect(mode[0][Type::Normal] == Style{0xFF9524, 150} &&
+             mode[1][Type::Normal] == Style{0xFF9524, 200} &&
+             mode[7][Type::Normal] == Style{0xFF9524, 100},
+         "bulk colors preserve each selected lane's own thickness");
+  expect(commonStyle(mode, selected, Type::Normal).color == 0xFF9524 &&
+             !commonStyle(mode, selected, Type::Normal).thickness,
+         "shared color is displayed even when thickness is mixed");
+  editSelected(mode, selected, Type::Normal, EditKind::AdjustThickness, 10);
+  expect(mode[0][Type::Normal].thickness == 160 &&
+             mode[1][Type::Normal].thickness == 210 &&
+             mode[7][Type::Normal].thickness == 110,
+         "bulk thickness steps adjust each selected lane relatively");
+  editSelected(mode, selected, Type::Normal, EditKind::ResetColor);
+  expect(mode[0][Type::Normal] == Style{0xCCCCCC, 160} &&
+             mode[1][Type::Normal] == Style{0x3399CC, 210} &&
+             mode[7][Type::Normal] == Style{0xDB3625, 110},
+         "color reset restores lane-specific defaults without changing thickness");
+  mode[1][Type::Normal].color = 0x123456;
+  editSelected(mode, selected, Type::Normal, EditKind::ResetThickness);
+  expect(mode[0][Type::Normal] == Style{0xCCCCCC, 100} &&
+             mode[1][Type::Normal] == Style{0x123456, 100} &&
+             mode[7][Type::Normal] == Style{0xDB3625, 100},
+         "thickness reset preserves custom lane colors");
+  editSelected(mode, selected, Type::Normal, EditKind::ResetColor);
+  expect(!commonStyle(mode, selected, Type::Normal).color &&
+             commonStyle(mode, selected, Type::Normal).thickness == 100,
+         "shared thickness is displayed even when colors are mixed");
+  editSelected(mode, selected, Type::Normal, EditKind::Thickness, 999);
+  editSelected(mode, selected, Type::LongBodyOn, EditKind::Thickness, 999);
+  expect(mode[1][Type::Normal] == Style{0x3399CC, 500} &&
+             mode[1][Type::LongBodyOn] == Style{0x3399CC, 100},
+         "bulk absolute thickness respects endpoint and body bounds");
+  editSelected(mode, selected, Type::Normal, EditKind::Thickness, -10);
+  expect(mode[1][Type::Normal] == Style{0x3399CC, 25},
+         "bulk thickness respects the minimum");
+  const auto beforeEmptyEdit = mode;
+  editSelected(mode, {}, Type::Normal, EditKind::Color, 0);
+  expect(mode == beforeEmptyEdit && !commonStyle(mode, {}, Type::Normal).color &&
+             !commonStyle(mode, {}, Type::Normal).thickness,
+         "an empty selection cannot change settings or display a shared value");
+  expect(mode[2][Type::Normal] == Style{0xABCDEF, 75} &&
+             mode[0][Type::LongHead] == Style{0x112233, 125},
+         "bulk edits leave unselected lanes and note types untouched");
+  TempDirectory temporary;
+  const auto path = temporary.path() / "bulk-notes.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save bulk note edits");
+  expect(AppSettingsStore::Load(path).settings.builtInNotesForKeyMode(7) == mode,
+         "bulk note edits survive save and reload");
+}
+
+void testBuiltInLaneAppearance() {
+  using Style = built_in_lane::Style;
+  AppSettings settings;
+  expect(settings.builtInLaneForKeyMode(7) == Style{} &&
+             built_in_lane::measureLineHeight({}) == 0.05F &&
+             built_in_lane::backgroundAlpha({}) == 122,
+         "lane appearance retains the existing measure line and background defaults");
+  settings.presentation().builtInLanes[7] = {0x12ABEF, 500, 0};
+  settings.presentation().builtInLanes[-7] = {0x654321, 75, 100};
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInLanes[7] =
+      {0x112233, 125, 25};
+  expect(built_in_lane::measureLineHeight(settings.builtInLaneForKeyMode(7)) == 0.25F &&
+             built_in_lane::backgroundAlpha(settings.builtInLaneForKeyMode(7)) == 0 &&
+             built_in_lane::backgroundAlpha(settings.builtInLaneForKeyMode(-7)) == 255 &&
+             settings.builtInLaneForKeyMode(5) == Style{},
+         "lane appearance supports thick lines and transparent or opaque backgrounds by mode");
+  settings.presentation().skin.follow7K1S = true;
+  expect(settings.builtInLaneForKeyMode(-7) == settings.builtInLaneForKeyMode(7),
+         "scratchless follow uses the parent lane appearance");
+  settings.presentation().skin.follow7K1S = false;
+  TempDirectory temporary;
+  const auto path = temporary.path() / "lane-appearance.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save lane appearance");
+  const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.builtInLaneForKeyMode(7) == Style{0x12ABEF, 500, 0} &&
+             loaded.builtInLaneForKeyMode(-7) == Style{0x654321, 75, 100} &&
+             loaded.presentation(AppSettings::PresentationOrientation::Portrait).builtInLanes.at(7) ==
+                 Style{0x112233, 125, 25},
+         "measure line and lane opacity persist by mode and orientation");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &lanes = document["presentations"]["landscape"]["builtInLanes"];
+  lanes["7"] = {{"measureLineColor", "bad"}, {"measureLineThicknessPercent", 900},
+                 {"backgroundOpacityPercent", -10}};
+  lanes["5"] = {{"measureLineColor", "123456"}, {"measureLineThicknessPercent", -1},
+                 {"backgroundOpacityPercent", 150}};
+  lanes["999"] = {{"backgroundOpacityPercent", 50}};
+  writeFile(path, document.dump());
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(invalid.settings.builtInLaneForKeyMode(7) == Style{0xFFFFFF, 500, 0} &&
+             invalid.settings.builtInLaneForKeyMode(5) == Style{0x123456, 25, 100} &&
+             !invalid.settings.presentation().builtInLanes.contains(999),
+         "invalid lane colors fall back and thickness, opacity, and modes are bounded");
+}
+
+void testBuiltInJudgeLineAppearance() {
+  using Style = built_in_judge_line::Style;
+  AppSettings settings;
+  expect(settings.builtInJudgeLineForKeyMode(7) == Style{0xFFFFFF, 100} &&
+             built_in_judge_line::height(128, {}) == 20,
+         "judge line retains its original white color and base height");
+  settings.presentation().builtInJudgeLines[7] = {0x12ABEF, 500};
+  settings.presentation().builtInJudgeLines[-7] = {0x654321, 75};
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).builtInJudgeLines[7] =
+      {0x112233, 125};
+  expect(built_in_judge_line::height(128, settings.builtInJudgeLineForKeyMode(7)) == 100 &&
+             settings.builtInJudgeLineForKeyMode(5) == Style{},
+         "judge-line height supports 500 percent and stays independent by mode");
+  settings.presentation().skin.follow7K1S = true;
+  expect(settings.builtInJudgeLineForKeyMode(-7) == Style{0x12ABEF, 500},
+         "scratchless follow uses the parent judge line");
+  settings.presentation().skin.follow7K1S = false;
+  expect(settings.builtInJudgeLineForKeyMode(-7) == Style{0x654321, 75},
+         "leaving follow restores the independent judge line");
+  TempDirectory temporary;
+  const auto path = temporary.path() / "judge-lines.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save judge-line appearance");
+  const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.builtInJudgeLineForKeyMode(7) == Style{0x12ABEF, 500} &&
+             loaded.builtInJudgeLineForKeyMode(-7) == Style{0x654321, 75} &&
+             loaded.presentation(AppSettings::PresentationOrientation::Portrait).builtInJudgeLines.at(7) ==
+                 Style{0x112233, 125},
+         "judge-line color and height persist by mode and orientation");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &lines = document["presentations"]["landscape"]["builtInJudgeLines"];
+  lines["7"] = {{"color", "not-a-color"}, {"heightPercent", 999}};
+  lines["5"] = {{"color", "123456"}, {"heightPercent", -20}};
+  lines["999"] = {{"color", "123456"}, {"heightPercent", 100}};
+  writeFile(path, document.dump());
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(invalid.settings.builtInJudgeLineForKeyMode(7) == Style{0xFFFFFF, 500} &&
+             invalid.settings.builtInJudgeLineForKeyMode(5) == Style{0x123456, 25} &&
+             !invalid.settings.presentation().builtInJudgeLines.contains(999),
+         "invalid judge-line colors fall back and heights and modes are bounded");
+}
+
+void testBuiltInScratchGradient() {
+  using namespace built_in_notes;
+  for (const auto type : {Type::Normal, Type::LongHead, Type::LongTail, Type::HellHead, Type::HellTail})
+    expect(hasScratchGradient(type), "scratch notes and endpoints receive the gradient");
+  for (const auto type : {Type::Mine, Type::Invisible, Type::LongBodyOff, Type::LongBodyOn,
+                          Type::HellBodyOff, Type::HellBodyOn, Type::HellDamage})
+    expect(!hasScratchGradient(type), "mines, outlines and bodies have no scratch decoration");
+  const auto stops = scratchGradient(0x3399CC);
+  std::uint32_t peakRed = 0;
+  for (const auto &stop : stops) peakRed = std::max(peakRed, (stop.color >> 16) & 255U);
+  expect(stops.front().position == 0 && stops.back().position == 1 &&
+             peakRed >= 100 && peakRed <= 130 &&
+             ((stops.front().color >> 16) & 255U) < 51 &&
+             ((stops.back().color >> 16) & 255U) < 51,
+         "scratch sheen keeps the chosen hue with a restrained highlight and gentle edge shading");
+  expect(scratchGradient(0).at(3).color > 0x404040 &&
+             scratchGradient(0xFFFFFF).front().color < 0xEEEEEE,
+         "scratch gradients remain visible on black and white custom colors");
+}
+
+void testBuiltInAppearancePresetColors() {
+  using namespace built_in_notes;
+  const auto check = [](std::uint32_t defaultColor) {
+    auto colors = colorPresets(defaultColor);
+    expect(!colors.empty() && colors.front() == defaultColor,
+           "appearance presets keep the current type's default first");
+    std::sort(colors.begin(), colors.end());
+    expect(std::adjacent_find(colors.begin(), colors.end()) == colors.end(),
+           "appearance presets never repeat the default or a fixed swatch");
+    expect(std::binary_search(colors.begin(), colors.end(), 0xFFFFFF) &&
+               std::binary_search(colors.begin(), colors.end(), 0x3399CC) &&
+               std::binary_search(colors.begin(), colors.end(), 0xCC0000),
+           "deduplicating presets preserves the shared palette");
+  };
+  for (const auto palette : {Palette::Gray, Palette::Blue, Palette::Scratch})
+    for (std::size_t i = 0; i < kTypeNames.size(); ++i)
+      check(defaultStyle(palette, static_cast<Type>(i)).color);
+  check(built_in_judge_line::Style{}.color);
+}
+
 int main() {
+  testBuiltInAppearancePresetColors();
+  testBuiltInLaneAppearance();
+  testBuiltInJudgeLineAppearance();
+  testBuiltInScratchGradient();
+  testBuiltInNoteBulkEditing();
+  testBuiltInNoteAppearancePersists();
+  testBuiltInNoteGeometryAndIsolation();
   testJudgementLabelVisibilityRoundTrip();
   testScratchlessBuiltInPreferencesRoundTrip();
   testFeedbackDefaultsAndScaleMigration();

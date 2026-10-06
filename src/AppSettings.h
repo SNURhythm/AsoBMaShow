@@ -4,6 +4,9 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "settings/BuiltInNotes.h"
+#include "settings/BuiltInJudgeLine.h"
+#include "settings/BuiltInLaneAppearance.h"
 #include "settings/JudgementTextVisibility.h"
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
@@ -92,7 +95,7 @@ public:
   static constexpr float kMaxHispeedMargin = 10.0F;
   static constexpr int kMinBgaBrightnessPercent = 0;
   static constexpr int kMaxBgaBrightnessPercent = 100;
-  static constexpr int kDefaultBgaBrightnessPercent = 100;
+  static constexpr int kDefaultBgaBrightnessPercent = 50;
   static constexpr float kMinBgaBlurStrength = 0.0f;
   static constexpr float kMaxBgaBlurStrength = 8.0f;
   static constexpr float kDefaultBgaBlurStrength = 2.0f;
@@ -165,6 +168,28 @@ public:
   bool prepMetronomeEnabled = false;
   bool ipadGestureReminderEnabled = true;
   bool startLaneIndicatorsEnabled = true;
+  const built_in_notes::ModeStyles &builtInNotesForKeyMode(int mode) const {
+    if (mode == -5 && presentation().skin.follow5K1S) mode = 5;
+    if (mode == -7 && presentation().skin.follow7K1S) mode = 7;
+    const auto &notes = presentation().builtInNotes;
+    const auto found = notes.find(mode);
+    static const built_in_notes::ModeStyles empty;
+    return found == notes.end() ? empty : found->second;
+  }
+  built_in_judge_line::Style builtInJudgeLineForKeyMode(int mode) const {
+    if (mode == -5 && presentation().skin.follow5K1S) mode = 5;
+    if (mode == -7 && presentation().skin.follow7K1S) mode = 7;
+    const auto &lines = presentation().builtInJudgeLines;
+    const auto found = lines.find(mode);
+    return found == lines.end() ? built_in_judge_line::Style{} : found->second;
+  }
+  built_in_lane::Style builtInLaneForKeyMode(int mode) const {
+    if (mode == -5 && presentation().skin.follow5K1S) mode = 5;
+    if (mode == -7 && presentation().skin.follow7K1S) mode = 7;
+    const auto &lanes = presentation().builtInLanes;
+    const auto found = lanes.find(mode);
+    return found == lanes.end() ? built_in_lane::Style{} : found->second;
+  }
   bool showInvisibleNotes = false;
   // PlayerConfig.showpastnote. Its narrow LaneRenderer condition is applied
   // by playfield projection rather than broadening past-note rendering.
@@ -257,6 +282,9 @@ public:
     JudgementTimingDisplayCriteria judgementTimingMillisecondsCriteria =
         JudgementTimingDisplayCriteria::GreatOrBelow;
     GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
+    built_in_notes::Settings builtInNotes;
+    built_in_judge_line::Settings builtInJudgeLines;
+    built_in_lane::Settings builtInLanes;
     skin::SkinProfileSettings skin;
     explicit PresentationSettings(PresentationOrientation orientation =
                                       PresentationOrientation::Landscape) {

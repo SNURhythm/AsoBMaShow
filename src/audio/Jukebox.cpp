@@ -1253,6 +1253,26 @@ PreparedGameplayBgaFrame Jukebox::prepareVisualFrameAt(
   return frame;
 }
 
+PreparedGameplayBgaFrame Jukebox::prepareImageFrame(std::shared_ptr<ImageData> image) {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  PreparedGameplayBgaFrame frame{.sequence = ++preparedBgaSequence};
+  preparedGameplayBgaFrames.fetch_add(1, std::memory_order_relaxed);
+  if (!image || !bgfx::isValid(image->texture) || image->width <= 0 || image->height <= 0)
+    return frame;
+  frame.composition = GameplayBgaComposition::BaseThenLayer;
+  frame.base = PreparedGameplayBgaSurface{
+      .role = GameplayBgaRole::Base,
+      .mediaKind = GameplayBgaMediaKind::Image,
+      .surfaceToken = frame.sequence,
+      .sourceWidth = image->width,
+      .sourceHeight = image->height};
+  PreparedBgaFrameLease lease{.frameSequence = frame.sequence};
+  lease.base = PinnedGameplayBgaSurface{.descriptor = *frame.base, .image = std::move(image)};
+  preparedBgaFrameLeases.emplace(frame.sequence, std::move(lease));
+  pinnedGameplayBgaFrames.fetch_add(1, std::memory_order_relaxed);
+  return frame;
+}
+
 BgaPreflightResult
 Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
                    std::span<const BgaDrawTarget> targets) {

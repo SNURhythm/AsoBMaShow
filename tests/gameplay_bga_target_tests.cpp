@@ -4,6 +4,7 @@
 #include "audio/GameplayBgaFrame.h"
 #include "audio/GameplayBgaMissStateTracker.h"
 #include "audio/Jukebox.h"
+#include "scene/SettingsPreviewBga.h"
 #include "RAII.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
@@ -1411,6 +1412,68 @@ void testEmbeddedImageResetsSkinSamplingOnMetal() {
   bgfx::frame();
 }
 
+void testPreviewBgaUsesNormalSubmissionAndLiveSettings() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+  AppSettings settings;
+  settings.bgaEnabled = true;
+  settings.bgaBrightnessPercent = 35;
+  settings.bgaDisplayMode = AppSettings::BgaDisplayMode::Fit;
+  PreparedGameplayBgaFrame pinned;
+  {
+    settings_scene::PreviewBga preview(jukebox, settings);
+    auto frame = preview.prepareVisualFrameAt(1, 1'000'000, {});
+    require(frame.composition == GameplayBgaComposition::BaseThenLayer && frame.base &&
+                frame.base->sourceWidth == settings_scene::kPreviewBgaWidth &&
+                frame.base->sourceHeight == settings_scene::kPreviewBgaHeight &&
+                !frame.layer && !frame.miss && !jukebox.hasActiveVisuals(),
+            "preview BGA pins its own image without activating or replacing chart media");
+    require(std::abs(jukebox.embeddedBgaBrightnessMultiplier() - 0.35F) < 0.00001F,
+            "preview BGA reads live brightness for the normal embedded skin renderer");
+    auto target = makeLoadedImageTarget(GameplayBgaRole::Base, 1);
+    const auto preflight = preview.preflight(frame, std::span(&target, 1));
+    require(preflight.ready && !preflight.requirements.empty(),
+            "preview BGA reserves the ordinary image renderer's transient geometry");
+    preview.commitPrepared(frame);
+    preview.submitPrepared(frame, target);
+    preview.finalizePrepared(frame);
+    require(jukebox.gameplayBgaSubmissionStats().embeddedSubmissions == 1 &&
+                jukebox.gameplayBgaSubmissionStats().pinnedFrames == 0,
+            "preview skin composition submits and releases the image through Jukebox");
+    settings.bgaEnabled = false;
+    frame = preview.prepareVisualFrameAt(2, 1'000'000, {});
+    require(frame.composition == GameplayBgaComposition::Blank && !frame.base,
+            "turning BGA off blanks the preview immediately even at paused chart time");
+    preview.submitFullscreen(frame);
+    settings.bgaEnabled = true;
+    settings.bgaBrightnessPercent = 80;
+    settings.bgaDisplayMode = AppSettings::BgaDisplayMode::Fill;
+    pinned = preview.prepareVisualFrameAt(3, 1'000'000, {});
+    require(pinned.base && std::abs(jukebox.embeddedBgaBrightnessMultiplier() - 0.8F) < 0.00001F,
+            "reenabling BGA applies edited settings without moving chart time");
+  }
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames == 1,
+          "the prepared frame retains its image when the preview provider is destroyed");
+  jukebox.submitFullscreen(pinned);
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames == 0 &&
+              jukebox.gameplayBgaSubmissionStats().fullscreenSubmissions == 2 &&
+              !jukebox.hasActiveVisuals(),
+          "normal fullscreen BGA submission releases the preview image and leaves media state intact");
+  const auto ordinary = jukebox.prepareVisualFrameAt(4, 1'000'000, {});
+  require(ordinary.composition == GameplayBgaComposition::Blank,
+          "ordinary playback does not inherit the preview image");
+  jukebox.finalizePrepared(ordinary);
+  if (const char *path = std::getenv("ASOBMASHOW_PREVIEW_BGA_PPM")) {
+    const auto rgba = settings_scene::previewBgaPixels();
+    std::ofstream image(path, std::ios::binary);
+    image << "P6\n" << settings_scene::kPreviewBgaWidth << " "
+          << settings_scene::kPreviewBgaHeight << "\n255\n";
+    for (std::size_t i = 0; i < rgba.size(); i += 4)
+      image.write(reinterpret_cast<const char *>(rgba.data() + i), 3);
+  }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1439,6 +1502,7 @@ int main(int argc, char **argv) {
   testBgaSubmitterHasVirtualDestruction();
   testJukeboxPreflightPerformsNoShaderLookupOrFilesystemIo();
   testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission();
+  testPreviewBgaUsesNormalSubmissionAndLiveSettings();
   testJukeboxBgaTargetStretchAndTrimmedUvs();
   testBgaStretchPrecedesNonuniformViewportProjection();
   testAuthoredProjectionPreservesBgaUvOrientation();

@@ -11,8 +11,6 @@
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
 #include "../../rendering/SimpleBatchRenderer.h"
-#include "../../rendering/TexBatchRenderer.h"
-#include "../../rendering/ImageAlphaBounds.h"
 #include "../../view/TextView.h"
 #include "../../rendering/Color.h"
 #include "../../rendering/Camera.h"
@@ -45,10 +43,8 @@ struct SelectedSkinHudGeometry;
 
 namespace rendering {
 class SimpleBatchRenderer;
-class TexBatchRenderer;
 } // namespace rendering
 
-class SpriteLoader;
 struct PlayfieldProjectionResult;
 struct BuiltInRendererTraversal;
 struct LaneState {
@@ -73,34 +69,6 @@ struct AtomicLaneState {
 };
 
 class JudgeResult;
-
-struct NoteUvRegion {
-  float u0 = 0.0f;
-  float v0 = 0.0f;
-  float u1 = 1.0f;
-  float v1 = 1.0f;
-};
-
-struct NoteSheet {
-  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyOffTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyOnTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle hellChargeBodyOffTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle hellChargeBodyOnTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle hellChargeDamageTexture = BGFX_INVALID_HANDLE;
-  NoteUvRegion note;
-  image_alpha::Bounds noteVisibleBounds;
-  NoteUvRegion longHead;
-  NoteUvRegion longBodyOff;
-  NoteUvRegion longBodyOn;
-  NoteUvRegion longTail;
-  NoteUvRegion hellChargeHead;
-  NoteUvRegion hellChargeBodyOff;
-  NoteUvRegion hellChargeBodyOn;
-  NoteUvRegion hellChargeDamage;
-  NoteUvRegion hellChargeTail;
-  NoteUvRegion mine;
-};
 
 class BMSRendererState {
 public:
@@ -300,7 +268,6 @@ private:
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
   std::vector<float> laneXLookup;
-  std::vector<const NoteSheet *> laneSheetLookup;
   std::vector<size_t> whiteKeyLaneIndices;
   std::vector<size_t> blueKeyLaneIndices;
   std::vector<size_t> scratchLaneIndices;
@@ -308,8 +275,6 @@ private:
   std::unordered_map<int, start_lane_indicator::ColorRole>
       startLaneIndicatorColorRoles;
 
-  float noteImageHeight = 0;
-  float noteImageWidth = 0;
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::vector<ReplayGhostEvent> replayGhostEvents;
@@ -349,8 +314,9 @@ private:
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;
 
-  float longBodyRenderHeightOff = 1.0f;
-  float longBodyRenderHeightOn = 1.0f;
+  built_in_notes::SharedModeStyles builtInNotes;
+  built_in_judge_line::Style builtInJudgeLine;
+  built_in_lane::Style builtInLane;
   long long currentRenderMicros = 0;
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
@@ -421,8 +387,8 @@ private:
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
-  rendering::TexBatchRenderer noteTextureBatchRenderer;
-  uint32_t activeNoteTextureDepth = std::numeric_limits<uint32_t>::max();
+  rendering::SimpleBatchRenderer noteBatchRenderer;
+  uint32_t activeNoteDepth = std::numeric_limits<uint32_t>::max();
   uint32_t activeInvisibleDepth = std::numeric_limits<uint32_t>::max();
   int judgementLayoutWidth = 0;
   int judgementLayoutHeight = 0;
@@ -507,10 +473,7 @@ private:
   void applyPendingHudText(long long currentMicros);
   void applyPendingPacemakerText();
   void expireLingeringTimingText(long long currentMicros);
-  bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
-  bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
-                                         int width, int height,
-                                         const char *label);
+
   bool isLeftScratch(int lane) const;
   bool isRightScratch(int lane) const;
   bool isScratch(int lane) const;
@@ -538,17 +501,15 @@ private:
   void rebuildPlayAreaGeometry();
   void setScratchLaneOnRight(bool enabled);
   float laneToX(int lane) const;
-  const NoteSheet &sheetForLane(int lane) const;
-  rendering::TexBatchRenderer &
-  noteTextureBatchAtDepth(uint32_t submitDepth);
+  built_in_notes::Style builtInNoteStyle(int lane, built_in_notes::Type type) const;
+  float builtInNoteHeight(int lane, built_in_notes::Type type) const;
+  float maximumBuiltInNoteHeight() const;
+  void drawBuiltInNote(int lane, built_in_notes::Type type, float x, float y,
+                       float width, float height, uint32_t depth);
   void setInvisibleBatchDepth(uint32_t submitDepth);
   void beginOrderedNoteBatches();
   void flushOrderedNoteBatches();
-  void destroyNoteSheetTextures();
   std::pair<float, float> calculateLanePlaneScreenBounds() const;
-  NoteSheet graySheet;
-  NoteSheet blueSheet;
-  NoteSheet scratchSheet;
   bms_parser::Chart *chart;
   bool laneIsCurrentlyPressed(int lane) const;
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)

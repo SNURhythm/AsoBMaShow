@@ -7,7 +7,18 @@
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/SettingsPreviewChart.h"
+#include "scene/SettingsSceneShared.h"
+#include "scene/play/StartLaneIndicatorGeometry.h"
+#include "settings/BuiltInNoteEditing.h"
+#include "settings/BuiltInScratchGradient.h"
+#include "view/DropdownView.h"
+#include "view/IconText.h"
 #include "scene/SettingsPreviewAutoPlay.h"
+#include "scene/SettingsPreviewPlayback.h"
+#include "view/ColorPickerView.h"
+#include "view/ColorPickerPopup.h"
+#include "view/OverlayPortal.h"
+#include "scene/play/BeatorajaHiSpeedChart.h"
 #include "scene/SettingsScenePreviewAuthority.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
@@ -22,6 +33,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <charconv>
+#include <set>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -705,11 +718,19 @@ ScenarioResult renderScenario(
     long long visualTimeMicros = kRenderMicros,
     std::uint64_t frameSerial = 0,
     bool seedPastInvisibleProbe = false,
-    bool primeRendererTraversal = false, bool scratchOnRight = false) {
+    bool primeRendererTraversal = false, bool scratchOnRight = false,
+    const built_in_notes::ModeStyles &noteStyles = {},
+    built_in_judge_line::Style judgeLineStyle = {}, bool scratchMineProbe = false,
+    built_in_lane::Style laneStyle = {}) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
   SyntheticChartFixture fixture;
+  if (scratchMineProbe) {
+    for (auto *timeline : fixture.chart->Measures.front()->TimeLines)
+      if (timeline->Timing == 2'250'000)
+        timeline->SetLandmineNote(7, new bms_parser::LandmineNote(12.0F));
+  }
   if (seedPastInvisibleProbe) {
     fixture.invisibleProbeNote->IsDead = false;
     fixture.invisibleProbeNote->IsPlayed = true;
@@ -724,6 +745,9 @@ ScenarioResult renderScenario(
 
   auto configuration = presentationConfig(coverPercent);
   configuration.scratchLaneOnRight = scratchOnRight;
+  configuration.builtInNotes = built_in_notes::snapshotModeStyles(noteStyles);
+  configuration.builtInJudgeLine = judgeLineStyle;
+  configuration.builtInLane = laneStyle;
   const auto authority = authorityFor(*fixture.chart, coverPercent);
   store.setConfiguration(configuration);
   store.applyAuthorityUpdate(authority);
@@ -1919,6 +1943,223 @@ void destroyRenderTarget(RenderTarget &target) {
   target = {};
 }
 
+void verifyCustomNoteAppearance(const RenderTarget &target) {
+  using Type = built_in_notes::Type;
+  using Kind = characterization::SubmissionKind;
+  built_in_notes::ModeStyles styles;
+  styles[0][Type::Normal] = {0x12ABEF, 500};
+  styles[5][Type::Mine] = {0x77CC55, 150};
+  styles[4][Type::LongBodyOn] = {0xAA55EE, 50};
+  styles[4][Type::LongTail] = {0xEECC11, 500};
+  styles[6][Type::HellDamage] = {0xDD3366, 75};
+  styles[7][Type::Normal] = {0x66DD88, 300};
+  const auto legacy = renderScenario(target, kAfterCoverPercent, true,
+      ScenarioRenderPath::Legacy, 2'200'000, 43, true, false, false, styles, {0x14EBCB, 500});
+  const auto captured = renderScenario(target, kAfterCoverPercent, true,
+      ScenarioRenderPath::Captured, 2'200'000, 43, true, false, false, styles, {0x14EBCB, 500});
+  verifyCapturedOverloadEquivalence(legacy, captured);
+  const auto find = [&](Kind kind, int lane) {
+    return std::ranges::find_if(legacy.recorder.submissions, [=](const auto &submission) {
+      return submission.kind == kind && submission.lane == lane;
+    });
+  };
+  const auto normal = find(Kind::NormalNote, 0);
+  const auto mine = find(Kind::Mine, 5);
+  const auto body = find(Kind::LongBody, 4);
+  const auto tail = find(Kind::LongTail, 4);
+  expect(normal != legacy.recorder.submissions.end() &&
+             std::abs(normal->rect.height - 100.0F / 128.0F) < 0.00001F,
+         "normal thickness supports 500 percent of the unchanged 20-pixel base");
+  expect(mine != legacy.recorder.submissions.end() &&
+             std::abs(mine->rect.height - 30.0F / 128.0F) < 0.00001F,
+         "mine thickness uses its own padded sprite region and lane setting");
+  expect(body != legacy.recorder.submissions.end() &&
+             std::abs(body->rect.width - 0.5F) < 0.00001F &&
+             std::abs(body->rect.x - 5.25F) < 0.00001F,
+         "custom long-note bodies are centered and narrowed within the lane");
+  expect(tail != legacy.recorder.submissions.end() &&
+             std::abs(tail->rect.height - 100.0F / 128.0F) < 0.00001F,
+         "long-note tails support 500 percent of the shared 20-pixel base");
+  const auto judgeLine = find(Kind::JudgeLine, -1);
+  expect(judgeLine != legacy.recorder.submissions.end() &&
+             std::abs(judgeLine->rect.height - 100.0F / 128.0F) < 0.00001F,
+         "custom judge-line height reaches both rendering paths");
+  const auto countColor = [](const auto &pixels, std::uint32_t rgb) {
+    std::size_t count = 0;
+    for (std::size_t i = 0; i + 3 < pixels.size(); i += 4)
+      if (pixels[i] == ((rgb >> 16) & 255) && pixels[i + 1] == ((rgb >> 8) & 255) &&
+          pixels[i + 2] == (rgb & 255)) ++count;
+    return count;
+  };
+  for (const auto rgb : {0x12ABEFU, 0x77CC55U, 0xAA55EEU, 0x14EBCBU}) {
+    expect(countColor(legacy.rgba, rgb) > 10 && countColor(captured.rgba, rgb) > 10,
+           "custom RGB " + built_in_notes::colorHex(rgb) + " reaches both render paths (" +
+               std::to_string(countColor(legacy.rgba, rgb)) + ", " +
+               std::to_string(countColor(captured.rgba, rgb)) + " pixels)");
+  }
+}
+
+void verifyColorPickerPixels(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+  ColorPickerView picker({1.0F / 3, 0.8F, 0.3F}, {});
+  picker.setSize(600, 360);
+  picker.setPosition(120, 120, YGPositionTypeAbsolute);
+  picker.applyYogaLayout();
+  rendering::UiBatchRenderer batch;
+  batch.beginFrame();
+  RenderContext context(batch);
+  {
+    RenderContext::UiBatchScope scope(context);
+    picker.render(context);
+  }
+  const auto pixels = readPixels(target);
+  const auto probe = [&](float x, float y, bool hueStrip) {
+    const int px = static_cast<int>(x * rendering::ui_scale_x);
+    const int py = static_cast<int>(y * rendering::ui_scale_y);
+    const float uiX = (px + 0.5F) / rendering::ui_scale_x;
+    const float uiY = (py + 0.5F) / rendering::ui_scale_y;
+    const auto expected = hueStrip
+        ? color_picker::toRgb({(uiX - 130) / 580, 1, 1})
+        : color_picker::toRgb({1.0F / 3, (uiX - 130) / 580, 1 - (uiY - 130) / 288});
+    const auto offset = (py * kDrawableWidth + px) * 4;
+    for (int channel = 0; channel < 3; ++channel)
+      expect(std::abs(int(pixels[offset + channel]) - int((expected >> (16 - 8 * channel)) & 255)) <= 3,
+             "picker's rendered gradient matches the RGB color chosen at the same position");
+  };
+  for (const float x : {0.1F, 0.5F, 0.9F})
+    for (const float y : {0.1F, 0.5F, 0.9F}) probe(130 + 580 * x, 130 + 288 * y, false);
+  for (const float hue : {0.08F, 0.25F, 0.42F, 0.58F, 0.75F, 0.92F})
+    probe(130 + 580 * hue, 452, true);
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "color-picker.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "color picker inspection image encodes");
+  }
+}
+
+void verifyColorPickerPopupPixels(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+  std::vector<ColorPickerPopup::Sample> samples{{.label = "S", .style = ColorPickerPopup::SampleStyle::Scratch}};
+  for (int lane = 1; lane <= 7; ++lane) samples.push_back({.label = std::to_string(lane)});
+  ColorPickerPopup popup(color_picker::fromRgb(0x3399CC), samples);
+  popup.fitToViewport(rendering::window_width, rendering::window_height);
+  rendering::UiBatchRenderer batch;
+  batch.beginFrame();
+  RenderContext context(batch);
+  {
+    RenderContext::UiBatchScope scope(context);
+    popup.render(context);
+  }
+  const auto pixels = readPixels(target);
+  auto *sample = popup.getChildren().front()->getChildren()[2]->getChildren()[1];
+  const int x = int((sample->getX() + sample->getWidth() / 2) * rendering::ui_scale_x);
+  const int y = int((sample->getY() + sample->getHeight() / 2) * rendering::ui_scale_y);
+  const auto offset = (y * kDrawableWidth + x) * 4;
+  expect(pixels[offset] == 0x33 && pixels[offset + 1] == 0x99 && pixels[offset + 2] == 0xCC,
+         "popup note sample renders the exact draft RGB above the picker");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "color-picker-popup.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "color picker popup inspection image encodes");
+  }
+}
+
+void verifyCustomLaneAppearance(const RenderTarget &target) {
+  using Kind = characterization::SubmissionKind;
+  const built_in_lane::Style style{0x44EE88, 500, 100};
+  const auto render = [&](ScenarioRenderPath path, built_in_lane::Style appearance) {
+    return renderScenario(target, 0, true, path, 2'200'000, 45, true, false, false,
+                           {}, {}, false, appearance);
+  };
+  const auto legacy = render(ScenarioRenderPath::Legacy, style);
+  const auto captured = render(ScenarioRenderPath::Captured, style);
+  verifyCapturedOverloadEquivalence(legacy, captured);
+  int lines = 0;
+  for (const auto &submission : legacy.recorder.submissions) {
+    if (submission.kind != Kind::MeasureLine) continue;
+    ++lines;
+    expect(std::abs(submission.rect.height - 0.25F) < 0.00001F,
+           "custom measure-line thickness reaches rendered geometry");
+  }
+  expect(lines > 0, "custom measure-line test contains visible bar lines");
+  auto recolored = style;
+  recolored.measureLineColor = 0xEE4488;
+  const auto pink = render(ScenarioRenderPath::Captured, recolored);
+  std::size_t lineColorPixels = 0;
+  for (std::size_t i = 0; i + 3 < captured.rgba.size(); i += 4)
+    if (pink.rgba[i] > captured.rgba[i] + 30 && captured.rgba[i + 1] > pink.rgba[i + 1] + 30)
+      ++lineColorPixels;
+  expect(lineColorPixels > 10, "measure-line color reaches rendered pixels");
+  auto transparentStyle = style;
+  transparentStyle.backgroundOpacityPercent = 0;
+  const auto transparent = render(ScenarioRenderPath::Legacy, transparentStyle);
+  const auto transparentCaptured = render(ScenarioRenderPath::Captured, transparentStyle);
+  verifyCapturedOverloadEquivalence(transparent, transparentCaptured);
+  std::size_t backgroundPixels = 0;
+  for (std::size_t i = 0; i + 3 < legacy.rgba.size(); i += 4)
+    if (legacy.rgba[i] == 20 && legacy.rgba[i + 1] == 20 && legacy.rgba[i + 2] == 20 &&
+        (transparent.rgba[i] != 20 || transparent.rgba[i + 1] != 20 || transparent.rgba[i + 2] != 20))
+      ++backgroundPixels;
+  expect(backgroundPixels > 1000, "lane background opacity changes only its fill behind gameplay");
+}
+
+void verifyScratchGradientAndPlainMines(const RenderTarget &target) {
+  using Type = built_in_notes::Type;
+  using Kind = characterization::SubmissionKind;
+  built_in_notes::ModeStyles styles;
+  styles[7][Type::Normal] = {0x3399CC, 300};
+  styles[7][Type::Mine] = {0x12ABEF, 300};
+  for (const bool mine : {false, true}) {
+    const auto time = mine ? 2'200'000 : 1'500'000;
+    const auto legacy = renderScenario(target, kAfterCoverPercent, true,
+        ScenarioRenderPath::Legacy, time, 44, true, false, false, styles, {}, mine);
+    const auto captured = renderScenario(target, kAfterCoverPercent, true,
+        ScenarioRenderPath::Captured, time, 44, true, false, false, styles, {}, mine);
+    verifyCapturedOverloadEquivalence(legacy, captured);
+    if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+      std::filesystem::create_directories(directory);
+      const auto path = std::filesystem::path(directory) /
+          (mine ? "scratch-mine.png" : "scratch-gradient.png");
+      expect(lodepng::encode(path.string(), legacy.rgba, kDrawableWidth, kDrawableHeight) == 0,
+             "scratch appearance inspection image encodes");
+    }
+    const auto submission = std::ranges::find_if(legacy.recorder.submissions, [mine](const auto &value) {
+      return value.kind == (mine ? Kind::Mine : Kind::NormalNote) && value.lane == 7;
+    });
+    expect(submission != legacy.recorder.submissions.end(), "scratch appearance probe is visible");
+    if (submission == legacy.recorder.submissions.end()) continue;
+    const auto pixel = [&](float fraction) {
+      const auto &rect = submission->rect;
+      const auto screen = rendering::game_camera.project(
+          {rect.x + rect.width * fraction, rect.y + rect.height * 0.5F, 0});
+      const int x = std::clamp(static_cast<int>(screen.x), 0, int(kDrawableWidth) - 1);
+      const int y = std::clamp(static_cast<int>(screen.y), 0, int(kDrawableHeight) - 1);
+      const auto index = (y * kDrawableWidth + x) * 4;
+      return std::array<int, 3>{legacy.rgba[index], legacy.rgba[index + 1], legacy.rgba[index + 2]};
+    };
+    if (mine) {
+      for (const float position : {0.10F, 0.27F, 0.31F, 0.50F, 0.73F, 0.90F})
+        expect(pixel(position) == std::array<int, 3>{0x12, 0xAB, 0xEF},
+               "scratch mines stay flat across former stripe and gradient positions");
+    } else {
+      const auto left = pixel(0.10F);
+      const auto sheenLeft = pixel(0.40F);
+      const auto sheenRight = pixel(0.60F);
+      const auto right = pixel(0.90F);
+      expect(sheenLeft[0] > left[0] + 30 && sheenRight[0] > right[0] + 30 &&
+                 std::abs(sheenLeft[0] - sheenRight[0]) < 30 &&
+                 sheenLeft[0] < 150 && sheenRight[0] < 150,
+             "scratch sheen is broad and softly shaded without a sharp white hotspot");
+      expect(pixel(0.30F)[0] > pixel(0.22F)[0] + 10,
+             "scratch colors interpolate within a segment instead of forming flat bands");
+    }
+  }
+}
+
 void verifyScratchlessChartEligibility() {
   for (int mode : {5, 7}) {
     for (int content = 0; content < 7; ++content) {
@@ -2021,8 +2262,10 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
-// Only the surrounding Settings UI is substituted; the extracted scene method,
-// renderer, camera, input handler, and logical input pipeline are production code.
+// The scene lifetime and disk persistence boundary are substituted. Extracted
+// editors, popup wiring, preview synchronization, widgets, renderer, camera,
+// input handler, and logical input pipeline are production code.
+using namespace settings_scene;
 struct SettingsScene {
   struct {
     struct : AppSettings {
@@ -2045,6 +2288,11 @@ struct SettingsScene {
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
+  built_in_notes::SharedModeStyles previewNoteStyles;
+  std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
+  std::function<void(std::uint32_t)> appearanceColorApply;
+  std::unique_ptr<ColorPickerPopup> appearanceColorPopup;
+  OverlayPortal *overlayPortal = nullptr;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
   std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
@@ -2052,6 +2300,7 @@ struct SettingsScene {
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::uint64_t previewFrameSerial = 0;
   bool previewActive = true;
+  bool previewPaused = false;
   bool previewAutoPlay = false;
   bool previewRandomTiming = false;
   std::mt19937 previewAutoPlayRandom{42};
@@ -2067,10 +2316,34 @@ struct SettingsScene {
   int previewScore = 0;
   std::map<Judgement, PlayfieldJudgementFastSlowCount> previewJudgeFastSlowCount;
   void syncPreviewInputLayout();
+  void syncPreviewPresentationConfiguration();
+  void closeAppearanceColorPopup();
+  void syncAppearanceColorPopup();
+  void appendAppearanceColorPicker(View *, const LayoutMetrics &, const std::string &,
+      std::uint32_t, std::vector<ColorPickerPopup::Sample>,
+      std::function<void(std::uint32_t)>, std::function<void(std::uint32_t)>);
+  void appendBuiltInNoteControls(View *, const LayoutMetrics &, int);
+  void appendBuiltInJudgeLineControls(View *, const LayoutMetrics &, int);
+  void appendBuiltInMeasureLineControls(View *, const LayoutMetrics &, int);
+  void appendBuiltInLanePercentControl(View *, const LayoutMetrics &, int,
+      const i18n::Text &, int built_in_lane::Style::*, const i18n::Text &);
+  std::map<int, std::set<int>> builtInNoteLanes;
+  int builtInNoteType = 0;
+  std::string builtInNoteDropdown;
+  std::map<std::string, color_picker::Hsv> appearanceColorPickers;
+  std::string appearanceColorPopupId;
+  int lastLayoutWidth = 0;
+  int settingsCommits = 0;
+  void persistSettings() { ++settingsCommits; }
+  void destroyPreviewInputHandler() {}
   void syncPreviewTouchLayout();
   void syncPreviewAuthority();
   void resetPreviewHudSample();
   void capturePreviewVisualState();
+  settings_scene::PreviewEndAnimation previewEndAnimation;
+  int previewRestartCount = 0;
+  void resetPreviewSimulation() { ++previewRestartCount; previewElapsedMicros = 0; }
+  void advancePreviewPlayback(float dt);
   void advancePreviewSimulation();
   void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult>);
   bms_parser::Note *pressLane(int, double);
@@ -2079,9 +2352,154 @@ struct SettingsScene {
   void publishPreviewJudgement(const JudgeResult &, long long);
 };
 using settings_scene::kPreviewBpm;
+using settings_scene::kPreviewLoopMicros;
 using settings_scene::previewLaneCoverAuthority;
 using settings_scene::previewFrameClock;
+using settings_scene::applyPreviewPlayerConfiguration;
 #include "settings_preview_input.inc"
+
+template <typename T> std::vector<T *> descendants(View &root) {
+  std::vector<T *> result;
+  const auto visit = [&](auto &&self, View *view) -> void {
+    if (auto *match = dynamic_cast<T *>(view)) result.push_back(match);
+    for (auto *child : view->getChildren()) self(self, child);
+  };
+  visit(visit, &root);
+  return result;
+}
+
+void clickAppearanceButton(View &dispatch, Button &button) {
+  SDL_Event event{};
+  event.type = SDL_MOUSEBUTTONDOWN;
+  event.button.button = SDL_BUTTON_LEFT;
+  event.button.x = int((rendering::ui_offset_x +
+      (button.getX() + button.getWidth() / 2) * rendering::ui_scale_x) / rendering::widthScale);
+  event.button.y = int((rendering::ui_offset_y +
+      (button.getY() + button.getHeight() / 2) * rendering::ui_scale_y) / rendering::heightScale);
+  dispatch.handleEvents(event);
+  event.type = SDL_MOUSEBUTTONUP;
+  dispatch.handleEvents(event);
+}
+
+void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
+  using Editor = void (SettingsScene::*)(View *, const LayoutMetrics &, int);
+  const std::array<Editor, 3> editors{&SettingsScene::appendBuiltInNoteControls,
+      &SettingsScene::appendBuiltInJudgeLineControls,
+      &SettingsScene::appendBuiltInMeasureLineControls};
+  for (const int keyMode : {7, -7}) {
+    for (std::size_t editor = 0; editor < editors.size(); ++editor) {
+      for (const bool confirm : {false, true}) {
+        const auto chart = settings_scene::makePreviewChart(keyMode);
+        const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+        PlayfieldVisualStateStore store(model);
+        Judge judge(chart->Meta.Rank);
+        OverlayPortal portal;
+        SettingsScene scene;
+        scene.overlayPortal = &portal;
+        scene.previewPaused = true;
+        scene.previewChart = chart.get();
+        scene.previewVisualStateStore = &store;
+        auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+        scene.previewRenderer = renderer.get();
+        scene.previewPresentation = std::move(renderer);
+        auto &saved = scene.context.settings.presentation();
+        saved.skin.follow7K1S = true;
+        scene.builtInNoteLanes[keyMode] = {0, 1};
+        saved.builtInNotes[7][0][built_in_notes::Type::Normal] = {0x123456, 140};
+        saved.builtInNotes[7][1][built_in_notes::Type::Normal] = {0x345678, 160};
+        saved.builtInNotes[7][2][built_in_notes::Type::Normal] = {0x56789A, 180};
+        saved.builtInJudgeLines[7] = {0x234567, 150};
+        saved.builtInLanes[7].measureLineColor = 0x345678;
+        saved.builtInLanes[7].measureLineThicknessPercent = 170;
+        scene.syncPreviewPresentationConfiguration();
+        const auto savedColor = [&]() {
+          if (editor == 0) return saved.builtInNotes.at(7).at(0).at(built_in_notes::Type::Normal).color;
+          if (editor == 1) return saved.builtInJudgeLines.at(7).color;
+          return saved.builtInLanes.at(7).measureLineColor;
+        };
+        const auto previewColor = [&]() {
+          const auto frame = store.captureForPresentation({.serial = 1});
+          if (editor == 0) return built_in_notes::resolve(frame.configuration.builtInNotes, 0,
+              built_in_notes::Type::Normal, built_in_notes::Palette::Gray).color;
+          if (editor == 1) return frame.configuration.builtInJudgeLine.color;
+          return frame.configuration.builtInLane.measureLineColor;
+        };
+        const auto buildEditor = [&]() {
+          auto body = std::make_unique<View>(0, 0, 1000, 5000);
+          (scene.*editors[editor])(body.get(), LayoutMetrics{}, keyMode);
+          return body;
+        };
+        const auto openPicker = [&](View &body) {
+          Button *palette = nullptr;
+          for (auto *button : descendants<Button>(body)) {
+            auto *label = dynamic_cast<TextView *>(button->getContentView());
+            if (label && label->getText() == ui_icons::textForCodepoint(ui_icons::kPalette))
+              palette = button;
+          }
+          expect(palette != nullptr, "production appearance editor exposes the palette action");
+          if (palette) clickAppearanceButton(*palette, *palette);
+          expect(scene.appearanceColorPopup && portal.isPresented(scene.appearanceColorPopup.get()),
+                 "palette action presents the production color popup through the scene portal");
+        };
+        const auto initial = savedColor();
+        auto body = buildEditor();
+        openPicker(*body);
+        if (!scene.appearanceColorPopup) continue;
+        const auto pickers = descendants<ColorPickerView>(*scene.appearanceColorPopup);
+        expect(pickers.size() == 1, "appearance popup contains one live color picker");
+        if (pickers.empty()) continue;
+        auto *picker = pickers.front();
+        SDL_Event drag{};
+        drag.type = SDL_MOUSEBUTTONDOWN;
+        drag.button.button = SDL_BUTTON_LEFT;
+        drag.button.x = int((rendering::ui_offset_x +
+            (picker->getX() + picker->getWidth() / 2) * rendering::ui_scale_x) / rendering::widthScale);
+        drag.button.y = int((rendering::ui_offset_y +
+            (picker->getY() + 15) * rendering::ui_scale_y) / rendering::heightScale);
+        portal.handleEvents(drag);
+        const auto draft = color_picker::toRgb(picker->value());
+        expect(draft != initial && previewColor() == draft && savedColor() == initial &&
+                   scene.settingsCommits == 0,
+               "real editor callbacks publish drafts to paused gameplay before mouse release without saving");
+        drag.type = SDL_MOUSEBUTTONUP;
+        portal.handleEvents(drag);
+        const auto actions = descendants<Button>(*scene.appearanceColorPopup);
+        expect(actions.size() == 2, "popup provides Cancel and Confirm");
+        if (actions.size() != 2) continue;
+        auto *popup = scene.appearanceColorPopup.get();
+        clickAppearanceButton(portal, *actions[confirm ? 1 : 0]);
+        scene.syncAppearanceColorPopup();
+        const auto expected = confirm ? draft : initial;
+        expect(!scene.appearanceColorPopup && !scene.appearanceColorPreview &&
+                   !scene.appearanceColorApply && !portal.isPresented(popup),
+               "scene dispatch closes the popup and clears temporary callbacks and portal registration");
+        expect(savedColor() == expected && previewColor() == expected &&
+                   scene.settingsCommits == (confirm ? 1 : 0),
+               "Confirm persists precisely the draft once; Cancel restores saved paused gameplay");
+        expect(!confirm || scene.lastLayoutWidth == -1,
+               "Confirm requests rebuilt appearance controls");
+        expect(saved.builtInNotes.at(7).at(0).at(built_in_notes::Type::Normal).thickness == 140 &&
+                   saved.builtInNotes.at(7).at(1).at(built_in_notes::Type::Normal).thickness == 160 &&
+                   saved.builtInNotes.at(7).at(2).at(built_in_notes::Type::Normal).color == 0x56789A &&
+                   saved.builtInJudgeLines.at(7).heightPercent == 150 &&
+                   saved.builtInLanes.at(7).measureLineThicknessPercent == 170 &&
+                   !saved.builtInNotes.contains(-7),
+               "color confirmation preserves dimensions, unselected lanes, and Follow storage");
+        if (editor == 0 && confirm)
+          expect(saved.builtInNotes.at(7).at(1).at(built_in_notes::Type::Normal).color == draft,
+                 "note popup confirmation applies to every selected lane");
+        body = buildEditor();
+        openPicker(*body);
+        if (scene.appearanceColorPopup) {
+          const auto reopened = descendants<ColorPickerView>(*scene.appearanceColorPopup);
+          expect(reopened.size() == 1 && color_picker::toRgb(reopened.front()->value()) == expected,
+                 "rebuilt editor reopens with the committed color or the restored saved color after Cancel");
+          scene.closeAppearanceColorPopup();
+        }
+      }
+    }
+  }
+}
 
 struct PreviewRecordingControl : IRhythmControl {
   std::vector<int> presses;
@@ -2225,7 +2643,8 @@ void verifyScratchLanePosition(const RenderTarget &target) {
       RenderContext context(batch);
       {
         RenderContext::UiBatchScope scope(context);
-        renderer.render(context, kRenderMicros, kRenderMicros);
+        // Sample at the scratch timing, while its visible lower half is above the judge line.
+        renderer.render(context, 1'550'000, 1'550'000);
       }
       const auto scratch = std::ranges::find_if(recorder.submissions, [](const auto &submission) {
         return submission.kind == characterization::SubmissionKind::NormalNote && submission.lane == 7;
@@ -2399,8 +2818,8 @@ void verifyPreviewScoreUsesRealJudgements() {
              scene.previewCombo == 0 && scene.previewMaximumCombo == 0,
          "a fresh preview has no invented score or completed notes");
   for (const auto [lane, time] : {std::pair{0, 1'500'000LL},
-                                  std::pair{2, 1'890'000LL},
-                                  std::pair{4, 2'300'000LL}}) {
+                                  std::pair{2, 1'540'000LL},
+                                  std::pair{4, 1'600'000LL}}) {
     scene.previewElapsedMicros = time;
     scene.pressLane(lane, 0);
     scene.releaseLane(lane, 0);
@@ -2408,16 +2827,64 @@ void verifyPreviewScoreUsesRealJudgements() {
   scene.previewElapsedMicros = 2'800'000;
   scene.advancePreviewSimulation();
   const auto state = store.capture({.serial = 1});
-  expect(scene.previewScore == 3 && scene.previewPassedNotes == 4 &&
-             scene.previewJudgeCount.at(Poor) == 1 && scene.previewCombo == 0 &&
+  expect(scene.previewScore == 3 && scene.previewPassedNotes == 8 &&
+             scene.previewJudgeCount.at(Poor) == 5 && scene.previewCombo == 0 &&
              state.authority.pacemakerStatus.currentScore == 3 &&
-             state.authority.pacemakerStatus.playedNotes == 4,
-         "preview scores real inputs and breaks combo when the next note is missed");
+             state.authority.pacemakerStatus.playedNotes == 8,
+         "preview scores real chord inputs and breaks combo for the unplayed lanes");
   scene.resetPreviewHudSample();
   expect(scene.previewScore == 0 && scene.previewPassedNotes == 0 &&
              scene.previewJudgeCount.at(PGreat) == 0 &&
              scene.previewJudgeFastSlowCount.empty(),
          "restarting clears preview score, note progression, and timing counters");
+}
+
+void verifyPreviewPause() {
+  const auto chart = settings_scene::makePreviewChart(7);
+  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = &renderer;
+  scene.previewVisualStateStore = &store;
+  scene.previewChartVisualModel = &model;
+  scene.previewPresentationEvents =
+      std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+  scene.previewAutoPlay = true;
+  scene.resetPreviewHudSample();
+  scene.advancePreviewPlayback(1.0F);
+  scene.capturePreviewVisualState();
+  const auto serial = scene.previewFrameSerial;
+  scene.previewPaused = true;
+  scene.advancePreviewPlayback(40.0F);
+  expect(scene.previewElapsedMicros == 1'000'000 && scene.previewPassedNotes == 0 &&
+             scene.previewAutoPlayNextEvent == 0 && scene.previewRestartCount == 0,
+         "pausing freezes chart time, autoplay, and looping even across a long pause");
+  auto config = presentationConfig(0);
+  config.builtInJudgeLine.color = 0x123456;
+  config.builtInJudgeLine.heightPercent = 250;
+  store.setConfiguration(config);
+  renderer.configure(config);
+  scene.capturePreviewVisualState();
+  expect(scene.previewFrameSerial > serial &&
+             scene.previewCapturedVisualState->configuration.builtInJudgeLine == config.builtInJudgeLine,
+         "paused frames still capture live appearance changes without advancing chart time");
+  scene.previewPaused = false;
+  scene.advancePreviewPlayback(0.5F);
+  expect(scene.previewElapsedMicros == 1'500'000 && scene.previewPassedNotes == 8 &&
+             scene.previewRestartCount == 0,
+         "resuming continues from the paused time and hits the next chord without catching up");
+  scene.previewPaused = true;
+  scene.previewElapsedMicros = kPreviewLoopMicros;
+  scene.advancePreviewPlayback(1.0F);
+  expect(scene.previewRestartCount == 0 && scene.previewElapsedMicros == kPreviewLoopMicros,
+         "pause preserves the final chart frame instead of restarting the loop");
+  scene.previewPaused = false;
+  scene.advancePreviewPlayback(0.0F);
+  expect(scene.previewRestartCount == 1,
+         "resuming at the end restores the normal preview loop");
 }
 
 void verifyPreviewAutoPlay() {
@@ -2535,6 +3002,7 @@ void verifyPreviewMissesAndFullCombo() {
     expect(scene.previewJudgeCount.at(Poor) == chart->Meta.TotalNotes,
            "repeated preview frames do not count the same miss twice");
     scene.resetPreviewHudSample();
+    const auto scratches = chart->Meta.GetScratchLaneIndices();
     for (const auto *timeline : chart->Measures.front()->TimeLines) {
       scene.previewElapsedMicros = timeline->Timing;
       scene.advancePreviewSimulation();
@@ -2542,7 +3010,11 @@ void verifyPreviewMissesAndFullCombo() {
         if (!note) continue;
         const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
         if (!longNote || !longNote->IsTail()) scene.pressLane(note->Lane, 0);
-        if (!longNote || longNote->IsTail()) scene.releaseLane(note->Lane, 0);
+        if (!longNote || longNote->IsTail()) {
+          const bool backSpin = longNote && longNote->Type != bms_parser::LongNoteType::LongNote &&
+              std::ranges::find(scratches, note->Lane) != scratches.end();
+          scene.releaseLane(note->Lane, 0, backSpin);
+        }
       }
     }
     scene.previewElapsedMicros = 33'000'000;
@@ -3085,6 +3557,11 @@ int main() {
           target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
           kRenderMicros, 41, true, false, true);
       verifyCapturedOverloadEquivalence(legacyRightScratch, capturedRightScratch);
+      verifyCustomNoteAppearance(target);
+      verifyCustomLaneAppearance(target);
+      verifyColorPickerPixels(target);
+      verifyColorPickerPopupPixels(target);
+      verifyScratchGradientAndPlainMines(target);
       verifyScratchlessChartEligibility();
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);
@@ -3095,6 +3572,8 @@ int main() {
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyPreviewPause();
+  verifyPausedAppearanceDraftUpdatesAndRestoresPreview();
   verifyPreviewAutoPlay();
   verifyPreviewMissesAndFullCombo();
       verifyIndividualJudgementLabelVisibility(target);

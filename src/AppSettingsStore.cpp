@@ -536,6 +536,122 @@ void readSkinProfileSettings(const json &document,
   }
 }
 
+json builtInNotesToJson(const built_in_notes::Settings &settings) {
+  auto result = json::object();
+  for (const auto &[mode, lanes] : settings) {
+    for (const auto &[lane, types] : lanes) {
+      for (const auto &[type, style] : types) {
+        result[std::to_string(mode)][std::to_string(lane)]
+              [built_in_notes::kTypeNames[static_cast<int>(type)]] =
+            {{"color", built_in_notes::colorHex(style.color)}, {"thickness", style.thickness}};
+      }
+    }
+  }
+  return result;
+}
+
+void readBuiltInNotes(const json &document, built_in_notes::Settings &settings,
+                      std::vector<std::string> &diagnostics) {
+  const auto notes = document.find("builtInNotes");
+  if (notes == document.end()) return;
+  if (!notes->is_object()) {
+    invalidValue("builtInNotes", "expected object", diagnostics);
+    return;
+  }
+  // Probe only supported identities, bounding allocations even for hostile JSON.
+  for (const int mode : built_in_notes::kModes) {
+    const auto lanes = notes->find(std::to_string(mode));
+    if (lanes == notes->end() || !lanes->is_object()) continue;
+    for (int lane = 0; lane < built_in_notes::kMaxLanes; ++lane) {
+      const auto types = lanes->find(std::to_string(lane));
+      if (types == lanes->end() || !types->is_object()) continue;
+      for (std::size_t t = 0; t < built_in_notes::kTypeNames.size(); ++t) {
+        const auto value = types->find(built_in_notes::kTypeNames[t]);
+        if (value == types->end() || !value->is_object()) continue;
+        const auto color = value->find("color");
+        if (color == value->end() || !color->is_string()) continue;
+        const auto rgb = built_in_notes::parseColor(color->get_ref<const std::string &>());
+        if (!rgb) {
+          invalidValue("builtInNotes.color", "expected six hexadecimal digits", diagnostics);
+          continue;
+        }
+        built_in_notes::Style style{*rgb, built_in_notes::defaultThickness(
+            static_cast<built_in_notes::Type>(t))};
+        readValue(*value, "thickness", style.thickness, diagnostics);
+        settings[mode][lane][static_cast<built_in_notes::Type>(t)] = style;
+      }
+    }
+  }
+  built_in_notes::sanitize(settings);
+}
+
+json builtInJudgeLinesToJson(const built_in_judge_line::Settings &settings) {
+  auto result = json::object();
+  for (const auto &[mode, style] : settings)
+    result[std::to_string(mode)] = {{"color", built_in_notes::colorHex(style.color)},
+                                   {"heightPercent", style.heightPercent}};
+  return result;
+}
+
+void readBuiltInJudgeLines(const json &document, built_in_judge_line::Settings &settings,
+                           std::vector<std::string> &diagnostics) {
+  const auto lines = document.find("builtInJudgeLines");
+  if (lines == document.end()) return;
+  if (!lines->is_object()) {
+    invalidValue("builtInJudgeLines", "expected object", diagnostics);
+    return;
+  }
+  for (const int mode : built_in_notes::kModes) {
+    const auto value = lines->find(std::to_string(mode));
+    if (value == lines->end() || !value->is_object()) continue;
+    built_in_judge_line::Style style;
+    const auto color = value->find("color");
+    if (color != value->end()) {
+      const auto rgb = color->is_string()
+          ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
+      if (rgb) style.color = *rgb;
+      else invalidValue("builtInJudgeLines.color", "expected six hexadecimal digits", diagnostics);
+    }
+    readValue(*value, "heightPercent", style.heightPercent, diagnostics);
+    settings[mode] = built_in_judge_line::sanitizeStyle(style);
+  }
+}
+
+json builtInLanesToJson(const built_in_lane::Settings &settings) {
+  auto result = json::object();
+  for (const auto &[mode, style] : settings)
+    result[std::to_string(mode)] = {
+        {"measureLineColor", built_in_notes::colorHex(style.measureLineColor)},
+        {"measureLineThicknessPercent", style.measureLineThicknessPercent},
+        {"backgroundOpacityPercent", style.backgroundOpacityPercent}};
+  return result;
+}
+
+void readBuiltInLanes(const json &document, built_in_lane::Settings &settings,
+                      std::vector<std::string> &diagnostics) {
+  const auto lanes = document.find("builtInLanes");
+  if (lanes == document.end()) return;
+  if (!lanes->is_object()) {
+    invalidValue("builtInLanes", "expected object", diagnostics);
+    return;
+  }
+  for (const int mode : built_in_notes::kModes) {
+    const auto value = lanes->find(std::to_string(mode));
+    if (value == lanes->end() || !value->is_object()) continue;
+    built_in_lane::Style style;
+    const auto color = value->find("measureLineColor");
+    if (color != value->end()) {
+      const auto rgb = color->is_string()
+          ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
+      if (rgb) style.measureLineColor = *rgb;
+      else invalidValue("builtInLanes.measureLineColor", "expected six hexadecimal digits", diagnostics);
+    }
+    readValue(*value, "measureLineThicknessPercent", style.measureLineThicknessPercent, diagnostics);
+    readValue(*value, "backgroundOpacityPercent", style.backgroundOpacityPercent, diagnostics);
+    settings[mode] = built_in_lane::sanitizeStyle(style);
+  }
+}
+
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
   json judgementVisibility = json::object();
   for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
@@ -551,6 +667,9 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"laneAngleDegrees", settings.laneAngleDegrees},
       {"laneLength", settings.laneLength},
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
+      {"builtInNotes", builtInNotesToJson(settings.builtInNotes)},
+      {"builtInJudgeLines", builtInJudgeLinesToJson(settings.builtInJudgeLines)},
+      {"builtInLanes", builtInLanesToJson(settings.builtInLanes)},
       {"noteStartPositionPercent", settings.noteStartPositionPercent},
       {"laneCoverEnabled", settings.laneCoverEnabled},
       {"liftEnabled", settings.liftEnabled},
@@ -722,6 +841,9 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
                       std::vector<std::string> &diagnostics,
                       AppSettings::PresentationOrientation orientation =
                           AppSettings::PresentationOrientation::Landscape) {
+  readBuiltInNotes(document, settings.builtInNotes, diagnostics);
+  readBuiltInJudgeLines(document, settings.builtInJudgeLines, diagnostics);
+  readBuiltInLanes(document, settings.builtInLanes, diagnostics);
   readValue(document, "scratchLaneOnRight", settings.scratchLaneOnRight, diagnostics);
   readValue(document, "hideEmptyScratchLane5K", settings.hideEmptyScratchLane5K, diagnostics);
   readValue(document, "hideEmptyScratchLane7K", settings.hideEmptyScratchLane7K, diagnostics);

@@ -10,6 +10,7 @@
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
+#include "../view/ColorPickerPopup.h"
 #include "SettingsPreviewAutoPlay.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
@@ -24,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -99,6 +101,29 @@ public:
                                 bool isBackSpin = false) override;
 
 private:
+  std::map<std::string, color_picker::Hsv> appearanceColorPickers;
+  std::unique_ptr<ColorPickerPopup> appearanceColorPopup;
+  std::string appearanceColorPopupId;
+  std::function<void(std::uint32_t)> appearanceColorApply;
+  std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
+  std::map<int, std::set<int>> builtInNoteLanes;
+  int builtInNoteType = 0;
+  int builtInLaneOpacityMode = 7;
+  std::string builtInNoteDropdown;
+  void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
+                                   const std::string &id, std::uint32_t color,
+                                   std::vector<ColorPickerPopup::Sample> samples,
+                                   std::function<void(std::uint32_t)> apply,
+                                   std::function<void(std::uint32_t)> preview);
+  void closeAppearanceColorPopup();
+  void syncAppearanceColorPopup();
+  void appendBuiltInNoteControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInMeasureLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInLaneOpacityControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInLanePercentControl(View *body, const settings_scene::LayoutMetrics &metrics,
+      int keyMode, const i18n::Text &label, int built_in_lane::Style::*property,
+      const i18n::Text &resetLabel);
+  void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {
     Profile,
@@ -305,18 +330,21 @@ private:
   std::unique_ptr<bms_parser::Chart> previewChart;
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
+  built_in_notes::SharedModeStyles previewNoteStyles;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
   std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   std::uint64_t previewFrameSerial = 0;
+  std::unique_ptr<IGameplayBgaSubmitter> previewBga;
   std::unique_ptr<PlayfieldPresentation> previewPresentation;
   std::unique_ptr<PlayfieldProjection> previewProjection;
   BMSRenderer *previewRenderer = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
   long long previewElapsedMicros = 0;
+  bool previewPaused = false;
   bool previewAutoPlay = false;
   bool previewRandomTiming = false;
   std::mt19937 previewAutoPlayRandom{std::random_device{}()};
@@ -478,6 +506,7 @@ private:
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();
   void resetPreviewHudSample();
+  void advancePreviewPlayback(float dt);
   void advancePreviewSimulation();
   void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult> transactions);
   void publishPreviewJudgement(const JudgeResult &judgeResult,

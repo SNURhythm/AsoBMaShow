@@ -2,6 +2,7 @@
 #include "scene/play/PlayfieldVisualState.h"
 
 #include "bms_parser.hpp"
+#include "support/AllocationFailure.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -996,6 +997,57 @@ void testTouchResetClearsLiveAndReplayState() {
           "model reset clears live and replay touch lifecycle state cleanly");
 }
 
+void testCustomizedPresentationConfigurationCopiesWithoutAllocations() {
+  built_in_notes::ModeStyles styles;
+  for (int lane = 0; lane < 48; ++lane)
+    for (int type = 0; type < 12; ++type)
+      styles[lane][static_cast<built_in_notes::Type>(type)] = {0x123456, 80};
+  PlayfieldPresentationConfig configuration;
+  configuration.builtInNotes = built_in_notes::snapshotModeStyles(styles);
+  try {
+    test_support::FailNextAllocation fail;
+    const auto captured = configuration;
+    const auto prepared = captured;
+    require(prepared == configuration,
+            "frame copies retain all configured note styles");
+  } catch (const std::bad_alloc &) {
+    require(false, "capturing and preparing customized note styles must not allocate");
+  }
+}
+
+void testNoteStyleSnapshotsReuseUnchangedSettingsAndPreserveCapturedFrames() {
+  using namespace built_in_notes;
+  ModeStyles editable{{47, {{Type::Normal, {0x123456, 80}}}}};
+  PlayfieldPresentationConfig configuration;
+  configuration.builtInNotes = snapshotModeStyles(editable);
+  const auto original = configuration.builtInNotes;
+  {
+    test_support::FailNextAllocation fail;
+    configuration.builtInNotes = snapshotModeStyles(editable, original);
+  }
+  require(configuration.builtInNotes == original,
+          "unchanged preview settings reuse the same immutable style snapshot");
+  ChartFixture fixture;
+  PlayfieldVisualStateStore store(buildPlayfieldChartVisualModel(fixture.chart, 0));
+  store.setConfiguration(configuration);
+  const auto captured = store.captureForPresentation({.serial = 1});
+  editable[47][Type::Normal] = {0xABCDEF, 150};
+  configuration.builtInNotes = snapshotModeStyles(editable, original);
+  store.setConfiguration(configuration);
+  const auto updated = store.captureForPresentation({.serial = 2});
+  require(resolve(captured.configuration.builtInNotes, 47, Type::Normal, Palette::Gray) ==
+              Style{0x123456, 80} &&
+              resolve(updated.configuration.builtInNotes, 47, Type::Normal, Palette::Gray) ==
+              Style{0xABCDEF, 150},
+          "changing saved styles preserves already captured frames and updates new frames");
+  configuration.builtInNotes = snapshotModeStyles({}, configuration.builtInNotes);
+  require(!configuration.builtInNotes &&
+              resolve(configuration.builtInNotes, 47, Type::Normal, Palette::Gray) ==
+                  Style{0xCCCCCC, 100} &&
+              resolve(configuration.builtInNotes, 47, Type::LongBodyOff, Palette::Gray).thickness == 80,
+          "clearing style overrides restores normal-note and long-body defaults");
+}
+
 void testPresentationCaptureKeepsAnImmutableSharedNoteSnapshot() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -1103,6 +1155,8 @@ void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
 } // namespace
 
 int main() {
+  testCustomizedPresentationConfigurationCopiesWithoutAllocations();
+  testNoteStyleSnapshotsReuseUnchangedSettingsAndPreserveCapturedFrames();
   testLateMovesCannotReviveReleasedTouchVisuals();
   testCancelledTouchVisualCanContinueDuringGrace();
   testCancelledTouchContinuationIsIndependentOfVisualPruning();

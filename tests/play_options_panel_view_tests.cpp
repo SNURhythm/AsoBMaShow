@@ -13,6 +13,8 @@
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
 #include "view/SnappedSlider.h"
+#include "view/ColorPickerView.h"
+#include "view/ColorPickerPopup.h"
 #include "view/TextView.h"
 #include "view/TextInputBox.h"
 #include "i18n/Localization.h"
@@ -63,6 +65,160 @@ void click(Button &button) {
   up.button.type = SDL_MOUSEBUTTONUP;
   button.handleEvents(down);
   button.handleEvents(up);
+}
+
+void testColorPickerColorSpace() {
+  for (const auto rgb : {0x000000U, 0xFFFFFFU, 0x808080U, 0xFF0000U, 0x00FF00U,
+                         0x0000FFU, 0x3399CCU, 0x12ABEFU, 0xFEDCBAU})
+    require(color_picker::toRgb(color_picker::fromRgb(rgb)) == rgb,
+            "picker RGB/HSV conversion retains preset and custom colors");
+  auto gray = color_picker::fromRgb(0x808080, {.hue = 0.66F, .saturation = 0.8F, .value = 1});
+  require(gray.hue == 0.66F && gray.saturation == 0,
+          "gray retains the user's hue for the next saturation adjustment");
+  const auto black = color_picker::fromRgb(0, {.hue = 0.66F, .saturation = 0.8F, .value = 1});
+  require(black.hue == 0.66F && black.saturation == 0.8F && black.value == 0,
+          "black retains hue and saturation for the next brightness adjustment");
+  require(color_picker::toRgb({1, 1, 1}) == 0xFF0000,
+          "both ends of the hue strip meet at red");
+}
+
+void testColorPickerDragAndRelease() {
+  for (bool touch : {false, true}) {
+    int changes = 0;
+    int commits = 0;
+    ColorPickerView picker({0, 1, 1}, [&](auto, bool finished) {
+      if (finished) ++commits;
+      else ++changes;
+    });
+    picker.setSize(220, 240);
+    const auto pointer = [&](Uint32 type, int x, int y, SDL_FingerID id = 7) {
+      SDL_Event event{};
+      event.type = type;
+      if (touch) {
+        event.tfinger.touchId = 1;
+        event.tfinger.fingerId = id;
+        event.tfinger.x = float(x) / rendering::window_width;
+        event.tfinger.y = float(y) / rendering::window_height;
+      } else if (type == SDL_MOUSEMOTION) {
+        event.motion.which = 1;
+        event.motion.x = x;
+        event.motion.y = y;
+      } else {
+        event.button.which = 1;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = x;
+        event.button.y = y;
+      }
+      return event;
+    };
+    auto down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 110, 80);
+    require(!picker.handleEvents(down) && changes == 1 && commits == 0,
+            "picker previews the initial mouse or touch press without committing");
+    auto move = pointer(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 400, 0);
+    require(!picker.handleEvents(move) && color_picker::toRgb(picker.value()) == 0xFF0000,
+            "dragging outside the square clamps to a saturated bright color");
+    auto unrelated = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 110, 80, 8);
+    if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
+    picker.notifyPointerEventConsumed(unrelated);
+    require(commits == 0, "unrelated releases cannot end the picker gesture");
+    auto up = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 110, 80);
+    picker.notifyPointerEventConsumed(up);
+    require(commits == 1 && color_picker::toRgb(picker.value()) == 0xFF0000,
+            "a release consumed by another view commits the last previewed color");
+    require(picker.handleEvents(move) && commits == 1,
+            "a consumed release cannot leave the picker dragging");
+    down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 110, 215);
+    require(!picker.handleEvents(down) && std::abs(picker.value().hue - 0.5F) < 0.001F,
+            "the hue strip selects cyan halfway across");
+    up = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 110, 215);
+    require(!picker.handleEvents(up) && commits == 2,
+            "ordinary pointer release commits exactly once");
+    require(!picker.handleEvents(down), "a new picker gesture starts after release");
+    SDL_Event lost{};
+    lost.type = SDL_WINDOWEVENT;
+    lost.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+    picker.handleEvents(lost);
+    require(commits == 3 && picker.handleEvents(move),
+            "focus loss commits the last previewed value and clears dragging");
+  }
+}
+
+void testColorPickerPopup() {
+  for (const auto [width, height] : {std::pair{1280, 720}, {390, 844}, {640, 360}}) {
+    std::vector<ColorPickerPopup::Sample> samples;
+    for (int i = 0; i < 48; ++i) samples.push_back({.label = std::to_string(i + 1)});
+    int previewChanges = 0;
+    std::uint32_t previewColor = 0xFF0000;
+    ColorPickerPopup popup({0, 1, 1}, samples, [&](std::uint32_t rgb) {
+      ++previewChanges;
+      previewColor = rgb;
+    });
+    popup.fitToViewport(width, height, 12, 20, 12, 16);
+    ColorPickerView *picker = nullptr;
+    std::vector<Button *> buttons;
+    const auto inspect = [&](auto &&self, View *view) -> void {
+      require(dynamic_cast<ScrollView *>(view) == nullptr, "popup has no competing scroll gestures");
+      require(view->getX() >= 0 && view->getY() >= 0 &&
+              view->getX() + view->getWidth() <= width &&
+              view->getY() + view->getHeight() <= height,
+              "popup controls and all 48 samples fit portrait and landscape viewports");
+      if (auto *p = dynamic_cast<ColorPickerView *>(view)) picker = p;
+      if (auto *b = dynamic_cast<Button *>(view)) buttons.push_back(b);
+      for (auto *child : view->getChildren()) self(self, child);
+    };
+    inspect(inspect, &popup);
+    require(picker && buttons.size() == 2 && picker->getHeight() >= 136,
+            "popup provides a usable picker and two actions");
+    auto *panel = popup.getChildren().front();
+    for (int i = 0; i < 48; ++i) {
+      auto *sample = panel->getChildren()[i + 1];
+      require(sample->getY() + sample->getHeight() <= picker->getY(),
+              "every note preview is above the picker");
+      auto *note = sample->getChildren()[1];
+      require(note->getWidth() > 0 && note->getHeight() > 0,
+              "all 48 note previews retain visible dimensions on short screens");
+    }
+    for (auto *button : buttons)
+      require(button->getY() >= picker->getY() + picker->getHeight(),
+              "confirmation actions remain below the picker");
+    SDL_Event wheel{};
+    wheel.type = SDL_MOUSEWHEEL;
+    require(!popup.handleEvents(wheel), "modal consumes scrolling over the background");
+    SDL_Event down{};
+    down.type = SDL_MOUSEBUTTONDOWN;
+    down.button.button = SDL_BUTTON_LEFT;
+    down.button.x = picker->getX() + picker->getWidth() / 2;
+    down.button.y = picker->getY() + 15;
+    popup.handleEvents(down);
+    require(previewChanges > 0 && previewColor == color_picker::toRgb(picker->value()) &&
+                previewColor != 0xFF0000 && !popup.result(),
+            "picker forwards live draft colors before release or confirmation");
+    SDL_Event up = down;
+    up.type = SDL_MOUSEBUTTONUP;
+    popup.handleEvents(up);
+    require(!popup.result() && color_picker::toRgb(picker->value()) != 0xFF0000,
+            "dragging and releasing edits only the draft until confirmed");
+    click(*buttons.back());
+    require(popup.result() && popup.result()->confirmed &&
+                color_picker::toRgb(popup.result()->color) == color_picker::toRgb(picker->value()),
+            "Confirm returns precisely the previewed draft");
+  }
+  for (const bool escape : {false, true}) {
+    ColorPickerPopup popup({0.5F, 1, 1}, {{.label = "S", .style = ColorPickerPopup::SampleStyle::Scratch}});
+    popup.fitToViewport(800, 600);
+    if (escape) {
+      SDL_Event event{};
+      event.type = SDL_KEYDOWN;
+      event.key.keysym.sym = SDLK_ESCAPE;
+      require(!popup.handleEvents(event), "Escape is consumed by the modal");
+    } else {
+      for (auto *child : popup.getChildren().front()->getChildren()) {
+        if (auto *button = dynamic_cast<Button *>(child)) { click(*button); break; }
+      }
+    }
+    require(popup.result() && !popup.result()->confirmed,
+            "Cancel and Escape discard the draft without applying a color");
+  }
 }
 
 void testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture() {
@@ -338,6 +494,9 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testColorPickerPopup();
+  testColorPickerColorSpace();
+  testColorPickerDragAndRelease();
   testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture();
   testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();

@@ -189,6 +189,7 @@ void SettingsScene::init() {
 }
 
 void SettingsScene::onPresentationOrientationWillChange() {
+  closeAppearanceColorPopup();
   const auto finishSelected = [&](auto &&self, View *view) -> bool {
     if (auto *input = dynamic_cast<TextInputBox *>(view); input && input->getSelected()) {
       input->endEditing();
@@ -253,15 +254,7 @@ void SettingsScene::update(float dt) {
     ensurePreviewRenderer();
     ensurePreviewInputHandler();
     syncPreviewInputLayout();
-    previewElapsedMicros +=
-        static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
-    advancePreviewSimulation();
-    const bool skinEnding = previewPresentation &&
-                            previewPresentation->selectedSkinGameplayTiming().has_value();
-    if (skinEnding ? previewEndAnimation.complete
-                   : previewElapsedMicros >= kPreviewLoopMicros) {
-      resetPreviewSimulation();
-    }
+    advancePreviewPlayback(dt);
   }
   applyPendingDifficultyTableUpdates();
   applyPendingArchiveCacheCleanupStatus();
@@ -273,6 +266,7 @@ void SettingsScene::update(float dt) {
     refreshIrSettingsPresentation();
   }
   ensureLayoutUpToDate();
+  syncAppearanceColorPopup();
 }
 
 void SettingsScene::renderScene() {
@@ -324,6 +318,10 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
                      {255, 209, 128, 255});
     updateDisplayPreviewUi();
   }
+  if (appearanceColorPopup) {
+    appearanceColorPopup->handleEvents(event);
+    return {};
+  }
   for (auto *view : views) {
     if (!view->handleEvents(event)) {
       // Navigation callbacks can destroy this scene while consuming the event.
@@ -337,6 +335,7 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
 }
 
 void SettingsScene::cleanupScene() {
+  closeAppearanceColorPopup();
   context.profileSwitchBlockers.scene = nullptr;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (gameplaySkinSettingsController != nullptr) {
