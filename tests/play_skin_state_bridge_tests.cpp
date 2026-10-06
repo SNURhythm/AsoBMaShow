@@ -1935,6 +1935,64 @@ void testThreeJudgeRegionsOnlyKeepLatestComboTimer() {
          "three-region skins retain judge timers but only the latest combo timer");
 }
 
+void testJudgeRegionsIncludeRemainderAndSparseLanes() {
+  struct Case {
+    int keyMode;
+    int regionCount;
+    std::vector<int> regionByChartLane;
+  };
+  const std::array cases{
+      Case{9, 2, {0, 0, 0, 0, 0, 1, 1, 1, 1}},
+      Case{7, 3, {0, 0, 0, 1, 1, 1, 2, 2}},
+      Case{14, 3, {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2}},
+      Case{10, 2, {0, 0, 0, 0, 0, -1, -1, 0, 1, 1, 1, 1, 1, -1, -1, 1}},
+      Case{4, 3, {0, 0, -1, 1, 2}},
+      Case{6, 3, {0, 0, 0, -1, 1, 1, 2}},
+  };
+  constexpr std::array judgeTimers{46, 47, 247};
+  constexpr std::array comboTimers{446, 447, 448};
+  for (const auto &test : cases) {
+    bms_parser::ChartMeta meta;
+    meta.KeyMode = test.keyMode;
+    PlayfieldChartVisualModel chart;
+    chart.keyCount = test.keyMode;
+    chart.laneOrder = meta.GetTotalLaneIndices();
+    ValidatedBeatorajaSkinModel model;
+    model.model.objects = {
+        {.id = 1, .payload = SkinJudgeObject{.player = test.regionCount - 1}}};
+    BeatorajaSkinConfiguration configuration;
+    const auto mutations = makePinnedSkinEventMutationTableV1();
+    PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+        .configuration = configuration, .mutationTable = mutations});
+    for (std::size_t index = 0; index < chart.laneOrder.size(); ++index) {
+      auto state = stateAt(index + 1);
+      state.sceneStartMicros = 0;
+      state.lanes.assign(chart.laneOrder.size(), {});
+      state.lanes[index].lastJudgement = {.judgement = Great, .combo = 42,
+          .fastSlowMicros = 5'000, .visualMicros = 100, .sequence = 1};
+      bridge.beginFrame(state, projectionAt(index + 1));
+      const int lane = chart.laneOrder[index];
+      const int expectedRegion = test.regionByChartLane.at(lane);
+      for (int region = 0; region < test.regionCount; ++region) {
+        const bool expected = region == expectedRegion;
+        const auto judge = bridge.judgeState(region);
+        const std::string label = "key mode " + std::to_string(test.keyMode) +
+            ", lane " + std::to_string(lane) + ", region " + std::to_string(region);
+        expect(judge.supported == expected &&
+                   (!expected || (judge.optionalZeroBasedGrade == Great && judge.combo == 42)),
+               "every lane updates exactly its authored judgement region: " + label);
+        expect(bridge.timerProperty({judgeTimers[region]}) ==
+                       (expected ? 100 : kPlayfieldTimestampOff) &&
+                   bridge.timerProperty({comboTimers[region]}) ==
+                       (expected ? 100 : kPlayfieldTimestampOff) &&
+                   bridge.integerProperty({525 + region}).value == (expected ? -5 : 0),
+               "remainder and sparse lanes drive judgement, combo, and timing: " + label);
+      }
+      bridge.discardFrame();
+    }
+  }
+}
+
 void testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -4367,6 +4425,7 @@ int main() {
   testDoublePlayJudgementsRetainEachRegionsLastEvent();
   testKeyboardDoublePlayRetainsNormalAndExtendedLaneTimers();
   testThreeJudgeRegionsOnlyKeepLatestComboTimer();
+  testJudgeRegionsIncludeRemainderAndSparseLanes();
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();

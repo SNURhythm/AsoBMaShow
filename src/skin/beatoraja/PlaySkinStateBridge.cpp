@@ -943,17 +943,23 @@ void PlaySkinStateBridge::updateJudgeRegions() {
     return;
   }
   const auto &chart = context_.chartModel;
-  const auto lanesPerRegion = chart.laneOrder.size() / regionCount;
-  if (lanesPerRegion == 0) return;
   const int mode = compatibleGameplaySkinKeyMode(chart.keyCount);
+  // Sparse SP charts omit channels from laneOrder, but keep their positions
+  // in the compatible five/seven-key skin layout, including its scratch slot.
+  const std::size_t laneCount =
+      mode == 5 ? 6 : mode == 7 ? 8 : chart.laneOrder.size();
+  if (laneCount == 0) return;
   for (std::size_t index = 0;
        index < chart.laneOrder.size() && index < snapshot.lanes.size(); ++index) {
     const int lane = chart.laneOrder[index];
     const int compactLane = mode == 10 ? skinNoteLaneForChartLane(3, lane)
                            : mode == 5 ? skinNoteLaneForChartLane(1, lane) : lane;
-    if (compactLane < 0) continue;
-    const auto region = static_cast<std::size_t>(compactLane) / lanesPerRegion;
-    if (region >= static_cast<std::size_t>(regionCount)) continue;
+    if (compactLane < 0 || static_cast<std::size_t>(compactLane) >= laneCount) {
+      continue;
+    }
+    // Divide after multiplying so remainder lanes belong to a region too.
+    const auto region =
+        static_cast<std::size_t>(compactLane) * regionCount / laneCount;
     const auto &event = snapshot.lanes[index].lastJudgement;
     if (event.sequence > judgeRegions_[region].sequence) {
       judgeRegions_[region] = event;
