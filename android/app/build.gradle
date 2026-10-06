@@ -164,6 +164,12 @@ android {
         }
     }
 
+    androidResources {
+        // FreeType seeks through font tables and glyphs. Compressed APK assets
+        // re-inflate on backward seeks, stalling the UI on large CJK fonts.
+        noCompress += ['ttf', 'otf', 'ttc']
+    }
+
     buildTypes {
         debug {
             debuggable true
