@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <ranges>
@@ -41,6 +42,7 @@
 #endif
 #endif
 
+#include "SkinDirectoryTraversal.h"
 #include "SkinIOSFileOpenCompatibility.h"
 
 namespace skin {
@@ -965,18 +967,21 @@ openDirectoryNoFollow(const fs::path &directory) {
   }
   UniqueDirectoryDescriptor current(
       ::open(absolute.root_path().c_str(),
-             O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+             skinAncestorDirectoryOpenFlag() | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   if (!current) {
     return std::nullopt;
   }
   const fs::path relative = absolute.lexically_relative(absolute.root_path());
-  for (const fs::path &component : relative) {
+  for (auto iterator = relative.begin(); iterator != relative.end(); ++iterator) {
+    const fs::path &component = *iterator;
+    const int access = std::next(iterator) == relative.end()
+                           ? O_RDONLY : skinAncestorDirectoryOpenFlag();
     if (component.empty() || component == "." || component == "..") {
       return std::nullopt;
     }
     UniqueDirectoryDescriptor next(
         ::openat(current.get(), component.c_str(),
-                 O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+                 access | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (!next) {
       return std::nullopt;
     }
@@ -1006,21 +1011,24 @@ bool ensureDirectoryNoFollow(const fs::path &directory) {
   }
   UniqueDirectoryDescriptor current(
       ::open(absolute.root_path().c_str(),
-             O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+             skinAncestorDirectoryOpenFlag() | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   if (!current) {
     return false;
   }
   const fs::path relative = absolute.lexically_relative(absolute.root_path());
-  for (const fs::path &component : relative) {
+  for (auto iterator = relative.begin(); iterator != relative.end(); ++iterator) {
+    const fs::path &component = *iterator;
+    const int access = std::next(iterator) == relative.end()
+                           ? O_RDONLY : skinAncestorDirectoryOpenFlag();
     if (component.empty() || component == "." || component == "..") {
       return false;
     }
     int next = ::openat(current.get(), component.c_str(),
-                        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                        access | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (next < 0 && errno == ENOENT &&
         ::mkdirat(current.get(), component.c_str(), 0700) == 0) {
       next = ::openat(current.get(), component.c_str(),
-                      O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                      access | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     }
     if (next < 0) {
       return false;

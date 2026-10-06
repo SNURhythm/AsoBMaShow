@@ -73,7 +73,11 @@ SkinStorageRoots defaultSkinStorageRoots() {
   std::filesystem::path privateRoot;
   const std::filesystem::path internalFiles = GetAndroidInternalFilesDir();
   if (!internalFiles.empty()) {
-    privateRoot = internalFiles / ".asobmashow-private" / "Skins";
+    // Android exposes /data/user/0 through a system symlink. Resolve that
+    // trusted container before the skin store's no-follow directory walks.
+    std::error_code error;
+    const auto container = std::filesystem::canonical(internalFiles, error);
+    if (!error) privateRoot = container / ".asobmashow-private" / "Skins";
   }
   auto roots = deriveSkinStorageRoots(visible, privateRoot);
   roots.liveSources = true;

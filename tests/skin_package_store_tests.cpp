@@ -1617,6 +1617,74 @@ void testRescanAcceptsVisibleEditDuringValidation() {
          "validation");
 }
 
+void testLiveSourceStorageBelowSearchOnlyParent() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const fs::path parent = temp.root() / "search-only";
+  fs::create_directory(parent);
+  struct RestorePermissions {
+    fs::path path;
+    ~RestorePermissions() { fs::permissions(path, fs::perms::owner_all); }
+  } restore{parent};
+  const auto package = normalizePackageId("FixtureSkin");
+  const fs::path source = temp.root() / "Unpacked/FixtureSkin";
+  writeNewTree(source);
+  // The app-owned child is writable; only its system-owned parent is search-only.
+  const fs::path app = parent / "app";
+  fs::create_directory(app);
+  auto roots = rootsBelow(app);
+  roots.liveSources = true;
+  fs::permissions(parent, fs::perms::owner_exec);
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  const auto recovered = store.recoverBeforeServiceStart();
+  expect(recovered.disposition == SkinRecoveryDisposition::Recovered,
+         "skin storage bootstraps below a search-only platform parent");
+  if (recovered.disposition != SkinRecoveryDisposition::Recovered) return;
+  auto prepared = store.prepareFolder(source, *package.package, {}, {});
+  expect(prepared.prepared.has_value(),
+         "skin import traverses a search-only platform parent");
+  if (!prepared.prepared) return;
+  const auto published = store.publish(
+      std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  expect(published.published,
+         "skin publication and catalog persistence work below a search-only parent");
+  catalog.flush();
+  SkinPackageCatalog restartedCatalog(roots.privateCatalog);
+  SkinPackageStore restarted(roots, restartedCatalog, aliases, profiles);
+  expect(restarted.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered &&
+             restartedCatalog.snapshot()->entries.size() == 1,
+         "skin catalog is readable after restarting below a search-only parent");
+#endif
+}
+
+void testRecoveryStillRejectsLinkedStorageAncestor() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const fs::path actual = temp.root() / "actual";
+  const fs::path linked = temp.root() / "linked";
+  fs::create_directory(actual);
+  fs::create_directory_symlink(actual, linked);
+  auto roots = rootsBelow(linked);
+  roots.liveSources = true;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  const auto recovered = store.recoverBeforeServiceStart();
+  expect(recovered.disposition == SkinRecoveryDisposition::Failed &&
+             hasDiagnostic(recovered.diagnostics, "skin_package_recovery_storage_unavailable"),
+         "search-only traversal does not follow a linked skin storage ancestor");
+  expect(!fs::exists(actual / "Documents") && !fs::exists(actual / "ApplicationSupport"),
+         "rejecting a linked storage ancestor creates no directories through it");
+#endif
+}
+
 void testLiveSourceRecoveryUsesCatalogMetadataWithoutRevisionCopies() {
   TempDirectory temp;
   auto roots = rootsBelow(temp.root());
@@ -2901,6 +2969,8 @@ int main(int argc, char **argv) {
   testRescanIgnoresLegacyRuntimeDirectory();
   testRescanFollowsVisiblePackageDirectorySymlink();
   testRescanAcceptsVisibleEditDuringValidation();
+  testLiveSourceStorageBelowSearchOnlyParent();
+  testRecoveryStillRejectsLinkedStorageAncestor();
   testLiveSourceRecoveryUsesCatalogMetadataWithoutRevisionCopies();
   testLiveSourceImportPublishesOnlyIntoDocumentsSkins();
   testLiveSourceStartupMigratesOnlyLegacyCatalogMetadata();
