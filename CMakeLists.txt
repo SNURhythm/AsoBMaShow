@@ -633,6 +633,8 @@ install(DIRECTORY assets DESTINATION bin)
 
 # Subdirectories
 add_subdirectory(bgfx)
+include(cmake/BgfxVulkanMsaa.cmake)
+asobmashow_fix_bgfx_vulkan_msaa()
 add_subdirectory(src)
 target_sources(main PRIVATE src/CourseIdentity.cpp)
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
@@ -661,6 +663,12 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME bgfx_vulkan_msaa_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/bgfx_vulkan_msaa_tests.py
+                --source ${ASOBMASHOW_BGFX_VULKAN_SOURCE}
+                --include ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
+                --compiler ${CMAKE_CXX_COMPILER}
+                --compiler-id ${CMAKE_CXX_COMPILER_ID})
     find_package(BZip2 REQUIRED)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
