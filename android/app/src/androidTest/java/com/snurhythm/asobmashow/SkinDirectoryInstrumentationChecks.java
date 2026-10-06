@@ -32,6 +32,9 @@ final class SkinDirectoryInstrumentationChecks {
             instance.set(new PickerActivity());
         });
         AsoBMaShowActivity activity = instance.get();
+        // The fixture constructs an Activity without onCreate; progress now
+        // crosses JNI even though this test does not launch the game loop.
+        activity.loadLibraries();
         String path = null;
         try {
             Files.createDirectory(fixture.resolve("이미지"));

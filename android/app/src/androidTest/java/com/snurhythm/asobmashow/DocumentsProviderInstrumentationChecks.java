@@ -73,6 +73,8 @@ final class DocumentsProviderInstrumentationChecks {
                     "Provider did not honor a narrow projection");
         }
 
+        verifyProtectedStorage(resolver, authority, nativeRoot);
+        verifyReservedMove(resolver, authority, nativeRoot);
         verifyPrivateBoundary(context, resolver, authority, nativeRoot);
         verifyOpenFilesIntent(context, instrumentation, authority);
         verifySelfImportRejected(authority, instrumentation);
@@ -210,6 +212,127 @@ final class DocumentsProviderInstrumentationChecks {
             } finally {
                 require(outside.delete(), "Could not clean owned outside-root sentinel");
             }
+        }
+    }
+
+    private static void verifyProtectedStorage(ContentResolver resolver, String authority, File nativeRoot)
+            throws Exception {
+        for (String protectedName : new String[]{"db", "profiles"}) {
+            File parent = new File(nativeRoot, protectedName);
+            boolean createdParent = !parent.exists();
+            require(parent.isDirectory() || parent.mkdir(), "Could not prepare protected storage test");
+            File fixture = new File(parent, "ReviewTest-" + UUID.randomUUID());
+            require(fixture.mkdir(), "Could not create owned protected-storage fixture");
+            File sentinel = new File(fixture, "sentinel.db");
+            byte[] bytes = {19, 37, 59, 83};
+            try {
+                try (OutputStream output = new FileOutputStream(sentinel)) { output.write(bytes); }
+                String fixtureId = ROOT_DOCUMENT_ID + protectedName + "/" + fixture.getName();
+                Uri folder = DocumentsContract.buildDocumentUri(authority, fixtureId);
+                Uri file = DocumentsContract.buildDocumentUri(authority, fixtureId + "/sentinel.db");
+                int mutations = Document.FLAG_SUPPORTS_WRITE | Document.FLAG_SUPPORTS_DELETE
+                        | Document.FLAG_SUPPORTS_RENAME | Document.FLAG_DIR_SUPPORTS_CREATE;
+                verifyDocument(resolver, folder, Document.MIME_TYPE_DIR, 0, mutations);
+                verifyDocument(resolver, DocumentsContract.buildDocumentUri(authority,
+                        ROOT_DOCUMENT_ID + protectedName), Document.MIME_TYPE_DIR, 0, mutations);
+                require(Arrays.equals(bytes, read(resolver.openInputStream(file))),
+                        "Protected storage is not readable for export");
+                for (String mode : new String[]{"w", "wt", "wa", "rw", "rwt"}) {
+                    requireRejected(() -> {
+                        try (ParcelFileDescriptor descriptor = resolver.openFileDescriptor(file, mode)) {
+                            if (descriptor == null) throw new Rejected();
+                        }
+                    }, "Protected database allowed mode " + mode);
+                    require(Arrays.equals(bytes, read(new FileInputStream(sentinel))),
+                            "Rejected open changed protected bytes");
+                }
+                requireRejected(() -> {
+                    if (DocumentsContract.createDocument(resolver, folder, "application/octet-stream", "new.db") == null)
+                        throw new Rejected();
+                }, "Protected folder allowed creation");
+                // Only our disposable sentinel tree is targeted by destructive probes.
+                requireRejected(() -> {
+                    if (DocumentsContract.renameDocument(resolver, folder, fixture.getName() + "-moved") == null)
+                        throw new Rejected();
+                }, "Protected ancestor allowed rename");
+                requireRejected(() -> {
+                    if (!DocumentsContract.deleteDocument(resolver, folder)) throw new Rejected();
+                }, "Protected ancestor allowed deletion");
+                require(Arrays.equals(bytes, read(new FileInputStream(sentinel))),
+                        "Protected ancestor probe lost sentinel data");
+            } finally {
+                removeTransferFixture(fixture);
+                removeTransferFixture(new File(parent, fixture.getName() + "-moved"));
+                if (createdParent) require(parent.delete(), "Could not remove newly created empty test parent");
+            }
+        }
+    }
+
+    private static void verifyReservedMove(ContentResolver resolver, String authority, File nativeRoot)
+            throws Exception {
+        String name = "ReservedMoveTest-" + UUID.randomUUID();
+        Uri parent = create(resolver, DocumentsContract.buildDocumentUri(authority, ROOT_DOCUMENT_ID),
+                Document.MIME_TYPE_DIR, name);
+        File fixture = new File(nativeRoot, name);
+        try {
+            Uri source = create(resolver, parent, Document.MIME_TYPE_DIR, "Source");
+            Uri album = create(resolver, source, Document.MIME_TYPE_DIR, "Album");
+            byte[] bytes = {3, 7, 11, 17};
+            write(resolver, create(resolver, album, "application/octet-stream", "chart.bms"), bytes);
+            File output = new File(fixture, "Copied");
+            Uri copied = DocumentsContract.buildDocumentUri(authority, ROOT_DOCUMENT_ID + name + "/Copied");
+            Uri copiedChart = DocumentsContract.buildDocumentUri(authority,
+                    ROOT_DOCUMENT_ID + name + "/Copied/Album/chart.bms");
+            ChartImportCopyControl control = new ChartImportCopyControl(() -> 1, () -> false);
+            java.util.concurrent.atomic.AtomicInteger checks = new java.util.concurrent.atomic.AtomicInteger();
+            try (DocumentsMutationGuard.Reservation reservation = DocumentsMutationGuard.reserveNewDestination(output)) {
+                requireRejected(() -> {
+                    if (DocumentsContract.createDocument(resolver, parent, Document.MIME_TYPE_DIR, "Copied") == null)
+                        throw new Rejected();
+                }, "Files created a reserved destination before import");
+                Runnable verify = () -> {
+                    try {
+                        for (String mode : new String[]{"w", "wt", "wa", "rw", "rwt"}) {
+                            requireRejected(() -> {
+                                try (ParcelFileDescriptor descriptor = resolver.openFileDescriptor(copiedChart, mode)) {
+                                    if (descriptor == null) throw new Rejected();
+                                }
+                            }, "Files opened an import destination for writing");
+                        }
+                        requireRejected(() -> {
+                            if (DocumentsContract.renameDocument(resolver, copied, "Moved") == null) throw new Rejected();
+                        }, "Files renamed an import destination");
+                        requireRejected(() -> {
+                            if (!DocumentsContract.deleteDocument(resolver, copied)) throw new Rejected();
+                        }, "Files removed an import destination");
+                        requireRejected(() -> {
+                            if (!DocumentsContract.deleteDocument(resolver, parent)) throw new Rejected();
+                        }, "Files removed a reserved destination's ancestor");
+                        requireRejected(() -> {
+                            if (DocumentsContract.createDocument(resolver, copied, "application/octet-stream", "new.bms") == null)
+                                throw new Rejected();
+                        }, "Files added entries inside a reserved destination");
+                        require(Arrays.equals(bytes, read(resolver.openInputStream(copiedChart))),
+                                "Reserved copy changed or became unreadable");
+                        checks.incrementAndGet();
+                    } catch (Exception error) { throw new RuntimeException(error); }
+                };
+                Uri tree = DocumentsContract.buildTreeDocumentUri(authority, DocumentsContract.getDocumentId(source));
+                ChartFolderImport.Result result = ChartFolderImport.run(
+                        new SafChartFolderSource(resolver, tree, control), reservation.canonicalOutput,
+                        true, control, (files, total, copiedBytes, totalBytes, current, phase) -> {},
+                        verify, AsoBMaShowDocumentsProvider.DOCUMENT_MUTATION_LOCK);
+                require(result.complete && checks.get() == 2 && !new File(fixture, "Source").exists(),
+                        "Reserved SAF Move failed: " + result.error);
+                require(Arrays.equals(bytes, read(new FileInputStream(new File(output, "Album/chart.bms")))),
+                        "Reserved SAF Move lost copied data");
+            }
+            write(resolver, copiedChart, bytes);
+            Uri renamed = DocumentsContract.renameDocument(resolver, copied, "Finished");
+            require(renamed != null && DocumentsContract.deleteDocument(resolver, renamed),
+                    "Finished move did not restore normal Files access");
+        } finally {
+            removeTransferFixture(fixture);
         }
     }
 
