@@ -7,6 +7,12 @@
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/SettingsPreviewChart.h"
+#include "scene/SettingsSceneShared.h"
+#include "scene/play/StartLaneIndicatorGeometry.h"
+#include "settings/BuiltInNoteEditing.h"
+#include "settings/BuiltInScratchGradient.h"
+#include "view/DropdownView.h"
+#include "view/IconText.h"
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
 #include "view/ColorPickerView.h"
@@ -27,6 +33,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <charconv>
+#include <set>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -2254,8 +2262,10 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
-// Only the surrounding Settings UI is substituted; the extracted scene method,
-// renderer, camera, input handler, and logical input pipeline are production code.
+// The scene lifetime and disk persistence boundary are substituted. Extracted
+// editors, popup wiring, preview synchronization, widgets, renderer, camera,
+// input handler, and logical input pipeline are production code.
+using namespace settings_scene;
 struct SettingsScene {
   struct {
     struct : AppSettings {
@@ -2308,6 +2318,24 @@ struct SettingsScene {
   void syncPreviewInputLayout();
   void syncPreviewPresentationConfiguration();
   void closeAppearanceColorPopup();
+  void syncAppearanceColorPopup();
+  void appendAppearanceColorPicker(View *, const LayoutMetrics &, const std::string &,
+      std::uint32_t, std::vector<ColorPickerPopup::Sample>,
+      std::function<void(std::uint32_t)>, std::function<void(std::uint32_t)>);
+  void appendBuiltInNoteControls(View *, const LayoutMetrics &, int);
+  void appendBuiltInJudgeLineControls(View *, const LayoutMetrics &, int);
+  void appendBuiltInMeasureLineControls(View *, const LayoutMetrics &, int);
+  void appendBuiltInLanePercentControl(View *, const LayoutMetrics &, int,
+      const i18n::Text &, int built_in_lane::Style::*, const i18n::Text &);
+  std::map<int, std::set<int>> builtInNoteLanes;
+  int builtInNoteType = 0;
+  std::string builtInNoteDropdown;
+  std::map<std::string, color_picker::Hsv> appearanceColorPickers;
+  std::string appearanceColorPopupId;
+  int lastLayoutWidth = 0;
+  int settingsCommits = 0;
+  void persistSettings() { ++settingsCommits; }
+  void destroyPreviewInputHandler() {}
   void syncPreviewTouchLayout();
   void syncPreviewAuthority();
   void resetPreviewHudSample();
@@ -2330,49 +2358,147 @@ using settings_scene::previewFrameClock;
 using settings_scene::applyPreviewPlayerConfiguration;
 #include "settings_preview_input.inc"
 
-void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
-  const auto chart = settings_scene::makePreviewChart(7);
-  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
-  PlayfieldVisualStateStore store(model);
-  Judge judge(chart->Meta.Rank);
-  SettingsScene scene;
-  scene.previewPaused = true;
-  scene.previewChart = chart.get();
-  scene.previewVisualStateStore = &store;
-  auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
-  scene.previewRenderer = renderer.get();
-  scene.previewPresentation = std::move(renderer);
-  auto &saved = scene.context.settings.presentation();
-  saved.builtInNotes[7][0][built_in_notes::Type::Normal] = {0x123456, 140};
-  saved.builtInJudgeLines[7] = {0x234567, 150};
-  saved.builtInLanes[7].measureLineColor = 0x345678;
-  scene.syncPreviewPresentationConfiguration();
-  auto notes = saved.builtInNotes.at(7);
-  notes[0][built_in_notes::Type::Normal].color = 0xFF0000;
-  scene.appearanceColorPreview = [draft = built_in_notes::snapshotModeStyles(notes)](auto &config) {
-    config.builtInNotes = draft;
-    config.builtInJudgeLine.color = 0x00FF00;
-    config.builtInLane.measureLineColor = 0x0000FF;
+template <typename T> std::vector<T *> descendants(View &root) {
+  std::vector<T *> result;
+  const auto visit = [&](auto &&self, View *view) -> void {
+    if (auto *match = dynamic_cast<T *>(view)) result.push_back(match);
+    for (auto *child : view->getChildren()) self(self, child);
   };
-  scene.syncPreviewPresentationConfiguration();
-  const auto draft = store.captureForPresentation({.serial = 1});
-  expect(built_in_notes::resolve(draft.configuration.builtInNotes, 0,
-             built_in_notes::Type::Normal, built_in_notes::Palette::Gray).color == 0xFF0000 &&
-             draft.configuration.builtInJudgeLine.color == 0x00FF00 &&
-             draft.configuration.builtInLane.measureLineColor == 0x0000FF,
-         "paused gameplay preview receives draft note, judge-line, and measure-line colors");
-  expect(saved.builtInNotes.at(7).at(0).at(built_in_notes::Type::Normal).color == 0x123456 &&
-             saved.builtInJudgeLines.at(7).color == 0x234567 &&
-             saved.builtInLanes.at(7).measureLineColor == 0x345678,
-         "live color previews never modify persisted settings before Confirm");
-  scene.closeAppearanceColorPopup();
-  const auto restored = store.captureForPresentation({.serial = 2});
-  expect(!scene.appearanceColorPreview &&
-             built_in_notes::resolve(restored.configuration.builtInNotes, 0,
-                 built_in_notes::Type::Normal, built_in_notes::Palette::Gray).color == 0x123456 &&
-             restored.configuration.builtInJudgeLine.color == 0x234567 &&
-             restored.configuration.builtInLane.measureLineColor == 0x345678,
-         "closing the popup restores saved colors in the paused preview");
+  visit(visit, &root);
+  return result;
+}
+
+void clickAppearanceButton(View &dispatch, Button &button) {
+  SDL_Event event{};
+  event.type = SDL_MOUSEBUTTONDOWN;
+  event.button.button = SDL_BUTTON_LEFT;
+  event.button.x = int((rendering::ui_offset_x +
+      (button.getX() + button.getWidth() / 2) * rendering::ui_scale_x) / rendering::widthScale);
+  event.button.y = int((rendering::ui_offset_y +
+      (button.getY() + button.getHeight() / 2) * rendering::ui_scale_y) / rendering::heightScale);
+  dispatch.handleEvents(event);
+  event.type = SDL_MOUSEBUTTONUP;
+  dispatch.handleEvents(event);
+}
+
+void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
+  using Editor = void (SettingsScene::*)(View *, const LayoutMetrics &, int);
+  const std::array<Editor, 3> editors{&SettingsScene::appendBuiltInNoteControls,
+      &SettingsScene::appendBuiltInJudgeLineControls,
+      &SettingsScene::appendBuiltInMeasureLineControls};
+  for (const int keyMode : {7, -7}) {
+    for (std::size_t editor = 0; editor < editors.size(); ++editor) {
+      for (const bool confirm : {false, true}) {
+        const auto chart = settings_scene::makePreviewChart(keyMode);
+        const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+        PlayfieldVisualStateStore store(model);
+        Judge judge(chart->Meta.Rank);
+        OverlayPortal portal;
+        SettingsScene scene;
+        scene.overlayPortal = &portal;
+        scene.previewPaused = true;
+        scene.previewChart = chart.get();
+        scene.previewVisualStateStore = &store;
+        auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+        scene.previewRenderer = renderer.get();
+        scene.previewPresentation = std::move(renderer);
+        auto &saved = scene.context.settings.presentation();
+        saved.skin.follow7K1S = true;
+        scene.builtInNoteLanes[keyMode] = {0, 1};
+        saved.builtInNotes[7][0][built_in_notes::Type::Normal] = {0x123456, 140};
+        saved.builtInNotes[7][1][built_in_notes::Type::Normal] = {0x345678, 160};
+        saved.builtInNotes[7][2][built_in_notes::Type::Normal] = {0x56789A, 180};
+        saved.builtInJudgeLines[7] = {0x234567, 150};
+        saved.builtInLanes[7].measureLineColor = 0x345678;
+        saved.builtInLanes[7].measureLineThicknessPercent = 170;
+        scene.syncPreviewPresentationConfiguration();
+        const auto savedColor = [&]() {
+          if (editor == 0) return saved.builtInNotes.at(7).at(0).at(built_in_notes::Type::Normal).color;
+          if (editor == 1) return saved.builtInJudgeLines.at(7).color;
+          return saved.builtInLanes.at(7).measureLineColor;
+        };
+        const auto previewColor = [&]() {
+          const auto frame = store.captureForPresentation({.serial = 1});
+          if (editor == 0) return built_in_notes::resolve(frame.configuration.builtInNotes, 0,
+              built_in_notes::Type::Normal, built_in_notes::Palette::Gray).color;
+          if (editor == 1) return frame.configuration.builtInJudgeLine.color;
+          return frame.configuration.builtInLane.measureLineColor;
+        };
+        const auto buildEditor = [&]() {
+          auto body = std::make_unique<View>(0, 0, 1000, 5000);
+          (scene.*editors[editor])(body.get(), LayoutMetrics{}, keyMode);
+          return body;
+        };
+        const auto openPicker = [&](View &body) {
+          Button *palette = nullptr;
+          for (auto *button : descendants<Button>(body)) {
+            auto *label = dynamic_cast<TextView *>(button->getContentView());
+            if (label && label->getText() == ui_icons::textForCodepoint(ui_icons::kPalette))
+              palette = button;
+          }
+          expect(palette != nullptr, "production appearance editor exposes the palette action");
+          if (palette) clickAppearanceButton(*palette, *palette);
+          expect(scene.appearanceColorPopup && portal.isPresented(scene.appearanceColorPopup.get()),
+                 "palette action presents the production color popup through the scene portal");
+        };
+        const auto initial = savedColor();
+        auto body = buildEditor();
+        openPicker(*body);
+        if (!scene.appearanceColorPopup) continue;
+        const auto pickers = descendants<ColorPickerView>(*scene.appearanceColorPopup);
+        expect(pickers.size() == 1, "appearance popup contains one live color picker");
+        if (pickers.empty()) continue;
+        auto *picker = pickers.front();
+        SDL_Event drag{};
+        drag.type = SDL_MOUSEBUTTONDOWN;
+        drag.button.button = SDL_BUTTON_LEFT;
+        drag.button.x = int((rendering::ui_offset_x +
+            (picker->getX() + picker->getWidth() / 2) * rendering::ui_scale_x) / rendering::widthScale);
+        drag.button.y = int((rendering::ui_offset_y +
+            (picker->getY() + 15) * rendering::ui_scale_y) / rendering::heightScale);
+        portal.handleEvents(drag);
+        const auto draft = color_picker::toRgb(picker->value());
+        expect(draft != initial && previewColor() == draft && savedColor() == initial &&
+                   scene.settingsCommits == 0,
+               "real editor callbacks publish drafts to paused gameplay before mouse release without saving");
+        drag.type = SDL_MOUSEBUTTONUP;
+        portal.handleEvents(drag);
+        const auto actions = descendants<Button>(*scene.appearanceColorPopup);
+        expect(actions.size() == 2, "popup provides Cancel and Confirm");
+        if (actions.size() != 2) continue;
+        auto *popup = scene.appearanceColorPopup.get();
+        clickAppearanceButton(portal, *actions[confirm ? 1 : 0]);
+        scene.syncAppearanceColorPopup();
+        const auto expected = confirm ? draft : initial;
+        expect(!scene.appearanceColorPopup && !scene.appearanceColorPreview &&
+                   !scene.appearanceColorApply && !portal.isPresented(popup),
+               "scene dispatch closes the popup and clears temporary callbacks and portal registration");
+        expect(savedColor() == expected && previewColor() == expected &&
+                   scene.settingsCommits == (confirm ? 1 : 0),
+               "Confirm persists precisely the draft once; Cancel restores saved paused gameplay");
+        expect(!confirm || scene.lastLayoutWidth == -1,
+               "Confirm requests rebuilt appearance controls");
+        expect(saved.builtInNotes.at(7).at(0).at(built_in_notes::Type::Normal).thickness == 140 &&
+                   saved.builtInNotes.at(7).at(1).at(built_in_notes::Type::Normal).thickness == 160 &&
+                   saved.builtInNotes.at(7).at(2).at(built_in_notes::Type::Normal).color == 0x56789A &&
+                   saved.builtInJudgeLines.at(7).heightPercent == 150 &&
+                   saved.builtInLanes.at(7).measureLineThicknessPercent == 170 &&
+                   !saved.builtInNotes.contains(-7),
+               "color confirmation preserves dimensions, unselected lanes, and Follow storage");
+        if (editor == 0 && confirm)
+          expect(saved.builtInNotes.at(7).at(1).at(built_in_notes::Type::Normal).color == draft,
+                 "note popup confirmation applies to every selected lane");
+        body = buildEditor();
+        openPicker(*body);
+        if (scene.appearanceColorPopup) {
+          const auto reopened = descendants<ColorPickerView>(*scene.appearanceColorPopup);
+          expect(reopened.size() == 1 && color_picker::toRgb(reopened.front()->value()) == expected,
+                 "rebuilt editor reopens with the committed color or the restored saved color after Cancel");
+          scene.closeAppearanceColorPopup();
+        }
+      }
+    }
+  }
 }
 
 struct PreviewRecordingControl : IRhythmControl {

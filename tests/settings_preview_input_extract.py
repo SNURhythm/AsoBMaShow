@@ -29,5 +29,19 @@ signatures = ('void SettingsScene::resetPreviewSimulation()',) if args.restart_o
 methods = '\n'.join(extract(source, signature) for signature in signatures)
 if not args.restart_only:
     controls = (args.root / 'src/scene/SettingsSceneControls.cpp').read_text()
-    methods += '\n' + extract(controls, 'void SettingsScene::closeAppearanceColorPopup()')
+    helpers = extract(controls, 'View *makeAppearanceColorPresets(')
+    helpers += '\n' + extract(controls, 'class ScratchNoteSample') + ';'
+    layout = (args.root / 'src/scene/SettingsSceneLayout.cpp').read_text()
+    helpers += '\n' + extract(layout, 'void styleGameplaySkinChoiceButton(')
+    methods = helpers + '\n' + methods
+    for signature in (
+        'void SettingsScene::closeAppearanceColorPopup()',
+        'void SettingsScene::syncAppearanceColorPopup()',
+        'void SettingsScene::appendAppearanceColorPicker(',
+        'void SettingsScene::appendBuiltInNoteControls(',
+        'void SettingsScene::appendBuiltInJudgeLineControls(',
+        'void SettingsScene::appendBuiltInMeasureLineControls(',
+        'void SettingsScene::appendBuiltInLanePercentControl(',
+    ):
+        methods += '\n' + extract(controls, signature)
 args.output.write_text(methods)

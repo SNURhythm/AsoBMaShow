@@ -708,6 +708,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     --root ${CMAKE_SOURCE_DIR} --output ${settings_preview_input_source}
             DEPENDS tests/settings_preview_input_extract.py tests/gameplay_terminal_scene_extract.py
                     src/scene/SettingsScenePreview.cpp src/scene/SettingsSceneControls.cpp
+                    src/scene/SettingsSceneLayout.cpp
             VERBATIM
         )
         add_executable(builtin_renderer_characterization_tests
@@ -720,6 +721,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ColorPickerView.cpp
             src/view/ColorPickerPopup.cpp
             src/view/Button.cpp
+            src/view/DropdownView.cpp
+            src/view/ScrollView.cpp
+            src/view/TextInputBox.cpp
             ${settings_preview_input_source}
             src/scene/SettingsPreviewChart.cpp
             src/scene/play/RealtimeTouchInputRouter.cpp

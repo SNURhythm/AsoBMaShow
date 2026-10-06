@@ -70,7 +70,7 @@
 
 - [x] User selected live gameplay preview while dragging with restoration on Cancel; implement Task 4.
 - [x] Build `main` and changed test targets, run full CTest with `-j 6`, review the final diff, and fix substantive findings.
-- [ ] Commit and push task changes. Report any review feedback intentionally left unchanged. Posting review replies requires explicit authorization.
+- [x] Commit and push task changes. Report any review feedback intentionally left unchanged. Posting review replies requires explicit authorization.
 
 
 ## Verification record
@@ -80,5 +80,13 @@
 - Explicit 9K/24K/48K construction failed before mode expansion; chart, touch, autoplay, and renderer checks now pass across every preview mode.
 - Paused color preview and restoration assertions failed before the override was wired, then passed. Popup callbacks and rotation cleanup passed.
 - Desktop main build and all six focused CTest groups passed.
-- Independent review found no correctness defect. Nonblocking coverage follow-up: exercise the complete editor-to-popup wiring, Confirm dispatch, and layout rebuilding in one integration test; current tests cover those components and preview configuration boundaries separately.
+- Independent review found no correctness defect. The remaining editor-to-popup integration coverage was completed during the subsequent review loop below.
 - Full CTest: 425/425 passed in 111.55 seconds; `git diff --check` passed.
+
+## Review loop
+
+- A fresh independent review of the complete PR found no actionable production defects.
+- Replaced the manually injected draft test with actual note, judge-line, and measure-line editor construction, palette clicks, popup events, and scene result dispatch against the real renderer and settings.
+- The integration test covers draft propagation before release, paused preview, Confirm/Cancel, persistence counts, callback/portal cleanup, preserved dimensions and unselected lanes, scratchless Follow storage, and reopening rebuilt controls with the correct color.
+- A fresh independent review of the final test changes found no actionable issues.
+- Desktop build and the expanded integration test passed; the complete CTest suite passed again (425/425). `git diff --check` passed.
