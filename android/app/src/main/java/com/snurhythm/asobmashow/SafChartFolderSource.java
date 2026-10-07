@@ -3,6 +3,7 @@ package com.snurhythm.asobmashow;
 import android.content.ContentResolver;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 
@@ -18,6 +19,7 @@ final class SafChartFolderSource implements ChartFolderImport.Source {
     private final ContentResolver resolver;
     private final Uri tree;
     private final ChartImportCopyControl control;
+    private final SafImportCancellation providerCalls = new SafImportCancellation();
 
     SafChartFolderSource(ContentResolver resolver, Uri tree, ChartImportCopyControl control) {
         this.resolver = resolver;
@@ -27,8 +29,9 @@ final class SafChartFolderSource implements ChartFolderImport.Source {
 
     @Override public ChartFolderImport.Entry root() throws IOException {
         control.checkpoint();
-        try (Cursor cursor = resolver.query(document(DocumentsContract.getTreeDocumentId(tree)),
-                COLUMNS, null, null, null)) {
+        try (SafImportCancellation.Operation operation = providerCalls.begin();
+             Cursor cursor = resolver.query(document(DocumentsContract.getTreeDocumentId(tree)),
+                COLUMNS, null, null, null, operation.signal)) {
             if (cursor == null || !cursor.moveToFirst()) throw new IOException("Could not read selected folder.");
             requireComplete(cursor);
             ChartFolderImport.Entry result = entry(cursor);
@@ -40,8 +43,9 @@ final class SafChartFolderSource implements ChartFolderImport.Source {
     @Override public List<ChartFolderImport.Entry> children(ChartFolderImport.Entry directory) throws IOException {
         List<ChartFolderImport.Entry> result = new ArrayList<>();
         control.checkpoint();
-        try (Cursor cursor = resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, directory.id),
-                COLUMNS, null, null, null)) {
+        try (SafImportCancellation.Operation operation = providerCalls.begin();
+             Cursor cursor = resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, directory.id),
+                COLUMNS, null, null, null, operation.signal)) {
             if (cursor == null) throw new IOException("Could not read selected folder.");
             requireComplete(cursor);
             while (true) {
@@ -56,8 +60,13 @@ final class SafChartFolderSource implements ChartFolderImport.Source {
 
     @Override public InputStream open(ChartFolderImport.Entry file) throws IOException {
         control.checkpoint();
-        return resolver.openInputStream(document(file.id));
+        try (SafImportCancellation.Operation operation = providerCalls.begin()) {
+            ParcelFileDescriptor descriptor = resolver.openFileDescriptor(document(file.id), "r", operation.signal);
+            return descriptor == null ? null : new ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+        }
     }
+
+    @Override public void cancel() { providerCalls.cancel(); }
 
     @Override public void delete(ChartFolderImport.Entry directory) throws IOException {
         // The engine validates immediately before deletion; do not pause after that snapshot.

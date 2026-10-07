@@ -878,7 +878,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         nativeSkinDirectoryImportProgress(operationToken, 0, 0);
         Path issued = null;
         CancellationSignal cancellation = new CancellationSignal();
-        ParcelFileDescriptor[] descriptor = {null};
+        AtomicReference<ParcelFileDescriptor> descriptor = new AtomicReference<>();
         try {
             if (selection.uri == null || !ContentResolver.SCHEME_CONTENT.equals(selection.uri.getScheme()) ||
                     !DocumentsContract.isTreeUri(selection.uri)) throw new IOException("Select a DocumentsProvider folder.");
@@ -892,7 +892,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                             throwIfDocumentHandoffCancelled(selection.operation);
                         }
                         @Override public void descriptor(ParcelFileDescriptor value) throws IOException {
-                            descriptor[0] = value;
+                            descriptor.set(value);
                             if (!registerDocumentHandoffIo(selection.operation, cancellation, value))
                                 throw new DocumentHandoffCancelledException();
                         }
@@ -920,9 +920,9 @@ public class AsoBMaShowActivity extends SDLActivity {
                     e instanceof DocumentHandoffCancelledException || cancellation.isCanceled()) return CANCELLED_RESULT;
             return ERROR_PREFIX + messageForException(e, "Could not copy the selected folder.");
         } finally {
-            clearDocumentHandoffIo(selection.operation, cancellation, descriptor[0]);
-            if (descriptor[0] != null) {
-                try { descriptor[0].close(); } catch (IOException ignored) { }
+            clearDocumentHandoffIo(selection.operation, cancellation, descriptor.get());
+            if (descriptor.get() != null) {
+                try { descriptor.get().close(); } catch (IOException ignored) { }
             }
             if (issued != null) {
                 try { SkinDirectoryImport.removeTree(issued); }

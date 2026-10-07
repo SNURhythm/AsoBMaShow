@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
@@ -14,7 +15,7 @@ final class ChartImportCopyControl {
     static final long ARCHIVE_RESERVED_BYTES = 256L * 1024 * 1024;
     private final IntSupplier copyState;
     private final BooleanSupplier cancelled;
-    private long pauseGeneration;
+    private final AtomicLong pauseGeneration = new AtomicLong();
 
     ChartImportCopyControl(IntSupplier copyState, BooleanSupplier cancelled) {
         this.copyState = copyState;
@@ -29,7 +30,7 @@ final class ChartImportCopyControl {
                 return;
             }
             if (!waited) {
-                pauseGeneration++;
+                pauseGeneration.incrementAndGet();
                 waited = true;
             }
             try {
@@ -42,13 +43,13 @@ final class ChartImportCopyControl {
     }
 
     long pauseGeneration() {
-        return pauseGeneration;
+        return pauseGeneration.get();
     }
 
     boolean continueWithoutWaiting(long validatedGeneration) throws InterruptedIOException {
         // Never suspend between validating a source snapshot and deleting it. If
         // validation (including a provider cursor) paused, the caller must list again.
-        return currentState() > 0 && pauseGeneration == validatedGeneration;
+        return currentState() > 0 && pauseGeneration.get() == validatedGeneration;
     }
 
     private int currentState() throws InterruptedIOException {
@@ -68,6 +69,10 @@ final class ChartImportCopyControl {
         copy(input, output, Long.MAX_VALUE, 0, null, bytesCopied);
     }
 
+    void copy(InputStream input, OutputStream output, byte[] buffer, LongConsumer bytesCopied) throws IOException {
+        copy(input, output, Long.MAX_VALUE, 0, null, bytesCopied, buffer);
+    }
+
     void copyArchive(InputStream input, OutputStream output, LongSupplier usableSpace)
             throws IOException {
         copyArchive(input, output, MAXIMUM_ARCHIVE_BYTES, ARCHIVE_RESERVED_BYTES, usableSpace);
@@ -83,7 +88,12 @@ final class ChartImportCopyControl {
 
     private void copy(InputStream input, OutputStream output, long maximumBytes,
                       long reservedBytes, LongSupplier usableSpace, LongConsumer bytesCopied) throws IOException {
-        byte[] buffer = new byte[1024 * 1024];
+        copy(input, output, maximumBytes, reservedBytes, usableSpace, bytesCopied, new byte[1024 * 1024]);
+    }
+
+    private void copy(InputStream input, OutputStream output, long maximumBytes,
+                      long reservedBytes, LongSupplier usableSpace, LongConsumer bytesCopied, byte[] buffer)
+            throws IOException {
         long copiedBytes = 0;
         while (true) {
             checkpoint();

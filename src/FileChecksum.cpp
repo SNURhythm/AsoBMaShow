@@ -6,8 +6,13 @@
 #include <fstream>
 #include <limits>
 
+#if defined(ASOBMASHOW_USE_OPENSSL_SHA256)
+#include <openssl/evp.h>
+#include <stdexcept>
+#endif
+
 namespace file_checksum {
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(ASOBMASHOW_USE_OPENSSL_SHA256)
 namespace {
 constexpr std::array<std::uint32_t, 64> kRoundConstants = {
     0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU,
@@ -33,7 +38,23 @@ std::uint32_t loadBigEndian(const std::byte *bytes) {
 } // namespace
 #endif
 
-#if defined(__APPLE__)
+#if defined(ASOBMASHOW_USE_OPENSSL_SHA256)
+Sha256::Sha256() : state_(EVP_MD_CTX_new(), EVP_MD_CTX_free) {
+  if (!state_ || EVP_DigestInit_ex(state_.get(), EVP_sha256(), nullptr) != 1) {
+    throw std::runtime_error("unable to initialize SHA-256");
+  }
+}
+
+void Sha256::detachState() {
+  // Preserve the existing value semantics when a caller forks a partial hash.
+  if (state_.use_count() == 1) return;
+  std::shared_ptr<EVP_MD_CTX> copy(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  if (!copy || EVP_MD_CTX_copy_ex(copy.get(), state_.get()) != 1) {
+    throw std::runtime_error("unable to copy SHA-256 state");
+  }
+  state_ = std::move(copy);
+}
+#elif defined(__APPLE__)
 Sha256::Sha256() { CC_SHA256_Init(&state_); }
 #else
 Sha256::Sha256()
@@ -109,7 +130,12 @@ void Sha256::update(std::span<const std::byte> bytes) {
   if (finalized_ || bytes.empty()) {
     return;
   }
-#if defined(__APPLE__)
+#if defined(ASOBMASHOW_USE_OPENSSL_SHA256)
+  detachState();
+  if (EVP_DigestUpdate(state_.get(), bytes.data(), bytes.size()) != 1) {
+    throw std::runtime_error("unable to update SHA-256");
+  }
+#elif defined(__APPLE__)
   while (!bytes.empty()) {
     const auto count = static_cast<CC_LONG>(std::min<std::size_t>(
         bytes.size(), std::numeric_limits<CC_LONG>::max()));
@@ -144,7 +170,15 @@ std::array<std::byte, 32> Sha256::final() {
   if (finalized_) {
     return digest_;
   }
-#if defined(__APPLE__)
+#if defined(ASOBMASHOW_USE_OPENSSL_SHA256)
+  detachState();
+  unsigned int size = 0;
+  if (EVP_DigestFinal_ex(state_.get(),
+                         reinterpret_cast<unsigned char *>(digest_.data()), &size) != 1 ||
+      size != digest_.size()) {
+    throw std::runtime_error("unable to finalize SHA-256");
+  }
+#elif defined(__APPLE__)
   CC_SHA256_Final(reinterpret_cast<unsigned char *>(digest_.data()), &state_);
 #else
   const std::uint64_t bitCount = totalBytes_ * 8U;

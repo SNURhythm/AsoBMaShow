@@ -177,6 +177,10 @@ elseif(ANDROID)
     find_package(CURL REQUIRED)
     list(APPEND COMMON_LIBS CURL::libcurl)
 
+    # Reuse the bundled TLS dependency for hardware-dispatched native checksums.
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    list(APPEND COMMON_LIBS OpenSSL::Crypto)
+
     find_package(LibArchive REQUIRED)
     if(TARGET LibArchive::LibArchive)
         list(APPEND COMMON_LIBS LibArchive::LibArchive)
@@ -480,6 +484,9 @@ target_link_libraries(main
     bgfx
     yogacore
 )
+if(ANDROID)
+    target_compile_definitions(main PRIVATE ASOBMASHOW_USE_OPENSSL_SHA256=1)
+endif()
 
 if (PLATFORM_MACOS)
     # 7-Zip registers archive handlers through static initialization. With a

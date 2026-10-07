@@ -20,11 +20,13 @@ class AndroidFolderImportTests(unittest.TestCase):
         source = ROOT / "android/app/src/main/java/com/snurhythm/asobmashow"
         with tempfile.TemporaryDirectory(prefix="folder-import-tests-") as output:
             subprocess.run([javac, "-d", output,
+                            str(source / "ImportCopyWorkers.java"),
                             str(source / "ChartImportCopyControl.java"),
                             str(source / "ChartFolderImport.java"),
                             str(ROOT / "tests/java/ChartFolderImportTests.java"),
+                            str(ROOT / "tests/java/ImportCopyWorkersTests.java"),
                             str(ROOT / "tests/java/ChartImportCopyControlTests.java")], check=True)
-            for test in ("ChartFolderImportTests", "ChartImportCopyControlTests"):
+            for test in ("ImportCopyWorkersTests", "ChartFolderImportTests", "ChartImportCopyControlTests"):
                 subprocess.run([java, "-cp", output,
                                 "com.snurhythm.asobmashow." + test], check=True)
 

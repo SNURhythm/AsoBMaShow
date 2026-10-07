@@ -23,8 +23,10 @@ final class SkinDirectoryImport {
     interface Source {
         Entry root() throws IOException;
         List<Entry> children(Entry directory, long remaining) throws IOException;
+        // Called concurrently for independent files; callbacks must be thread-safe.
         InputStream open(Entry file) throws IOException;
         void checkpoint() throws IOException;
+        default void cancel() { }
     }
     interface Progress { void update(long bytes, long files); }
     static final class Limits {
@@ -37,10 +39,12 @@ final class SkinDirectoryImport {
     private final Source source;
     private final Limits limits;
     private final Set<String> seen = new HashSet<>();
-    private long entries, bytes, files;
+    private long entries, bytes, files, reservedBytes;
     private final Progress progress;
-    private SkinDirectoryImport(Source source, Limits limits, Progress progress) {
+    private final ImportCopyWorkers workers;
+    private SkinDirectoryImport(Source source, Limits limits, Progress progress, ImportCopyWorkers workers) {
         this.source = source; this.limits = limits; this.progress = progress;
+        this.workers = workers;
     }
 
     static String copy(Source source, Path output, Limits limits) throws IOException {
@@ -51,15 +55,16 @@ final class SkinDirectoryImport {
                 limits.pathBytes <= 0 || limits.fileBytes <= 0) throw new IOException("Invalid folder import limits.");
         // CREATE_NEW semantics: never remove an existing path on failure.
         Files.createDirectory(output);
-        try {
+        try (ImportCopyWorkers workers = new ImportCopyWorkers(source::checkpoint, source::cancel)) {
             progress.update(0, 0);
             source.checkpoint();
             Entry root = source.root();
             if (root == null || !root.directory) throw new IOException("Select a folder to import.");
             requireName(root.name);
-            SkinDirectoryImport copy = new SkinDirectoryImport(source, limits, progress);
+            SkinDirectoryImport copy = new SkinDirectoryImport(source, limits, progress, workers);
             copy.requireUnique(root);
             copy.copyChildren(root, output, "", 1);
+            workers.awaitAll();
             source.checkpoint();
             return root.name;
         } catch (IOException | RuntimeException e) {
@@ -91,36 +96,45 @@ final class SkinDirectoryImport {
                 Files.createDirectory(output);
                 copyChildren(child, output, path, depth + 1);
             } else {
-                if (child.size > limits.fileBytes || child.size > limits.bytes - bytes)
-                    throw new IOException("Folder exceeds the skin size limit.");
-                long fileBytes = 0;
-                try (InputStream input = source.open(child);
-                     OutputStream stream = Files.newOutputStream(output, StandardOpenOption.CREATE_NEW)) {
-                    if (input == null) throw new IOException("Could not read a skin file.");
-                    byte[] buffer = new byte[64 * 1024];
-                    while (true) {
-                        source.checkpoint();
-                        int count = input.read(buffer);
-                        source.checkpoint();
-                        if (count < 0) break;
-                        if (count == 0) {
-                            int value = input.read();
-                            source.checkpoint();
-                            if (value < 0) break;
-                            buffer[0] = (byte)value;
-                            count = 1;
-                        }
-                        if (count > limits.fileBytes - fileBytes || count > limits.bytes - bytes)
-                            throw new IOException("Folder exceeds the skin size limit.");
-                        stream.write(buffer, 0, count);
-                        fileBytes += count;
-                        bytes += count;
-                        progress.update(bytes, files);
-                    }
-                }
-                progress.update(bytes, ++files);
+                workers.submit(() -> copyFile(child, output));
             }
         }
+    }
+    private void copyFile(Entry child, Path output) throws IOException {
+        synchronized (this) {
+            if (child.size > limits.fileBytes || child.size > limits.bytes - reservedBytes)
+                throw new IOException("Folder exceeds the skin size limit.");
+        }
+        long fileBytes = 0;
+        try (InputStream input = workers.track(source.open(child));
+             OutputStream stream = Files.newOutputStream(output, StandardOpenOption.CREATE_NEW)) {
+            byte[] buffer = workers.buffer();
+            while (true) {
+                source.checkpoint();
+                int count = input.read(buffer);
+                source.checkpoint();
+                if (count < 0) break;
+                if (count == 0) {
+                    int value = input.read();
+                    source.checkpoint();
+                    if (value < 0) break;
+                    buffer[0] = (byte)value;
+                    count = 1;
+                }
+                synchronized (this) {
+                    if (count > limits.fileBytes - fileBytes || count > limits.bytes - reservedBytes)
+                        throw new IOException("Folder exceeds the skin size limit.");
+                    reservedBytes += count;
+                }
+                stream.write(buffer, 0, count);
+                fileBytes += count;
+                synchronized (this) {
+                    bytes += count;
+                    progress.update(bytes, files);
+                }
+            }
+        }
+        synchronized (this) { progress.update(bytes, ++files); }
     }
     private static void requireName(String name) throws IOException {
         if (name == null || name.isEmpty() || name.equals(".") || name.equals("..") ||

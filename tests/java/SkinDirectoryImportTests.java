@@ -3,11 +3,14 @@ package com.snurhythm.asobmashow;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class SkinDirectoryImportTests {
     static class Source implements SkinDirectoryImport.Source {
         Map<String, List<SkinDirectoryImport.Entry>> entries = new HashMap<>();
-        boolean cancelled;
+        volatile boolean cancelled;
         public SkinDirectoryImport.Entry root() { return entry("root", "My Skin", true, 0); }
         public List<SkinDirectoryImport.Entry> children(SkinDirectoryImport.Entry directory, long remaining) throws IOException {
             List<SkinDirectoryImport.Entry> result = entries.getOrDefault(directory.id, List.of());
@@ -32,7 +35,51 @@ public final class SkinDirectoryImportTests {
             catch (IOException expected) { require(!Files.exists(output)); }
         } finally { SkinDirectoryImport.removeTree(temp); }
     }
+    static void concurrentFilesKeepExactContentsAndProgress() throws Exception {
+        CountDownLatch readers = new CountDownLatch(Math.min(2, Runtime.getRuntime().availableProcessors()));
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maximum = new AtomicInteger();
+        Source source = new Source() {
+            public InputStream open(SkinDirectoryImport.Entry file) {
+                int count = active.incrementAndGet();
+                maximum.accumulateAndGet(count, Math::max);
+                return new ByteArrayInputStream(new byte[]{(byte)Integer.parseInt(file.id)}) {
+                    boolean first = true;
+                    @Override public synchronized int read(byte[] bytes, int offset, int length) {
+                        if (first) {
+                            first = false;
+                            readers.countDown();
+                            try { require(readers.await(2, TimeUnit.SECONDS)); }
+                            catch (InterruptedException error) { throw new AssertionError(error); }
+                        }
+                        return super.read(bytes, offset, length);
+                    }
+                    @Override public void close() { active.decrementAndGet(); }
+                };
+            }
+        };
+        List<SkinDirectoryImport.Entry> files = new ArrayList<>();
+        for (int i = 1; i <= 20; i++) files.add(entry("" + i, "file-" + i, false, -1));
+        source.entries.put("root", files);
+        Path root = Files.createTempDirectory("skin-parallel-");
+        List<long[]> progress = new ArrayList<>();
+        try {
+            SkinDirectoryImport.copy(source, root.resolve("copy"), limits(20,20,1,64,1),
+                    (bytes, count) -> progress.add(new long[]{bytes, count}));
+            require(maximum.get() >= Math.min(2, Runtime.getRuntime().availableProcessors())
+                    && maximum.get() <= Math.min(8, Runtime.getRuntime().availableProcessors()) && active.get() == 0);
+            for (int i = 1; i <= 20; i++) require(Arrays.equals(
+                    Files.readAllBytes(root.resolve("copy/file-" + i)), new byte[]{(byte)i}));
+            long bytes = 0, count = 0;
+            for (long[] update : progress) {
+                require(update[0] >= bytes && update[1] >= count);
+                bytes = update[0]; count = update[1];
+            }
+            require(bytes == 20 && count == 20);
+        } finally { SkinDirectoryImport.removeTree(root); }
+    }
     public static void main(String[] args) throws Exception {
+        concurrentFilesKeepExactContentsAndProgress();
         Source source = new Source();
         source.entries.put("root", List.of(entry("folder", "이미지", true, 0), entry("lua", "skin.lua", false, -1)));
         source.entries.put("folder", List.of(entry("image", "note.png", false, 3)));

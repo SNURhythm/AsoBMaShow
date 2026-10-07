@@ -24,14 +24,18 @@ final class SafSkinDirectorySource implements SkinDirectoryImport.Source {
     private final Uri tree;
     private final CancellationSignal cancellation;
     private final IoControl control;
+    private final SafImportCancellation providerCalls = new SafImportCancellation();
     SafSkinDirectorySource(ContentResolver resolver, Uri tree, CancellationSignal cancellation, IoControl control) {
         this.resolver = resolver; this.tree = tree; this.cancellation = cancellation; this.control = control;
+        cancellation.setOnCancelListener(providerCalls::cancel);
     }
     @Override public void checkpoint() throws IOException { control.checkpoint(); cancellation.throwIfCanceled(); }
+    @Override public void cancel() { providerCalls.cancel(); }
     @Override public SkinDirectoryImport.Entry root() throws IOException {
         checkpoint();
-        try (Cursor cursor = resolver.query(document(DocumentsContract.getTreeDocumentId(tree)),
-                COLUMNS, null, null, null, cancellation)) {
+        try (SafImportCancellation.Operation operation = providerCalls.begin();
+             Cursor cursor = resolver.query(document(DocumentsContract.getTreeDocumentId(tree)),
+                COLUMNS, null, null, null, operation.signal)) {
             if (cursor == null || !cursor.moveToFirst()) throw new IOException("Could not read selected folder.");
             requireComplete(cursor);
             SkinDirectoryImport.Entry result = entry(cursor);
@@ -44,8 +48,9 @@ final class SafSkinDirectorySource implements SkinDirectoryImport.Source {
             throws IOException {
         checkpoint();
         List<SkinDirectoryImport.Entry> result = new ArrayList<>();
-        try (Cursor cursor = resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, directory.id),
-                COLUMNS, null, null, null, cancellation)) {
+        try (SafImportCancellation.Operation operation = providerCalls.begin();
+             Cursor cursor = resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, directory.id),
+                COLUMNS, null, null, null, operation.signal)) {
             if (cursor == null) throw new IOException("Could not read selected folder.");
             requireComplete(cursor);
             while (cursor.moveToNext()) {
@@ -59,7 +64,10 @@ final class SafSkinDirectorySource implements SkinDirectoryImport.Source {
     }
     @Override public InputStream open(SkinDirectoryImport.Entry file) throws IOException {
         checkpoint();
-        ParcelFileDescriptor descriptor = resolver.openFileDescriptor(document(file.id), "r", cancellation);
+        ParcelFileDescriptor descriptor;
+        try (SafImportCancellation.Operation operation = providerCalls.begin()) {
+            descriptor = resolver.openFileDescriptor(document(file.id), "r", operation.signal);
+        }
         if (descriptor == null) throw new IOException("Could not open skin file.");
         try {
             control.descriptor(descriptor);

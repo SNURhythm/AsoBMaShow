@@ -40,7 +40,9 @@ final class ChartFolderImport {
     interface Source {
         Entry root() throws IOException;
         List<Entry> children(Entry directory) throws IOException;
+        // Called concurrently for independent files; callbacks must be thread-safe.
         InputStream open(Entry file) throws IOException;
+        default void cancel() { }
         // Must not pause between the engine's final validation and the provider call.
         void delete(Entry directory) throws IOException;
     }
@@ -118,7 +120,7 @@ final class ChartFolderImport {
         }
 
         Result run() {
-            try {
+            try (ImportCopyWorkers workers = new ImportCopyWorkers(control::checkpoint, source::cancel)) {
                 report("", Phase.COUNTING);
                 control.checkpoint();
                 Entry root = source.root();
@@ -132,7 +134,8 @@ final class ChartFolderImport {
                     throw new IOException("Cannot create a new destination folder: " + output.getName());
                 }
                 ownsOutput = true;
-                copyDirectory(plan, output);
+                copyDirectory(plan, output, workers);
+                workers.awaitAll();
                 control.checkpoint();
                 report(root.name, Phase.COPYING);
                 return new Result(true, true, "");
@@ -188,21 +191,26 @@ final class ChartFolderImport {
             return new ArrayList<>(children);
         }
 
-        private void copyDirectory(PlannedEntry directory, File destination) throws IOException {
+        private void copyDirectory(PlannedEntry directory, File destination, ImportCopyWorkers workers) throws IOException {
             control.checkpoint();
-            // Release each complete subtree before opening the next one. Parent-level
-            // files follow its subfolders so a large root does not delay that recovery.
+            // Move releases each complete subtree before opening the next one. Copy
+            // keeps workers busy across subfolders without waiting at each boundary.
             for (PlannedEntry child : directory.children) {
                 if (!child.entry.directory) continue;
                 control.checkpoint();
                 File childOutput = childPath(destination, child.destinationName);
                 if (!childOutput.mkdir()) throw new IOException("Cannot create folder: " + child.destinationName);
-                copyDirectory(child, childOutput);
+                copyDirectory(child, childOutput, workers);
             }
             for (PlannedEntry child : directory.children) {
-                if (!child.entry.directory) copyFile(child, childPath(destination, child.destinationName));
+                if (!child.entry.directory) {
+                    File childOutput = childPath(destination, child.destinationName);
+                    workers.submit(() -> copyFile(child, childOutput, workers));
+                }
             }
             if (move) {
+                // Every writer (including its fsync) must finish before source deletion.
+                workers.awaitAll();
                 report(directory.entry.name, Phase.REMOVING_SOURCE);
                 control.checkpoint();
                 beforeSourceDeletion.run();
@@ -228,35 +236,40 @@ final class ChartFolderImport {
             }
         }
 
-        private void copyFile(PlannedEntry file, File destination) throws IOException {
+        private void copyFile(PlannedEntry file, File destination, ImportCopyWorkers workers) throws IOException {
             control.checkpoint();
             report(file.entry.name, Phase.COPYING);
             if (!destination.createNewFile()) throw new IOException("Destination already exists: " + destination.getName());
             boolean complete = false;
-            long startBytes = copiedBytes;
+            long[] fileBytes = {0};
             MessageDigest digest = move ? newDigest() : null;
             try {
-                try (InputStream input = source.open(file.entry);
+                try (InputStream input = workers.track(source.open(file.entry));
                      FileOutputStream stream = new FileOutputStream(destination)) {
                     if (input == null) throw new IOException("Cannot read source file: " + file.entry.name);
                     InputStream copiedInput = move ? new DigestInputStream(input, digest) : input;
-                    control.copy(copiedInput, stream, count -> {
-                        copiedBytes = Math.addExact(copiedBytes, count);
-                        report(file.entry.name, Phase.COPYING);
+                    control.copy(copiedInput, stream, workers.buffer(), count -> {
+                        fileBytes[0] = Math.addExact(fileBytes[0], count);
+                        synchronized (this) {
+                            copiedBytes = Math.addExact(copiedBytes, count);
+                            report(file.entry.name, Phase.COPYING);
+                        }
                     });
                     control.checkpoint();
-                    if (file.entry.size >= 0 && copiedBytes - startBytes != file.entry.size) {
+                    if (file.entry.size >= 0 && fileBytes[0] != file.entry.size) {
                         throw new IOException("Source file size changed: " + file.entry.name);
                     }
                     if (move) stream.getFD().sync();
                 }
                 if (move) {
                     file.copiedDigest = digest.digest();
-                    file.copiedLength = copiedBytes - startBytes;
+                    file.copiedLength = fileBytes[0];
                 }
                 complete = true;
-                copiedFiles++;
-                report(file.entry.name, Phase.COPYING);
+                synchronized (this) {
+                    copiedFiles++;
+                    report(file.entry.name, Phase.COPYING);
+                }
             } finally {
                 if (!complete && !destination.delete() && destination.exists()) {
                     throw new IOException("Cannot remove incomplete destination file: " + destination.getName());
@@ -340,7 +353,7 @@ final class ChartFolderImport {
             return child;
         }
 
-        private void report(String name, Phase phase) {
+        private synchronized void report(String name, Phase phase) {
             progress.update(copiedFiles, totalFiles, copiedBytes, totalBytes, name, phase);
         }
     }

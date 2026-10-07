@@ -20,6 +20,7 @@ class AndroidSkinDirectoryImportTests(unittest.TestCase):
         source = ROOT / "android/app/src/main/java/com/snurhythm/asobmashow"
         with tempfile.TemporaryDirectory(prefix="folder-import-tests-") as output:
             subprocess.run([javac, "-d", output,
+                            str(source / "ImportCopyWorkers.java"),
                             str(source / "SkinDirectoryImport.java"),
                             str(ROOT / "tests/java/SkinDirectoryImportTests.java")], check=True)
             subprocess.run([java, "-cp", output,

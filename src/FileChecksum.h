@@ -10,7 +10,10 @@
 #include <string>
 #include <string_view>
 
-#if defined(__APPLE__)
+#if defined(ASOBMASHOW_USE_OPENSSL_SHA256)
+#include <memory>
+struct evp_md_ctx_st;
+#elif defined(__APPLE__)
 #include <CommonCrypto/CommonDigest.h>
 #endif
 
@@ -24,7 +27,10 @@ public:
   [[nodiscard]] std::string finalHex();
 
 private:
-#if !defined(__APPLE__)
+#if defined(ASOBMASHOW_USE_OPENSSL_SHA256)
+  void detachState();
+  std::shared_ptr<evp_md_ctx_st> state_;
+#elif !defined(__APPLE__)
   void transform(const std::byte *block);
 
   std::array<std::uint32_t, 8> state_{};

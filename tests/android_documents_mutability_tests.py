@@ -205,7 +205,8 @@ class AndroidDocumentsMutabilityTests(unittest.TestCase):
             sources.append(str(path))
         sources += [str(JAVA / name) for name in (
             "DocumentsPathPolicy.java", "DocumentsLibraryChanges.java", "DocumentsMutationGuard.java",
-            "AsoBMaShowDocumentsProvider.java", "ChartFolderImport.java", "ChartImportCopyControl.java")]
+            "AsoBMaShowDocumentsProvider.java", "ChartFolderImport.java", "ChartImportCopyControl.java",
+            "ImportCopyWorkers.java")]
         sources.append(str(ROOT / "tests/java/DocumentsMutabilityTests.java"))
         subprocess.run([javac, "-d", cls.output.name, *sources], check=True)
 

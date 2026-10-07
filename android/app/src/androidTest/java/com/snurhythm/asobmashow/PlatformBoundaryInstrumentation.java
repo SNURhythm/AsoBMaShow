@@ -43,11 +43,32 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         start();
     }
 
+    @Override public Activity newActivity(ClassLoader loader, String className, Intent intent)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        if (arguments != null && "import-copy-benchmark".equals(arguments.getString("mode"))
+                && AsoBMaShowActivity.class.getName().equals(className)) {
+            return new ImportCopyBenchmark.PickerActivity();
+        }
+        return super.newActivity(loader, className, intent);
+    }
+
     @Override
     public void onStart() {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            if ("import-copy-benchmark".equals(arguments.getString("mode"))) {
+                ImportCopyBenchmark.run(getTargetContext(), this, arguments);
+                result.putString("result", "PASS import copy benchmark; all copied bytes verified");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
+            if ("import-cancellation".equals(arguments.getString("mode"))) {
+                ImportCancellationChecks.run(getTargetContext());
+                result.putString("result", "PASS parallel provider cancellation and error classification");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             if ("skin-directory".equals(arguments.getString("mode"))) {
                 SkinDirectoryInstrumentationChecks.run(getTargetContext(), this);
                 result.putString("result", "PASS skin directory import, bounds, cancellation, ownership and cleanup");

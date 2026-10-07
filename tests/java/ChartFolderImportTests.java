@@ -43,7 +43,7 @@ public final class ChartFolderImportTests {
         final Node root = new Node("root", "Charts", true, null);
         final Map<String, Node> nodes = new LinkedHashMap<>();
         final Map<String, Integer> listings = new LinkedHashMap<>();
-        final List<String> events = new ArrayList<>();
+        final List<String> events = java.util.Collections.synchronizedList(new ArrayList<>());
         OpenHook opening = node -> {};
         DeleteHook deleting = node -> {};
         ListHook listing = (node, count) -> {};
@@ -603,9 +603,78 @@ public final class ChartFolderImportTests {
         Files.deleteIfExists(file.toPath());
     }
 
+    private static void testParallelCopiesFinishBeforeMoveDeletion() throws Exception {
+        FakeSource source = new FakeSource();
+        for (int i = 0; i < 20; i++) source.file(source.root, "file-" + i, "file-" + i,
+                new byte[]{(byte)i});
+        CountDownLatch opened = new CountDownLatch(Math.min(2, Runtime.getRuntime().availableProcessors()));
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maximum = new AtomicInteger();
+        AtomicInteger completed = new AtomicInteger();
+        ChartFolderImport.Source concurrent = new ChartFolderImport.Source() {
+            public ChartFolderImport.Entry root() { return source.root(); }
+            public List<ChartFolderImport.Entry> children(ChartFolderImport.Entry directory) throws IOException {
+                return source.children(directory);
+            }
+            public InputStream open(ChartFolderImport.Entry entry) throws IOException {
+                InputStream input = source.open(entry);
+                maximum.accumulateAndGet(active.incrementAndGet(), Math::max);
+                opened.countDown();
+                try {
+                    if (!opened.await(2, TimeUnit.SECONDS)) throw new IOException("Copies did not overlap");
+                } catch (InterruptedException error) { throw new IOException(error); }
+                return new java.io.FilterInputStream(input) {
+                    public void close() throws IOException {
+                        super.close(); active.decrementAndGet(); completed.incrementAndGet();
+                    }
+                };
+            }
+            public void delete(ChartFolderImport.Entry directory) throws IOException {
+                require(active.get() == 0 && completed.get() == 20, "Source removed with copies still running");
+                source.delete(directory);
+            }
+        };
+        File destination = output();
+        List<long[]> updates = new ArrayList<>();
+        ChartFolderImport.Result result = ChartFolderImport.run(concurrent, destination, true, control(),
+                (files, total, bytes, totalBytes, name, phase) -> updates.add(new long[]{bytes, files}), () -> {});
+        require(result.complete, "Parallel move failed: " + result.error);
+        require(maximum.get() >= Math.min(2, Runtime.getRuntime().availableProcessors())
+                    && maximum.get() <= Math.min(8, Runtime.getRuntime().availableProcessors()), "Reads must overlap within the bounded pool");
+        for (int i = 0; i < 20; i++) contents(new File(destination, "file-" + i), new byte[]{(byte)i});
+        long bytes = 0, files = 0;
+        for (long[] update : updates) {
+            require(update[0] >= bytes && update[1] >= files, "Progress moved backwards");
+            bytes = update[0]; files = update[1];
+        }
+        require(bytes == 20 && files == 20, "Parallel progress lost updates");
+    }
+
+    private static void testCopyOverlapsFilesInDifferentDirectories() throws Exception {
+        FakeSource source = new FakeSource();
+        Node a = source.dir(source.root, "a", "A");
+        Node b = source.dir(source.root, "b", "B");
+        source.file(a, "one", "one.bms");
+        source.file(b, "two", "two.wav");
+        CountDownLatch opened = new CountDownLatch(Math.min(2, Runtime.getRuntime().availableProcessors()));
+        source.opening = node -> {
+            opened.countDown();
+            try {
+                if (!opened.await(2, TimeUnit.SECONDS)) throw new IOException("Copy stalled between directories");
+            } catch (InterruptedException error) { throw new IOException(error); }
+        };
+        File destination = output();
+        ChartFolderImport.Result result = run(source, destination, false);
+        require(result.complete, "Independent subfolder copies must overlap: " + result.error);
+        contents(new File(destination, "A/one.bms"), new byte[]{1, 2, 3});
+        contents(new File(destination, "B/two.wav"), new byte[]{1, 2, 3});
+    }
+
     public static void main(String[] args) throws Exception {
         temporary = Files.createTempDirectory("chart-folder-import-").toFile();
         try {
+            testParallelCopiesFinishBeforeMoveDeletion();
+            testCopyOverlapsFilesInDifferentDirectories();
             testCopyKeepsSourceAndCountsChunks();
             testMoveDeletesCompletedSubfoldersPromptly();
             testLaterFailureRetainsEarlierMovedContent();
@@ -630,7 +699,7 @@ public final class ChartFolderImportTests {
             testPauseAfterValidationRequiresFreshSourceListing();
             testPauseInsideProviderListingRequiresFreshSnapshot();
             testPauseDuringValidationCanResumeUnchangedMove();
-            System.out.println("24 chart folder import tests passed");
+            System.out.println("26 chart folder import tests passed");
         } finally {
             cleanup(temporary);
         }
