@@ -948,6 +948,18 @@ std::string GetAndroidCacheDir() {
   return {};
 }
 
+std::string GetAndroidPreferredLanguageTags() {
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "getPreferredLanguageTags", "()Ljava/lang/String;", nullptr, callError);
+  if (!callError.empty()) {
+    auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+    if (env != nullptr && env->ExceptionCheck()) env->ExceptionClear();
+    return {};
+  }
+  return result;
+}
+
 std::optional<std::string> ConvertAndroidMs932ToUtf8(std::string_view value) {
   auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
   if (env == nullptr ||

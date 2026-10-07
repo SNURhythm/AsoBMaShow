@@ -1762,6 +1762,237 @@ void testLongNoteHoldTimersUseCapturedLaneState(int keyMode = 7, int lane = 0) {
   bridge.discardFrame();
 }
 
+void testDoublePlayLaneEffectsUsePlayerAndKeyOffsets() {
+  for (const int keys : {10, 14}) {
+    bms_parser::ChartMeta source;
+    source.KeyMode = keys;
+    PlayfieldChartVisualModel chart;
+    chart.keyCount = keys;
+    chart.laneOrder = source.GetTotalLaneIndices();
+    ValidatedBeatorajaSkinModel model;
+    BeatorajaSkinConfiguration configuration;
+    const auto mutations = makePinnedSkinEventMutationTableV1();
+    PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+        .configuration = configuration, .runtime = nullptr,
+        .mutationTable = mutations});
+    auto state = stateAt(1);
+    state.sceneStartMicros = 0;
+    state.lanes.assign(chart.laneOrder.size(), {});
+    state.realtimeLongNoteLanes.emplace();
+    for (std::size_t i = 0; i < chart.laneOrder.size(); ++i) {
+      const int lane = chart.laneOrder[i];
+      state.lanes[i] = {.pressed = true, .beatorajaJudgeValue = lane + 1,
+          .pressMicros = 100'000 + lane, .releaseMicros = 200'000 + lane,
+          .bombMicros = 300'000 + lane};
+      state.realtimeLongNoteLanes->push_back(
+          {.lane = lane, .active = true, .reactive = true});
+    }
+    bridge.beginFrame(state, projectionAt(1));
+    for (int player = 0; player < 2; ++player) {
+      for (int key = 0; key <= keys / 2; ++key) {
+        const int lane = player * 8 + (key == 0 ? 7 : key - 1);
+        expect(bridge.timerProperty({100 + player * 10 + key}) == 100'000 + lane &&
+                   bridge.timerProperty({50 + player * 10 + key}) == 300'000 + lane,
+               "DP lane beam and bomb timers resolve each side's canonical lane");
+        expect(bridge.integerProperty({500 + player * 10 + key},
+                   SkinIntegerPropertyDomain::ImageIndex).value == lane + 1,
+               "DP key-judge images use the requested side and key");
+        expect(bridge.timerProperty({70 + player * 10 + key}) == 2'500'000 &&
+                   bridge.timerProperty({250 + player * 10 + key}) == 2'500'000 &&
+                   bridge.timerProperty({120 + player * 10 + key}) == kPlayfieldTimestampOff,
+               "DP long-note holds and HCN beams remain active on both sides");
+      }
+    }
+    bridge.discardFrame();
+    state.clock.serial = 2;
+    for (auto &lane : state.lanes) lane.pressed = false;
+    for (auto &lane : *state.realtimeLongNoteLanes) {
+      lane.active = false;
+      lane.reactive = false;
+      lane.damaged = true;
+    }
+    bridge.beginFrame(state, projectionAt(2));
+    for (int player = 0; player < 2; ++player) {
+      for (int key = 0; key <= keys / 2; ++key) {
+        const int lane = player * 8 + (key == 0 ? 7 : key - 1);
+        expect(bridge.timerProperty({120 + player * 10 + key}) == 200'000 + lane &&
+                   bridge.timerProperty({100 + player * 10 + key}) == kPlayfieldTimestampOff &&
+                   bridge.timerProperty({270 + player * 10 + key}) == 2'500'000,
+               "DP release and HCN damage timers preserve side identity");
+      }
+    }
+  }
+}
+
+void testDoublePlayJudgementsRetainEachRegionsLastEvent() {
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 10;
+  chart.laneOrder = {7, 0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 15};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1, .payload = SkinJudgeObject{.player = 0}},
+                         {.id = 2, .payload = SkinJudgeObject{.player = 1}}};
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+      .configuration = configuration, .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.sceneStartMicros = 0;
+  state.lanes.assign(12, {});
+  state.lastJudge = JudgeResult(Great, 5'000);
+  state.combo = 22;
+  state.lastJudgeVisualMicros = 400'000;
+  state.lanes[1].lastJudgement = {.judgement = PGreat, .combo = 21,
+      .fastSlowMicros = -2'000, .visualMicros = 400'000, .sequence = 1};
+  state.lanes[6].lastJudgement = {.judgement = Great, .combo = 22,
+      .fastSlowMicros = 5'000, .visualMicros = 400'000, .sequence = 2};
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.judgeState(0).optionalZeroBasedGrade == PGreat &&
+             bridge.judgeState(0).combo == 21 &&
+             bridge.judgeState(1).optionalZeroBasedGrade == Great &&
+             bridge.judgeState(1).combo == 22,
+         "simultaneous DP judgements retain each area's grade and event combo");
+  expect(bridge.timerProperty({47}) == 400'000 &&
+             bridge.timerProperty({447}) == 400'000 &&
+             bridge.timerProperty({46}) == 400'000,
+         "both DP judgement and combo timers start independently");
+  expect(bridge.integerProperty({526}).value == -5 &&
+             bridge.booleanProperty({1263}).value &&
+             bridge.booleanProperty({241}).value,
+         "DP timing and judgement predicates read the requested region");
+  bridge.discardFrame();
+  state.clock.serial = 2;
+  state.lanes[11].lastJudgement = {.judgement = Poor, .combo = 0,
+      .visualMicros = 500'000, .sequence = 3};
+  bridge.beginFrame(state, projectionAt(2));
+  expect(bridge.judgeState(1).optionalZeroBasedGrade == Poor &&
+             bridge.judgeState(1).combo == 0 &&
+             bridge.timerProperty({47}) == 500'000 &&
+             bridge.judgeState(0).combo == 21,
+         "right scratch misses update only the right judgement region");
+  bridge.discardFrame();
+  model.model.objects.resize(1);
+  state.clock.serial = 3;
+  bridge.beginFrame(state, projectionAt(3));
+  expect(bridge.judgeState(0).optionalZeroBasedGrade == Great &&
+             bridge.judgeState(0).combo == 22 && !bridge.judgeState(1).supported,
+         "a DP skin with one centered judge continues to use global judgement");
+}
+
+void testKeyboardDoublePlayRetainsNormalAndExtendedLaneTimers() {
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 48;
+  chart.laneOrder = {0, 9, 26, 35};
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+      .configuration = configuration, .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.sceneStartMicros = 0;
+  state.lanes.assign(4, {.pressed = true, .beatorajaJudgeValue = 1,
+                         .pressMicros = 100, .bombMicros = 200});
+  bridge.beginFrame(state, projectionAt(1));
+  for (int timer : {101, 1410, 111, 1510}) {
+    expect(bridge.timerProperty({timer}) == 100,
+           "24K DP resolves both normal and extended key-on timer groups");
+  }
+  for (int timer : {51, 1010, 61, 1110}) {
+    expect(bridge.timerProperty({timer}) == 200,
+           "24K DP resolves both normal and extended bomb timer groups");
+  }
+  expect(bridge.timerProperty({1101}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({1501}) == kPlayfieldTimestampOff,
+         "gaps between extended player groups never alias normal 2P keys");
+  expect(bridge.integerProperty({501}, SkinIntegerPropertyDomain::ImageIndex).value == 1 &&
+             bridge.integerProperty({511}, SkinIntegerPropertyDomain::ImageIndex).value == 1,
+         "24K DP retains normal key-judge selectors on both sides");
+}
+
+void testThreeJudgeRegionsOnlyKeepLatestComboTimer() {
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 9;
+  chart.laneOrder = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1, .payload = SkinJudgeObject{.player = 2}}};
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+      .configuration = configuration, .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.sceneStartMicros = 0;
+  state.lanes.assign(9, {});
+  for (int region = 0; region < 3; ++region) {
+    state.lanes[region * 3].lastJudgement = {.judgement = PGreat,
+        .combo = region + 1, .visualMicros = 100 + region,
+        .sequence = static_cast<std::uint64_t>(region + 1)};
+  }
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.timerProperty({46}) == 100 && bridge.timerProperty({47}) == 101 &&
+             bridge.timerProperty({247}) == 102 &&
+             bridge.timerProperty({446}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({447}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({448}) == 102,
+         "three-region skins retain judge timers but only the latest combo timer");
+}
+
+void testJudgeRegionsIncludeRemainderAndSparseLanes() {
+  struct Case {
+    int keyMode;
+    int regionCount;
+    std::vector<int> regionByChartLane;
+  };
+  const std::array cases{
+      Case{9, 2, {0, 0, 0, 0, 0, 1, 1, 1, 1}},
+      Case{7, 3, {0, 0, 0, 1, 1, 1, 2, 2}},
+      Case{14, 3, {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2}},
+      Case{10, 2, {0, 0, 0, 0, 0, -1, -1, 0, 1, 1, 1, 1, 1, -1, -1, 1}},
+      Case{4, 3, {0, 0, -1, 1, 2}},
+      Case{6, 3, {0, 0, 0, -1, 1, 1, 2}},
+  };
+  constexpr std::array judgeTimers{46, 47, 247};
+  constexpr std::array comboTimers{446, 447, 448};
+  for (const auto &test : cases) {
+    bms_parser::ChartMeta meta;
+    meta.KeyMode = test.keyMode;
+    PlayfieldChartVisualModel chart;
+    chart.keyCount = test.keyMode;
+    chart.laneOrder = meta.GetTotalLaneIndices();
+    ValidatedBeatorajaSkinModel model;
+    model.model.objects = {
+        {.id = 1, .payload = SkinJudgeObject{.player = test.regionCount - 1}}};
+    BeatorajaSkinConfiguration configuration;
+    const auto mutations = makePinnedSkinEventMutationTableV1();
+    PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+        .configuration = configuration, .mutationTable = mutations});
+    for (std::size_t index = 0; index < chart.laneOrder.size(); ++index) {
+      auto state = stateAt(index + 1);
+      state.sceneStartMicros = 0;
+      state.lanes.assign(chart.laneOrder.size(), {});
+      state.lanes[index].lastJudgement = {.judgement = Great, .combo = 42,
+          .fastSlowMicros = 5'000, .visualMicros = 100, .sequence = 1};
+      bridge.beginFrame(state, projectionAt(index + 1));
+      const int lane = chart.laneOrder[index];
+      const int expectedRegion = test.regionByChartLane.at(lane);
+      for (int region = 0; region < test.regionCount; ++region) {
+        const bool expected = region == expectedRegion;
+        const auto judge = bridge.judgeState(region);
+        const std::string label = "key mode " + std::to_string(test.keyMode) +
+            ", lane " + std::to_string(lane) + ", region " + std::to_string(region);
+        expect(judge.supported == expected &&
+                   (!expected || (judge.optionalZeroBasedGrade == Great && judge.combo == 42)),
+               "every lane updates exactly its authored judgement region: " + label);
+        expect(bridge.timerProperty({judgeTimers[region]}) ==
+                       (expected ? 100 : kPlayfieldTimestampOff) &&
+                   bridge.timerProperty({comboTimers[region]}) ==
+                       (expected ? 100 : kPlayfieldTimestampOff) &&
+                   bridge.integerProperty({525 + region}).value == (expected ? -5 : 0),
+               "remainder and sparse lanes drive judgement, combo, and timing: " + label);
+      }
+      bridge.discardFrame();
+    }
+  }
+}
+
 void testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -4190,6 +4421,11 @@ int main() {
     testLongNoteHoldTimersUseCapturedLaneState(keyMode, lane);
   }
   testSparseModeInputTimersUseOriginalChannels();
+  testDoublePlayLaneEffectsUsePlayerAndKeyOffsets();
+  testDoublePlayJudgementsRetainEachRegionsLastEvent();
+  testKeyboardDoublePlayRetainsNormalAndExtendedLaneTimers();
+  testThreeJudgeRegionsOnlyKeepLatestComboTimer();
+  testJudgeRegionsIncludeRemainderAndSparseLanes();
   testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets();
   testPomyuTimersFollowPinnedDefaultProcessorCycles();
   testPomyuTimersUseAuthoredMotionCycles();

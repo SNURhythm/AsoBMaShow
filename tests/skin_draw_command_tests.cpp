@@ -5245,6 +5245,89 @@ void testNonvisualDrawsStillSetFontBlend() {
   }
 }
 
+void testFiveKeySkinsTranslateChartLanesForNotesAndGhosts() {
+  // The literal maps are skin-array order, not scratch-first input order.
+  // Omitting translation rejects 5K scratches and misplaces DP's second side.
+  for (const auto &[type, chartLanes] :
+       std::vector<std::pair<int, std::vector<int>>>{
+           {1, {0, 1, 2, 3, 4, 7}},
+           {3, {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 15}},
+           {0, {0, 1, 2, 3, 4, 5, 6, 7}},
+           {2, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}}}) {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    FakeState state;
+    auto note = gameplayNoteObject(resources);
+    const auto prototype = note.lanes.front();
+    note.lines.clear();
+    note.lanes.clear();
+    for (std::size_t i = 0; i < chartLanes.size(); ++i) {
+      auto lane = prototype;
+      lane.authoredLane = static_cast<int>(i);
+      lane.laneDestination.x = 50.0 * i;
+      note.lanes.push_back(std::move(lane));
+    }
+    ValidatedBeatorajaSkinModel model;
+    model.model.header.type = type;
+    model.model.objects = {{.id = 1, .authoredName = "compact-lanes",
+                            .payload = note, .authoredOrdinal = 1,
+                            .critical = true}};
+    auto presented = destination(1, 1, 0.0);
+    presented.presentation.frames.clear();
+    model.model.destinations = {std::move(presented)};
+    std::uint64_t serial = 0;
+    for (std::size_t i = 0; i < chartLanes.size(); ++i) {
+      for (const auto kind : {SkinProjectedNoteKind::Normal,
+                              SkinProjectedNoteKind::Invisible,
+                              SkinProjectedNoteKind::Mine}) {
+        state.notes = {{.visualId = 1, .lane = chartLanes[i], .kind = kind,
+                        .authoredYDisplacement = 30.0}};
+        state.longNotes.clear();
+        const auto result = evaluate(renderer, runtime, model, resources,
+                                     state, ++serial);
+        expect(result.submitReady && result.submitReady->commands.size() == 1,
+               "every chart lane renders in the compact skin array");
+        if (result.submitReady && result.submitReady->commands.size() == 1) {
+          const auto &quad = std::get<SkinTexturedQuadCommand>(
+              result.submitReady->commands.front().payload);
+          expect(quad.vertices[0].x == static_cast<float>(50 * i),
+                 "normal, hidden and mine notes use the correct authored lane");
+        }
+        expect(result.syntheticReplayGhostGeometry &&
+                   result.syntheticReplayGhostGeometry->lanes.size() == chartLanes.size(),
+               "skin publishes replay geometry for all lanes");
+        if (result.syntheticReplayGhostGeometry &&
+            result.syntheticReplayGhostGeometry->lanes.size() == chartLanes.size()) {
+          const auto &ghost = result.syntheticReplayGhostGeometry->lanes[i];
+          expect(ghost.lane == chartLanes[i] && ghost.normalNote.x == 50.0 * i,
+                 "replay geometry maps authored lanes back to chart identities");
+        }
+      }
+      state.notes.clear();
+      for (const auto mode : {SkinProjectedLongNoteMode::LN,
+                              SkinProjectedLongNoteMode::CN,
+                              SkinProjectedLongNoteMode::HCN}) {
+        state.longNotes = {{.headVisualId = 2, .tailVisualId = 3,
+                            .lane = chartLanes[i], .mode = mode,
+                            .headAuthoredYDisplacement = 30.0,
+                            .tailAuthoredYDisplacement = 100.0}};
+        const auto result = evaluate(renderer, runtime, model, resources,
+                                     state, ++serial);
+        expect(result.submitReady && !result.submitReady->commands.empty(),
+               "long notes and backspins render in every mapped lane");
+        if (result.submitReady) {
+          for (const auto &command : result.submitReady->commands) {
+            expect(std::get<SkinTexturedQuadCommand>(command.payload).vertices[0].x ==
+                       static_cast<float>(50 * i),
+                   "long-note bodies and caps stay in their authored lane");
+          }
+        }
+      }
+    }
+  }
+}
+
 void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
   RuntimeHarness runtime;
   Skin2DRenderer renderer;
@@ -7746,6 +7829,7 @@ int main(int argc, char **argv) {
   testJudgeMaxGaugeFallsBackImageAndDetailIndependently();
   testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder();
   testCriticalJudgeRequiresSupportedState();
+  testFiveKeySkinsTranslateChartLanesForNotesAndGhosts();
   testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder();
   testLiveScrollUnitsUseSkinLaneHeightAndHispeed();
   testLiftUsesPinnedSharedLaneOriginAndScrollHeight();

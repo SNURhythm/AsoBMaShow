@@ -5780,6 +5780,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME localization_catalog_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
+    add_test(NAME android_locale_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_locale_tests.py)
+    set_tests_properties(android_locale_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
+        LABELS "platform_android" TIMEOUT 30)
 
     add_executable(application_ui_state_store_tests
         tests/application_ui_state_store_tests.cpp

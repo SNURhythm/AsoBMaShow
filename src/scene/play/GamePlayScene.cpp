@@ -2800,8 +2800,8 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
       const long long eventSongTimeMicros = result.replayEvent.songTimeMicros;
       const int eventCombo = result.replayEvent.combo;
       const int eventScore = result.replayEvent.score;
-      presentationEventFanout->onJudge(
-          result.judge, eventCombo, eventScore,
+      presentationEventFanout->onLaneJudge(
+          result.replayEvent.lane, result.judge, eventCombo, eventScore,
           judgeEventClock(eventSongTimeMicros), true);
     }
     session.appliedTransactionSequence = transaction.sequence;
@@ -7361,7 +7361,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
                                      : inputContext.songTimeMicros;
       onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
-              !options.autoPlay || isReplayPlayback(), transaction.note);
+              !options.autoPlay || isReplayPlayback(), transaction.note,
+              transaction.hasReplayEvent ? transaction.replayEvent.lane : mainLane);
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -7436,7 +7437,8 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
                                      : inputContext.songTimeMicros;
       onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
-              !options.autoPlay || isReplayPlayback(), transaction.note);
+              !options.autoPlay || isReplayPlayback(), transaction.note,
+              transaction.hasReplayEvent ? transaction.replayEvent.lane : lane);
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -7785,7 +7787,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
           longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
         longNote->Tail->Play(event.judgeTimeMicros);
       }
-      onJudge(recordedJudge, eventClock, false, note);
+      onJudge(recordedJudge, eventClock, false, note, event.lane);
       applyReplayGauge(event);
     }
     break;
@@ -7826,7 +7828,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     if (event.judgement != None) {
       auto *note = findReplayNote(event);
       markReplayMissedNote(note, event.judgeTimeMicros);
-      onJudge(recordedJudge, eventClock, false, note);
+      onJudge(recordedJudge, eventClock, false, note, event.lane);
       applyReplayGauge(event);
     }
     break;
@@ -8051,7 +8053,7 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             PlayfieldJudgeEventClock clock,
                             bool recordTimingSample,
-                            const bms_parser::Note *graphNote) {
+                            const bms_parser::Note *graphNote, int lane) {
   if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
   }
@@ -8069,9 +8071,9 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   state->commitJudge(judgeResult);
   recordSkinGameplayGraphJudge(graphNote, judgeResult, clock.songTimeMicros);
   const int judgementCount = previousCount + 1;
-  presentationEventFanout->onJudge(judgeResult, state->combo,
-                                   state->getScore(), clock,
-                                   recordTimingSample);
+  presentationEventFanout->onLaneJudge(
+      graphNote != nullptr ? graphNote->Lane : lane, judgeResult, state->combo,
+      state->getScore(), clock, recordTimingSample);
   const int adjustedNotesDisplayTimingMilliseconds =
       gameplay_timing::nextNotesDisplayTimingMilliseconds(
           context.settings.notesDisplayTimingMilliseconds,

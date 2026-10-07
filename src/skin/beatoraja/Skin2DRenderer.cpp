@@ -8,6 +8,7 @@
 #include "SkinCoverNormalization.h"
 #include "SkinGaugeGraphRenderer.h"
 #include "SkinNoteDistributionGraphRenderer.h"
+#include "SkinNoteLaneMapping.h"
 #include "SkinHitErrorVisualizerRenderer.h"
 #include "MusicSelectBarRenderer.h"
 #include "SkinTimingVisualizerRenderer.h"
@@ -2810,7 +2811,9 @@ lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
                            std::make_move_iterator(lowered.commands.end()));
   };
 
-  const auto laneAt = [&](int lane) -> const SkinLaneNotePresentation * {
+  const auto laneAt = [&](int chartLane) -> const SkinLaneNotePresentation * {
+    const int lane = skinNoteLaneForChartLane(inputs.model.model.header.type,
+                                             chartLane);
     if (lane < 0 || static_cast<std::size_t>(lane) >= note.lanes.size()) {
       return nullptr;
     }
@@ -6259,7 +6262,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         for (std::size_t laneIndex = 0; laneIndex < layout->note->lanes.size();
              ++laneIndex) {
           const auto &lane = layout->note->lanes[laneIndex];
-          if (lane.authoredLane < 0) {
+          const int chartLane = chartLaneForSkinNoteLane(
+              inputs.model.model.header.type, lane.authoredLane);
+          if (chartLane < 0) {
             continue;
           }
           bool emptyClip = false;
@@ -6301,7 +6306,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                                    : image_alpha::Bounds{0.0, 0.0, 0.0, 0.0};
           }
           replayGhostGeometry.lanes.push_back(
-              {.lane = lane.authoredLane,
+              {.lane = chartLane,
                .normalNote = normalNote,
                .clip = *clip,
                .visibleBounds = visibleBounds});

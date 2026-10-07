@@ -1056,10 +1056,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              .tailId = tail->id,
              .headTimelineId = timeline->id,
              .tailTimelineId = tailTimeline->id,
-             // JsonPlaySkinObjectLoader preserves the zero-based Note arrays,
-             // and LaneRenderer draws them with TimeLine.getNote(lane).  Its
-             // lane is therefore the BMS lane ID, not the scratch-first UI
-             // display order used by the built-in renderer.
+             // Retain the canonical chart lane, not scratch-first UI order.
+             // The skin boundary translates it to Beatoraja's compact lane
+             // arrays for five-key modes.
              .lane = note->lane,
              .mode = note->longNoteMode,
              .headSource = effectiveSource(*note),

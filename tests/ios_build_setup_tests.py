@@ -574,6 +574,56 @@ int main() { return 0; }
         init_script = IOS_INIT.read_text(encoding="utf-8")
         self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", init_script)
 
+    def test_ios_bgfx_build_uses_legacy_reflection_until_ios_17(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        configure = script[
+            script.index("prepare_bgfx_project() {") : script.index("install_gems() {")
+        ]
+        upstream = ROOT / "bgfx/bgfx/src/renderer_mtl.mm"
+        original = upstream.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(ROOT / "cmake", root / "cmake")
+            source = root / "bgfx"
+            renderer = source / "bgfx/src/renderer_mtl.mm"
+            renderer.parent.mkdir(parents=True)
+            renderer.write_text(original, encoding="utf-8")
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.22)\n"
+                "project(bgfx LANGUAGES CXX)\n"
+                'set(BGFX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bgfx")\n'
+                'add_library(bgfx STATIC "${BGFX_DIR}/src/renderer_mtl.mm")\n'
+                'file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/compiled-sources.txt" '
+                'CONTENT "$<TARGET_PROPERTY:bgfx,SOURCES>")\n',
+                encoding="utf-8",
+            )
+            command = ["bash", "-euc", configure + '\nROOT_DIR="$1"\nprepare_bgfx_project',
+                       "bgfx-metal-test", str(root)]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            sources = (source / "build/compiled-sources.txt").read_text().split(";")
+            self.assertNotIn(str(renderer), sources,
+                             "iOS still compiles the upstream iOS 16 reflection path")
+            self.assertEqual(1, len(sources))
+            compiled = Path(sources[0])
+            expected = original.replace(
+                "m_usesMTLBindings, macOS 13.0, iOS 16.0,",
+                "m_usesMTLBindings, macOS 13.0, iOS 17.0,",
+            )
+            self.assertNotEqual(original, expected, "upstream gate changed; review workaround")
+            self.assertEqual(expected, compiled.read_text())
+            self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
+            modified = compiled.stat().st_mtime_ns
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(modified, compiled.stat().st_mtime_ns,
+                             "unchanged configuration should not recompile Metal")
+            renderer.write_text(expected, encoding="utf-8")
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode,
+                                "an upstream gate change must require review")
+            self.assertIn("reflection gate changed", result.stderr)
+
     def test_bgfx_configuration_recovers_after_xcode_is_replaced(self):
         script = IOS_INIT.read_text(encoding="utf-8")
         configure = script[

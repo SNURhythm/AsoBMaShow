@@ -156,7 +156,7 @@ struct FixturePresentation {
   }
   void onLanePressed(int, JudgeResult, long long) {}
   void onLaneReleased(int, long long) {}
-  void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) {}
+  void onLaneJudge(int, JudgeResult, int, int, PlayfieldJudgeEventClock, bool) {}
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &) {}
   void clearLiveTouchPoints() {}
 };
@@ -493,11 +493,11 @@ public:
     return makePlayfieldJudgeEventClock(time, 0);
   }
   void onJudgeFromProduction(const JudgeResult &, PlayfieldJudgeEventClock, bool,
-                             const bms_parser::Note *);
+                             const bms_parser::Note *, int = -1);
   void onJudge(const JudgeResult &judge, PlayfieldJudgeEventClock clock, bool record,
-               const bms_parser::Note *note) {
+               const bms_parser::Note *note, int lane = -1) {
     if (useProductionJudging) {
-      onJudgeFromProduction(judge, clock, record, note);
+      onJudgeFromProduction(judge, clock, record, note, lane);
     } else if (!state->isEnding) {
       state->commitJudge(judge);
     }

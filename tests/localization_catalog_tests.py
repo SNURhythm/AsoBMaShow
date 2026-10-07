@@ -32,7 +32,7 @@ class LocalizationCatalogTests(unittest.TestCase):
     def test_languages_preserve_named_placeholders(self):
         for key, *values in self.entries:
             with self.subTest(key=key):
-                self.assertEqual(len(values), 3, "English, Korean, and Japanese are required")
+                self.assertEqual(len(values), 5, "English, Korean, Japanese, Simplified Chinese, and Traditional Chinese are required")
                 english = values[0]
                 for translated in values:
                     self.assertTrue(translated)

@@ -6,6 +6,7 @@
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "../view/IconText.h"
 #include "../view/LaneCoverControlsView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
@@ -26,6 +27,8 @@ using namespace settings_scene;
 namespace {
 constexpr const char *kRepositoryUrl =
     "https://github.com/SNURhythm/AsoBMaShow";
+constexpr uint32_t kIconPlay = 0xf04b;
+constexpr uint32_t kIconPause = 0xf04c;
 
 View *makeCardsColumn(const LayoutMetrics &metrics) {
   auto *cardsColumn = new View();
@@ -598,15 +601,17 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   auto *playbackControls = new View();
   playbackControls->setFlexDirection(FlexDirection::Row);
   playbackControls->setGap(selectionGap);
+  const int pauseButtonSize = metrics.actionButtonHeight;
+  const int playbackToggleWidth =
+      static_cast<int>((selectionWidth - pauseButtonSize - selectionGap * 2) / 2);
   const auto addPlaybackToggle = [&](const char *labelKey, bool selected, bool enabled,
                                       std::function<void()> action) {
     auto *label = makeText(i18n::message(labelKey, {{"state", i18n::tr(selected
         ? "settings.skins.judgement_hud.on.label" : "settings.skins.judgement_hud.off.label")}}),
         metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
-    const int width = static_cast<int>((selectionWidth - selectionGap) / 2);
     auto *button = selected
-        ? makeAccentButton(width, metrics.actionButtonHeight, label, ui_theme::cyan())
-        : makeControlButton(width, metrics.actionButtonHeight, label);
+        ? makeAccentButton(playbackToggleWidth, metrics.actionButtonHeight, label, ui_theme::cyan())
+        : makeControlButton(playbackToggleWidth, metrics.actionButtonHeight, label);
     button->setEnabled(enabled);
     button->setOnClickListener([this, action = std::move(action)]() {
       action();
@@ -619,19 +624,20 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
                      [this]() { previewAutoPlay = !previewAutoPlay; });
   addPlaybackToggle("settings.preview_layout.random_timing.label", previewRandomTiming,
                      previewAutoPlay, [this]() { previewRandomTiming = !previewRandomTiming; });
-  previewPanel->addView(playbackControls);
-  auto *pauseLabel = makeText(i18n::message(previewPaused
-      ? "settings.preview_layout.resume.label" : "settings.preview_layout.pause.label"),
-      metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+  auto *pauseIcon = new TextView(ui_icons::kFontAwesomeSolidPath, metrics.smallTextSize);
+  pauseIcon->setText(ui_icons::textForCodepoint(previewPaused ? kIconPlay : kIconPause));
+  pauseIcon->setAlign(TextView::CENTER);
+  pauseIcon->setVAlign(TextView::MIDDLE);
+  pauseIcon->setThemedColor(ui_theme::textPrimary);
   auto *pauseButton = previewPaused
-      ? makeAccentButton(static_cast<int>(selectionWidth), metrics.actionButtonHeight,
-                         pauseLabel, ui_theme::cyan())
-      : makeControlButton(static_cast<int>(selectionWidth), metrics.actionButtonHeight, pauseLabel);
+      ? makeAccentButton(pauseButtonSize, pauseButtonSize, pauseIcon, ui_theme::cyan())
+      : makeControlButton(pauseButtonSize, pauseButtonSize, pauseIcon);
   pauseButton->setOnClickListener([this]() {
     previewPaused = !previewPaused;
     lastLayoutWidth = -1;
   });
-  previewPanel->addView(pauseButton);
+  playbackControls->addView(pauseButton);
+  previewPanel->addView(playbackControls);
   if (previewAutoPlay && previewRandomTiming)
     previewPanel->addView(makeWrappedText(
         i18n::message("settings.preview_layout.random_timing.description"),
@@ -2339,8 +2345,10 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
                     .label = i18n::message("settings.language.system.label")},
                    {.id = "en", .label = "English"},
                    {.id = "ko", .label = "한국어"},
-                   {.id = "ja", .label = "日本語"}},
-       .maxVisibleItems = 4});
+                   {.id = "ja", .label = "日本語"},
+                   {.id = "zh-Hans", .label = "简体中文"},
+                   {.id = "zh-Hant", .label = "繁體中文"}},
+       .maxVisibleItems = 6});
   languageControls->addView(languageDropdown);
   languageControls->addView(languageStatus);
   cardsColumn->addView(makeCard(

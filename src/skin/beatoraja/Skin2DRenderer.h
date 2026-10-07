@@ -79,6 +79,7 @@ enum class SkinProjectedNoteKind : std::uint8_t {
 
 struct SkinProjectedNoteView {
   std::uint32_t visualId = 0;
+  // Canonical chart lane; SkinNote arrays may use a different lane index.
   int lane = -1;
   SkinProjectedNoteKind kind = SkinProjectedNoteKind::Normal;
   // Live gameplay snapshots carry an abstract scroll delta plus the
@@ -97,6 +98,7 @@ enum class SkinProjectedLongNoteMode : std::uint8_t { LN, CN, HCN };
 struct SkinProjectedLongNoteView {
   std::uint32_t headVisualId = 0;
   std::uint32_t tailVisualId = 0;
+  // Same canonical chart-lane contract as SkinProjectedNoteView.
   int lane = -1;
   SkinProjectedLongNoteMode mode = SkinProjectedLongNoteMode::LN;
   std::optional<double> scrollSpeed;
