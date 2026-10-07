@@ -24,6 +24,7 @@ struct ReplayVideoExportOptions {
   bool includeResultScreen = false;
   bool renderTouchPoints = true;
   bool renderReplayGhosts = true;
+  bool autoKeySound = false;
   std::string pacemakerTarget;
   ReplayVideoExportProgressCallback progressCallback;
   std::stop_token stop;

@@ -621,7 +621,7 @@ inline StartOptions makeCourseReplayStageStartOptions(
     const std::shared_ptr<ReplayData> &stageReplay) {
   StartOptions options;
   options.startPosition = 0;
-  options.autoKeySound = false;
+  options.autoKeySound = session != nullptr && session->autoKeySound;
   options.autoPlay = false;
   options.ownsChart = true;
   if (session != nullptr) {

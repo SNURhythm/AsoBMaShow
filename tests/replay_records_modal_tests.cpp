@@ -2,6 +2,8 @@
 #include "rendering/common.h"
 #include "scene/ReplayRecordsModal.h"
 #include "view/View.h"
+#include "view/Button.h"
+#include "view/TextView.h"
 #include "ReplayVideoExporter.h"
 #include "scene/MusicSelectRecords.h"
 #include "scene/MusicSelectGhostBattle.h"
@@ -136,6 +138,61 @@ void testRetainedModalActivatesSelectedRecordThroughOwner() {
   modal->hide();
   expect(!modal->isVisible(), "hide dismisses the retained records modal");
 }
+Button *findVisibleButton(View *view, const std::string &label) {
+  if (!view->getVisible()) return nullptr;
+  if (auto *button = dynamic_cast<Button *>(view)) {
+    auto *text = dynamic_cast<TextView *>(button->getContentView());
+    if (text && text->getText() == label) return button;
+  }
+  for (auto *child : view->getChildren()) {
+    if (auto *found = findVisibleButton(child, label)) return found;
+  }
+  return nullptr;
+}
+
+void clickModalButton(ReplayRecordsModal &modal, const char *key) {
+  auto *button = findVisibleButton(modal.root(), i18n::tr(key));
+  expect(button != nullptr, "requested option button is visible");
+  if (!button) return;
+  SDL_Event event{};
+  event.type = SDL_MOUSEBUTTONDOWN;
+  event.button.button = SDL_BUTTON_LEFT;
+  event.button.x = button->getX() + button->getWidth() / 2;
+  event.button.y = button->getY() + button->getHeight() / 2;
+  button->handleEvents(event);
+  event.type = SDL_MOUSEBUTTONUP;
+  button->handleEvents(event);
+}
+
+void testKeysoundSelectionFlowsThroughWatchAndExport() {
+  View parent(0, 0, rendering::design_width, rendering::design_height);
+  auto record = modernChartRecord();
+  bool exportedAuto = false;
+  auto modal = ReplayRecordsModal::Create(&parent, {
+      .loadRecords = [&](const ChartMetaRecord &) {
+        return std::vector<ResultRecordSummary>{record};
+      },
+      .exportModernChart = [&](const ChartMetaRecord &,
+                               const ModernChartResultRecord &,
+                               ReplayVideoExportOptions options) {
+        exportedAuto = options.autoKeySound;
+      }});
+  modal->showChart({});
+  modal->selectRecord(record);
+  expect(!modal->autoKeySound(), "saved replays default to input timing");
+  clickModalButton(*modal, "records.watch.label");
+  clickModalButton(*modal, "settings.controls.keysound.auto_timed.label");
+  expect(modal->autoKeySound(), "watch uses the selected automatic timing");
+  modal->returnToList();
+  clickModalButton(*modal, "records.export_video.label");
+  clickModalButton(*modal, "records.export_video.label");
+  expect(exportedAuto, "export receives the same selected automatic timing");
+  clickModalButton(*modal, "settings.controls.keysound.input_trigger.label");
+  clickModalButton(*modal, "records.export_video.label");
+  expect(!exportedAuto && !modal->autoKeySound(),
+         "export selector switches both consumers back to input timing");
+}
+
 void testCourseTargetsHaveIndependentIdentity() {
   MusicSelectBar course;
   course.kind = skin::MusicSelectBarKind::Grade;
@@ -174,6 +231,7 @@ int main() {
     std::cerr << "FAIL: headless bgfx did not initialize\n";
     return 1;
   }
+  testKeysoundSelectionFlowsThroughWatchAndExport();
   testCourseTargetsHaveIndependentIdentity();
   testSelectedModernRecordDispatchesWatchAndExport();
   testNonModernRecordCannotCrossTheActionBoundary();

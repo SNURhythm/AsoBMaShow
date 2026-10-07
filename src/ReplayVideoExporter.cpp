@@ -513,6 +513,7 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.includeResultScreen = options.includeResultScreen;
   resolved.renderTouchPoints = options.renderTouchPoints;
   resolved.renderReplayGhosts = options.renderReplayGhosts;
+  resolved.autoKeySound = options.autoKeySound;
   resolved.pacemakerTarget = options.pacemakerTarget;
   resolved.progressCallback = options.progressCallback;
   resolved.stop = options.stop;
@@ -957,10 +958,11 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
                       long long audioOffsetMicros,
                       long long playbackEventDeadlineMicros,
                       const std::filesystem::path &path,
-                      ReplayVideoExportLog *log) {
+                      ReplayVideoExportLog *log, bool autoKeySound) {
   std::atomic_bool isCancelled = false;
   const chart_audio::RenderOptions options{
-      .keySoundMode = chart_audio::KeySoundMode::ReplayTiming,
+      .keySoundMode = autoKeySound ? chart_audio::KeySoundMode::ChartTiming
+                                   : chart_audio::KeySoundMode::ReplayTiming,
       .replay = &replay,
       .playback = preparationPlan.playback,
       .clubMode = replay.provenance.clubMode,
@@ -4581,7 +4583,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult = writeReplayAudioTrack(
       *chart, replay, preparationPlan, audioOffsetMicros,
-      playbackEventDeadlineMicros, wavPath, exportLog);
+      playbackEventDeadlineMicros, wavPath, exportLog, resolvedOptions.autoKeySound);
   if (!audioResult.success) {
     replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
@@ -4849,7 +4851,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
                 *stage.chart, stage.replay));
     const auto audioResult = writeReplayAudioTrack(
         *stage.chart, stage.replay, stage.preparationPlan, audioOffsetMicros,
-        playbackEventDeadlineMicros, stageWavPath, exportLog);
+        playbackEventDeadlineMicros, stageWavPath, exportLog, resolvedOptions.autoKeySound);
     if (!audioResult.success) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,

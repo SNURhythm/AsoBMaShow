@@ -121,6 +121,9 @@ public:
   [[nodiscard]] bool renderTouchPoints() const noexcept {
     return selectedReplayRenderTouchPoints_;
   }
+  [[nodiscard]] bool autoKeySound() const noexcept {
+    return selectedReplayAutoKeySound_;
+  }
   [[nodiscard]] bool renderReplayGhosts() const noexcept {
     return selectedReplayRenderGhosts_;
   }
@@ -205,6 +208,10 @@ private:
   Button *exportTouchHideButton_ = nullptr;
   Button *exportGhostShowButton_ = nullptr;
   Button *exportGhostHideButton_ = nullptr;
+  Button *keysoundAutoButton_ = nullptr;
+  Button *keysoundInputButton_ = nullptr;
+  Button *exportKeysoundAutoButton_ = nullptr;
+  Button *exportKeysoundInputButton_ = nullptr;
   TextView *watchButtonText_ = nullptr;
   TextView *gbattleButtonText_ = nullptr;
   TextView *resultButtonText_ = nullptr;
@@ -229,6 +236,10 @@ private:
   TextView *exportTouchHideButtonText_ = nullptr;
   TextView *exportGhostShowButtonText_ = nullptr;
   TextView *exportGhostHideButtonText_ = nullptr;
+  TextView *keysoundAutoButtonText_ = nullptr;
+  TextView *keysoundInputButtonText_ = nullptr;
+  TextView *exportKeysoundAutoButtonText_ = nullptr;
+  TextView *exportKeysoundInputButtonText_ = nullptr;
 
   ReplayRecordsModalCallbacks callbacks_;
   ChartMetaRecord record_;
@@ -251,6 +262,7 @@ private:
   bool selectedExportIncludeResultScreen_ = true;
   bool selectedReplayRenderTouchPoints_ = false;
   bool selectedReplayRenderGhosts_ = true;
+  bool selectedReplayAutoKeySound_ = false;
   bool touchVisualizationEnabled_ = false;
   bool exportInProgress_ = false;
   bool resultRecallInProgress_ = false;

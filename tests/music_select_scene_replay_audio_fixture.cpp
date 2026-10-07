@@ -95,6 +95,7 @@ struct ReplayData { int initialGaugeType = 8, gaugeAutoShift = 9; };
 struct CourseSession {
   int currentIndex = 0;
   bool applied = false;
+  bool autoKeySound = false;
   std::shared_ptr<ReplayData> data = std::make_shared<ReplayData>();
   bool hasCourseReplayStage(int index) { return index == 0; }
   auto currentCourseReplayStageReplay() { return data; }
@@ -209,6 +210,7 @@ struct RecordsModal {
   void setIrUploadInProgress(bool) {}
   void reloadRecords(bool) {}
   void setStatus(const std::string &value) { status = value; }
+  bool autoKeySound() { return true; }
   bool renderTouchPoints() { return true; }
   bool renderReplayGhosts() { return false; }
   void hide() { visible = false; }
@@ -357,6 +359,7 @@ void testReplayAudio(int path) {
       assert(options.pacemakerTarget == 43);
     }
     if (path == 1) assert(options.courseSession && options.courseSession->applied);
+    if (path == 2) assert(options.autoKeySound);
     if (path == 2) assert(options.touchVisualizationEnabled && !options.replayGhostRenderingEnabled);
     assert(!scene.modal.visible);
   }

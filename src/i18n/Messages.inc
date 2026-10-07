@@ -961,6 +961,7 @@
 {"records.ir.ir_upload_queued.message", "IR upload is queued.", "IR 업로드가 대기 중입니다.", "IRアップロードは待機中です。", "IR 上传已加入队列。", "IR 上傳已加入佇列。"},
 {"records.ir.saved_result_has_no_verified_ir_snapshot.message", "This saved result has no verified IR snapshot.", "이 결과에는 검증된 IR 데이터가 없습니다.", "この保存済みリザルトには検証済みのIRスナップショットがありません。", "此已保存成绩没有经过验证的 IR 快照。", "此已儲存成績沒有經過驗證的 IR 快照。"},
 {"records.ir_record.label", "IR Record", "IR 기록", "IR記録", "IR 记录", "IR 紀錄"},
+{"records.keysound.label", "Keysound", "키음", "キー音", "键音", "鍵音"},
 {"records.loading.progress", "Loading...", "불러오는 중...", "読み込み中...", "正在加载...", "正在載入..."},
 {"records.max_combo.label", "Max Combo", "최대 콤보", "最大コンボ", "最大连击", "最大連擊"},
 {"records.newest.label", "Newest", "최신순", "新しい順", "最新", "最新"},
