@@ -1,5 +1,6 @@
 #include "../src/ArchiveRAII.h"
 #include "../src/ArchiveFile.h"
+#include "../src/archive/ArchiveSourceAccess.h"
 #include "../src/ChartLibraryScanner.h"
 #include "../src/PlayOptionUtils.h"
 #include "../src/Utils.h"
@@ -351,6 +352,41 @@ private:
   bool held_ = false;
   bool released_ = false;
 };
+
+void testReferencedArchiveSurvivesUnavailableRefresh() {
+  TempDirectory temporary;
+  const auto original = temporary.path() / "source.zip";
+  auto writer = makeArchiveWriteHandle();
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), original.string().c_str()) == ARCHIVE_OK);
+  const auto contents = chartText("Referenced chart");
+  ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+  archive_entry_set_pathname(entry.get(), "song/chart.bms");
+  archive_entry_set_filetype(entry.get(), AE_IFREG);
+  archive_entry_set_perm(entry.get(), 0644);
+  archive_entry_set_size(entry.get(), contents.size());
+  assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+  assert(archive_write_data(writer.get(), contents.data(), contents.size()) == static_cast<la_ssize_t>(contents.size()));
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  const std::filesystem::path reference = "@androidarchive@/scanner/named.zip";
+  archive_source::setResolver([&](const auto &) -> archive_source::Access { return {original, {}, {}}; });
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  assert(session->InsertEntry(reference, "android-archive-uri:content://example/source"));
+  ChartLibraryScanner scanner;
+  const auto first = scanner.ScanWithResult(*session, {reference});
+  assert(first.completed && first.changedCount >= 1 && session->CountAllChartMeta() == 1);
+  const auto columns = readStoredChartColumns(temporary.path() / "chart.db", reference / "song/chart.bms");
+  assert(columns.exists && columns.sourceArchiveSize == static_cast<std::int64_t>(std::filesystem::file_size(original)));
+  archive_source::setResolver({});
+  scanner.ScanWithResult(*session, {reference});
+  assert(session->CountAllChartMeta() == 1);
+  archive_source::setResolver([&](const auto &) -> archive_source::Access { return {original, {}, {}}; });
+  assert(scanner.Scan(*session, {reference}) == 0);
+  archive_source::setResolver({});
+}
 
 void testBasicNoOpAndDeleteScan() {
   TempDirectory temporary;
@@ -3279,7 +3315,8 @@ void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--archive-reference") { testReferencedArchiveSurvivesUnavailableRefresh(); return 0; }
   testPmsFormatSurvivesBufferedChartLoading();
   testHistoricalPmsMetadataRebuildsUnchangedSources();
   testUntrustedIncompleteMarkersDoNotHideCharts();
@@ -3289,6 +3326,7 @@ int main() {
     }
   }
   testUnavailableMarkerJournalDoesNotDeleteExistingCharts();
+  testReferencedArchiveSurvivesUnavailableRefresh();
   testBasicNoOpAndDeleteScan();
   testUpgradedSolidSevenZipReplacesPlayableCachedChart();
   testSequenceFeaturesMatchBeatorajaSongData();

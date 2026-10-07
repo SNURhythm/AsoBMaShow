@@ -1,3 +1,4 @@
+#include "../archive/ArchiveSourceAccess.h"
 #include "ChartRepository.h"
 #include "ChartRepositoryInternal.h"
 
@@ -80,18 +81,9 @@ sqlite3_int64 fileTimeToSqlNs(std::filesystem::file_time_type time) {
 bool archiveFileStateForDatabase(const std::filesystem::path &path,
                                  sqlite3_int64 &archiveSize,
                                  sqlite3_int64 &mtimeNs) {
-  std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error) || error) {
-    return false;
-  }
-  const auto size = std::filesystem::file_size(path, error);
-  if (error) {
-    return false;
-  }
-  const auto mtime = std::filesystem::last_write_time(path, error);
-  if (error) {
-    return false;
-  }
+  std::uintmax_t size = 0;
+  std::filesystem::file_time_type mtime{};
+  if (!archive_source::fileState(path, size, mtime)) return false;
   archiveSize =
       clampSqlInteger(static_cast<std::uint64_t>(std::min<std::uintmax_t>(
           size, std::numeric_limits<std::uint64_t>::max())));

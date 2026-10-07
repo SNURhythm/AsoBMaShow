@@ -47,6 +47,15 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             "HIDDeviceManager.java"
         )
 
+    def test_android_links_archive_and_codec_registrations(self):
+        block = re.search(r'if\(ANDROID\)\n    # Keep 7-Zip.*?\nendif\(\)', self.cmake, re.S)
+        self.assertIsNotNone(block, "Android must retain the side-effect-only 7-Zip registrations")
+        for name in ("7zRegister.cpp.o", "LzmaRegister.cpp.o", "Lzma2Register.cpp.o",
+                     "DeltaFilter.cpp.o", "RarHandler.cpp.o", "Rar5Handler.cpp.o",
+                     "RarCodecsRegister.cpp.o"):
+            self.assertIn(name, block.group(0))
+        self.assertIn("target_sources(main PRIVATE", block.group(0))
+
     def test_android_release_toolchain_meets_api_36_policy(self):
         self.assertRegex(self.gradle, r"(?m)^\s*compileSdk 36$")
         self.assertRegex(self.gradle, r"(?m)^\s*targetSdk 36$")

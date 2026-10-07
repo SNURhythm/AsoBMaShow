@@ -46,7 +46,10 @@ public:
   bool finishAndroidImport(const std::string &token, bool folder,
                            const std::filesystem::path &path,
                            const std::string &error,
-                           const std::string &retainedError = {});
+                           const std::string &retainedError = {},
+                           const std::string &archiveUri = {},
+                           bool archiveGrantAcquired = false,
+                           std::shared_ptr<AndroidArchiveImportOwner> archiveOwner = {});
   void cancelAndroidImports();
   [[nodiscard]] Snapshot snapshot() const;
   std::vector<DownloadedIndexCompletion> takeDownloadedIndexCompletions();

@@ -4,6 +4,7 @@
 #include "../ChartLibraryScanner.h"
 #include "../DifficultyTableImporter.h"
 #include "../Utils.h"
+#include "../library/ChartLibraryPlatform.h"
 
 #include <memory>
 
@@ -686,6 +687,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         int removedChartCount = -1;
         const bool removed = session->DeleteEntryAndChartMetaInDirectory(
             entryPath, removedChartCount);
+        if (removed) chart_library_platform::removeFolderAccess(*entryIt);
 
         if (token.stop_requested()) {
           return;

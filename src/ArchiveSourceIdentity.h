@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ArchiveFile.h"
+#include "archive/ArchiveSourceAccess.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -16,9 +17,11 @@ namespace archive_source_identity {
 
 inline std::string KeyForPath(const std::filesystem::path &path) {
   const auto cacheKey = archive_file::cacheKeyForPath(path);
+  const auto source = archive_source::resolve(path);
+  if (!source) return {};
 #if defined(_WIN32)
   const HANDLE handle = CreateFileW(
-      path.c_str(), FILE_READ_ATTRIBUTES,
+      source.path.c_str(), FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
       OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   if (handle == INVALID_HANDLE_VALUE) return {};
@@ -38,7 +41,9 @@ inline std::string KeyForPath(const std::filesystem::path &path) {
          std::to_string(fileId) + ':' + std::to_string(basic.ChangeTime.QuadPart);
 #else
   struct stat status{};
-  if (::lstat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode)) return {};
+  const int result = archive_source::isReference(path)
+      ? ::stat(source.path.c_str(), &status) : ::lstat(source.path.c_str(), &status);
+  if (result != 0 || !S_ISREG(status.st_mode)) return {};
 #if defined(__APPLE__)
   const auto changed = status.st_ctimespec;
 #else

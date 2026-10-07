@@ -41,15 +41,17 @@ class LocalizationCatalogTests(unittest.TestCase):
 
     def test_source_uses_catalog_ids_and_every_message_is_referenced(self):
         referenced = set()
-        for path in (ROOT / "src").rglob("*"):
-            if path.suffix not in (".h", ".cpp"):
+        sources = list((ROOT / "src").rglob("*"))
+        sources.extend((ROOT / "android/app/src/main/java").rglob("*.java"))
+        for path in sources:
+            if path.suffix not in (".h", ".cpp", ".java"):
                 continue
             source = path.read_text()
             for literal in re.findall(LITERAL, source):
                 value = literal[1:-1]
                 if value in self.catalog:
                     referenced.add(value)
-            for match in re.finditer(r"i18n::(?:tr|format|message)\(\s*(" + LITERAL + ")", source):
+            for match in re.finditer(r"(?:i18n::(?:tr|format|message)|nativeArchiveImportText)\(\s*(" + LITERAL + ")", source):
                 key = json.loads(match[1])
                 self.assertTrue(key in self.catalog, f"{path}: unknown message ID {key!r}")
         self.assertEqual(set(self.catalog) - referenced, set())
