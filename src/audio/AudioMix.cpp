@@ -195,25 +195,38 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
   const size_t targetFrames = *projectedSamples / channelCount;
   std::vector<short> output(*projectedSamples);
 
+  // Advance the exact source-rate / target-rate ratio without accumulating
+  // floating-point error. Android's 128-bit long double uses software math;
+  // integer interpolation also makes half-sample rounding platform-independent.
+  const auto denominator = static_cast<std::int64_t>(targetRate);
+  const size_t wholeStep = static_cast<size_t>(sourceRate / targetRate);
+  const auto fractionalStep = static_cast<std::int64_t>(sourceRate % targetRate);
+  size_t leftFrame = 0;
+  std::int64_t fraction = 0;
+
   for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
-    const long double sourcePosition =
-        static_cast<long double>(targetFrame) * sourceRate / targetRate;
-    const size_t leftFrame =
-        std::min(static_cast<size_t>(sourcePosition), sourceFrames - 1);
     const size_t rightFrame = std::min(leftFrame + 1, sourceFrames - 1);
-    const long double fraction = sourcePosition - leftFrame;
 
     for (int channel = 0; channel < channels; ++channel) {
       const size_t leftIndex = leftFrame * channelCount + channel;
       const size_t rightIndex = rightFrame * channelCount + channel;
-      const long double interpolated =
-          static_cast<long double>(source[leftIndex]) * (1.0L - fraction) +
-          static_cast<long double>(source[rightIndex]) * fraction;
-      const long rounded = std::lround(interpolated);
-      output[targetFrame * channelCount + channel] =
-          static_cast<short>(std::clamp(
-              rounded, static_cast<long>(std::numeric_limits<short>::min()),
-              static_cast<long>(std::numeric_limits<short>::max())));
+      // A weighted int16 sample times a positive int rate fits in int64.
+      // Convex interpolation stays within int16 bounds, including after rounding.
+      const std::int64_t numerator =
+          source[leftIndex] * (denominator - fraction) +
+          source[rightIndex] * fraction;
+      const std::int64_t rounded =
+          (numerator + (numerator >= 0 ? denominator / 2 : -denominator / 2)) /
+          denominator;
+      output[targetFrame * channelCount + channel] = static_cast<short>(rounded);
+    }
+
+    // Saturate at the final source frame, including extreme rate ratios.
+    leftFrame += std::min(wholeStep, sourceFrames - 1 - leftFrame);
+    fraction += fractionalStep;
+    if (fraction >= denominator) {
+      fraction -= denominator;
+      if (leftFrame < sourceFrames - 1) ++leftFrame;
     }
   }
 

@@ -4717,6 +4717,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             "$<$<AND:$<CONFIG:Debug>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,chart_audio_renderer_tests>>:-O2>")
     endif()
 
+    add_executable(audio_resampling_tests
+        tests/audio_resampling_tests.cpp
+        src/audio/AudioMix.cpp
+    )
+    target_include_directories(audio_resampling_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_resampling_tests PRIVATE cxx_std_23)
+
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
@@ -8466,6 +8473,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(video_decode_state_tests)
 
     asobmashow_register_test(audio_video_settings_tests foundation_av_settings)
+    asobmashow_register_test(audio_resampling_tests foundation_av_audio_resampling)
     asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
     asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
