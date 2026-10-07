@@ -3005,8 +3005,9 @@ public class AsoBMaShowActivity extends SDLActivity {
         return output.getAbsolutePath();
     }
 
-    private File documentsBmsDirectory() {
-        return new File(AsoBMaShowDocumentsProvider.documentsDirectory(this), "BMS");
+    private File documentsBmsDirectory() throws IOException {
+        DocumentsPathPolicy policy = AsoBMaShowDocumentsProvider.initializeDocuments(this);
+        return policy.child(policy.resolve(DocumentsPathPolicy.ROOT_DOCUMENT_ID), "BMS");
     }
 
     private ChartFolderImport.Progress importProgress(String token) {
@@ -3033,7 +3034,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
         control.checkpoint();
         DocumentsPathPolicy policy = AsoBMaShowDocumentsProvider.initializeDocuments(this);
-        File documents = AsoBMaShowDocumentsProvider.documentsDirectory(this);
+        File documents = policy.resolve(DocumentsPathPolicy.ROOT_DOCUMENT_ID);
         File directory = policy.child(documents, "BMS");
         if (!directory.isDirectory() && !directory.mkdirs()) {
             throw new IOException("Could not create BMS import folder.");

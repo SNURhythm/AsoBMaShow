@@ -81,6 +81,8 @@ struct RealtimeTouchUiTransform {
   int uiOffsetY = 0;
   int uiWidth = 0;
   int uiHeight = 0;
+  float inputScaleX = 1.0F;
+  float inputScaleY = 1.0F;
 
   bool operator==(const RealtimeTouchUiTransform &) const = default;
 };

@@ -10,6 +10,7 @@ args = parser.parse_args()
 source = (args.root / "src/input/RhythmInputHandler.cpp").read_text()
 signatures = (
     "bool RhythmInputHandler::notifyTouchEvent(",
+    "bms_parser::Note *RhythmInputHandler::applyTouchLane(",
     "void RhythmInputHandler::discardPendingTouchEvents()",
     "void RhythmInputHandler::setApplicationBackground(bool background)",
     "Vector3 RhythmInputHandler::normalizedTouchToRenderLocation(",
@@ -32,6 +33,7 @@ methods = "\n\n".join(extract(source, signature) for signature in signatures)
 scene_source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
 methods += "\n\n" + "\n\n".join(extract(scene_source, signature) for signature in (
     "bool GamePlayScene::handleTouchInputAtGameplayTime(",
+    "bool GamePlayScene::handleTouchInput(",
     "void GamePlayScene::cancelLegacyFloatingLaneCoverTouch()",
     "void GamePlayScene::refreshLegacyTouchLayout()",
 ))

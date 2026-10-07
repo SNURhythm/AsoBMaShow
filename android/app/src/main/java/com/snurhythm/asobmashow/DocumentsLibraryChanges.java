@@ -25,14 +25,14 @@ final class DocumentsLibraryChanges {
         }
     }
 
-    synchronized void writerOpened(long now) {
+    synchronized void writerOpened(long now, boolean affectsBms) {
         ++writers;
-        changed(now);
+        if (affectsBms) changed(now);
     }
 
     synchronized void writerClosed(long now) {
         --writers;
-        changed(now);
+        if (dirty) changed(now);
     }
 
     synchronized long readyRevision(long now) {

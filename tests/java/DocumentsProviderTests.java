@@ -42,15 +42,20 @@ public final class DocumentsProviderTests {
             denied(() -> policy.resolve("documents:link/secret"));
             denied(() -> policy.child(new File(root, "link"), "created"));
             require(policy.child(skins, "한글.lr2skin").getParentFile().equals(skins));
-            require(DocumentsPathPolicy.affectsBms("documents:BMS"));
-            require(DocumentsPathPolicy.affectsBms("documents:BMS/song/a.wav"));
-            require(!DocumentsPathPolicy.affectsBms("documents:Skins/a"));
-            require(!DocumentsPathPolicy.affectsBms("documents:BMS-other"));
+            for (String alias : new String[]{"BMS", "bms", "BmS", "bMs"}) {
+                require(DocumentsPathPolicy.affectsBms("documents:" + alias));
+                require(DocumentsPathPolicy.affectsBms("documents:" + alias + "/song/a.wav"));
+            }
+            for (String unrelated : new String[]{"documents:", "documents:Skins/a",
+                    "documents:BMS-other", "documents:bms-other/song", "documents:bms2",
+                    "documents:other/bms/song", "other:bms/song", "DOCUMENTS:bms/song"}) {
+                require(!DocumentsPathPolicy.affectsBms(unrelated));
+            }
 
             AtomicBoolean persisted = new AtomicBoolean();
             DocumentsLibraryChanges changes = new DocumentsLibraryChanges(false, persisted::set);
             require(changes.readyRevision(5000) == 0);
-            for (int i = 0; i < 1000; ++i) changes.writerOpened(i);
+            for (int i = 0; i < 1000; ++i) changes.writerOpened(i, true);
             require(persisted.get());
             require(changes.readyRevision(10000) == 0);
             for (int i = 0; i < 999; ++i) changes.writerClosed(1000 + i);

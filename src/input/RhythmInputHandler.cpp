@@ -50,7 +50,8 @@ bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
     activeTouchPoints.erase(fingerIndex);
   }
   if (touchEventCallback != nullptr) {
-    return touchEventCallback(fingerIndex, action, normalizedLocation);
+    return touchEventCallback(fingerIndex, action, normalizedLocation,
+                              touchEventTimestampMicros());
   }
   return false;
 }
@@ -339,7 +340,16 @@ bool RhythmInputHandler::startListenTouch() {
   // on the gameplay thread before simulation, alongside layout publication.
   touchInputSource = std::make_unique<SDLTouchInputSource>(TARGET_OS_ANDROID);
   touchInputSource->setHandler(this);
+  touchInputSource->setRawEventCallback(touchIngressCallback);
   return touchInputSource->startListen();
+}
+void RhythmInputHandler::setTouchIngressCallback(
+    std::function<void(const SDL_Event &, std::uint64_t)> callback) {
+  touchIngressCallback = std::move(callback);
+  if (touchInputSource != nullptr) {
+    touchInputSource->setRawEventCallback(touchIngressCallback);
+  }
+  discardPendingTouchEvents();
 }
 void RhythmInputHandler::stopListen() {
   if (inputDeviceRegistry != nullptr) {
@@ -480,7 +490,7 @@ void RhythmInputHandler::setTouchLaneOrder(
 }
 
 void RhythmInputHandler::setTouchEventCallback(
-    std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback) {
+    std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t)> callback) {
   touchEventCallback = std::move(callback);
 }
 
@@ -630,5 +640,5 @@ bms_parser::Note *RhythmInputHandler::applyTouchLane(
   const int player = (keyMode == 10 || keyMode == 14) && lane >= 8 ? 2 : 1;
   return logicalInputPipeline->consumePhysicalTouchLane(
       {.player = player, .keyMode = keyMode}, lane, pressed,
-      scratchDirection);
+      scratchDirection, touchEventTimestampMicros());
 }

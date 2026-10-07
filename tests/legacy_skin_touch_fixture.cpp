@@ -52,7 +52,21 @@ public:
   struct TouchSource { void discardPendingEvents() {} };
   TouchSource *touchInputSource = nullptr;
   bool applicationBackground = false;
-  struct Pipeline { int resets = 0; void reset() { ++resets; } } pipeline;
+  std::vector<int> presses, releases;
+  std::vector<std::uint64_t> laneTimestamps;
+  struct Pipeline {
+    RhythmInputHandler *owner;
+    int resets = 0;
+    void reset() { ++resets; }
+    struct Scope { int player, keyMode; };
+    bms_parser::Note *consumePhysicalTouchLane(Scope, int lane, bool pressed,
+                                               std::optional<int>, std::uint64_t timestamp) {
+      (pressed ? owner->presses : owner->releases).push_back(lane);
+      owner->laneTimestamps.push_back(timestamp);
+      return nullptr;
+    }
+  } pipeline{this};
+  int keyMode = 7;
   Pipeline *logicalInputPipeline = &pipeline;
   int totalLaneCount = 8, scratchLaneCount = 1;
   float playAreaWidth = 8, playAreaLeftX = 0;
@@ -64,13 +78,11 @@ public:
   std::map<SDL_FingerID, FlickState> flickStates;
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
   std::map<SDL_FingerID, Vector3> activeTouchPoints;
-  std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> touchEventCallback;
+  std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t)> touchEventCallback;
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
-  std::vector<int> presses, releases;
-  bms_parser::Note *applyTouchLane(int lane, bool pressed, std::optional<int>) {
-    (pressed ? presses : releases).push_back(lane);
-    return nullptr;
-  }
+  bms_parser::Note *applyTouchLane(int lane, bool pressed, std::optional<int>);
+  std::uint64_t ingressTimestamp = 0;
+  std::uint64_t touchEventTimestampMicros() const { return ingressTimestamp; }
   bool notifyTouchEvent(SDL_FingerID, ReplayTouchAction, Vector3);
   void discardPendingTouchEvents();
   void setApplicationBackground(bool background);
@@ -123,6 +135,11 @@ public:
   State *state = &ownedState;
   struct Context {
     struct Jukebox {
+      long long getTimeMicros() const { return 900000; }
+      Jukebox &audioRuntime() { return *this; }
+      std::optional<long long> songTimeMicrosAtSteadyMicros(std::uint64_t time) {
+        return static_cast<long long>(time) - 100000;
+      }
       bool paused = false;
       bool isPaused() const { return paused; }
     } jukebox;
@@ -137,7 +154,12 @@ public:
   int persisted = 0;
   bool practiceInputAllowed(long long) { return practiceAllowed; }
   void persistFloatingLaneCoverSettings() { ++persisted; }
-  void appendReplayTouchSample(SDL_FingerID, ReplayTouchAction, Vector3, long long) {}
+  std::vector<long long> replayTimes;
+  long long getGameplayTimeMicros(long long time) { return time - 10000; }
+  void appendReplayTouchSample(SDL_FingerID, ReplayTouchAction, Vector3, long long time) {
+    replayTimes.push_back(time);
+  }
+  bool handleTouchInput(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t);
   bool handleFloatingLaneCoverInput(SDL_FingerID, ReplayTouchAction, Vector3, long long) {
     return false;
   }
@@ -172,6 +194,21 @@ int main() {
   const Vector3 firstLane{.1875F, .5F, 0};
   const Vector3 secondLane{.4375F, .5F, 0};
   const Vector3 gap{.28125F, .5F, 0};
+  RhythmInputHandler delayed;
+  GamePlayScene delayedScene;
+  delayed.setTouchLaneLayout(skinLayout());
+  delayed.touchEventCallback = [&](SDL_FingerID finger, ReplayTouchAction action,
+                                   Vector3 point, std::uint64_t time) {
+    return delayedScene.handleTouchInput(finger, action, point, time);
+  };
+  delayed.ingressTimestamp = 123000;
+  delayed.onFingerDown(77, firstLane);
+  delayed.ingressTimestamp = 143000;
+  delayed.onFingerUp(77, firstLane);
+  expect(delayed.laneTimestamps == std::vector<std::uint64_t>{123000, 143000},
+         "production touch handler forwards original timestamps to logical lane pipeline");
+  expect(delayedScene.replayTimes == std::vector<long long>{13000, 33000},
+         "production touch sample capture maps ingress through the audio and gameplay clocks");
   RhythmInputHandler handler;
   handler.setTouchLaneLayout(skinLayout());
   handler.onFingerDown(1, firstLane);
@@ -250,7 +287,7 @@ int main() {
   int callbackCancels = 0;
   Vector3 cancelledPoint{};
   interrupted.touchEventCallback = [&](SDL_FingerID finger, ReplayTouchAction action,
-                                       Vector3 point) {
+                                       Vector3 point, std::uint64_t) {
     if (finger != 20) return false;
     if (action == ReplayTouchAction::Down) callbackCapture = true;
     if (action == ReplayTouchAction::Cancel) {
@@ -286,7 +323,7 @@ int main() {
   rendering::ui_scale_x = rendering::ui_scale_y = 1.0F;
   std::vector<ReplayTouchAction> laneCallbacks;
   interrupted.touchEventCallback = [&](SDL_FingerID, ReplayTouchAction action,
-                                       Vector3) {
+                                       Vector3, std::uint64_t) {
     laneCallbacks.push_back(action);
     return action == ReplayTouchAction::Cancel;
   };

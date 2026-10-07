@@ -912,7 +912,11 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeCommitDocumentHandoff(
 std::string GetAndroidExternalFilesDir() {
   if (const char *external = SDL_AndroidGetExternalStoragePath();
       external != nullptr && external[0] != '\0') {
-    return external;
+    // SDL returns an absolute external path, which may still contain a system
+    // alias. Resolve only this trusted container, before appending Documents.
+    std::error_code error;
+    const auto container = std::filesystem::canonical(external, error);
+    return error ? std::string(external) : container.string();
   }
   if (const char *internal = SDL_AndroidGetInternalStoragePath();
       internal != nullptr && internal[0] != '\0') {

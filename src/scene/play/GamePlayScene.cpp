@@ -1,3 +1,4 @@
+#include "RealtimeSdlTouchInput.h"
 #include "../../GameplayKeyMode.h"
 #include "../../i18n/Localization.h"
 //
@@ -522,7 +523,9 @@ gameplay::RealtimeTouchUiTransform realtimeTouchUiTransform() noexcept {
           .uiOffsetX = rendering::ui_offset_x,
           .uiOffsetY = rendering::ui_offset_y,
           .uiWidth = rendering::window_width,
-          .uiHeight = rendering::window_height};
+          .uiHeight = rendering::window_height,
+          .inputScaleX = rendering::widthScale,
+          .inputScaleY = rendering::heightScale};
 }
 
 std::uint64_t effectiveRealtimeTouchLayoutRevision(
@@ -1502,6 +1505,88 @@ struct GamePlayScene::RealtimeGameplaySession {
     session.physicalInputRouter->disconnectDevice(device.stableId, nowMicros());
   }
 
+  // Both native producers use published geometry only. Keep routing, auxiliary
+  // publication, and release acknowledgement atomic with lifecycle cancellation.
+  static void consumeTouchSampleLocked(RealtimeGameplaySession &session,
+                                       gameplay::RealtimeTouchSample sample) {
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.touchRouter == nullptr) return;
+    const auto phase = sample.phase;
+    session.populateImmutableHit(sample);
+    sample.excludedFromGameplay =
+        sample.presentationHit.kind != PresentationUiControlKind::None &&
+        sample.presentationHit.kind !=
+            PresentationUiControlKind::VirtualController;
+    gameplay::RealtimeTouchRoutingDisposition disposition =
+        gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
+    {
+      if (session.touchRouter != nullptr) {
+        disposition = session.touchRouter->consumeForPublication(sample);
+      }
+    }
+    bool auxiliaryPublished = false;
+    if (gameplay::realtimeTouchRoutingPublishesAuxiliary(disposition)) {
+      if (!session.auxiliaryTouches.tryPush(sample)) {
+        // Stop admitting later callbacks until the game thread drains and
+        // transactionally cancels every ownership domain.
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
+      } else {
+        auxiliaryPublished = true;
+      }
+    } else if (gameplay::realtimeTouchRoutingRequiresRecovery(disposition)) {
+      // The sample was not accepted by the router, so publishing it to
+      // presentation/replay would create mismatched ownership. Fail closed;
+      // the normal overflow recovery releases the old contact and republishes
+      // a clean snapshot before ingress resumes.
+      session.acceptingTouch.store(false, std::memory_order_release);
+      session.touchRoutingRecoveryRequested.store(true,
+                                                  std::memory_order_release);
+    }
+    if (phase == gameplay::RealtimeTouchPhase::Up && auxiliaryPublished) {
+      if (session.touchRouter == nullptr ||
+          !session.touchRouter->acknowledgePublishedRelease(sample.fingerId)) {
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+      }
+    }
+    bool cancellationAcknowledged = false;
+    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
+        auxiliaryPublished) {
+      cancellationAcknowledged =
+          session.touchRouter != nullptr &&
+          session.touchRouter->acknowledgePublishedCancellation(
+              sample.fingerId);
+      if (!cancellationAcknowledged) {
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+      }
+    }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
+        gameplay::realtimeTouchShouldScheduleCancelExpiry(
+            disposition, auxiliaryPublished, cancellationAcknowledged)) {
+      scheduleCancelledTouchExpiry(session, sample);
+    }
+#endif
+  }
+
+  static void sdlTouchSink(RealtimeGameplaySession &session, const SDL_Event &event,
+                           std::uint64_t timestampMicros) {
+    std::lock_guard lock(session.touchRouterMutex);
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.inputInterrupted.load(std::memory_order_acquire) ||
+        (session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire))) return;
+    const auto snapshot = session.touchHitSnapshots.acquire();
+    if (!snapshot) return;
+    auto sample = gameplay::realtimeTouchSampleFromSdl(
+        event, timestampMicros, snapshot->uiTransform);
+    if (sample) consumeTouchSampleLocked(session, *sample);
+  }
+
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   struct CancelledTouchExpiry {
     void *lifetimeToken = nullptr;
@@ -1598,66 +1683,8 @@ struct GamePlayScene::RealtimeGameplaySession {
             session.touchTimestampSession.toSteadyMicros(
                 event->timestampMicros),
     };
-    session.populateImmutableHit(sample);
-    sample.excludedFromGameplay =
-        sample.presentationHit.kind != PresentationUiControlKind::None &&
-        sample.presentationHit.kind !=
-            PresentationUiControlKind::VirtualController;
-    gameplay::RealtimeTouchRoutingDisposition disposition =
-        gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
-    {
-      std::lock_guard lock(session.touchRouterMutex);
-      if (session.touchRouter != nullptr) {
-        disposition = session.touchRouter->consumeForPublication(sample);
-      }
-    }
-    bool auxiliaryPublished = false;
-    if (gameplay::realtimeTouchRoutingPublishesAuxiliary(disposition)) {
-      if (!session.auxiliaryTouches.tryPush(sample)) {
-        // Stop admitting later callbacks until the game thread drains and
-        // transactionally cancels every ownership domain.
-        session.acceptingTouch.store(false, std::memory_order_release);
-        session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
-      } else {
-        auxiliaryPublished = true;
-      }
-    } else if (gameplay::realtimeTouchRoutingRequiresRecovery(disposition)) {
-      // The sample was not accepted by the router, so publishing it to
-      // presentation/replay would create mismatched ownership. Fail closed;
-      // the normal overflow recovery releases the old contact and republishes
-      // a clean snapshot before ingress resumes.
-      session.acceptingTouch.store(false, std::memory_order_release);
-      session.touchRoutingRecoveryRequested.store(true,
-                                                  std::memory_order_release);
-    }
-    if (phase == gameplay::RealtimeTouchPhase::Up && auxiliaryPublished) {
-      std::lock_guard lock(session.touchRouterMutex);
-      if (session.touchRouter == nullptr ||
-          !session.touchRouter->acknowledgePublishedRelease(sample.fingerId)) {
-        session.acceptingTouch.store(false, std::memory_order_release);
-        session.touchRoutingRecoveryRequested.store(true,
-                                                    std::memory_order_release);
-      }
-    }
-    bool cancellationAcknowledged = false;
-    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
-        auxiliaryPublished) {
-      std::lock_guard lock(session.touchRouterMutex);
-      cancellationAcknowledged =
-          session.touchRouter != nullptr &&
-          session.touchRouter->acknowledgePublishedCancellation(
-              sample.fingerId);
-      if (!cancellationAcknowledged) {
-        session.acceptingTouch.store(false, std::memory_order_release);
-        session.touchRoutingRecoveryRequested.store(true,
-                                                    std::memory_order_release);
-      }
-    }
-    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
-        gameplay::realtimeTouchShouldScheduleCancelExpiry(
-            disposition, auxiliaryPublished, cancellationAcknowledged)) {
-      scheduleCancelledTouchExpiry(session, sample);
-    }
+    std::lock_guard lock(session.touchRouterMutex);
+    consumeTouchSampleLocked(session, sample);
   }
 #endif
 };
@@ -2031,7 +2058,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     return false;
   }
 
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   std::optional<gameplay::RealtimeTouchLayout> touchLayout;
   if (!options.autoPlay) {
     presentation->refreshGeometry();
@@ -2042,7 +2069,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     if (!touchLayout.has_value()) {
       realtimeGameplayAuthorityWaitingForSkinGeometry =
           presentation->activeMode() == PresentationMode::Skin;
-      SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
+      SDL_Log("Realtime gameplay input unavailable: invalid touch layout");
       return false;
     }
   }
@@ -2135,7 +2162,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
           gameplay::RealtimeGameplayInputBridgeSink{
               .context = session.get(),
               .emit = &RealtimeGameplaySession::emitLegacyInput});
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   if (touchLayout.has_value()) {
     session->touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(
         session->epoch, *touchLayout,
@@ -2167,7 +2194,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   session->visualMeasureIndex = state->passedMeasureCount;
   session->visualTimelineIndex = state->passedTimelineCount;
   session->layoutRefreshKey = makeRealtimeTouchLayoutRefreshKey(
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
       effectiveRealtimeTouchLayoutRevision(
           presentation->touchLayoutRevision(),
           context.inputProfile.virtualController, chart->Meta.KeyMode),
@@ -2246,6 +2273,14 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .sdlWatchContext = &activeSession,
 #endif
           });
+#if TARGET_OS_ANDROID
+  if (inputHandler != nullptr) {
+    inputHandler->setTouchIngressCallback(
+        [session = &activeSession](const SDL_Event &event, std::uint64_t time) {
+          RealtimeGameplaySession::sdlTouchSink(*session, event, time);
+        });
+  }
+#endif
   setRealtimeGameplayIngressEnabled(true);
   (void)activeSession.inputRegistration->activate();
   SDL_Log("Realtime gameplay native input authority active (epoch %llu)",
@@ -2255,8 +2290,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 
 void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #if TARGET_OS_ANDROID
-  // Both authorities use the deferred SDL touch stream on Android. Close its
-  // ownership and queued overlay touches at every pause/resume boundary.
+  // Close legacy fallback ownership and queued overlay touches at every boundary.
   if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
 #endif
   if (!realtimeGameplayAuthorityActive()) {
@@ -2274,7 +2308,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
       session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
     }
   }
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   session.touchIngressDesired = enabled;
   if (enabled) {
     if (session.acceptingTouch.load(std::memory_order_acquire)) {
@@ -2282,7 +2316,9 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
     }
     // SDL's UIKit bridge holds its callback spinlock until an in-flight raw
     // callback returns. Detach before mutating any raw-thread-owned state.
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(nullptr, nullptr);
+#endif
     session.acceptingTouch.store(false, std::memory_order_release);
     const auto expectedKey = makeRealtimeTouchLayoutRefreshKey(
         presentation != nullptr
@@ -2306,7 +2342,9 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
                    "Realtime touch ingress remains disabled without an immutable hit snapshot");
       return;
     }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     session.touchTimestampSession.reanchor();
+#endif
     bool routerEnabled = true;
     {
       std::lock_guard lock(session.touchRouterMutex);
@@ -2320,10 +2358,14 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
       return;
     }
     session.acceptingTouch.store(true, std::memory_order_release);
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
+#endif
     return;
   }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   IOSSetRawTouchEventSink(nullptr, nullptr);
+#endif
   session.acceptingTouch.store(false, std::memory_order_release);
   bool routerDisabled = true;
   {
@@ -2842,11 +2884,14 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   }
   auto &session = *realtimeGameplaySession;
   setRealtimeGameplayIngressEnabled(false);
+#if TARGET_OS_ANDROID
+  if (inputHandler != nullptr) inputHandler->setTouchIngressCallback({});
+#endif
   if (session.inputRegistration != nullptr) {
     session.inputRegistration->close();
   }
   drainRealtimeTouchSamples();
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   // A first cancellation can fail transactionally when either bounded queue
   // is full. Draining above makes the normal recovery path available; retry
   // before stopping the worker so every accepted Press can still acquire its
@@ -2866,6 +2911,8 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
                  "Realtime touch cancellation failed during final shutdown; replay transfer is invalid");
     transferReplay = false;
   }
+#endif
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   // No raw callback can enter after sink detachment. Closing the delayed
   // callback lifetime here also prevents a queued cancellation-expiry callback
   // from racing worker shutdown; destruction remains an idempotent fallback.
@@ -3301,8 +3348,9 @@ void GamePlayScene::init() {
     });
     inputHandler->setTouchEventCallback([this](SDL_FingerID fingerIndex,
                                                ReplayTouchAction action,
-                                               Vector3 normalizedLocation) {
-      return handleTouchInput(fingerIndex, action, normalizedLocation);
+                                               Vector3 normalizedLocation,
+                                               std::uint64_t timestampMicros) {
+      return handleTouchInput(fingerIndex, action, normalizedLocation, timestampMicros);
     });
     inputHandler->discardPendingTouchEvents();
     refreshGameplayPresentationGeometry();
@@ -3920,6 +3968,10 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
     startButtonPressed = false;
     selectButtonPressed = false;
     cancelCoursePauseHold();
+  }
+  if (realtimeGameplayAuthorityActive()) {
+    setRealtimeGameplayIngressEnabled(!background && state != nullptr &&
+        state->isPlaying && !state->isEnding && !context.jukebox.isPaused());
   }
 #endif
   guidedAccessReminderBackground = background;
@@ -6599,8 +6651,8 @@ void GamePlayScene::update(float dt) {
   (void)dt;
   applyPendingBestReplay();
   const bool realtimeAtFrameStart = realtimeGameplayAuthorityActive();
-  // Android feeds realtime authority through the legacy SDL touch bridge.
-  // Its deferred callbacks must run before the resulting commands are drained.
+  // The legacy fallback drains before simulation. Android realtime touch
+  // admission bypasses this queue and uses immutable geometry on the producer.
   if (inputHandler != nullptr && (TARGET_OS_ANDROID || !realtimeAtFrameStart)) {
     inputHandler->pumpPendingTouchEvents();
   }
@@ -8187,9 +8239,13 @@ void GamePlayScene::appendReplayLaneCoverEvent(float noteStartPositionPercent,
 
 bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      ReplayTouchAction action,
-                                     Vector3 normalizedLocation) {
-  const long long gameplayTimeMicros =
-      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+                                     Vector3 normalizedLocation,
+                                     std::uint64_t timestampMicros) {
+  const auto songTimeMicros = timestampMicros != 0
+      ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
+            timestampMicros).value_or(context.jukebox.getTimeMicros())
+      : context.jukebox.getTimeMicros();
+  const long long gameplayTimeMicros = getGameplayTimeMicros(songTimeMicros);
   return handleTouchInputAtGameplayTime(fingerIndex, action, normalizedLocation,
                                         gameplayTimeMicros);
 }

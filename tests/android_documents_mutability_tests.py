@@ -16,13 +16,16 @@ import java.io.File;
 public class Context {
     public static final int MODE_PRIVATE = 0;
     private final File root;
+    private final java.util.Map<String, SharedPreferences> preferences = new java.util.HashMap<>();
     public Context(File root) { this.root = root; }
     public File getExternalFilesDir(String type) { return root; }
     public File getFilesDir() { return root; }
     public Context getApplicationContext() { return this; }
     public String getString(int id) { return "AsoBMaShow"; }
     public ContentResolver getContentResolver() { return new ContentResolver(); }
-    public SharedPreferences getSharedPreferences(String name, int mode) { return new SharedPreferences(); }
+    public SharedPreferences getSharedPreferences(String name, int mode) {
+        return preferences.computeIfAbsent(name, ignored -> new SharedPreferences());
+    }
 }
 """,
     "android/content/ContentResolver.java": """
@@ -33,11 +36,13 @@ public class ContentResolver { public void notifyChange(Uri uri, Object observer
     "android/content/SharedPreferences.java": """
 package android.content;
 public class SharedPreferences {
-    public boolean getBoolean(String key, boolean fallback) { return fallback; }
+    private final java.util.Map<String, Boolean> values = new java.util.HashMap<>();
+    public boolean getBoolean(String key, boolean fallback) { return values.getOrDefault(key, fallback); }
     public Editor edit() { return new Editor(); }
-    public static class Editor {
-        public Editor putBoolean(String key, boolean value) { return this; }
-        public void apply() {}
+    public class Editor {
+        private final java.util.Map<String, Boolean> pending = new java.util.HashMap<>();
+        public Editor putBoolean(String key, boolean value) { pending.put(key, value); return this; }
+        public void apply() { values.putAll(pending); }
     }
 }
 """,
@@ -242,6 +247,17 @@ class AndroidDocumentsMutabilityTests(unittest.TestCase):
 
     def test_ordinary_documents_remain_mutable(self):
         self.scenario("ordinary")
+
+    def test_writers_remain_tracked_after_folder_is_renamed_into_bms(self):
+        self.scenario("renamed-writers")
+
+    def test_internal_storage_fallback_accepts_aliased_ancestors(self):
+        self.scenario("fallback-alias")
+
+    def test_bms_case_alias_mutations_persist_library_refresh(self):
+        for alias in ("BMS", "bms", "BmS"):
+            with self.subTest(alias=alias):
+                self.scenario("refresh-" + alias)
 
     def test_path_aliases_cannot_bypass_protection(self):
         self.scenario("aliases")

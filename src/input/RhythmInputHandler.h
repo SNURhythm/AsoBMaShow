@@ -30,6 +30,7 @@ class SDLTouchInputSource;
 class RhythmInputHandler : public IInputHandler {
 private:
   std::unique_ptr<SDLTouchInputSource> touchInputSource;
+  std::function<void(const SDL_Event &, std::uint64_t)> touchIngressCallback;
   InputDeviceRegistry *inputDeviceRegistry = nullptr;
   std::unique_ptr<LogicalGameplayInputPipeline> logicalInputPipeline;
   std::uint64_t inputSubscriptionToken = 0;
@@ -66,7 +67,7 @@ private:
                          Vector3 normalizedLocation);
   std::map<SDL_FingerID, FlickState> flickStates;
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
-  std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)>
+  std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t)>
       touchEventCallback;
   bool notifyTouchEvent(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
@@ -97,6 +98,8 @@ public:
                     Vector3 normalizedLocation) override;
   bool startListenSDL();
   bool startListenTouch();
+  void setTouchIngressCallback(
+      std::function<void(const SDL_Event &, std::uint64_t)> callback);
   void stopListen();
   void discardPendingTouchEvents();
   void setApplicationBackground(bool background);
@@ -115,5 +118,5 @@ public:
   void setLongNoteHeldCallback(
       std::function<std::optional<bool>(int)> callback);
   void setTouchEventCallback(
-      std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
+      std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t)> callback);
 };

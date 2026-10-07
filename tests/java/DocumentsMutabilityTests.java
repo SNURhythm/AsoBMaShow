@@ -102,6 +102,96 @@ public final class DocumentsMutabilityTests {
         check(!Files.exists(documents.resolve("BMS/Finished")), "Released reservation still blocks Files");
     }
 
+    private static void acknowledgeRefresh(Context context, DocumentsLibraryChanges changes, String operation) {
+        check(context.getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                        .getBoolean("library-dirty", false),
+                operation + " did not persist the library dirty flag");
+        long revision = changes.readyRevision(android.os.SystemClock.elapsedRealtime() + 3000);
+        check(revision != 0, operation + " did not queue a library refresh");
+        changes.acknowledge(revision);
+        check(!context.getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                        .getBoolean("library-dirty", false),
+                operation + " acknowledgement did not clear the dirty flag");
+    }
+
+    private static void aliasRefresh(AsoBMaShowDocumentsProvider provider, Context context, String alias)
+            throws Exception {
+        DocumentsLibraryChanges changes = AsoBMaShowDocumentsProvider.changes(context);
+        String folder = provider.createDocument(ROOT, Document.MIME_TYPE_DIR, alias);
+        acknowledgeRefresh(context, changes, "Create " + alias);
+        String file = provider.createDocument(folder, "application/octet-stream", "chart.bms");
+        acknowledgeRefresh(context, changes, "Create chart under " + alias);
+        try (ParcelFileDescriptor descriptor = provider.openDocument(file, "rwt", null)) {
+            descriptor.writeBytes(SENTINEL);
+            check(context.getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                            .getBoolean("library-dirty", false),
+                    "Opening a writer must persist dirty state before close");
+            check(changes.readyRevision(android.os.SystemClock.elapsedRealtime() + 3000) == 0,
+                    "Refresh must wait for open writers");
+        }
+        acknowledgeRefresh(context, changes, "Write under " + alias);
+        file = provider.renameDocument(file, "renamed.bms");
+        acknowledgeRefresh(context, changes, "Rename under " + alias);
+        provider.deleteDocument(file);
+        acknowledgeRefresh(context, changes, "Delete chart under " + alias);
+        provider.deleteDocument(folder);
+        acknowledgeRefresh(context, changes, "Delete " + alias);
+    }
+
+    private static void renamedWriterRefresh(AsoBMaShowDocumentsProvider provider, Context context)
+            throws Exception {
+        DocumentsLibraryChanges changes = AsoBMaShowDocumentsProvider.changes(context);
+        String incoming = provider.createDocument(ROOT, Document.MIME_TYPE_DIR, "Incoming");
+        String first = provider.createDocument(incoming, "application/octet-stream", "first.bms");
+        String second = provider.createDocument(incoming, "application/octet-stream", "second.bms");
+        try (ParcelFileDescriptor ordinary = provider.openDocument(first, "wt", null)) {
+            ordinary.writeBytes(SENTINEL);
+        }
+        check(changes.readyRevision(android.os.SystemClock.elapsedRealtime() + 3000) == 0,
+                "Unrelated Documents writes should not request library refresh");
+        check(!context.getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                        .getBoolean("library-dirty", false),
+                "Unrelated Documents writes should not persist dirty state");
+        try (ParcelFileDescriptor one = provider.openDocument(first, "wt", null)) {
+            try (ParcelFileDescriptor two = provider.openDocument(second, "wt", null)) {
+                one.writeBytes(new byte[]{1});
+                provider.renameDocument(incoming, "BMS");
+                long revision = changes.readyRevision(android.os.SystemClock.elapsedRealtime() + 3000);
+                check(revision == 0, "Renaming into BMS must not refresh while writers remain open");
+                changes.acknowledge(revision);
+                two.writeBytes(SENTINEL);
+            }
+            check(changes.readyRevision(android.os.SystemClock.elapsedRealtime() + 3000) == 0,
+                    "Refresh must wait for every writer opened before the rename");
+            one.writeBytes(SENTINEL);
+        }
+        check(changes.readyRevision(android.os.SystemClock.elapsedRealtime()) == 0,
+                "Writer close must restart the refresh debounce");
+        acknowledgeRefresh(context, changes, "Finish writers after folder rename");
+    }
+
+    private static void fallbackAlias(Path temporary) throws Exception {
+        Path realFiles = Files.createDirectories(temporary.resolve("data/data/package/files"));
+        Path alias = Files.createSymbolicLink(temporary.resolve("user0"), temporary.resolve("data/data"));
+        Context context = new Context(alias.resolve("package/files").toFile()) {
+            @Override public java.io.File getExternalFilesDir(String type) { return null; }
+        };
+        AsoBMaShowDocumentsProvider provider = new AsoBMaShowDocumentsProvider();
+        provider.attachContext(context);
+        AsoBMaShowDocumentsProvider.initializeDocuments(context);
+        check(Files.isDirectory(realFiles.resolve("Documents/Skins")),
+                "Aliased internal fallback must initialize canonical Documents");
+        String folder = provider.createDocument(ROOT, Document.MIME_TYPE_DIR, "BMS");
+        String file = provider.createDocument(folder, "application/octet-stream", "chart.bms");
+        try (ParcelFileDescriptor writer = provider.openDocument(file, "wt", null)) {
+            writer.writeBytes(SENTINEL);
+        }
+        check(Arrays.equals(Files.readAllBytes(realFiles.resolve("Documents/BMS/chart.bms")), SENTINEL),
+                "Fallback provider writes must reach the canonical internal root");
+        provider.deleteDocument(folder);
+        check(!Files.exists(realFiles.resolve("Documents/BMS")), "Fallback provider deletion failed");
+    }
+
     private static void verifyImportBlocked(AsoBMaShowDocumentsProvider provider, String relative) throws Exception {
         for (String mode : new String[]{"w", "wt", "wa", "rw", "rwt"}) {
             denied(() -> provider.openDocument(ROOT + relative, mode, null));
@@ -118,6 +208,10 @@ public final class DocumentsMutabilityTests {
     public static void main(String[] args) throws Exception {
         Path temporary = Files.createTempDirectory("documents-mutability-").toRealPath();
         try {
+            if (args[0].equals("fallback-alias")) {
+                fallbackAlias(temporary);
+                return;
+            }
             Context context = new Context(temporary.toFile());
             AsoBMaShowDocumentsProvider provider = new AsoBMaShowDocumentsProvider();
             provider.attachContext(context);
@@ -127,7 +221,11 @@ public final class DocumentsMutabilityTests {
             String scenario = args[0];
             String[] databases = {"db/chart.db", "db/chart.db-wal", "db/chart.db-shm",
                     "profiles/player/scores.db", "profiles/player/replays.db-journal"};
-            if (scenario.equals("reserved-import") || scenario.equals("reserved-move")) {
+            if (scenario.equals("renamed-writers")) {
+                renamedWriterRefresh(provider, context);
+            } else if (scenario.startsWith("refresh-")) {
+                aliasRefresh(provider, context, scenario.substring("refresh-".length()));
+            } else if (scenario.equals("reserved-import") || scenario.equals("reserved-move")) {
                 importReservation(provider, documents, scenario.equals("reserved-move"));
             } else if (scenario.startsWith("write-")) {
                 for (String relative : databases) {

@@ -292,7 +292,7 @@ private:
                                   bool resetVisibleTimeReference,
                                   ReplayLaneCoverChangeKind changeKind);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
-                        Vector3 normalizedLocation);
+                        Vector3 normalizedLocation, std::uint64_t timestampMicros = 0);
   bool handleTouchInputAtGameplayTime(
       SDL_FingerID fingerIndex, ReplayTouchAction action,
       Vector3 normalizedLocation, long long gameplayTimeMicros,

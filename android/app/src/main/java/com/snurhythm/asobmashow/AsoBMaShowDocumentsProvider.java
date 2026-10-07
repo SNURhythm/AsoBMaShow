@@ -70,7 +70,7 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             throw new FileNotFoundException("Could not create Documents folder");
         }
         DocumentsPathPolicy policy = new DocumentsPathPolicy(documents);
-        File skins = policy.child(documents, "Skins");
+        File skins = policy.child(policy.resolve(DocumentsPathPolicy.ROOT_DOCUMENT_ID), "Skins");
         if (!skins.isDirectory() && !skins.mkdirs()) {
             throw new FileNotFoundException("Could not create Skins folder");
         }
@@ -194,14 +194,15 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             DocumentsMutationGuard.requireUnreserved(file, false);
             boolean bms = DocumentsPathPolicy.affectsBms(documentId);
             DocumentsLibraryChanges changes = changes(getContext());
-            if (bms) changes.writerOpened(SystemClock.elapsedRealtime());
+            // A folder can be renamed into BMS while its writer is still open.
+            changes.writerOpened(SystemClock.elapsedRealtime(), bms);
             try {
                 return ParcelFileDescriptor.open(file, access, closeHandler, error -> {
-                    if (bms) changes.writerClosed(SystemClock.elapsedRealtime());
+                    changes.writerClosed(SystemClock.elapsedRealtime());
                     notifyDocument(documentId);
                 });
             } catch (IOException | RuntimeException error) {
-                if (bms) changes.writerClosed(SystemClock.elapsedRealtime());
+                changes.writerClosed(SystemClock.elapsedRealtime());
                 throw error;
             }
         } catch (IOException error) { throw failure(error); }

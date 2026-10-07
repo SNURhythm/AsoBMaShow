@@ -1167,15 +1167,19 @@ void testPhysicalTouchLaneDoesNotDependOnBrdControls() {
       [&](const auto &transition) { applied.push_back(transition); });
 
   (void)pipeline.consumePhysicalTouchLane(
-      {.player = 1, .keyMode = 4}, 4, true, std::nullopt);
+      {.player = 1, .keyMode = 4}, 4, true, std::nullopt, 123000);
   (void)pipeline.consumePhysicalTouchLane(
-      {.player = 1, .keyMode = 4}, 4, false, std::nullopt);
+      {.player = 1, .keyMode = 4}, 4, false, std::nullopt, 143000);
 
   require(control.calls ==
               std::vector<ControlCall>{
                   {.kind = ControlCall::Kind::Press, .lane = 4},
                   {.kind = ControlCall::Kind::Release, .lane = 4}},
           "physical touch lanes reach gameplay without a BRD layout");
+  require(control.timestamps == std::vector<std::int64_t>{123000, 143000} &&
+              applied.size() == 2 && applied[0].source.timestampMicros == 123000 &&
+              applied[1].source.timestampMicros == 143000,
+          "delayed touch press/release preserve ingress interval for judging and replay");
   require(applied.size() == 2 && applied[0].physicalLane == 4 &&
               applied[1].physicalLane == 4 &&
               applied[0].hasReplayControl && applied[1].hasReplayControl &&

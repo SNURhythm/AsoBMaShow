@@ -714,10 +714,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_documents_mutability_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_documents_mutability_tests.py -v)
+    add_test(NAME android_documents_activity_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_activity_tests.py -v)
     add_test(NAME android_documents_mutation_guard_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_documents_mutation_guard_tests.py -v)
-    set_tests_properties(android_documents_mutability_tests android_documents_mutation_guard_tests PROPERTIES
+    set_tests_properties(android_documents_mutability_tests android_documents_activity_tests
+                         android_documents_mutation_guard_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS platform_android
         TIMEOUT 30
@@ -5785,6 +5789,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(android_locale_tests PROPERTIES
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         LABELS "platform_android" TIMEOUT 30)
+    add_test(NAME android_native_storage_paths_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_native_storage_paths_tests.py -v)
+    set_tests_properties(android_native_storage_paths_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
+        LABELS "platform_android" TIMEOUT 30)
 
     add_executable(application_ui_state_store_tests
         tests/application_ui_state_store_tests.cpp
@@ -7135,7 +7144,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
 
+    set(android_realtime_touch_methods
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/android_realtime_touch_ingress_methods.h)
+    add_custom_command(
+        OUTPUT ${android_realtime_touch_methods}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_realtime_touch_ingress_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${android_realtime_touch_methods}
+        DEPENDS tests/android_realtime_touch_ingress_extract.py
+                tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
     add_executable(realtime_gameplay_worker_tests
+        ${android_realtime_touch_methods}
+        src/input/SDLTouchInputSource.cpp
+        src/scene/play/RealtimeTouchInputRouter.cpp
         tests/realtime_gameplay_worker_tests.cpp
         tests/support/AllocationFailure.cpp
         src/bms_parser.cpp
@@ -7159,6 +7181,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplaySetup.cpp
     )
     target_include_directories(realtime_gameplay_worker_tests PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(realtime_gameplay_worker_tests PRIVATE cxx_std_23)

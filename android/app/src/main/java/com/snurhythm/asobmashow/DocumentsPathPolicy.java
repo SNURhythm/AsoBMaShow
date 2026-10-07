@@ -83,7 +83,11 @@ final class DocumentsPathPolicy {
     }
 
     static boolean affectsBms(String documentId) {
-        return documentId.equals(ROOT_DOCUMENT_ID + "BMS") ||
-                documentId.startsWith(ROOT_DOCUMENT_ID + "BMS/");
+        if (!documentId.startsWith(ROOT_DOCUMENT_ID)) return false;
+        String relative = documentId.substring(ROOT_DOCUMENT_ID.length());
+        int separator = relative.indexOf('/');
+        String topLevel = separator < 0 ? relative : relative.substring(0, separator);
+        // External storage may resolve case aliases to the same library tree.
+        return topLevel.equalsIgnoreCase("BMS");
     }
 }
