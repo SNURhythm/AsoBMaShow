@@ -407,7 +407,7 @@ display::ApplyResult SettingsAudioVideoSession::beginDisplayPreview(
     const player_settings::VideoSettings &candidate,
     std::chrono::steady_clock::time_point now) {
   const auto capabilities = displayManager_.capabilities();
-  const auto working = displayManager_.lastWorkingSettings();
+  const auto working = displayManager_.captureEffectiveSettings();
   auto runtimeCandidate = candidate;
   auto persistedCandidate = settings_.audioVideo.video;
   if (capabilities.canChangeMode) {
@@ -437,7 +437,8 @@ display::ApplyResult SettingsAudioVideoSession::beginDisplayPreview(
   } else {
     runtimeCandidate.frameCap = working.frameCap;
   }
-  if (runtimeCandidate.mode == DisplayMode::BorderlessFullscreen) {
+  if (capabilities.canSelectResolution &&
+      runtimeCandidate.mode == DisplayMode::BorderlessFullscreen) {
     if (const auto *selectedDisplay =
             findDisplay(capabilities, runtimeCandidate.displayIndex);
         selectedDisplay != nullptr && !selectedDisplay->resolutions.empty()) {

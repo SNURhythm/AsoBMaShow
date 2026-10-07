@@ -1,3 +1,4 @@
+#include "RealtimeSdlTouchInput.h"
 #include "../../GameplayKeyMode.h"
 #include "../../i18n/Localization.h"
 //
@@ -522,7 +523,9 @@ gameplay::RealtimeTouchUiTransform realtimeTouchUiTransform() noexcept {
           .uiOffsetX = rendering::ui_offset_x,
           .uiOffsetY = rendering::ui_offset_y,
           .uiWidth = rendering::window_width,
-          .uiHeight = rendering::window_height};
+          .uiHeight = rendering::window_height,
+          .inputScaleX = rendering::widthScale,
+          .inputScaleY = rendering::heightScale};
 }
 
 std::uint64_t effectiveRealtimeTouchLayoutRevision(
@@ -1407,7 +1410,12 @@ struct GamePlayScene::RealtimeGameplaySession {
       return 0;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+#if TARGET_OS_ANDROID
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+#endif
+    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.inputRegistry == nullptr ||
         session.physicalInputRouter == nullptr) {
       return 0;
@@ -1450,7 +1458,12 @@ struct GamePlayScene::RealtimeGameplaySession {
       return;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+#if TARGET_OS_ANDROID
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+#endif
+    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.physicalInputRouter == nullptr ||
         !session.registryRealtimeEnabled(event.control.deviceClass)) {
       return;
@@ -1479,12 +1492,99 @@ struct GamePlayScene::RealtimeGameplaySession {
       return;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+#if TARGET_OS_ANDROID
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+#endif
+    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.physicalInputRouter == nullptr ||
         !session.registryRealtimeEnabled(device.deviceClass)) {
       return;
     }
     session.physicalInputRouter->disconnectDevice(device.stableId, nowMicros());
+  }
+
+  // Both native producers use published geometry only. Keep routing, auxiliary
+  // publication, and release acknowledgement atomic with lifecycle cancellation.
+  static void consumeTouchSampleLocked(RealtimeGameplaySession &session,
+                                       gameplay::RealtimeTouchSample sample) {
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.touchRouter == nullptr) return;
+    const auto phase = sample.phase;
+    session.populateImmutableHit(sample);
+    sample.excludedFromGameplay =
+        sample.presentationHit.kind != PresentationUiControlKind::None &&
+        sample.presentationHit.kind !=
+            PresentationUiControlKind::VirtualController;
+    gameplay::RealtimeTouchRoutingDisposition disposition =
+        gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
+    {
+      if (session.touchRouter != nullptr) {
+        disposition = session.touchRouter->consumeForPublication(sample);
+      }
+    }
+    bool auxiliaryPublished = false;
+    if (gameplay::realtimeTouchRoutingPublishesAuxiliary(disposition)) {
+      if (!session.auxiliaryTouches.tryPush(sample)) {
+        // Stop admitting later callbacks until the game thread drains and
+        // transactionally cancels every ownership domain.
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
+      } else {
+        auxiliaryPublished = true;
+      }
+    } else if (gameplay::realtimeTouchRoutingRequiresRecovery(disposition)) {
+      // The sample was not accepted by the router, so publishing it to
+      // presentation/replay would create mismatched ownership. Fail closed;
+      // the normal overflow recovery releases the old contact and republishes
+      // a clean snapshot before ingress resumes.
+      session.acceptingTouch.store(false, std::memory_order_release);
+      session.touchRoutingRecoveryRequested.store(true,
+                                                  std::memory_order_release);
+    }
+    if (phase == gameplay::RealtimeTouchPhase::Up && auxiliaryPublished) {
+      if (session.touchRouter == nullptr ||
+          !session.touchRouter->acknowledgePublishedRelease(sample.fingerId)) {
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+      }
+    }
+    bool cancellationAcknowledged = false;
+    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
+        auxiliaryPublished) {
+      cancellationAcknowledged =
+          session.touchRouter != nullptr &&
+          session.touchRouter->acknowledgePublishedCancellation(
+              sample.fingerId);
+      if (!cancellationAcknowledged) {
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+      }
+    }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
+        gameplay::realtimeTouchShouldScheduleCancelExpiry(
+            disposition, auxiliaryPublished, cancellationAcknowledged)) {
+      scheduleCancelledTouchExpiry(session, sample);
+    }
+#endif
+  }
+
+  static void sdlTouchSink(RealtimeGameplaySession &session, const SDL_Event &event,
+                           std::uint64_t timestampMicros) {
+    std::lock_guard lock(session.touchRouterMutex);
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.inputInterrupted.load(std::memory_order_acquire) ||
+        (session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire))) return;
+    const auto snapshot = session.touchHitSnapshots.acquire();
+    if (!snapshot) return;
+    auto sample = gameplay::realtimeTouchSampleFromSdl(
+        event, timestampMicros, snapshot->uiTransform);
+    if (sample) consumeTouchSampleLocked(session, *sample);
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -1583,66 +1683,8 @@ struct GamePlayScene::RealtimeGameplaySession {
             session.touchTimestampSession.toSteadyMicros(
                 event->timestampMicros),
     };
-    session.populateImmutableHit(sample);
-    sample.excludedFromGameplay =
-        sample.presentationHit.kind != PresentationUiControlKind::None &&
-        sample.presentationHit.kind !=
-            PresentationUiControlKind::VirtualController;
-    gameplay::RealtimeTouchRoutingDisposition disposition =
-        gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
-    {
-      std::lock_guard lock(session.touchRouterMutex);
-      if (session.touchRouter != nullptr) {
-        disposition = session.touchRouter->consumeForPublication(sample);
-      }
-    }
-    bool auxiliaryPublished = false;
-    if (gameplay::realtimeTouchRoutingPublishesAuxiliary(disposition)) {
-      if (!session.auxiliaryTouches.tryPush(sample)) {
-        // Stop admitting later callbacks until the game thread drains and
-        // transactionally cancels every ownership domain.
-        session.acceptingTouch.store(false, std::memory_order_release);
-        session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
-      } else {
-        auxiliaryPublished = true;
-      }
-    } else if (gameplay::realtimeTouchRoutingRequiresRecovery(disposition)) {
-      // The sample was not accepted by the router, so publishing it to
-      // presentation/replay would create mismatched ownership. Fail closed;
-      // the normal overflow recovery releases the old contact and republishes
-      // a clean snapshot before ingress resumes.
-      session.acceptingTouch.store(false, std::memory_order_release);
-      session.touchRoutingRecoveryRequested.store(true,
-                                                  std::memory_order_release);
-    }
-    if (phase == gameplay::RealtimeTouchPhase::Up && auxiliaryPublished) {
-      std::lock_guard lock(session.touchRouterMutex);
-      if (session.touchRouter == nullptr ||
-          !session.touchRouter->acknowledgePublishedRelease(sample.fingerId)) {
-        session.acceptingTouch.store(false, std::memory_order_release);
-        session.touchRoutingRecoveryRequested.store(true,
-                                                    std::memory_order_release);
-      }
-    }
-    bool cancellationAcknowledged = false;
-    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
-        auxiliaryPublished) {
-      std::lock_guard lock(session.touchRouterMutex);
-      cancellationAcknowledged =
-          session.touchRouter != nullptr &&
-          session.touchRouter->acknowledgePublishedCancellation(
-              sample.fingerId);
-      if (!cancellationAcknowledged) {
-        session.acceptingTouch.store(false, std::memory_order_release);
-        session.touchRoutingRecoveryRequested.store(true,
-                                                    std::memory_order_release);
-      }
-    }
-    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
-        gameplay::realtimeTouchShouldScheduleCancelExpiry(
-            disposition, auxiliaryPublished, cancellationAcknowledged)) {
-      scheduleCancelledTouchExpiry(session, sample);
-    }
+    std::lock_guard lock(session.touchRouterMutex);
+    consumeTouchSampleLocked(session, sample);
   }
 #endif
 };
@@ -1925,6 +1967,7 @@ void GamePlayScene::applySkinAudioVolume(
 #endif
 
 void GamePlayScene::refreshGameplayPresentationGeometry() {
+  refreshLegacyTouchLayout();
   if (inputHandler != nullptr && presentation != nullptr &&
       presentation->activeMode() == PresentationMode::BuiltIn) {
     inputHandler->setPlayAreaWidth(playfieldPresentationConfiguration.playAreaWidth);
@@ -1952,6 +1995,17 @@ void GamePlayScene::refreshGameplayPresentationGeometry() {
   gameplaySkinSafeBoundsWidth = safeUiBounds.width;
   gameplaySkinSafeBoundsHeight = safeUiBounds.height;
 #endif
+}
+
+void GamePlayScene::refreshLegacyTouchLayout() {
+  if (inputHandler == nullptr || presentation == nullptr ||
+      (!TARGET_OS_ANDROID && realtimeGameplayAuthorityActive())) {
+    return;
+  }
+  inputHandler->setTouchLaneLayout(
+      presentation->activeMode() == PresentationMode::Skin
+          ? std::optional<gameplay::RealtimeTouchLayout>(presentation->touchLayout())
+          : std::nullopt);
 }
 
 void GamePlayScene::updateSkinResetLayoutVisibility() {
@@ -2004,7 +2058,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     return false;
   }
 
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   std::optional<gameplay::RealtimeTouchLayout> touchLayout;
   if (!options.autoPlay) {
     presentation->refreshGeometry();
@@ -2015,7 +2069,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     if (!touchLayout.has_value()) {
       realtimeGameplayAuthorityWaitingForSkinGeometry =
           presentation->activeMode() == PresentationMode::Skin;
-      SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
+      SDL_Log("Realtime gameplay input unavailable: invalid touch layout");
       return false;
     }
   }
@@ -2108,7 +2162,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
           gameplay::RealtimeGameplayInputBridgeSink{
               .context = session.get(),
               .emit = &RealtimeGameplaySession::emitLegacyInput});
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   if (touchLayout.has_value()) {
     session->touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(
         session->epoch, *touchLayout,
@@ -2140,7 +2194,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   session->visualMeasureIndex = state->passedMeasureCount;
   session->visualTimelineIndex = state->passedTimelineCount;
   session->layoutRefreshKey = makeRealtimeTouchLayoutRefreshKey(
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
       effectiveRealtimeTouchLayoutRevision(
           presentation->touchLayoutRevision(),
           context.inputProfile.virtualController, chart->Meta.KeyMode),
@@ -2219,6 +2273,14 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .sdlWatchContext = &activeSession,
 #endif
           });
+#if TARGET_OS_ANDROID
+  if (inputHandler != nullptr) {
+    inputHandler->setTouchIngressCallback(
+        [session = &activeSession](const SDL_Event &event, std::uint64_t time) {
+          RealtimeGameplaySession::sdlTouchSink(*session, event, time);
+        });
+  }
+#endif
   setRealtimeGameplayIngressEnabled(true);
   (void)activeSession.inputRegistration->activate();
   SDL_Log("Realtime gameplay native input authority active (epoch %llu)",
@@ -2227,6 +2289,10 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 }
 
 void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
+#if TARGET_OS_ANDROID
+  // Close legacy fallback ownership and queued overlay touches at every boundary.
+  if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+#endif
   if (!realtimeGameplayAuthorityActive()) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(nullptr, nullptr);
@@ -2242,7 +2308,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
       session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
     }
   }
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   session.touchIngressDesired = enabled;
   if (enabled) {
     if (session.acceptingTouch.load(std::memory_order_acquire)) {
@@ -2250,7 +2316,9 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
     }
     // SDL's UIKit bridge holds its callback spinlock until an in-flight raw
     // callback returns. Detach before mutating any raw-thread-owned state.
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(nullptr, nullptr);
+#endif
     session.acceptingTouch.store(false, std::memory_order_release);
     const auto expectedKey = makeRealtimeTouchLayoutRefreshKey(
         presentation != nullptr
@@ -2274,7 +2342,9 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
                    "Realtime touch ingress remains disabled without an immutable hit snapshot");
       return;
     }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     session.touchTimestampSession.reanchor();
+#endif
     bool routerEnabled = true;
     {
       std::lock_guard lock(session.touchRouterMutex);
@@ -2288,10 +2358,14 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
       return;
     }
     session.acceptingTouch.store(true, std::memory_order_release);
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
+#endif
     return;
   }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   IOSSetRawTouchEventSink(nullptr, nullptr);
+#endif
   session.acceptingTouch.store(false, std::memory_order_release);
   bool routerDisabled = true;
   {
@@ -2810,11 +2884,14 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   }
   auto &session = *realtimeGameplaySession;
   setRealtimeGameplayIngressEnabled(false);
+#if TARGET_OS_ANDROID
+  if (inputHandler != nullptr) inputHandler->setTouchIngressCallback({});
+#endif
   if (session.inputRegistration != nullptr) {
     session.inputRegistration->close();
   }
   drainRealtimeTouchSamples();
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   // A first cancellation can fail transactionally when either bounded queue
   // is full. Draining above makes the normal recovery path available; retry
   // before stopping the worker so every accepted Press can still acquire its
@@ -2834,6 +2911,8 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
                  "Realtime touch cancellation failed during final shutdown; replay transfer is invalid");
     transferReplay = false;
   }
+#endif
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   // No raw callback can enter after sink detachment. Closing the delayed
   // callback lifetime here also prevents a queued cancellation-expiry callback
   // from racing worker shutdown; destruction remains an idempotent fallback.
@@ -3269,8 +3348,9 @@ void GamePlayScene::init() {
     });
     inputHandler->setTouchEventCallback([this](SDL_FingerID fingerIndex,
                                                ReplayTouchAction action,
-                                               Vector3 normalizedLocation) {
-      return handleTouchInput(fingerIndex, action, normalizedLocation);
+                                               Vector3 normalizedLocation,
+                                               std::uint64_t timestampMicros) {
+      return handleTouchInput(fingerIndex, action, normalizedLocation, timestampMicros);
     });
     inputHandler->discardPendingTouchEvents();
     refreshGameplayPresentationGeometry();
@@ -3567,6 +3647,7 @@ bool GamePlayScene::reset() {
   inputInterruptionPause = false;
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
+  backgroundGaugeFailurePending = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   // Retry and Retry Same both begin a new attempt. Rebuild all attempt facts
   // so runtime modifiers (including pause use) never leak into the retry.
@@ -3799,7 +3880,100 @@ bool GamePlayScene::isGuidedAccessEnabled() const {
 #endif
 }
 
+bool GamePlayScene::continuesAudioInBackground() const {
+  return !backgroundGaugeFailurePending &&
+         !playbackInitializationFailed && !guidedAccessReminderPending &&
+         !practiceMenuActive && state != nullptr && state->isPlaying &&
+         !state->isEnding && !context.jukebox.isPaused();
+}
+
+void GamePlayScene::updateWhileBackgrounded() {
+  if (!continuesAudioInBackground()) return;
+  const auto rawSongTimeMicros = context.jukebox.getTimeMicros();
+  if (preparationIndicatorActive(rawSongTimeMicros)) return;
+  auto gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  bool practiceSectionComplete = false;
+  if (options.practiceSession != nullptr) {
+    const auto timing = gameplay_timing::practiceFrameTiming(
+        rawSongTimeMicros, getAudioOffsetMicros(),
+        options.practiceSession->configuration().endMicros);
+    gameplayTimeMicros = timing.chartTimeMicros;
+    practiceSectionComplete = timing.sectionComplete;
+  }
+  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const bool sourcePlaytimeElapsed = playtimeMillis.has_value() &&
+      skin::beatorajaGameplayStateFinished(gameplayTimeMicros, *playtimeMillis);
+  if (realtimeGameplayAuthorityActive()) {
+    // The worker owns judging. Only retire audio at the same terminal boundary
+    // as the foreground; snapshot/UI transfer waits until rendering resumes.
+    const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
+    const auto action = gameplay::classifyRealtimeGameplayTerminal(
+        snapshot ? snapshot->terminalReason : gameplay::GameplayTerminalReason::None,
+        options.practiceSession != nullptr, sourcePlaytimeElapsed);
+    if (realtimeGameplaySession->worker->fault() != gameplay::RealtimeGameplayFault::None ||
+        action != gameplay::RealtimeGameplayTerminalAction::Wait) {
+      context.jukebox.pause();
+    }
+    return;
+  }
+  const bool replayAborted = isReplayPlayback() &&
+      options.replayData->abortedAtSongTimeMicros.has_value() &&
+      gameplayTimeMicros >= *options.replayData->abortedAtSongTimeMicros;
+  if (replayAborted) {
+    gameplayTimeMicros = *options.replayData->abortedAtSongTimeMicros;
+  }
+  // Judgement callbacks update CPU presentation state; terminal handling and
+  // texture/layout work wait for the next ordinary foreground update.
+  advancingGameplayInBackground = true;
+  const auto gaugeFailed = [&] {
+    // Recorded abort time remains authoritative for survival-gauge replays.
+    return state->activeGaugeFailed() &&
+        (!isReplayPlayback() || !options.replayData->abortedAtSongTimeMicros.has_value());
+  };
+  if (isReplayPlayback()) processReplayEvents(gameplayTimeMicros);
+  if (!gaugeFailed() &&
+      !gameplay::shouldCompleteLegacyGameplayState(
+          playtimeMillis.has_value(), sourcePlaytimeElapsed,
+          state->passedMeasureCount == chart->Measures.size())) {
+    updateHellChargeGauge(gameplayTimeMicros);
+    if (!gaugeFailed()) checkPassedTimeline(gameplayTimeMicros);
+  }
+  advancingGameplayInBackground = false;
+  if (gaugeFailed() || practiceSectionComplete || replayAborted ||
+      gameplay::shouldCompleteLegacyGameplayState(
+          playtimeMillis.has_value(), sourcePlaytimeElapsed,
+          state->passedMeasureCount == chart->Measures.size())) {
+    context.jukebox.pause();
+  }
+}
+
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
+#if TARGET_OS_ANDROID
+  if (inputHandler != nullptr) inputHandler->setApplicationBackground(background);
+  if (background) {
+    if (realtimeGameplayAuthorityActive() &&
+        realtimeGameplaySession->physicalInputRouter != nullptr) {
+      const std::lock_guard lifecycleLock(realtimeGameplaySession->inputInterruptionMutex);
+      const auto timestampMicros = nowMicros();
+      for (const auto &device : context.inputDeviceRegistry.snapshot()) {
+        realtimeGameplaySession->physicalInputRouter->disconnectDevice(
+            device.stableId, timestampMicros);
+      }
+      input::LogicalInputTransition command;
+      while (realtimeGameplaySession->inputCommands.tryPop(command)) {}
+      gameplay::StartSelectControlInput control;
+      while (realtimeGameplaySession->startSelectInputs.tryPop(control)) {}
+    }
+    if (startSelectControl) startSelectControl->reset();
+    startButtonPressed = false;
+    selectButtonPressed = false;
+    cancelCoursePauseHold();
+  }
+  if (realtimeGameplayAuthorityActive()) {
+    setRealtimeGameplayIngressEnabled(!background && state != nullptr &&
+        state->isPlaying && !state->isEnding && !context.jukebox.isPaused());
+  }
+#endif
   guidedAccessReminderBackground = background;
   if (!background && skinIrRankingRequest) {
     // Application backgrounding closes the service's active generation.
@@ -6408,6 +6582,13 @@ bool GamePlayScene::finishIfGaugeFailed() {
     return false;
   }
 
+  if (advancingGameplayInBackground) {
+    // Freeze scoring at the first failure even though UI/result work must wait
+    // for foreground. isEnding cannot be set until that work is performed.
+    backgroundGaugeFailurePending = true;
+    return true;
+  }
+
   const long long finalGameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
   updateSkinGameplayGraph(finalGameplayTimeMicros);
@@ -6470,7 +6651,9 @@ void GamePlayScene::update(float dt) {
   (void)dt;
   applyPendingBestReplay();
   const bool realtimeAtFrameStart = realtimeGameplayAuthorityActive();
-  if (inputHandler != nullptr && !realtimeAtFrameStart) {
+  // The legacy fallback drains before simulation. Android realtime touch
+  // admission bypasses this queue and uses immutable geometry on the producer.
+  if (inputHandler != nullptr && (TARGET_OS_ANDROID || !realtimeAtFrameStart)) {
     inputHandler->pumpPendingTouchEvents();
   }
   if (realtimeAtFrameStart) {
@@ -6602,6 +6785,11 @@ void GamePlayScene::update(float dt) {
     stopRealtimeGameplayAuthority(true);
     state->passedMeasureCount = chart->Measures.size();
     state->passedTimelineCount = 0;
+  } else if (finishIfGaugeFailed()) {
+    // A background tick can reach both failure and the last timeline. Failure
+    // must win before the completion/loop branch; recorded aborts keep their
+    // existing exemption inside finishIfGaugeFailed().
+    return;
   } else if (!gameplay::shouldCompleteLegacyGameplayState(
                  playtimeMillis.has_value(), sourcePlaytimeElapsed,
                  state->passedMeasureCount == chart->Measures.size())) {
@@ -6713,6 +6901,9 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+  // Skin lane quads are published by rendering, including after viewport or
+  // presentation changes. SDL input must see that newly published geometry.
+  refreshLegacyTouchLayout();
   // The gameplay presentation can queue ordinary UI text before subsequent
   // direct overlay submissions.
   renderContext.flushUiBatch();
@@ -7313,7 +7504,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
   const auto &measures = chart->Measures;
-  if (state == nullptr) {
+  if (state == nullptr || backgroundGaugeFailurePending) {
     return;
   }
   const long long visualEventMicros = getVisualTimeMicros(time);
@@ -7325,6 +7516,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
   // its tail was overwritten in the lane. CN/HCN autoplay still follows only
   // active lane slots, so do not synthesize their detached tail events here.
   for (const auto &owned : chart->DetachedNotes) {
+    if (backgroundGaugeFailurePending) return;
     auto *tail = dynamic_cast<bms_parser::LongNote *>(owned.get());
     if (tail == nullptr || !tail->IsTail() || !tail->IsHolding || tail->IsPlayed ||
         tail->Timeline == nullptr || tail->Timeline->Timing > judgedTime ||
@@ -7342,6 +7534,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
     const auto &measure = measures[i];
     for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
          j < measure->TimeLines.size(); j++) {
+      if (backgroundGaugeFailurePending) return;
       const auto &timeline = measure->TimeLines[j];
       if (timeline->Timing <= judgedTime) {
         applyTimelineBpm(timeline);
@@ -7363,6 +7556,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
         }
         // make remaining notes POOR
         for (const auto &note : timeline->Notes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr) {
             continue;
           }
@@ -7384,6 +7578,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                 onJudge(poorResult, eventClock, false, note);
                 appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                                   time, judgedTime, poorResult);
+                if (backgroundGaugeFailurePending) return;
                 if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
                   markLongNoteMissed(longNote->Tail, judgedTime,
                                      !longNoteTailJudgedBeforeTiming(
@@ -7421,6 +7616,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                             judgedTime, poorResult);
         }
         for (const auto &note : timeline->LandmineNotes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr || note->IsDead) {
             continue;
           }
@@ -7429,6 +7625,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
       } else if (timeline->Timing <= judgedTime) {
         // auto-release long notes
         for (const auto &note : timeline->Notes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr) {
             continue;
           }
@@ -7492,6 +7689,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
         }
         for (const auto &note : timeline->LandmineNotes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr || note->IsDead) {
             continue;
           }
@@ -7505,6 +7703,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
         return;
       }
     }
+    if (backgroundGaugeFailurePending) return;
     if (state->passedTimelineCount == measure->TimeLines.size() &&
         isFirstMeasure) {
       state->passedMeasureCount++;
@@ -7557,7 +7756,7 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
   }
 
   const auto &events = options.replayData->events;
-  while (replayEventCursor < events.size() &&
+  while (!backgroundGaugeFailurePending && replayEventCursor < events.size() &&
          events[replayEventCursor].songTimeMicros <= gameplayTimeMicros) {
     if (practiceReplayEventAllowed(events[replayEventCursor])) {
       applyReplayEvent(events[replayEventCursor],
@@ -7566,7 +7765,8 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
     }
     replayEventCursor++;
   }
-  if (options.replayData->abortedAtSongTimeMicros.has_value() &&
+  if (!advancingGameplayInBackground &&
+      options.replayData->abortedAtSongTimeMicros.has_value() &&
       gameplayTimeMicros >= *options.replayData->abortedAtSongTimeMicros) {
     abortPlayFromStartSelectControl();
   }
@@ -7617,7 +7817,8 @@ void GamePlayScene::applyReplayLaneCoverEvent(
 
 void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
                                      long long visualTimeMicros) {
-  if (state == nullptr || !state->isPlaying || state->isEnding ||
+  if (backgroundGaugeFailurePending || state == nullptr ||
+      !state->isPlaying || state->isEnding ||
       !practiceReplayEventAllowed(event)) {
     return;
   }
@@ -7705,7 +7906,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
 }
 
 void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
-  if (!isReplayPlayback() || state == nullptr) {
+  if (backgroundGaugeFailurePending || !isReplayPlayback() || state == nullptr) {
     return;
   }
 
@@ -7740,6 +7941,7 @@ void GamePlayScene::resetHellChargeGaugeTracking(long long gameplayTimeMicros) {
 }
 
 void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
+  if (backgroundGaugeFailurePending) return;
   if (state == nullptr || chart == nullptr || isReplayPlayback()) {
     lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
     return;
@@ -7759,7 +7961,7 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     updateGaugeStatusText();
     appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr, gameplayTimeMicros,
                       gameplayTimeMicros, JudgeResult(judgement, 0), !lr2);
-    return state->isEnding;
+    return state->isEnding || backgroundGaugeFailurePending;
   };
   std::vector<bms_parser::LongNote *> activeHellChargeNotes;
   for (const auto *measure : chart->Measures) {
@@ -7868,7 +8070,7 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
 void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
                                      long long songTimeMicros,
                                      long long judgeTimeMicros) {
-  if (note == nullptr || note->IsDead) {
+  if (backgroundGaugeFailurePending || note == nullptr || note->IsDead) {
     return;
   }
 
@@ -7904,7 +8106,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             PlayfieldJudgeEventClock clock,
                             bool recordTimingSample,
                             const bms_parser::Note *graphNote, int lane) {
-  if (state == nullptr || state->isEnding) {
+  if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
   }
   if (gameplay::fallbackJudgementInvalidatesRanking(
@@ -7935,7 +8137,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
     context.settings.notesDisplayTimingMilliseconds =
         adjustedNotesDisplayTimingMilliseconds;
     notesDisplayTimingSettingsDirty = true;
-    refreshRuntimePresentationConfiguration();
+    if (!advancingGameplayInBackground) refreshRuntimePresentationConfiguration();
   }
   (void)judgementCount;
   // CurrentRhythmHUD->OnJudge(state);
@@ -7953,7 +8155,7 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
                                       const JudgeResult &judgeResult,
                                       bool checkGaugeFailure) {
   const auto capturePolicy = resultCapturePolicy();
-  if (state == nullptr || state->isEnding) {
+  if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
   }
   const auto range = practiceNoteRange();
@@ -8037,9 +8239,13 @@ void GamePlayScene::appendReplayLaneCoverEvent(float noteStartPositionPercent,
 
 bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      ReplayTouchAction action,
-                                     Vector3 normalizedLocation) {
-  const long long gameplayTimeMicros =
-      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+                                     Vector3 normalizedLocation,
+                                     std::uint64_t timestampMicros) {
+  const auto songTimeMicros = timestampMicros != 0
+      ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
+            timestampMicros).value_or(context.jukebox.getTimeMicros())
+      : context.jukebox.getTimeMicros();
+  const long long gameplayTimeMicros = getGameplayTimeMicros(songTimeMicros);
   return handleTouchInputAtGameplayTime(fingerIndex, action, normalizedLocation,
                                         gameplayTimeMicros);
 }
@@ -8048,11 +8254,24 @@ bool GamePlayScene::handleTouchInputAtGameplayTime(
     SDL_FingerID fingerIndex, ReplayTouchAction action,
     Vector3 normalizedLocation, long long gameplayTimeMicros,
     bool allowBuiltInControl) {
+  const bool activeFloatingDrag =
+      floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
+  if (action == ReplayTouchAction::Cancel) {
+    // Cancellation closes an existing pointer stream even after gameplay
+    // becomes paused, ends, or crosses a practice-input boundary.
+    if (playfieldVisualStateStore != nullptr) {
+      playfieldVisualStateStore->setLiveTouchPoint(
+          static_cast<long long>(fingerIndex), action, normalizedLocation.x,
+          normalizedLocation.y, gameplayTimeMicros);
+    }
+    appendReplayTouchSample(fingerIndex, action, normalizedLocation,
+                            gameplayTimeMicros);
+    if (activeFloatingDrag) cancelLegacyFloatingLaneCoverTouch();
+    return !allowBuiltInControl || activeFloatingDrag;
+  }
   if (!practiceInputAllowed(gameplayTimeMicros)) {
     return false;
   }
-  const bool activeFloatingDrag =
-      floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
   if (state == nullptr || !state->isPlaying || state->isEnding ||
       context.jukebox.isPaused()) {
     if (activeFloatingDrag && (action == ReplayTouchAction::Up ||
@@ -8250,7 +8469,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                                      const JudgeResult *precomputedJudge,
                                      long long songTimeMicros,
                                      bool recordEvent) {
-  if (!judge.allowsNote(note)) {
+  if (backgroundGaugeFailurePending || !judge.allowsNote(note)) {
     return JudgeResult(None, 0);
   }
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
@@ -8304,7 +8523,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                                        const JudgeResult *precomputedJudge,
                                        long long songTimeMicros,
                                        bool recordEvent) {
-  if (!judge.allowsNote(Note) || !Note->IsLongNote()) {
+  if (backgroundGaugeFailurePending || !judge.allowsNote(Note) || !Note->IsLongNote()) {
     return JudgeResult(None, 0);
   }
   const auto &LongNote = static_cast<bms_parser::LongNote *>(Note);
@@ -8416,6 +8635,7 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   return {};
 }
 void GamePlayScene::updateLaneStateText() {
+  if (advancingGameplayInBackground) return;
   if (laneStateText == nullptr) {
     return;
   }

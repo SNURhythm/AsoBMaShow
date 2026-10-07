@@ -38,6 +38,8 @@ struct TaskRequest {
   std::uint64_t downloadedSelectionGeneration = 0;
   std::filesystem::path androidImportPath;
   bool androidImportFolder = false;
+  bool androidImportMove = false;
+  std::string androidImportRetainedError;
   bool rebuildLibraryMetadata = false;
   bool folderRegistrationCompleted = false;
 };

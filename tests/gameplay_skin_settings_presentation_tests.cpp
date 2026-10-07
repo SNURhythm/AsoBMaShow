@@ -475,6 +475,10 @@ void testNonSelectableEntriesRemainInManagementProjection() {
 }
 
 void testSkinPackageProgressUsesMeasuredWork() {
+  require(skin::gameplaySkinPackageProgressDisplayText(
+              {.phase = skin::SkinProgressPhase::Copying,
+               .completedBytes = 1'536}) == "Copying skin files — 1.5 KB",
+          "provider copies show measured bytes before a total or first completed file exists");
   require(
       skin::gameplaySkinPackageProgressDisplayText(
           {.phase = skin::SkinProgressPhase::Copying,

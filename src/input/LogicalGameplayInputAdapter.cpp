@@ -502,7 +502,7 @@ bms_parser::Note *LogicalGameplayInputPipeline::consumeTouchTransition(
 
 bms_parser::Note *LogicalGameplayInputPipeline::consumePhysicalTouchLane(
     input::InputScope scope, int lane, bool pressed,
-    std::optional<int> scratchDirection) {
+    std::optional<int> scratchDirection, std::uint64_t timestampMicros) {
   const input::LogicalActionKind action =
       !scratchDirection.has_value()
           ? input::LogicalActionKind::Lane
@@ -514,6 +514,7 @@ bms_parser::Note *LogicalGameplayInputPipeline::consumePhysicalTouchLane(
       .action = {.kind = action, .lane = lane},
       .pressed = pressed,
       .value = pressed ? 1.0F : 0.0F,
+      .timestampMicros = timestampMicros,
   });
 }
 

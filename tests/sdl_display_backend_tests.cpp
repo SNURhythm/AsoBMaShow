@@ -253,9 +253,10 @@ private:
 
 display::SDLDisplayBackend
 makeBackend(const std::shared_ptr<FakeSDLAdapter> &adapter,
-            RendererSpy &renderer, std::uint32_t &activeFlags) {
+            RendererSpy &renderer, std::uint32_t &activeFlags,
+            bool fixedMobile = false, bool mobileVsync = false) {
   return display::SDLDisplayBackend(
-      adapter, false, [&activeFlags]() { return activeFlags; },
+      adapter, fixedMobile, [&activeFlags]() { return activeFlags; },
       [&renderer, &activeFlags](std::uint32_t flags, std::string &errorMessage)
           -> std::unique_ptr<display::IRendererDisplayTransaction> {
         if (!renderer.reserve(flags, errorMessage)) {
@@ -281,7 +282,7 @@ makeBackend(const std::shared_ptr<FakeSDLAdapter> &adapter,
           std::uint32_t &activeFlags;
         };
         return std::make_unique<UpdatingTransaction>(renderer, activeFlags);
-      });
+      }, mobileVsync);
 }
 
 display::SDLDisplayBackend
@@ -534,6 +535,47 @@ void testFixedMobileDisplayOnlyAdvertisesFrameCap() {
   require(capabilities.displays.size() == 1 &&
               capabilities.displays[0].index == 0,
           "mobile exposes only its current physical display as logical zero");
+}
+
+void testAndroidVsyncWithoutWindowMutation() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  adapter->state.mode = DisplayMode::ExclusiveFullscreen;
+  adapter->state.displayIndex = 1;
+  adapter->state.width = 2400;
+  adapter->state.height = 1080;
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x90; // VSync and 2x MSAA.
+  auto backend = makeBackend(adapter, renderer, activeFlags, true, true);
+  auto capabilities = backend.capabilities();
+  require(capabilities.canChangeVsync && !capabilities.canChangeMode &&
+              !capabilities.canSelectDisplay && !capabilities.canSelectResolution,
+          "Android exposes VSync while keeping native display geometry");
+  const auto original = backend.capture();
+  auto candidate = original.settings;
+  candidate.vsync = false;
+  std::string error;
+  require(backend.apply(candidate, error) && activeFlags == 0x10,
+          "Android disables VSync without requiring a matching SDL mode");
+  candidate.width = 1000;
+  require(!backend.apply(candidate, error), "mobile geometry changes are rejected");
+  candidate.width = original.settings.width;
+  adapter->state.width = 1080;
+  adapter->state.height = 2400;
+  require(backend.restore(original, error) == display::RestoreStatus::Restored &&
+              activeFlags == 0x90 && adapter->state.width == 1080,
+          "rollback restores VSync while retaining a new native orientation");
+  candidate = backend.capture().settings;
+  candidate.vsync = false;
+  renderer.failNextSynchronize = true;
+  require(!backend.apply(candidate, error) && activeFlags == 0x90,
+          "failed renderer transaction leaves VSync unchanged");
+  require(adapter->fullscreenCalls == 0 && adapter->clearModeCalls == 0 &&
+              adapter->sizeCalls == 0 && adapter->positionCalls == 0 &&
+              adapter->displayModeCalls == 0 && adapter->maximizeCalls == 0,
+          "Android VSync transactions never mutate the SDL window");
+  auto iosBackend = makeBackend(adapter, renderer, activeFlags, true, false);
+  require(!iosBackend.apply(candidate, error) && activeFlags == 0x90,
+          "iOS keeps its fixed VSync policy");
 }
 
 void testRendererReservationExcludesExportBeforeFirstSDLMutation() {
@@ -903,6 +945,7 @@ int main() {
   testWindowedRestoreRejectsIgnoredPosition();
   testCapabilitiesUseTheSDLAdapterAndDeduplicateModes();
   testFixedMobileDisplayOnlyAdvertisesFrameCap();
+  testAndroidVsyncWithoutWindowMutation();
   testRendererReservationExcludesExportBeforeFirstSDLMutation();
   testExportUiFrameUnlockStillExcludesDisplayTransactions();
   testExportRequestPublishesBeforeWaitingForRendererAccess();

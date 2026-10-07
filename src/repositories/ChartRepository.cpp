@@ -1971,7 +1971,11 @@ ChartRepository::ChartRepository(std::filesystem::path databasePath)
     : impl_(std::make_unique<Impl>(std::move(databasePath))) {
   chart_storage_identity::ConfigureArchiveCachePathNormalization();
   archive_file::setArchiveIndexCacheDirectory(
+#if TARGET_OS_ANDROID
+      std::filesystem::temp_directory_path() / "archive-index");
+#else
       Utils::GetDocumentsPath("db") / "archive-index");
+#endif
 }
 
 ChartRepository::~ChartRepository() = default;

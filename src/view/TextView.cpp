@@ -1,5 +1,6 @@
 #include "TextView.h"
 #include "SdlTtfRuntime.h"
+#include "FontCacheSession.h"
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -34,11 +35,35 @@ constexpr std::string_view kReplacementUtf8 = "\xEF\xBF\xBD";
 struct CachedFont {
   TTF_Font *font = nullptr;
   int refCount = 0;
+  std::uint64_t lastUnused = 0;
 };
 
 using FontCacheKey = std::tuple<std::string, int, int>;
 // Borrowed tuple lookups avoid allocating a key while releasing a font.
 std::map<FontCacheKey, CachedFont, std::less<>> g_fontCache;
+std::uint64_t g_fontOpens = 0;
+unsigned g_fontCacheSessions = 0;
+std::uint64_t g_fontCacheUseSerial = 0;
+constexpr std::size_t kMaxIdleFonts = 8;
+constexpr int kMaxRetainedRasterSize = 128;
+
+// Called with both the SDL_ttf operation guard and cache mutex held. Scanning
+// the small cache avoids allocating while releasing views or rolling back.
+void trimIdleFonts(std::size_t limit) {
+  for (;;) {
+    std::size_t idle = 0;
+    auto oldest = g_fontCache.end();
+    for (auto it = g_fontCache.begin(); it != g_fontCache.end(); ++it) {
+      if (it->second.refCount != 0) continue;
+      ++idle;
+      if (oldest == g_fontCache.end() ||
+          it->second.lastUnused < oldest->second.lastUnused) oldest = it;
+    }
+    if (idle <= limit) return;
+    TTF_CloseFont(oldest->second.font);
+    g_fontCache.erase(oldest);
+  }
+}
 
 struct Utf8Token {
   Uint32 codepoint = 0;
@@ -144,10 +169,6 @@ int fontStyleForWeight(TextView::FontWeight weight) {
 TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
                                int fontStyle, bool required) {
   text_runtime::OperationGuard operation;
-  if (!required && !canReadFile(path)) {
-    return nullptr;
-  }
-
   const auto key = std::tie(path, fontSize, fontStyle);
   {
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
@@ -158,11 +179,16 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
     }
   }
 
+  if (!required && !canReadFile(path)) {
+    return nullptr;
+  }
+
   UniqueResource<TTF_Font, TTF_CloseFont> opened(TTF_OpenFont(path.c_str(), fontSize));
   if (opened == nullptr && (required || canReadFile(path))) {
     SDL_Log("Failed to load font '%s': %s", path.c_str(), TTF_GetError());
   }
   if (opened != nullptr) {
+    ++g_fontOpens;
     TTF_SetFontStyle(opened.get(), fontStyle);
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
     auto [cached, inserted] = g_fontCache.emplace(key, CachedFont{opened.get(), 1});
@@ -191,8 +217,13 @@ void releaseFontCandidate(const std::string &path, int fontSize, int fontStyle,
 
   --cached->second.refCount;
   if (cached->second.refCount <= 0) {
-    TTF_CloseFont(cached->second.font);
-    g_fontCache.erase(cached);
+    if (g_fontCacheSessions > 0 && fontSize <= kMaxRetainedRasterSize) {
+      cached->second.lastUnused = ++g_fontCacheUseSerial;
+      trimIdleFonts(kMaxIdleFonts);
+    } else {
+      TTF_CloseFont(cached->second.font);
+      g_fontCache.erase(cached);
+    }
   }
 }
 
@@ -307,6 +338,37 @@ int logicalLengthFor(int rasterLength) {
 }
 
 } // namespace
+
+text_runtime::FontCacheSession::FontCacheSession() noexcept
+    : initialized_(text_runtime::acquire()) {
+  if (!initialized_) return;
+  OperationGuard operation;
+  std::lock_guard lock(g_fontCacheMutex);
+  ++g_fontCacheSessions;
+}
+
+text_runtime::FontCacheSession::~FontCacheSession() {
+  if (!initialized_) return;
+  {
+    OperationGuard operation;
+    std::lock_guard lock(g_fontCacheMutex);
+    if (--g_fontCacheSessions == 0) trimIdleFonts(0);
+  }
+  // release takes the lifecycle lock before the operation lock.
+  text_runtime::release();
+}
+
+text_runtime::FontCacheStats text_runtime::fontCacheStatsForTesting() {
+  OperationGuard operation;
+  std::lock_guard lock(g_fontCacheMutex);
+  FontCacheStats stats;
+  stats.opens = g_fontOpens;
+  for (const auto &[key, cached] : g_fontCache) {
+    if (cached.refCount > 0) ++stats.active;
+    else ++stats.idle;
+  }
+  return stats;
+}
 
 TextView::TextView(const std::string &fontPath, int fontSize,
                    FontWeight fontWeight)

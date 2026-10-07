@@ -62,6 +62,13 @@ struct PlatformDocumentImportRequest {
   std::uint64_t maxBytes = 0;
 };
 
+// Shared with the detached platform worker; it never retains the UI/controller.
+struct PlatformDirectoryImportProgress {
+  std::atomic_bool started{false};
+  std::atomic_uint64_t completedBytes{0};
+  std::atomic_uint64_t completedFiles{0};
+};
+
 // Reserved for the platform folder-picker implementation. It is deliberately a
 // value type so portable lifecycle and cleanup code does not depend on native
 // picker availability.
@@ -71,6 +78,7 @@ struct PlatformDirectoryImportRequest {
   std::uint64_t maxRegularFileBytes = 0;
   std::uint32_t maxDepth = 0;
   std::uint32_t maxPathBytes = 0;
+  std::shared_ptr<PlatformDirectoryImportProgress> progress;
 };
 
 struct PlatformDocumentExportRequest {

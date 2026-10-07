@@ -34,5 +34,5 @@ jobs:
       - name: Verify Android release workflow contract
         run: PYTHONDONTWRITEBYTECODE=1 python3 tests/android_release_workflow_tests.py
       - name: Run fatal Android lint
-        run: android/gradlew -p android lintFirebaseDebug
-      - run: ./scripts/android_firebase_deploy.sh --variant firebaseRelease
+        run: android/gradlew -p android lintRestricted_file_accessDebug
+      - run: ./scripts/android_firebase_deploy.sh --variant restricted_file_accessRelease

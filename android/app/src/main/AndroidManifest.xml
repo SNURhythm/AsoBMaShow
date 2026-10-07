@@ -35,9 +35,20 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:mimeType="vnd.android.document/root" />
+        </intent>
+    </queries>
+
+    <!-- LuaJIT's GC64 pointers require clear high bits, including allocations
+         from the skin runtime's quota allocator. Android heap tags violate that ABI. -->
     <application
         android:name=".AsoBMaShowApplication"
+        android:allowNativeHeapPointerTagging="false"
         android:allowBackup="true"
+        android:appCategory="game"
         android:backupAgent=".AsoBMaShowBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -49,6 +60,17 @@
         <meta-data
             android:name="SDL_ENV.SDL_ACCELEROMETER_AS_JOYSTICK"
             android:value="0" />
+
+        <provider
+            android:name=".AsoBMaShowDocumentsProvider"
+            android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
 
         <service
             android:name=".AsoBMaShowMusicService"

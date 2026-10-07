@@ -21,7 +21,7 @@ def main():
         extract(header, signature) + ";" for signature in (
             "struct SoundSetFolderPick", "class SoundSetFolderPicker final")))
     fixture = fixture.replace("SOUND_PICKER_METHODS", sound_picker)
-    fixture = fixture.replace("IMPORT_METHOD", extract(source, "void requestImport(bool folder)"))
+    fixture = fixture.replace("IMPORT_METHOD", extract(source, "void requestImport(bool folder,"))
     fixture = fixture.replace("FOLDER_METHODS", "\n".join(extract(source, signature) for signature in (
         "FolderActionService::~FolderActionService()",
         "void FolderActionService::requestAddFolder()",

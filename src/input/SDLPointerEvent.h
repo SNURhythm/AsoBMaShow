@@ -1,8 +1,21 @@
 #pragma once
 
 #include <SDL2/SDL.h>
+#include <limits>
 
 namespace sdl_pointer_event {
+
+// Android touch pointer IDs are nonnegative; mouse emulation has its own owner.
+inline constexpr SDL_FingerID kMouseFingerId =
+    std::numeric_limits<SDL_FingerID>::min();
+
+[[nodiscard]] inline constexpr bool
+isTouchSynthesizedMouse(const SDL_Event &event) noexcept {
+  if (event.type == SDL_MOUSEMOTION) return event.motion.which == SDL_TOUCH_MOUSEID;
+  if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP)
+    return event.button.which == SDL_TOUCH_MOUSEID;
+  return false;
+}
 
 [[nodiscard]] inline constexpr float
 verticalWheelScrollDelta(const SDL_MouseWheelEvent &event,

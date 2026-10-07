@@ -13,6 +13,24 @@ public final class AndroidFolderPickerActivityFixture {
     public static void main(String[] arguments) throws Exception {
         String scenario = arguments[0];
         PickerActivity activity = new PickerActivity();
+        if (scenario.startsWith("import-")) {
+            boolean tree = !scenario.equals("import-archive");
+            Intent returned = new Intent("result");
+            returned.setData(Uri.parse(tree ? "content://tree" : "content://archive.zip"));
+            returned.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            if (scenario.equals("import-move")) returned.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            activity.onActivityResult(tree ? PickerActivity.REQUEST_OPEN_IMPORT_FOLDER
+                    : PickerActivity.REQUEST_OPEN_ARCHIVE, Activity.RESULT_OK, returned);
+            if (activity.archivePickerUri.get() != returned.getData()
+                    || activity.archivePickerTree.get() != tree || !activity.archivePickerError.get().isEmpty()) {
+                throw new AssertionError("Transient import selection was not delivered");
+            }
+            if (activity.resolver.persisted) throw new AssertionError("One-shot import retained permanent access");
+            // Imports must not consume slots needed for durable Add Folder access.
+            testStorageAccess(activity, "storage-30-denied");
+            return;
+        }
         if (scenario.equals("chart-formats")) {
             Method predicate = PickerActivity.class.getDeclaredMethod("isChartFile", String.class);
             predicate.setAccessible(true);
@@ -127,8 +145,8 @@ public final class AndroidFolderPickerActivityFixture {
             throws Exception {
         Build.VERSION.SDK_INT = scenario.equals("storage-28") ? 28
                 : scenario.equals("storage-29") ? 29 : 30;
-        BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = !scenario.equals("storage-play");
-        Environment.permissionGranted = scenario.endsWith("granted") || scenario.equals("storage-play");
+        BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = !scenario.equals("storage-restricted-file-access");
+        Environment.permissionGranted = scenario.endsWith("granted") || scenario.equals("storage-restricted-file-access");
         Method direct = PickerActivity.class.getDeclaredMethod("directPathForTree", Uri.class);
         direct.setAccessible(true);
         String path = (String) direct.invoke(activity, Uri.parse("content://tree"));
@@ -158,7 +176,10 @@ public final class AndroidFolderPickerActivityFixture {
             if (worker.isAlive() || !("content://tree\nfolder\n" + expected).equals(result.get())) {
                 throw new AssertionError("Folder handoff lost SAF grant or returned wrong raw path");
             }
-            if (!activity.resolver.persisted) throw new AssertionError("Read grant was not persisted");
+            if (!activity.resolver.persisted
+                    || activity.resolver.persistedFlags != Intent.FLAG_GRANT_READ_URI_PERMISSION) {
+                throw new AssertionError("Add Folder must persist only the durable read grant");
+            }
         } finally {
             worker.interrupt();
             worker.join(2000);
@@ -229,14 +250,17 @@ class PickerActivity extends FakeSdlActivity {
     void stopMidiInput() {}
     void releaseNativeMusicPlayerLocked() {}
     static boolean nativeChartFolderPickerCancelled(String token) { return false; }
+    void startDocumentsLibraryRefresh() {}
+    void stopDocumentsLibraryRefresh() {}
     ACTIVITY_FIELDS
     ACTIVITY_METHODS
 }
 
 class Dummy {
     boolean persisted;
+    int persistedFlags;
     void setActivityResumed(boolean resumed) {}
-    void takePersistableUriPermission(Uri uri, int flags) { persisted = true; }
+    void takePersistableUriPermission(Uri uri, int flags) { persisted = true; persistedFlags = flags; }
     void destroy() {}
     void cancel(Object value) {}
 }
@@ -244,7 +268,7 @@ class DocumentHandoffOperation { Object operationToken; int requestCode; }
 class ActivityInfo { static final int SCREEN_ORIENTATION_LANDSCAPE = 0; }
 class Activity { static final int RESULT_OK = -1; }
 class DocumentsContract {
-    static boolean isTreeUri(Uri uri) { return true; }
+    static boolean isTreeUri(Uri uri) { return uri.toString().equals("content://tree"); }
     static String getTreeDocumentId(Uri uri) { return "primary:Charts"; }
 }
 class BuildConfig { static boolean ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = true; }
@@ -267,9 +291,10 @@ class Settings {
     static final String ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION = "permission";
 }
 class Uri {
-    static Uri parse(String text) { return new Uri(); }
+    private String text;
+    static Uri parse(String text) { Uri uri = new Uri(); uri.text = text; return uri; }
     String getAuthority() { return "com.android.externalstorage.documents"; }
-    public String toString() { return "content://tree"; }
+    public String toString() { return text; }
 }
 class Intent {
     Uri data;
@@ -278,8 +303,9 @@ class Intent {
     int getFlags() { return flags; }
     static final String ACTION_OPEN_DOCUMENT_TREE = "tree";
     static final int FLAG_GRANT_READ_URI_PERMISSION = 1;
-    static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 2;
-    static final int FLAG_GRANT_PREFIX_URI_PERMISSION = 4;
+    static final int FLAG_GRANT_WRITE_URI_PERMISSION = 2;
+    static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 64;
+    static final int FLAG_GRANT_PREFIX_URI_PERMISSION = 128;
     Intent(String action) {}
     void setData(Uri uri) { data = uri; }
     void addFlags(int flags) { this.flags |= flags; }

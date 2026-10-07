@@ -70,7 +70,7 @@ bool PickAndroidChartFolder(std::filesystem::path &path, std::string &bookmark,
                            std::string &, const std::stop_token &) {
   path = pick(); bookmark = "tree-uri"; return true;
 }
-bool PickAndroidFolderForImport(std::filesystem::path &path, std::string &) {
+bool PickAndroidFolderForImport(std::filesystem::path &path, std::string &, bool) {
   path = pick(); return true;
 }
 bool PickAndroidArchiveForImport(std::filesystem::path &path, std::string &) {

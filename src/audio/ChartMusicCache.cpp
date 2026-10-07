@@ -97,7 +97,11 @@ std::string normalizedPathKey(const std::filesystem::path &path) {
 } // namespace
 
 std::filesystem::path CacheDirectory() {
+#if TARGET_OS_ANDROID
+  return std::filesystem::temp_directory_path() / "music_cache";
+#else
   return Utils::GetDocumentsPath("music_cache");
+#endif
 }
 
 std::filesystem::path CachedAudioPathForChart(

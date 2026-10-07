@@ -14,4 +14,8 @@ namespace skin {
 // provides Beatoraja's inactive result for gameplay features AsoBMaShow lacks.
 [[nodiscard]] SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog();
 
+// Indexed admission for numeric Lua main_state calls on the render path.
+[[nodiscard]] bool gameplaySkinBuiltinNumericContains(SkinBindingType type,
+                                                      int selector);
+
 } // namespace skin

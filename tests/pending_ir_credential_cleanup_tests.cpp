@@ -1,4 +1,5 @@
 #include "ir/PendingIrCredentialCleanup.h"
+#include "targets.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -7,6 +8,16 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if TARGET_OS_ANDROID
+namespace {
+std::string androidInternalFilesDirectory;
+}
+
+std::string GetAndroidInternalFilesDir() {
+  return androidInternalFilesDirectory;
+}
+#endif
 
 namespace {
 int failures = 0;
@@ -27,6 +38,9 @@ public:
                                .time_since_epoch()
                                .count()));
     std::filesystem::create_directories(path);
+#if TARGET_OS_ANDROID
+    androidInternalFilesDirectory = (path / "private-files").string();
+#endif
   }
 
   ~TemporaryDirectory() {
@@ -76,6 +90,11 @@ void testFailedCredentialRemovalPersistsAndRetriesAfterRestart() {
     expect(result.status ==
                ir::ProfileCredentialDeletionStatus::CredentialCleanupPending,
            "failed secure cleanup reports a retryable pending state");
+#if !TARGET_OS_ANDROID
+    expect(std::filesystem::is_regular_file(
+               temp.path / ".pending-ir-credential-cleanup" / "profile-b.pending"),
+           "non-Android deletion retry state remains under application data");
+#endif
   }
 
   ir::PendingIrCredentialCleanup afterRestart(temp.path);
@@ -165,6 +184,83 @@ void testOverwriteResetRetriesForAReplacedLiveProfile() {
   expect(afterRestart.pendingOverwriteResets(diagnostic).empty(),
          "successful overwrite cleanup removes the embedded marker");
 }
+
+#if TARGET_OS_ANDROID
+void testAndroidDeletionRetrySurvivesRemovingPublicDocuments() {
+  for (const bool internalDocumentsFallback : {false, true}) {
+    TemporaryDirectory temp;
+    const auto privateFiles = temp.path / "private-files";
+    const auto documents =
+        (internalDocumentsFallback ? privateFiles : temp.path / "external-files") /
+        "Documents";
+    const auto staging = documents / "profiles" / ".staging-profile-replaced";
+    std::filesystem::create_directories(staging);
+    std::string diagnostic;
+    {
+      ir::PendingIrCredentialCleanup pending(documents);
+      const auto deletion = ir::coordinateProfileCredentialDeletion(
+          pending, "profile-deleted", [](std::string &) { return true; },
+          [](std::string &) { return false; });
+      expect(deletion.status ==
+                 ir::ProfileCredentialDeletionStatus::CredentialCleanupPending,
+             "Android credential removal failure schedules a durable retry");
+      expect(std::filesystem::is_regular_file(
+                 privateFiles / ".pending-ir-credential-cleanup" /
+                 "profile-deleted.pending"),
+             "Android deletion retry state is stored in private internal files");
+      expect(!std::filesystem::exists(
+                 documents / ".pending-ir-credential-cleanup"),
+             "Android deletion retry state is not exposed through Documents");
+      expect(pending.scheduleOverwriteReset("profile-replaced", diagnostic),
+             "private deletion queue still stages overwrite resets with profiles");
+      expect(pending.pendingOverwriteResets(diagnostic).empty(),
+             "staged overwrite resets remain invisible until publication");
+      std::filesystem::rename(staging,
+                              documents / "profiles" / "profile-replaced");
+      expect(pending.pendingOverwriteResets(diagnostic) ==
+                 std::vector<std::string>{"profile-replaced"},
+             "overwrite reset publishes atomically with the public profile");
+    }
+
+    std::filesystem::remove_all(documents);
+    ir::PendingIrCredentialCleanup afterRestart(documents);
+    const auto retry = ir::retryPendingProfileCredentialCleanup(
+        afterRestart, [](std::string_view) { return false; },
+        [](std::string_view id, std::string &) {
+          return id == "profile-deleted";
+        });
+    expect(retry.completed == 1 && retry.retained == 0,
+           "deleting exposed Documents cannot lose private credential retries");
+    expect(afterRestart.pending(diagnostic).empty() && diagnostic.empty(),
+           "successful Android cleanup removes the private retry marker");
+  }
+}
+
+void testAndroidMissingPrivateStorageFailsClosed() {
+  TemporaryDirectory temp;
+  androidInternalFilesDirectory.clear();
+  ir::PendingIrCredentialCleanup pending(temp.path);
+  bool profileDeleted = false;
+  const auto deletion = ir::coordinateProfileCredentialDeletion(
+      pending, "profile-unavailable",
+      [&](std::string &) {
+        profileDeleted = true;
+        return true;
+      },
+      [](std::string &) { return true; });
+  expect(deletion.status == ir::ProfileCredentialDeletionStatus::QueueFailed &&
+             !deletion.diagnostic.empty() && !profileDeleted,
+         "unavailable private storage blocks deletion before credentials can leak");
+  expect(!std::filesystem::exists(temp.path / ".pending-ir-credential-cleanup"),
+         "unavailable private storage never falls back to public Documents");
+  std::string diagnostic;
+  expect(pending.pending(diagnostic).empty() && !diagnostic.empty(),
+         "unavailable private storage reports retry discovery failure");
+  expect(!pending.complete("profile-unavailable", diagnostic) &&
+             !diagnostic.empty(),
+         "unavailable private storage cannot report cleanup completion");
+}
+#endif
 } // namespace
 
 int main() {
@@ -172,6 +268,10 @@ int main() {
   testFailedCredentialRemovalPersistsAndRetriesAfterRestart();
   testRetryNeverRemovesCredentialsForLiveProfile();
   testOverwriteResetRetriesForAReplacedLiveProfile();
+#if TARGET_OS_ANDROID
+  testAndroidDeletionRetrySurvivesRemovingPublicDocuments();
+  testAndroidMissingPrivateStorageFailsClosed();
+#endif
   if (failures != 0) {
     std::cerr << failures << " pending IR cleanup test(s) failed\n";
     return 1;

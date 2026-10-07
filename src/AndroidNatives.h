@@ -9,6 +9,9 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <memory>
+
+struct PlatformDirectoryImportProgress;
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,7 +68,8 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
 bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
                                  std::string &errorMessage);
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
-                                std::string &errorMessage);
+                                std::string &errorMessage,
+                                bool moveSource = false);
 bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
                                     std::string &errorMessage);
 void RetireAndroidDocumentHandoff(std::uint64_t operationToken);
@@ -75,6 +79,16 @@ void UnregisterAndroidDocumentCommit(std::uint64_t operationToken);
 std::string ImportAndroidDocument(std::uint64_t operationToken,
                                   const std::string &mimeType,
                                   std::uint64_t maxBytes);
+std::string ImportAndroidDirectory(std::uint64_t operationToken,
+                                   std::uint64_t maxBytes, std::uint64_t maxFiles,
+                                   std::uint64_t maxDepth, std::uint64_t maxPathBytes,
+                                   std::uint64_t maxRegularFileBytes,
+                                   std::string *originalSourceName,
+                                   std::shared_ptr<PlatformDirectoryImportProgress> progress);
+bool ValidateAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                       std::string &errorMessage);
+bool CleanupAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                      std::string &errorMessage);
 std::string ExportAndroidDocument(std::uint64_t operationToken,
                                   const std::filesystem::path &localPath,
                                   const std::string &mimeType,
@@ -106,6 +120,7 @@ bool ReadAndroidTreeFile(const std::filesystem::path &path,
                          std::string &errorMessage);
 std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &path,
                                                  std::string &errorMessage);
+bool OpenAndroidDocumentsFolder(std::string &errorMessage);
 bool OpenURLInAndroidBrowser(const std::string &url,
                              std::string &errorMessage);
 bool DownloadURLTextAndroid(const std::string &url, std::string &body,

@@ -4,8 +4,12 @@
 #if TARGET_OS_ANDROID
 
 #include "StableHash.h"
+#include "PlatformDocumentHandoff.h"
+#include "skin/package/SkinDirectoryRename.h"
 #include "audio/NativeMusicPlayer.h"
 #include "library/ChartLibraryTaskService.h"
+#include "library/DocumentsLibraryRefresh.h"
+#include "repositories/ChartRepository.h"
 #include "platform/ScreenOrientation.h"
 
 #include <SDL2/SDL_events.h>
@@ -45,6 +49,12 @@ constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
 std::mutex gAndroidDocumentCommitMutex;
 std::unordered_map<std::string, std::function<bool()>>
     gAndroidDocumentCommitHandlers;
+struct DirectoryImportProgressBridge {
+  std::shared_ptr<PlatformDirectoryImportProgress> progress;
+  bool renderPaused = true;
+};
+std::mutex gDirectoryImportProgressMutex;
+std::unordered_map<std::string, DirectoryImportProgressBridge> gDirectoryImportProgress;
 std::mutex gAndroidImportTasksMutex;
 chart_library_tasks::ChartLibraryTaskService *gAndroidImportTasks = nullptr;
 
@@ -711,15 +721,64 @@ void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &
   }
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeRefreshDocumentsLibrary(
+    JNIEnv *, jclass) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) return 0;
+  try {
+    const auto id = chart_library_tasks::enqueueDocumentsLibraryRefresh(
+        *gAndroidImportTasks, ChartRepository::DefaultBmsFolderPath());
+    if (id != 0) {
+      SDL_Log("Android Documents library refresh queued: %llu", static_cast<unsigned long long>(id));
+    }
+    return static_cast<jlong>(id);
+  } catch (...) {
+    return 0;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDocumentsRefreshStatus(
+    JNIEnv *, jclass, jlong taskId) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) return -1;
+  try {
+    for (const auto &task : gAndroidImportTasks->snapshot().tasks) {
+      if (task.id != static_cast<std::uint64_t>(taskId)) continue;
+      if (task.status == chart_library_tasks::TaskStatus::Complete) return 1;
+      if (task.status == chart_library_tasks::TaskStatus::Failed) return -1;
+      return 0;
+    }
+  } catch (...) {
+  }
+  return -1;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeBeginChartImport(
-    JNIEnv *env, jclass, jstring token, jboolean folder) {
+    JNIEnv *env, jclass, jstring token, jboolean folder, jboolean moveSource) {
   std::lock_guard lock(gAndroidImportTasksMutex);
   if (gAndroidImportTasks == nullptr) {
     return 0;
   }
   return gAndroidImportTasks->beginAndroidImport(jstringToUtf8(env, token),
-                                                folder == JNI_TRUE) ? 1 : -1;
+                                                folder == JNI_TRUE, moveSource == JNI_TRUE) ? 1 : -1;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportProgress(
+    JNIEnv *env, jclass, jstring token, jint files, jint totalFiles,
+    jlong bytes, jlong totalBytes, jstring name, jint phase) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) return;
+  try {
+    gAndroidImportTasks->updateAndroidImportProgress(jstringToUtf8(env, token),
+        files, totalFiles, bytes > 0 ? static_cast<std::uint64_t>(bytes) : 0,
+        totalBytes, jstringToUtf8(env, name), phase);
+  } catch (...) {
+    SDL_Log("Could not publish Android import progress");
+  }
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -734,13 +793,13 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportCopyState(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeFinishChartImport(
     JNIEnv *env, jclass, jstring token, jboolean folder, jstring path,
-    jstring error) {
+    jstring error, jstring retainedError) {
   std::lock_guard lock(gAndroidImportTasksMutex);
   return gAndroidImportTasks != nullptr &&
                  gAndroidImportTasks->finishAndroidImport(
                      jstringToUtf8(env, token), folder == JNI_TRUE,
                      std::filesystem::path(jstringToUtf8(env, path)),
-                     jstringToUtf8(env, error))
+                     jstringToUtf8(env, error), jstringToUtf8(env, retainedError))
              ? JNI_TRUE
              : JNI_FALSE;
 }
@@ -853,7 +912,11 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeCommitDocumentHandoff(
 std::string GetAndroidExternalFilesDir() {
   if (const char *external = SDL_AndroidGetExternalStoragePath();
       external != nullptr && external[0] != '\0') {
-    return external;
+    // SDL returns an absolute external path, which may still contain a system
+    // alias. Resolve only this trusted container, before appending Documents.
+    std::error_code error;
+    const auto container = std::filesystem::canonical(external, error);
+    return error ? std::string(external) : container.string();
   }
   if (const char *internal = SDL_AndroidGetInternalStoragePath();
       internal != nullptr && internal[0] != '\0') {
@@ -1044,7 +1107,7 @@ bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
 }
 
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
-                                std::string &errorMessage) {
+                                std::string &errorMessage, bool moveSource) {
   folderPath.clear();
   RequestAndroidExternalActivityRenderPause();
   struct ExternalActivityPauseReset {
@@ -1053,7 +1116,8 @@ bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
 
   std::string callError;
   const std::string result = callActivityStringMethod(
-      "pickFolderForImport", "()Ljava/lang/String;", nullptr, callError);
+      "pickFolderForImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      moveSource ? "move" : "copy", callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;
@@ -1138,6 +1202,111 @@ std::string ImportAndroidDocument(std::uint64_t operationToken,
                         : result;
 }
 
+namespace skin {
+int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
+                                               const char *sourceName,
+                                               int destinationParent,
+                                               const char *destinationName) noexcept {
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (env == nullptr || activity == nullptr) {
+    errno = EIO;
+    return -1;
+  }
+  jclass activityClass = env->GetObjectClass(activity);
+  jmethodID method = activityClass == nullptr ? nullptr : env->GetMethodID(
+      activityClass, "getDocumentsMutationLock", "()Ljava/lang/Object;");
+  jobject monitor = method == nullptr ? nullptr : env->CallObjectMethod(activity, method);
+  if (activityClass) env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  if (env->ExceptionCheck() || monitor == nullptr) {
+    env->ExceptionClear();
+    if (monitor) env->DeleteLocalRef(monitor);
+    errno = EIO;
+    return -1;
+  }
+  if (env->MonitorEnter(monitor) != JNI_OK) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(monitor);
+    errno = EIO;
+    return -1;
+  }
+  const int result = skinRenameDirectoryUnderMutationLock(
+      sourceParent, sourceName, destinationParent, destinationName);
+  const int renameError = errno;
+  // Keep the retained monitor, even if the Activity is destroyed during rename.
+  env->MonitorExit(monitor);
+  env->DeleteLocalRef(monitor);
+  errno = renameError;
+  return result;
+}
+} // namespace skin
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeSkinDirectoryImportProgress(
+    JNIEnv *env, jclass, jstring token, jlong bytes, jlong files) {
+  std::lock_guard lock(gDirectoryImportProgressMutex);
+  const auto found = gDirectoryImportProgress.find(jstringToUtf8(env, token));
+  if (found == gDirectoryImportProgress.end()) return;
+  auto &bridge = found->second;
+  // The picker has returned. I/O continues on this worker while SDL renders.
+  if (bridge.renderPaused) {
+    bridge.renderPaused = false;
+    FinishAndroidExternalActivityRenderPause();
+  }
+  if (bridge.progress) {
+    bridge.progress->completedBytes.store(std::max<jlong>(0, bytes));
+    bridge.progress->completedFiles.store(std::max<jlong>(0, files));
+    bridge.progress->started.store(true, std::memory_order_release);
+  }
+}
+
+std::string ImportAndroidDirectory(std::uint64_t operationToken,
+                                   std::uint64_t maxBytes, std::uint64_t maxFiles,
+                                   std::uint64_t maxDepth, std::uint64_t maxPathBytes,
+                                   std::uint64_t maxRegularFileBytes,
+                                   std::string *originalSourceName,
+                                   std::shared_ptr<PlatformDirectoryImportProgress> progress) {
+  RequestAndroidExternalActivityRenderPause();
+  const auto tokenText = std::to_string(operationToken);
+  {
+    std::lock_guard lock(gDirectoryImportProgressMutex);
+    gDirectoryImportProgress.emplace(tokenText, DirectoryImportProgressBridge{std::move(progress)});
+  }
+  struct ProgressReset {
+    const std::string &token;
+    ~ProgressReset() {
+      std::lock_guard lock(gDirectoryImportProgressMutex);
+      const auto found = gDirectoryImportProgress.find(token);
+      if (found != gDirectoryImportProgress.end()) {
+        if (found->second.renderPaused) FinishAndroidExternalActivityRenderPause();
+        gDirectoryImportProgress.erase(found);
+      }
+    }
+  } progressReset{tokenText};
+  const auto limits = std::to_string(maxBytes) + "," + std::to_string(maxFiles) +
+                      "," + std::to_string(maxDepth) + "," +
+                      std::to_string(maxPathBytes) + "," +
+                      std::to_string(maxRegularFileBytes);
+  std::string callError;
+  auto result = callActivityStringMethod2(
+      "importDirectory", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      tokenText.c_str(), limits.c_str(), callError);
+  if (!callError.empty()) {
+    return std::string(kErrorPrefix) + callError;
+  }
+  const auto separator = result.find('\n');
+  if (!result.empty() && result.front() == '/' && separator != std::string::npos) {
+    if (originalSourceName) {
+      *originalSourceName = result.substr(separator + 1);
+    }
+    result.resize(separator);
+  }
+  return result.empty() ? std::string(kErrorPrefix) +
+                              "Android folder import returned no result."
+                        : result;
+}
+
 std::string ExportAndroidDocument(std::uint64_t operationToken,
                                   const std::filesystem::path &localPath,
                                   const std::string &mimeType,
@@ -1210,6 +1379,44 @@ bool CleanupAndroidTemporaryDocument(const std::filesystem::path &localPath,
       result.rfind(kErrorPrefix, 0) == 0
           ? result.substr(std::char_traits<char>::length(kErrorPrefix))
           : "Android could not clean up the temporary document.";
+  return false;
+}
+
+bool ValidateAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                      std::string &errorMessage) {
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod(
+      "validateDirectoryHandoffImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      pathText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android rejected temporary directory ownership.";
+  return false;
+}
+
+bool CleanupAndroidTemporaryDirectory(const std::filesystem::path &localPath,
+                                     std::string &errorMessage) {
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod(
+      "cleanupDirectoryHandoffImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      pathText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android could not clean up the temporary directory.";
   return false;
 }
 
@@ -1410,6 +1617,18 @@ std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &pa
     return std::nullopt;
   }
   return fd;
+}
+
+bool OpenAndroidDocumentsFolder(std::string &errorMessage) {
+  std::string callError;
+  const auto result = callActivityStringMethod(
+      "openDocumentsFolder", "()Ljava/lang/String;", nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
 }
 
 bool OpenURLInAndroidBrowser(const std::string &url,

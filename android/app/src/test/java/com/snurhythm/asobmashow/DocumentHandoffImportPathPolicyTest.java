@@ -8,6 +8,17 @@ import org.junit.Test;
 
 public class DocumentHandoffImportPathPolicyTest {
     @Test
+    public void directoryOwnershipDoesNotAuthorizeArchiveFilesOrArbitraryFolders() {
+        Path base = Path.of("/private/cache/document-handoff");
+        Path valid = base.resolve("12345678-1234-1234-1234-123456789abc/imported-directory");
+        assertTrue(DocumentHandoffImportPathPolicy.isIssuedDirectoryPath(base, valid));
+        assertFalse(DocumentHandoffImportPathPolicy.isIssuedPath(base, valid));
+        assertFalse(DocumentHandoffImportPathPolicy.isIssuedDirectoryPath(base, valid.getParent()));
+        assertFalse(DocumentHandoffImportPathPolicy.isIssuedDirectoryPath(base, valid.resolveSibling("imported-document.zip")));
+        assertFalse(DocumentHandoffImportPathPolicy.isIssuedDirectoryPath(base, base.resolve("bad/imported-directory")));
+    }
+
+    @Test
     public void acceptsOnlyIssuedUuidDirectoryAndImportLeaf() {
         Path base = Path.of("/private/cache/document-handoff");
         Path valid = base.resolve("12345678-1234-1234-1234-123456789abc")

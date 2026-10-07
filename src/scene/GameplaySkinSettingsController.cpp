@@ -132,6 +132,7 @@ struct GameplaySkinSettingsController::Impl {
   bool closed = false;
   bool errorState = false;
   platform_document_handoff::PlatformDocumentHandoffOperation handoff;
+  std::shared_ptr<PlatformDirectoryImportProgress> handoffProgress;
   std::shared_ptr<PlatformDocumentHandoffResult> pickedSource;
   std::optional<SkinPreparedDisposalReservation> disposalReservation;
   std::optional<PreparedPackage> preparedPackage;
@@ -471,11 +472,21 @@ struct GameplaySkinSettingsController::Impl {
   }
 
   void pollHandoff() {
+    if (handoffProgress && handoffProgress->started.load(std::memory_order_acquire)) {
+      projected.hasPackageProgress = true;
+      projected.progress = {.phase = SkinProgressPhase::Copying,
+                            .completedBytes = handoffProgress->completedBytes.load(),
+                            .completedFiles = handoffProgress->completedFiles.load()};
+      setStatus(i18n::message("settings.skins.preparing_skin_package.progress"));
+    }
     if (!handoff || !handoff.ready()) {
       return;
     }
     auto result = handoff.takeResult();
     handoff.close();
+    handoffProgress.reset();
+    projected.hasPackageProgress = false;
+    projected.progress = {};
     if (!result) {
       releaseDisposalReservation();
       setError(i18n::message("settings.skins.document_picker_returned_no_result.message"));
@@ -840,6 +851,7 @@ struct GameplaySkinSettingsController::Impl {
     projected.preparedName.reset();
     projected.collisionPackage.reset();
     projected.hasPackageProgress = false;
+    handoffProgress.reset();
     try {
       if (archive) {
         handoff =
@@ -848,6 +860,7 @@ struct GameplaySkinSettingsController::Impl {
                 : platform_document_handoff::PlatformDocumentHandoffOperation{};
         phase = Phase::PickingArchive;
       } else {
+        handoffProgress = std::make_shared<PlatformDirectoryImportProgress>();
         handoff =
             dependencies.beginFolderHandoff
                 ? dependencies.beginFolderHandoff(
@@ -856,7 +869,8 @@ struct GameplaySkinSettingsController::Impl {
                        .maxRegularFileBytes =
                            SkinPackagePolicy::maxRegularFileBytes,
                        .maxDepth = SkinPackagePolicy::maxPathComponents,
-                       .maxPathBytes = SkinPackagePolicy::maxPathBytes})
+                       .maxPathBytes = SkinPackagePolicy::maxPathBytes,
+                       .progress = handoffProgress})
                 : platform_document_handoff::PlatformDocumentHandoffOperation{};
         phase = Phase::PickingFolder;
       }

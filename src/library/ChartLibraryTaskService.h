@@ -37,11 +37,16 @@ public:
   std::uint64_t reserve(i18n::Text title, i18n::Text detail);
   bool enqueueReserved(std::uint64_t id, TaskRequest request);
   bool failReserved(std::uint64_t id, i18n::Text detail);
-  bool beginAndroidImport(const std::string &token, bool folder);
+  bool beginAndroidImport(const std::string &token, bool folder, bool moveSource = false);
+  bool updateAndroidImportProgress(const std::string &token, int copiedFiles,
+                                    int totalFiles, std::uint64_t copiedBytes,
+                                    std::int64_t totalBytes, const std::string &name,
+                                    int phase);
   int androidImportCopyState(const std::string &token) const;
   bool finishAndroidImport(const std::string &token, bool folder,
                            const std::filesystem::path &path,
-                           const std::string &error);
+                           const std::string &error,
+                           const std::string &retainedError = {});
   void cancelAndroidImports();
   [[nodiscard]] Snapshot snapshot() const;
   std::vector<DownloadedIndexCompletion> takeDownloadedIndexCompletions();
@@ -71,7 +76,12 @@ private:
   std::condition_variable_any pauseChanged_;
   std::deque<TaskRequest> queue_;
   std::vector<TaskInfo> tasks_;
-  std::unordered_map<std::string, std::pair<std::uint64_t, bool>> androidImports_;
+  struct AndroidImportReservation {
+    std::uint64_t id;
+    bool folder;
+    bool moveSource;
+  };
+  std::unordered_map<std::string, AndroidImportReservation> androidImports_;
   bool acceptingAndroidImports_ = true;
   std::vector<DownloadedIndexCompletion> downloadedIndexCompletions_;
   std::optional<std::uint64_t> activeTaskId_;

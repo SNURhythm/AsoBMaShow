@@ -123,7 +123,7 @@ public:
       const input::LogicalInputTransition &transition);
   [[nodiscard]] bms_parser::Note *consumePhysicalTouchLane(
       input::InputScope scope, int lane, bool pressed,
-      std::optional<int> scratchDirection);
+      std::optional<int> scratchDirection, std::uint64_t timestampMicros = 0);
   void setBindings(const InputProfile &profile,
                    std::vector<input::InputScope> activeScopes);
   void disconnectDevice(std::string_view stableId);

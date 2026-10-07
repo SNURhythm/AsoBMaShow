@@ -73,7 +73,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     def test_android_import_results_keep_the_originating_token_and_type(self):
         worker = self.activity.split("private void startNextPendingImportCopyLocked()", 1)[1]
         worker = worker.split("private Uri archiveUriFromIntent", 1)[0]
-        self.assertIn("nativeBeginChartImport(request.token, request.isTree)", worker)
+        self.assertIn("nativeBeginChartImport(request.token, request.isTree, request.moveSource)", worker)
         self.assertIn("nativeFinishChartImport(request.token, request.isTree", worker)
         self.assertNotIn("pendingArchiveImportResults", self.activity)
         platform = read("src/library/ChartLibraryPlatform.cpp")
@@ -82,7 +82,9 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     def test_android_copy_checkpoints_cover_storage_and_destroy(self):
         copying = self.activity.split("private String copyArchiveUriToInternalStorage", 1)[1]
         copying = copying.split("private File uniqueFile", 1)[0]
-        self.assertIn("control.copy(input, outputStream)", copying)
+        folder_copy = read("android/app/src/main/java/com/snurhythm/asobmashow/ChartFolderImport.java")
+        self.assertIn("control.copy(copiedInput, stream,", folder_copy)
+        self.assertIn("ChartFolderImport.run", copying)
         self.assertIn("control.checkpoint()", copying)
         self.assertIn("ChartImportCopyControl control", copying)
         destruction = self.activity.split("protected void onDestroy()", 1)[1]
@@ -159,7 +161,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             ("pickArchiveForImport", "pickFolderForImport"),
             ("pickFolderForImport", "importDocument"),
         ):
-            picker = self.activity.split(f"public String {method}()", 1)[1]
+            picker = self.activity.split(f"public String {method}(", 1)[1]
             picker = picker.split(f"public String {next_method}", 1)[0]
             self.assertIn("pendingArchiveImportsDestroyed", picker)
             cancelled = picker.split("if (uri == null)", 1)[1]
@@ -174,6 +176,44 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("SDL/android-project/gradlew", self.workflow)
         self.assertIn(expected_wrapper, self.android_readme)
         self.assertTrue((ROOT / expected_wrapper).is_file())
+
+    def test_android_file_access_flavors_are_independent_of_distribution(self):
+        self.assertIn("flavorDimensions 'fileAccess'", self.gradle)
+        for flavor, enabled in (("restricted_file_access", "false"),
+                                ("all_file_access", "true")):
+            body = re.search(r"\b" + flavor + r"\s*\{([^}]+)\}", self.gradle)
+            self.assertIsNotNone(body)
+            self.assertIn("dimension 'fileAccess'", body.group(1))
+            self.assertIn(
+                "buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', "
+                f"'{enabled}'", body.group(1),
+            )
+        self.assertNotRegex(self.gradle, r"(?m)^\s*(?:play|firebase)\s*\{")
+        self.assertNotIn("android.permission.MANAGE_EXTERNAL_STORAGE", self.manifest)
+        self.assertIn("android.permission.MANAGE_EXTERNAL_STORAGE",
+                      read("android/app/src/all_file_access/AndroidManifest.xml"))
+        self.assertIn('VARIANT="restricted_file_accessRelease"', self.deploy_script)
+        self.assertIn("android_firebase_deploy.sh --variant restricted_file_accessRelease",
+                      self.workflow)
+
+    def test_android_variant_tasks_and_artifacts_preserve_underscores(self):
+        functions = self.deploy_script.split("variant_task_name() {", 1)[1]
+        functions = "variant_task_name() {" + functions.split("run_gradle_build() {", 1)[0]
+        command = (functions + '\nVARIANT="$1"\nANDROID_DIR="$2"\nAPK_PATH=""\n'
+                   'variant_task_name\nartifact_path_for_variant\n')
+        for flavor in ("restricted_file_access", "all_file_access"):
+            for build_type in ("Debug", "Release"):
+                with self.subTest(flavor=flavor, build_type=build_type):
+                    variant = flavor + build_type
+                    output = subprocess.check_output(
+                        ["bash", "-c", command, "variant-fixture", variant, "/fixture/android"],
+                        text=True,
+                    ).splitlines()
+                    self.assertEqual(output, [
+                        "assemble" + variant[0].upper() + variant[1:],
+                        f"/fixture/android/app/build/outputs/apk/{flavor}/"
+                        f"{build_type.lower()}/app-{flavor}-{build_type.lower()}.apk",
+                    ])
 
     def test_android_build_enables_lua_skin_runtime(self):
         self.assertIn(
@@ -305,7 +345,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                     "--build-only",
                     "--skip-build",
                     "--variant",
-                    "firebaseDebug",
+                    "restricted_file_accessDebug",
                 ],
                 cwd=ROOT,
                 env=environment,
@@ -318,7 +358,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     def test_android_artifact_upload_does_not_require_build_toolchains(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            apk = root / "app-firebase-debug.apk"
+            apk = root / "app-restricted_file_access-debug.apk"
             apk.write_bytes(b"fixture")
             firebase = root / "firebase"
             firebase.write_text(
@@ -356,7 +396,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                     "--apk",
                     str(apk),
                     "--variant",
-                    "firebaseDebug",
+                    "restricted_file_accessDebug",
                     "--firebase-cli",
                     str(firebase),
                 ],
@@ -390,10 +430,10 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
 
         android_job = self.workflow.split("  android-firebase:", 1)[1]
         self.assertIn(
-            "android/gradlew -p android lintFirebaseDebug",
+            "android/gradlew -p android lintRestricted_file_accessDebug",
             android_job,
         )
-        lint_index = android_job.index("lintFirebaseDebug")
+        lint_index = android_job.index("lintRestricted_file_accessDebug")
         deploy_index = android_job.index("android_firebase_deploy.sh")
         self.assertLess(lint_index, deploy_index)
 
@@ -404,7 +444,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("checkSelfPermission", self.music_service)
         self.assertIn("Manifest.permission.POST_NOTIFICATIONS", self.music_service)
 
-    def test_persisted_uri_permissions_use_explicit_read_grants(self):
+    def test_only_durable_add_folder_access_is_persisted(self):
         permission_calls = re.findall(
             r"takePersistableUriPermission\(\s*\w+,\s*([^\)]+)\)",
             self.activity,
@@ -412,7 +452,6 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             permission_calls,
             [
-                "Intent.FLAG_GRANT_READ_URI_PERMISSION",
                 "Intent.FLAG_GRANT_READ_URI_PERMISSION",
             ],
         )

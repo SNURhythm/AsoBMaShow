@@ -628,6 +628,36 @@ void testFixedDisplayFrameCapPreservesImportedDisabledIntent() {
           "preserved byte-for-byte");
 }
 
+void testMobileVsyncUsesCurrentNativeGeometryAfterRotation() {
+  SessionFixture fixture;
+  // The session is opened before a native orientation change. SDL may expose
+  // only portrait display modes even though the drawable is now landscape.
+  fixture.displayBackend.exposedCapabilities = fixedDisplayCapabilities();
+  fixture.displayBackend.exposedCapabilities.canChangeVsync = true;
+  fixture.displayBackend.state.settings.mode =
+      player_settings::DisplayMode::BorderlessFullscreen;
+  fixture.displayBackend.state.settings.width = 1080;
+  fixture.displayBackend.state.settings.height = 2400;
+  fixture.displayBackend.state.settings.vsync = true;
+  display::DisplaySettingsManager manager(fixture.displayBackend,
+      fixture.frameCap, fixture.settings.audioVideo.video);
+  SettingsAudioVideoSession session(fixture.settings, fixture.audioManager, manager,
+      {.persist = [&]() { ++fixture.saves; }, .playTestSound = {}});
+  fixture.displayBackend.state.settings.width = 2400;
+  fixture.displayBackend.state.settings.height = 1080;
+  auto candidate = fixture.settings.audioVideo.video;
+  candidate.vsync = false;
+  const auto preview = session.beginDisplayPreview(candidate, Clock::time_point{});
+  require(preview.status == display::ApplyStatus::PreviewPending &&
+              fixture.displayBackend.state.settings.width == 2400 &&
+              fixture.displayBackend.state.settings.height == 1080 &&
+              !fixture.displayBackend.state.settings.vsync,
+          "VSync-only mobile preview uses the current native drawable");
+  require(session.keepDisplayPreview().status == display::ApplyStatus::Applied &&
+              !fixture.settings.audioVideo.video.vsync && fixture.saves == 1,
+          "Android VSync choice persists after confirmation");
+}
+
 void testBorderlessPreviewIgnoresStaleWindowedResolutionIntent() {
   AppSettings settings;
   settings.audioVideo.video.width = 1600;
@@ -831,6 +861,7 @@ int main() {
   testDisplayPreviewPersistsOnlyWhenKept();
   testSafeFrameCapOnlyChangePersistsWithoutOverlay();
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();
+  testMobileVsyncUsesCurrentNativeGeometryAfterRotation();
   testBorderlessPreviewIgnoresStaleWindowedResolutionIntent();
   testDisplayTimeoutFocusLossAndTabExitRevertWithoutSaving();
   testRetryablePreviewRollbackBecomesBlockingNonConfirmableRecovery();

@@ -5,6 +5,7 @@
 #include <bx/math.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -42,8 +43,12 @@ bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
   const std::uint32_t white = 0xffffffffU;
   const auto texture = bgfx::createTexture2D(
       1, 1, false, 1, bgfx::TextureFormat::RGBA8, 0, bgfx::copy(&white, 4));
+  const std::uint32_t green = 0xff00ff00U;
+  const auto greenTexture = bgfx::createTexture2D(
+      1, 1, false, 1, bgfx::TextureFormat::RGBA8, 0, bgfx::copy(&green, 4));
   bool passed = bgfx::isValid(output) && bgfx::isValid(readback) &&
-                bgfx::isValid(framebuffer) && bgfx::isValid(texture);
+                bgfx::isValid(framebuffer) && bgfx::isValid(texture) &&
+                bgfx::isValid(greenTexture);
   if (!passed) std::cerr << "FAIL: Metal readback resources are unavailable\n";
 
   if (passed) {
@@ -61,15 +66,27 @@ bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
         rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
     const auto textProgram =
         rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+    const auto opacityProgram =
+        rendering::ShaderManager::getInstance().getProgram("vs_skin_quad.bin",
+                                                          "fs_skin_quad.bin");
+    const auto sampling =
+        rendering::UniformCache::getInstance().getVec4("u_skinSampling");
+    constexpr std::array opacities{0.5f, 0.5f, 0.25f, 1.0f, 0.5f,
+                                   0.5f, 0.5f, 0.75f, 0.5f};
+    constexpr std::array opacityQuads{1, 1, 1, 1, 1, 2, 2, 3, 1};
     rendering::UiBatchRenderer renderer;
-    for (int frame = 0; frame < 44; ++frame) {
+    for (int frame = 0; frame < 46 + static_cast<int>(opacities.size()); ++frame) {
       renderer.beginFrame();
       renderer.begin();
       // Each tile is one draw slot. Scene changes alter both the batch sizes
-      // and vertex formats. The last frames return to the original scene.
+      // and vertex formats. The last frames reuse the original geometry while
+      // changing scissor, index contents and texture state independently.
       const int scene = frame < 40 ? frame : 0;
+      const bool opacityFrame = frame >= 46;
+      const float opacity = opacityFrame ? opacities[frame - 46] : 1.0f;
       for (int tile = 0; tile < 64; ++tile) {
-        const int quads = 1 + ((scene * 103 + tile * 37) % 311);
+        const int quads = opacityFrame ? opacityQuads[frame - 46]
+                                      : 1 + ((scene * 103 + tile * 37) % 311);
         const float x = (tile % 8) * 16;
         const float y = (tile / 8) * 16;
         std::vector<rendering::PosColorVertex> colorVertices;
@@ -78,24 +95,46 @@ bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
         // Overlapping opaque quads vary storage demand without changing the
         // expected image: red color tiles alternate with white texture tiles.
         for (int quad = 0; quad < quads; ++quad) {
+          // Opacity frames use adjacent quads, so repeated alpha blending does
+          // not hide stale opacity data as the stream grows and shrinks.
+          const float left = opacityFrame ? x + 16.0f * quad / quads : x;
+          const float right = opacityFrame ? x + 16.0f * (quad + 1) / quads : x + 16;
           colorVertices.insert(colorVertices.end(),
-              {{x, y, 0, 0xff0000ffU}, {x + 16, y, 0, 0xff0000ffU},
-               {x + 16, y + 16, 0, 0xff0000ffU}, {x, y + 16, 0, 0xff0000ffU}});
+              {{left, y, 0, 0xff0000ffU}, {right, y, 0, 0xff0000ffU},
+               {right, y + 16, 0, 0xff0000ffU}, {left, y + 16, 0, 0xff0000ffU}});
           textVertices.insert(textVertices.end(),
-              {{x, y, 0, 0, 0}, {x + 16, y, 0, 1, 0},
-               {x + 16, y + 16, 0, 1, 1}, {x, y + 16, 0, 0, 1}});
-          for (const int index : {0, 1, 2, 0, 2, 3}) {
+              {{left, y, 0, 0, 0}, {right, y, 0, 1, 0},
+               {right, y + 16, 0, 1, 1}, {left, y + 16, 0, 0, 1}});
+          const auto quadIndices = frame == 42
+                                       ? std::array{0, 1, 2, 0, 1, 2}
+                                       : std::array{0, 1, 2, 0, 2, 3};
+          for (const int index : quadIndices) {
             indices.push_back(static_cast<std::uint16_t>(quad * 4 + index));
           }
         }
         rendering::UiBatchState state{
             .program = colorProgram,
             .state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A};
+        if (frame == 41) {
+          state.scissor = rendering::UiBatchScissor{
+              .x = static_cast<int>(x), .y = static_cast<int>(y),
+              .width = 8, .height = 16};
+        }
         bool appended;
         if ((tile + scene) % 2 != 0) {
           state.program = textProgram;
-          state.texture = texture;
+          state.texture = frame == 43 || frame == 44 ? greenTexture : texture;
           state.sampler = sampler;
+          if (opacityFrame) {
+            state.state |= BGFX_STATE_BLEND_ALPHA;
+            state.textureOpacity = opacity;
+            if (opacity < 1.0f) {
+              // Match RenderContext's actual faded-text shader and stream.
+              state.program = opacityProgram;
+              state.uniforms[0] = {.handle = sampling, .value = {0, 0, 0, 0}};
+              state.uniformCount = 1;
+            }
+          }
           appended = renderer.appendTextured(textVertices, indices, state);
         } else {
           appended = renderer.appendColor(colorVertices, indices, state);
@@ -123,11 +162,25 @@ bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
         bool corrupted = false;
         for (int y = 2; y < 14; ++y) {
           for (int x = 2; x < 14; ++x) {
+            if (frame == 42 && x == y) continue; // Triangle edge coverage varies.
             const auto pixel = ((tile / 8 * 16 + y) * 128 + tile % 8 * 16 + x) * 4;
-            const auto expected = textured ? 255 : 0;
-            corrupted |= pixels[pixel] != expected ||
-                         pixels[pixel + 1] != expected ||
-                         pixels[pixel + 2] != 255;
+            const bool clipped = (frame == 41 && x >= 8) ||
+                                 (frame == 42 && x < y);
+            const bool greenTextured = textured && (frame == 43 || frame == 44);
+            const int expectedBlue = !clipped && textured && !greenTextured ? 255 : 0;
+            const int expectedGreen = !clipped && textured ? 255 : 0;
+            const int expectedRed = !clipped && !greenTextured ? 255 : 0;
+            if (opacityFrame && textured) {
+              const int expected = static_cast<int>(std::lround(255.0f * opacity));
+              for (int channel = 0; channel < 3; ++channel) {
+                corrupted |= std::abs(static_cast<int>(pixels[pixel + channel]) -
+                                      expected) > 1;
+              }
+            } else {
+              corrupted |= pixels[pixel] != expectedBlue ||
+                           pixels[pixel + 1] != expectedGreen ||
+                           pixels[pixel + 2] != expectedRed;
+            }
           }
         }
         if (corrupted) ++corruptedTiles;
@@ -145,6 +198,7 @@ bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
   if (bgfx::isValid(output)) bgfx::destroy(output);
   if (bgfx::isValid(readback)) bgfx::destroy(readback);
   if (bgfx::isValid(texture)) bgfx::destroy(texture);
+  if (bgfx::isValid(greenTexture)) bgfx::destroy(greenTexture);
   return passed;
 }
 

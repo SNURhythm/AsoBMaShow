@@ -36,6 +36,8 @@
 #endif
 #endif
 
+#include "SkinDirectoryTraversal.h"
+#include "SkinDirectoryRename.h"
 #include "SkinIOSFileOpenCompatibility.h"
 
 namespace skin {
@@ -1340,24 +1342,20 @@ public:
         expected.st_ino == actual.st_ino;
     bool renamed = false;
     if (sourceMatches) {
-#if defined(__APPLE__)
-      renamed = ::renameatx_np(parentFd_, name_.c_str(), destinationParent,
-                               leaf.c_str(), RENAME_EXCL) == 0;
-#elif defined(__linux__)
-      renamed =
-          ::syscall(SYS_renameat2, parentFd_, name_.c_str(), destinationParent,
-                    leaf.c_str(), RENAME_NOREPLACE) == 0;
-#else
-      errno = ENOTSUP;
-#endif
+      renamed = skinRenameDirectoryNoReplace(parentFd_, name_.c_str(),
+                                               destinationParent, leaf.c_str()) == 0;
     }
     if (!renamed) {
+      const int renameError = errno;
       if (destinationParent >= 0) {
         ::close(destinationParent);
       }
-      diagnostics.push_back(
-          diagnostic("skin_import_publication_rename_failed",
-                     "unable to publish the exact prepared visible package"));
+      diagnostics.push_back(diagnostic(
+          "skin_import_publication_rename_failed",
+          "unable to publish the exact prepared visible package: " +
+              (sourceMatches
+                   ? std::error_code(renameError, std::generic_category()).message()
+                   : std::string("prepared directory identity could not be verified"))));
       return false;
     }
     const bool sourceParentSynchronized = ::fsync(parentFd_) == 0;
@@ -1904,19 +1902,21 @@ private:
       return -1;
     }
     int current = ::open(absolute.root_path().c_str(),
-                         O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                         skinAncestorDirectoryOpenFlag() | O_DIRECTORY | O_CLOEXEC);
     if (current < 0) {
       return -1;
     }
     const fs::path relative = absolute.lexically_relative(absolute.root_path());
-    for (const fs::path &componentPath : relative) {
-      const std::string component = componentPath.string();
+    for (auto iterator = relative.begin(); iterator != relative.end(); ++iterator) {
+      const std::string component = iterator->string();
+      const int access = std::next(iterator) == relative.end()
+                             ? O_RDONLY : skinAncestorDirectoryOpenFlag();
       int next = ::openat(current, component.c_str(),
-                          O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                          access | O_DIRECTORY | O_CLOEXEC);
       if (next < 0 && create && errno == ENOENT &&
           ::mkdirat(current, component.c_str(), 0777) == 0) {
         next = ::openat(current, component.c_str(),
-                        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                        access | O_DIRECTORY | O_CLOEXEC);
       }
       ::close(current);
       if (next < 0) {

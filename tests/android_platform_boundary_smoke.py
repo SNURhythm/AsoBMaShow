@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--test-apk", type=Path, required=True)
-    parser.add_argument("--flavor", choices=("firebase", "play"), required=True)
+    parser.add_argument("--flavor", choices=("restricted_file_access", "all_file_access"), required=True)
     arguments = parser.parse_args()
     requests = []
     ports = {}

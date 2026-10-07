@@ -542,6 +542,62 @@ static void testDisabledSiblingEndsCoveredRecyclerGesture() {
   }
 }
 
+static void testRecyclerAllowsTapJitterAtDifferentScreenSizes() {
+  const int originalWidth = rendering::render_width;
+  const int originalHeight = rendering::render_height;
+  const float originalScaleX = rendering::ui_scale_x;
+  const float originalScaleY = rendering::ui_scale_y;
+  for (const auto [width, height] : {std::pair{1080, 2186},
+                                   std::pair{2186, 1080},
+                                   std::pair{1170, 2532}}) {
+    rendering::render_width = width;
+    rendering::render_height = height;
+    rendering::ui_scale_x = rendering::ui_scale_y =
+        static_cast<float>(width) / (width < height ? 1080.0F : 1920.0F);
+    const auto send = [](RecyclerView<int> &list, Uint32 type, float x, float y) {
+      SDL_Event event{};
+      event.type = type;
+      event.tfinger.touchId = 1;
+      event.tfinger.fingerId = 0; // Android's first pointer.
+      event.tfinger.x = x * rendering::ui_scale_x / rendering::render_width;
+      event.tfinger.y = y * rendering::ui_scale_y / rendering::render_height;
+      list.handleEvents(event);
+    };
+    for (const float jitter : {0.0F, 1.0F, 5.0F, 10.0F}) {
+      RecyclerView<int> list([](int a, int b) { return a == b; });
+      list.setSize(200, 200);
+      list.itemHeight = 60;
+      list.onCreateView = [](const int &) { return new View(); };
+      list.onBind = [](View *, const int &, int, bool) {};
+      list.setItems(std::vector<int>{1, 2, 3, 4, 5, 6});
+      int selections = 0;
+      list.onSelected = [&](const int &, int index) {
+        REQUIRE(index == 1);
+        ++selections;
+      };
+      send(list, SDL_FINGERDOWN, 80, 90);
+      // Android can report motion even when the coordinates are unchanged.
+      send(list, SDL_FINGERMOTION, 80 + jitter, 90 - jitter);
+      REQUIRE(list.scrollOffset == 0.0F);
+      send(list, SDL_FINGERUP, 80 + jitter, 90 - jitter);
+      REQUIRE(selections == 1);
+
+      send(list, SDL_FINGERDOWN, 80, 90);
+      send(list, SDL_FINGERMOTION, 80, 85);
+      send(list, SDL_FINGERMOTION, 80, 80);
+      REQUIRE(list.scrollOffset == 0.0F);
+      send(list, SDL_FINGERMOTION, 80, 70);
+      REQUIRE(std::abs(list.scrollOffset - 20.0F) < 0.001F);
+      send(list, SDL_FINGERUP, 80, 70);
+      REQUIRE(selections == 1);
+    }
+  }
+  rendering::render_width = originalWidth;
+  rendering::render_height = originalHeight;
+  rendering::ui_scale_x = originalScaleX;
+  rendering::ui_scale_y = originalScaleY;
+}
+
 static void testNavigationMayDestroyDispatchingViews() {
   for (const bool touch : {false, true}) {
     for (const bool throughButtonContent : {false, true}) {
@@ -602,6 +658,7 @@ int main(int argc, char **argv) {
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
     testDisabledSiblingEndsCoveredScrollGestures();
     testDisabledSiblingEndsCoveredRecyclerGesture();
+    testRecyclerAllowsTapJitterAtDifferentScreenSizes();
     testDisabledButtonBlocksUnderlyingPointerActions();
     testDisablingCancelsHoverAndActivePointerGestures();
   }

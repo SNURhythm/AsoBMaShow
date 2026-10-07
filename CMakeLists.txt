@@ -177,6 +177,10 @@ elseif(ANDROID)
     find_package(CURL REQUIRED)
     list(APPEND COMMON_LIBS CURL::libcurl)
 
+    # Reuse the bundled TLS dependency for hardware-dispatched native checksums.
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    list(APPEND COMMON_LIBS OpenSSL::Crypto)
+
     find_package(LibArchive REQUIRED)
     if(TARGET LibArchive::LibArchive)
         list(APPEND COMMON_LIBS LibArchive::LibArchive)
@@ -480,6 +484,9 @@ target_link_libraries(main
     bgfx
     yogacore
 )
+if(ANDROID)
+    target_compile_definitions(main PRIVATE ASOBMASHOW_USE_OPENSSL_SHA256=1)
+endif()
 
 if (PLATFORM_MACOS)
     # 7-Zip registers archive handlers through static initialization. With a
@@ -633,6 +640,8 @@ install(DIRECTORY assets DESTINATION bin)
 
 # Subdirectories
 add_subdirectory(bgfx)
+include(cmake/BgfxVulkanFixes.cmake)
+asobmashow_fix_bgfx_vulkan()
 add_subdirectory(src)
 target_sources(main PRIVATE src/CourseIdentity.cpp)
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
@@ -661,6 +670,17 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME bgfx_vulkan_msaa_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/bgfx_vulkan_msaa_tests.py
+                --source ${ASOBMASHOW_BGFX_VULKAN_SOURCE}
+                --include ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
+                --compiler ${CMAKE_CXX_COMPILER}
+                --compiler-id ${CMAKE_CXX_COMPILER_ID})
+    add_test(NAME bgfx_vulkan_swapchain_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/bgfx_vulkan_swapchain_tests.py
+                --source ${ASOBMASHOW_BGFX_VULKAN_SOURCE}
+                --compiler ${CMAKE_CXX_COMPILER}
+                --compiler-id ${CMAKE_CXX_COMPILER_ID})
     find_package(BZip2 REQUIRED)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
@@ -682,10 +702,70 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME android_documents_provider_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_provider_tests.py -v)
+    set_tests_properties(android_documents_provider_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
+    add_test(NAME android_documents_mutability_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_mutability_tests.py -v)
+    add_test(NAME android_documents_activity_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_activity_tests.py -v)
+    add_test(NAME android_documents_mutation_guard_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_documents_mutation_guard_tests.py -v)
+    set_tests_properties(android_documents_mutability_tests android_documents_activity_tests
+                         android_documents_mutation_guard_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
+    add_test(NAME android_folder_import_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_folder_import_tests.py -v)
+    set_tests_properties(android_folder_import_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
+    add_test(NAME android_skin_directory_import_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_skin_directory_import_tests.py -v)
+    set_tests_properties(android_skin_directory_import_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     add_test(NAME android_temporary_storage_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_temporary_storage_tests.py -v)
     set_tests_properties(android_temporary_storage_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
+    add_test(NAME android_window_presentation_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_window_presentation_tests.py -v)
+    add_test(NAME android_display_refresh_rate_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_display_refresh_rate_tests.py -v)
+    add_test(NAME android_gameplay_orientation_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_gameplay_orientation_tests.py -v)
+    set_tests_properties(android_window_presentation_tests
+                         android_gameplay_orientation_tests
+                         android_display_refresh_rate_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS platform_android
         TIMEOUT 30
@@ -4645,6 +4725,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             "$<$<AND:$<CONFIG:Debug>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,chart_audio_renderer_tests>>:-O2>")
     endif()
 
+    add_executable(audio_resampling_tests
+        tests/audio_resampling_tests.cpp
+        src/audio/AudioMix.cpp
+    )
+    target_include_directories(audio_resampling_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_resampling_tests PRIVATE cxx_std_23)
+
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
@@ -5700,6 +5787,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_locale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_locale_tests.py)
     set_tests_properties(android_locale_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
+        LABELS "platform_android" TIMEOUT 30)
+    add_test(NAME android_native_storage_paths_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_native_storage_paths_tests.py -v)
+    set_tests_properties(android_native_storage_paths_tests PROPERTIES
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         LABELS "platform_android" TIMEOUT 30)
 
@@ -7052,7 +7144,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
 
+    set(android_realtime_touch_methods
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/android_realtime_touch_ingress_methods.h)
+    add_custom_command(
+        OUTPUT ${android_realtime_touch_methods}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_realtime_touch_ingress_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${android_realtime_touch_methods}
+        DEPENDS tests/android_realtime_touch_ingress_extract.py
+                tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
     add_executable(realtime_gameplay_worker_tests
+        ${android_realtime_touch_methods}
+        src/input/SDLTouchInputSource.cpp
+        src/scene/play/RealtimeTouchInputRouter.cpp
         tests/realtime_gameplay_worker_tests.cpp
         tests/support/AllocationFailure.cpp
         src/bms_parser.cpp
@@ -7076,6 +7181,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplaySetup.cpp
     )
     target_include_directories(realtime_gameplay_worker_tests PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(realtime_gameplay_worker_tests PRIVATE cxx_std_23)
@@ -7117,6 +7224,42 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(realtime_touch_input_router_tests PRIVATE
         BX_CONFIG_DEBUG=1
     )
+
+    set(legacy_skin_touch_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/legacy_skin_touch_tests.cpp)
+    add_custom_command(
+        OUTPUT ${legacy_skin_touch_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/legacy_skin_touch_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${legacy_skin_touch_source}
+        DEPENDS tests/legacy_skin_touch_extract.py tests/legacy_skin_touch_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/input/RhythmInputHandler.cpp src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
+    add_executable(legacy_skin_touch_tests
+        ${legacy_skin_touch_source}
+        src/scene/play/RealtimeTouchInputRouter.cpp
+    )
+    target_include_directories(legacy_skin_touch_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(legacy_skin_touch_tests PRIVATE cxx_std_23)
+
+    add_executable(sdl_touch_input_source_tests
+        tests/sdl_touch_input_source_tests.cpp
+        src/input/SDLTouchInputSource.cpp
+    )
+    target_include_directories(sdl_touch_input_source_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
+    target_compile_features(sdl_touch_input_source_tests PRIVATE cxx_std_23)
+    target_compile_definitions(sdl_touch_input_source_tests PRIVATE SDL_MAIN_HANDLED)
+    if(TARGET SDL2::SDL2)
+        target_include_directories(sdl_touch_input_source_tests PRIVATE
+            $<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>)
+    elseif(TARGET SDL2::SDL2-static)
+        target_include_directories(sdl_touch_input_source_tests PRIVATE
+            $<TARGET_PROPERTY:SDL2::SDL2-static,INTERFACE_INCLUDE_DIRECTORIES>)
+    elseif(TARGET SDL2)
+        target_include_directories(sdl_touch_input_source_tests PRIVATE
+            $<TARGET_PROPERTY:SDL2,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
 
     add_executable(replay_keysound_schedule_tests
         tests/replay_keysound_schedule_tests.cpp
@@ -7627,6 +7770,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
+
+    set(display_orientation_sync_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/display_orientation_sync_tests.cpp)
+    add_custom_command(
+        OUTPUT ${display_orientation_sync_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/display_orientation_sync_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${display_orientation_sync_source}
+        DEPENDS tests/display_orientation_sync_extract.py tests/display_orientation_sync_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/main.cpp
+        VERBATIM
+    )
+    add_executable(display_orientation_sync_tests ${display_orientation_sync_source})
+    target_include_directories(display_orientation_sync_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(display_orientation_sync_tests PRIVATE cxx_std_23)
+
+    set(android_render_suspend_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/android_render_suspend_tests.cpp)
+    add_custom_command(
+        OUTPUT ${android_render_suspend_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_render_suspend_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${android_render_suspend_source}
+        DEPENDS tests/android_render_suspend_extract.py tests/android_render_suspend_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/main.cpp
+        VERBATIM
+    )
+    add_executable(android_render_suspend_tests ${android_render_suspend_source})
+    target_compile_features(android_render_suspend_tests PRIVATE cxx_std_20)
 
     add_executable(quaternion_math_tests
         tests/quaternion_math_tests.cpp
@@ -8363,6 +8533,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(video_decode_state_tests)
 
     asobmashow_register_test(audio_video_settings_tests foundation_av_settings)
+    asobmashow_register_test(audio_resampling_tests foundation_av_audio_resampling)
     asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
     asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
@@ -8695,6 +8866,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if (TARGET skin_quad_batch_renderer_tests)
         asobmashow_register_test(skin_quad_batch_renderer_tests)
     endif()
+    add_executable(ui_batch_upload_cache_tests tests/ui_batch_upload_cache_tests.cpp)
+    target_include_directories(ui_batch_upload_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ui_batch_upload_cache_tests PRIVATE cxx_std_20)
+    asobmashow_register_test(ui_batch_upload_cache_tests)
+
     add_executable(ui_batch_renderer_tests
         tests/ui_batch_renderer_tests.cpp
         src/rendering/UiBatchRenderer.cpp
@@ -8725,6 +8901,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ui_batch_metal_tests PRIVATE ${COMMON_LIBS} bgfx)
         asobmashow_register_test(ui_batch_metal_tests)
         set_tests_properties(ui_batch_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
+        # Exercise Android's upload reuse against real GPU buffers without an
+        # emulator or Android build; keep the host's Metal backend and SDK.
+        add_executable(ui_batch_android_upload_metal_tests
+            tests/ui_batch_metal_tests.cpp
+            src/rendering/UiBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+        )
+        target_include_directories(ui_batch_android_upload_metal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(ui_batch_android_upload_metal_tests PRIVATE cxx_std_23)
+        target_compile_definitions(ui_batch_android_upload_metal_tests PRIVATE TARGET_OS_ANDROID=1)
+        target_link_libraries(ui_batch_android_upload_metal_tests PRIVATE ${COMMON_LIBS} bgfx)
+        asobmashow_register_test(ui_batch_android_upload_metal_tests)
+        set_tests_properties(ui_batch_android_upload_metal_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
@@ -8983,6 +9175,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(realtime_gameplay_authority_policy_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)
+    asobmashow_register_test(legacy_skin_touch_tests)
+    asobmashow_register_test(sdl_touch_input_source_tests)
     asobmashow_register_test(replay_keysound_schedule_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
@@ -9040,6 +9234,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(display_orientation_sync_tests foundation_av_display_orientation_sync)
+    asobmashow_register_test(android_render_suspend_tests foundation_av_android_render_suspend)
     asobmashow_register_test(quaternion_math_tests foundation_math_quaternion)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)

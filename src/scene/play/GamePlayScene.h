@@ -76,6 +76,8 @@ public:
   void init() override;
   void update(float dt) override;
   void onApplicationBackgroundChanged(bool background) override;
+  bool continuesAudioInBackground() const override;
+  void updateWhileBackgrounded() override;
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
@@ -114,6 +116,8 @@ private:
   bool guidedAccessReminderPending = false;
   bool guidedAccessReminderExiting = false;
   bool guidedAccessReminderBackground = false;
+  bool advancingGameplayInBackground = false;
+  bool backgroundGaugeFailurePending = false;
   View *guidedAccessReminderLayout = nullptr;
   TextView *guidedAccessReminderIcon = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;
@@ -134,6 +138,7 @@ private:
   bool inputInterruptionPause = false;
   void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
+  void refreshLegacyTouchLayout();
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
@@ -287,7 +292,7 @@ private:
                                   bool resetVisibleTimeReference,
                                   ReplayLaneCoverChangeKind changeKind);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
-                        Vector3 normalizedLocation);
+                        Vector3 normalizedLocation, std::uint64_t timestampMicros = 0);
   bool handleTouchInputAtGameplayTime(
       SDL_FingerID fingerIndex, ReplayTouchAction action,
       Vector3 normalizedLocation, long long gameplayTimeMicros,

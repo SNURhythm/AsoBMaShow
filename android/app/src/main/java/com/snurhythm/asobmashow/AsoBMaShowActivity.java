@@ -7,6 +7,7 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -22,6 +23,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.SystemClock;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
@@ -29,6 +32,13 @@ import android.provider.DocumentsContract.Document;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.View;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
 
@@ -47,6 +57,7 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,6 +83,44 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
     private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
     private boolean notificationPermissionRequestStarted;
+    private final Handler documentsRefreshHandler = new Handler(Looper.getMainLooper());
+    private long documentsRefreshTask;
+    private long documentsRefreshRevision;
+    private final Runnable documentsRefreshPoll = new Runnable() {
+        @Override public void run() {
+            long delay = 1000;
+            DocumentsLibraryChanges changes = AsoBMaShowDocumentsProvider.changes(AsoBMaShowActivity.this);
+            try {
+                if (documentsRefreshTask != 0) {
+                    int status = nativeDocumentsRefreshStatus(documentsRefreshTask);
+                    if (status != 0) {
+                        if (status > 0) changes.acknowledge(documentsRefreshRevision);
+                        else delay = 30000;
+                        documentsRefreshTask = 0;
+                    }
+                } else {
+                    long revision = changes.readyRevision(SystemClock.elapsedRealtime());
+                    if (revision != 0) {
+                        documentsRefreshTask = nativeRefreshDocumentsLibrary();
+                        if (documentsRefreshTask != 0) documentsRefreshRevision = revision;
+                    }
+                }
+            } catch (UnsatisfiedLinkError ignored) {
+                // The provider can run before SDL has loaded the native library.
+            }
+            documentsRefreshHandler.postDelayed(this, delay);
+        }
+    };
+
+    private void startDocumentsLibraryRefresh() {
+        documentsRefreshHandler.removeCallbacks(documentsRefreshPoll);
+        documentsRefreshHandler.postDelayed(documentsRefreshPoll, 1000);
+    }
+
+    private void stopDocumentsLibraryRefresh() {
+        documentsRefreshHandler.removeCallbacks(documentsRefreshPoll);
+    }
+
 
     private final NativeFolderPickerRequests folderPickerRequests =
             new NativeFolderPickerRequests();
@@ -127,12 +176,14 @@ public class AsoBMaShowActivity extends SDLActivity {
         final Uri uri;
         final String displayName;
         final boolean isTree;
+        final boolean moveSource;
         final String error;
 
-        PendingImportRequest(Uri uri, String displayName, boolean isTree, String error) {
+        PendingImportRequest(Uri uri, String displayName, boolean isTree, String error, boolean moveSource) {
             this.uri = uri;
             this.displayName = displayName;
             this.isTree = isTree;
+            this.moveSource = isTree && moveSource;
             this.error = error;
         }
     }
@@ -184,7 +235,64 @@ public class AsoBMaShowActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // SDL queues a windowed-style command during onCreate. Restore immersive
+        // mode after that command, without its blocking native resize handshake.
+        getWindow().getDecorView().post(this::restoreImmersiveMode);
+        AndroidDisplayRefreshRate.requestHighestRefreshRate(getWindow());
+        if (mSurface != null) {
+            mSurface.getHolder().addCallback(new SurfaceHolder.Callback() {
+                @Override public void surfaceCreated(SurfaceHolder holder) {
+                    AndroidDisplayRefreshRate.requestHighestRefreshRate(
+                            getWindow(), holder.getSurface());
+                }
+
+                @Override public void surfaceChanged(SurfaceHolder holder, int format,
+                                                     int width, int height) {
+                    AndroidDisplayRefreshRate.requestHighestRefreshRate(
+                            getWindow(), holder.getSurface());
+                }
+
+                @Override public void surfaceDestroyed(SurfaceHolder holder) {}
+            });
+        }
         handleArchiveImportIntent(getIntent());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            restoreImmersiveMode();
+            AndroidDisplayRefreshRate.requestHighestRefreshRate(getWindow(), getNativeSurface());
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        AndroidDisplayRefreshRate.requestHighestRefreshRate(getWindow(), getNativeSurface());
+    }
+
+    private void restoreImmersiveMode() {
+        Window window = getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        mFullscreenModeActive = true;
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+            WindowInsetsController insets = window.getInsetsController();
+            if (insets != null) {
+                insets.setSystemBarsBehavior(
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                insets.hide(WindowInsets.Type.systemBars());
+            }
+        }
     }
 
     @Override
@@ -198,10 +306,12 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
         nativeGyroscopeActivityResumed();
         folderPickerRequests.onResume(this::hasManageExternalStorageAccess);
+        startDocumentsLibraryRefresh();
     }
 
     @Override
     protected void onPause() {
+        stopDocumentsLibraryRefresh();
         folderPickerRequests.onPause();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = false;
@@ -222,6 +332,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        stopDocumentsLibraryRefresh();
         folderPickerRequests.destroy();
         cancelPendingChartImports();
         synchronized (gyroscopeTurntableLock) {
@@ -258,13 +369,32 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private boolean gameplayOrientationLocked;
 
+    private int captureScreenOrientation() {
+        int rotation = getWindowManager().getDefaultDisplay().getRotation();
+        boolean portrait = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_PORTRAIT;
+        boolean quarterTurn = rotation == Surface.ROTATION_90
+                || rotation == Surface.ROTATION_270;
+        boolean naturalPortrait = portrait != quarterTurn;
+        boolean reversed = naturalPortrait
+                ? rotation == Surface.ROTATION_180 || rotation == Surface.ROTATION_270
+                : rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_180;
+        return portrait
+                ? (reversed ? ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+                            : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+                : (reversed ? ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+                            : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    }
+
     public void setScreenOrientation(int mode, boolean lockCurrent) {
         CountDownLatch applied = new CountDownLatch(1);
         runOnUiThread(() -> {
             try {
                 if (lockCurrent) {
                     if (!gameplayOrientationLocked) {
-                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+                        // LOCKED follows the display's last rotation when the
+                        // launcher rotated it during Home/app switching.
+                        setRequestedOrientation(captureScreenOrientation());
                     }
                 } else {
                     setRequestedOrientation(mode == 1
@@ -302,10 +432,15 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static native boolean nativeChartFolderPickerCancelled(String cancellationToken);
     private static native boolean nativeDownloadUrlTextCheckpoint(long checkpointToken);
     private static native boolean nativeDownloadUrlTextPauseRequested(long checkpointToken);
-    private static native int nativeBeginChartImport(String token, boolean isTree);
+    private static native long nativeRefreshDocumentsLibrary();
+    private static native int nativeDocumentsRefreshStatus(long task);
+    private static native int nativeBeginChartImport(String token, boolean isTree, boolean moveSource);
     private static native int nativeChartImportCopyState(String token);
+    private static native void nativeChartImportProgress(String token, int files, int totalFiles,
+            long bytes, long totalBytes, String name, int phase);
     private static native boolean nativeFinishChartImport(
-            String token, boolean isTree, String path, String error);
+            String token, boolean isTree, String path, String error, String retainedError);
+    private static native void nativeSkinDirectoryImportProgress(String token, long bytes, long files);
     private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
     private static native void nativeGyroscopeActivityPaused();
@@ -520,19 +655,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                     finishArchivePicker();
                     return;
                 }
-                if (isTree) {
-                    int flags = data.getFlags();
-                    int requiredFlags = Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                            | Intent.FLAG_GRANT_READ_URI_PERMISSION;
-                    if ((flags & requiredFlags) == requiredFlags) {
-                        try {
-                            getContentResolver().takePersistableUriPermission(
-                                    importUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        } catch (Exception ignored) {
-                            // Some providers grant transient access only; keep using it for this copy.
-                        }
-                    }
-                }
+                // Imports run once within this Activity lifetime and use its transient
+                // grants. Only Add Folder needs persisted access after an app restart.
                 archivePickerUri.set(importUri);
                 archivePickerName.set(displayName);
                 archivePickerTree.set(isTree);
@@ -672,7 +796,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         return startPendingImportCopy(uri, archivePickerName.get(), archivePickerTree.get(), "");
     }
 
-    public String pickFolderForImport() {
+    public String pickFolderForImport(String operation) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return ERROR_PREFIX + "Folder import picker cannot block the UI thread.";
         }
@@ -700,8 +824,8 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             Intent folderIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             folderIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                     | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            if ("move".equals(operation)) folderIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             try {
                 startActivityForResult(folderIntent, REQUEST_OPEN_IMPORT_FOLDER);
             } catch (Exception e) {
@@ -732,7 +856,89 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             return ERROR_PREFIX + "Folder selection was cancelled.";
         }
-        return startPendingImportCopy(uri, archivePickerName.get(), true, "");
+        return startPendingImportCopy(uri, archivePickerName.get(), true, "", "move".equals(operation));
+    }
+
+    public Object getDocumentsMutationLock() {
+        return AsoBMaShowDocumentsProvider.DOCUMENT_MUTATION_LOCK;
+    }
+
+    public String importDirectory(String operationToken, String limitsText) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Folder import cannot block the UI thread.";
+        }
+        SkinDirectoryImport.Limits limits;
+        try {
+            String[] values = limitsText.split(",");
+            if (operationToken == null || operationToken.isEmpty() || values.length != 5)
+                throw new IOException("Invalid folder import request.");
+            limits = new SkinDirectoryImport.Limits(Long.parseLong(values[0]), Long.parseLong(values[1]),
+                    Long.parseLong(values[2]), Long.parseLong(values[3]), Long.parseLong(values[4]));
+            if (limits.bytes <= 0 || limits.entries <= 0 || limits.depth <= 0 ||
+                    limits.pathBytes <= 0 || limits.fileBytes <= 0) throw new IOException("Invalid folder import limits.");
+        } catch (Exception e) {
+            return ERROR_PREFIX + "Invalid folder import limits.";
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        DocumentSelection selection = awaitDocumentSelection(DocumentHandoffKind.IMPORT, operationToken, intent);
+        if (!selection.result.isEmpty()) {
+            return finishDocumentHandoffOperation(selection.operation) ? selection.result : CANCELLED_RESULT;
+        }
+        nativeSkinDirectoryImportProgress(operationToken, 0, 0);
+        Path issued = null;
+        CancellationSignal cancellation = new CancellationSignal();
+        AtomicReference<ParcelFileDescriptor> descriptor = new AtomicReference<>();
+        try {
+            if (selection.uri == null || !ContentResolver.SCHEME_CONTENT.equals(selection.uri.getScheme()) ||
+                    !DocumentsContract.isTreeUri(selection.uri)) throw new IOException("Select a DocumentsProvider folder.");
+            if (!registerDocumentHandoffIo(selection.operation, cancellation, null))
+                throw new DocumentHandoffCancelledException();
+            issued = Files.createDirectory(createPrivateDocumentHandoffBase().toPath().resolve(UUID.randomUUID().toString()));
+            Path output = issued.resolve("imported-directory");
+            SafSkinDirectorySource source = new SafSkinDirectorySource(getContentResolver(), selection.uri, cancellation,
+                    new SafSkinDirectorySource.IoControl() {
+                        @Override public void checkpoint() throws IOException {
+                            throwIfDocumentHandoffCancelled(selection.operation);
+                        }
+                        @Override public void descriptor(ParcelFileDescriptor value) throws IOException {
+                            descriptor.set(value);
+                            if (!registerDocumentHandoffIo(selection.operation, cancellation, value))
+                                throw new DocumentHandoffCancelledException();
+                        }
+                    });
+            long[] nextProgressAt = {0};
+            long[] lastProgress = {0, 0};
+            String name = SkinDirectoryImport.copy(source, output, limits, (bytes, files) -> {
+                long now = System.nanoTime();
+                lastProgress[0] = bytes;
+                lastProgress[1] = files;
+                if (now >= nextProgressAt[0]) {
+                    nativeSkinDirectoryImportProgress(operationToken, bytes, files);
+                    nextProgressAt[0] = now + 100_000_000L;
+
+                }
+            });
+            nativeSkinDirectoryImportProgress(operationToken, lastProgress[0], lastProgress[1]);
+            if (!finishDocumentHandoffOperation(selection.operation)) throw new DocumentHandoffCancelledException();
+            // Names reject control characters; the newline separates path from suggested package name.
+            String result = output.toString() + "\n" + name;
+            issued = null;
+            return result;
+        } catch (Exception e) {
+            if (!finishDocumentHandoffOperation(selection.operation) ||
+                    e instanceof DocumentHandoffCancelledException || cancellation.isCanceled()) return CANCELLED_RESULT;
+            return ERROR_PREFIX + messageForException(e, "Could not copy the selected folder.");
+        } finally {
+            clearDocumentHandoffIo(selection.operation, cancellation, descriptor.get());
+            if (descriptor.get() != null) {
+                try { descriptor.get().close(); } catch (IOException ignored) { }
+            }
+            if (issued != null) {
+                try { SkinDirectoryImport.removeTree(issued); }
+                catch (IOException e) { Log.w("AsoBMaShow", "Could not remove cancelled skin folder import", e); }
+            }
+        }
     }
 
     public String importDocument(String operationToken, String mimeType,
@@ -1006,6 +1212,62 @@ public class AsoBMaShowActivity extends SDLActivity {
         } catch (Exception e) {
             return ERROR_PREFIX + messageForException(
                     e, "Temporary document cleanup failed.");
+        }
+    }
+
+    public String validateDirectoryHandoffImport(String localPath) {
+        try {
+            validatedDocumentHandoffImport(localPath, false, false, true);
+            return SUCCESS_RESULT;
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(e, "Temporary folder ownership could not be verified.");
+        }
+    }
+
+    public String cleanupDirectoryHandoffImport(String localPath) {
+        try {
+            File owned = validatedDocumentHandoffImport(localPath, true, true, true);
+            SkinDirectoryImport.removeTree(owned.toPath());
+            try { Files.deleteIfExists(owned.toPath().getParent()); } catch (IOException ignored) { }
+            return SUCCESS_RESULT;
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(e, "Temporary folder cleanup failed.");
+        }
+    }
+
+    public String openDocumentsFolder() {
+        try {
+            DocumentsPathPolicy paths = AsoBMaShowDocumentsProvider.initializeDocuments(this);
+            File bms = documentsBmsDirectory();
+            if (!bms.isDirectory() && !bms.mkdirs()) {
+                throw new IOException("Could not create BMS folder.");
+            }
+            Intent rootIntent = new Intent(Intent.ACTION_VIEW).setDataAndType(
+                    DocumentsContract.buildRootUri(AsoBMaShowDocumentsProvider.AUTHORITY,
+                            DocumentsPathPolicy.ROOT_ID), DocumentsContract.Root.MIME_TYPE_ITEM);
+            android.content.pm.PackageManager manager = getPackageManager();
+            int flags = android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+                    | android.content.pm.PackageManager.MATCH_SYSTEM_ONLY;
+            List<android.content.pm.ResolveInfo> browsers = manager.queryIntentActivities(rootIntent, flags);
+            if (browsers.isEmpty()) throw new IOException("System Files browser is unavailable.");
+            android.content.pm.ResolveInfo chosen = browsers.get(0);
+            android.content.pm.ResolveInfo preferred = manager.resolveActivity(rootIntent, flags);
+            if (preferred != null) {
+                for (android.content.pm.ResolveInfo browser : browsers) {
+                    if (browser.activityInfo.packageName.equals(preferred.activityInfo.packageName)
+                            && browser.activityInfo.name.equals(preferred.activityInfo.name)) chosen = browser;
+                }
+            }
+            Intent intent = new Intent(Intent.ACTION_VIEW).setComponent(new android.content.ComponentName(
+                    chosen.activityInfo.packageName, chosen.activityInfo.name));
+            intent.setDataAndType(DocumentsContract.buildDocumentUri(
+                    AsoBMaShowDocumentsProvider.AUTHORITY, paths.documentId(bms)),
+                    DocumentsContract.Document.MIME_TYPE_DIR);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            return SUCCESS_RESULT;
+        } catch (Exception error) {
+            return ERROR_PREFIX + messageForException(error, "Could not open the Files app.");
         }
     }
 
@@ -2138,6 +2400,12 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                 boolean allowMissing,
                                                 boolean allowFinalSymlink)
             throws IOException {
+        return validatedDocumentHandoffImport(localPath, allowMissing, allowFinalSymlink, false);
+    }
+
+    private File validatedDocumentHandoffImport(String localPath, boolean allowMissing,
+                                                boolean allowFinalSymlink, boolean directory)
+            throws IOException {
         if (localPath == null || localPath.isEmpty()) {
             throw new IOException("Temporary document path is empty.");
         }
@@ -2146,13 +2414,15 @@ public class AsoBMaShowActivity extends SDLActivity {
             throw new IOException("Temporary document path is invalid.");
         }
 
-        File baseFile = new File(getCacheDir(), "document-handoff");
+        // Match createPrivateDocumentHandoffBase: Android may expose /data/user/0
+        // while its canonical app-private cache is under /data/data.
+        File baseFile = new File(getCacheDir().getCanonicalFile(), "document-handoff");
         Path basePath = baseFile.toPath().toAbsolutePath().normalize();
         Path candidatePath = candidate.toPath().toAbsolutePath().normalize();
         Path parentPath = candidatePath.getParent();
         if (parentPath == null ||
-                !DocumentHandoffImportPathPolicy.isIssuedPath(
-                        basePath, candidatePath)) {
+                !(directory ? DocumentHandoffImportPathPolicy.isIssuedDirectoryPath(basePath, candidatePath)
+                        : DocumentHandoffImportPathPolicy.isIssuedPath(basePath, candidatePath))) {
             throw new IOException("Temporary document is outside private storage.");
         }
         if (Files.isSymbolicLink(basePath)) {
@@ -2183,8 +2453,8 @@ public class AsoBMaShowActivity extends SDLActivity {
             throw new IOException("Temporary document no longer exists.");
         }
         if ((!allowFinalSymlink && finalSymlink) ||
-                (!finalSymlink && !Files.isRegularFile(
-                        candidatePath, LinkOption.NOFOLLOW_LINKS))) {
+                (!finalSymlink && !(directory ? Files.isDirectory(candidatePath, LinkOption.NOFOLLOW_LINKS)
+                        : Files.isRegularFile(candidatePath, LinkOption.NOFOLLOW_LINKS)))) {
             throw new IOException("Temporary document is not a regular file.");
         }
         return candidatePath.toFile();
@@ -2353,8 +2623,12 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private String directPathForTree(Uri treeUri) {
-        if (!hasManageExternalStorageAccess()
-                || !"com.android.externalstorage.documents".equals(treeUri.getAuthority())) {
+        return hasManageExternalStorageAccess() ? storagePathForTree(treeUri) : "";
+    }
+
+    // Identifies local paths for containment checks; it does not grant access to them.
+    private String storagePathForTree(Uri treeUri) {
+        if (!"com.android.externalstorage.documents".equals(treeUri.getAuthority())) {
             return "";
         }
         try {
@@ -2563,12 +2837,17 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private String startPendingImportCopy(Uri importUri, String displayName,
                                           boolean isTree, String error) {
+        return startPendingImportCopy(importUri, displayName, isTree, error, false);
+    }
+
+    private String startPendingImportCopy(Uri importUri, String displayName,
+                                          boolean isTree, String error, boolean moveSource) {
         synchronized (pendingArchiveImportLock) {
             if (pendingArchiveImportsDestroyed) {
                 return ERROR_PREFIX + "Chart import cancelled.";
             }
             pendingArchiveImportRequests.addLast(
-                    new PendingImportRequest(importUri, displayName, isTree, error));
+                    new PendingImportRequest(importUri, displayName, isTree, error, moveSource));
             startNextPendingImportCopyLocked();
         }
         return PENDING_IMPORT_RESULT;
@@ -2585,6 +2864,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         pendingArchiveImportWorker = new Thread(() -> {
             String path = "";
             String error = "";
+            String retainedError = "";
             try {
                 while (true) {
                     int started;
@@ -2592,7 +2872,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                         if (pendingArchiveImportsDestroyed) {
                             throw new IOException("Chart import cancelled.");
                         }
-                        started = nativeBeginChartImport(request.token, request.isTree);
+                        started = nativeBeginChartImport(request.token, request.isTree, request.moveSource);
                     }
                     if (started < 0) {
                         throw new IOException("Chart import cancelled.");
@@ -2609,20 +2889,31 @@ public class AsoBMaShowActivity extends SDLActivity {
                         () -> nativeChartImportCopyState(request.token),
                         () -> pendingArchiveImportsDestroyed);
                 control.checkpoint();
-                path = copyImportUriToInternalStorage(
-                        request.uri, request.displayName, request.isTree, control);
-                control.checkpoint();
+                if (request.isTree) {
+                    File output = uniqueDirectory(documentsBmsDirectory(), sanitizeFileName(request.displayName));
+                    ChartFolderImport.Result copied = copyTreeUriToBmsFolder(request.uri, output,
+                            request.moveSource, control, importProgress(request.token));
+                    if (copied.retainedOutput) {
+                        path = output.getAbsolutePath();
+                        if (!copied.complete) retainedError = copied.error;
+                    } else if (!copied.complete) {
+                        throw new IOException(copied.error);
+                    }
+                } else {
+                    path = copyArchiveUriToInternalStorage(request.uri, request.displayName, control);
+                    control.checkpoint();
+                }
             } catch (Exception e) {
                 error = e.getMessage() == null ? "Could not import charts." : e.getMessage();
             }
             boolean accepted;
             synchronized (pendingArchiveImportLock) {
-                if (pendingArchiveImportsDestroyed) {
+                if (pendingArchiveImportsDestroyed && !(request.moveSource && !path.isEmpty())) {
                     error = "Chart import cancelled.";
                 }
-                accepted = nativeFinishChartImport(request.token, request.isTree, path, error);
+                accepted = nativeFinishChartImport(request.token, request.isTree, path, error, retainedError);
             }
-            if ((!accepted || !error.isEmpty()) && !path.isEmpty()) {
+            if ((!accepted || !error.isEmpty()) && !path.isEmpty() && !request.moveSource) {
                 deleteRecursively(new File(path));
             }
             synchronized (pendingArchiveImportLock) {
@@ -2642,7 +2933,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             pendingArchiveImportRequests.clear();
             if (activePendingImportRequest != null) {
                 nativeFinishChartImport(activePendingImportRequest.token,
-                        activePendingImportRequest.isTree, "", "Chart import cancelled.");
+                        activePendingImportRequest.isTree, "", "Chart import cancelled.", "");
             }
             if (pendingArchiveImportWorker != null) {
                 pendingArchiveImportWorker.interrupt();
@@ -2714,101 +3005,60 @@ public class AsoBMaShowActivity extends SDLActivity {
         return output.getAbsolutePath();
     }
 
-    private String copyImportUriToInternalStorage(Uri uri, String displayName,
-                                                  boolean isTree,
-                                                  ChartImportCopyControl control) throws Exception {
-        if (isTree) {
-            return copyTreeUriToBmsFolder(uri, displayName, control);
-        }
-        return copyArchiveUriToInternalStorage(uri, displayName, control);
+    private File documentsBmsDirectory() throws IOException {
+        DocumentsPathPolicy policy = AsoBMaShowDocumentsProvider.initializeDocuments(this);
+        return policy.child(policy.resolve(DocumentsPathPolicy.ROOT_DOCUMENT_ID), "BMS");
     }
 
-    private File documentsBmsDirectory() {
-        File base = getExternalFilesDir(null);
-        if (base == null) {
-            base = getFilesDir();
-        }
-        return new File(base, "BMS");
-    }
-
-    private String copyTreeUriToBmsFolder(Uri treeUri, String displayName,
-                                         ChartImportCopyControl control) throws Exception {
-        control.checkpoint();
-        File directory = documentsBmsDirectory();
-        if (!directory.isDirectory() && !directory.mkdirs()) {
-            throw new Exception("Could not create BMS import folder.");
-        }
-        File output = uniqueDirectory(directory, sanitizeFileName(displayName));
-        if (!output.mkdirs()) {
-            throw new Exception("Could not create imported chart copy.");
-        }
-
-        try {
-            String rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri);
-            copyDocumentTreeChildren(treeUri, rootDocumentId, output, control);
-        } catch (Exception e) {
-            deleteRecursively(output);
-            throw e;
-        }
-        return output.getAbsolutePath();
-    }
-
-    private void copyDocumentTreeChildren(Uri treeUri, String parentDocumentId,
-                                          File destination,
-                                          ChartImportCopyControl control) throws Exception {
-        control.checkpoint();
-        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                treeUri, parentDocumentId);
-        String[] columns = new String[] {
-                Document.COLUMN_DOCUMENT_ID,
-                Document.COLUMN_DISPLAY_NAME,
-                Document.COLUMN_MIME_TYPE
+    private ChartFolderImport.Progress importProgress(String token) {
+        return new ChartFolderImport.Progress() {
+            long lastPublished = -1;
+            ChartFolderImport.Phase lastPhase;
+            @Override public void update(int files, int totalFiles, long bytes, long totalBytes,
+                                         String name, ChartFolderImport.Phase phase) {
+                long now = SystemClock.elapsedRealtime();
+                if (phase != lastPhase || lastPublished < 0 || now - lastPublished >= 100
+                        || (phase == ChartFolderImport.Phase.COPYING && files == totalFiles)) {
+                    nativeChartImportProgress(token, files, totalFiles, bytes, totalBytes, name, phase.ordinal());
+                    lastPublished = now;
+                    lastPhase = phase;
+                }
+            }
         };
-        try (Cursor cursor = getContentResolver().query(
-                childrenUri, columns, null, null, null)) {
-            if (cursor == null) {
-                throw new Exception("Could not read selected folder.");
-            }
-            int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
-            int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
-            int mimeColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE);
-            while (true) {
-                control.checkpoint();
-                if (!cursor.moveToNext()) {
-                    break;
-                }
-                control.checkpoint();
-                String documentId = cursor.getString(idColumn);
-                String name = sanitizeFileName(cursor.getString(nameColumn));
-                String mimeType = cursor.getString(mimeColumn);
-                if (name.isEmpty()) {
-                    name = "item";
-                }
-                if (Document.MIME_TYPE_DIR.equals(mimeType)) {
-                    File childDirectory = uniqueDirectory(destination, name);
-                    if (!childDirectory.mkdirs()) {
-                        throw new Exception("Could not create folder: " + name);
-                    }
-                    copyDocumentTreeChildren(treeUri, documentId, childDirectory, control);
-                } else {
-                    Uri documentUri =
-                            DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
-                    File output = uniqueFile(destination, name);
-                    copyDocumentUriToFile(documentUri, output, control);
-                }
-            }
-        }
     }
 
-    private void copyDocumentUriToFile(Uri uri, File output,
-                                       ChartImportCopyControl control) throws Exception {
+    private ChartFolderImport.Result copyTreeUriToBmsFolder(Uri treeUri, File output,
+            boolean moveSource, ChartImportCopyControl control, ChartFolderImport.Progress progress) throws IOException {
+        if (AsoBMaShowDocumentsProvider.AUTHORITY.equals(treeUri.getAuthority())) {
+            throw new IOException("This folder is already in AsoBMaShow. Place charts in its BMS folder instead.");
+        }
         control.checkpoint();
-        try (InputStream input = getContentResolver().openInputStream(uri);
-             FileOutputStream outputStream = new FileOutputStream(output)) {
-            if (input == null) {
-                throw new Exception("Could not open imported file.");
-            }
-            control.copy(input, outputStream);
+        DocumentsPathPolicy policy = AsoBMaShowDocumentsProvider.initializeDocuments(this);
+        File documents = policy.resolve(DocumentsPathPolicy.ROOT_DOCUMENT_ID);
+        File directory = policy.child(documents, "BMS");
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new IOException("Could not create BMS import folder.");
+        }
+        if (moveSource) {
+            // Persist newly initialized Documents/BMS ancestors before any
+            // source can be removed. The transfer syncs its own output tree.
+            ChartFolderImport.syncDirectory(documents);
+            ChartFolderImport.syncDirectory(documents.getParentFile());
+        }
+        policy.documentId(output);
+        // Older system pickers can expose an ancestor of the app's destination.
+        String directSource = storagePathForTree(treeUri);
+        if (!directSource.isEmpty() && output.getCanonicalFile().toPath()
+                .startsWith(new File(directSource).getCanonicalFile().toPath())) {
+            throw new IOException("The selected source contains the BMS import destination.");
+        }
+        // Reserve before creation so no Files client can hold a writable descriptor
+        // to any destination inode. Keep the lease through cleanup and partial moves.
+        try (DocumentsMutationGuard.Reservation reservation = DocumentsMutationGuard.reserveNewDestination(output)) {
+            return ChartFolderImport.run(new SafChartFolderSource(getContentResolver(), treeUri, control),
+                    reservation.canonicalOutput, moveSource, control, progress,
+                    () -> AsoBMaShowDocumentsProvider.changes(this).changed(SystemClock.elapsedRealtime()),
+                    AsoBMaShowDocumentsProvider.DOCUMENT_MUTATION_LOCK);
         }
     }
 

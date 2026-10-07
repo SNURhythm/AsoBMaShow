@@ -8,7 +8,7 @@ GRADLEW="${ROOT_DIR}/android/gradlew"
 REQUIRED_ANDROID_NDK_VERSION="28.2.13676358"
 BUILD_ONLY=0
 SKIP_BUILD=0
-VARIANT="firebaseRelease"
+VARIANT="restricted_file_accessRelease"
 APK_PATH=""
 FIREBASE_CLI_BIN="${FIREBASE_CLI_BIN:-firebase}"
 SERVICE_CREDENTIALS_FILE=""
@@ -35,7 +35,7 @@ Options:
   --env-file PATH       Load an additional env file.
   --build-only          Build only; do not upload.
   --skip-build          Upload an existing APK from --apk.
-  --variant NAME        Gradle build variant to assemble. Default: firebaseRelease.
+  --variant NAME        Gradle build variant to assemble. Default: restricted_file_accessRelease.
   --apk PATH            APK to upload. Defaults to android/app/build/outputs/apk/<variant>/app-<variant>.apk.
   --build-number N      Override automatic versionCode with N.
   --version-code N      Override automatic ANDROID_VERSION_CODE with N.

@@ -137,17 +137,17 @@ struct FolderActionService::Impl {
   }
 
 #if TARGET_OS_ANDROID
-  void requestImport(bool folder) {
+  void requestImport(bool folder, bool moveSource = false) {
     if (pickerActive.exchange(true)) return;
     try {
       if (pickerThread.joinable()) pickerThread.join();
       pickerThread = std::jthread(
-          [this, folder](const std::stop_token &) {
+          [this, folder, moveSource](const std::stop_token &) {
             ScopeExit reset([this] { pickerActive.store(false); });
             std::filesystem::path path;
             std::string error;
             const bool picked = folder
-                                    ? PickAndroidFolderForImport(path, error)
+                                    ? PickAndroidFolderForImport(path, error, moveSource)
                                     : PickAndroidArchiveForImport(path, error);
             if (!picked) {
               if (!error.empty()) {
@@ -276,6 +276,14 @@ void FolderActionService::requestAddFolder() {
     state->active.store(false, std::memory_order_release);
     throw;
   }
+#endif
+}
+
+void FolderActionService::requestImportFolder(bool moveSource) {
+#if TARGET_OS_ANDROID
+  if (impl_) impl_->requestImport(true, moveSource);
+#else
+  (void)moveSource;
 #endif
 }
 

@@ -1166,7 +1166,8 @@ std::optional<std::string> digestAndMaybeCopy(
     }
 #else
     const int input =
-        openInventoryFileNoFollow(inventory, entry.normalizedPath);
+        openInventoryFileNoFollow(
+            inventory, utf8Path(entry.sourcePath.lexically_relative(inventory.rootPath)));
     if (input < 0 ||
         (requireStable && !metadataMatchesOpenFile(input, entry.metadata))) {
       if (input >= 0) {

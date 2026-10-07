@@ -493,6 +493,11 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   audio::playback::DrainRealtimeCommands(state, true);
   audio::playback::DrainCommands(state);
 
+  if (userData->applicationSuspended.load(std::memory_order_acquire)) {
+    fillSilence(pOutput, frameCount, outputChannels);
+    return;
+  }
+
   const bool clockRunning = userData->stopwatch->isRunning();
   if (!clockRunning && state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);

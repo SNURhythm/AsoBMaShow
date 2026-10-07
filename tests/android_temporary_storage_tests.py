@@ -30,6 +30,34 @@ public class Application {
     public File getCacheDir() { return CACHE; }
 }
 """,
+            "android/util/Log.java": """
+package android.util;
+public class Log {
+    public static Throwable lastError;
+    public static int e(String tag, String message, Throwable error) {
+        lastError = error;
+        return 0;
+    }
+}
+""",
+            "com/snurhythm/asobmashow/AsoBMaShowDocumentsProvider.java": """
+package com.snurhythm.asobmashow;
+import android.app.Application;
+import android.system.Os;
+import java.io.IOException;
+public class AsoBMaShowDocumentsProvider {
+    public static int calls;
+    public static boolean privateEnvironmentReady;
+    public static IOException failure;
+    public static void initializeDocuments(Application application) throws IOException {
+        calls++;
+        String cache = application.getCacheDir().getAbsolutePath();
+        privateEnvironmentReady = cache.equals(Os.getenv("TMPDIR"))
+                && cache.equals(Os.getenv("SQLITE_TMPDIR"));
+        if (failure != null) throw failure;
+    }
+}
+""",
             "android/system/ErrnoException.java": """
 package android.system;
 public class ErrnoException extends Exception {
@@ -72,6 +100,9 @@ public class Os {
 
     def test_application_replaces_inherited_temporary_storage(self):
         self.run_scenario("inherited")
+
+    def test_documents_failure_keeps_private_temporary_storage_ready(self):
+        self.run_scenario("documents-failure")
 
     def test_environment_failure_prevents_native_startup(self):
         for variable in ("TMPDIR", "SQLITE_TMPDIR"):

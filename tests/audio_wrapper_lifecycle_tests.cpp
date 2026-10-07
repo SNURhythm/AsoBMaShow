@@ -1953,6 +1953,105 @@ void testRunningMidBufferStopAndRateTransitionDoesNotJump() {
   }
 }
 
+void testApplicationSuspensionSilencesEveryBusWithoutConsumingPcm() {
+  for (const auto bus : {audio::Bus::System, audio::Bus::Bgm,
+                         audio::Bus::Keysound}) {
+    Stopwatch stopwatch;
+    auto control = std::make_shared<FactoryControl>();
+    AudioWrapper wrapper(&stopwatch,
+                         std::make_unique<FakeConfigurableFactory>(control));
+    if (bus != audio::Bus::System) stopwatch.start();
+    const path_t sound = PATH("application-suspension.wav");
+    std::vector<short> pcm(64, 6000);
+    std::fill(pcm.begin() + 8, pcm.end(), 12000);
+    require(wrapper.loadGeneratedSound(sound, std::move(pcm), 1, 44100) &&
+                wrapper.playSound(sound, bus),
+            "application suspension fixture loads and starts a voice");
+    std::array<std::int16_t, 16> output{};
+    control->renderCallback(output.data(), 8, 2, control->renderUserData);
+    const auto firstSample = output[0];
+    require(firstSample > 0, "foreground voice is audible before suspension");
+    auto *data = static_cast<UserData *>(control->renderUserData);
+    const auto frames = data->audioClockFrameCursor->load();
+    wrapper.setApplicationSuspended(true);
+    wrapper.setApplicationSuspended(true);
+    for (int callback = 0; callback < 16; ++callback) {
+      output.fill(100);
+      control->renderCallback(output.data(), 8, 2, control->renderUserData);
+      require(std::ranges::all_of(output, [](auto sample) { return sample == 0; }),
+              "background callbacks silence System, Bgm, and Keysound buses");
+    }
+    require(data->audioClockFrameCursor->load() == frames,
+            "background callbacks do not advance the chart audio clock");
+    wrapper.setApplicationSuspended(false);
+    control->renderCallback(output.data(), 8, 2, control->renderUserData);
+    require(std::abs(output[0] - firstSample * 2) <= 2,
+            "foreground resumes at the retained PCM cursor instead of consuming the tail");
+  }
+}
+
+void testBackgroundGameplayKeepsClockRunningAndPreservesExplicitPause() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  stopwatch.start();
+  const path_t sound = PATH("background-gameplay.wav");
+  require(wrapper.loadGeneratedSound(sound, std::vector<short>(4096, 6000), 1,
+                                     44100) &&
+              wrapper.playSound(sound, audio::Bus::Bgm),
+          "background gameplay fixture starts chart audio");
+  std::array<std::int16_t, 16> output{};
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  const auto frames = data->audioClockFrameCursor->load();
+  // Gameplay opts out of application suspension; the renderer can remain off.
+  wrapper.setApplicationSuspended(false);
+  for (int callback = 0; callback < 16; ++callback) {
+    control->renderCallback(output.data(), 8, 2, control->renderUserData);
+    require(output[0] != 0, "background chart PCM stays audible");
+  }
+  require(data->audioClockFrameCursor->load() > frames,
+          "background chart audio callbacks advance the gameplay clock");
+  wrapper.pauseClock();
+  const auto pausedFrames = data->audioClockFrameCursor->load();
+  wrapper.setApplicationSuspended(true);
+  wrapper.setApplicationSuspended(false);
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(wrapper.isClockPaused() &&
+              data->audioClockFrameCursor->load() == pausedFrames,
+          "foregrounding never resumes an explicit clock pause");
+}
+
+void testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("background-submission.wav");
+  require(wrapper.loadGeneratedSound(sound, std::vector<short>(64, 6000), 1,
+                                     44100), "background submission fixture loads");
+  wrapper.setApplicationSuspended(true);
+  require(wrapper.playSound(sound, audio::Bus::System),
+          "a worker can submit a sound while the app is suspended");
+  std::array<std::int16_t, 16> output{};
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(std::ranges::all_of(output, [](auto sample) { return sample == 0; }),
+          "newly submitted System voices cannot bypass application suspension");
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  require(data->callbackState->playingSoundCount == 1,
+          "the suspended callback retains the submitted voice");
+  require(audio::playback::EnqueueCommand(
+              *data->callbackState, {.type = AudioCommandType::StopAll}),
+          "stop command is accepted during suspension");
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(data->callbackState->playingSoundCount == 0,
+          "suspended callbacks drain control commands without waiting for foreground");
+  wrapper.setApplicationSuspended(false);
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(std::ranges::all_of(output, [](auto sample) { return sample == 0; }),
+          "a voice stopped in background does not return on foreground");
+}
+
 void testSettingsToneIsAudibleWithoutStartingGameplayClock() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -3209,6 +3308,9 @@ void testOversizedCallbacksUseBoundedScratchAndPreserveScheduledOnsets() {
 
 int main() {
   try {
+    testApplicationSuspensionSilencesEveryBusWithoutConsumingPcm();
+    testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops();
+    testBackgroundGameplayKeepsClockRunningAndPreservesExplicitPause();
     testRestartCommitsRateBeforeSynchronousFirstCallback();
     testNativePresentationHistoryResetsBeforeBackendRestart();
     testNativePresentationHistoryUsesRateAndPauseTimelineResets();

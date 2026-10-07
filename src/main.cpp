@@ -33,6 +33,7 @@
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include "view/TextInputBox.h"
+#include "view/FontCacheSession.h"
 #include "view/ImageView.h"
 #include <cstdlib>
 #include <iostream>
@@ -184,7 +185,9 @@ void changeWorkingDirectoryToExecutableDir(
 }
 
 uint32_t resolveResetFlags() {
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX || TARGET_OS_ANDROID
+  // Avoid a multisampled native-resolution backbuffer and its resolve on
+  // Android. Text and skin images retain their own texture filtering.
   constexpr int msaaSamples = 0;
 #else
   constexpr int msaaSamples = 2;
@@ -575,7 +578,8 @@ int main(int argv, char **args) {
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #if TARGET_OS_ANDROID
-  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "1");
+  // Keep the CPU gameplay tick alive; the main loop suspends bgfx explicitly.
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
   SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO, "1");
 #endif
   // print bgfx version
@@ -619,7 +623,7 @@ int main(int argv, char **args) {
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
   uint32_t windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-  if (TARGET_PLATFORM == iOS) {
+  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
     // Use the current screen size in either launch orientation. An exclusive
     // mode based on the initial landscape dimensions can fail in portrait.
     windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
@@ -649,9 +653,6 @@ int main(int argv, char **args) {
                 windowLogicalHeight);
 
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-#if TARGET_OS_ANDROID
-  SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
-#endif
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
   if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
     windowLogicalWidth = windowCreateWidth;
@@ -912,8 +913,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
       s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
       [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
-      [&context, &activeBgfxResetFlags](std::uint32_t /*resetFlags*/,
-                                        std::string &errorMessage)
+      [&context, &activeBgfxResetFlags, &presentationOrientation](
+          std::uint32_t /*resetFlags*/, std::string &errorMessage)
           -> std::unique_ptr<display::IRendererDisplayTransaction> {
         auto reservation =
             context.rendererAccess.tryAcquireDisplay(errorMessage);
@@ -925,8 +926,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             std::move(*reservation));
         return std::make_unique<CallbackRendererDisplayTransaction>(
             std::move(lifetime),
-            [&context, &activeBgfxResetFlags](std::uint32_t resetFlags,
-                                              std::string &syncError) {
+            [&context, &activeBgfxResetFlags, &presentationOrientation](
+                std::uint32_t resetFlags, std::string &syncError) {
               int logicalWidth = 0;
               int logicalHeight = 0;
               int renderWidth = 0;
@@ -944,6 +945,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               rendering::heightScale = static_cast<float>(renderHeight) /
                                        static_cast<float>(logicalHeight);
               rendering::updateUIScale(renderWidth, renderHeight);
+              // Startup VSync may observe the OS rotation before its resize
+              // event. Publish the matching profile while skins can prepare
+              // in the menu, before gameplay locks the current orientation.
+              presentationOrientation.updateViewport(renderWidth, renderHeight);
+              context.sceneManager->setPresentationOrientation(
+                  presentationOrientation.orientation());
               activeBgfxResetFlags = resetFlags;
               s_bgfxResetFlags = resetFlags;
               context.bgfxResetFlags.store(resetFlags,
@@ -956,7 +963,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               context.framePacer.reset(std::chrono::steady_clock::now());
               return true;
             });
-      });
+      }, TARGET_PLATFORM == Android);
+#if TARGET_OS_ANDROID
+  // Android owns native geometry; only apply the persisted renderer preference.
+  auto startupVideo = context.displayBackend->capture().settings;
+  startupVideo.vsync = context.settings.audioVideo.video.vsync;
+  std::string startupVsyncError;
+  if (!context.displayBackend->apply(startupVideo, startupVsyncError)) {
+    SDL_Log("Could not apply Android VSync preference: %s",
+            startupVsyncError.c_str());
+  }
+#endif
   context.displaySettingsManager =
       std::make_unique<display::DisplaySettingsManager>(
           *context.displayBackend, context.framePacer,
@@ -989,6 +1006,13 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (previous == background) {
       return;
     }
+#if TARGET_OS_ANDROID
+    // The miniaudio device is independent of SDL's paused audio devices.
+    const bool gameplayContinues = sceneManager.currentScene != nullptr &&
+        sceneManager.currentScene->continuesAudioInBackground();
+    context.jukebox.audioRuntime().setApplicationSuspended(
+        background && !gameplayContinues);
+#endif
     scene_event_routing::dispatchApplicationBackgroundChange(
         sceneManager.currentScene, background);
     context.setIrApplicationActive(!background);
@@ -1010,6 +1034,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       appliedOrientation = context.settings.screenOrientation;
       screen_orientation::apply(appliedOrientation, false);
     }
+#if TARGET_OS_ANDROID
+    if (!context.appInBackground.load(std::memory_order_acquire))
+#endif
     context.pollGameplaySkinCommits();
     if (context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
@@ -1057,6 +1084,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     };
 
     auto applyWindowResize = [&](int logicalW, int logicalH) {
+#if TARGET_OS_ANDROID
+      if (context.appInBackground.load(std::memory_order_acquire)) return false;
+#endif
       if (logicalW <= 0 || logicalH <= 0) {
         return true;
       }
@@ -1076,6 +1106,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
       if (targetRenderW == rendering::render_width &&
           targetRenderH == rendering::render_height) {
+        presentationOrientation.updateViewport(targetRenderW, targetRenderH);
+        sceneManager.setPresentationOrientation(
+            presentationOrientation.orientation());
         return true;
       }
 
@@ -1153,6 +1186,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                                    std::memory_order_relaxed);
       bgfx::reset(rendering::render_width, rendering::render_height,
                   activeBgfxResetFlags);
+      // Reset clears view framebuffer bindings even when the drawable size
+      // stays unchanged, so the next frame must restore the BGA input targets.
+      context.restoreGameplayRenderViews();
       bgfx::frame();
       androidRenderSuspended = suspend;
       SDL_Log("Android rendering %s", suspend ? "suspended" : "resumed");
@@ -1243,7 +1279,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
 
-      if (scene_event_routing::shouldDispatchToScene(event)) {
+      if (scene_event_routing::shouldDispatchToScene(event) &&
+          !(TARGET_OS_ANDROID &&
+            context.appInBackground.load(std::memory_order_acquire) &&
+            event.type != SDL_WINDOWEVENT)) {
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;
@@ -1269,8 +1308,16 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     };
 
     auto waitForBackgroundEvent = [&]() {
+      int timeoutMs = kBackgroundEventWaitTimeoutMs;
+#if TARGET_OS_ANDROID
+      if (sceneManager.currentScene != nullptr &&
+          sceneManager.currentScene->continuesAudioInBackground()) {
+        sceneManager.currentScene->updateWhileBackgrounded();
+        timeoutMs = 16;
+      }
+#endif
       SDL_Event waitEvent{};
-      if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
+      if (SDL_WaitEventTimeout(&waitEvent, timeoutMs)) {
         if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
           ++rawEventsInWindow;
         }
@@ -1672,6 +1719,7 @@ static void runReadyApplication(ApplicationContext &context) {
 }
 
 int run() {
+  text_runtime::FontCacheSession fontCacheSession;
   ApplicationContext context;
   return application_startup::execute(
       context.profileReady(),

@@ -168,6 +168,29 @@ SDL_Color displayApplyColor(display::ApplyStatus status) {
   return {255, 177, 170, 255};
 }
 
+void refreshFixedDisplayGeometry(player_settings::VideoSettings &draft,
+                                 display::IDisplayBackend *backend) {
+  if (backend == nullptr) {
+    return;
+  }
+  const auto capabilities = backend->capabilities();
+  if (capabilities.canChangeMode && capabilities.canSelectDisplay &&
+      capabilities.canSelectResolution) {
+    return;
+  }
+  const auto effective = backend->capture().settings;
+  if (!capabilities.canChangeMode) {
+    draft.mode = effective.mode;
+  }
+  if (!capabilities.canSelectDisplay) {
+    draft.displayIndex = effective.displayIndex;
+  }
+  if (!capabilities.canSelectResolution) {
+    draft.width = effective.width;
+    draft.height = effective.height;
+  }
+}
+
 int volumePercent(float value) {
   return static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 100.0F));
 }
@@ -421,6 +444,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
     return cardsColumn;
   }
 
+  refreshFixedDisplayGeometry(displayDraft, context.displayBackend.get());
   const auto model = BuildDisplayControlModel(
       displayDraft, context.displaySettingsManager->capabilities());
   auto *controls = new View();
@@ -707,6 +731,7 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
   }
 
   if (syncInputs && context.displaySettingsManager != nullptr) {
+    refreshFixedDisplayGeometry(displayDraft, context.displayBackend.get());
     const auto displayModel = BuildDisplayControlModel(
         displayDraft, context.displaySettingsManager->capabilities());
     refreshDropdown(displayModeDropdown, displayModel.modes,
@@ -774,6 +799,7 @@ void SettingsScene::applyDisplayDraft() {
   if (audioVideoSession == nullptr) {
     return;
   }
+  refreshFixedDisplayGeometry(displayDraft, context.displayBackend.get());
   const auto result = audioVideoSession->beginDisplayPreview(
       displayDraft, std::chrono::steady_clock::now());
   setDisplayStatus(displayApplyMessage(result),

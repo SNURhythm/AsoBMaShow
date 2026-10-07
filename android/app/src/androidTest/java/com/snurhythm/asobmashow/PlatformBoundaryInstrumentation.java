@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.security.NetworkSecurityPolicy;
 import android.system.Os;
@@ -42,11 +43,65 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         start();
     }
 
+    @Override public Activity newActivity(ClassLoader loader, String className, Intent intent)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        if (arguments != null && "import-copy-benchmark".equals(arguments.getString("mode"))
+                && AsoBMaShowActivity.class.getName().equals(className)) {
+            return new ImportCopyBenchmark.PickerActivity();
+        }
+        return super.newActivity(loader, className, intent);
+    }
+
     @Override
     public void onStart() {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            if ("import-copy-benchmark".equals(arguments.getString("mode"))) {
+                ImportCopyBenchmark.run(getTargetContext(), this, arguments);
+                result.putString("result", "PASS import copy benchmark; all copied bytes verified");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
+            if ("import-cancellation".equals(arguments.getString("mode"))) {
+                ImportCancellationChecks.run(getTargetContext());
+                result.putString("result", "PASS parallel provider cancellation and error classification");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
+            if ("skin-directory".equals(arguments.getString("mode"))) {
+                SkinDirectoryInstrumentationChecks.run(getTargetContext(), this);
+                result.putString("result", "PASS skin directory import, bounds, cancellation, ownership and cleanup");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
+            if ("documents-open-files".equals(arguments.getString("mode"))) {
+                Intent intent = DocumentsProviderInstrumentationChecks.verifyOpenFilesIntent(
+                        getTargetContext(), this, BuildConfig.APPLICATION_ID + ".documents");
+                getTargetContext().startActivity(intent);
+                result.putString("result", "PASS opened BMS in system Files");
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
+            if ("documents-provider".equals(arguments.getString("mode")) ||
+                    "documents-refresh".equals(arguments.getString("mode"))) {
+                DocumentsProviderInstrumentationChecks.run(getTargetContext(), this);
+                if ("documents-refresh".equals(arguments.getString("mode"))) {
+                    startActivitySync(new Intent(getTargetContext(), AsoBMaShowActivity.class)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    long deadline = SystemClock.elapsedRealtime() + 120000;
+                    while (getTargetContext().getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                            .getBoolean("library-dirty", false) && SystemClock.elapsedRealtime() < deadline) {
+                        SystemClock.sleep(100);
+                    }
+                    require(!getTargetContext().getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                            .getBoolean("library-dirty", false),
+                            "Foreground native refresh never completed/acknowledged provider edits");
+                }
+                result.putString("result", "PASS " + arguments.getString("mode") + " " + BuildConfig.FLAVOR);
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             File cacheDirectory = getTargetContext().getCacheDir();
             require(cacheDirectory.getAbsolutePath().equals(Os.getenv("TMPDIR")),
                     "Target application did not configure native private temporary storage");

@@ -508,7 +508,8 @@ void SettingsScene::ensurePreviewInputHandler() {
         LogicalGameplayRegistryPolicy{.acceptKeyboardFromRegistry = false});
     previewInputHandler->discardPendingTouchEvents();
     previewInputHandler->setTouchEventCallback(
-        [this](SDL_FingerID finger, ReplayTouchAction action, Vector3 position) {
+        [this](SDL_FingerID finger, ReplayTouchAction action, Vector3 position,
+               std::uint64_t) {
           if (!previewPresentation) return false;
           if (!previewTouchRouter) return true;
           const auto phase = action == ReplayTouchAction::Down ? gameplay::RealtimeTouchPhase::Down

@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <thread>
@@ -29,6 +30,7 @@
 #include <unistd.h>
 #endif
 
+#include "SkinDirectoryTraversal.h"
 #include "SkinIOSFileOpenCompatibility.h"
 
 namespace skin {
@@ -113,22 +115,25 @@ bool ensureDirectoryNoFollow(const fs::path &directory) {
     return true;
 #else
     int current = ::open(absolute.root_path().c_str(),
-                         O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                         skinAncestorDirectoryOpenFlag() | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (current < 0) {
       return false;
     }
     const fs::path relative = absolute.lexically_relative(absolute.root_path());
-    for (const fs::path &component : relative) {
+    for (auto iterator = relative.begin(); iterator != relative.end(); ++iterator) {
+      const fs::path &component = *iterator;
+      const int access = std::next(iterator) == relative.end()
+                             ? O_RDONLY : skinAncestorDirectoryOpenFlag();
       if (component.empty() || component == "." || component == "..") {
         ::close(current);
         return false;
       }
       int next = ::openat(current, component.c_str(),
-                          O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                          access | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
       if (next < 0 && errno == ENOENT &&
           ::mkdirat(current, component.c_str(), 0700) == 0) {
         next = ::openat(current, component.c_str(),
-                        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                        access | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
       }
       ::close(current);
       if (next < 0) {

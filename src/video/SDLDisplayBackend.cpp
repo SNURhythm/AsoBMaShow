@@ -233,17 +233,21 @@ std::uint32_t resetFlagsForVsync(std::uint32_t current, bool vsync) {
 SDLDisplayBackend::SDLDisplayBackend(
     SDL_Window *window, bool fixedMobileDisplayValue,
     ResetFlagsReader readResetFlagsValue,
-    RendererTransactionFactory beginRendererTransactionValue)
+    RendererTransactionFactory beginRendererTransactionValue,
+    bool allowMobileVsyncValue)
     : SDLDisplayBackend(std::make_shared<RealSDLDisplayAdapter>(window),
                         fixedMobileDisplayValue, std::move(readResetFlagsValue),
-                        std::move(beginRendererTransactionValue)) {}
+                        std::move(beginRendererTransactionValue),
+                        allowMobileVsyncValue) {}
 
 SDLDisplayBackend::SDLDisplayBackend(
     std::shared_ptr<ISDLDisplayAdapter> adapterValue,
     bool fixedMobileDisplayValue, ResetFlagsReader readResetFlagsValue,
-    RendererTransactionFactory beginRendererTransactionValue)
+    RendererTransactionFactory beginRendererTransactionValue,
+    bool allowMobileVsyncValue)
     : adapter(std::move(adapterValue)),
       fixedMobileDisplay(fixedMobileDisplayValue),
+      allowMobileVsync(allowMobileVsyncValue),
       readResetFlags(std::move(readResetFlagsValue)),
       beginRendererTransaction(std::move(beginRendererTransactionValue)) {}
 
@@ -287,7 +291,8 @@ Capabilities SDLDisplayBackend::capabilities() const {
       .canSelectDisplay = !fixedMobileDisplay && rendererTransactionsAvailable,
       .canSelectResolution =
           !fixedMobileDisplay && rendererTransactionsAvailable,
-      .canChangeVsync = !fixedMobileDisplay && rendererTransactionsAvailable,
+      .canChangeVsync =
+          (!fixedMobileDisplay || allowMobileVsync) && rendererTransactionsAvailable,
       .canSetFrameCap = true,
   };
   if (!adapter) {
@@ -565,7 +570,15 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
   }
   const RuntimeState previous = capture();
   const SDLWindowState current = adapter->windowState();
-  const bool mutateWindow = !sameDisplayFields(settings, current);
+  if (fixedMobileDisplay &&
+      (settings.mode != previous.settings.mode || settings.displayIndex != 0 ||
+       settings.width != current.width || settings.height != current.height ||
+       (!allowMobileVsync && settings.vsync != previous.settings.vsync))) {
+    errorMessage = "Display configuration is fixed on this platform.";
+    return false;
+  }
+  const bool mutateWindow =
+      !fixedMobileDisplay && !sameDisplayFields(settings, current);
   const std::uint32_t resetFlags =
       resetFlagsForVsync(previous.bgfxResetFlags, settings.vsync);
   const bool synchronize =
@@ -584,7 +597,8 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
   }
 
   std::optional<SDLNativeDisplayMode> expectedMode;
-  if (settings.mode == player_settings::DisplayMode::ExclusiveFullscreen) {
+  if (!fixedMobileDisplay &&
+      settings.mode == player_settings::DisplayMode::ExclusiveFullscreen) {
     expectedMode = findExclusiveMode(*adapter, settings.displayIndex,
                                      settings.width, settings.height);
     if (!expectedMode.has_value()) {
@@ -635,8 +649,9 @@ RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
       !snapshot.windowMaximized &&
       (current.x != snapshot.windowX || current.y != snapshot.windowY);
   const bool restoreMaximized = current.maximized != snapshot.windowMaximized;
-  const bool mutateWindow = !sameDisplayFields(snapshot.settings, current) ||
-                            restorePosition || restoreMaximized;
+  const bool mutateWindow = !fixedMobileDisplay &&
+      (!sameDisplayFields(snapshot.settings, current) ||
+       restorePosition || restoreMaximized);
   const bool synchronize =
       mutateWindow || snapshot.bgfxResetFlags != beforeRestore.bgfxResetFlags;
 
@@ -654,7 +669,7 @@ RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
   }
 
   std::optional<SDLNativeDisplayMode> restoreMode;
-  if (snapshot.settings.mode ==
+  if (!fixedMobileDisplay && snapshot.settings.mode ==
           player_settings::DisplayMode::ExclusiveFullscreen &&
       snapshot.exclusiveRefreshRateHz > 0) {
     restoreMode =
@@ -662,7 +677,7 @@ RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
                              .height = snapshot.settings.height,
                              .refreshRateHz = snapshot.exclusiveRefreshRateHz,
                              .pixelFormat = snapshot.exclusivePixelFormat};
-  } else if (snapshot.settings.mode ==
+  } else if (!fixedMobileDisplay && snapshot.settings.mode ==
              player_settings::DisplayMode::ExclusiveFullscreen) {
     restoreMode =
         findExclusiveMode(*adapter, snapshot.settings.displayIndex,

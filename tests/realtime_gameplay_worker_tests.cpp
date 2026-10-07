@@ -1,4 +1,6 @@
 #include "scene/play/RealtimeGameplayWorker.h"
+#include "input/SDLTouchInputSource.h"
+#include "scene/play/RealtimeSdlTouchInput.h"
 
 #include "bms_parser.hpp"
 #include "input/LogicalGameplayInputAdapter.h"
@@ -15,6 +17,14 @@
 #include <iostream>
 #include <new>
 #include <thread>
+
+namespace rendering {
+int render_width = 1000, render_height = 500;
+int window_width = 1000, window_height = 500;
+float ui_scale_x = 1, ui_scale_y = 1;
+int ui_offset_x = 0, ui_offset_y = 0;
+float widthScale = 1, heightScale = 1;
+}
 
 namespace {
 
@@ -190,6 +200,170 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
     std::this_thread::sleep_for(1ms);
   }
   return predicate();
+}
+
+// The scene owns these boundaries in production. Ingress, immutable hit lookup,
+// routing/publication and worker submission below are extracted unchanged.
+struct RealtimeGameplaySession {
+  struct Scene { struct Context { std::atomic_bool appInBackground{false}; } context; } owner;
+  Scene *scene = &owner;
+  std::atomic_bool acceptingTouch{true}, inputInterrupted{false};
+  std::atomic_bool auxiliaryTouchOverflow{false}, touchRoutingRecoveryRequested{false};
+  std::mutex touchRouterMutex;
+  gameplay::RealtimeGameplayWorker *worker = nullptr;
+  std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
+  gameplay::RealtimeTouchHitSnapshotPublication touchHitSnapshots;
+  gameplay::RealtimeTouchHitCaptureTracker rawHitCaptures;
+  std::atomic<std::uint64_t> requestedHitCaptureReset{0};
+  std::uint64_t appliedRawHitCaptureReset = 0;
+  gameplay::BoundedMpscQueue<gameplay::RealtimeTouchSample, 64> auxiliaryTouches;
+  void enqueueStartSelectInput(const gameplay::RealtimeGameplayInput &) {}
+#include "android_realtime_touch_ingress_methods.h"
+};
+
+void testAndroidTouchReachesWorkerWithoutRenderDrain() {
+  for (bool deferred : {false, true}) {
+    FakeClock clock;
+    FakeAudio audio;
+    clock.nowMicros.store(1'000'000);
+    auto config = makeConfig(clock, audio);
+    config.clock.mapSteadyToSong = [](void *, std::int64_t) -> std::optional<std::int64_t> {
+      return 1'000'000;
+    };
+    gameplay::RealtimeGameplayWorker worker(makeScratchlessDefinition(4), config);
+    gameplay::RealtimeTouchLayout layout{
+        .revision = 1, .bottomLeft = {0, 1}, .bottomRight = {1, 1},
+        .topLeft = {0, 0}, .topRight = {1, 0},
+        .lanes = {0}, .scratch = {false}, .laneCount = 1, .keyMode = 4};
+    RealtimeGameplaySession session;
+    session.worker = &worker;
+    session.touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(7, layout,
+        gameplay::RealtimeTouchInputSink{.context = &session,
+                                         .emit = &RealtimeGameplaySession::emitTouchInput});
+    require(session.touchHitSnapshots.publish({.layoutRevision = 1,
+        .uiTransform = {.renderWidth = 1000, .renderHeight = 500,
+                        .uiScaleX = 1, .uiScaleY = 1, .uiWidth = 1000, .uiHeight = 500}}),
+            "immutable input geometry publishes");
+    SDLTouchInputSource source(deferred);
+    source.setRawEventCallback([&](const SDL_Event &event, std::uint64_t time) {
+      RealtimeGameplaySession::sdlTouchSink(session, event, time);
+    });
+    require(worker.start(), "SDL timing worker starts");
+    SDL_Event event{};
+    event.type = SDL_FINGERDOWN;
+    event.tfinger.fingerId = 42;
+    event.tfinger.x = .5F;
+    event.tfinger.y = .5F;
+    for (int gate = 0; gate < 3; ++gate) {
+      session.acceptingTouch.store(gate != 0);
+      session.owner.context.appInBackground.store(gate == 1);
+      session.inputInterrupted.store(gate == 2);
+      SDLTouchInputSource::EventHandler(&source, &event);
+      gameplay::RealtimeTouchSample ignored;
+      require(!session.auxiliaryTouches.tryPop(ignored),
+              "closed, background and interrupted ingress must not publish touches");
+    }
+    session.acceptingTouch.store(true);
+    session.owner.context.appInBackground.store(false);
+    session.inputInterrupted.store(false);
+    std::thread producer([&] { SDLTouchInputSource::EventHandler(&source, &event); });
+    producer.join();
+    const bool admitted = waitUntil([&] {
+      return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1;
+    });
+    clock.nowMicros.store(3'000'000, std::memory_order_release);
+    require(waitUntil([&] {
+      return worker.acquireLatestSnapshot()->noteStates[0].played;
+    }), "worker passes note deadline without rendering");
+    source.pumpPendingEvents();
+    auto snapshot = worker.acquireLatestSnapshot();
+    gameplay::RealtimeTouchSample sample;
+    int auxiliarySamples = 0;
+    while (session.auxiliaryTouches.tryPop(sample)) ++auxiliarySamples;
+    require(admitted && snapshot->attempt.judgeCounts[PGreat] == 1 &&
+                snapshot->attempt.judgeCounts[Poor] == 0 && auxiliarySamples == 1,
+            "Android touch must reach judgement before render drain and automatic Poor");
+    source.setRawEventCallback({});
+    worker.stop();
+  }
+  SDL_Event mouse{};
+  mouse.type = SDL_MOUSEBUTTONDOWN;
+  mouse.button.x = 250;
+  mouse.button.y = 125;
+  const auto converted = gameplay::realtimeTouchSampleFromSdl(mouse, 123456,
+      {.renderWidth = 1000, .renderHeight = 500, .inputScaleX = 2, .inputScaleY = 2});
+  require(converted && converted->normalizedX == .5F && converted->normalizedY == .5F &&
+              converted->phase == gameplay::RealtimeTouchPhase::Down &&
+              converted->steadyTimestampMicros == 123456,
+          "mouse ingress uses published drawable scaling and preserves time");
+}
+
+void testAndroidSyntheticMouseDoesNotStealPointerZero() {
+  FakeClock clock;
+  FakeAudio audio;
+  clock.nowMicros.store(1'000'000);
+  auto config = makeConfig(clock, audio);
+  config.clock.mapSteadyToSong = [](void *, std::int64_t) -> std::optional<std::int64_t> {
+    return 1'000'000;
+  };
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.KeyMode = 4;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(0, new bms_parser::Note(11));
+  timeline->SetNote(1, new bms_parser::Note(12));
+  chart.Measures.push_back(measure);
+  gameplay::RealtimeGameplayWorker worker(gameplay::buildGameplayDefinition(chart, 0), config);
+  RealtimeGameplaySession session;
+  session.worker = &worker;
+  gameplay::RealtimeTouchLayout layout{
+      .revision = 1, .bottomLeft = {0, 1}, .bottomRight = {1, 1},
+      .topLeft = {0, 0}, .topRight = {1, 0},
+      .lanes = {0, 1}, .scratch = {false, false}, .laneCount = 2, .keyMode = 4};
+  session.touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(7, layout,
+      gameplay::RealtimeTouchInputSink{.context = &session,
+                                       .emit = &RealtimeGameplaySession::emitTouchInput});
+  require(session.touchHitSnapshots.publish({.layoutRevision = 1,
+      .uiTransform = {.renderWidth = 1000, .renderHeight = 500,
+                      .uiScaleX = 1, .uiScaleY = 1, .uiWidth = 1000, .uiHeight = 500}}),
+          "two-lane input geometry publishes");
+  SDLTouchInputSource source(true);
+  source.setRawEventCallback([&](const SDL_Event &event, std::uint64_t time) {
+    RealtimeGameplaySession::sdlTouchSink(session, event, time);
+  });
+  require(worker.start(), "multitouch worker starts");
+  // SDL sends a touch-synthesized mouse Down before its originating FingerDown.
+  SDL_Event mouse{};
+  mouse.type = SDL_MOUSEBUTTONDOWN;
+  mouse.button.which = SDL_TOUCH_MOUSEID;
+  mouse.button.x = 250;
+  mouse.button.y = 250;
+  SDLTouchInputSource::EventHandler(&source, &mouse);
+  SDL_Event finger{};
+  finger.type = SDL_FINGERDOWN;
+  finger.tfinger.fingerId = 5;
+  finger.tfinger.x = .25F;
+  finger.tfinger.y = .5F;
+  SDLTouchInputSource::EventHandler(&source, &finger);
+  finger.tfinger.fingerId = 0;
+  finger.tfinger.x = .75F;
+  SDLTouchInputSource::EventHandler(&source, &finger);
+  require(waitUntil([&] { return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 2; }),
+          "synthetic mouse must not steal pointer zero or drop a simultaneous second note");
+  finger.type = SDL_FINGERUP;
+  SDLTouchInputSource::EventHandler(&source, &finger);
+  require(waitUntil([&] {
+    auto snapshot = worker.acquireLatestSnapshot();
+    return snapshot->lanePressed[0] && !snapshot->lanePressed[1];
+  }), "releasing pointer zero must preserve the other physical finger's hold");
+  finger.tfinger.fingerId = 5;
+  finger.tfinger.x = .25F;
+  SDLTouchInputSource::EventHandler(&source, &finger);
+  require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[0]; }),
+          "last physical release clears its own held lane");
+  source.setRawEventCallback({});
+  worker.stop();
 }
 
 void testPreparationSnapshotsDoNotVisitUnchangedLargeChart() {
@@ -2015,6 +2189,8 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+  testAndroidTouchReachesWorkerWithoutRenderDrain();
+  testAndroidSyntheticMouseDoesNotStealPointerZero();
   testLr2SameKeyBatchUsesLatestEdgeAndRetainsReplayHistory();
   testLr2ScratchBatchKeepsLatestKeyAndProcessingDirection();
   testLr2SimultaneousInputsUseLaneOrderAndOneUpdate();

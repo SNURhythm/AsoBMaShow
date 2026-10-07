@@ -120,9 +120,12 @@ public final class AsoBMaShowBackupAgent extends BackupAgent {
             File externalRoot) {
         List<Path> roots = new ArrayList<>();
         roots.add(credentialContext.getFilesDir().toPath().resolve("profiles"));
+        roots.add(credentialContext.getFilesDir().toPath().resolve("Documents/profiles"));
         roots.add(deviceContext.getFilesDir().toPath().resolve("profiles"));
+        roots.add(deviceContext.getFilesDir().toPath().resolve("Documents/profiles"));
         if (externalRoot != null) {
             roots.add(externalRoot.toPath().resolve("profiles"));
+            roots.add(externalRoot.toPath().resolve("Documents/profiles"));
         }
         return roots;
     }

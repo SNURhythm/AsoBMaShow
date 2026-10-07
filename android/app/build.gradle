@@ -142,14 +142,14 @@ android {
         }
     }
 
-    flavorDimensions 'distribution'
+    flavorDimensions 'fileAccess'
     productFlavors {
-        play {
-            dimension 'distribution'
+        restricted_file_access {
+            dimension 'fileAccess'
             buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'false'
         }
-        firebase {
-            dimension 'distribution'
+        all_file_access {
+            dimension 'fileAccess'
             buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'true'
         }
     }
@@ -162,6 +162,12 @@ android {
             ]
             assets.srcDir(generatedAssetsDir)
         }
+    }
+
+    androidResources {
+        // FreeType seeks through font tables and glyphs. Compressed APK assets
+        // re-inflate on backward seeks, stalling the UI on large CJK fonts.
+        noCompress += ['ttf', 'otf', 'ttc']
     }
 
     buildTypes {

@@ -65,6 +65,13 @@ struct RealtimeTouchLayout {
   bool dragMode = false;
 };
 
+// Shared by native realtime ingress and SDL's legacy gameplay handler. Points
+// and lane regions use normalized drawable coordinates. The uniform-layout
+// flag is reserved for the realtime router's historical built-in adapter.
+[[nodiscard]] std::optional<std::size_t> hitTestRealtimeTouchLayout(
+    const RealtimeTouchLayout &layout, float x, float y, bool requireInside,
+    bool legacyUniformLayout = false) noexcept;
+
 struct RealtimeTouchUiTransform {
   int renderWidth = 0;
   int renderHeight = 0;
@@ -74,6 +81,8 @@ struct RealtimeTouchUiTransform {
   int uiOffsetY = 0;
   int uiWidth = 0;
   int uiHeight = 0;
+  float inputScaleX = 1.0F;
+  float inputScaleY = 1.0F;
 
   bool operator==(const RealtimeTouchUiTransform &) const = default;
 };

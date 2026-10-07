@@ -88,6 +88,7 @@ public:
   ~DisplaySettingsManager();
 
   Capabilities capabilities() const;
+  player_settings::VideoSettings captureEffectiveSettings() const;
   const player_settings::VideoSettings &configuredIntent() const;
   const player_settings::VideoSettings &lastWorkingSettings() const;
   ApplyResult applySafeStartupIntent();
@@ -116,7 +117,6 @@ private:
   bool applyFrameCap(std::uint32_t, std::string &errorMessage);
   ApplyResult rollback(const RuntimeState &, RollbackReason,
                        std::string applyError = {});
-  player_settings::VideoSettings captureEffectiveSettings() const;
 
   IDisplayBackend &backend;
   IFrameCapRuntime &frameCapRuntime;
