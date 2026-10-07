@@ -73,14 +73,23 @@ extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity
   return count;
 }
 
+bool fixtureAndroid = false;
+
 struct FixtureInput {
+  int touchPumps = 0;
   std::vector<input::InputScope> activeScopes;
   void setBindings(const InputProfile &, std::vector<input::InputScope> scopes) {
     activeScopes = std::move(scopes);
   }
   void stopListen() {}
-  void pumpPendingTouchEvents() {}
-  void discardPendingTouchEvents() {}
+  int pendingTouches = 0;
+  int pumpedTouches = 0;
+  int touchDiscards = 0;
+  bool dragOwned = false;
+  void pumpPendingTouchEvents() { ++touchPumps; pumpedTouches += pendingTouches; pendingTouches = 0; }
+  void discardPendingTouchEvents() { ++touchDiscards; pendingTouches = 0; dragOwned = false; }
+  bool background = false;
+  void setApplicationBackground(bool value) { background = value; }
 };
 
 struct FixtureTouchRouter {
@@ -180,11 +189,18 @@ public:
   struct {
     FixtureJukebox jukebox;
     InputProfile inputProfile;
-    struct { bool ipadGestureReminderEnabled = false; } settings;
+    struct {
+      bool ipadGestureReminderEnabled = false;
+      int notesDisplayTimingMilliseconds = 0;
+      bool notesDisplayTimingAutoAdjust = false;
+    } settings;
     ReminderSceneManager reminderSceneManager;
     ReminderSceneManager *sceneManager = &reminderSceneManager;
     struct {
       int fallbackCompletions = 0;
+      std::vector<input::InputDeviceSnapshot> snapshot() const {
+        return {{.stableId = "keyboard", .connected = true}};
+      }
       void resetGyroscopeTurntableSession() {}
       void completeRealtimeInputFallback() { ++fallbackCompletions; }
     } inputDeviceRegistry;
@@ -226,6 +242,8 @@ public:
   bool guidedAccessReminderPending = false;
   bool guidedAccessReminderExiting = false;
   bool guidedAccessReminderBackground = false;
+  bool advancingGameplayInBackground = false;
+  bool backgroundGaugeFailurePending = false;
   bool guidedAccessEnabled = false;
   bool isGuidedAccessEnabled() const { return guidedAccessEnabled; }
   FixturePauseView reminderLayout;
@@ -233,6 +251,8 @@ public:
   void discardGuidedAccessReminderTouches();
   void showGuidedAccessReminder() { reminderLayout.setVisible(true); }
   void onApplicationBackgroundChanged(bool background);
+  bool continuesAudioInBackground() const;
+  void updateWhileBackgrounded();
   void returnFromGuidedAccessReminder();
   int chimePlays = 0;
   int chimeStops = 0;
@@ -338,19 +358,17 @@ public:
     return realtimeGameplaySession != nullptr;
   }
   void applyPendingBestReplay() {}
-  void drainRealtimeInputCommands() {}
+  int touchPumpsAtCommandDrain = -1;
+  void drainRealtimeInputCommands() {
+    touchPumpsAtCommandDrain = inputHandler ? inputHandler->touchPumps : 0;
+  }
   std::function<void()> onIngressClosed;
   std::function<void()> onTouchDrain;
   void setRealtimeGameplayIngressEnabled(bool enabled) {
     if (!enabled && onIngressClosed) onIngressClosed();
-    if (realtimeGameplaySession) {
-      const std::lock_guard lock(realtimeGameplaySession->inputInterruptionMutex);
-      if (realtimeGameplaySession->physicalInputRouter &&
-          (!enabled || !realtimeGameplaySession->inputInterrupted.load())) {
-        realtimeGameplaySession->physicalInputRouter->setGameplayEnabled(enabled, clock);
-      }
-    }
+    setRealtimeGameplayIngressEnabledFromProduction(enabled);
   }
+  void setRealtimeGameplayIngressEnabledFromProduction(bool enabled);
   void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
   void startPracticeAttemptFromMenu() { require(false, "unexpected practice menu"); }
@@ -368,6 +386,7 @@ public:
     }
   }
   void updateCoursePauseHoldProgress(long long) {}
+  void cancelCoursePauseHold() {}
   long long getAudioOffsetMicros() const { return offset; }
   long long getGameplayTimeMicros(long long raw) const { return raw + offset; }
   void updatePracticeHud(long long) {}
@@ -394,7 +413,7 @@ public:
   void applyReplayGauge(const ReplayEvent &event);
   void buildReplayNoteLookup();
   bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
-  JudgeResult pressNote(bms_parser::Note *, long long, const JudgeResult *, long long, bool);
+  JudgeResult pressNote(bms_parser::Note *, long long, const JudgeResult *, long long, bool = true);
   JudgeResult releaseNote(bms_parser::Note *, long long, const JudgeResult *, long long, bool);
   void expireGimmickNote(bms_parser::Note *, long long);
   void processReplayLaneCoverEvents(long long) {}
@@ -416,7 +435,9 @@ public:
   void showPlaybackInitializationFailure(const char *) {
     require(false, "unexpected realtime failure");
   }
-  void updateHellChargeGauge(long long) {}
+  void updateHellChargeGauge(long long time) {
+    if (useProductionJudging) updateHellChargeGaugeForTest(time);
+  }
   void updateHellChargeGaugeForTest(long long);
   void resetHellChargeGaugeTracking(long long);
   std::unordered_map<bms_parser::LongNote *, long long> hellChargeGaugeBalanceMicros;
@@ -425,7 +446,25 @@ public:
   FixtureHcnController *laneInputController = nullptr;
   bool finishIfGaugeFailed();
   void updateSkinGameplayGraph(long long) {}
+  bool useProductionJudging = false;
+  bool notesDisplayTimingSettingsDirty = false;
+  long long latePoorTiming = 200'000;
+  long long getJudgementTimeMicros(long long time) const { return time; }
+  void applyTimelineBpm(const bms_parser::TimeLine *) {}
+  void recordSkinGameplayGraphJudge(const bms_parser::Note *, const JudgeResult &, long long) {}
+  void refreshRuntimePresentationConfiguration() {}
+  void checkPassedTimelineFromProduction(long long);
+  void detonateLandmine(bms_parser::LandmineNote *, long long, long long);
+  std::function<void()> onTimelineAdvance;
+  int backgroundTimelineTicks = 0;
+  long long lastBackgroundTimelineTime = 0;
   void checkPassedTimeline(long long time) {
+    if (useProductionJudging) { checkPassedTimelineFromProduction(time); return; }
+    if (onTimelineAdvance) onTimelineAdvance();
+    if (advancingGameplayInBackground) {
+      ++backgroundTimelineTicks;
+      lastBackgroundTimelineTime = time;
+    }
     require(time < 2'000'000 || options.practiceSession != nullptr,
             "fixture timeline driver only covers the opening gap");
   }
@@ -453,9 +492,13 @@ public:
   PlayfieldJudgeEventClock judgeEventClock(long long time) {
     return makePlayfieldJudgeEventClock(time, 0);
   }
-  void onJudge(const JudgeResult &judge, PlayfieldJudgeEventClock, bool,
-               const bms_parser::Note *) {
-    if (!state->isEnding) {
+  void onJudgeFromProduction(const JudgeResult &, PlayfieldJudgeEventClock, bool,
+                             const bms_parser::Note *);
+  void onJudge(const JudgeResult &judge, PlayfieldJudgeEventClock clock, bool record,
+               const bms_parser::Note *note) {
+    if (useProductionJudging) {
+      onJudgeFromProduction(judge, clock, record, note);
+    } else if (!state->isEnding) {
       state->commitJudge(judge);
     }
   }
@@ -1904,7 +1947,285 @@ void testRetryRefreshesIndependentInputScope() {
   }
 }
 
+void testDeferredTouchPumpWithRealtimeAuthority() {
+  for (const bool android : {false, true}) {
+    fixtureAndroid = android;
+    GamePlayScene scene;
+    FixtureInput input;
+    scene.inputHandler = &input;
+    scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+    scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+    // A paused state returns after the real input-drain boundary.
+    scene.state->isPlaying = false;
+    scene.update(0.0F);
+    require(input.touchPumps == (android ? 1 : 0) &&
+                scene.touchPumpsAtCommandDrain == (android ? 1 : 0),
+            "Android deferred touches must be delivered before realtime commands drain");
+  }
+  fixtureAndroid = false;
+}
+
+void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
+  fixtureAndroid = true;
+  GamePlayScene scene;
+  FixtureInput input;
+  scene.inputHandler = &input;
+  scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  const input::PhysicalControl key{.deviceId = "keyboard",
+      .deviceClass = input::DeviceClass::Keyboard,
+      .kind = input::ControlKind::Key, .index = 4};
+  InputProfile profile;
+  profile.bindings.push_back({.id = "background-key", .scope = {1, 7},
+      .action = {.kind = input::LogicalActionKind::Lane, .lane = 0}, .control = key});
+  std::vector<input::RealtimePhysicalInputTransition> transitions;
+  auto &router = scene.realtimeGameplaySession->physicalInputRouter;
+  router = std::make_unique<input::RealtimePhysicalInputRouter>(
+      profile, makeGameplayInputScopes(7), [&](const auto &transition) {
+        transitions.push_back(transition);
+        return true;
+      });
+  router->setGameplayEnabled(true, 100);
+  router->consume({.control = key, .rawValue = 1, .normalizedValue = 1}, 200);
+  scene.clock = 300;
+  scene.onApplicationBackgroundChanged(true);
+  require(transitions.size() == 2 && transitions.back().type ==
+              input::RealtimePhysicalInputTransitionType::Release &&
+              transitions.back().hasReplayControl &&
+              transitions.back().steadyTimestampMicros == 300,
+          "Android Home records an ordinary held-key release at the lifecycle boundary");
+  require(!scene.context.jukebox.isPaused() && input.background &&
+              !scene.realtimeGameplaySession->inputInterrupted,
+          "Android lifecycle cancellation never invokes native failure auto-pause");
+  scene.onApplicationBackgroundChanged(false);
+  require(!input.background && transitions.size() == 2,
+          "foregrounding does not re-press cancelled physical inputs");
+  fixtureAndroid = false;
+}
+
+void testBackgroundSameTickFailureStopsScoring() {
+  for (const bool background : {false, true}) {
+    GamePlayScene scene;
+    scene.useProductionJudging = true;
+    scene.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(scene.chart->Meta, {});
+    scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+    scene.state->setStartingGaugePercent(1);
+    scene.context.jukebox.time = 4'000'000;
+    if (background) scene.updateWhileBackgrounded();
+    else scene.update(0.0F);
+    require(scene.state->judgeCount[Poor] == 1 && scene.recordedReplay.events.size() == 1,
+            "the first survival failure stops same-tick overdue-note scoring and replay capture");
+    require(scene.state->isEnding != background && scene.transitions == (background ? 0 : 1),
+            "only result presentation is deferred by a background failure");
+    if (background) {
+      scene.update(0.0F);
+      require(scene.state->isEnding && scene.transitions == 1 &&
+                  scene.state->judgeCount[Poor] == 1 && scene.recordedReplay.events.size() == 1,
+              "foreground finalizes the latched failure without judging another note");
+    }
+  }
+}
+
+void testBackgroundFailureLatchReplayAndHcnBoundaries() {
+  for (const bool recordedAbort : {false, true}) {
+    GamePlayScene watch;
+    watch.useProductionJudging = true;
+    watch.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+    watch.state->setStartingGaugePercent(1);
+    auto replay = std::make_shared<ReplayData>();
+    for (const auto timing : {2'000'000LL, 3'000'000LL}) {
+      replay->events.push_back({.action = ReplayEventAction::Miss, .lane = 0,
+          .noteTimeMicros = timing, .songTimeMicros = 4'000'000,
+          .judgeTimeMicros = 4'000'000, .judgement = Poor, .diffMicros = 200'000,
+          .gauge = 0, .gaugeType = GaugeType::Hard});
+    }
+    if (recordedAbort) replay->abortedAtSongTimeMicros = 5'000'000;
+    watch.options.replayData = replay;
+    watch.buildReplayNoteLookup();
+    watch.advancingGameplayInBackground = true;
+    watch.processReplayEvents(4'000'000);
+    require(watch.replayEventCursor == (recordedAbort ? 2 : 1) &&
+                watch.state->judgeCount[Poor] == (recordedAbort ? 2 : 1) &&
+                watch.backgroundGaugeFailurePending != recordedAbort &&
+                !watch.state->isEnding && watch.transitions == 0,
+            "Watch stops at failure, except when its recorded abort remains authoritative");
+  }
+
+  GamePlayScene hcn;
+  hcn.useProductionJudging = true;
+  for (auto *measure : hcn.chart->Measures) delete measure;
+  hcn.chart->Measures.clear();
+  auto *measure = new bms_parser::Measure();
+  auto *start = new bms_parser::TimeLine(8, false);
+  auto *end = new bms_parser::TimeLine(8, false);
+  start->Timing = 0;
+  end->Timing = 4'000'000;
+  for (int lane = 0; lane < 2; ++lane) {
+    auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+    auto *tail = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+    head->Tail = tail;
+    tail->Head = head;
+    head->IsPlayed = true;
+    start->SetNote(lane, head);
+    end->SetNote(lane, tail);
+  }
+  measure->TimeLines = {start, end};
+  hcn.chart->Measures.push_back(measure);
+  hcn.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(
+      hcn.chart->Meta, {.ruleset = GameplayRuleset::Beatoraja});
+  hcn.state = std::make_unique<RhythmState>(hcn.chart, false, GameplayRuleset::Beatoraja);
+  hcn.state->isPlaying = true;
+  hcn.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  hcn.state->setStartingGaugePercent(1);
+  hcn.advancingGameplayInBackground = true;
+  hcn.updateHellChargeGaugeForTest(1'000'000);
+  require(hcn.backgroundGaugeFailurePending && hcn.recordedReplay.events.size() == 1 &&
+              hcn.state->gaugeHistory.size() == 1 && !hcn.state->isEnding,
+          "non-LR2 HCN catch-up stops both additional ticks and lanes at its first failure");
+  hcn.advancingGameplayInBackground = false;
+  hcn.useProductionResetBoundary = true;
+  hcn.reset();
+  require(!hcn.backgroundGaugeFailurePending,
+          "a new attempt clears the deferred background failure latch");
+  hcn.onJudgeFromProduction(JudgeResult(PGreat, 0), hcn.judgeEventClock(1), false, nullptr);
+  require(hcn.state->judgeCount[PGreat] == 1,
+          "fresh-attempt scoring is not blocked by a previous background failure");
+}
+
+void testBackgroundFinalTimelineFailureWinsOverPracticeLoop() {
+  GamePlayScene scene;
+  scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  practice::Configuration configuration;
+  configuration.endMicros = 8'000'000;
+  configuration.loop = true;
+  scene.options.practiceSession = std::make_shared<practice::Session>(configuration);
+  scene.options.practiceSession->beginAttempt();
+  scene.onTimelineAdvance = [&] {
+    scene.state->applyGaugeDelta(-100);
+    scene.state->passedMeasureCount = scene.chart->Measures.size();
+  };
+  scene.context.jukebox.time = 1'000'000;
+  scene.updateWhileBackgrounded();
+  require(scene.state->activeGaugeFailed() && scene.context.jukebox.isPaused() &&
+              !scene.state->isEnding && scene.transitions == 0 && scene.resets == 0,
+          "background final timeline defers its failed terminal without restarting practice");
+  scene.update(0.0F);
+  require(scene.state->isEnding && scene.transitions == 1 && scene.resets == 0,
+          "foreground gives a failed final timeline priority over practice loop completion");
+}
+
+void testAndroidRealtimePauseResumeDiscardsDeferredTouches() {
+  fixtureAndroid = true;
+  GamePlayScene scene;
+  FixtureInput input;
+  scene.inputHandler = &input;
+  scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  input.pendingTouches = 2;
+  input.dragOwned = true;
+  scene.showPauseMenu(true);
+  require(input.touchDiscards == 1 && input.pendingTouches == 0 && !input.dragOwned,
+          "pausing active realtime gameplay discards queued touches and owned drags");
+  input.pendingTouches = 2; // Resume-button Down/Up queued by the Java watcher.
+  input.dragOwned = true;
+  scene.closePauseMenu();
+  input.pumpPendingTouchEvents();
+  require(input.touchDiscards == 2 && input.pumpedTouches == 0 && !input.dragOwned,
+          "Resume touch cannot enter the lane beneath the dismissed pause overlay");
+  fixtureAndroid = false;
+}
+
+void testBackgroundGameplayProgress() {
+  GamePlayScene scene;
+  scene.context.jukebox.time = 500'000;
+  require(scene.continuesAudioInBackground(), "running gameplay keeps audio active");
+  scene.updateWhileBackgrounded();
+  require(scene.backgroundTimelineTicks == 1 &&
+              scene.lastBackgroundTimelineTime == 500'000 && scene.transitions == 0,
+          "legacy gameplay advances without rendering or result transitions");
+  scene.context.jukebox.time = 900'000;
+  scene.updateWhileBackgrounded();
+  require(scene.lastBackgroundTimelineTime == 900'000,
+          "background chart time follows the continuing audio clock");
+  scene.context.jukebox.paused = true;
+  scene.updateWhileBackgrounded();
+  require(!scene.continuesAudioInBackground() && scene.backgroundTimelineTicks == 2,
+          "backgrounding preserves explicit user pause");
+  scene.context.jukebox.paused = false;
+  scene.playbackInitializationFailed = true;
+  require(!scene.continuesAudioInBackground(), "failed playback cannot run in background");
+  scene.playbackInitializationFailed = false;
+  scene.practiceMenuActive = true;
+  require(!scene.continuesAudioInBackground(), "practice setup is not active gameplay");
+  scene.practiceMenuActive = false;
+  scene.sourcePlaytime = 1;
+  scene.updateWhileBackgrounded();
+  require(scene.transitions == 0 && !scene.state->isEnding,
+          "chart completion remains pending until a foreground update");
+
+  require(scene.context.jukebox.isPaused(),
+          "a naturally completed background chart retires audio without a pause overlay");
+
+  GamePlayScene practiceScene;
+  practice::Configuration configuration;
+  configuration.endMicros = 700'000;
+  configuration.loop = true;
+  practiceScene.options.practiceSession = std::make_shared<practice::Session>(configuration);
+  practiceScene.options.practiceSession->beginAttempt();
+  practiceScene.context.jukebox.time = 800'000;
+  practiceScene.updateWhileBackgrounded();
+  require(practiceScene.context.jukebox.isPaused() &&
+              practiceScene.lastBackgroundTimelineTime == 699'999 &&
+              practiceScene.options.practiceSession->completedAttempts().empty() &&
+              practiceScene.transitions == 0,
+          "practice judges through its endpoint and defers loop resource reset to foreground");
+
+  GamePlayScene realtime;
+  realtime.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  realtime.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  realtime.updateWhileBackgrounded();
+  require(!realtime.context.jukebox.isPaused() && realtime.backgroundTimelineTicks == 0,
+          "realtime gameplay keeps its worker authority without a second main-thread timeline tick");
+  realtime.realtimeGameplaySession->worker->snapshot.terminalReason =
+      gameplay::GameplayTerminalReason::SurvivalGaugeFailed;
+  realtime.updateWhileBackgrounded();
+  require(realtime.context.jukebox.isPaused() && realtime.transitions == 0,
+          "realtime terminal audio stops without creating result UI in background");
+
+  GamePlayScene watch;
+  auto replay = std::make_shared<ReplayData>();
+  replay->abortedAtSongTimeMicros = 700'000;
+  replay->events.push_back({.action = ReplayEventAction::Press, .lane = 0,
+                           .songTimeMicros = 600'000});
+  watch.options.replayData = replay;
+  watch.context.jukebox.time = 900'000;
+  watch.updateWhileBackgrounded();
+  require(watch.replayEventCursor == 1 && !watch.state->isEnding &&
+              watch.transitions == 0 && watch.lastBackgroundTimelineTime == 700'000,
+          "Watch consumes replay input while deferring its terminal action");
+}
+
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "background-same-tick-failure") {
+    testBackgroundSameTickFailureStopsScoring();
+    testBackgroundFailureLatchReplayAndHcnBoundaries();
+    return 0;
+  }
+  testBackgroundSameTickFailureStopsScoring();
+  testBackgroundFailureLatchReplayAndHcnBoundaries();
+  if (argc > 1 && std::string_view(argv[1]) == "background-final-failure") {
+    testBackgroundFinalTimelineFailureWinsOverPracticeLoop();
+    return 0;
+  }
+  if (argc > 1 && std::string_view(argv[1]) == "android-resume-touch") {
+    testAndroidRealtimePauseResumeDiscardsDeferredTouches();
+    return 0;
+  }
+  testBackgroundFinalTimelineFailureWinsOverPracticeLoop();
+  testAndroidRealtimePauseResumeDiscardsDeferredTouches();
+  testBackgroundGameplayProgress();
+  testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause();
+  testDeferredTouchPumpWithRealtimeAuthority();
   testRetryRefreshesIndependentInputScope();
   testLegacyLr2HellChargeInitialPassingBound();
   testLegacyLr2HellChargeOrdering();

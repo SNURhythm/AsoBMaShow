@@ -578,7 +578,8 @@ int main(int argv, char **args) {
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #if TARGET_OS_ANDROID
-  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "1");
+  // Keep the CPU gameplay tick alive; the main loop suspends bgfx explicitly.
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
   SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO, "1");
 #endif
   // print bgfx version
@@ -912,8 +913,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
       s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
       [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
-      [&context, &activeBgfxResetFlags](std::uint32_t /*resetFlags*/,
-                                        std::string &errorMessage)
+      [&context, &activeBgfxResetFlags, &presentationOrientation](
+          std::uint32_t /*resetFlags*/, std::string &errorMessage)
           -> std::unique_ptr<display::IRendererDisplayTransaction> {
         auto reservation =
             context.rendererAccess.tryAcquireDisplay(errorMessage);
@@ -925,8 +926,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             std::move(*reservation));
         return std::make_unique<CallbackRendererDisplayTransaction>(
             std::move(lifetime),
-            [&context, &activeBgfxResetFlags](std::uint32_t resetFlags,
-                                              std::string &syncError) {
+            [&context, &activeBgfxResetFlags, &presentationOrientation](
+                std::uint32_t resetFlags, std::string &syncError) {
               int logicalWidth = 0;
               int logicalHeight = 0;
               int renderWidth = 0;
@@ -944,6 +945,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               rendering::heightScale = static_cast<float>(renderHeight) /
                                        static_cast<float>(logicalHeight);
               rendering::updateUIScale(renderWidth, renderHeight);
+              // Startup VSync may observe the OS rotation before its resize
+              // event. Publish the matching profile while skins can prepare
+              // in the menu, before gameplay locks the current orientation.
+              presentationOrientation.updateViewport(renderWidth, renderHeight);
+              context.sceneManager->setPresentationOrientation(
+                  presentationOrientation.orientation());
               activeBgfxResetFlags = resetFlags;
               s_bgfxResetFlags = resetFlags;
               context.bgfxResetFlags.store(resetFlags,
@@ -1001,7 +1008,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
 #if TARGET_OS_ANDROID
     // The miniaudio device is independent of SDL's paused audio devices.
-    context.jukebox.audioRuntime().setApplicationSuspended(background);
+    const bool gameplayContinues = sceneManager.currentScene != nullptr &&
+        sceneManager.currentScene->continuesAudioInBackground();
+    context.jukebox.audioRuntime().setApplicationSuspended(
+        background && !gameplayContinues);
 #endif
     scene_event_routing::dispatchApplicationBackgroundChange(
         sceneManager.currentScene, background);
@@ -1024,6 +1034,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       appliedOrientation = context.settings.screenOrientation;
       screen_orientation::apply(appliedOrientation, false);
     }
+#if TARGET_OS_ANDROID
+    if (!context.appInBackground.load(std::memory_order_acquire))
+#endif
     context.pollGameplaySkinCommits();
     if (context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
@@ -1071,6 +1084,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     };
 
     auto applyWindowResize = [&](int logicalW, int logicalH) {
+#if TARGET_OS_ANDROID
+      if (context.appInBackground.load(std::memory_order_acquire)) return false;
+#endif
       if (logicalW <= 0 || logicalH <= 0) {
         return true;
       }
@@ -1090,6 +1106,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
       if (targetRenderW == rendering::render_width &&
           targetRenderH == rendering::render_height) {
+        presentationOrientation.updateViewport(targetRenderW, targetRenderH);
+        sceneManager.setPresentationOrientation(
+            presentationOrientation.orientation());
         return true;
       }
 
@@ -1167,6 +1186,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                                    std::memory_order_relaxed);
       bgfx::reset(rendering::render_width, rendering::render_height,
                   activeBgfxResetFlags);
+      // Reset clears view framebuffer bindings even when the drawable size
+      // stays unchanged, so the next frame must restore the BGA input targets.
+      context.restoreGameplayRenderViews();
       bgfx::frame();
       androidRenderSuspended = suspend;
       SDL_Log("Android rendering %s", suspend ? "suspended" : "resumed");
@@ -1257,7 +1279,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
 
-      if (scene_event_routing::shouldDispatchToScene(event)) {
+      if (scene_event_routing::shouldDispatchToScene(event) &&
+          !(TARGET_OS_ANDROID &&
+            context.appInBackground.load(std::memory_order_acquire) &&
+            event.type != SDL_WINDOWEVENT)) {
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;
@@ -1283,8 +1308,16 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     };
 
     auto waitForBackgroundEvent = [&]() {
+      int timeoutMs = kBackgroundEventWaitTimeoutMs;
+#if TARGET_OS_ANDROID
+      if (sceneManager.currentScene != nullptr &&
+          sceneManager.currentScene->continuesAudioInBackground()) {
+        sceneManager.currentScene->updateWhileBackgrounded();
+        timeoutMs = 16;
+      }
+#endif
       SDL_Event waitEvent{};
-      if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
+      if (SDL_WaitEventTimeout(&waitEvent, timeoutMs)) {
         if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
           ++rawEventsInWindow;
         }

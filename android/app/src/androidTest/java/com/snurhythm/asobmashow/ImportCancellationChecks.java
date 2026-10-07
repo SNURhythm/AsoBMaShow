@@ -11,7 +11,12 @@ import android.net.Uri;
 import android.os.CancellationSignal;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.io.IOException;
 import java.util.concurrent.*;
 
@@ -19,7 +24,7 @@ final class ImportCancellationChecks {
     private static void require(boolean value, String message) {
         if (!value) throw new AssertionError(message);
     }
-    private static final class BlockingProvider extends ContentProvider {
+    private static class BlockingProvider extends ContentProvider {
         final CountDownLatch opened = new CountDownLatch(2);
         final CountDownLatch cancelled = new CountDownLatch(2);
         final CountDownLatch cleanup = new CountDownLatch(1);
@@ -52,7 +57,80 @@ final class ImportCancellationChecks {
             throw new FileNotFoundException("Test cleanup");
         }
     }
+    private static void blockedChartQuery(Context context, int blockedQuery) throws Exception {
+        CountDownLatch queried = new CountDownLatch(1);
+        CountDownLatch queryCancelled = new CountDownLatch(1);
+        CountDownLatch queryCleanup = new CountDownLatch(1);
+        AtomicInteger queryCount = new AtomicInteger();
+        BlockingProvider provider = new BlockingProvider() {
+            @Override public Cursor query(Uri uri, String[] columns, String where, String[] args,
+                                          String order, CancellationSignal signal) {
+                if (queryCount.incrementAndGet() == blockedQuery) {
+                    require(signal != null, "Blocked query needs its own cancellation signal");
+                    signal.setOnCancelListener(queryCancelled::countDown);
+                    queried.countDown();
+                    while (!signal.isCanceled() && queryCleanup.getCount() > 0) {
+                        java.util.concurrent.locks.LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(5));
+                    }
+                    signal.throwIfCanceled();
+                }
+                if (uri.getPath().endsWith("/children")) return new MatrixCursor(columns);
+                return super.query(uri, columns, where, args, order);
+            }
+        };
+        ProviderInfo info = new ProviderInfo();
+        info.authority = "import-query-cancellation-fixture";
+        provider.attachInfo(context, info);
+        AtomicInteger state = new AtomicInteger(1);
+        ChartImportCopyControl control = new ChartImportCopyControl(state::get, () -> false);
+        SafChartFolderSource source = new SafChartFolderSource(ContentResolver.wrap(provider),
+                DocumentsContract.buildTreeDocumentUri(info.authority, "fixture"), control);
+        File staging = Files.createTempDirectory(context.getCacheDir().toPath(), "cancel-query-").toFile();
+        File output = new File(staging, "copy");
+        AtomicReference<ChartFolderImport.Result> result = new AtomicReference<>();
+        Thread coordinator = new Thread(() -> result.set(ChartFolderImport.run(source, output, true, control,
+                (files, total, bytes, totalBytes, name, phase) -> {}, () -> {})));
+        coordinator.start();
+        try {
+            require(queried.await(3, TimeUnit.SECONDS), "Chart query never blocked: " + blockedQuery);
+            state.set(-1);
+            require(queryCancelled.await(2, TimeUnit.SECONDS), "Native cancellation missed blocked chart query: " + blockedQuery);
+            coordinator.join(3000);
+            require(!coordinator.isAlive() && result.get() != null && !result.get().complete && !output.exists(),
+                    "Blocked chart cancellation failed to drain and remove staging");
+        } finally {
+            queryCleanup.countDown();
+            state.set(-1);
+            coordinator.interrupt();
+            coordinator.join(3000);
+            require(!coordinator.isAlive(), "Chart query did not drain before cleanup");
+            SkinDirectoryImport.removeTree(staging.toPath());
+        }
+    }
+
+    private static void directoryDurability(Context context) throws Exception {
+        File documents = AsoBMaShowDocumentsProvider.documentsDirectory(context);
+        require(documents.isDirectory() || documents.mkdirs(), "Cannot initialize Documents for durability check");
+        for (File base : new File[]{context.getFilesDir(), documents}) {
+            File staging = Files.createTempDirectory(base.toPath(), "directory-durability-").toFile();
+            try {
+                File nested = new File(staging, "empty");
+                require(nested.mkdir(), "Cannot create empty durability fixture");
+                try (FileOutputStream stream = new FileOutputStream(new File(staging, "file"))) {
+                    stream.write(new byte[]{1, 2, 3});
+                    stream.getFD().sync();
+                }
+                ChartFolderImport.syncDirectory(nested);
+                ChartFolderImport.syncDirectory(staging);
+                ChartFolderImport.syncDirectory(base);
+                if (base.equals(documents)) ChartFolderImport.syncDirectory(base.getParentFile());
+            } finally { SkinDirectoryImport.removeTree(staging.toPath()); }
+        }
+    }
+
     static void run(Context context) throws Exception {
+        directoryDurability(context);
+        for (int query = 1; query <= 3; query++) blockedChartQuery(context, query);
         for (boolean skin : new boolean[]{true, false}) {
             BlockingProvider provider = new BlockingProvider();
             ProviderInfo info = new ProviderInfo();

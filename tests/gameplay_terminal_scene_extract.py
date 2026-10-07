@@ -24,6 +24,8 @@ def main():
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
         "void GamePlayScene::onApplicationBackgroundChanged(",
+        "bool GamePlayScene::continuesAudioInBackground() const",
+        "void GamePlayScene::updateWhileBackgrounded()",
         "void GamePlayScene::returnFromGuidedAccessReminder()",
         "void GamePlayScene::showPauseMenu(",
         "void GamePlayScene::closePauseMenu()",
@@ -52,6 +54,7 @@ def main():
         "JudgeResult GamePlayScene::pressNote(",
         "JudgeResult GamePlayScene::releaseNote(",
         "void GamePlayScene::expireGimmickNote(",
+        "void GamePlayScene::detonateLandmine(",
     ]
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     helpers = [
@@ -59,6 +62,7 @@ def main():
         "replay::ReplayTouchAction modernTouchAction(",
         "bool longNoteTailJudgedBeforeTiming(",
         "void markReplayMissedNote(",
+        "void markLongNoteMissed(",
         "JudgeResult normalizeLongNoteReleaseJudge(",
         "JudgeResult judgeClassicLongNoteRelease(",
         "ReplayEventAction\nreplayActionFromRealtime(",
@@ -66,17 +70,28 @@ def main():
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
     methods += "\n\n".join(
-        extract(source, signature).replace("SDL_GetTicks64()", "reminderTicks")
-        if signature == "void GamePlayScene::update(float dt)" else extract(source, signature)
+        extract(source, signature).replace("SDL_GetTicks64()", "reminderTicks").replace("TARGET_OS_ANDROID", "fixtureAndroid")
+        if signature == "void GamePlayScene::update(float dt)" else
+        extract(source, signature).replace("#if TARGET_OS_ANDROID", "if (fixtureAndroid) {").replace("#endif", "}")
+        if signature == "void GamePlayScene::onApplicationBackgroundChanged(" else extract(source, signature)
         for signature in signatures)
     methods += "\n" + extract(source, "bool laneIsPressed(")
     methods += "\n" + extract(source, "void GamePlayScene::resetHellChargeGaugeTracking(")
     methods += "\n" + extract(source, "void GamePlayScene::updateHellChargeGauge(").replace(
         "GamePlayScene::updateHellChargeGauge(", "GamePlayScene::updateHellChargeGaugeForTest(", 1)
+    methods += "\n" + extract(source, "void GamePlayScene::onJudge(").replace(
+        "GamePlayScene::onJudge(", "GamePlayScene::onJudgeFromProduction(", 1)
+    methods += "\n" + extract(source, "void GamePlayScene::checkPassedTimeline(").replace(
+        "GamePlayScene::checkPassedTimeline(", "GamePlayScene::checkPassedTimelineFromProduction(", 1)
     native_reminder_pump = extract(source, "void GamePlayScene::discardGuidedAccessReminderTouches()")
     # Exercise the native iPad queue on the host without enabling iOS-only reset setup.
     methods += "\n" + native_reminder_pump.replace(
         "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR", "#if 1", 1)
+    ingress = extract(source, "void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled)")
+    ingress = ingress.replace("setRealtimeGameplayIngressEnabled(",
+                              "setRealtimeGameplayIngressEnabledFromProduction(", 1)
+    ingress = ingress.replace("#if TARGET_OS_ANDROID", "if (fixtureAndroid) {", 1).replace("#endif", "}", 1)
+    methods += "\n" + ingress
     interruption = extract(source, "  void interruptInput(const input::InputInterruption &interruption)")
     methods += "\n" + interruption.replace("  void interruptInput(", "void FixtureRealtimeSession::interruptInput(", 1)
     reset_boundary = extract(source, "bool GamePlayScene::reset()")

@@ -11,6 +11,7 @@ source = (args.root / "src/input/RhythmInputHandler.cpp").read_text()
 signatures = (
     "bool RhythmInputHandler::notifyTouchEvent(",
     "void RhythmInputHandler::discardPendingTouchEvents()",
+    "void RhythmInputHandler::setApplicationBackground(bool background)",
     "Vector3 RhythmInputHandler::normalizedTouchToRenderLocation(",
     "bool RhythmInputHandler::isLaneOccupied(",
     "void RhythmInputHandler::beginFingerLane(",
@@ -32,7 +33,8 @@ scene_source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
 methods += "\n\n" + "\n\n".join(extract(scene_source, signature) for signature in (
     "bool GamePlayScene::handleTouchInputAtGameplayTime(",
     "void GamePlayScene::cancelLegacyFloatingLaneCoverTouch()",
+    "void GamePlayScene::refreshLegacyTouchLayout()",
 ))
 fixture = (args.root / "tests/legacy_skin_touch_fixture.cpp").read_text()
 args.output.parent.mkdir(parents=True, exist_ok=True)
-args.output.write_text(fixture.replace("// PRODUCTION_METHODS", methods))
+args.output.write_text(fixture.replace("// PRODUCTION_METHODS", methods.replace("TARGET_OS_ANDROID", "fixtureAndroid")))

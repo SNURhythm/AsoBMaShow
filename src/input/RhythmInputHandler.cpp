@@ -315,6 +315,7 @@ bool RhythmInputHandler::startListenSDL() {
   }
   inputSubscriptionToken = inputDeviceRegistry->subscribeInput(
       [this](const input::PhysicalInputEvent &event) {
+        if (applicationBackground) return;
         const auto deviceClass = static_cast<std::size_t>(event.control.deviceClass);
         if (logicalInputPipeline != nullptr &&
             deviceClass < registryDeviceClassEnabled.size() &&
@@ -364,6 +365,16 @@ void RhythmInputHandler::stopListen() {
   flickStates.clear();
   cancelGraceExpiry.clear();
 }
+void RhythmInputHandler::setApplicationBackground(bool background) {
+  applicationBackground = background;
+  discardPendingTouchEvents();
+  if (background && logicalInputPipeline != nullptr) {
+    // Reset resolves held bindings into ordinary logical releases, retaining
+    // their gameplay/replay semantics before clearing the ownership state.
+    logicalInputPipeline->reset();
+  }
+}
+
 void RhythmInputHandler::discardPendingTouchEvents() {
   if (touchInputSource != nullptr) {
     touchInputSource->discardPendingEvents();

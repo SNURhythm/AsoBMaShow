@@ -95,6 +95,10 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
         self.run_scenario("result-grant")
         self.run_scenario("result-deny")
 
+    def test_imports_use_transient_grants_and_preserve_durable_add_folder(self):
+        for scenario in ("import-copy", "import-move", "import-archive"):
+            self.run_scenario(scenario)
+
     def test_chart_discovery_accepts_pms_and_existing_formats(self):
         self.run_scenario("chart-formats")
 

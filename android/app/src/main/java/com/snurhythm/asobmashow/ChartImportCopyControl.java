@@ -42,6 +42,9 @@ final class ChartImportCopyControl {
         }
     }
 
+    // The I/O cancellation monitor must never wait for a paused transfer.
+    void checkCancellation() throws InterruptedIOException { currentState(); }
+
     long pauseGeneration() {
         return pauseGeneration.get();
     }

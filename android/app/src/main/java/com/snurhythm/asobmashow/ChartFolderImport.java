@@ -5,7 +5,9 @@ import java.io.FileOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.LinkOption;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
@@ -19,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ChartFolderImport {
     static final class Entry {
@@ -45,6 +48,14 @@ final class ChartFolderImport {
         default void cancel() { }
         // Must not pause between the engine's final validation and the provider call.
         void delete(Entry directory) throws IOException;
+    }
+
+    interface DirectorySync { void sync(File directory) throws IOException; }
+
+    static void syncDirectory(File directory) throws IOException {
+        try (FileChannel channel = FileChannel.open(directory.toPath(), StandardOpenOption.READ)) {
+            channel.force(true);
+        }
     }
 
     enum Phase { COUNTING, COPYING, REMOVING_SOURCE }
@@ -87,8 +98,15 @@ final class ChartFolderImport {
 
     static Result run(Source source, File output, boolean move, ChartImportCopyControl control,
                       Progress progress, Runnable beforeSourceDeletion, Object destinationMutationLock) {
+        return run(source, output, move, control, progress, beforeSourceDeletion,
+                destinationMutationLock, ChartFolderImport::syncDirectory);
+    }
+
+    static Result run(Source source, File output, boolean move, ChartImportCopyControl control,
+                      Progress progress, Runnable beforeSourceDeletion, Object destinationMutationLock,
+                      DirectorySync directorySync) {
         return new Transfer(source, output, move, control, progress, beforeSourceDeletion,
-                destinationMutationLock).run();
+                destinationMutationLock, directorySync).run();
     }
 
     private static final class Transfer {
@@ -99,6 +117,7 @@ final class ChartFolderImport {
         private final Progress progress;
         private final Runnable beforeSourceDeletion;
         private final Object destinationMutationLock;
+        private final DirectorySync directorySync;
         private final Set<String> discoveredIds = new HashSet<>();
         private File output;
         private boolean ownsOutput;
@@ -109,7 +128,8 @@ final class ChartFolderImport {
         private long copiedBytes;
 
         Transfer(Source source, File output, boolean move, ChartImportCopyControl control,
-                 Progress progress, Runnable beforeSourceDeletion, Object destinationMutationLock) {
+                 Progress progress, Runnable beforeSourceDeletion, Object destinationMutationLock,
+                 DirectorySync directorySync) {
             this.source = source;
             this.requestedOutput = output;
             this.move = move;
@@ -117,10 +137,11 @@ final class ChartFolderImport {
             this.progress = progress;
             this.beforeSourceDeletion = beforeSourceDeletion;
             this.destinationMutationLock = destinationMutationLock;
+            this.directorySync = directorySync;
         }
 
         Result run() {
-            try (ImportCopyWorkers workers = new ImportCopyWorkers(control::checkpoint, source::cancel)) {
+            try (ImportCopyWorkers workers = new ImportCopyWorkers(control::checkpoint, control::checkCancellation, source::cancel)) {
                 report("", Phase.COUNTING);
                 control.checkpoint();
                 Entry root = source.root();
@@ -167,7 +188,7 @@ final class ChartFolderImport {
                 }
             } else {
                 // Admit the entire move before deleting any completed subtree. Without
-                // both fields, a later edit can be indistinguishable from the copied file.
+                // both fields, the final source snapshot cannot be validated reliably.
                 if (move && (entry.size < 0 || entry.lastModified <= 0)) {
                     throw new IOException("Cannot safely move a file without its size and modification time: "
                             + entry.name + ". Use Copy instead.");
@@ -211,6 +232,14 @@ final class ChartFolderImport {
             if (move) {
                 // Every writer (including its fsync) must finish before source deletion.
                 workers.awaitAll();
+                // File fsync does not persist its name, or any newly created ancestor.
+                // Include empty directories and commit the full new path before removing
+                // this source subtree. The caller makes output's existing parent durable.
+                for (File current = destination; ; current = current.getParentFile()) {
+                    control.checkpoint();
+                    directorySync.sync(current);
+                    if (current.equals(output.getParentFile())) break;
+                }
                 report(directory.entry.name, Phase.REMOVING_SOURCE);
                 control.checkpoint();
                 beforeSourceDeletion.run();
@@ -220,6 +249,7 @@ final class ChartFolderImport {
                     // Hash outside the shared monitor: the reservation prevents Files
                     // writes, while unrelated folders remain usable during large moves.
                     if (!verifyCopiedDestination(directory, destination, generation)) continue;
+                    if (!verifySourceContents(directory, generation, workers)) continue;
                     verifyRemainingSource(directory);
                     synchronized (destinationMutationLock) {
                         // The caller reserves this new destination for the whole transfer.
@@ -321,6 +351,45 @@ final class ChartFolderImport {
                                 && copied.length() == child.copiedLength;
                 if (!valid) throw new IOException("Copied entry changed before source removal: " + child.entry.name);
             }
+        }
+
+        private boolean verifySourceContents(PlannedEntry directory, long generation,
+                                             ImportCopyWorkers workers) throws IOException {
+            AtomicBoolean uninterrupted = new AtomicBoolean(true);
+            for (PlannedEntry child : directory.children) {
+                if (child.entry.directory) continue;
+                // Keep provider reads on tracked workers so cancellation can close blocked
+                // streams and drain them before destination cleanup, just as during copying.
+                workers.submit(() -> {
+                    MessageDigest digest = newDigest();
+                    long length = 0;
+                    if (!control.continueWithoutWaiting(generation)) {
+                        uninterrupted.set(false);
+                        return;
+                    }
+                    try (InputStream input = workers.track(source.open(child.entry))) {
+                        byte[] buffer = workers.buffer();
+                        while (true) {
+                            if (!control.continueWithoutWaiting(generation)) {
+                                uninterrupted.set(false);
+                                return;
+                            }
+                            int count = input.read(buffer);
+                            if (count < 0) break;
+                            length = Math.addExact(length, count);
+                            if (length > child.copiedLength) {
+                                throw new IOException("Source file size changed: " + child.entry.name);
+                            }
+                            digest.update(buffer, 0, count);
+                        }
+                    }
+                    if (length != child.copiedLength || !Arrays.equals(child.copiedDigest, digest.digest())) {
+                        throw new IOException("Source file contents changed before source removal: " + child.entry.name);
+                    }
+                });
+            }
+            workers.awaitAll();
+            return uninterrupted.get() && control.continueWithoutWaiting(generation);
         }
 
         private void verifyRemainingSource(PlannedEntry directory) throws IOException {

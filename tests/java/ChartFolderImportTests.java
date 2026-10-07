@@ -36,6 +36,7 @@ public final class ChartFolderImportTests {
     }
 
     private interface OpenHook { void run(Node node) throws IOException; }
+    private interface StreamHook { InputStream open(Node node) throws IOException; }
     private interface DeleteHook { void run(Node node) throws IOException; }
     private interface ListHook { void run(Node node, int count) throws IOException; }
 
@@ -45,6 +46,7 @@ public final class ChartFolderImportTests {
         final Map<String, Integer> listings = new LinkedHashMap<>();
         final List<String> events = java.util.Collections.synchronizedList(new ArrayList<>());
         OpenHook opening = node -> {};
+        StreamHook stream = node -> new ByteArrayInputStream(node.bytes);
         DeleteHook deleting = node -> {};
         ListHook listing = (node, count) -> {};
         ListHook listed = (node, count) -> {};
@@ -80,7 +82,7 @@ public final class ChartFolderImportTests {
             Node node = nodes.get(entry.id);
             events.add("open:" + entry.id);
             opening.run(node);
-            return new ByteArrayInputStream(node.bytes);
+            return stream.open(node);
         }
         @Override public void delete(ChartFolderImport.Entry directory) throws IOException {
             Node node = nodes.get(directory.id);
@@ -161,8 +163,8 @@ public final class ChartFolderImportTests {
         ChartFolderImport.Result result = ChartFolderImport.run(source, output, true, control(),
                 (copied, total, bytes, totalBytes, name, phase) -> {}, () -> marks.add("dirty"));
         require(result.complete && result.retainedOutput, "Move should complete");
-        require(source.events.equals(Arrays.asList("open:first-chart", "delete:first", "open:second-chart",
-                "delete:second", "open:root-chart", "delete:root")),
+        require(source.events.equals(Arrays.asList("open:first-chart", "open:first-chart", "delete:first", "open:second-chart",
+                "open:second-chart", "delete:second", "open:root-chart", "open:root-chart", "delete:root")),
                 "Move must copy/delete in postorder before copying parent files: " + source.events);
     }
 
@@ -248,6 +250,133 @@ public final class ChartFolderImportTests {
             require(!result.complete && !result.retainedOutput && !output.exists(),
                     "Source mutation must abort safe move: " + change);
             require(!source.events.contains("delete:root"), "Changed source must remain: " + change);
+        }
+    }
+
+    private static void testChangedSourceContentsWithIdenticalMetadataPreventsDeletion() throws Exception {
+        for (byte[] replacement : new byte[][] {new byte[] {4, 5, 6}, new byte[] {1, 2}}) {
+            FakeSource source = new FakeSource();
+            Node file = source.file(source.root, "chart", "chart.bms");
+            File output = output();
+            ChartFolderImport.Result result = ChartFolderImport.run(source, output, true, control(),
+                    (copied, total, bytes, totalBytes, name, phase) -> {},
+                    () -> file.bytes = replacement);
+            require(!result.complete && !result.retainedOutput && !output.exists(),
+                    "Source content changes with unchanged size/mtime metadata must abort Move");
+            require(source.root.children.contains(file) && Arrays.equals(file.bytes, replacement)
+                    && !source.events.contains("delete:root"), "Replacement source must survive Move");
+        }
+    }
+
+    private static void testSourceVerificationReadFailurePreservesSource() throws Exception {
+        for (boolean failOpen : new boolean[] {true, false}) {
+            FakeSource source = new FakeSource();
+            source.file(source.root, "chart", "chart.bms");
+            AtomicInteger opens = new AtomicInteger();
+            AtomicBoolean closed = new AtomicBoolean();
+            source.stream = node -> {
+                if (opens.incrementAndGet() == 1) return new ByteArrayInputStream(node.bytes);
+                if (failOpen) throw new IOException("Cannot reread source");
+                return new InputStream() {
+                    public int read() throws IOException { throw new IOException("Cannot reread source"); }
+                    public void close() { closed.set(true); }
+                };
+            };
+            File output = output();
+            ChartFolderImport.Result result = run(source, output, true);
+            require(!result.complete && result.error.contains("Cannot reread source")
+                    && !output.exists() && source.root.children.size() == 1
+                    && !source.events.contains("delete:root"), "Failed verification read must preserve source");
+            require(failOpen || closed.get(), "Failed verification stream must be closed");
+        }
+    }
+
+    private static void testCancellationClosesBlockedSourceVerificationBeforeCleanup() throws Exception {
+        FakeSource source = new FakeSource();
+        source.file(source.root, "chart", "chart.bms");
+        File output = output();
+        AtomicInteger opens = new AtomicInteger();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        AtomicBoolean closedBeforeCleanup = new AtomicBoolean();
+        CountDownLatch reading = new CountDownLatch(1);
+        source.stream = node -> {
+            if (opens.incrementAndGet() == 1) return new ByteArrayInputStream(node.bytes);
+            return new InputStream() {
+                private boolean closed;
+                public synchronized int read() throws IOException {
+                    reading.countDown();
+                    while (!closed) {
+                        try { wait(); } catch (InterruptedException ignored) { }
+                    }
+                    throw new IOException("Verification stream closed");
+                }
+                public synchronized void close() {
+                    closedBeforeCleanup.set(new File(output, "chart.bms").isFile());
+                    closed = true;
+                    notifyAll();
+                }
+            };
+        };
+        AtomicReference<ChartFolderImport.Result> result = new AtomicReference<>();
+        Thread worker = new Thread(() -> result.set(ChartFolderImport.run(source, output, true,
+                new ChartImportCopyControl(() -> 1, cancelled::get),
+                (copied, total, bytes, totalBytes, name, phase) -> {}, () -> {})));
+        worker.start();
+        try {
+            require(reading.await(2, TimeUnit.SECONDS), "Source verification must reread copied files");
+            cancelled.set(true);
+            worker.join(3000);
+            require(!worker.isAlive() && result.get() != null && !result.get().complete,
+                    "Cancellation must unblock source verification");
+            require(closedBeforeCleanup.get() && !output.exists(),
+                    "Verification reader must close and drain before output cleanup");
+            require(source.root.children.size() == 1 && !source.events.contains("delete:root"),
+                    "Cancelled verification must preserve the source");
+        } finally {
+            cancelled.set(true);
+            worker.interrupt();
+            worker.join(3000);
+        }
+    }
+
+    private static void testPauseDuringSourceVerificationRechecksContents() throws Exception {
+        FakeSource source = new FakeSource();
+        Node file = source.file(source.root, "chart", "chart.bms");
+        AtomicInteger opens = new AtomicInteger();
+        AtomicInteger state = new AtomicInteger(1);
+        CountDownLatch paused = new CountDownLatch(1);
+        ChartImportCopyControl control = new ChartImportCopyControl(() -> {
+            int current = state.get();
+            if (current == 0) paused.countDown();
+            return current;
+        }, () -> false);
+        source.stream = node -> {
+            if (opens.incrementAndGet() != 2) return new ByteArrayInputStream(node.bytes);
+            return new ByteArrayInputStream(node.bytes) {
+                @Override public synchronized int read(byte[] buffer, int offset, int length) {
+                    int count = super.read(buffer, offset, length);
+                    if (count < 0) state.set(0);
+                    return count;
+                }
+            };
+        };
+        File output = output();
+        AtomicReference<ChartFolderImport.Result> result = new AtomicReference<>();
+        Thread worker = new Thread(() -> result.set(ChartFolderImport.run(source, output, true, control,
+                (copied, total, bytes, totalBytes, name, phase) -> {}, () -> {})));
+        worker.start();
+        try {
+            require(paused.await(2, TimeUnit.SECONDS), "Move must observe pause during source verification");
+            file.bytes = new byte[] {4, 5, 6};
+            state.set(1);
+            worker.join(3000);
+            require(!worker.isAlive() && result.get() != null && !result.get().complete,
+                    "Resumed Move must detect source changes even with unchanged metadata");
+            require(!output.exists() && source.root.children.contains(file)
+                    && !source.events.contains("delete:root"), "Paused source replacement must survive");
+        } finally {
+            worker.interrupt();
+            worker.join(3000);
         }
     }
 
@@ -426,8 +555,8 @@ public final class ChartFolderImportTests {
         source.file(samples, "sample", "sample.wav");
         File output = output();
         require(run(source, output, true).complete, "Nested move should complete");
-        require(source.events.equals(Arrays.asList("open:sample", "delete:samples", "open:album-chart",
-                "delete:album", "delete:root")), "Nested sources must be removed in postorder");
+        require(source.events.equals(Arrays.asList("open:sample", "open:sample", "delete:samples", "open:album-chart",
+                "open:album-chart", "delete:album", "delete:root")), "Nested sources must be removed in postorder");
         contents(new File(output, "Album/Samples/sample.wav"), new byte[] {1, 2, 3});
         contents(new File(output, "Album/album.bms"), new byte[] {1, 2, 3});
     }
@@ -630,7 +759,7 @@ public final class ChartFolderImportTests {
                 };
             }
             public void delete(ChartFolderImport.Entry directory) throws IOException {
-                require(active.get() == 0 && completed.get() == 20, "Source removed with copies still running");
+                require(active.get() == 0 && completed.get() == 40, "Source removed with copy or verification reads still running");
                 source.delete(directory);
             }
         };
@@ -670,9 +799,128 @@ public final class ChartFolderImportTests {
         contents(new File(destination, "B/two.wav"), new byte[]{1, 2, 3});
     }
 
+    private static void testDestinationDirectoryBarriersPrecedeEveryRemoval() throws Exception {
+        FakeSource source = new FakeSource();
+        Node album = source.dir(source.root, "album", "Album");
+        source.dir(album, "empty", "Empty");
+        source.file(album, "chart", "chart.bms");
+        File destination = output();
+        List<String> barriers = new ArrayList<>();
+        source.deleting = node -> {
+            List<String> expected;
+            if (node.entry.id.equals("empty")) expected = Arrays.asList("Album/Empty", "Album", "", "..");
+            else if (node.entry.id.equals("album")) expected = Arrays.asList("Album", "", "..");
+            else expected = Arrays.asList("", "..");
+            require(barriers.equals(expected), "Persist every directory entry to its existing parent before deletion: " + barriers);
+            barriers.clear();
+        };
+        ChartFolderImport.Result result = ChartFolderImport.run(source, destination, true, control(),
+                (files, total, bytes, totalBytes, name, phase) -> {}, () -> {}, new Object(), directory -> {
+                    ChartFolderImport.syncDirectory(directory);
+                    barriers.add(destination.getCanonicalFile().toPath().relativize(directory.toPath()).toString());
+                });
+        require(result.complete && source.events.contains("delete:root"), "Durable nested move must finish: " + result.error);
+        require(new File(destination, "Album/Empty").isDirectory(), "Empty destination directories must survive move");
+        contents(new File(destination, "Album/chart.bms"), new byte[]{1, 2, 3});
+    }
+
+    private static void testDirectoryBarrierFailurePreservesSources(boolean afterFirstMove, boolean empty) throws Exception {
+        FakeSource source = empty ? new FakeSource() : twoAlbums();
+        File destination = output();
+        AtomicBoolean failed = new AtomicBoolean();
+        ChartFolderImport.Result result = ChartFolderImport.run(source, destination, true, control(),
+                (files, total, bytes, totalBytes, name, phase) -> {}, () -> {}, new Object(), directory -> {
+                    if ((!afterFirstMove || source.events.contains("delete:first"))
+                            && directory.equals(destination.getCanonicalFile().getParentFile())) {
+                        failed.set(true);
+                        throw new IOException("Directory durability unavailable");
+                    }
+                    ChartFolderImport.syncDirectory(directory);
+                });
+        require(failed.get() && !result.complete && result.error.contains("Directory durability unavailable"),
+                "Directory sync failure must fail the move");
+        require(!source.events.contains("delete:root") && !source.events.contains("delete:second"),
+                "Do not delete the source of an uncommitted directory");
+        if (afterFirstMove) {
+            require(result.retainedOutput && source.nodes.get("second").children.size() == 1,
+                    "Retain both earlier moved output and later uncommitted source");
+            contents(new File(destination, "First/chart.bms"), new byte[]{1, 2, 3});
+        } else {
+            require(!source.events.contains("delete:first") && !destination.exists() && !result.retainedOutput,
+                    "Failure before the first deletion must preserve all source and clean output");
+        }
+    }
+
+    private static void testBlockedProviderCancellation(String operation, boolean interruptOnly) throws Exception {
+        FakeSource source = new FakeSource();
+        source.file(source.root, "chart", "chart.bms");
+        CountDownLatch blocked = new CountDownLatch(1);
+        CountDownLatch released = new CountDownLatch(1);
+        AtomicInteger state = new AtomicInteger(1);
+        AtomicBoolean providerCancelled = new AtomicBoolean();
+        ChartFolderImport.Source blocking = new ChartFolderImport.Source() {
+            private void block() throws IOException {
+                blocked.countDown();
+                // Binder providers may ignore Java interruption and need their signal.
+                while (released.getCount() > 0) {
+                    java.util.concurrent.locks.LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(5));
+                }
+                throw new IOException("Provider query cancelled");
+            }
+            public ChartFolderImport.Entry root() throws IOException {
+                if (operation.equals("root")) block();
+                return source.root();
+            }
+            public List<ChartFolderImport.Entry> children(ChartFolderImport.Entry directory) throws IOException {
+                if (operation.equals("list") || (operation.equals("revalidate")
+                        && source.listings.getOrDefault(directory.id, 0) == 1)) block();
+                return source.children(directory);
+            }
+            public InputStream open(ChartFolderImport.Entry entry) throws IOException { return source.open(entry); }
+            public void delete(ChartFolderImport.Entry directory) throws IOException { source.delete(directory); }
+            public void cancel() { providerCancelled.set(true); released.countDown(); }
+        };
+        File destination = output();
+        AtomicReference<ChartFolderImport.Result> result = new AtomicReference<>();
+        Thread coordinator = new Thread(() -> result.set(ChartFolderImport.run(blocking, destination, true,
+                new ChartImportCopyControl(state::get, () -> false),
+                (files, total, bytes, totalBytes, name, phase) -> {}, () -> {})));
+        coordinator.start();
+        try {
+            require(blocked.await(2, TimeUnit.SECONDS), "Provider query never blocked: " + operation);
+            if (interruptOnly) {
+                state.set(0); // Cancellation must remain live even when copying is paused.
+                coordinator.interrupt();
+            } else state.set(-1);
+            coordinator.join(1500);
+            require(!coordinator.isAlive() && providerCancelled.get(),
+                    "Blocked provider must receive cancellation: " + operation + "/" + interruptOnly);
+            require(result.get() != null && !result.get().complete && !destination.exists()
+                            && source.root.children.size() == 1 && !source.events.contains("delete:root"),
+                    "Cancelled query must preserve source and clean its owned destination");
+        } finally {
+            released.countDown();
+            state.set(-1);
+            coordinator.interrupt();
+            coordinator.join(2000);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         temporary = Files.createTempDirectory("chart-folder-import-").toFile();
         try {
+            testDestinationDirectoryBarriersPrecedeEveryRemoval();
+            testDirectoryBarrierFailurePreservesSources(false, false);
+            testDirectoryBarrierFailurePreservesSources(true, false);
+            testDirectoryBarrierFailurePreservesSources(false, true);
+            for (String operation : Arrays.asList("root", "list", "revalidate")) {
+                testBlockedProviderCancellation(operation, false);
+                testBlockedProviderCancellation(operation, true);
+            }
+            testChangedSourceContentsWithIdenticalMetadataPreventsDeletion();
+            testSourceVerificationReadFailurePreservesSource();
+            testCancellationClosesBlockedSourceVerificationBeforeCleanup();
+            testPauseDuringSourceVerificationRechecksContents();
             testParallelCopiesFinishBeforeMoveDeletion();
             testCopyOverlapsFilesInDifferentDirectories();
             testCopyKeepsSourceAndCountsChunks();
@@ -699,7 +947,7 @@ public final class ChartFolderImportTests {
             testPauseAfterValidationRequiresFreshSourceListing();
             testPauseInsideProviderListingRequiresFreshSnapshot();
             testPauseDuringValidationCanResumeUnchangedMove();
-            System.out.println("26 chart folder import tests passed");
+            System.out.println("40 chart folder import tests passed");
         } finally {
             cleanup(temporary);
         }

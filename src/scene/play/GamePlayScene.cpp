@@ -1407,7 +1407,12 @@ struct GamePlayScene::RealtimeGameplaySession {
       return 0;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+#if TARGET_OS_ANDROID
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+#endif
+    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.inputRegistry == nullptr ||
         session.physicalInputRouter == nullptr) {
       return 0;
@@ -1450,7 +1455,12 @@ struct GamePlayScene::RealtimeGameplaySession {
       return;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+#if TARGET_OS_ANDROID
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+#endif
+    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.physicalInputRouter == nullptr ||
         !session.registryRealtimeEnabled(event.control.deviceClass)) {
       return;
@@ -1479,7 +1489,12 @@ struct GamePlayScene::RealtimeGameplaySession {
       return;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+#if TARGET_OS_ANDROID
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+#endif
+    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.physicalInputRouter == nullptr ||
         !session.registryRealtimeEnabled(device.deviceClass)) {
       return;
@@ -1957,7 +1972,7 @@ void GamePlayScene::refreshGameplayPresentationGeometry() {
 
 void GamePlayScene::refreshLegacyTouchLayout() {
   if (inputHandler == nullptr || presentation == nullptr ||
-      realtimeGameplayAuthorityActive()) {
+      (!TARGET_OS_ANDROID && realtimeGameplayAuthorityActive())) {
     return;
   }
   inputHandler->setTouchLaneLayout(
@@ -2239,12 +2254,12 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 }
 
 void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
-  if (!realtimeGameplayAuthorityActive()) {
 #if TARGET_OS_ANDROID
-    // Pause/resume also forms a boundary for the deferred SDL touch stream.
-    // A queued Down from the overlay must not enter the resumed attempt.
-    if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+  // Both authorities use the deferred SDL touch stream on Android. Close its
+  // ownership and queued overlay touches at every pause/resume boundary.
+  if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
 #endif
+  if (!realtimeGameplayAuthorityActive()) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(nullptr, nullptr);
 #endif
@@ -3584,6 +3599,7 @@ bool GamePlayScene::reset() {
   inputInterruptionPause = false;
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
+  backgroundGaugeFailurePending = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   // Retry and Retry Same both begin a new attempt. Rebuild all attempt facts
   // so runtime modifiers (including pause use) never leak into the retry.
@@ -3816,9 +3832,95 @@ bool GamePlayScene::isGuidedAccessEnabled() const {
 #endif
 }
 
+bool GamePlayScene::continuesAudioInBackground() const {
+  return !backgroundGaugeFailurePending &&
+         !playbackInitializationFailed && !guidedAccessReminderPending &&
+         !practiceMenuActive && state != nullptr && state->isPlaying &&
+         !state->isEnding && !context.jukebox.isPaused();
+}
+
+void GamePlayScene::updateWhileBackgrounded() {
+  if (!continuesAudioInBackground()) return;
+  const auto rawSongTimeMicros = context.jukebox.getTimeMicros();
+  if (preparationIndicatorActive(rawSongTimeMicros)) return;
+  auto gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  bool practiceSectionComplete = false;
+  if (options.practiceSession != nullptr) {
+    const auto timing = gameplay_timing::practiceFrameTiming(
+        rawSongTimeMicros, getAudioOffsetMicros(),
+        options.practiceSession->configuration().endMicros);
+    gameplayTimeMicros = timing.chartTimeMicros;
+    practiceSectionComplete = timing.sectionComplete;
+  }
+  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const bool sourcePlaytimeElapsed = playtimeMillis.has_value() &&
+      skin::beatorajaGameplayStateFinished(gameplayTimeMicros, *playtimeMillis);
+  if (realtimeGameplayAuthorityActive()) {
+    // The worker owns judging. Only retire audio at the same terminal boundary
+    // as the foreground; snapshot/UI transfer waits until rendering resumes.
+    const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
+    const auto action = gameplay::classifyRealtimeGameplayTerminal(
+        snapshot ? snapshot->terminalReason : gameplay::GameplayTerminalReason::None,
+        options.practiceSession != nullptr, sourcePlaytimeElapsed);
+    if (realtimeGameplaySession->worker->fault() != gameplay::RealtimeGameplayFault::None ||
+        action != gameplay::RealtimeGameplayTerminalAction::Wait) {
+      context.jukebox.pause();
+    }
+    return;
+  }
+  const bool replayAborted = isReplayPlayback() &&
+      options.replayData->abortedAtSongTimeMicros.has_value() &&
+      gameplayTimeMicros >= *options.replayData->abortedAtSongTimeMicros;
+  if (replayAborted) {
+    gameplayTimeMicros = *options.replayData->abortedAtSongTimeMicros;
+  }
+  // Judgement callbacks update CPU presentation state; terminal handling and
+  // texture/layout work wait for the next ordinary foreground update.
+  advancingGameplayInBackground = true;
+  const auto gaugeFailed = [&] {
+    // Recorded abort time remains authoritative for survival-gauge replays.
+    return state->activeGaugeFailed() &&
+        (!isReplayPlayback() || !options.replayData->abortedAtSongTimeMicros.has_value());
+  };
+  if (isReplayPlayback()) processReplayEvents(gameplayTimeMicros);
+  if (!gaugeFailed() &&
+      !gameplay::shouldCompleteLegacyGameplayState(
+          playtimeMillis.has_value(), sourcePlaytimeElapsed,
+          state->passedMeasureCount == chart->Measures.size())) {
+    updateHellChargeGauge(gameplayTimeMicros);
+    if (!gaugeFailed()) checkPassedTimeline(gameplayTimeMicros);
+  }
+  advancingGameplayInBackground = false;
+  if (gaugeFailed() || practiceSectionComplete || replayAborted ||
+      gameplay::shouldCompleteLegacyGameplayState(
+          playtimeMillis.has_value(), sourcePlaytimeElapsed,
+          state->passedMeasureCount == chart->Measures.size())) {
+    context.jukebox.pause();
+  }
+}
+
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
 #if TARGET_OS_ANDROID
-  if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+  if (inputHandler != nullptr) inputHandler->setApplicationBackground(background);
+  if (background) {
+    if (realtimeGameplayAuthorityActive() &&
+        realtimeGameplaySession->physicalInputRouter != nullptr) {
+      const std::lock_guard lifecycleLock(realtimeGameplaySession->inputInterruptionMutex);
+      const auto timestampMicros = nowMicros();
+      for (const auto &device : context.inputDeviceRegistry.snapshot()) {
+        realtimeGameplaySession->physicalInputRouter->disconnectDevice(
+            device.stableId, timestampMicros);
+      }
+      input::LogicalInputTransition command;
+      while (realtimeGameplaySession->inputCommands.tryPop(command)) {}
+      gameplay::StartSelectControlInput control;
+      while (realtimeGameplaySession->startSelectInputs.tryPop(control)) {}
+    }
+    if (startSelectControl) startSelectControl->reset();
+    startButtonPressed = false;
+    selectButtonPressed = false;
+    cancelCoursePauseHold();
+  }
 #endif
   guidedAccessReminderBackground = background;
   if (!background && skinIrRankingRequest) {
@@ -6428,6 +6530,13 @@ bool GamePlayScene::finishIfGaugeFailed() {
     return false;
   }
 
+  if (advancingGameplayInBackground) {
+    // Freeze scoring at the first failure even though UI/result work must wait
+    // for foreground. isEnding cannot be set until that work is performed.
+    backgroundGaugeFailurePending = true;
+    return true;
+  }
+
   const long long finalGameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
   updateSkinGameplayGraph(finalGameplayTimeMicros);
@@ -6490,7 +6599,9 @@ void GamePlayScene::update(float dt) {
   (void)dt;
   applyPendingBestReplay();
   const bool realtimeAtFrameStart = realtimeGameplayAuthorityActive();
-  if (inputHandler != nullptr && !realtimeAtFrameStart) {
+  // Android feeds realtime authority through the legacy SDL touch bridge.
+  // Its deferred callbacks must run before the resulting commands are drained.
+  if (inputHandler != nullptr && (TARGET_OS_ANDROID || !realtimeAtFrameStart)) {
     inputHandler->pumpPendingTouchEvents();
   }
   if (realtimeAtFrameStart) {
@@ -6622,6 +6733,11 @@ void GamePlayScene::update(float dt) {
     stopRealtimeGameplayAuthority(true);
     state->passedMeasureCount = chart->Measures.size();
     state->passedTimelineCount = 0;
+  } else if (finishIfGaugeFailed()) {
+    // A background tick can reach both failure and the last timeline. Failure
+    // must win before the completion/loop branch; recorded aborts keep their
+    // existing exemption inside finishIfGaugeFailed().
+    return;
   } else if (!gameplay::shouldCompleteLegacyGameplayState(
                  playtimeMillis.has_value(), sourcePlaytimeElapsed,
                  state->passedMeasureCount == chart->Measures.size())) {
@@ -7334,7 +7450,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
   const auto &measures = chart->Measures;
-  if (state == nullptr) {
+  if (state == nullptr || backgroundGaugeFailurePending) {
     return;
   }
   const long long visualEventMicros = getVisualTimeMicros(time);
@@ -7346,6 +7462,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
   // its tail was overwritten in the lane. CN/HCN autoplay still follows only
   // active lane slots, so do not synthesize their detached tail events here.
   for (const auto &owned : chart->DetachedNotes) {
+    if (backgroundGaugeFailurePending) return;
     auto *tail = dynamic_cast<bms_parser::LongNote *>(owned.get());
     if (tail == nullptr || !tail->IsTail() || !tail->IsHolding || tail->IsPlayed ||
         tail->Timeline == nullptr || tail->Timeline->Timing > judgedTime ||
@@ -7363,6 +7480,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
     const auto &measure = measures[i];
     for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
          j < measure->TimeLines.size(); j++) {
+      if (backgroundGaugeFailurePending) return;
       const auto &timeline = measure->TimeLines[j];
       if (timeline->Timing <= judgedTime) {
         applyTimelineBpm(timeline);
@@ -7384,6 +7502,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
         }
         // make remaining notes POOR
         for (const auto &note : timeline->Notes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr) {
             continue;
           }
@@ -7405,6 +7524,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                 onJudge(poorResult, eventClock, false, note);
                 appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                                   time, judgedTime, poorResult);
+                if (backgroundGaugeFailurePending) return;
                 if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
                   markLongNoteMissed(longNote->Tail, judgedTime,
                                      !longNoteTailJudgedBeforeTiming(
@@ -7442,6 +7562,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                             judgedTime, poorResult);
         }
         for (const auto &note : timeline->LandmineNotes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr || note->IsDead) {
             continue;
           }
@@ -7450,6 +7571,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
       } else if (timeline->Timing <= judgedTime) {
         // auto-release long notes
         for (const auto &note : timeline->Notes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr) {
             continue;
           }
@@ -7513,6 +7635,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
         }
         for (const auto &note : timeline->LandmineNotes) {
+          if (backgroundGaugeFailurePending) return;
           if (note == nullptr || note->IsDead) {
             continue;
           }
@@ -7526,6 +7649,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
         return;
       }
     }
+    if (backgroundGaugeFailurePending) return;
     if (state->passedTimelineCount == measure->TimeLines.size() &&
         isFirstMeasure) {
       state->passedMeasureCount++;
@@ -7578,7 +7702,7 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
   }
 
   const auto &events = options.replayData->events;
-  while (replayEventCursor < events.size() &&
+  while (!backgroundGaugeFailurePending && replayEventCursor < events.size() &&
          events[replayEventCursor].songTimeMicros <= gameplayTimeMicros) {
     if (practiceReplayEventAllowed(events[replayEventCursor])) {
       applyReplayEvent(events[replayEventCursor],
@@ -7587,7 +7711,8 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
     }
     replayEventCursor++;
   }
-  if (options.replayData->abortedAtSongTimeMicros.has_value() &&
+  if (!advancingGameplayInBackground &&
+      options.replayData->abortedAtSongTimeMicros.has_value() &&
       gameplayTimeMicros >= *options.replayData->abortedAtSongTimeMicros) {
     abortPlayFromStartSelectControl();
   }
@@ -7638,7 +7763,8 @@ void GamePlayScene::applyReplayLaneCoverEvent(
 
 void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
                                      long long visualTimeMicros) {
-  if (state == nullptr || !state->isPlaying || state->isEnding ||
+  if (backgroundGaugeFailurePending || state == nullptr ||
+      !state->isPlaying || state->isEnding ||
       !practiceReplayEventAllowed(event)) {
     return;
   }
@@ -7726,7 +7852,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
 }
 
 void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
-  if (!isReplayPlayback() || state == nullptr) {
+  if (backgroundGaugeFailurePending || !isReplayPlayback() || state == nullptr) {
     return;
   }
 
@@ -7761,6 +7887,7 @@ void GamePlayScene::resetHellChargeGaugeTracking(long long gameplayTimeMicros) {
 }
 
 void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
+  if (backgroundGaugeFailurePending) return;
   if (state == nullptr || chart == nullptr || isReplayPlayback()) {
     lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
     return;
@@ -7780,7 +7907,7 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     updateGaugeStatusText();
     appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr, gameplayTimeMicros,
                       gameplayTimeMicros, JudgeResult(judgement, 0), !lr2);
-    return state->isEnding;
+    return state->isEnding || backgroundGaugeFailurePending;
   };
   std::vector<bms_parser::LongNote *> activeHellChargeNotes;
   for (const auto *measure : chart->Measures) {
@@ -7889,7 +8016,7 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
 void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
                                      long long songTimeMicros,
                                      long long judgeTimeMicros) {
-  if (note == nullptr || note->IsDead) {
+  if (backgroundGaugeFailurePending || note == nullptr || note->IsDead) {
     return;
   }
 
@@ -7925,7 +8052,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             PlayfieldJudgeEventClock clock,
                             bool recordTimingSample,
                             const bms_parser::Note *graphNote) {
-  if (state == nullptr || state->isEnding) {
+  if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
   }
   if (gameplay::fallbackJudgementInvalidatesRanking(
@@ -7956,7 +8083,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
     context.settings.notesDisplayTimingMilliseconds =
         adjustedNotesDisplayTimingMilliseconds;
     notesDisplayTimingSettingsDirty = true;
-    refreshRuntimePresentationConfiguration();
+    if (!advancingGameplayInBackground) refreshRuntimePresentationConfiguration();
   }
   (void)judgementCount;
   // CurrentRhythmHUD->OnJudge(state);
@@ -7974,7 +8101,7 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
                                       const JudgeResult &judgeResult,
                                       bool checkGaugeFailure) {
   const auto capturePolicy = resultCapturePolicy();
-  if (state == nullptr || state->isEnding) {
+  if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
   }
   const auto range = practiceNoteRange();
@@ -8284,7 +8411,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                                      const JudgeResult *precomputedJudge,
                                      long long songTimeMicros,
                                      bool recordEvent) {
-  if (!judge.allowsNote(note)) {
+  if (backgroundGaugeFailurePending || !judge.allowsNote(note)) {
     return JudgeResult(None, 0);
   }
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
@@ -8338,7 +8465,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                                        const JudgeResult *precomputedJudge,
                                        long long songTimeMicros,
                                        bool recordEvent) {
-  if (!judge.allowsNote(Note) || !Note->IsLongNote()) {
+  if (backgroundGaugeFailurePending || !judge.allowsNote(Note) || !Note->IsLongNote()) {
     return JudgeResult(None, 0);
   }
   const auto &LongNote = static_cast<bms_parser::LongNote *>(Note);
@@ -8450,6 +8577,7 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   return {};
 }
 void GamePlayScene::updateLaneStateText() {
+  if (advancingGameplayInBackground) return;
   if (laneStateText == nullptr) {
     return;
   }

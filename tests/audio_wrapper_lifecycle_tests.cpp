@@ -1990,6 +1990,38 @@ void testApplicationSuspensionSilencesEveryBusWithoutConsumingPcm() {
   }
 }
 
+void testBackgroundGameplayKeepsClockRunningAndPreservesExplicitPause() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  stopwatch.start();
+  const path_t sound = PATH("background-gameplay.wav");
+  require(wrapper.loadGeneratedSound(sound, std::vector<short>(4096, 6000), 1,
+                                     44100) &&
+              wrapper.playSound(sound, audio::Bus::Bgm),
+          "background gameplay fixture starts chart audio");
+  std::array<std::int16_t, 16> output{};
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  const auto frames = data->audioClockFrameCursor->load();
+  // Gameplay opts out of application suspension; the renderer can remain off.
+  wrapper.setApplicationSuspended(false);
+  for (int callback = 0; callback < 16; ++callback) {
+    control->renderCallback(output.data(), 8, 2, control->renderUserData);
+    require(output[0] != 0, "background chart PCM stays audible");
+  }
+  require(data->audioClockFrameCursor->load() > frames,
+          "background chart audio callbacks advance the gameplay clock");
+  wrapper.pauseClock();
+  const auto pausedFrames = data->audioClockFrameCursor->load();
+  wrapper.setApplicationSuspended(true);
+  wrapper.setApplicationSuspended(false);
+  control->renderCallback(output.data(), 8, 2, control->renderUserData);
+  require(wrapper.isClockPaused() &&
+              data->audioClockFrameCursor->load() == pausedFrames,
+          "foregrounding never resumes an explicit clock pause");
+}
+
 void testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -3278,6 +3310,7 @@ int main() {
   try {
     testApplicationSuspensionSilencesEveryBusWithoutConsumingPcm();
     testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops();
+    testBackgroundGameplayKeepsClockRunningAndPreservesExplicitPause();
     testRestartCommitsRateBeforeSynchronousFirstCallback();
     testNativePresentationHistoryResetsBeforeBackendRestart();
     testNativePresentationHistoryUsesRateAndPauseTimelineResets();

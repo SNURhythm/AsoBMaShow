@@ -444,7 +444,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("checkSelfPermission", self.music_service)
         self.assertIn("Manifest.permission.POST_NOTIFICATIONS", self.music_service)
 
-    def test_persisted_uri_permissions_are_limited_to_granted_read_write_access(self):
+    def test_only_durable_add_folder_access_is_persisted(self):
         permission_calls = re.findall(
             r"takePersistableUriPermission\(\s*\w+,\s*([^\)]+)\)",
             self.activity,
@@ -453,11 +453,8 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             permission_calls,
             [
                 "Intent.FLAG_GRANT_READ_URI_PERMISSION",
-                "persistedFlags",
             ],
         )
-        self.assertIn("int persistedFlags = flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION\n"
-                      "                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);", self.activity)
 
     def test_sdl_dynamic_receivers_are_android_13_compatible(self):
         self.assertIn("registerReceiverCompat(mUsbBroadcast, filter)",

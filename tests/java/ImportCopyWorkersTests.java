@@ -102,13 +102,42 @@ public final class ImportCopyWorkersTests {
         }
     }
 
+    private static void monitorFailureAbortsEvenWithoutCopies() throws Exception {
+        CountDownLatch cancelled = new CountDownLatch(1);
+        try (ImportCopyWorkers workers = new ImportCopyWorkers(() -> {}, () -> {
+            throw new IOException("Control state unavailable");
+        }, cancelled::countDown)) {
+            require(cancelled.await(2, TimeUnit.SECONDS), "Monitor failure never cancelled pending provider I/O");
+            workers.awaitAll();
+            throw new AssertionError("Monitor failure must fail an empty transfer");
+        } catch (IOException expected) {
+            require(expected.getMessage().equals("Control state unavailable"), "Monitor failure lost its original cause");
+        }
+    }
+
+    private static void normalCloseStopsCancellationMonitor() throws Exception {
+        CountDownLatch checked = new CountDownLatch(1);
+        AtomicReference<Thread> monitor = new AtomicReference<>();
+        AtomicBoolean providerCancelled = new AtomicBoolean();
+        try (ImportCopyWorkers workers = new ImportCopyWorkers(() -> {}, () -> {
+            monitor.set(Thread.currentThread());
+            checked.countDown();
+        }, () -> providerCancelled.set(true))) {
+            require(checked.await(2, TimeUnit.SECONDS), "Cancellation monitor never started");
+        }
+        require(!monitor.get().isAlive() && !providerCancelled.get(),
+                "Successful close must join monitor without cancelling the provider");
+    }
+
     public static void main(String[] args) throws Exception {
+        monitorFailureAbortsEvenWithoutCopies();
+        normalCloseStopsCancellationMonitor();
         deviceBudget(1, 1);
         deviceBudget(2, 2);
         deviceBudget(0, 4);
         deviceBudget(32, 8);
         cancellationClosesBlockedReadersBeforeReturning();
         failedCopyDrainsOtherReadersAndPreservesError();
-        System.out.println("6 import copy worker tests passed");
+        System.out.println("8 import copy worker tests passed");
     }
 }

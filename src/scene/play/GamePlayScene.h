@@ -76,6 +76,8 @@ public:
   void init() override;
   void update(float dt) override;
   void onApplicationBackgroundChanged(bool background) override;
+  bool continuesAudioInBackground() const override;
+  void updateWhileBackgrounded() override;
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
@@ -114,6 +116,8 @@ private:
   bool guidedAccessReminderPending = false;
   bool guidedAccessReminderExiting = false;
   bool guidedAccessReminderBackground = false;
+  bool advancingGameplayInBackground = false;
+  bool backgroundGaugeFailurePending = false;
   View *guidedAccessReminderLayout = nullptr;
   TextView *guidedAccessReminderIcon = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;

@@ -756,7 +756,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_display_refresh_rate_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_display_refresh_rate_tests.py -v)
+    add_test(NAME android_gameplay_orientation_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_gameplay_orientation_tests.py -v)
     set_tests_properties(android_window_presentation_tests
+                         android_gameplay_orientation_tests
                          android_display_refresh_rate_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS platform_android
@@ -7738,6 +7742,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
 
+    set(display_orientation_sync_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/display_orientation_sync_tests.cpp)
+    add_custom_command(
+        OUTPUT ${display_orientation_sync_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/display_orientation_sync_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${display_orientation_sync_source}
+        DEPENDS tests/display_orientation_sync_extract.py tests/display_orientation_sync_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/main.cpp
+        VERBATIM
+    )
+    add_executable(display_orientation_sync_tests ${display_orientation_sync_source})
+    target_include_directories(display_orientation_sync_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(display_orientation_sync_tests PRIVATE cxx_std_23)
+
+    set(android_render_suspend_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/android_render_suspend_tests.cpp)
+    add_custom_command(
+        OUTPUT ${android_render_suspend_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_render_suspend_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${android_render_suspend_source}
+        DEPENDS tests/android_render_suspend_extract.py tests/android_render_suspend_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/main.cpp
+        VERBATIM
+    )
+    add_executable(android_render_suspend_tests ${android_render_suspend_source})
+    target_compile_features(android_render_suspend_tests PRIVATE cxx_std_20)
+
     add_executable(quaternion_math_tests
         tests/quaternion_math_tests.cpp
         src/math/Quaternion.cpp
@@ -9174,6 +9205,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(display_orientation_sync_tests foundation_av_display_orientation_sync)
+    asobmashow_register_test(android_render_suspend_tests foundation_av_android_render_suspend)
     asobmashow_register_test(quaternion_math_tests foundation_math_quaternion)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)

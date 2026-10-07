@@ -4801,6 +4801,15 @@ void MainMenuScene::buildFileActionsModal() {
       "menu.manage_files.label", "menu.manage_files.intro",
       "menu.manage_files.close.label",
       [this]() { fileActionsModalRoot_->setVisible(false); }, &fileActionsPanel_);
+  if (AndroidBuildHasManageExternalStorage()) {
+    addAction(actions, "menu.add_folder.label", "menu.manage_files.link", false,
+              [this]() {
+                fileActionsModalRoot_->setVisible(false);
+                if (context.requestAddChartFolderFromFiles) {
+                  context.requestAddChartFolderFromFiles();
+                }
+              });
+  }
   addAction(actions, "menu.import_folder.label", "menu.manage_files.folder", true,
             [this]() {
               fileActionsPanel_->setVisible(false);

@@ -33,6 +33,7 @@ import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -368,13 +369,32 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private boolean gameplayOrientationLocked;
 
+    private int captureScreenOrientation() {
+        int rotation = getWindowManager().getDefaultDisplay().getRotation();
+        boolean portrait = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_PORTRAIT;
+        boolean quarterTurn = rotation == Surface.ROTATION_90
+                || rotation == Surface.ROTATION_270;
+        boolean naturalPortrait = portrait != quarterTurn;
+        boolean reversed = naturalPortrait
+                ? rotation == Surface.ROTATION_180 || rotation == Surface.ROTATION_270
+                : rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_180;
+        return portrait
+                ? (reversed ? ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+                            : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+                : (reversed ? ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+                            : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    }
+
     public void setScreenOrientation(int mode, boolean lockCurrent) {
         CountDownLatch applied = new CountDownLatch(1);
         runOnUiThread(() -> {
             try {
                 if (lockCurrent) {
                     if (!gameplayOrientationLocked) {
-                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+                        // LOCKED follows the display's last rotation when the
+                        // launcher rotated it during Home/app switching.
+                        setRequestedOrientation(captureScreenOrientation());
                     }
                 } else {
                     setRequestedOrientation(mode == 1
@@ -631,21 +651,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                     finishArchivePicker();
                     return;
                 }
-                if (isTree) {
-                    int flags = data.getFlags();
-                    int requiredFlags = Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                            | Intent.FLAG_GRANT_READ_URI_PERMISSION;
-                    if ((flags & requiredFlags) == requiredFlags) {
-                        try {
-                            int persistedFlags = flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                            getContentResolver().takePersistableUriPermission(
-                                    importUri, persistedFlags);
-                        } catch (Exception ignored) {
-                            // Some providers grant transient access only; keep using it for this copy.
-                        }
-                    }
-                }
+                // Imports run once within this Activity lifetime and use its transient
+                // grants. Only Add Folder needs persisted access after an app restart.
                 archivePickerUri.set(importUri);
                 archivePickerName.set(displayName);
                 archivePickerTree.set(isTree);
@@ -813,7 +820,6 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             Intent folderIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             folderIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                     | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
             if ("move".equals(operation)) folderIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             try {
@@ -3023,9 +3029,16 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
         control.checkpoint();
         DocumentsPathPolicy policy = AsoBMaShowDocumentsProvider.initializeDocuments(this);
-        File directory = policy.child(AsoBMaShowDocumentsProvider.documentsDirectory(this), "BMS");
+        File documents = AsoBMaShowDocumentsProvider.documentsDirectory(this);
+        File directory = policy.child(documents, "BMS");
         if (!directory.isDirectory() && !directory.mkdirs()) {
             throw new IOException("Could not create BMS import folder.");
+        }
+        if (moveSource) {
+            // Persist newly initialized Documents/BMS ancestors before any
+            // source can be removed. The transfer syncs its own output tree.
+            ChartFolderImport.syncDirectory(documents);
+            ChartFolderImport.syncDirectory(documents.getParentFile());
         }
         policy.documentId(output);
         // Older system pickers can expose an ancestor of the app's destination.

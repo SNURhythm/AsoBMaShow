@@ -18,9 +18,10 @@ remain in BMS and remaining source content is kept; the task reports the failure
 **Open in Files** always uses the system Files browser, opening Documents/BMS.
 Navigate up to reach the Documents root. Documents/Skins is created when missing.
 The AsoBMaShow root exposes the entire Documents directory, including
-BMS, databases, Skins and other user files. Files-aware apps can browse, copy,
-export, rename and delete these files through Android's permission grants. The
-provider uses `getExternalFilesDir(null)/Documents` with `getFilesDir()/Documents`
+BMS, databases, Skins and other user files. Files-aware apps can browse, copy and
+export these files through Android's permission grants. The db and profiles
+subtrees are read-only through the provider; other files can also be edited,
+renamed and deleted. The provider uses `getExternalFilesDir(null)/Documents` with `getFilesDir()/Documents`
 as fallback, matching the native Documents path. Rendered music and archive
 indexes use Android's private cache. Import staging, credentials, private skin
 state and shared preferences stay outside the exposed Documents subtree.
@@ -30,8 +31,9 @@ Put charts under BMS. Import Folder rejects the app's own Documents tree to avoi
 recursively copying it into itself. Provider changes in BMS are coalesced until writable handles
 close and changes settle; the next foreground session queues a library refresh.
 Pending changes survive an app restart and clear after the refresh succeeds.
-Other files remain directly editable; live database replacement should be done
-with the game closed, and skin/database changes may require reopening the app.
+The db and profiles subtrees remain read-only even when the game is closed;
+Files supports exporting them, not replacing databases. Other files remain
+directly editable, and skin changes may require reopening the app.
 
 `all_file_access` retains Add Folder for users who want direct external folders.
 On Android 11+ it requests all-files access before opening the folder picker.

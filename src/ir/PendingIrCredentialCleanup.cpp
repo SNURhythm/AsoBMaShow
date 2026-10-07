@@ -1,7 +1,12 @@
 #include "PendingIrCredentialCleanup.h"
 
 #include "../AtomicFile.h"
+#include "../targets.h"
 #include "IrCredentialBackend.h"
+
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -62,7 +67,18 @@ bool removeMarkerFile(const std::filesystem::path &path,
 PendingIrCredentialCleanup::PendingIrCredentialCleanup(
     const std::filesystem::path &applicationDataRoot)
     : applicationDataRoot_(applicationDataRoot),
-      directory_(applicationDataRoot / ".pending-ir-credential-cleanup") {}
+      directory_(applicationDataRoot / ".pending-ir-credential-cleanup") {
+#if TARGET_OS_ANDROID
+  // Deletion retries must survive edits to the public Documents subtree.
+  // Overwrite reset markers stay under applicationDataRoot_ so they commit
+  // atomically with the replacement profile's staging-directory rename.
+  const std::string internalFilesDirectory = GetAndroidInternalFilesDir();
+  directory_ = internalFilesDirectory.empty()
+                   ? std::filesystem::path{}
+                   : std::filesystem::path(internalFilesDirectory) /
+                         ".pending-ir-credential-cleanup";
+#endif
+}
 
 std::filesystem::path PendingIrCredentialCleanup::markerPath(
     std::string_view profileId) const {
@@ -83,6 +99,10 @@ bool PendingIrCredentialCleanup::schedule(std::string_view profileId,
   try {
     std::lock_guard lock(mutex_);
     diagnostic.clear();
+    if (directory_.empty()) {
+      diagnostic = "pending credential cleanup private storage is unavailable";
+      return false;
+    }
     if (!isValidCredentialProfileId(profileId)) {
       diagnostic = "pending credential cleanup profile identity is invalid";
       return false;
@@ -106,6 +126,10 @@ bool PendingIrCredentialCleanup::complete(std::string_view profileId,
   try {
     std::lock_guard lock(mutex_);
     diagnostic.clear();
+    if (directory_.empty()) {
+      diagnostic = "pending credential cleanup private storage is unavailable";
+      return false;
+    }
     if (!isValidCredentialProfileId(profileId)) {
       diagnostic = "pending credential cleanup profile identity is invalid";
       return false;
@@ -127,6 +151,10 @@ PendingIrCredentialCleanup::pending(std::string &diagnostic) const noexcept {
   try {
     std::lock_guard lock(mutex_);
     diagnostic.clear();
+    if (directory_.empty()) {
+      diagnostic = "pending credential cleanup private storage is unavailable";
+      return {};
+    }
     std::error_code error;
     const auto directoryStatus =
         std::filesystem::symlink_status(directory_, error);

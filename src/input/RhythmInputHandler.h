@@ -36,6 +36,7 @@ private:
   std::uint64_t deviceSubscriptionToken = 0;
   std::array<bool, 6> registryDeviceClassEnabled{true, true, true,
                                                   true, true, true};
+  bool applicationBackground = false;
   int totalLaneCount;
   int scratchLaneCount;
   int keyMode = 7;
@@ -98,6 +99,7 @@ public:
   bool startListenTouch();
   void stopListen();
   void discardPendingTouchEvents();
+  void setApplicationBackground(bool background);
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
   void setBindings(const InputProfile &profile,

@@ -20,6 +20,10 @@ final class ImportCopyWorkers implements AutoCloseable {
     private final Set<InputStream> inputs = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Action checkpoint;
     private final Runnable cancelPendingIo;
+    private final Thread cancellationMonitor;
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean providerCancelled = new AtomicBoolean();
+    private volatile IOException cancellationFailure;
     private int pending;
     private boolean stopping;
 
@@ -27,14 +31,43 @@ final class ImportCopyWorkers implements AutoCloseable {
         this(Runtime.getRuntime().availableProcessors(), checkpoint, cancelPendingIo);
     }
 
+    ImportCopyWorkers(Action checkpoint, Action checkCancellation, Runnable cancelPendingIo) {
+        this(Runtime.getRuntime().availableProcessors(), checkpoint, checkCancellation, cancelPendingIo);
+    }
+
     ImportCopyWorkers(int availableProcessors, Action checkpoint, Runnable cancelPendingIo) {
+        this(availableProcessors, checkpoint, checkpoint, cancelPendingIo);
+    }
+
+    private ImportCopyWorkers(int availableProcessors, Action checkpoint, Action checkCancellation,
+                              Runnable cancelPendingIo) {
         // Like chart parsing, use reported hardware parallelism (fallback: four).
         // File I/O also has an eight-stream / eight-MiB buffer ceiling.
         workerCount = Math.min(8, availableProcessors > 0 ? availableProcessors : 4);
         executor = Executors.newFixedThreadPool(workerCount);
         completed = new ExecutorCompletionService<>(executor);
-        this.checkpoint = checkpoint;
+        this.checkpoint = () -> {
+            if (cancellationFailure != null) throw cancellationFailure;
+            checkpoint.run();
+        };
         this.cancelPendingIo = cancelPendingIo;
+        Thread coordinator = Thread.currentThread();
+        cancellationMonitor = new Thread(() -> {
+            try {
+                while (!closed.get()) {
+                    if (coordinator.isInterrupted()) throw cancelled();
+                    checkCancellation.run();
+                    Thread.sleep(50);
+                }
+            } catch (IOException | RuntimeException | InterruptedException error) {
+                if (!closed.get()) {
+                    cancellationFailure = error instanceof IOException ? (IOException)error
+                            : new IOException("Import copy cancelled.", error);
+                    stopIo(true);
+                }
+            }
+        }, "import-cancellation");
+        cancellationMonitor.start();
     }
 
     void submit(Action action) throws IOException {
@@ -71,6 +104,7 @@ final class ImportCopyWorkers implements AutoCloseable {
     }
 
     void awaitAll() throws IOException {
+        checkpoint.run();
         while (pending > 0) awaitOne();
     }
 
@@ -95,22 +129,32 @@ final class ImportCopyWorkers implements AutoCloseable {
         }
     }
 
-    @Override public void close() {
+    private void stopIo(boolean cancelProvider) {
         InputStream[] remaining;
         synchronized (this) {
             stopping = true;
             remaining = inputs.toArray(new InputStream[0]);
         }
         executor.shutdownNow();
-        if (pending > 0) {
+        if (cancelProvider && providerCancelled.compareAndSet(false, true)) {
             try { cancelPendingIo.run(); } catch (RuntimeException ignored) { }
         }
         for (InputStream input : remaining) {
-            try { input.close(); } catch (IOException ignored) { }
+            try { input.close(); } catch (IOException | RuntimeException ignored) { }
         }
+    }
+
+    @Override public void close() {
+        closed.set(true);
+        cancellationMonitor.interrupt();
+        stopIo(pending > 0);
         // A provider stream may need close/cancellation as well as interruption.
         // Never let output cleanup race a still-running writer.
         boolean interrupted = Thread.interrupted();
+        while (cancellationMonitor.isAlive()) {
+            try { cancellationMonitor.join(50); }
+            catch (InterruptedException error) { interrupted = true; }
+        }
         while (!executor.isTerminated()) {
             try { executor.awaitTermination(50, TimeUnit.MILLISECONDS); }
             catch (InterruptedException error) { interrupted = true; }

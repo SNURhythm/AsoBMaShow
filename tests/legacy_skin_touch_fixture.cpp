@@ -51,6 +51,9 @@ class RhythmInputHandler {
 public:
   struct TouchSource { void discardPendingEvents() {} };
   TouchSource *touchInputSource = nullptr;
+  bool applicationBackground = false;
+  struct Pipeline { int resets = 0; void reset() { ++resets; } } pipeline;
+  Pipeline *logicalInputPipeline = &pipeline;
   int totalLaneCount = 8, scratchLaneCount = 1;
   float playAreaWidth = 8, playAreaLeftX = 0;
   bool dragModeEnabled = false;
@@ -70,6 +73,7 @@ public:
   }
   bool notifyTouchEvent(SDL_FingerID, ReplayTouchAction, Vector3);
   void discardPendingTouchEvents();
+  void setApplicationBackground(bool background);
   Vector3 normalizedTouchToRenderLocation(Vector3) const;
   bool isLaneOccupied(int, SDL_FingerID) const;
   void beginFingerLane(SDL_FingerID, int, Vector3);
@@ -99,8 +103,22 @@ struct TouchVisualState {
   }
 };
 
+bool fixtureAndroid = true;
+enum class PresentationMode { BuiltIn, Skin };
+struct FixturePresentation {
+  PresentationMode mode = PresentationMode::Skin;
+  gameplay::RealtimeTouchLayout layout;
+  PresentationMode activeMode() const { return mode; }
+  const gameplay::RealtimeTouchLayout &touchLayout() const { return layout; }
+};
+
 class GamePlayScene {
 public:
+  RhythmInputHandler *inputHandler = nullptr;
+  FixturePresentation *presentation = nullptr;
+  bool realtimeAuthority = false;
+  bool realtimeGameplayAuthorityActive() const { return realtimeAuthority; }
+  void refreshLegacyTouchLayout();
   struct State { bool isPlaying = true, isEnding = false; } ownedState;
   State *state = &ownedState;
   struct Context {
@@ -253,6 +271,12 @@ int main() {
          "background discard cancels callback-owned touch at its latest location");
   interrupted.discardPendingTouchEvents();
   expect(callbackCancels == 1, "repeated background/foreground discard cancels once");
+  interrupted.setApplicationBackground(true);
+  expect(interrupted.applicationBackground && interrupted.pipeline.resets == 1,
+         "background clears physical binding ownership as well as touch ownership");
+  interrupted.setApplicationBackground(false);
+  expect(!interrupted.applicationBackground && interrupted.pipeline.resets == 1,
+         "foreground restores input without another synthetic binding release");
   interrupted.onFingerDown(20, firstLane);
   interrupted.onFingerUp(20, firstLane);
   interrupted.discardPendingTouchEvents();
@@ -293,6 +317,28 @@ int main() {
            "Cancel retires lane-cover capture even when gameplay input is gated");
     expect(scene.visualState.active.empty(),
            "Cancel closes published live-touch visualization while paused or gated");
+  }
+  for (const bool android : {false, true}) {
+    fixtureAndroid = android;
+    RhythmInputHandler input;
+    FixturePresentation presentation;
+    GamePlayScene scene;
+    scene.inputHandler = &input;
+    scene.presentation = &presentation;
+    scene.realtimeAuthority = true;
+    scene.refreshLegacyTouchLayout();
+    presentation.layout = skinLayout();
+    scene.refreshLegacyTouchLayout();
+    input.onFingerDown(99, firstLane);
+    input.onFingerUp(99, firstLane);
+    expect(android ? input.presses == std::vector<int>{3}
+                   : !input.touchLaneLayout.has_value(),
+           "late skin geometry updates Android legacy touch routing under realtime authority only");
+    if (android) {
+      presentation.mode = PresentationMode::BuiltIn;
+      scene.refreshLegacyTouchLayout();
+      expect(!input.touchLaneLayout.has_value(), "built-in fallback clears authored touch regions");
+    }
   }
   return failures ? 1 : 0;
 }
