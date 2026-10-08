@@ -4955,12 +4955,19 @@ void MainMenuScene::buildFileActionsModal() {
               showComputerGuide("menu.manage_files.computer.regular.label",
                                 "menu.manage_files.computer.regular.instructions");
             });
-  addAction(computerCards, 0xf120 /* terminal */,
-            "menu.manage_files.computer.advanced.label",
-            "menu.manage_files.computer.advanced.description",
+  addAction(computerCards, 0xf108 /* desktop */,
+            "menu.manage_files.computer.gui.label",
+            "menu.manage_files.computer.gui.description",
             [showComputerGuide] {
-              showComputerGuide("menu.manage_files.computer.advanced.label",
-                                "menu.manage_files.computer.advanced.instructions");
+              showComputerGuide("menu.manage_files.computer.gui.label",
+                                "menu.manage_files.computer.gui.instructions");
+            });
+  addAction(computerCards, 0xf120 /* terminal */,
+            "menu.manage_files.computer.cli.label",
+            "menu.manage_files.computer.cli.description",
+            [showComputerGuide] {
+              showComputerGuide("menu.manage_files.computer.cli.label",
+                                "menu.manage_files.computer.cli.instructions");
             });
   computerImportPanel_->setVisible(false);
   computerImportPanel_->setDisplay(YGDisplayNone);
