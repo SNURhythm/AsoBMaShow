@@ -123,6 +123,35 @@ file(WRITE "${{CMAKE_BINARY_DIR}}/found.txt" "${{Fixture_PACKAGE_DIR}}")
         self.assertIn("source.properties", result.stderr)
         self.assertFalse((self.root / "build/selected.txt").exists())
 
+    @unittest.skipUnless(shutil.which("pkg-config"), "pkg-config required")
+    def test_dependency_change_rechecks_package_and_pkg_config_results(self):
+        project = self.root / "CMakeLists.txt"
+        with project.open("a") as output:
+            output.write("""
+if(NOT Fixture_FOUND)
+    set(Fixture_LIBRARY "${VCPKG_INSTALLED_DIR}/lib/libfixture.a" CACHE FILEPATH "")
+    set(Fixture_FOUND TRUE CACHE BOOL "")
+endif()
+file(MAKE_DIRECTORY "${VCPKG_INSTALLED_DIR}/lib/pkgconfig")
+file(WRITE "${VCPKG_INSTALLED_DIR}/lib/pkgconfig/cache-fixture.pc"
+    "Name: cache-fixture\nDescription: Cache relocation fixture\nVersion: 1\nLibs: -L${VCPKG_INSTALLED_DIR}/lib -lfixture\nCflags: -I${VCPKG_INSTALLED_DIR}/include\n")
+set(ENV{PKG_CONFIG_LIBDIR} "${VCPKG_INSTALLED_DIR}/lib/pkgconfig")
+set(ENV{PKG_CONFIG_PATH} "")
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FIXTURE REQUIRED cache-fixture)
+file(WRITE "${CMAKE_BINARY_DIR}/discovered.txt"
+    "${Fixture_LIBRARY}\n${FIXTURE_LIBRARY_DIRS}\n${FIXTURE_INCLUDE_DIRS}")
+""")
+        previous = self.configure()
+        manifest = self.root / "vcpkg.json"
+        manifest.write_text(manifest.read_text() + "\n")
+        current = self.configure()
+        self.assertNotEqual(previous, current)
+        self.assertEqual(
+            (self.root / "build/discovered.txt").read_text().splitlines(),
+            [f"{current}/lib/libfixture.a", f"{current}/lib", f"{current}/include"],
+        )
+
     def test_environment_and_registry_overlay_contents_invalidate_identity(self):
         overlay = self.root / "extra-ports"
         overlay.mkdir()

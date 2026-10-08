@@ -912,7 +912,7 @@ struct IrRankingModal::Impl {
       // Keep the same player at the viewport's top when rows update.
       if (previous && list->itemHeight > 0 && !previous->entries.empty()) {
         const auto anchor = std::min(previous->entries.size() - 1,
-            static_cast<std::size_t>(std::max(0.0f, list->scrollOffset) / list->itemHeight));
+            static_cast<std::size_t>(std::max(0.0, list->scrollOffset) / list->itemHeight));
         const auto &id = previous->entries[anchor].providerEntryId;
         if (!id.empty()) {
           const auto found = std::ranges::find_if(retained->entries,

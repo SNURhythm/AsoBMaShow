@@ -146,7 +146,7 @@ void ScrollView::renderImpl(RenderContext &context) {
   }
   if (!touchPressedInside) {
     float momentumDelta = 0.0f;
-    if (touchMomentum.step(momentumDelta) && !scrollBy(momentumDelta)) {
+    if (touchMomentum.step(SDL_GetTicks(), momentumDelta) && !scrollBy(momentumDelta)) {
       touchMomentum.stop();
     }
   }
@@ -309,7 +309,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (!isInside(uiX, uiY)) {
       return true;
     }
-    touchMomentum.stop();
+    touchMomentum.beginDrag(event.tfinger.timestamp);
     activeTouchId = event.tfinger.fingerId;
     touchPressedInside = true;
     touchDragging = false;
@@ -345,7 +345,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (touchDragging) {
       const float delta = lastTouchUiY - uiY;
       scrollBy(delta);
-      touchMomentum.recordDragDelta(delta);
+      touchMomentum.recordDragDelta(delta, event.tfinger.timestamp);
       lastTouchUiY = uiY;
       return false;
     }
@@ -369,7 +369,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       return false;
     }
     if (hadDrag) {
-      touchMomentum.release();
+      touchMomentum.release(event.tfinger.timestamp);
     } else {
       touchMomentum.stop();
     }
@@ -483,7 +483,7 @@ void ScrollView::renderPersistentScrollbar(RenderContext &context) const {
   const float thumbTravel = std::max(0.0f, trackHeight - thumbHeight);
   const float thumbY = static_cast<float>(getViewportY()) + kScrollbarInset +
                        thumbTravel * std::clamp(scrollOffset / maxOffset,
-                                                0.0f, 1.0f);
+                                                0.0, 1.0);
   const float trackX = static_cast<float>(getViewportX() + getViewportWidth()) -
                        kScrollbarInset - kScrollbarTrackWidth;
   const float trackY = static_cast<float>(getViewportY()) + kScrollbarInset;
@@ -503,17 +503,17 @@ void ScrollView::clampScrollOffset() {
     scrollOffset = 0.0f;
     return;
   }
-  const float maxOffset = std::max(
-      0.0f,
-      static_cast<float>(contentView->getHeight() - getScrollContentHeight()));
-  scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
+  const double maxOffset = std::max(
+      0.0,
+      static_cast<double>(contentView->getHeight() - getScrollContentHeight()));
+  scrollOffset = std::clamp(scrollOffset, 0.0, maxOffset);
 }
 
 bool ScrollView::scrollBy(float delta) {
   if (contentView == nullptr) {
     return false;
   }
-  const float previousOffset = scrollOffset;
+  const double previousOffset = scrollOffset;
   scrollOffset += delta;
   clampScrollOffset();
   updateContentPosition();

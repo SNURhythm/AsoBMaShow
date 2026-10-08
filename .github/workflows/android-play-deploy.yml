@@ -1,0 +1,52 @@
+name: Build & Upload Android Play Beta Draft (Manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-play:
+    name: Upload Google Play public beta draft
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 60
+    concurrency:
+      group: android-google-play
+      cancel-in-progress: false
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      ANDROID_HOME: /opt/homebrew/share/android-commandlinetools
+      ANDROID_SDK_ROOT: /opt/homebrew/share/android-commandlinetools
+      VCPKG_ROOT: /Users/xf/vcpkg
+      ANDROID_KEYSTORE_PATH: ${{ secrets.ANDROID_KEYSTORE_PATH }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Verify Android release workflows
+        run: |
+          python3 tests/android_release_workflow_tests.py
+          python3 tests/android_play_workflow_tests.py
+      - name: Run fatal Android lint
+        run: android/gradlew -p android lintRestricted_file_accessDebug
+      - name: Build and upload public beta draft
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: ./scripts/android_play_deploy.sh
+      - name: Retain signed app bundle
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-public-beta-aab
+          path: android/app/build/outputs/bundle/restricted_file_accessRelease/*.aab
+          if-no-files-found: ignore
+          retention-days: 14

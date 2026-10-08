@@ -57,9 +57,9 @@ void MainMenuScene::buildTutorial() {
         }
         View *target = step == NewcomerTutorialStep::Download
                            ? findBmsButton : readyPlayOptionsButton;
-        // The right-hand controls scroll on short screens. Keep the actual
-        // highlighted control visible, including after a viewport resize.
-        if (target && tutorialRightScroll_) {
+        // Play options scroll on short screens; Download stays in the fixed
+        // primary action area. Only scroll a target inside the scroll view.
+        if (step != NewcomerTutorialStep::Download && target && tutorialRightScroll_) {
           const int top = tutorialRightScroll_->getY();
           const int bottom = top + tutorialRightScroll_->getHeight();
           if (target->getY() < top || target->getY() + target->getHeight() > bottom) {

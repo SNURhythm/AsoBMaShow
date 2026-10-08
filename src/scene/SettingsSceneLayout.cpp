@@ -68,6 +68,7 @@ void SettingsScene::resetViewState() {
   rootLayout = nullptr;
   overlayPortal = nullptr;
   scrollView = nullptr;
+  tabRailScrollView = nullptr;
   offsetInput = nullptr;
   summaryOffsetValueText = nullptr;
   visualOffsetInput = nullptr;
@@ -250,6 +251,9 @@ void SettingsScene::ensureLayoutUpToDate() {
     lastLayoutScrollOffset = scrollView->getScrollOffset();
   }
   // A folded preview has no scroll view; retain the last expanded offset.
+  if (tabRailScrollView != nullptr) {
+    lastTabRailScrollOffset = tabRailScrollView->getScrollOffset();
+  }
 
   resetViewState();
   lastLayoutWidth = rendering::window_width;
@@ -264,6 +268,9 @@ void SettingsScene::ensureLayoutUpToDate() {
   lastLaidOutPreviewPanelPage = previewPanelPage;
   if (preserveScroll && scrollView != nullptr) {
     scrollView->setScrollOffset(lastLayoutScrollOffset);
+  }
+  if (tabRailScrollView != nullptr) {
+    tabRailScrollView->setScrollOffset(lastTabRailScrollOffset);
   }
 }
 
@@ -3074,6 +3081,7 @@ void SettingsScene::initView() {
   tabControls->addView(irTabButton);
   tabControls->addView(miscTabButton);
   auto *tabRail = new ScrollView();
+  tabRailScrollView = tabRail;
   tabRail->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
   if (portrait) tabRail->setHeight(metrics.actionButtonHeight * 4.0F + 24.0F);
   tabRail->setFlexShrink(0.0f);

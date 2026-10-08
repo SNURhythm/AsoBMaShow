@@ -191,7 +191,7 @@ run_build_only() {
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGN_IDENTITY= \
-    IPHONEOS_DEPLOYMENT_TARGET=14.0 \
+    IPHONEOS_DEPLOYMENT_TARGET=15.0 \
     build
   if [ -n "${IOS_BUILD_OUTPUT_PATH_FILE:-}" ]; then
     printf '%s\n' "${app_path}" > "${IOS_BUILD_OUTPUT_PATH_FILE}"

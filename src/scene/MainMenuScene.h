@@ -239,6 +239,7 @@ private:
   View *fileActionsModalRoot_ = nullptr;
   View *fileActionsPanel_ = nullptr;
   View *folderImportPanel_ = nullptr;
+  View *computerImportPanel_ = nullptr;
 #endif
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   RecyclerView<MainMenuParseLogRow> *parseLogRecyclerView = nullptr;

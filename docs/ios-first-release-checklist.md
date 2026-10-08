@@ -1,7 +1,7 @@
 # iOS-first release checklist — 0.0.1
 
 This checklist is the final human gate for the first iOS/iPadOS release. The
-shipping contract is marketing version `0.0.1`, minimum iOS/iPadOS 14.0, iPhone
+shipping contract is marketing version `0.0.1`, minimum iOS/iPadOS 15.0, iPhone
 and iPad support, and `NSAllowsArbitraryLoads = true` so user-selected HTTP
 difficulty tables continue to load. It does not authorize a deployment.
 
@@ -10,7 +10,7 @@ difficulty tables continue to load. It does not authorize a deployment.
 - [x] Run `scripts/ios_release_verify.sh` without any distribution action.
 - [x] Confirm release-critical native tests and iOS release-contract tests pass.
 - [x] Build the unsigned device app and run `scripts/ios_artifact_audit.sh`.
-- [x] Confirm the unsigned artifact reports version 0.0.1, iOS 14.0, arm64,
+- [x] Confirm the unsigned artifact reports version 0.0.1, iOS 15.0, arm64,
   iPhone/iPad families, compiled icons, permission strings, retained ATS
   behavior, and resolved embedded frameworks.
 - [ ] Run `scripts/ios_artifact_audit.sh --require-signature` on the exact signed

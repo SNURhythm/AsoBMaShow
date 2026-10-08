@@ -85,11 +85,14 @@ struct SettingsScene {
   bool previewActive = false, lastLaidOutPreviewActive = false;
   bool previewPanelFolded = false;
   float lastLayoutScrollOffset = 0.0F;
+  float lastTabRailScrollOffset = 0.0F;
   int previewPanelPage = 0, lastLaidOutPreviewPanelPage = 0;
   View *visibleScroll = nullptr;
+  View *visibleTabRail = nullptr;
   int saves = 0;
   void persistSettings() { ++saves; }
   void initView() {
+    visibleTabRail = nullptr;
     rootLayout = new View;
     views.push_back(rootLayout);
     if (previewActive) {
@@ -101,6 +104,9 @@ struct SettingsScene {
       visibleScroll = previewScroll;
       views.push_back(previewScroll);
     } else {
+      TAB_RAIL_SCROLL_BINDING
+      visibleTabRail = tabRail;
+      views.push_back(tabRail);
       scrollView = new View;
       visibleScroll = scrollView;
       views.push_back(scrollView);
@@ -125,6 +131,33 @@ void expect(bool condition, const char *message) {
   if (!condition) { ++failures; std::cerr << message << '\n'; }
 }
 int main() {
+  {
+    SettingsScene scene;
+    scene.ensureLayoutUpToDate();
+    scene.visibleTabRail->setScrollOffset(240);
+    scene.visibleScroll->setScrollOffset(375);
+    scene.activeTab = 2;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleTabRail->getScrollOffset() == 240,
+           "switching settings tabs preserves the navigation list scroll");
+    expect(scene.visibleScroll->getScrollOffset() == 0,
+           "a different settings tab starts its own content at the top");
+    scene.visibleTabRail->setScrollOffset(180);
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleTabRail->getScrollOffset() == 180,
+           "rebuilding the same settings tab preserves navigation scroll");
+    scene.previewActive = true;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    scene.previewActive = false;
+    scene.lastLayoutWidth = -1;
+    scene.ensureLayoutUpToDate();
+    expect(scene.visibleTabRail->getScrollOffset() == 180,
+           "returning from preview retains the hidden navigation list position");
+    scene.resetViewState();
+  }
   {
     SettingsScene scene;
     scene.previewActive = true;

@@ -158,12 +158,15 @@ function(asobmashow_prepare_android_dependencies)
     set(installed "${directory}/installed")
     # CMake find_package/find_library results can otherwise retain paths into
     # the preceding identity after an overlay or manifest changes in-place.
+    # Invalidate discovery flags too: otherwise Find modules and pkg-config
+    # may skip detection after their cached include/library paths are removed.
     if(VCPKG_INSTALLED_DIR AND NOT VCPKG_INSTALLED_DIR STREQUAL installed)
         set(previous "${VCPKG_INSTALLED_DIR}")
         get_cmake_property(cache_variables CACHE_VARIABLES)
         foreach(variable IN LISTS cache_variables)
             string(FIND "${${variable}}" "${previous}/" old_prefix)
-            if(NOT old_prefix EQUAL -1 OR "${${variable}}" STREQUAL previous)
+            if(NOT old_prefix EQUAL -1 OR "${${variable}}" STREQUAL previous
+               OR variable MATCHES "(^__pkg_config_checked_|_FOUND$)")
                 unset(${variable} CACHE)
             endif()
         endforeach()

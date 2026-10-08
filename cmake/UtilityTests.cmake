@@ -11,6 +11,11 @@ target_include_directories(stable_hash_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(stable_hash_tests PRIVATE cxx_std_23)
 asobmashow_register_test(stable_hash_tests)
 
+add_executable(scroll_momentum_tests tests/scroll_momentum_tests.cpp)
+target_include_directories(scroll_momentum_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(scroll_momentum_tests PRIVATE cxx_std_23)
+asobmashow_register_test(scroll_momentum_tests)
+
 # Run the same stop-request contract against native threads and Android's
 # production fallback, selected locally after loading the host standard library.
 foreach(thread_test IN ITEMS thread_compat_tests thread_compat_fallback_tests)

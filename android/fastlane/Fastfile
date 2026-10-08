@@ -1,0 +1,41 @@
+require "fileutils"
+
+default_platform(:android)
+
+repository_root = File.expand_path("../..", __dir__)
+bundle_path = File.join(repository_root, "android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab")
+
+platform :android do
+  desc "Build a signed restricted-access AAB without uploading"
+  lane :build_bundle do
+    # A successful command must produce this run's artifact, never an old bundle.
+    FileUtils.rm_f(bundle_path)
+    sh(File.join(repository_root, "scripts/android_firebase_deploy.sh"),
+       "--build-only", "--bundle", "--variant", "restricted_file_accessRelease")
+    UI.user_error!("AAB not found or empty: #{bundle_path}") unless File.file?(bundle_path) && File.size?(bundle_path)
+    UI.success("Built AAB: #{bundle_path}")
+    bundle_path
+  end
+
+  desc "Build and upload a draft release to Google Play public beta (open testing)"
+  lane :play_beta do
+    credentials = ENV["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"]
+    if credentials.to_s.strip.empty?
+      UI.user_error!("Set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON to the Play service account JSON before uploading.")
+    end
+
+    aab = build_bundle
+    upload_to_play_store(
+      package_name: "com.snurhythm.asobmashow",
+      json_key_data: credentials,
+      aab: aab,
+      track: "beta",
+      release_status: "draft",
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: true
+    )
+  end
+end

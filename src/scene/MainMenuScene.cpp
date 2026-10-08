@@ -996,6 +996,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   fileActionsModalRoot_ = nullptr;
   fileActionsPanel_ = nullptr;
   folderImportPanel_ = nullptr;
+  computerImportPanel_ = nullptr;
 #endif
   parseLogRecyclerView = nullptr;
   parseLogExportStatusText = nullptr;
@@ -1474,14 +1475,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->setGap(12);
   libraryHeader->setHeight(kMenuActionHeight);
 
-  auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
-  libraryTitle->setName("mainMenuTitle");
-  libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
-  libraryTitle->setThemedColor(ui_theme::textPrimary);
-  libraryTitle->setVAlign(TextView::MIDDLE);
-  libraryTitle->setFlex(1);
-  libraryHeader->addView(libraryTitle);
-
   parseLogButton = makeModalButton(i18n::message("menu.log.label"), 20, &parseLogButtonText);
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(kMenuActionHeight);
@@ -1811,20 +1804,21 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   replayButtonSlot->addView(replayButton);
 
   findBmsButtonSlot = new View();
-  findBmsButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0);
+  findBmsButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0)->setFlexShrink(0);
   findBmsButtonSlot->setVisible(false);
+  findBmsButtonSlot->setDisplay(YGDisplayNone);
   findBmsButtonSlot->setAlignItems(YGAlignStretch);
 
-  findBmsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
-  findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  findBmsButton = new Button(0, 0, kDetailsContentWidth, 88);
+  findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
   findBmsButton->setContentView(findBmsButtonText);
   styleThemedActionButton(findBmsButton, findBmsButtonText, true,
-                          ui_theme::successAction, ui_theme::successActionHover,
-                          ui_theme::successActionPressed,
-                          ui_theme::accentBorder);
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -1914,7 +1908,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       overlayPortal, std::move(revealMenuCallbacks));
 
   rightContent->addView(unzipButtonSlot);
-  rightContent->addView(findBmsButtonSlot);
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   settingsButton->setName("mainMenuSettings");
@@ -1949,6 +1942,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   primaryActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
   primaryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
   primaryActions->addView(startButton);
+  primaryActions->addView(findBmsButtonSlot);
   primaryActions->addView(recordActions);
   primaryActions->addView(settingsButton);
   right->addView(primaryActions);
@@ -2062,8 +2056,8 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
   auto *target = portrait ? detailsControlsContent_ : detailsContent_;
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
-  for (auto *view : std::array<View *, 4>{readyPlayOptionsButton, chartActionsRow,
-           unzipButtonSlot, findBmsButtonSlot}) {
+  for (auto *view : std::array<View *, 3>{readyPlayOptionsButton, chartActionsRow,
+           unzipButtonSlot}) {
     view->moveTo(*target);
   }
   settings->moveTo(portrait ? *records : *primary);
@@ -2088,20 +2082,19 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
     else button->setWidth(kDetailsContentWidth);
   }
   const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
-  startButton->setHeight(portrait ? height : 88);
-  for (auto *view : std::array<View *, 8>{replayButtonSlot, replayButton, rankingsButton,
-           settings, chartActionsRow, unzipButton, findBmsButton, searchBox}) view->setHeight(height);
+  const int primaryHeight = portrait ? height : 88;
+  startButton->setHeight(primaryHeight);
+  findBmsButton->setHeight(primaryHeight);
+  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
+  for (auto *view : std::array<View *, 7>{replayButtonSlot, replayButton, rankingsButton,
+           settings, chartActionsRow, unzipButton, searchBox}) view->setHeight(height);
   for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
-  for (auto *slot : {unzipButtonSlot, findBmsButtonSlot})
-    slot->setHeight(slot->getVisible() ? height : 0);
+  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? height : 0);
   for (auto *button : {chartFilterButton, chartSortButton})
     button->setWidth(height)->setHeight(height);
   auto *toolbar = rootLayout->findViewByName("mainMenuToolbar");
-  auto *title = rootLayout->findViewByName("mainMenuTitle");
-  title->setVisible(!portrait);
-  title->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
   toolbar->setHeight(height);
-  for (auto *view : toolbar->getChildren()) if (view != title) view->setHeight(height);
+  for (auto *view : toolbar->getChildren()) view->setHeight(height);
   for (auto *view : rootLayout->findViewByName("mainMenuLibraryActions")->getChildren())
     view->setHeight(height);
   readyPlayOptionsButton->setHeight(portrait ? 96 : 122);
@@ -4667,7 +4660,14 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   }
 
   findBmsButtonSlot->setVisible(visible);
-  findBmsButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
+  findBmsButtonSlot->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+  const int primaryHeight = rendering::window_height > rendering::window_width
+                                ? kPortraitMenuActionHeight : 88;
+  findBmsButtonSlot->setHeight(visible ? primaryHeight : 0);
+  if (startButton != nullptr) {
+    startButton->setVisible(!visible);
+    startButton->setDisplay(visible ? YGDisplayNone : YGDisplayFlex);
+  }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -4701,7 +4701,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
 void MainMenuScene::buildFileActionsModal() {
   if (rootLayout == nullptr) return;
 
-  // The scene view tree owns both panels for their entire lifetime. Switching
+  // The scene view tree owns all panels for their entire lifetime. Switching
   // panels only changes visibility, including inside button callbacks.
   fileActionsModalRoot_ = new BlockingOverlayView(
       0, 0, rendering::window_width, rendering::window_height);
@@ -4717,7 +4717,8 @@ void MainMenuScene::buildFileActionsModal() {
 
   auto makePanel = [this](const char *titleKey, const char *introKey,
                           const char *footerKey,
-                          std::function<void()> onClose, View **panelOut) {
+                          std::function<void()> onClose, View **panelOut,
+                          bool showComputerHelp = false) {
     auto *panel = new View();
     panel->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignStretch)
@@ -4735,82 +4736,134 @@ void MainMenuScene::buildFileActionsModal() {
     title->setFlexShrink(0);
     panel->addView(title);
 
-    auto *scroll = new ScrollView();
-    scroll->setFlex(1)->setMinHeight(0);
-    scroll->setContentPadding(Edge::Right, 12);
-    auto *content = new View();
-    content->setFlexDirection(FlexDirection::Column);
-    content->setAlignItems(YGAlignStretch);
-    content->setGap(14);
     auto *intro = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
     intro->setLocalizedText(i18n::message(introKey));
     intro->setThemedColor(ui_theme::textSecondary);
     intro->setWrap(true);
     intro->setFlexShrink(0);
-    content->addView(intro);
+    panel->addView(intro);
+
+    auto *scroll = new ScrollView();
+    scroll->setName("fileActionsScroll");
+    scroll->setFlex(1)->setMinHeight(0);
+    // Put the scrollbar in the panel's padding so cards align with the footer.
+    scroll->setMargin(Edge::Right, -12);
+    scroll->setContentPadding(Edge::Right, 12);
+    auto *content = new View();
+    content->setFlexDirection(FlexDirection::Column);
+    content->setAlignItems(YGAlignStretch);
+    content->setGap(14);
     scroll->setContentView(content);
     panel->addView(scroll);
 
     TextView *closeText = nullptr;
     auto *close = makeModalButton(i18n::message(footerKey), 20, &closeText);
-    close->setWidthPercent(100)->setFlexShrink(0);
+    close->setWidth(140)->setAlignSelf(YGAlignFlexEnd)->setFlexShrink(0);
     close->setOnClickListener(std::move(onClose));
     styleThemedActionButton(close, closeText, true, ui_theme::control,
                             ui_theme::controlHover, ui_theme::controlPressed,
                             ui_theme::hairlineStrong);
-    panel->addView(close);
+    if (showComputerHelp) {
+      auto *footer = new View();
+      footer->setFlexDirection(FlexDirection::Row)
+          ->setAlignItems(YGAlignCenter)->setGap(16)->setHeight(58)
+          ->setFlexShrink(0);
+      TextView *helpText = nullptr;
+      auto *help = makeModalButton(
+          i18n::message("menu.manage_files.computer.label"), 18, &helpText);
+      help->setName("fileActionsComputerHelp");
+      help->setWidth(0)->setFlex(1)->setMinWidth(0);
+      help->setStyledBorderWidth(0);
+      help->setThemedBackgroundColors(
+          [] { return Color(0, 0, 0, 0); },
+          [] { return ui_theme::withAlpha(ui_theme::cyan(), 14); },
+          [] { return ui_theme::withAlpha(ui_theme::cyan(), 26); });
+      helpText->setAlign(TextView::LEFT);
+      helpText->setWrap(true);
+      helpText->setThemedColor(ui_theme::cyan);
+      help->setOnClickListener([this] {
+        fileActionsPanel_->setVisible(false);
+        fileActionsPanel_->setDisplay(YGDisplayNone);
+        computerImportPanel_->setVisible(true);
+        computerImportPanel_->setDisplay(YGDisplayFlex);
+        fileActionsModalRoot_->applyYogaLayout();
+      });
+      footer->addView(help);
+      footer->addView(close);
+      panel->addView(footer);
+    } else {
+      panel->addView(close);
+    }
     fileActionsModalRoot_->addView(panel);
     *panelOut = panel;
     return content;
   };
-  auto addAction = [](View *content, const char *labelKey,
-                      const char *descriptionKey, bool primary,
+  auto addAction = [](View *content, uint32_t iconCodepoint,
+                      const char *labelKey, const char *descriptionKey,
                       std::function<void()> onClick) {
-    auto *card = new View();
+    auto *card = new Button();
     card->setFlexDirection(FlexDirection::Column)
-        ->setAlignItems(YGAlignStretch)
+        ->setAlignItems(YGAlignCenter)
+        ->setJustifyContent(YGJustifyCenter)
         ->setFlexShrink(0)
-        ->setGap(10)
-        ->setPadding(Edge::All, 14)
-        ->setThemedBackgroundColor(ui_theme::insetSurface)
-        ->setCornerRadius(ui_theme::controlRadius())
-        ->setThemedBorderColor(ui_theme::hairline)
-        ->setBorderWidth(1);
-    auto *description = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+        ->setGap(18)
+        ->setPadding(Edge::All, 20)
+        ->setCornerRadius(ui_theme::controlRadius());
+    card->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
+                                    ui_theme::controlPressed);
+    card->setThemedBorderColors(ui_theme::hairlineStrong,
+                                ui_theme::accentBorderStrong,
+                                ui_theme::accentBorderStrong);
+    card->setStyledBorderWidth(1);
+    card->setOnClickListener(std::move(onClick));
+
+    auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, 80);
+    icon->setName("fileActionIcon");
+    icon->setText(ui_icons::textForCodepoint(iconCodepoint));
+    icon->setThemedColor([] { return ui_theme::activePalette().cyan; });
+    icon->setAlign(TextView::CENTER);
+    icon->setVAlign(TextView::MIDDLE);
+    icon->setSize(88, 88);
+    icon->setFlexShrink(0);
+    card->addView(icon);
+
+    auto *copy = new View();
+    copy->setName("fileActionCopy");
+    copy->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch)->setGap(8);
+    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    label->setName("fileActionLabel");
+    label->setLocalizedText(i18n::message(labelKey));
+    label->setThemedColor(ui_theme::textPrimary);
+    label->setWrap(true);
+    label->setFlexShrink(0);
+    copy->addView(label);
+    auto *description = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    description->setName("fileActionDescription");
     description->setLocalizedText(i18n::message(descriptionKey));
     description->setThemedColor(ui_theme::textSecondary);
     description->setWrap(true);
     description->setFlexShrink(0);
-    TextView *buttonText = nullptr;
-    auto *button = makeModalButton(i18n::message(labelKey), 20, &buttonText);
-    button->setWidthPercent(100)->setFlexShrink(0);
-    buttonText->setWrap(true);
-    button->setOnClickListener(std::move(onClick));
-    styleThemedActionButton(
-        button, buttonText, true,
-        primary ? ui_theme::primaryAction : ui_theme::control,
-        primary ? ui_theme::primaryActionHover : ui_theme::controlHover,
-        primary ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
-        primary ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
-    card->addView(button);
-    card->addView(description);
+    copy->addView(description);
+    card->addView(copy);
     content->addView(card);
+    return card;
+  };
+  auto addRow = [](View *content) {
+    auto *row = new View();
+    row->setName("fileActionCards");
+    row->setWidthPercent(100)->setGap(14)->setFlexShrink(0);
+    content->addView(row);
+    return row;
   };
 
   auto *actions = makePanel(
       "menu.manage_files.label", "menu.manage_files.intro",
       "menu.manage_files.close.label",
-      [this]() { fileActionsModalRoot_->setVisible(false); }, &fileActionsPanel_);
-  if (AndroidBuildHasManageExternalStorage()) {
-    addAction(actions, "menu.add_folder.label", "menu.manage_files.link", false,
-              [this]() {
-                fileActionsModalRoot_->setVisible(false);
-                if (context.requestAddChartFolderFromFiles) {
-                  context.requestAddChartFolderFromFiles();
-                }
-              });
-  }
-  addAction(actions, "menu.import_folder.label", "menu.manage_files.folder", true,
+      [this]() { fileActionsModalRoot_->setVisible(false); }, &fileActionsPanel_, true);
+  auto *actionCards = addRow(actions);
+  addAction(actionCards, ui_icons::kDownload,
+            "menu.import_folder.label", "menu.manage_files.folder",
             [this]() {
               fileActionsPanel_->setVisible(false);
               fileActionsPanel_->setDisplay(YGDisplayNone);
@@ -4818,7 +4871,8 @@ void MainMenuScene::buildFileActionsModal() {
               folderImportPanel_->setDisplay(YGDisplayFlex);
               fileActionsModalRoot_->applyYogaLayout();
             });
-  addAction(actions, "menu.import_archive.label", "menu.manage_files.archive", false,
+  addAction(actionCards, 0xf1c6 /* file-zipper */,
+            "menu.import_archive.label", "menu.manage_files.archive",
             [this]() {
               fileActionsModalRoot_->setVisible(false);
               if (context.chartLibraryFolderActions) {
@@ -4826,7 +4880,8 @@ void MainMenuScene::buildFileActionsModal() {
                 context.chartLibraryFolderActions->requestImportArchive();
               }
             });
-  addAction(actions, "menu.open_files.label", "menu.manage_files.open", false,
+  addAction(actionCards, ui_icons::kReveal,
+            "menu.open_files.label", "menu.manage_files.open",
             [this]() {
               fileActionsModalRoot_->setVisible(false);
               std::string error;
@@ -4836,6 +4891,17 @@ void MainMenuScene::buildFileActionsModal() {
                                          i18n::tr("menu.open_files.failed"), nullptr);
               }
             });
+  if (AndroidBuildHasManageExternalStorage()) {
+    auto *link = addAction(actions, 0xf0c1 /* link */,
+                          "menu.manage_files.link.label", "menu.manage_files.link",
+                          [this]() {
+                            fileActionsModalRoot_->setVisible(false);
+                            if (context.requestAddChartFolderFromFiles) {
+                              context.requestAddChartFolderFromFiles();
+                            }
+                          });
+    link->setName("fileActionLink");
+  }
 
   auto *folderActions = makePanel(
       "menu.import_folder.label", "menu.manage_files.folder_choice",
@@ -4848,12 +4914,65 @@ void MainMenuScene::buildFileActionsModal() {
       context.chartLibraryFolderActions->requestImportFolder(moveSource);
     }
   };
-  addAction(folderActions, "menu.manage_files.copy.label", "menu.manage_files.copy",
-            true, [importFolder]() { importFolder(false); });
-  addAction(folderActions, "menu.manage_files.move.label", "menu.manage_files.move",
-            false, [importFolder]() { importFolder(true); });
+  auto *folderCards = addRow(folderActions);
+  addAction(folderCards, 0xf0c5 /* copy */,
+            "menu.manage_files.copy.label", "menu.manage_files.copy",
+            [importFolder]() { importFolder(false); });
+  addAction(folderCards, 0xf362 /* right-left */,
+            "menu.manage_files.move.label", "menu.manage_files.move",
+            [importFolder]() { importFolder(true); });
   folderImportPanel_->setVisible(false);
   folderImportPanel_->setDisplay(YGDisplayNone);
+
+  auto *computerActions = makePanel(
+      "menu.manage_files.computer.label", "menu.manage_files.computer.choice",
+      "library.tasks.back.label", [this]() { showFileActionsModal(); },
+      &computerImportPanel_);
+  auto showComputerGuide = [this](const char *titleKey, const char *instructionsKey) {
+    const auto path = ChartRepository::DefaultBmsFolderPath().string();
+    const auto instructions = i18n::format(instructionsKey, {{"path", path}});
+    const SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0,
+         i18n::tr("library.tasks.back.label")},
+        {0, 1, i18n::tr("menu.refresh_library.label")},
+    };
+    SDL_MessageBoxData messageBox{};
+    messageBox.flags = SDL_MESSAGEBOX_INFORMATION;
+    messageBox.title = i18n::tr(titleKey);
+    messageBox.message = instructions.c_str();
+    messageBox.numbuttons = 2;
+    messageBox.buttons = buttons;
+    int selectedButton = -1;
+    if (SDL_ShowMessageBox(&messageBox, &selectedButton) == 0 && selectedButton == 1) {
+      fileActionsModalRoot_->setVisible(false);
+      startLibraryRefresh();
+      showTasksModal();
+    }
+  };
+  auto *computerCards = addRow(computerActions);
+  addAction(computerCards, 0xf1c6 /* file-zipper */,
+            "menu.manage_files.computer.regular.label",
+            "menu.manage_files.computer.regular.description",
+            [showComputerGuide] {
+              showComputerGuide("menu.manage_files.computer.regular.label",
+                                "menu.manage_files.computer.regular.instructions");
+            });
+  addAction(computerCards, 0xf108 /* desktop */,
+            "menu.manage_files.computer.gui.label",
+            "menu.manage_files.computer.gui.description",
+            [showComputerGuide] {
+              showComputerGuide("menu.manage_files.computer.gui.label",
+                                "menu.manage_files.computer.gui.instructions");
+            });
+  addAction(computerCards, 0xf120 /* terminal */,
+            "menu.manage_files.computer.cli.label",
+            "menu.manage_files.computer.cli.description",
+            [showComputerGuide] {
+              showComputerGuide("menu.manage_files.computer.cli.label",
+                                "menu.manage_files.computer.cli.instructions");
+            });
+  computerImportPanel_->setVisible(false);
+  computerImportPanel_->setDisplay(YGDisplayNone);
   rootLayout->addView(fileActionsModalRoot_);
   resizeFileActionsModal();
 }
@@ -4866,12 +4985,37 @@ void MainMenuScene::resizeFileActionsModal() {
   fileActionsModalRoot_->setPadding(Edge::Bottom, safe.bottom);
   fileActionsModalRoot_->setPadding(Edge::Left, safe.left);
   fileActionsModalRoot_->setPadding(Edge::Right, safe.right);
-  const float width = std::min(720.0f, std::max(
+  const float width = std::min(1040.0f, std::max(
       0.0f, rendering::window_width - safe.left - safe.right - 32.0f));
-  const float height = std::min(780.0f, std::max(
-      0.0f, rendering::window_height - safe.top - safe.bottom - 32.0f));
-  for (auto *panel : {fileActionsPanel_, folderImportPanel_}) {
-    panel->setWidth(width)->setHeight(height);
+  const bool columns = rendering::window_width > rendering::window_height && width >= 900.0f;
+  const float availableHeight = std::max(
+      0.0f, rendering::window_height - safe.top - safe.bottom - 32.0f);
+  auto layoutCard = [](View *card, float cardWidth, bool vertical) {
+    card->setWidth(cardWidth)->setHeight(vertical ? 280.0f : 164.0f);
+    card->setFlexDirection(vertical ? FlexDirection::Column : FlexDirection::Row);
+    auto *copy = card->findViewByName("fileActionCopy");
+    copy->setWidth(std::max(0.0f, vertical ? cardWidth - 40.0f : cardWidth - 146.0f));
+    for (const char *name : {"fileActionLabel", "fileActionDescription"}) {
+      auto *text = static_cast<TextView *>(card->findViewByName(name));
+      text->setAlign(vertical ? TextView::CENTER : TextView::LEFT);
+    }
+  };
+  for (auto *panel : {fileActionsPanel_, folderImportPanel_, computerImportPanel_}) {
+    auto *scroll = static_cast<ScrollView *>(panel->findViewByName("fileActionsScroll"));
+    auto *content = scroll->getContentView();
+    auto *row = content->findViewByName("fileActionCards");
+    const auto count = row->getChildren().size();
+    const float contentWidth = std::max(0.0f, width - 42.0f);
+    const float cardsHeight = columns ? 280.0f : count * 164.0f + (count - 1) * 14.0f;
+    auto *link = content->findViewByName("fileActionLink");
+    const float height = cardsHeight + 224.0f + (link ? 178.0f : 0.0f);
+    panel->setWidth(width)->setHeight(std::min(height, availableHeight));
+    row->setFlexDirection(columns ? FlexDirection::Row : FlexDirection::Column);
+    const float cardWidth = columns ? (contentWidth - (count - 1) * 14.0f) / count
+                                    : contentWidth;
+    for (auto *card : row->getChildren()) layoutCard(card, cardWidth, columns);
+    if (link) layoutCard(link, contentWidth, false);
+    scroll->refreshContentLayout();
   }
 }
 
@@ -4894,6 +5038,8 @@ void MainMenuScene::showFileActionsModal() {
   fileActionsPanel_->setDisplay(YGDisplayFlex);
   folderImportPanel_->setVisible(false);
   folderImportPanel_->setDisplay(YGDisplayNone);
+  computerImportPanel_->setVisible(false);
+  computerImportPanel_->setDisplay(YGDisplayNone);
   fileActionsModalRoot_->setVisible(true);
   fileActionsModalRoot_->applyYogaLayout();
 }
@@ -7484,6 +7630,7 @@ void MainMenuScene::cleanupScene() {
   fileActionsModalRoot_ = nullptr;
   fileActionsPanel_ = nullptr;
   folderImportPanel_ = nullptr;
+  computerImportPanel_ = nullptr;
 #endif
   parseLogRecyclerView = nullptr;
   parseLogExportStatusText = nullptr;

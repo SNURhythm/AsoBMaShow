@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 CACHE_SCHEMA = 1
-DEPLOYMENT_TARGET = "14.0"
+DEPLOYMENT_TARGET = "15.0"
 DEPENDENCY_NAME = "utf8proc"
 LICENSE_SHA256 = "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
 TRIPLETS = ("arm64-ios", "arm64-ios-simulator")
@@ -388,9 +388,9 @@ def verify_artifacts(
                     f"{identifier} minimum OS {minimum} exceeds {DEPLOYMENT_TARGET}"
                 )
 
-    compile_header(header, "iphoneos", "arm64-apple-ios14.0")
+    compile_header(header, "iphoneos", "arm64-apple-ios15.0")
     compile_header(
-        header, "iphonesimulator", "arm64-apple-ios14.0-simulator"
+        header, "iphonesimulator", "arm64-apple-ios15.0-simulator"
     )
     if manifest is not None:
         verify_manifest(manifest, framework, header)
