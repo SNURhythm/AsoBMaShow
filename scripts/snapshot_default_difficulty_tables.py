@@ -29,8 +29,8 @@ def fetch(url):
 
 
 def main():
-    source = (ROOT / "src/library/ChartLibraryOperations.cpp").read_text(encoding="utf-8")
-    defaults = re.search(r"kDefaultDifficultyTableUrls\[\] = \{(.*?)\};", source, re.S)
+    source = (ROOT / "src/DifficultyTableDefaults.h").read_text(encoding="utf-8")
+    defaults = re.search(r"kDefaultSources\[\] = \{(.*?)\};", source, re.S)
     urls = re.findall(r'"(https://[^"]+)"', defaults.group(1))
     if not urls:
         raise ValueError("No default difficulty table URLs found")

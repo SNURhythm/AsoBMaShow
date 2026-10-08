@@ -20,19 +20,6 @@
 
 namespace chart_library_tasks {
 
-namespace {
-constexpr const char *kDefaultDifficultyTableUrls[] = {
-    "https://rattoto10.jounin.jp/table.html",
-    "https://rattoto10.jounin.jp/table_insane.html",
-    "https://miraiscarlet.github.io/bms/table/genocide_normal/normal_bms.html",
-    "https://miraiscarlet.github.io/bms/table/genocide_insane/insane_bms.html",
-    "https://stellabms.xyz/sl/table.html",
-    "https://stellabms.xyz/st/table.html",
-    "https://asumatoki.kr/table/aery/header.json",
-    "https://asumatoki.kr/table/aery7/header.json",
-};
-} // namespace
-
 ChartLibraryOperations::ChartLibraryOperations(
     ChartLibraryOperationsDependencies dependencies)
     : dependencies_(std::move(dependencies)) {
@@ -403,8 +390,8 @@ bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
   }
 
   constexpr int totalTables =
-      static_cast<int>(sizeof(kDefaultDifficultyTableUrls) /
-                       sizeof(kDefaultDifficultyTableUrls[0]));
+      static_cast<int>(sizeof(difficulty_table::kDefaultSources) /
+                       sizeof(difficulty_table::kDefaultSources[0]));
   int successfulTables = 0;
   bool allSucceeded = true;
   bool interrupted = false;
@@ -426,7 +413,7 @@ bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     if (!checkpoint()) {
       return false;
     }
-    const char *url = kDefaultDifficultyTableUrls[i];
+    const char *url = difficulty_table::kDefaultSources[i].url;
     progress({.current = i,
               .total = totalTables,
               .stage = ChartScanProgressStage::Preparing},

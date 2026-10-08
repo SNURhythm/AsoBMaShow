@@ -1015,27 +1015,27 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
 bool DifficultyTableImporter::SeedBundledDefaultsForApplication(
     ChartRepository::Session &session, ApplicationUiState &state,
     const std::string &assetPath) {
-  if (state.defaultDifficultyTablesSeeded && state.aeryDifficultyTablesSeeded) {
-    return false;
+  const int previousRevision = state.bundledDifficultyTablesRevision;
+  if (previousRevision >= difficulty_table::kBundledSeedRevision) return false;
+  for (int revision = previousRevision + 1;
+       revision <= difficulty_table::kBundledSeedRevision; ++revision) {
+    std::vector<std::string> sources;
+    for (const auto &source : difficulty_table::kDefaultSources) {
+      if (source.seedRevision == revision) sources.emplace_back(source.url);
+    }
+    if (sources.empty()) break;
+    SeedBundledDefaults(session, assetPath, sources);
+    const auto installed = session.SelectDifficultyTables();
+    if (!std::ranges::all_of(sources, [&](const auto &source) {
+          return std::ranges::any_of(installed, [&](const auto &table) {
+            return table.sourceUrl == source;
+          });
+        })) {
+      break;
+    }
+    state.bundledDifficultyTablesRevision = revision;
   }
-  const std::vector<std::string> aerySources = {
-      "https://asumatoki.kr/table/aery/header.json",
-      "https://asumatoki.kr/table/aery7/header.json"};
-  // Existing installations receive just the new tables. Do not restore other
-  // defaults that the user may have deliberately deleted.
-  SeedBundledDefaults(session, assetPath, state.defaultDifficultyTablesSeeded
-      ? aerySources : std::vector<std::string>{});
-  const auto installed = session.SelectDifficultyTables();
-  if (!state.aeryDifficultyTablesSeeded &&
-      std::ranges::all_of(aerySources, [&](const auto &source) {
-        return std::ranges::any_of(installed, [&](const auto &table) {
-          return table.sourceUrl == source;
-        });
-      })) {
-    state.aeryDifficultyTablesSeeded = true;
-    return true;
-  }
-  return false;
+  return state.bundledDifficultyTablesRevision != previousRevision;
 }
 
 int DifficultyTableImporter::SeedBundledDefaults(

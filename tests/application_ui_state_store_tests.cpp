@@ -117,7 +117,7 @@ void testDifficultyTableSeedStateSurvivesRestart() {
   const auto path = applicationUiStatePath(temp.path());
   ApplicationUiState state;
   state.defaultDifficultyTablesSeeded = true;
-  state.aeryDifficultyTablesSeeded = true;
+  state.bundledDifficultyTablesRevision = 2;
   std::string diagnostic;
   expect(ApplicationUiStateStore::SaveAtomic(path, state, diagnostic),
          "shared table seed state saves");
@@ -126,12 +126,56 @@ void testDifficultyTableSeedStateSurvivesRestart() {
   nlohmann::json document;
   { std::ifstream input(path); input >> document; }
   document.erase("defaultDifficultyTablesSeeded");
-  document.erase("aeryDifficultyTablesSeeded");
+  document.erase("bundledDifficultyTablesRevision");
   { std::ofstream output(path); output << document; }
   const auto loaded = ApplicationUiStateStore::Load(path);
   expect(!loaded.state.defaultDifficultyTablesSeeded &&
-             !loaded.state.aeryDifficultyTablesSeeded,
+             loaded.state.bundledDifficultyTablesRevision == 0,
          "older application state leaves table seed migration pending");
+}
+
+void testLegacyTableSeedFlagsMigrateToRevision() {
+  TempDirectory temp;
+  const auto path = applicationUiStatePath(temp.path());
+  std::string diagnostic;
+  expect(ApplicationUiStateStore::SaveAtomic(path, {}, diagnostic),
+         "initial state saves");
+  nlohmann::json document;
+  { std::ifstream input(path); input >> document; }
+  document.erase("bundledDifficultyTablesRevision");
+  document["defaultDifficultyTablesSeeded"] = true;
+  document["aeryDifficultyTablesSeeded"] = true;
+  { std::ofstream output(path); output << document; }
+  const auto loaded = ApplicationUiStateStore::Load(path);
+  expect(ApplicationUiStateStore::SaveAtomic(path, loaded.state, diagnostic),
+         "migrated state saves");
+  { std::ifstream input(path); input >> document; }
+  expect(document.value("bundledDifficultyTablesRevision", 0) == 2,
+         "legacy Aery completion migrates to bundled seed revision 2");
+  expect(!document.contains("aeryDifficultyTablesSeeded"),
+         "new state saves a revision instead of the Aery-specific marker");
+  document.erase("bundledDifficultyTablesRevision");
+  { std::ofstream output(path); output << document; }
+  expect(ApplicationUiStateStore::Load(path).state.bundledDifficultyTablesRevision == 1,
+         "legacy original defaults migrate to revision 1 without skipping additions");
+  for (const auto invalid : {nlohmann::json(-1), nlohmann::json("2"),
+                             nlohmann::json(2.5), nlohmann::json(999999999999ULL)}) {
+    document["bundledDifficultyTablesRevision"] = invalid;
+    { std::ofstream output(path); output << document; }
+    expect(ApplicationUiStateStore::Load(path).state.bundledDifficultyTablesRevision == 1,
+           "invalid revisions retain the legacy baseline");
+  }
+  document["bundledDifficultyTablesRevision"] = 7;
+  document["aeryDifficultyTablesSeeded"] = true;
+  { std::ofstream output(path); output << document; }
+  const auto future = ApplicationUiStateStore::Load(path);
+  expect(future.state.bundledDifficultyTablesRevision == 7,
+         "older builds preserve a newer seed revision despite stale legacy flags");
+  expect(ApplicationUiStateStore::SaveAtomic(path, future.state, diagnostic),
+         "newer seed revision saves");
+  expect(ApplicationUiStateStore::Load(path).state.bundledDifficultyTablesRevision == 7,
+         "newer seed revision survives restart");
+
 }
 
 void testTutorialCompletionSurvivesRestart() {
@@ -168,6 +212,7 @@ int main() {
   testLanguagePreferenceRoundTripsAndMigrates();
   testTutorialCompletionSurvivesRestart();
   testDifficultyTableSeedStateSurvivesRestart();
+  testLegacyTableSeedFlagsMigrateToRevision();
   if (failures != 0) {
     std::cerr << failures << " application UI state test(s) failed\n";
     return 1;

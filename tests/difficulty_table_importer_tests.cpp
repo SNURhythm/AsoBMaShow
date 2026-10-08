@@ -689,12 +689,13 @@ void testSharedSeedStatePreservesDeletedTables() {
   assert(repository.EnsureReady());
   ApplicationUiState applicationState;
   applicationState.defaultDifficultyTablesSeeded = true;
+  applicationState.bundledDifficultyTablesRevision = 1;
   DifficultyTableImporter importer;
   {
     auto session = repository.OpenSession();
     assert(session);
     assert(importer.SeedBundledDefaultsForApplication(*session, applicationState));
-    assert(applicationState.aeryDifficultyTablesSeeded);
+    assert(applicationState.bundledDifficultyTablesRevision == 2);
     const auto tables = session->SelectDifficultyTables();
     assert(tables.size() == 2);
     for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
@@ -706,12 +707,38 @@ void testSharedSeedStatePreservesDeletedTables() {
   assert(session->SelectDifficultyTables().empty());
 }
 
+void testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ApplicationUiState state;
+  DifficultyTableImporter importer;
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state, "missing.json"));
+  assert(state.bundledDifficultyTablesRevision == 0);
+  assert(importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(state.bundledDifficultyTablesRevision == 2);
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 8);
+  for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
+  // Offline snapshot completion is independent of the pending online refresh.
+  assert(!state.defaultDifficultyTablesSeeded);
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(session->SelectDifficultyTables().empty());
+  state.bundledDifficultyTablesRevision = 7;
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(state.bundledDifficultyTablesRevision == 7);
+  assert(session->SelectDifficultyTables().empty());
+}
+
 int main() {
   testGenocideLegacyUrlsImportAndUpdateMirrorTables();
   testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson();
   testBundledDefaultsSurviveOfflineAndYieldToUpdates();
   testPackagedDefaultsImportWithoutNetwork();
   testSharedSeedStatePreservesDeletedTables();
+  testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport();
 #if !defined(_WIN32)
   testDesktopDownloadsEnforceIncrementalResponseBudget();
 #endif

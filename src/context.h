@@ -605,15 +605,18 @@ public:
     // profile, including an inactive profile whose user already deleted a table.
     const auto previousApplicationState = applicationUiState;
     if (!applicationUiState.defaultDifficultyTablesSeeded ||
-        !applicationUiState.aeryDifficultyTablesSeeded) {
+        applicationUiState.bundledDifficultyTablesRevision <
+            difficulty_table::kBundledSeedRevision) {
       for (const auto &profile : profileManager.listProfiles()) {
         const auto loaded = AppSettingsStore::Load(
             profileManager.pathsFor(profile.id).settingsJson);
         if (loaded.status != AppSettingsLoadStatus::Loaded) continue;
         applicationUiState.defaultDifficultyTablesSeeded |=
             loaded.settings.defaultDifficultyTablesSeeded;
-        applicationUiState.aeryDifficultyTablesSeeded |=
-            loaded.settings.aeryDifficultyTablesSeeded;
+        applicationUiState.bundledDifficultyTablesRevision = std::max(
+            applicationUiState.bundledDifficultyTablesRevision,
+            loaded.settings.aeryDifficultyTablesSeeded ? 2
+                : loaded.settings.defaultDifficultyTablesSeeded ? 1 : 0);
       }
       if (applicationUiState != previousApplicationState) {
         saveApplicationUiState();

@@ -19,7 +19,7 @@ struct ApplicationUiState {
   std::string language = "system";
   bool newcomerTutorialCompleted = false;
   bool defaultDifficultyTablesSeeded = false;
-  bool aeryDifficultyTablesSeeded = false;
+  int bundledDifficultyTablesRevision = 0;
 
   bool operator==(const ApplicationUiState &) const = default;
 };

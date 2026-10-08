@@ -813,7 +813,6 @@ json settingsToJson(const AppSettings &settings) {
                          {"tableUrls", settings.scratchless5K.tableUrls}}},
       {"scratchless7K", {{"mode", static_cast<int>(settings.scratchless7K.mode)},
                          {"tableUrls", settings.scratchless7K.tableUrls}}},
-      {"aeryDifficultyTablesSeeded", settings.aeryDifficultyTablesSeeded},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},

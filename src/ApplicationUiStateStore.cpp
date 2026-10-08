@@ -3,7 +3,9 @@
 #include "VersionedJson.h"
 #include "i18n/Localization.h"
 
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -89,15 +91,23 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
     }
   }
 
-  for (const auto &[key, value] : {
-           std::pair{"defaultDifficultyTablesSeeded",
-                     &result.state.defaultDifficultyTablesSeeded},
-           std::pair{"aeryDifficultyTablesSeeded",
-                     &result.state.aeryDifficultyTablesSeeded}}) {
-    const auto encoded = loaded.document.find(key);
-    if (encoded != loaded.document.end() && encoded->is_boolean()) {
-      *value = encoded->get<bool>();
-    }
+  const auto defaults = loaded.document.find("defaultDifficultyTablesSeeded");
+  if (defaults != loaded.document.end() && defaults->is_boolean()) {
+    result.state.defaultDifficultyTablesSeeded = defaults->get<bool>();
+  }
+  // Revision 1 shipped the original defaults; revision 2 added the Aery pair.
+  // Read old flags only for migration, and preserve revisions from newer builds.
+  result.state.bundledDifficultyTablesRevision =
+      result.state.defaultDifficultyTablesSeeded ? 1 : 0;
+  const auto aery = loaded.document.find("aeryDifficultyTablesSeeded");
+  if (aery != loaded.document.end() && aery->is_boolean() && aery->get<bool>()) {
+    result.state.bundledDifficultyTablesRevision = 2;
+  }
+  const auto revision = loaded.document.find("bundledDifficultyTablesRevision");
+  if (revision != loaded.document.end() && revision->is_number_integer() &&
+      *revision >= 0 && *revision <= std::numeric_limits<int>::max()) {
+    result.state.bundledDifficultyTablesRevision = std::max(
+        result.state.bundledDifficultyTablesRevision, revision->get<int>());
   }
 
   const auto toolbar = loaded.document.find("musicSelectToolbar");
@@ -146,7 +156,7 @@ bool ApplicationUiStateStore::SaveAtomic(const std::filesystem::path &path,
                        ? state.language : "system"},
       {"newcomerTutorialCompleted", state.newcomerTutorialCompleted},
       {"defaultDifficultyTablesSeeded", state.defaultDifficultyTablesSeeded},
-      {"aeryDifficultyTablesSeeded", state.aeryDifficultyTablesSeeded},
+      {"bundledDifficultyTablesRevision", state.bundledDifficultyTablesRevision},
       {"musicSelectToolbar",
        {{"mode", modeName(toolbar.mode)},
         {"x", toolbar.x},

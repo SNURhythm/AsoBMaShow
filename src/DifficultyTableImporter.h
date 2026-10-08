@@ -2,6 +2,7 @@
 
 #include "ApplicationUiState.h"
 #include "DifficultyTableModel.h"
+#include "DifficultyTableDefaults.h"
 #include "repositories/ChartRepository.h"
 
 #include <filesystem>
