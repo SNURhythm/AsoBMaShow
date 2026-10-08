@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ApplicationUiState.h"
 #include "DifficultyTableModel.h"
 #include "repositories/ChartRepository.h"
 
@@ -38,6 +39,11 @@ public:
       ChartRepository::Session &session,
       const std::string &assetPath = "assets/difficulty-tables/defaults.json",
       const std::vector<std::string> &sourceUrls = {});
+
+  // Returns true when shared seed state changed and should be persisted.
+  bool SeedBundledDefaultsForApplication(
+      ChartRepository::Session &session, ApplicationUiState &state,
+      const std::string &assetPath = "assets/difficulty-tables/defaults.json");
 
   bool ImportFromUrl(
       ChartRepository::Session &session, const std::string &pageUrl,

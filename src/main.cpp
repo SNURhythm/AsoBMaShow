@@ -1699,29 +1699,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 static void runReadyApplication(ApplicationContext &context) {
   // Make defaults visible to the first selector load. Leave the online seed
   // pending so the normal background refresh replaces these snapshots.
-  if (!context.settings.defaultDifficultyTablesSeeded ||
-      !context.settings.aeryDifficultyTablesSeeded) {
-    if (auto session = context.chartRepository.OpenSession()) {
-      DifficultyTableImporter importer;
-      const std::vector<std::string> aerySources = {
-          "https://asumatoki.kr/table/aery/header.json",
-          "https://asumatoki.kr/table/aery7/header.json"};
-      // Existing installations receive just the new tables. Do not restore
-      // other defaults that the user may have deliberately deleted.
-      importer.SeedBundledDefaults(
-          *session, "assets/difficulty-tables/defaults.json",
-          context.settings.defaultDifficultyTablesSeeded
-              ? aerySources : std::vector<std::string>{});
-      const auto installed = session->SelectDifficultyTables();
-      if (!context.settings.aeryDifficultyTablesSeeded &&
-          std::ranges::all_of(aerySources, [&](const auto &source) {
-            return std::ranges::any_of(installed, [&](const auto &table) {
-              return table.sourceUrl == source;
-            });
-          })) {
-        context.settings.aeryDifficultyTablesSeeded = true;
-        context.saveSettings();
-      }
+  if (auto session = context.chartRepository.OpenSession()) {
+    DifficultyTableImporter importer;
+    if (importer.SeedBundledDefaultsForApplication(
+            *session, context.applicationUiState)) {
+      context.saveApplicationUiState();
     }
   }
   application_result_recovery::execute(

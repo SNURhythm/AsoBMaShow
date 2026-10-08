@@ -112,6 +112,28 @@ void testPathIsDeviceScoped() {
          "application UI state is not profile-scoped");
 }
 
+void testDifficultyTableSeedStateSurvivesRestart() {
+  TempDirectory temp;
+  const auto path = applicationUiStatePath(temp.path());
+  ApplicationUiState state;
+  state.defaultDifficultyTablesSeeded = true;
+  state.aeryDifficultyTablesSeeded = true;
+  std::string diagnostic;
+  expect(ApplicationUiStateStore::SaveAtomic(path, state, diagnostic),
+         "shared table seed state saves");
+  expect(ApplicationUiStateStore::Load(path).state == state,
+         "both table seed markers survive restart independently of profiles");
+  nlohmann::json document;
+  { std::ifstream input(path); input >> document; }
+  document.erase("defaultDifficultyTablesSeeded");
+  document.erase("aeryDifficultyTablesSeeded");
+  { std::ofstream output(path); output << document; }
+  const auto loaded = ApplicationUiStateStore::Load(path);
+  expect(!loaded.state.defaultDifficultyTablesSeeded &&
+             !loaded.state.aeryDifficultyTablesSeeded,
+         "older application state leaves table seed migration pending");
+}
+
 void testTutorialCompletionSurvivesRestart() {
   TempDirectory temp;
   const auto path = applicationUiStatePath(temp.path());
@@ -145,6 +167,7 @@ int main() {
   testPathIsDeviceScoped();
   testLanguagePreferenceRoundTripsAndMigrates();
   testTutorialCompletionSurvivesRestart();
+  testDifficultyTableSeedStateSurvivesRestart();
   if (failures != 0) {
     std::cerr << failures << " application UI state test(s) failed\n";
     return 1;

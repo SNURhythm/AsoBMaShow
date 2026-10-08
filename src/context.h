@@ -601,6 +601,25 @@ public:
       return;
     }
 
+    // Tables belong to the shared chart database. Migrate evidence from every
+    // profile, including an inactive profile whose user already deleted a table.
+    const auto previousApplicationState = applicationUiState;
+    if (!applicationUiState.defaultDifficultyTablesSeeded ||
+        !applicationUiState.aeryDifficultyTablesSeeded) {
+      for (const auto &profile : profileManager.listProfiles()) {
+        const auto loaded = AppSettingsStore::Load(
+            profileManager.pathsFor(profile.id).settingsJson);
+        if (loaded.status != AppSettingsLoadStatus::Loaded) continue;
+        applicationUiState.defaultDifficultyTablesSeeded |=
+            loaded.settings.defaultDifficultyTablesSeeded;
+        applicationUiState.aeryDifficultyTablesSeeded |=
+            loaded.settings.aeryDifficultyTablesSeeded;
+      }
+      if (applicationUiState != previousApplicationState) {
+        saveApplicationUiState();
+      }
+    }
+
     retryPendingIrCredentialCleanup();
 
     inputDeviceRegistry.configureGyroscopeTurntable(
@@ -617,12 +636,15 @@ public:
             chart_library_tasks::ChartLibraryOperationsDependencies{
                 .repository = chartRepository,
                 .tablesDirectory = Utils::GetDocumentsPath("tables"),
-                .defaultDifficultyTablesSeeded =
-                    [this] { return settings.defaultDifficultyTablesSeeded; },
-                .setDefaultDifficultyTablesSeeded = [this](bool seeded) {
-                  settings.defaultDifficultyTablesSeeded = seeded;
+                .defaultDifficultyTablesSeeded = [this] {
+                  std::lock_guard lock(applicationUiStateMutex);
+                  return applicationUiState.defaultDifficultyTablesSeeded;
                 },
-                .saveSettings = [this] { return saveSettings(); },
+                .setDefaultDifficultyTablesSeeded = [this](bool seeded) {
+                  std::lock_guard lock(applicationUiStateMutex);
+                  applicationUiState.defaultDifficultyTablesSeeded = seeded;
+                },
+                .saveSettings = [this] { return saveApplicationUiState(); },
                 .requestReload = [this](bool includeFolders) {
                   if (includeFolders) {
                     chartLibraryFoldersReloadRequested = true;

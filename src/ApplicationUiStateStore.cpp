@@ -89,6 +89,17 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
     }
   }
 
+  for (const auto &[key, value] : {
+           std::pair{"defaultDifficultyTablesSeeded",
+                     &result.state.defaultDifficultyTablesSeeded},
+           std::pair{"aeryDifficultyTablesSeeded",
+                     &result.state.aeryDifficultyTablesSeeded}}) {
+    const auto encoded = loaded.document.find(key);
+    if (encoded != loaded.document.end() && encoded->is_boolean()) {
+      *value = encoded->get<bool>();
+    }
+  }
+
   const auto toolbar = loaded.document.find("musicSelectToolbar");
   const auto tutorial = loaded.document.find("newcomerTutorialCompleted");
   if (tutorial != loaded.document.end()) {
@@ -134,6 +145,8 @@ bool ApplicationUiStateStore::SaveAtomic(const std::filesystem::path &path,
       {"language", i18n::isLanguagePreference(state.language)
                        ? state.language : "system"},
       {"newcomerTutorialCompleted", state.newcomerTutorialCompleted},
+      {"defaultDifficultyTablesSeeded", state.defaultDifficultyTablesSeeded},
+      {"aeryDifficultyTablesSeeded", state.aeryDifficultyTablesSeeded},
       {"musicSelectToolbar",
        {{"mode", modeName(toolbar.mode)},
         {"x", toolbar.x},

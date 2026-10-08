@@ -431,6 +431,7 @@ public:
   [[nodiscard]] ScratchlessSettings &scratchlessForKeyMode(int keyMode) {
     return keyMode == 5 || keyMode == -5 ? scratchless5K : scratchless7K;
   }
+  // Legacy profile-scoped markers, read only to migrate to application state.
   bool aeryDifficultyTablesSeeded = false;
   bool defaultDifficultyTablesSeeded = false;
   std::map<std::string, ir::IrProviderSettings> irProviders = {

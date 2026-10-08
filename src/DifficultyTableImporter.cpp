@@ -1012,6 +1012,32 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
   return document;
 }
 
+bool DifficultyTableImporter::SeedBundledDefaultsForApplication(
+    ChartRepository::Session &session, ApplicationUiState &state,
+    const std::string &assetPath) {
+  if (state.defaultDifficultyTablesSeeded && state.aeryDifficultyTablesSeeded) {
+    return false;
+  }
+  const std::vector<std::string> aerySources = {
+      "https://asumatoki.kr/table/aery/header.json",
+      "https://asumatoki.kr/table/aery7/header.json"};
+  // Existing installations receive just the new tables. Do not restore other
+  // defaults that the user may have deliberately deleted.
+  SeedBundledDefaults(session, assetPath, state.defaultDifficultyTablesSeeded
+      ? aerySources : std::vector<std::string>{});
+  const auto installed = session.SelectDifficultyTables();
+  if (!state.aeryDifficultyTablesSeeded &&
+      std::ranges::all_of(aerySources, [&](const auto &source) {
+        return std::ranges::any_of(installed, [&](const auto &table) {
+          return table.sourceUrl == source;
+        });
+      })) {
+    state.aeryDifficultyTablesSeeded = true;
+    return true;
+  }
+  return false;
+}
+
 int DifficultyTableImporter::SeedBundledDefaults(
     ChartRepository::Session &session, const std::string &assetPath,
     const std::vector<std::string> &sourceUrls) {

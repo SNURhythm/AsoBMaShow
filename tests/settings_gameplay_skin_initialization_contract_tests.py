@@ -84,7 +84,7 @@ int main() {
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_scratchless_skin_callbacks_keep_mode_and_multiple_tables_independent(self) -> None:
-        source = (ROOT / "src/scene/SettingsSceneSkins.cpp").read_text()
+        source = (ROOT / "src/scene/SettingsSceneControls.cpp").read_text()
         controls = extract(source, "void SettingsScene::appendScratchlessModeSettings(")
         mode_callback = extract(controls, "[this, keyMode](const std::string &id)")
         table_callback = extract(controls, "[this, keyMode, url = table.sourceUrl, content]()")

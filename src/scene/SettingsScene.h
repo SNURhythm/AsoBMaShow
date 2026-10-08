@@ -536,6 +536,12 @@ private:
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);
 
+  void appendScratchlessModeSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
+      bool enabled);
+  void appendScratchlessFallbackSettings(
+      View *column, const settings_scene::LayoutMetrics &metrics);
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   void ensureGameplaySkinSettingsController();
   void updateGameplaySkinSettingsController();
@@ -560,9 +566,6 @@ private:
   void appendGameplaySkinViewportSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
-  void appendScratchlessModeSettings(
-      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
-      bool enabled);
   void appendBuiltInGameplayTraitSettings(
       View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
       bool followsOriginal = false);

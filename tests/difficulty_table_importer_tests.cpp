@@ -683,11 +683,35 @@ void testPackagedDefaultsImportWithoutNetwork() {
   assert(session->SelectDifficultyTables().size() == 2);
 }
 
+void testSharedSeedStatePreservesDeletedTables() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  ApplicationUiState applicationState;
+  applicationState.defaultDifficultyTablesSeeded = true;
+  DifficultyTableImporter importer;
+  {
+    auto session = repository.OpenSession();
+    assert(session);
+    assert(importer.SeedBundledDefaultsForApplication(*session, applicationState));
+    assert(applicationState.aeryDifficultyTablesSeeded);
+    const auto tables = session->SelectDifficultyTables();
+    assert(tables.size() == 2);
+    for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
+  }
+  // Reopening the shared database under another profile uses the same state.
+  auto session = repository.OpenSession();
+  assert(session);
+  assert(!importer.SeedBundledDefaultsForApplication(*session, applicationState));
+  assert(session->SelectDifficultyTables().empty());
+}
+
 int main() {
   testGenocideLegacyUrlsImportAndUpdateMirrorTables();
   testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson();
   testBundledDefaultsSurviveOfflineAndYieldToUpdates();
   testPackagedDefaultsImportWithoutNetwork();
+  testSharedSeedStatePreservesDeletedTables();
 #if !defined(_WIN32)
   testDesktopDownloadsEnforceIncrementalResponseBudget();
 #endif

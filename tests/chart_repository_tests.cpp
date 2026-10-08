@@ -4202,7 +4202,44 @@ void testScratchlessTableMembership() {
   assert(session->DifficultyTableSourcesForChart(meta).empty());
 }
 
+void testScratchlessCourseOnlyMembership() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  assert(repository.EnsureReady());
+  AppSettings settings;
+  difficulty_table::Document table;
+  table.name = "Course-only scratchless fixture";
+  table.symbol = "C";
+  table.sourceUrl = settings.scratchless5K.tableUrls.front();
+  const std::string md5(32, 'c');
+  const std::string sha256(64, 'd');
+  table.courses = {{.name = "Grade", .charts = {{.md5 = md5}, {.sha256 = sha256}}}};
+  {
+    auto session = repository.OpenSession();
+    assert(session && session->ReplaceDifficultyTable(table));
+    bms_parser::ChartMeta meta;
+    meta.MD5 = md5;
+    assert(session->DifficultyTableSourcesForChart(meta) ==
+           std::vector<std::string>{table.sourceUrl});
+    meta.MD5.clear();
+    meta.SHA256 = sha256;
+    assert(session->DifficultyTableSourcesForChart(meta) ==
+           std::vector<std::string>{table.sourceUrl});
+  }
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.MD5 = md5;
+  assert(gameplay::presentationKeyMode(chart, settings, repository) == -5);
+  auto session = repository.OpenSession();
+  table.charts = {{.md5 = md5}, {.sha256 = sha256}};
+  assert(session->ReplaceDifficultyTable(table));
+  assert(session->DifficultyTableSourcesForChart(chart.Meta).size() == 1);
+  assert(session->DeleteDifficultyTable(session->SelectDifficultyTables().front().id));
+  assert(session->DifficultyTableSourcesForChart(chart.Meta).empty());
+}
+
 int main(int argc, char **argv) {
+  testScratchlessCourseOnlyMembership();
   testScratchlessTableMembership();
   if (argc > 1) {
     try {

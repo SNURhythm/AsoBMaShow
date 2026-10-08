@@ -492,7 +492,12 @@ std::vector<std::string> ChartRepository::Session::DifficultyTableSourcesForChar
       "SELECT DISTINCT dt.source_url FROM difficulty_tables dt "
       "JOIN difficulty_table_entries e ON e.table_id = dt.id "
       "WHERE (?1 <> '' AND e.sha256 = ?1) OR (?2 <> '' AND e.md5 = ?2) "
-      "ORDER BY dt.source_url";
+      "UNION "
+      "SELECT dt.source_url FROM difficulty_tables dt "
+      "JOIN difficulty_courses c ON c.table_id = dt.id "
+      "JOIN difficulty_course_entries e ON e.course_id = c.id "
+      "WHERE (?1 <> '' AND e.sha256 = ?1) OR (?2 <> '' AND e.md5 = ?2) "
+      "ORDER BY source_url";
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "matching scratchless difficulty tables",
                                     logSqlErrorText)) return {};
