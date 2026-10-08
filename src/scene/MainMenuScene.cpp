@@ -4716,7 +4716,8 @@ void MainMenuScene::buildFileActionsModal() {
 
   auto makePanel = [this](const char *titleKey, const char *introKey,
                           const char *footerKey,
-                          std::function<void()> onClose, View **panelOut) {
+                          std::function<void()> onClose, View **panelOut,
+                          bool showComputerHelp = false) {
     auto *panel = new View();
     panel->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignStretch)
@@ -4759,7 +4760,39 @@ void MainMenuScene::buildFileActionsModal() {
     styleThemedActionButton(close, closeText, true, ui_theme::control,
                             ui_theme::controlHover, ui_theme::controlPressed,
                             ui_theme::hairlineStrong);
-    panel->addView(close);
+    if (showComputerHelp) {
+      auto *footer = new View();
+      footer->setFlexDirection(FlexDirection::Row)
+          ->setAlignItems(YGAlignCenter)->setGap(16)->setHeight(58)
+          ->setFlexShrink(0);
+      TextView *helpText = nullptr;
+      auto *help = makeModalButton(
+          i18n::message("menu.manage_files.computer.label"), 18, &helpText);
+      help->setName("fileActionsComputerHelp");
+      help->setWidth(0)->setFlex(1)->setMinWidth(0);
+      help->setStyledBorderWidth(0);
+      help->setThemedBackgroundColors(
+          [] { return Color(0, 0, 0, 0); },
+          [] { return ui_theme::withAlpha(ui_theme::cyan(), 14); },
+          [] { return ui_theme::withAlpha(ui_theme::cyan(), 26); });
+      helpText->setAlign(TextView::LEFT);
+      helpText->setWrap(true);
+      helpText->setThemedColor(ui_theme::cyan);
+      help->setOnClickListener([] {
+        const auto path = ChartRepository::DefaultBmsFolderPath().string();
+        const auto instructions = i18n::format(
+            "menu.manage_files.computer.instructions", {{"path", path}});
+        SDL_ShowSimpleMessageBox(
+            SDL_MESSAGEBOX_INFORMATION,
+            i18n::tr("menu.manage_files.computer.label"),
+            instructions.c_str(), nullptr);
+      });
+      footer->addView(help);
+      footer->addView(close);
+      panel->addView(footer);
+    } else {
+      panel->addView(close);
+    }
     fileActionsModalRoot_->addView(panel);
     *panelOut = panel;
     return content;
@@ -4826,7 +4859,7 @@ void MainMenuScene::buildFileActionsModal() {
   auto *actions = makePanel(
       "menu.manage_files.label", "menu.manage_files.intro",
       "menu.manage_files.close.label",
-      [this]() { fileActionsModalRoot_->setVisible(false); }, &fileActionsPanel_);
+      [this]() { fileActionsModalRoot_->setVisible(false); }, &fileActionsPanel_, true);
   auto *actionCards = addRow(actions);
   addAction(actionCards, ui_icons::kDownload,
             "menu.import_folder.label", "menu.manage_files.folder",

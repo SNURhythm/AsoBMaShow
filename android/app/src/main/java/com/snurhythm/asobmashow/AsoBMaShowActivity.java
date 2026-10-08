@@ -69,6 +69,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
+    @Override
+    protected void messageboxCreateAndShow(Bundle args) {
+        int[] buttonIds = args.getIntArray("buttonIds");
+        String[] buttonTexts = args.getStringArray("buttonTexts");
+        // SDL's custom message layout does not scroll long help text. The
+        // platform message area scrolls while keeping its dismiss button visible.
+        if ((args.getInt("flags") & 0x40 /* SDL_MESSAGEBOX_INFORMATION */) == 0
+                || buttonIds == null || buttonIds.length != 1
+                || buttonTexts == null || buttonTexts.length != 1) {
+            super.messageboxCreateAndShow(args);
+            return;
+        }
+        try {
+            new AlertDialog.Builder(this)
+                    .setTitle(args.getString("title"))
+                    .setMessage(args.getString("message"))
+                    .setPositiveButton(buttonTexts[0], (dialog, which) -> messageboxSelection[0] = buttonIds[0])
+                    .setOnDismissListener(dialog -> {
+                        synchronized (messageboxSelection) { messageboxSelection.notifyAll(); }
+                    })
+                    .show();
+        } catch (RuntimeException error) {
+            Log.w("AsoBMaShow", "Could not show information dialog", error);
+            synchronized (messageboxSelection) { messageboxSelection.notifyAll(); }
+        }
+    }
+
     private static final int REQUEST_OPEN_ARCHIVE = 0x41534f44;
     private static final int REQUEST_OPEN_IMPORT_FOLDER = 0x41534f46;
     private static final int REQUEST_POST_NOTIFICATIONS = 0x41534f47;
