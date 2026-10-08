@@ -31,6 +31,21 @@ struct VirtualControllerConfig {
   static constexpr float kDefaultScratchKeyplateSpacing = 0.25F;
 
   bool enabled = false;
+  bool scratchEnabled = true;
+
+  [[nodiscard]] static constexpr bool isScratchlessKeyMode(int keyMode) {
+    return keyMode == 4 || keyMode == -5 || keyMode == 6 ||
+           keyMode == -7 || keyMode == 8;
+  }
+
+  [[nodiscard]] static VirtualControllerConfig forKeyMode(int keyMode) {
+    VirtualControllerConfig config;
+    config.scratchEnabled = !isScratchlessKeyMode(keyMode);
+    if (keyMode == 4 || keyMode == 6 || keyMode == 8) {
+      config.keySpacingX = 0.20F;
+    }
+    return config;
+  }
   // Flick preserves the original vertical-swipe behavior. Spin is an
   // opt-in turntable gesture whose rotation is quantized by the touch router.
   VirtualControllerScratchMode scratchMode = VirtualControllerScratchMode::Flick;

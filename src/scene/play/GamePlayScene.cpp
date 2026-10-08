@@ -582,7 +582,8 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
                                   float spinScratchRotationDegrees,
                                   const std::unordered_map<int, bool> &lanePressed,
                                   bool startButtonPressed,
-                                  bool selectButtonPressed) {
+                                  bool selectButtonPressed,
+                                  bool commandScratchPressed) {
   if (!layout.valid()) {
     return;
   }
@@ -607,8 +608,9 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
   for (const auto &element : layout.elements) {
     const auto &bounds = element.bounds;
     const bool pressed =
-        element.lane >= 0 && lanePressed.contains(element.lane) &&
-        lanePressed.at(element.lane);
+        (element.lane >= 0 && lanePressed.contains(element.lane) &&
+         lanePressed.at(element.lane)) ||
+        (element.scratch && element.lane < 0 && commandScratchPressed);
     const bool startPressed =
         element.control == gameplay::VirtualControllerControl::Start &&
         startButtonPressed;
@@ -2072,7 +2074,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     presentation->refreshGeometry();
     touchLayout = buildRealtimeTouchLayout(
         *presentation, assist_options::isDragMode(options.assistOption),
-        chart->Meta, context.inputProfile.virtualController,
+        chart->Meta, virtualControllerConfig,
         realtimeTouchUiTransform());
     if (!touchLayout.has_value()) {
       realtimeGameplayAuthorityWaitingForSkinGeometry =
@@ -2188,9 +2190,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   if (!options.autoPlay) {
     const auto activeInputScopes =
         makeGameplayInputScopes(presentationKeyMode());
-    const auto realtimeInputProfile =
-        makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
-                                                   activeInputScopes);
+    const auto &realtimeInputProfile = context.inputProfile;
     session->physicalInputRouter =
         std::make_unique<input::RealtimePhysicalInputRouter>(
             realtimeInputProfile, activeInputScopes,
@@ -2205,7 +2205,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
       effectiveRealtimeTouchLayoutRevision(
           presentation->touchLayoutRevision(),
-          context.inputProfile.virtualController, chart->Meta.KeyMode),
+          virtualControllerConfig, chart->Meta.KeyMode),
       presentation->touchHitRegionsRevision(),
 #else
       0, 0,
@@ -2332,7 +2332,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
         presentation != nullptr
             ? effectiveRealtimeTouchLayoutRevision(
                   presentation->touchLayoutRevision(),
-                  context.inputProfile.virtualController,
+                  virtualControllerConfig,
                   chart != nullptr ? chart->Meta.KeyMode : 0)
             : 0,
         presentation != nullptr ? presentation->touchHitRegionsRevision() : 0,
@@ -2420,7 +2420,7 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
     if (chart != nullptr) {
       appendVirtualControllerHitRegions(
           snapshot.regionsTopmostFirst,
-          currentVirtualControllerLayout(context.inputProfile.virtualController,
+          currentVirtualControllerLayout(virtualControllerConfig,
                                          chart->Meta.KeyMode,
                                          session.layoutRefreshKey.uiTransform),
           session.layoutRefreshKey.layoutRevision);
@@ -2628,7 +2628,7 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
   const auto currentKey = makeRealtimeTouchLayoutRefreshKey(
       effectiveRealtimeTouchLayoutRevision(
           presentation->touchLayoutRevision(),
-          context.inputProfile.virtualController, chart->Meta.KeyMode),
+          virtualControllerConfig, chart->Meta.KeyMode),
       presentation->touchHitRegionsRevision(), pauseButton,
       practiceRestartButton, skinResetLayoutButton);
   if (session.layoutRefreshKey == currentKey &&
@@ -2662,7 +2662,7 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
   presentation->refreshGeometry();
   const auto layout = buildRealtimeTouchLayout(
       *presentation, assist_options::isDragMode(options.assistOption),
-      chart->Meta, context.inputProfile.virtualController,
+      chart->Meta, virtualControllerConfig,
       currentKey.uiTransform);
   if (!layout.has_value()) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
@@ -2985,6 +2985,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       chart(options.ownsChart ? ownedChart.get() : chart),
       scratchlessAllowed(gameplay::scratchlessAllowed(
           context.settings, this->chart->Meta, context.chartRepository)),
+      virtualControllerConfig(context.inputProfile.virtualControllerForKeyMode(presentationKeyMode())),
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile,
           presentationKeyMode()))),
@@ -3009,6 +3010,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
       scratchlessAllowed(gameplay::scratchlessAllowed(
           context.settings, this->chart->Meta, context.chartRepository)),
+      virtualControllerConfig(context.inputProfile.virtualControllerForKeyMode(presentationKeyMode())),
       options(enforceCoursePlaybackRules(
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
                                        presentationKeyMode()))),
@@ -3321,10 +3323,8 @@ void GamePlayScene::init() {
   if (!isReplayPlayback() && !options.autoPlay) {
     const auto activeInputScopes =
         makeGameplayInputScopes(presentationKeyMode());
-    const auto gameplayInputProfile =
-        makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
-                                                   activeInputScopes);
-    escapeHandledByInputPipeline = true;
+    const auto &gameplayInputProfile = context.inputProfile;
+    pauseHandledByInputPipeline = true;
     ownedInputHandler = std::make_unique<RhythmInputHandler>(
         this, chart->Meta, context.inputDeviceRegistry, gameplayInputProfile,
         activeInputScopes,
@@ -3652,7 +3652,7 @@ bool GamePlayScene::reset() {
     const auto scopes =
         makeGameplayInputScopes(presentationKeyMode());
     ownedInputHandler->setBindings(
-        makeGameplayInputProfileWithEscapeFallback(context.inputProfile, scopes),
+        context.inputProfile,
         scopes);
   }
   if (guidedAccessReminderPending && inputHandler != nullptr) {
@@ -4274,7 +4274,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
     guidedAccessReminderLayout->setVisible(false);
   }
   playbackInitializationFailed = true;
-  escapeHandledByInputPipeline = true;
+  pauseHandledByInputPipeline = true;
   if (state != nullptr) {
     state->isPlaying = false;
     state->isEnding = true;
@@ -6929,21 +6929,25 @@ void GamePlayScene::renderScene() {
   renderContext.flushUiBatch();
   if (!options.autoPlay && chart != nullptr) {
     float spinScratchRotationDegrees = 0.0F;
+    bool commandScratchPressed = false;
     bool virtualControllerReady = false;
     if (realtimeGameplaySession != nullptr) {
       std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
       if (realtimeGameplaySession->touchRouter != nullptr) {
         spinScratchRotationDegrees =
             realtimeGameplaySession->touchRouter->spinScratchRotationDegrees();
+        commandScratchPressed =
+            realtimeGameplaySession->touchRouter->commandScratchPressed();
         virtualControllerReady = true;
       }
     }
     if (virtualControllerReady) {
       renderVirtualControllerOverlay(currentVirtualControllerLayout(
-          context.inputProfile.virtualController, chart->Meta.KeyMode,
+          virtualControllerConfig, chart->Meta.KeyMode,
           realtimeTouchUiTransform()),
                                      spinScratchRotationDegrees, lanePressed,
-                                     startButtonPressed, selectButtonPressed);
+                                     startButtonPressed, selectButtonPressed,
+                                     commandScratchPressed);
     }
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -8647,8 +8651,10 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
     adjustLaneCoverFromInput(sdl_pointer_event::verticalWheelScrollDelta(event.wheel, 0.5F));
   }
   if (event.type == SDL_KEYDOWN) {
-    if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE &&
-        !escapeHandledByInputPipeline) {
+    if (event.key.repeat == 0 && !pauseHandledByInputPipeline &&
+        hasActiveKeyboardActionBinding(context.inputProfile,
+            makeGameplayInputScopes(presentationKeyMode()), event.key.keysym.scancode,
+            input::LogicalActionKind::Pause)) {
       togglePauseMenuFromInput();
     }
   }

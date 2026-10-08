@@ -5,17 +5,31 @@
 #include "VirtualControllerConfig.h"
 
 #include <functional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 struct InputProfile {
-  static constexpr int kSchemaVersion = 8;
+  static constexpr int kSchemaVersion = 9;
 
   int schemaVersion = kSchemaVersion;
   input::GyroscopeTurntableConfig gyroscopeTurntable;
-  input::VirtualControllerConfig virtualController;
+  std::map<int, input::VirtualControllerConfig> virtualControllers = [] {
+    std::map<int, input::VirtualControllerConfig> configs;
+    for (const int mode : {4, -5, 5, 6, -7, 7, 8, 10, 14}) {
+      configs.emplace(mode, input::VirtualControllerConfig::forKeyMode(mode));
+    }
+    return configs;
+  }();
+
+  const input::VirtualControllerConfig &virtualControllerForKeyMode(int keyMode) const {
+    const auto found = virtualControllers.find(keyMode);
+    if (found != virtualControllers.end()) return found->second;
+    static const input::VirtualControllerConfig disabled;
+    return disabled;
+  }
   std::vector<input::InputBinding> bindings;
 
   void sanitize(std::vector<std::string> &diagnostics);
@@ -33,6 +47,7 @@ struct InputProfile {
 namespace input_profile {
 
 bool migrateCompactScratchlessLaneBindings(InputProfile &profile);
+bool addMissingGameplayCommandBindings(InputProfile &profile);
 
 } // namespace input_profile
 

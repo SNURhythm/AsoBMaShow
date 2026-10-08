@@ -13,7 +13,7 @@ class VirtualControllerEditorView final : public View {
 public:
   using CommitCallback = std::function<void(input::VirtualControllerConfig)>;
 
-  VirtualControllerEditorView(input::VirtualControllerConfig config,
+  VirtualControllerEditorView(input::VirtualControllerConfig config, int keyMode,
                               CommitCallback onCommit);
 
 protected:
@@ -67,6 +67,7 @@ private:
                           float &y) noexcept;
 
   input::VirtualControllerConfig config_;
+  int keyMode_;
   CommitCallback onCommit_;
   DragMode dragMode_ = DragMode::None;
   std::int64_t activePointerId_ = -1;

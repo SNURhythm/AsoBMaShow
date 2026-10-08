@@ -2264,6 +2264,47 @@ void testScratchlessVirtualControllerKeepsPlatter() {
           "double-play virtual scratch also remains available");
 }
 
+void testScratchlessVirtualControllerOptionalPlatter() {
+  for (const int mode : {4, -5, 6, -7, 8}) {
+    for (const auto player : {input::VirtualControllerPlayer::Player1,
+                              input::VirtualControllerPlayer::Player2}) {
+      auto config = input::VirtualControllerConfig::forKeyMode(mode);
+      config.enabled = true;
+      config.player = player;
+      const auto layout = gameplay::makeVirtualControllerLayout(config, mode, {0, 0, 1000, 600});
+      require(layout.valid() && layout.elements.size() == static_cast<std::size_t>(std::abs(mode) + 2) &&
+                  std::ranges::none_of(layout.elements, [](const auto &element) { return element.scratch; }),
+              "scratchless defaults retain keys and Start/Select without a platter");
+      const auto regions = gameplay::makeVirtualControllerTouchRegions(layout,
+          {.renderWidth = 1000, .renderHeight = 600, .uiScaleX = 1, .uiScaleY = 1,
+           .uiWidth = 1000, .uiHeight = 600});
+      require(regions.size() == layout.elements.size() &&
+                  std::ranges::none_of(regions, [](const auto &region) { return region.scratch; }),
+              "hidden platter leaves no active scratch touch region");
+      std::vector<gameplay::VirtualControllerRect> keys;
+      for (const auto &element : layout.elements) {
+        if (element.control == gameplay::VirtualControllerControl::Key) keys.push_back(element.bounds);
+      }
+      for (std::size_t index = 1; index < keys.size(); ++index) {
+        if (mode > 0) {
+          require(keys[index].y == keys.front().y &&
+                      keys[index].x >= keys[index - 1].x + keys[index - 1].width,
+                  "even defaults form a straight, non-overlapping row");
+        } else {
+          require(index % 2 == 0 ? keys[index].y == keys.front().y
+                                : keys[index].y < keys.front().y,
+                  "odd scratchless keys retain their zig-zag layout");
+        }
+      }
+      config.scratchEnabled = true;
+      const auto withScratch = gameplay::makeVirtualControllerLayout(config, mode, {0, 0, 1000, 600});
+      require(withScratch.elements.size() == layout.elements.size() + 1 &&
+                  std::ranges::any_of(withScratch.elements, [](const auto &element) { return element.scratch; }),
+              "scratchless platter can be enabled independently for either side");
+    }
+  }
+}
+
 void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
   for (const int mode : {4, 6, 8}) {
     for (const auto scratchMode : {input::VirtualControllerScratchMode::Flick,
@@ -2273,9 +2314,13 @@ void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
       config.scratchMode = scratchMode;
       const auto controller = gameplay::makeVirtualControllerLayout(config, mode, {0, 0, 1000, 600});
       std::vector<int> keys;
+      std::vector<float> keyRows;
       const gameplay::VirtualControllerElement *scratch = nullptr;
       for (const auto &element : controller.elements) {
-        if (element.control == gameplay::VirtualControllerControl::Key) keys.push_back(element.lane);
+        if (element.control == gameplay::VirtualControllerControl::Key) {
+          keys.push_back(element.lane);
+          keyRows.push_back(element.bounds.y);
+        }
         if (element.scratch) scratch = &element;
       }
       const std::vector<int> expected = mode == 4 ? std::vector<int>{0, 1, 3, 4}
@@ -2283,6 +2328,9 @@ void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
                       : std::vector<int>{7, 0, 1, 2, 3, 4, 5, 6};
       require(keys == expected && scratch != nullptr && scratch->lane == -1,
               "4K/6K/8K virtual keys retain canonical lanes beside a command-only platter");
+      for (const float row : keyRows) {
+        require(row == keyRows.front(), "even-key controller uses a straight row");
+      }
       gameplay::RealtimeTouchLayout layout;
       layout.keyMode = mode;
       layout.laneRegions = gameplay::makeVirtualControllerTouchRegions(controller,
@@ -2294,6 +2342,7 @@ void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
            .emitAnalogScratchTicks = &InputCapture::emitAnalogScratchTicks});
       const float x = (scratch->bounds.centerX() + scratch->bounds.width * 0.4F) / 1000;
       const float y = scratch->bounds.centerY() / 600;
+      require(!router.commandScratchPressed(), "idle command platter is not highlighted");
       require(router.consume({.fingerId = 400, .phase = gameplay::RealtimeTouchPhase::Down,
                               .normalizedX = x, .normalizedY = y, .steadyTimestampMicros = 100'000}) &&
               router.consume({.fingerId = 400, .phase = gameplay::RealtimeTouchPhase::Move,
@@ -2303,6 +2352,7 @@ void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
                   capture.events[0].hasReplayControl &&
                   capture.events[0].replayControl.kind == replay::LogicalControlKind::ScratchClockwise,
               "flick and spin emit scratch commands without borrowing an 8K key lane");
+      require(router.commandScratchPressed(), "held command platter supplies pressed feedback");
       if (scratchMode == input::VirtualControllerScratchMode::Spin) {
         require(!capture.analogScratchTicks.empty() && capture.analogScratchTicks[0].ticks > 0,
                 "command-only spin also emits analog adjustment ticks");
@@ -2311,6 +2361,18 @@ void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
                   capture.events[1].type == gameplay::RealtimeGameplayInputType::Release &&
                   capture.events[1].replayControl == capture.events[0].replayControl,
               "command-only scratch cancellation releases the same direction");
+      require(!router.commandScratchPressed(), "cancellation clears command platter feedback");
+      require(router.consume({.fingerId = 401, .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = x, .normalizedY = y, .steadyTimestampMicros = 200'000}) &&
+              router.consume({.fingerId = 401, .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = x, .normalizedY = y + .04F, .steadyTimestampMicros = 210'000}) &&
+              router.commandScratchPressed(), "command platter feedback can be held again");
+      if (scratchMode == input::VirtualControllerScratchMode::Spin) {
+        require(router.advanceSpinScratch(360'000) && !router.commandScratchPressed(),
+                "spin grace expiry clears command platter feedback with the finger still down");
+      }
+      router.reset();
+      require(!router.commandScratchPressed(), "router reset clears command platter feedback");
     }
   }
 }
@@ -2653,6 +2715,7 @@ int main() {
   testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
   testFailedCancelExpiryRequestsRecovery();
   testScratchlessVirtualControllerKeepsPlatter();
+  testScratchlessVirtualControllerOptionalPlatter();
   testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
   testVirtualControllerAvailabilityMatchesTouchRouterPlatform();

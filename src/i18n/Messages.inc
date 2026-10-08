@@ -1420,6 +1420,8 @@
 {"settings.input.virtual_controller_layout.label", "Virtual Controller Layout", "가상 컨트롤러 배치", "仮想コントローラーのレイアウト", "虚拟控制器布局", "虛擬控制器配置"},
 {"settings.input.virtual_controller_off.label", "Virtual Controller: Off", "가상 컨트롤러: 꺼짐", "仮想コントローラー: オフ", "虚拟控制器：关", "虛擬控制器：關"},
 {"settings.input.virtual_controller_on.label", "Virtual Controller: On", "가상 컨트롤러: 켜짐", "仮想コントローラー: オン", "虚拟控制器：开", "虛擬控制器：開"},
+{"settings.input.virtual_scratch_off.label", "Scratch Platter: Off", "스크래치 턴테이블: 꺼짐", "スクラッチターンテーブル: オフ", "转盘：关闭", "轉盤：關閉"},
+{"settings.input.virtual_scratch_on.label", "Scratch Platter: On", "스크래치 턴테이블: 켜짐", "スクラッチターンテーブル: オン", "转盘：开启", "轉盤：開啟"},
 {"settings.input.waiting_input.progress", "Waiting for input...", "입력 대기 중...", "入力待ち...", "等待输入...", "等待輸入..."},
 {"settings.ir.active_profile_unavailable.message", "The active profile is unavailable.", "현재 프로필을 사용할 수 없습니다.", "現在のプロファイルを使用できません。", "当前档案不可用。", "目前的設定檔無法使用。"},
 {"settings.ir.add_key.label", "Add Key", "키 추가", "キーを追加", "添加密钥", "新增金鑰"},

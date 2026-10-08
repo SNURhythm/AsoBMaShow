@@ -289,6 +289,7 @@ public:
                           std::int64_t steadyTimestampMicros) noexcept;
   void reset() noexcept;
   [[nodiscard]] float spinScratchRotationDegrees() const noexcept;
+  [[nodiscard]] bool commandScratchPressed() const noexcept;
 
 private:
   struct FingerState {

@@ -1093,6 +1093,12 @@ float RealtimeTouchInputRouter::spinScratchRotationDegrees() const noexcept {
   return spinScratchRotationDegrees_;
 }
 
+bool RealtimeTouchInputRouter::commandScratchPressed() const noexcept {
+  return std::ranges::any_of(fingers_, [](const FingerState &finger) {
+    return finger.active && finger.scratch && finger.lane < 0 && finger.pressed;
+  });
+}
+
 bool RealtimeTouchInputRouter::setGameplayEnabled(
     bool enabled, std::int64_t steadyTimestampMicros) noexcept {
   if (!enabled) {

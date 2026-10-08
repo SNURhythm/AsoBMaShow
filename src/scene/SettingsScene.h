@@ -503,7 +503,7 @@ private:
   void refreshInputDropdowns();
   void requestInputViewRebuild();
   void commitGyroscopeTurntableSetting(bool stepAngle, std::string_view text);
-  void commitVirtualControllerSetting(input::VirtualControllerConfig config);
+  void commitVirtualControllerSetting(int keyMode, input::VirtualControllerConfig config);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();

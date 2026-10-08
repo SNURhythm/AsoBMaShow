@@ -11,7 +11,7 @@ namespace {
 [[nodiscard]] bool finite(float value) noexcept { return std::isfinite(value); }
 
 [[nodiscard]] int keysPerVirtualControllerPlayer(int keyMode) noexcept {
-  switch (keyMode) {
+  switch (input_profile::canonicalChartKeyMode(keyMode)) {
   case 4:
   case 6:
   case 8:
@@ -113,7 +113,7 @@ VirtualControllerLayout makeVirtualControllerLayout(
   }
 
   bms_parser::ChartMeta meta;
-  meta.KeyMode = keyMode;
+  meta.KeyMode = input_profile::canonicalChartKeyMode(keyMode);
   const int keysPerPlayer = keysPerVirtualControllerPlayer(keyMode);
   const bool drawPlayerTwo =
       config.player == input::VirtualControllerPlayer::Player2;
@@ -156,16 +156,18 @@ VirtualControllerLayout makeVirtualControllerLayout(
       return elements;
     }
 
-    const float keyplateLeft = scratchDiameter + scratchToKeyplateGap;
+    const bool staggered = keysPerPlayer % 2 != 0;
+    const float keyplateLeft = config.scratchEnabled
+                                  ? scratchDiameter + scratchToKeyplateGap : 0.0F;
     const float upperKeyTop = systemSize + keyHeight * 0.25F;
-    const float lowerKeyTop = upperKeyTop + keyPitchY;
+    const float lowerKeyTop = upperKeyTop + (staggered ? keyPitchY : 0.0F);
     const float keyplateRight =
         keyplateLeft + static_cast<float>(keysPerPlayer - 1) * keyPitchX +
         keyWidth;
     const float systemsLeft =
         (keyplateLeft + keyplateRight) * 0.5F - (systemSize * 2.0F + systemGap) * 0.5F;
     const float scratchTop = upperKeyTop +
-                             (keyPitchY + keyHeight - scratchDiameter) * 0.5F;
+                             ((staggered ? keyPitchY : 0.0F) + keyHeight - scratchDiameter) * 0.5F;
 
     elements.reserve(static_cast<std::size_t>(keysPerPlayer) + 3U);
     elements.push_back(
@@ -190,27 +192,27 @@ VirtualControllerLayout makeVirtualControllerLayout(
                     .y = 0.0F,
                     .width = systemSize,
                     .height = systemSize}});
-    // Keep the platter available for Start/Select commands even when the
-    // chart's empty scratch lane is hidden.
-    elements.push_back(
-        {.control = VirtualControllerControl::Scratch,
-         .shape = VirtualControllerShape::Circle,
-         .lane = scratchLanes[scratchOffset],
-         .scratch = true,
-         .spinScratch = config.scratchMode ==
-                        input::VirtualControllerScratchMode::Spin,
-         .invertFlickScratchDirection =
-             config.scratchMode == input::VirtualControllerScratchMode::Flick &&
-             !drawPlayerTwo,
-         .replayControl = commandOnlyScratch
-             ? std::optional(replay::LogicalControl{
-                   .kind = replay::LogicalControlKind::ScratchClockwise,
-                   .player = chartPlayer})
-             : std::nullopt,
-         .bounds = {.x = 0.0F,
-                    .y = scratchTop,
-                    .width = scratchDiameter,
-                    .height = scratchDiameter}});
+    if (config.scratchEnabled) {
+      elements.push_back(
+          {.control = VirtualControllerControl::Scratch,
+           .shape = VirtualControllerShape::Circle,
+           .lane = scratchLanes[scratchOffset],
+           .scratch = true,
+           .spinScratch = config.scratchMode ==
+                          input::VirtualControllerScratchMode::Spin,
+           .invertFlickScratchDirection =
+               config.scratchMode == input::VirtualControllerScratchMode::Flick &&
+               !drawPlayerTwo,
+           .replayControl = commandOnlyScratch
+               ? std::optional(replay::LogicalControl{
+                     .kind = replay::LogicalControlKind::ScratchClockwise,
+                     .player = chartPlayer})
+               : std::nullopt,
+           .bounds = {.x = 0.0F,
+                      .y = scratchTop,
+                      .width = scratchDiameter,
+                      .height = scratchDiameter}});
+    }
     for (int keyPosition = 0; keyPosition < keysPerPlayer; ++keyPosition) {
       elements.push_back(
           {.control = VirtualControllerControl::Key,

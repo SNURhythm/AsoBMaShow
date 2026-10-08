@@ -43,7 +43,12 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
   }
 
   gyroscopeTurntable.sanitize(diagnostics);
-  virtualController.sanitize(diagnostics);
+  for (auto &[keyMode, config] : virtualControllers) {
+    config.sanitize(diagnostics);
+    if (!input::VirtualControllerConfig::isScratchlessKeyMode(keyMode)) {
+      config.scratchEnabled = true;
+    }
+  }
 
   for (auto &binding : bindings) {
     if (binding.scope.player != 1 && binding.scope.player != 2) {

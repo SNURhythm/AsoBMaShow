@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -906,42 +907,53 @@ void testScratchReversalKeepsAnOverlappingDigitalHoldCoherent() {
       "scratch reversal remains ordered while a digital scratch hold overlaps");
 }
 
-void testEscapeFallbackYieldsToAnActiveLogicalPauseBinding() {
-  InputProfile profile = makeDefaultInputProfile();
-  profile.bindings.push_back({
-      .id = "pause-escape",
-      .scope = {1, 7},
-      .action = {input::LogicalActionKind::Pause, 0},
-      .control = {.deviceId = "keyboard",
-                  .deviceClass = input::DeviceClass::Keyboard,
-                  .kind = input::ControlKind::Key,
-                  .index = SDL_SCANCODE_ESCAPE,
-                  .direction = input::ControlDirection::Any},
-  });
-  const auto activeScopes = makeGameplayInputScopes(7);
-  require(hasActiveKeyboardActionBinding(profile, activeScopes,
-                                         SDL_SCANCODE_ESCAPE,
-                                         input::LogicalActionKind::Pause),
-          "the Escape fallback detects an active logical Pause binding");
-  const auto inactiveScopes = makeGameplayInputScopes(8);
-  require(!hasActiveKeyboardActionBinding(profile, inactiveScopes,
-                                          SDL_SCANCODE_ESCAPE,
-                                          input::LogicalActionKind::Pause),
-          "inactive key-mode bindings do not suppress the Escape fallback");
-
-  const auto withFallback =
-      makeGameplayInputProfileWithEscapeFallback(profile, activeScopes);
-  require(std::ranges::count_if(withFallback.bindings, [](const auto &binding) {
-            return binding.action.kind == input::LogicalActionKind::Pause;
-          }) == 1,
-          "an explicit active Escape pause binding is not duplicated");
+void testSavedCommandBindingsRespectRebindingAndRemoval() {
+  for (const auto [action, defaultKey, reboundKey] : {
+           std::tuple{input::LogicalActionKind::Start, SDL_SCANCODE_Q, SDL_SCANCODE_E},
+           std::tuple{input::LogicalActionKind::Select, SDL_SCANCODE_W, SDL_SCANCODE_R},
+           std::tuple{input::LogicalActionKind::Pause, SDL_SCANCODE_ESCAPE, SDL_SCANCODE_P}}) {
+    auto profile = makeDefaultInputProfile();
+    const auto scopes = makeGameplayInputScopes(7);
+    require(hasActiveKeyboardActionBinding(profile, scopes, defaultKey, action),
+            "Start, Select, and Pause defaults are real profile bindings");
+    for (auto &binding : profile.bindings) {
+      if (binding.scope == input::InputScope{1, 7} && binding.action.kind == action) {
+        binding.control.index = reboundKey;
+      }
+    }
+    std::vector<input::RealtimePhysicalInputTransition> edges;
+    input::RealtimePhysicalInputRouter router(profile, scopes, [&](const auto &edge) {
+      edges.push_back(edge);
+      return true;
+    });
+    router.setGameplayEnabled(true, 0);
+    router.consume(keyEvent(defaultKey, true), 100'000);
+    require(edges.empty(), "rebound command stops responding to its old default key");
+    router.consume(keyEvent(reboundKey, true), 110'000);
+    require(std::ranges::count_if(edges, [&](const auto &edge) {
+              return edge.type == input::RealtimePhysicalInputTransitionType::Command &&
+                     edge.command.action.kind == action && edge.command.pressed;
+            }) == 1,
+            "rebound command responds through the configured input pipeline");
+    std::erase_if(profile.bindings, [&](const auto &binding) {
+      return binding.scope == input::InputScope{1, 7} && binding.action.kind == action;
+    });
+    edges.clear();
+    input::RealtimePhysicalInputRouter cleared(profile, scopes, [&](const auto &edge) {
+      edges.push_back(edge);
+      return true;
+    });
+    cleared.setGameplayEnabled(true, 0);
+    cleared.consume(keyEvent(defaultKey, true), 120'000);
+    cleared.consume(keyEvent(reboundKey, true), 130'000);
+    require(edges.empty(), "cleared command stays unbound without a hidden fallback");
+  }
 }
 
-void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
+void testDefaultPauseRunsInTheOrderedLogicalPipeline() {
   RecordingControl control;
   const auto scopes = makeGameplayInputScopes(7);
-  const InputProfile profile = makeGameplayInputProfileWithEscapeFallback(
-      makeDefaultInputProfile(), scopes);
+  const InputProfile profile = makeDefaultInputProfile();
   std::vector<input::LogicalInputTransition> commands;
   std::size_t controlCallsAtPause = 0;
   LogicalGameplayInputPipeline pipeline(
@@ -962,17 +974,17 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
               commands.size() == 1 && commands.front().pressed &&
               commands.front().action.kind == input::LogicalActionKind::Pause &&
               controlCallsAtPause == 1,
-          "the lane edge is applied before the queued Escape pause fallback");
+          "the lane edge is applied before the queued Escape pause binding");
 }
 
 void testCoverShortcutsRespectCustomBindings() {
   const auto scopes = makeGameplayInputScopes(14);
-  auto profile = makeGameplayInputProfileWithEscapeFallback(makeDefaultInputProfile(), scopes);
+  auto profile = makeDefaultInputProfile();
   require(hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_Q, input::LogicalActionKind::Start) &&
               hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_W, input::LogicalActionKind::Select) &&
               hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_UP, input::LogicalActionKind::LaneCoverDecrease) &&
               hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease),
-          "keyboard fallback provides Beatoraja START, SELECT, and cover arrows once for DP");
+          "saved defaults provide START, SELECT, and cover arrows once for DP");
   InputProfile custom;
   custom.bindings.push_back({.id = "custom-q", .scope = {2, 14},
       .action = {input::LogicalActionKind::Lane, 8},
@@ -982,7 +994,8 @@ void testCoverShortcutsRespectCustomBindings() {
       .action = {input::LogicalActionKind::Select, 0},
       .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
                   .kind = input::ControlKind::Key, .index = SDL_SCANCODE_E}});
-  const auto merged = makeGameplayInputProfileWithEscapeFallback(custom, scopes);
+  input_profile::addMissingGameplayCommandBindings(custom);
+  const auto &merged = custom;
   require(!hasActiveKeyboardActionBinding(merged, scopes, SDL_SCANCODE_Q, input::LogicalActionKind::Start) &&
               !hasActiveKeyboardActionBinding(merged, scopes, SDL_SCANCODE_W, input::LogicalActionKind::Select),
           "cover defaults never steal another player's key or duplicate a rebound command");
@@ -994,7 +1007,7 @@ void testScratchlessStartSelectScratchCommands() {
       for (const auto scratch : {SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT}) {
         const auto scopes = makeGameplayInputScopes(mode);
         const auto savedProfile = makeDefaultInputProfile();
-        const auto profile = makeGameplayInputProfileWithEscapeFallback(savedProfile, scopes);
+        const auto &profile = savedProfile;
         gameplay::StartSelectControl commands({.keyMode = std::abs(mode)});
         input::RealtimePhysicalInputRouter router(profile, scopes, [&](const auto &edge) {
           if (edge.type == input::RealtimePhysicalInputTransitionType::Command) {
@@ -1043,13 +1056,14 @@ void testScratchlessScratchFallbackRespectsCustomBindings() {
         .control = {.deviceId = "pad", .deviceClass = input::DeviceClass::GameController,
                     .kind = input::ControlKind::Button, .index = 0}});
     const auto scopes = makeGameplayInputScopes(mode);
-    const auto profile = makeGameplayInputProfileWithEscapeFallback(saved, scopes);
+    input_profile::addMissingGameplayCommandBindings(saved);
+    const auto &profile = saved;
     require(!hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_LSHIFT,
                 input::LogicalActionKind::ScratchCounterClockwise) &&
             !hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_RSHIFT,
                 input::LogicalActionKind::ScratchClockwise),
             "scratchless scratch fallbacks yield to occupied keys and custom controller actions");
-    require(saved.bindings.size() == 2, "fallbacks never modify the saved profile");
+
   }
 }
 
@@ -1087,7 +1101,8 @@ void testIndependentScratchlessGameplayBindings() {
     auto profile = makeDefaultInputProfile();
     const auto canonicalKey = mode == 5 ? SDL_SCANCODE_D : SDL_SCANCODE_S;
     for (auto &binding : profile.bindings) {
-      if (binding.scope == input::InputScope{1, -mode} && binding.action.lane == 0) {
+      if (binding.scope == input::InputScope{1, -mode} &&
+          binding.action.kind == input::LogicalActionKind::Lane && binding.action.lane == 0) {
         binding.control.index = SDL_SCANCODE_A;
       }
     }
@@ -1645,8 +1660,8 @@ int main() {
   testTouchAndHardwareShareOneLaneOwnershipBoundary();
   testTouchScratchAndDigitalScratchShareOneOwnershipBoundary();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
-  testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
-  testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testSavedCommandBindingsRespectRebindingAndRemoval();
+  testDefaultPauseRunsInTheOrderedLogicalPipeline();
   testCoverShortcutsRespectCustomBindings();
   testIndependentScratchlessGameplayBindings();
   testScratchlessStartSelectScratchCommands();

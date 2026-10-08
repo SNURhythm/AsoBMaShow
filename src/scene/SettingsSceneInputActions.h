@@ -12,7 +12,7 @@
 
 namespace settings_scene {
 
-inline constexpr std::array<int, 9> kInputKeyModes = {4, -5, 5, 6, -7, 7, 8, 10, 14};
+inline constexpr std::array<int, 12> kInputKeyModes = {4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48};
 
 constexpr bool isScratchlessInputSelection(int keyMode) {
   return keyMode == -5 || keyMode == -7;

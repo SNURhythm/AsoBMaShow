@@ -21,9 +21,6 @@ bool hasActiveKeyboardActionBinding(
     const InputProfile &profile,
     std::span<const input::InputScope> activeScopes, int scancode,
     input::LogicalActionKind actionKind);
-InputProfile makeGameplayInputProfileWithEscapeFallback(
-    const InputProfile &profile,
-    std::span<const input::InputScope> activeScopes);
 
 class LogicalGameplayInputAdapter {
 public:
