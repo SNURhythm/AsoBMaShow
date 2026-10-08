@@ -2498,6 +2498,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
+    add_test(NAME scroll_offset_precision
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/scroll_offset_precision_tests.py -v)
+    set_tests_properties(scroll_offset_precision PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
+    )
     add_test(NAME settings_sound_set_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/settings_sound_set_lifecycle_tests.py -v)

@@ -286,6 +286,8 @@ private:
   TextView *displayPreviewStatusText = nullptr;
   Button *displayPreviewKeepButton = nullptr;
   ScrollView *scrollView = nullptr;
+  ScrollView *tabRailScrollView = nullptr;
+  float lastTabRailScrollOffset = 0.0F;
   DropdownView *inputPlayerDropdown = nullptr;
   DropdownView *inputKeyModeDropdown = nullptr;
   DropdownView *inputDeviceDropdown = nullptr;

@@ -27,6 +27,10 @@ class SettingsSoundSetLifecycleTests(unittest.TestCase):
             r"  auto \*previewScroll = new ScrollView\(\);\n(.*?)(?=  previewScroll->)",
             layout, re.S).group(0)
         fixture = fixture.replace("PREVIEW_SCROLL_BINDING", preview_scroll)
+        tab_rail_scroll = re.search(
+            r"  auto \*tabRail = new ScrollView\(\);\n(.*?)(?=  tabRail->)",
+            layout, re.S).group(0)
+        fixture = fixture.replace("TAB_RAIL_SCROLL_BINDING", tab_rail_scroll)
         fixture = (fixture.replace("VIEW_FIELDS", "\n".join(
             f"View *{name} = nullptr;" for name in pointers))
                    .replace("SCENE_METHODS", methods))

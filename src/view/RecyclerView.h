@@ -44,7 +44,7 @@ private:
     }
     if (!touchDragging) {
       float momentumDelta = 0.0f;
-      if (touchMomentum.step(momentumDelta) && !scrollBy(momentumDelta)) {
+      if (touchMomentum.step(SDL_GetTicks(), momentumDelta) && !scrollBy(momentumDelta)) {
         touchMomentum.stop();
       }
     }
@@ -117,7 +117,7 @@ private:
       }
       // scroll to the selected item
       if (changed) {
-        const float previousOffset = scrollOffset;
+        const double previousOffset = scrollOffset;
         int selectedY = selectedIndex * itemHeight;
         if (selectedY < scrollOffset) {
           scrollOffset = selectedY;
@@ -206,7 +206,7 @@ private:
       if (!isInsideContent(touchX, touchY)) {
         return true;
       }
-      touchMomentum.stop();
+      touchMomentum.beginDrag(event.tfinger.timestamp);
       touchPressX = touchX;
       touchPressY = touchY;
       touchLastY = touchY;
@@ -242,7 +242,7 @@ private:
       const float delta = touchLastY - touchY;
       revealScrollbar();
       scrollBy(delta);
-      touchMomentum.recordDragDelta(delta);
+      touchMomentum.recordDragDelta(delta, event.tfinger.timestamp);
       touchLastY = touchY;
       touchDragging = true;
       break;
@@ -254,7 +254,7 @@ private:
       const bool hadDrag = touchDragging;
       touchDragging = false;
       if (hadDrag) {
-        touchMomentum.release();
+        touchMomentum.release(event.tfinger.timestamp);
       } else {
         touchMomentum.stop();
         float touchX = 0.0f;
@@ -300,7 +300,7 @@ public:
   inline ~RecyclerView() { destroyAllViews(); }
 
   // scroll offset in pixels
-  float scrollOffset;
+  double scrollOffset;
 
   // fixed height of all items in the list
   int itemHeight;
@@ -480,7 +480,7 @@ private:
   int visibleItemsLayoutWidth = 0;
   int visibleItemsLayoutHeight = 0;
   int visibleItemsLayoutItemHeight = 0;
-  float visibleItemsLayoutScrollOffset = 0.0f;
+  double visibleItemsLayoutScrollOffset = 0.0;
 
   static constexpr int kScrollbarContentInset = 14;
   static constexpr int kScrollbarWidth = 4;
@@ -648,7 +648,7 @@ private:
         std::clamp(this->getContentHeight() * trackHeight / itemsSize,
                    kScrollbarMinThumbHeight, trackHeight);
     const float progress =
-        std::clamp(scrollOffset / static_cast<float>(maxOffset), 0.0f, 1.0f);
+        std::clamp(scrollOffset / maxOffset, 0.0, 1.0);
     const int trackX = this->getContentX() + this->getContentWidth() -
                        kScrollbarRightInset - kScrollbarWidth;
     const int trackY = this->getContentY() + kScrollbarVerticalInset;
@@ -666,14 +666,14 @@ private:
 
   inline void clampScrollOffset() {
     const int itemsSize = std::max(1, itemCount()) * itemHeight;
-    const float maxOffset =
-        std::max(0.0f,
-                 static_cast<float>(itemsSize - this->getContentHeight()));
-    scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
+    const double maxOffset =
+        std::max(0.0,
+                 static_cast<double>(itemsSize - this->getContentHeight()));
+    scrollOffset = std::clamp(scrollOffset, 0.0, maxOffset);
   }
 
   inline bool scrollBy(float delta) {
-    const float previousOffset = scrollOffset;
+    const double previousOffset = scrollOffset;
     scrollOffset += delta;
     clampScrollOffset();
     if (std::fabs(scrollOffset - previousOffset) <= 0.001f) {
@@ -771,7 +771,7 @@ private:
   }
 
   inline int getStartIndex() {
-    return std::max(0.0f, (scrollOffset / itemHeight) - topMargin);
+    return std::max(0.0, (scrollOffset / itemHeight) - topMargin);
   }
 
   inline int getEndIndex() {

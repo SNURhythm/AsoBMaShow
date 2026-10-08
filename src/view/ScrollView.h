@@ -30,7 +30,7 @@ protected:
 
 private:
   std::unique_ptr<View> contentView;
-  float scrollOffset = 0.0f;
+  double scrollOffset = 0.0;
   bool mousePressedInside = false;
   bool mouseDragging = false;
   bool mouseCapturedByContent = false;
