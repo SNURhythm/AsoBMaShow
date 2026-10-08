@@ -594,47 +594,67 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     touchBody->setGap(metrics.compact ? 10.0F : 14.0F);
     const int touchKeyMode = inputSelectedKeyMode;
     const auto touchConfig = context.inputProfile.playfieldTouchForKeyMode(touchKeyMode);
+    const int labelWidth = std::min(220, bodyWidth / 4);
+    auto makeModeRow = [&](const char *label) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Row);
+      row->setAlignItems(YGAlignCenter);
+      row->setGap(static_cast<float>(layout.selectorGap));
+      auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
+                            ui_theme::textPrimary(), TextView::LEFT, TextView::MIDDLE);
+      text->setWidth(static_cast<float>(labelWidth));
+      text->setHeight(static_cast<float>(metrics.actionButtonHeight));
+      text->setFlexShrink(0.0F);
+      text->setAutoFitText(true);
+      row->addView(text);
+      auto *buttons = new View();
+      buttons->setFlexDirection(FlexDirection::Row);
+      buttons->setFlexWrap(YGWrapWrap);
+      buttons->setGap(static_cast<float>(layout.selectorGap));
+      buttons->setWidth(static_cast<float>(std::max(0, bodyWidth - labelWidth - layout.selectorGap)));
+      row->addView(buttons);
+      touchBody->addView(row);
+      return buttons;
+    };
+    auto makeModeButton = [&](const char *label, bool selected, bool available = true) {
+      auto *text = makeText(i18n::message(label), metrics.bodyTextSize + 1,
+                            available ? ui_theme::textPrimary() : ui_theme::textSecondary(),
+                            TextView::CENTER, TextView::MIDDLE);
+      auto *button = selected
+          ? makeAccentButton(kFitContentWidth, metrics.actionButtonHeight, text, ui_theme::cyan())
+          : makeControlButton(kFitContentWidth, metrics.actionButtonHeight, text);
+      button->setFlexShrink(0.0F);
+      button->setEnabled(available);
+      return button;
+    };
     if (input::PlayfieldTouchConfig::supportsTapToScratch(touchKeyMode)) {
-      auto *tapToggle = makeControlButton(
-          bodyWidth, metrics.actionButtonHeight,
-          makeText(i18n::message(touchConfig.tapToScratch
-                       ? "settings.input.tap_scratch_on.label"
-                       : "settings.input.tap_scratch_off.label"),
-                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      tapToggle->setOnClickListener([this, touchKeyMode, touchConfig]() {
+      auto *scratchModes = makeModeRow("settings.input.scratch_mode.label");
+      for (const auto &[tap, label] : {
+               std::pair{false, "settings.input.tap_scratch_off.label"},
+               std::pair{true, "settings.input.tap_scratch_on.label"}}) {
+        auto *button = makeModeButton(label, touchConfig.tapToScratch == tap);
+        button->setOnClickListener([this, touchKeyMode, touchConfig, tap]() {
+          auto next = touchConfig;
+          next.tapToScratch = tap;
+          commitPlayfieldTouchSetting(touchKeyMode, next);
+        });
+        scratchModes->addView(button);
+      }
+    }
+    auto *sideModes = makeModeRow("settings.input.side_taps.label");
+    for (const auto &[mode, label] : {
+             std::pair{input::SideTapMode::EdgeLane, "settings.input.side_taps_edge.label"},
+             std::pair{input::SideTapMode::Scratch, "settings.input.side_taps_scratch.label"},
+             std::pair{input::SideTapMode::Ignore, "settings.input.side_taps_ignore.label"}}) {
+      auto *button = makeModeButton(label, touchConfig.sideTapMode == mode,
+          mode != input::SideTapMode::Scratch || touchConfig.tapToScratch);
+      button->setOnClickListener([this, touchKeyMode, touchConfig, mode]() {
         auto next = touchConfig;
-        next.tapToScratch = !next.tapToScratch;
+        next.sideTapMode = mode;
         commitPlayfieldTouchSetting(touchKeyMode, next);
       });
-      touchBody->addView(tapToggle);
+      sideModes->addView(button);
     }
-    const char *sideLabel = touchConfig.sideTapMode == input::SideTapMode::Scratch
-                               ? "settings.input.side_taps_scratch.label"
-                           : touchConfig.sideTapMode == input::SideTapMode::Ignore
-                               ? "settings.input.side_taps_ignore.label"
-                               : "settings.input.side_taps_edge.label";
-    auto *sideButton = makeControlButton(
-        bodyWidth, metrics.actionButtonHeight,
-        makeText(i18n::message(sideLabel), metrics.bodyTextSize + 1,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-    sideButton->setOnClickListener([this, touchKeyMode, touchConfig]() {
-      auto next = touchConfig;
-      switch (next.sideTapMode) {
-      case input::SideTapMode::EdgeLane:
-        next.sideTapMode = next.tapToScratch ? input::SideTapMode::Scratch
-                                           : input::SideTapMode::Ignore;
-        break;
-      case input::SideTapMode::Scratch:
-        next.sideTapMode = input::SideTapMode::Ignore;
-        break;
-      case input::SideTapMode::Ignore:
-        next.sideTapMode = input::SideTapMode::EdgeLane;
-        break;
-      }
-      commitPlayfieldTouchSetting(touchKeyMode, next);
-    });
-    touchBody->addView(sideButton);
     touchBody->addView(makeWrappedText(
         inputPlayfieldTouchSettingsError.empty()
             ? ""
