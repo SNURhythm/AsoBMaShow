@@ -4746,6 +4746,8 @@ void MainMenuScene::buildFileActionsModal() {
     auto *scroll = new ScrollView();
     scroll->setName("fileActionsScroll");
     scroll->setFlex(1)->setMinHeight(0);
+    // Put the scrollbar in the panel's padding so cards align with the footer.
+    scroll->setMargin(Edge::Right, -12);
     scroll->setContentPadding(Edge::Right, 12);
     auto *content = new View();
     content->setFlexDirection(FlexDirection::Column);
@@ -5003,7 +5005,7 @@ void MainMenuScene::resizeFileActionsModal() {
     auto *content = scroll->getContentView();
     auto *row = content->findViewByName("fileActionCards");
     const auto count = row->getChildren().size();
-    const float contentWidth = std::max(0.0f, width - 54.0f);
+    const float contentWidth = std::max(0.0f, width - 42.0f);
     const float cardsHeight = columns ? 280.0f : count * 164.0f + (count - 1) * 14.0f;
     auto *link = content->findViewByName("fileActionLink");
     const float height = cardsHeight + 224.0f + (link ? 178.0f : 0.0f);
