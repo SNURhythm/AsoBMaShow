@@ -216,7 +216,7 @@ class IOSArtifactAuditTests(unittest.TestCase):
                 "clang",
                 "-arch",
                 "arm64",
-                "-miphoneos-version-min=14.0",
+                "-miphoneos-version-min=15.0",
                 str(source),
                 "-o",
                 str(app / executable),
@@ -233,7 +233,7 @@ class IOSArtifactAuditTests(unittest.TestCase):
             "CFBundleSupportedPlatforms": ["iPhoneOS"],
             "DTPlatformName": "iphoneos",
             "DTSDKName": "iphoneos26.0",
-            "MinimumOSVersion": "14.0",
+            "MinimumOSVersion": "15.0",
             "UIDeviceFamily": [1, 2],
             "CFBundleIcons": {
                 "CFBundlePrimaryIcon": {
@@ -362,7 +362,7 @@ class IOSArtifactAuditTests(unittest.TestCase):
     def test_release_metadata_failures_are_specific(self):
         cases = (
             ("CFBundleShortVersionString", "0.0.2", "version"),
-            ("MinimumOSVersion", "15.0", "minimum OS"),
+            ("MinimumOSVersion", "14.0", "minimum OS"),
             ("DTSDKName", "macosx26.0", "SDK"),
             ("CFBundleIdentifier", "invalid.bundle", "bundle identifier"),
             ("UIDeviceFamily", [1], "device family"),
@@ -466,7 +466,7 @@ class IOSArtifactAuditTests(unittest.TestCase):
                     "clang",
                     "-arch",
                     "x86_64",
-                    "-mios-simulator-version-min=14.0",
+                    "-mios-simulator-version-min=15.0",
                     str(root / "main.c"),
                     "-o",
                     str(simulator),

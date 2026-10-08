@@ -85,7 +85,7 @@ int main() { return 0; }
                 compiler,
                 "-std=c++2b",
                 "-target",
-                "arm64-apple-ios14.0",
+                "arm64-apple-ios15.0",
                 "-isysroot",
                 sdk,
                 "-I",
@@ -169,7 +169,7 @@ int main() { return 0; }
             "audio/AudioWrapper.cpp = sourcecode.cpp.objcpp;", group
         )
 
-    def test_ios_release_contract_remains_version_0_0_1_on_ios_14(self):
+    def test_ios_release_contract_remains_version_0_0_1_on_ios_15(self):
         target_configurations = [
             object_block(
                 self.project,
@@ -182,7 +182,7 @@ int main() { return 0; }
             )
         ]
         for configuration in target_configurations:
-            self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 14.0;", configuration)
+            self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 15.0;", configuration)
             self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
 
     def test_ios_target_enables_lua_gameplay_skins_in_effective_build_settings(self):
@@ -329,7 +329,7 @@ int main() { return 0; }
                     "-std=c++20",
                     "-arch",
                     "arm64",
-                    "-miphoneos-version-min=14.0",
+                    "-miphoneos-version-min=15.0",
                     "-I",
                     str(ROOT / "src"),
                     f'-DASOBMASHOW_BUILD_COMMIT="{commit}"',
@@ -566,13 +566,13 @@ int main() { return 0; }
             self.assertFalse((fixture / "install-called").exists())
             self.assertNotIn("private-device", result.stdout + result.stderr)
 
-    def test_pods_and_generated_bgfx_align_to_ios_14(self):
+    def test_pods_and_generated_bgfx_align_to_ios_15(self):
         podfile = PODFILE.read_text(encoding="utf-8")
-        self.assertIn("platform :ios, '14.0'", podfile)
+        self.assertIn("platform :ios, '15.0'", podfile)
         self.assertIn("IPHONEOS_DEPLOYMENT_TARGET", podfile)
-        self.assertIn("'14.0'", podfile)
+        self.assertIn("'15.0'", podfile)
         init_script = IOS_INIT.read_text(encoding="utf-8")
-        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", init_script)
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0", init_script)
 
     def test_ios_bgfx_build_uses_legacy_reflection_until_ios_17(self):
         script = IOS_INIT.read_text(encoding="utf-8")
@@ -702,11 +702,11 @@ int main() { return 0; }
                 self.assertNotIn(str(removed_xcode), record.read_text(encoding="utf-8"))
             self.assertEqual("preserved", retained_output.read_text(encoding="utf-8"))
 
-    def test_all_ios_build_entrypoints_override_dependencies_to_ios_14(self):
+    def test_all_ios_build_entrypoints_override_dependencies_to_ios_15(self):
         self.assertIn(
-            "IPHONEOS_DEPLOYMENT_TARGET=14.0", DEPLOY_SCRIPT.read_text()
+            "IPHONEOS_DEPLOYMENT_TARGET=15.0", DEPLOY_SCRIPT.read_text()
         )
-        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET=14.0", FASTFILE.read_text())
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET=15.0", FASTFILE.read_text())
 
     def test_ats_exception_is_retained_without_privacy_manifest(self):
         plist = subprocess.run(
@@ -1140,11 +1140,11 @@ class IOSUtf8procSetupTests(unittest.TestCase):
         shutil.copy2(UTF8PROC_LICENSE, license_path)
 
         for triplet, sdk, target in (
-            ("arm64-ios", "iphoneos", "arm64-apple-ios14.0"),
+            ("arm64-ios", "iphoneos", "arm64-apple-ios15.0"),
             (
                 "arm64-ios-simulator",
                 "iphonesimulator",
-                "arm64-apple-ios14.0-simulator",
+                "arm64-apple-ios15.0-simulator",
             ),
         ):
             library_dir = installed / triplet / "lib"
@@ -1329,7 +1329,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             text=True,
         )
 
-    def test_clean_checkout_generates_two_ios14_slices_and_compilable_header(self):
+    def test_clean_checkout_generates_two_ios15_slices_and_compilable_header(self):
         with tempfile.TemporaryDirectory() as temp:
             _, _, count_file, output, _, _ = self.ensure_fixture(Path(temp))
             framework = output / "lib/libutf8proc.xcframework"
@@ -1350,24 +1350,24 @@ class IOSUtf8procSetupTests(unittest.TestCase):
                 libraries["ios-arm64-simulator"]["SupportedPlatformVariant"],
             )
             self.assertEqual(
-                ("IOS", "14.0"),
+                ("IOS", "15.0"),
                 self.archive_build_version(
                     framework / "ios-arm64/libutf8proc.a"
                 ),
             )
             self.assertEqual(
-                ("IOSSIMULATOR", "14.0"),
+                ("IOSSIMULATOR", "15.0"),
                 self.archive_build_version(
                     framework / "ios-arm64-simulator/libutf8proc.a"
                 ),
             )
             self.compile_header(
-                header, "iphoneos", "arm64-apple-ios14.0"
+                header, "iphoneos", "arm64-apple-ios15.0"
             )
             self.compile_header(
                 header,
                 "iphonesimulator",
-                "arm64-apple-ios14.0-simulator",
+                "arm64-apple-ios15.0-simulator",
             )
             self.assertEqual(
                 ["called:arm64-ios", "called:arm64-ios-simulator"],

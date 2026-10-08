@@ -2,7 +2,7 @@
 set -euo pipefail
 
 EXPECTED_VERSION="0.0.1"
-EXPECTED_MIN_OS="14.0"
+EXPECTED_MIN_OS="15.0"
 EXPECTED_BUNDLE_ID="com.snurhythm.AsoBMaShow"
 REQUIRE_SIGNATURE=0
 TEMP_DIR=""
@@ -11,7 +11,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/ios_artifact_audit.sh [--require-signature] APP_OR_IPA
 
-Audits an iOS .app or .ipa for the AsoBMaShow 0.0.1 / iOS 14 release contract.
+Audits an iOS .app or .ipa for the AsoBMaShow 0.0.1 / iOS 15 release contract.
 A privacy manifest is neither required nor synthesized by this gate.
 USAGE
 }

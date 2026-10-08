@@ -161,7 +161,7 @@ platform :ios do
     identity = release_build_identity
     configure_distribution_signing("adhoc")
     xcargs = build_identity_xcargs(
-      "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0",
+      "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=15.0",
       identity
     )
     derived_data_path = firebase_derived_data_path
@@ -210,7 +210,7 @@ platform :ios do
     identity = release_build_identity
     configure_distribution_signing("appstore")
     xcargs = build_identity_xcargs(
-      "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0",
+      "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=15.0",
       identity
     )
     build_app(
