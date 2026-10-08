@@ -150,8 +150,7 @@ Button *findVisibleButton(View *view, const std::string &label) {
   return nullptr;
 }
 
-void clickModalButton(ReplayRecordsModal &modal, const char *key) {
-  auto *button = findVisibleButton(modal.root(), i18n::tr(key));
+void clickButton(Button *button) {
   expect(button != nullptr, "requested option button is visible");
   if (!button) return;
   SDL_Event event{};
@@ -162,6 +161,101 @@ void clickModalButton(ReplayRecordsModal &modal, const char *key) {
   button->handleEvents(event);
   event.type = SDL_MOUSEBUTTONUP;
   button->handleEvents(event);
+}
+
+void clickModalButton(ReplayRecordsModal &modal, const char *key) {
+  clickButton(findVisibleButton(modal.root(), i18n::tr(key)));
+}
+
+View *findVisibleOptionRow(View *view, const std::string &label) {
+  if (!view->getVisible()) return nullptr;
+  for (auto *child : view->getChildren()) {
+    if (auto *text = dynamic_cast<TextView *>(child);
+        text && text->getText() == label) return view;
+    if (auto *row = findVisibleOptionRow(child, label)) return row;
+  }
+  return nullptr;
+}
+
+void hideReplayOption(ReplayRecordsModal &modal, const char *label) {
+  auto *row = findVisibleOptionRow(modal.root(), i18n::tr(label));
+  expect(row != nullptr, "visualization option row is visible");
+  if (row) clickButton(findVisibleButton(row, i18n::tr("records.hide.label")));
+}
+
+void testReplayPreferencesRestoreAcrossModalInstances() {
+  player_settings::ReplayPreferences saved;
+  const auto record = modernChartRecord();
+  ReplayVideoExportOptions exported;
+  int saves = 0;
+  auto callbacks = [&] {
+    return ReplayRecordsModalCallbacks{
+        .loadRecords = [&](const ChartMetaRecord &) {
+          return std::vector<ResultRecordSummary>{record};
+        },
+        .exportModernChart = [&](const ChartMetaRecord &,
+                                 const ModernChartResultRecord &,
+                                 ReplayVideoExportOptions options) { exported = options; },
+        .loadPreferences = [&] { return saved; },
+        .savePreferences = [&](const player_settings::ReplayPreferences &preferences) {
+          saved = preferences;
+          ++saves;
+        }};
+  };
+  {
+    View parent(0, 0, rendering::design_width, rendering::design_height);
+    auto modal = ReplayRecordsModal::Create(&parent, callbacks());
+    modal->showChart({});
+    modal->selectRecord(record);
+    clickModalButton(*modal, "records.export_video.label");
+    clickButton(findVisibleButton(modal->root(), "60 fps"));
+    clickButton(findVisibleButton(modal->root(), "1080p"));
+    hideReplayOption(*modal, "records.touch_points.label");
+    hideReplayOption(*modal, "records.ghosts.label");
+    clickModalButton(*modal, "settings.controls.keysound.auto_timed.label");
+    expect(saves == 5 && saved.exportFps == 60 && !saved.exportFullResolution &&
+               !saved.renderTouchPoints && !saved.renderGhosts && saved.autoKeySound,
+           "each replay option change is saved immediately");
+  }
+  {
+    View parent(0, 0, rendering::design_width, rendering::design_height);
+    auto modal = ReplayRecordsModal::Create(&parent, callbacks());
+    modal->showChart({});
+    modal->selectRecord(record);
+    expect(modal->autoKeySound() && !modal->renderTouchPoints() &&
+               !modal->renderReplayGhosts(),
+           "a new modal restores watch preferences from shared settings");
+    clickModalButton(*modal, "records.export_video.label");
+    clickModalButton(*modal, "records.export_video.label");
+    expect(exported.fps == 60 && exported.height == 1080 &&
+               !exported.renderTouchPoints && !exported.renderReplayGhosts &&
+               exported.autoKeySound,
+           "a new modal restores all five preferences for export");
+    modal->returnToList();
+    clickModalButton(*modal, "records.export_video.label");
+    clickModalButton(*modal, "records.export_video.label");
+    expect(exported.fps == 60 && exported.height == 1080,
+           "reopening the export page preserves FPS and resolution");
+    expect(saves == 5, "loading and navigating options does not rewrite settings");
+
+    // Reloading a retained modal must use the active profile's preferences.
+    saved = {};
+    modal->hide();
+    modal->showChart({});
+    modal->selectRecord(record);
+    const ResultRecordSummary autoPlay{
+        .identity = AutoPlayRecordId{},
+        .capabilities = {.watch = true, .videoExport = true},
+        .autoPlay = true};
+    modal->selectRecord(autoPlay);
+    expect(modal->autoKeySound() && !modal->renderTouchPoints() &&
+               !modal->renderReplayGhosts(), "autoplay applies its temporary overrides");
+    modal->selectRecord(record);
+    expect(!modal->autoKeySound() && modal->renderTouchPoints() &&
+               modal->renderReplayGhosts(),
+           "autoplay leaves the active profile's saved visualization choices intact");
+    expect(saves == 5, "autoplay overrides are never persisted");
+  }
 }
 
 void testKeysoundSelectionFlowsThroughWatchAndExport() {
@@ -197,10 +291,10 @@ void testKeysoundSelectionFlowsThroughWatchAndExport() {
   nextChart.meta.Title = "Another chart";
   modal->showChart(nextChart);
   modal->selectRecord(record);
-  expect(!modal->autoKeySound(), "reopening records restores input timing");
+  expect(modal->autoKeySound(), "reopening records retains the keysound choice");
   clickModalButton(*modal, "records.export_video.label");
   clickModalButton(*modal, "records.export_video.label");
-  expect(!exportedAuto, "reopened export does not reuse the previous chart timing");
+  expect(exportedAuto, "reopened export reuses the saved keysound choice");
 }
 
 void testCourseTargetsHaveIndependentIdentity() {
@@ -241,6 +335,7 @@ int main() {
     std::cerr << "FAIL: headless bgfx did not initialize\n";
     return 1;
   }
+  testReplayPreferencesRestoreAcrossModalInstances();
   testKeysoundSelectionFlowsThroughWatchAndExport();
   testCourseTargetsHaveIndependentIdentity();
   testSelectedModernRecordDispatchesWatchAndExport();

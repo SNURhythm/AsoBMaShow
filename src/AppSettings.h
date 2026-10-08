@@ -5,6 +5,7 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "settings/ReplayPreferences.h"
 #include "settings/BuiltInNotes.h"
 #include "settings/BuiltInJudgeLine.h"
 #include "settings/BuiltInLaneAppearance.h"
@@ -153,6 +154,7 @@ public:
 
   player_settings::AudioVideoSettings audioVideo =
       player_settings::defaultAudioVideoSettingsForPlatform();
+  player_settings::ReplayPreferences replayPreferences;
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
   // Matches Beatoraja PlayConfig.duration. Green number is the derived live

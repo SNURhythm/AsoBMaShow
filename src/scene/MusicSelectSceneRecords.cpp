@@ -42,7 +42,6 @@ void MusicSelectScene::openChartRecords() {
   recordsIrRevisions_.clear();
   if (playOptionsModal_ != nullptr) playOptionsModal_->hide();
   if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
-  recordsModal_->setTouchVisualizationEnabled(context.settings.touchVisualizationEnabled);
   recordsModal_->showChart(*record);
 }
 
@@ -701,6 +700,11 @@ void MusicSelectScene::updateRecordServices() {
 
 ReplayRecordsModalCallbacks MusicSelectScene::makeRecordsModalCallbacks() {
   ReplayRecordsModalCallbacks callbacks;
+  callbacks.loadPreferences = [this] { return context.settings.replayPreferences; };
+  callbacks.savePreferences = [this](const player_settings::ReplayPreferences &preferences) {
+    context.settings.replayPreferences = preferences;
+    if (!context.saveSettings()) SDL_Log("Failed to save replay preferences");
+  };
   callbacks.loadRecords = [this](const ChartMetaRecord &record) {
     return loadRecordsForSelector(record);
   };

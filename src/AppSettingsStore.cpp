@@ -752,6 +752,12 @@ json settingsToJson(const AppSettings &settings) {
       {"constantScroll", settings.constantScroll},
       {"constantFadeInMilliseconds", settings.constantFadeInMilliseconds},
       {"touchVisualizationEnabled", settings.touchVisualizationEnabled},
+      {"replayPreferences",
+       {{"exportFps", settings.replayPreferences.exportFps},
+        {"exportFullResolution", settings.replayPreferences.exportFullResolution},
+        {"renderTouchPoints", settings.replayPreferences.renderTouchPoints},
+        {"renderGhosts", settings.replayPreferences.renderGhosts},
+        {"autoKeySound", settings.replayPreferences.autoKeySound}}},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
       {"findBmsSkipUnarchivingForNonSolidArchives",
        settings.findBmsSkipUnarchivingForNonSolidArchives},
@@ -999,6 +1005,24 @@ AppSettings settingsFromJson(const json &document,
             settings.constantFadeInMilliseconds, diagnostics);
   readValue(document, "touchVisualizationEnabled",
             settings.touchVisualizationEnabled, diagnostics);
+  settings.replayPreferences.renderTouchPoints = settings.touchVisualizationEnabled;
+  if (const auto preferences = document.find("replayPreferences");
+      preferences != document.end()) {
+    if (!preferences->is_object()) {
+      invalidValue("replayPreferences", "expected object", diagnostics);
+    } else {
+      readValue(*preferences, "exportFps", settings.replayPreferences.exportFps,
+                diagnostics);
+      readValue(*preferences, "exportFullResolution",
+                settings.replayPreferences.exportFullResolution, diagnostics);
+      readValue(*preferences, "renderTouchPoints",
+                settings.replayPreferences.renderTouchPoints, diagnostics);
+      readValue(*preferences, "renderGhosts",
+                settings.replayPreferences.renderGhosts, diagnostics);
+      readValue(*preferences, "autoKeySound",
+                settings.replayPreferences.autoKeySound, diagnostics);
+    }
+  }
   readValue(document, "archiveChartPreviewEnabled",
             settings.archiveChartPreviewEnabled, diagnostics);
   readValue(document, "findBmsSkipUnarchivingForNonSolidArchives",

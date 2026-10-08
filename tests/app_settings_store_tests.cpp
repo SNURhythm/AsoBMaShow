@@ -182,6 +182,7 @@ void testLegacyFixtureLoadsEverySetting() {
   // The retired floating-cover UI field must not silently opt legacy users
   // into current-BPM Hi-Speed Auto Adjust.
   expected.hispeedAutoAdjust = false;
+  expected.replayPreferences.renderTouchPoints = false;
   expected.sanitize();
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "complete legacy fixture loads");
@@ -1227,6 +1228,48 @@ void testIpadGestureReminderRoundTrip() {
          "explicitly disabling the reminder survives settings restart");
 }
 
+void testReplayPreferencesSurviveSettingsRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "replay-options.json";
+  const nlohmann::json preferences = {
+      {"exportFps", 60}, {"exportFullResolution", false},
+      {"renderTouchPoints", false}, {"renderGhosts", false},
+      {"autoKeySound", true}};
+  writeFile(path, nlohmann::json({{"schemaVersion", 3},
+                                {"replayPreferences", preferences}}).dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error),
+         "replay preferences save: " + error);
+  const auto saved = nlohmann::json::parse(readFile(path));
+  expect(saved.contains("replayPreferences") &&
+             saved["replayPreferences"] == preferences,
+         "all five replay choices survive loading and saving settings");
+  const auto reloaded = AppSettingsStore::Load(path);
+  expect(reloaded.settings.replayPreferences.exportFps == 60 &&
+             !reloaded.settings.replayPreferences.exportFullResolution &&
+             !reloaded.settings.replayPreferences.renderTouchPoints &&
+             !reloaded.settings.replayPreferences.renderGhosts &&
+             reloaded.settings.replayPreferences.autoKeySound,
+         "saved replay preferences restore after restarting");
+
+  writeFile(path, R"({"schemaVersion":3,"touchVisualizationEnabled":false})");
+  const auto old = AppSettingsStore::Load(path);
+  expect(old.settings.replayPreferences.exportFps == 120 &&
+             old.settings.replayPreferences.exportFullResolution &&
+             !old.settings.replayPreferences.renderTouchPoints &&
+             old.settings.replayPreferences.renderGhosts &&
+             !old.settings.replayPreferences.autoKeySound,
+         "old settings inherit touch visualization and keep other replay defaults");
+  writeFile(path, R"({"schemaVersion":3,"replayPreferences":{
+      "exportFps":75,"exportFullResolution":"bad","renderGhosts":false}})");
+  const auto malformed = AppSettingsStore::Load(path);
+  expect(malformed.settings.replayPreferences.exportFps == 120 &&
+             malformed.settings.replayPreferences.exportFullResolution &&
+             !malformed.settings.replayPreferences.renderGhosts,
+         "invalid replay settings use supported defaults without losing valid fields");
+}
+
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   AppSettings defaults;
   expect(!defaults.findBmsSkipUnarchivingForNonSolidArchives,
@@ -1580,6 +1623,7 @@ void testVersionFixturesAndNoRewrite() {
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
   expectedV0.skinBgaMode = 2;
   expectedV0.hispeedAutoAdjust = false;
+  expectedV0.replayPreferences.renderTouchPoints = false;
   expectedV0.showPastNotes = false;
   expectedV0.notesDisplayTimingMilliseconds = 0;
   expectedV0.constantFadeInMilliseconds = 100;
@@ -2493,6 +2537,7 @@ int main() {
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();
+  testReplayPreferencesSurviveSettingsRoundTrip();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();

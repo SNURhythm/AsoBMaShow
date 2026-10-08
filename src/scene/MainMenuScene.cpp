@@ -5979,8 +5979,6 @@ void MainMenuScene::openReplayRecordsForSelection() {
     return;
   }
   replayIrObservedRevisions.clear();
-  recordsModal_->setTouchVisualizationEnabled(
-      context.settings.touchVisualizationEnabled);
   recordsModal_->showChart(*selectedMeta);
   setReplayButtonVisible(true);
 }
@@ -6067,6 +6065,11 @@ void MainMenuScene::applyReplayFileDocumentHandoff() {
 
 ReplayRecordsModalCallbacks MainMenuScene::makeRecordsModalCallbacks() {
   ReplayRecordsModalCallbacks callbacks;
+  callbacks.loadPreferences = [this] { return context.settings.replayPreferences; };
+  callbacks.savePreferences = [this](const player_settings::ReplayPreferences &preferences) {
+    context.settings.replayPreferences = preferences;
+    if (!context.saveSettings()) SDL_Log("Failed to save replay preferences");
+  };
   callbacks.loadRecords = [this](const ChartMetaRecord &record) {
     return loadRecordsForModal(record);
   };
