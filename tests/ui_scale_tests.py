@@ -80,7 +80,7 @@ struct MainMenuScene {
 };
 PRODUCTION_METHOD
 int main() {
-  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),title("mainMenuTitle"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
+  View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
@@ -91,7 +91,6 @@ int main() {
   library.setPadding(Edge::All,14);button.setWidth(292)->setHeight(84);
   songs.setFlex(1)->setMinWidth(0)->setMinHeight(0)->setPadding(Edge::All,16);
   songs.add(toolbar);toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
-  toolbar.add(title);title.setMinWidth(280)->setFlex(1);
   std::array<View,4> headerButtons={View("add"),View("refresh"),View("search"),View("tasks")};
   int widths[]={112,122,154,142};
   for(int i=0;i<4;++i){toolbar.add(headerButtons[i]);headerButtons[i].setWidth(widths[i]);}
@@ -100,12 +99,12 @@ int main() {
   controls.setFlex(1)->setMinWidth(0)->setMinHeight(0);controls.add(controlsScroll);
   controlsScroll.setWidthPercent(100)->setFlex(1)->setMinHeight(0);
   primary.setFlexShrink(0);scroll.setFlex(1)->setMinWidth(0)->setMinHeight(0);
-  primary.add(start);primary.add(records);primary.add(settings);
+  primary.add(start);primary.add(findSlot);primary.add(records);primary.add(settings);
   records.setFlexDirection(FlexDirection::Row);records.add(replaySlot);records.add(ranking);
   replaySlot.setFlex(1)->setMinWidth(0);ranking.setFlex(1)->setMinWidth(0);
   replaySlot.add(replay);replay.setWidthPercent(100);
-  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);content.add(findSlot);
-  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);
+  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);
+  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
   MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
   for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
@@ -116,6 +115,7 @@ int main() {
     YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
     scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
     scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
+    assert(findSlot.parent==&primary && "download must remain with the primary action when rotating");
     float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
     if(dimensions.second>dimensions.first) {
       const float usable=dimensions.second-106-24;
@@ -134,7 +134,7 @@ int main() {
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
       assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
       assert(YGNodeLayoutGetTop(details.node)>=YGNodeLayoutGetTop(browser.node)+bh);
-      assert(!title.visible && chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&controlsContent);
+      assert(chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&controlsContent);
       assert(primary.parent==&controls && settings.parent==&records);
       assert(YGNodeLayoutGetLeft(headerButtons.back().node)+YGNodeLayoutGetWidth(headerButtons.back().node)<=YGNodeLayoutGetWidth(toolbar.node)+1);
       assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==136);
@@ -147,7 +147,7 @@ int main() {
              YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 16);
       assert(YGNodeLayoutGetWidth(library.node)==320 && YGNodeLayoutGetWidth(details.node)==500);
       assert(std::abs(bh-dh)<1);
-      assert(title.visible && !controls.visible && chart.best.parent==&chart && options.parent==&content && tools.parent==&content);
+      assert(!controls.visible && chart.best.parent==&chart && options.parent==&content && tools.parent==&content);
       assert(primary.parent==&details && settings.parent==&primary);
       assert(YGNodeLayoutGetHeight(primary.node)==280 && YGNodeLayoutGetHeight(button.node)==84);
     }

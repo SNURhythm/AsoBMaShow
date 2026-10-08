@@ -653,7 +653,6 @@
 {"menu.selected_music_select_skin_service_unavailable.message", "The selected music-select skin service is unavailable.", "선택한 곡 선택 스킨 서비스를 사용할 수 없습니다.", "選択した選曲スキンのサービスを利用できません。", "所选选曲皮肤服务不可用。", "所選選曲皮膚服務無法使用。"},
 {"menu.settings.label", "Settings", "설정", "設定", "设置", "設定"},
 {"menu.show_same_folder.label", "Show Same Folder", "같은 폴더 보기", "同じフォルダーを表示", "显示同文件夹", "顯示同資料夾"},
-{"menu.song_select.label", "Song Select", "곡 선택", "選曲", "选曲", "選曲"},
 {"menu.start.label", "Start", "시작", "開始", "开始", "開始"},
 {"menu.stop.label", "Stop", "정지", "停止", "停止", "停止"},
 {"menu.stopped.message", "Stopped.", "정지했습니다.", "停止しました。", "已停止。", "已停止。"},

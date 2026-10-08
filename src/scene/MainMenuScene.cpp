@@ -1474,14 +1474,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->setGap(12);
   libraryHeader->setHeight(kMenuActionHeight);
 
-  auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
-  libraryTitle->setName("mainMenuTitle");
-  libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
-  libraryTitle->setThemedColor(ui_theme::textPrimary);
-  libraryTitle->setVAlign(TextView::MIDDLE);
-  libraryTitle->setFlex(1);
-  libraryHeader->addView(libraryTitle);
-
   parseLogButton = makeModalButton(i18n::message("menu.log.label"), 20, &parseLogButtonText);
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(kMenuActionHeight);
@@ -1811,20 +1803,21 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   replayButtonSlot->addView(replayButton);
 
   findBmsButtonSlot = new View();
-  findBmsButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0);
+  findBmsButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0)->setFlexShrink(0);
   findBmsButtonSlot->setVisible(false);
+  findBmsButtonSlot->setDisplay(YGDisplayNone);
   findBmsButtonSlot->setAlignItems(YGAlignStretch);
 
-  findBmsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
-  findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  findBmsButton = new Button(0, 0, kDetailsContentWidth, 88);
+  findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
   findBmsButton->setContentView(findBmsButtonText);
   styleThemedActionButton(findBmsButton, findBmsButtonText, true,
-                          ui_theme::successAction, ui_theme::successActionHover,
-                          ui_theme::successActionPressed,
-                          ui_theme::accentBorder);
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -1914,7 +1907,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       overlayPortal, std::move(revealMenuCallbacks));
 
   rightContent->addView(unzipButtonSlot);
-  rightContent->addView(findBmsButtonSlot);
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   settingsButton->setName("mainMenuSettings");
@@ -1949,6 +1941,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   primaryActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
   primaryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
   primaryActions->addView(startButton);
+  primaryActions->addView(findBmsButtonSlot);
   primaryActions->addView(recordActions);
   primaryActions->addView(settingsButton);
   right->addView(primaryActions);
@@ -2062,8 +2055,8 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
   auto *target = portrait ? detailsControlsContent_ : detailsContent_;
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
-  for (auto *view : std::array<View *, 4>{readyPlayOptionsButton, chartActionsRow,
-           unzipButtonSlot, findBmsButtonSlot}) {
+  for (auto *view : std::array<View *, 3>{readyPlayOptionsButton, chartActionsRow,
+           unzipButtonSlot}) {
     view->moveTo(*target);
   }
   settings->moveTo(portrait ? *records : *primary);
@@ -2088,20 +2081,19 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
     else button->setWidth(kDetailsContentWidth);
   }
   const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
-  startButton->setHeight(portrait ? height : 88);
-  for (auto *view : std::array<View *, 8>{replayButtonSlot, replayButton, rankingsButton,
-           settings, chartActionsRow, unzipButton, findBmsButton, searchBox}) view->setHeight(height);
+  const int primaryHeight = portrait ? height : 88;
+  startButton->setHeight(primaryHeight);
+  findBmsButton->setHeight(primaryHeight);
+  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
+  for (auto *view : std::array<View *, 7>{replayButtonSlot, replayButton, rankingsButton,
+           settings, chartActionsRow, unzipButton, searchBox}) view->setHeight(height);
   for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
-  for (auto *slot : {unzipButtonSlot, findBmsButtonSlot})
-    slot->setHeight(slot->getVisible() ? height : 0);
+  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? height : 0);
   for (auto *button : {chartFilterButton, chartSortButton})
     button->setWidth(height)->setHeight(height);
   auto *toolbar = rootLayout->findViewByName("mainMenuToolbar");
-  auto *title = rootLayout->findViewByName("mainMenuTitle");
-  title->setVisible(!portrait);
-  title->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
   toolbar->setHeight(height);
-  for (auto *view : toolbar->getChildren()) if (view != title) view->setHeight(height);
+  for (auto *view : toolbar->getChildren()) view->setHeight(height);
   for (auto *view : rootLayout->findViewByName("mainMenuLibraryActions")->getChildren())
     view->setHeight(height);
   readyPlayOptionsButton->setHeight(portrait ? 96 : 122);
@@ -4667,7 +4659,14 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   }
 
   findBmsButtonSlot->setVisible(visible);
-  findBmsButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
+  findBmsButtonSlot->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+  const int primaryHeight = rendering::window_height > rendering::window_width
+                                ? kPortraitMenuActionHeight : 88;
+  findBmsButtonSlot->setHeight(visible ? primaryHeight : 0);
+  if (startButton != nullptr) {
+    startButton->setVisible(!visible);
+    startButton->setDisplay(visible ? YGDisplayNone : YGDisplayFlex);
+  }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
