@@ -245,13 +245,28 @@ void SettingsScene::commitVirtualControllerSetting(
   requestInputViewRebuild();
 }
 
+void SettingsScene::commitPlayfieldTouchSetting(
+    int keyMode, input::PlayfieldTouchConfig config) {
+  if (inputCaptureController->updatePlayfieldTouchConfig(keyMode, config)) {
+    inputPlayfieldTouchSettingsError.clear();
+  } else {
+    inputPlayfieldTouchSettingsError =
+        inputCaptureController->lastError().empty()
+            ? i18n::tr("settings.input.failed_save_input_profile.message")
+            : std::string(inputCaptureController->lastError());
+  }
+  requestInputViewRebuild();
+}
+
 std::string SettingsScene::inputViewSignature() const {
   if (inputCaptureController == nullptr) {
     return {};
   }
   const auto &controller = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
+  const auto &touch = context.inputProfile.playfieldTouchForKeyMode(inputSelectedKeyMode);
   std::ostringstream output;
-  output << inputSelectedPlayer << ':' << inputSelectedKeyMode << ':'
+  output << touch.tapToScratch << ':' << static_cast<int>(touch.sideTapMode) << ':'
+         << inputPlayfieldTouchSettingsError << ':' << inputSelectedPlayer << ':' << inputSelectedKeyMode << ':'
          << inputSelectedDeviceId << ':'
          << static_cast<int>(inputCaptureController->state()) << ':'
          << inputCaptureController->lastError() << ':'
@@ -567,6 +582,71 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   cards->addView(makeCard(
       metrics, i18n::message("settings.input.binding_scope.label"), i18n::message("settings.input.choose_player_key_mode_device.message"),
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
+  constexpr bool showPlayfieldTouchSettings = true;
+#else
+  constexpr bool showPlayfieldTouchSettings = false;
+#endif
+  if (showPlayfieldTouchSettings) {
+    auto *touchBody = new View();
+    touchBody->setFlexDirection(FlexDirection::Column);
+    touchBody->setGap(metrics.compact ? 10.0F : 14.0F);
+    const int touchKeyMode = inputSelectedKeyMode;
+    const auto touchConfig = context.inputProfile.playfieldTouchForKeyMode(touchKeyMode);
+    if (input::PlayfieldTouchConfig::supportsTapToScratch(touchKeyMode)) {
+      auto *tapToggle = makeControlButton(
+          bodyWidth, metrics.actionButtonHeight,
+          makeText(i18n::message(touchConfig.tapToScratch
+                       ? "settings.input.tap_scratch_on.label"
+                       : "settings.input.tap_scratch_off.label"),
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      tapToggle->setOnClickListener([this, touchKeyMode, touchConfig]() {
+        auto next = touchConfig;
+        next.tapToScratch = !next.tapToScratch;
+        commitPlayfieldTouchSetting(touchKeyMode, next);
+      });
+      touchBody->addView(tapToggle);
+    }
+    const char *sideLabel = touchConfig.sideTapMode == input::SideTapMode::Scratch
+                               ? "settings.input.side_taps_scratch.label"
+                           : touchConfig.sideTapMode == input::SideTapMode::Ignore
+                               ? "settings.input.side_taps_ignore.label"
+                               : "settings.input.side_taps_edge.label";
+    auto *sideButton = makeControlButton(
+        bodyWidth, metrics.actionButtonHeight,
+        makeText(i18n::message(sideLabel), metrics.bodyTextSize + 1,
+                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+    sideButton->setOnClickListener([this, touchKeyMode, touchConfig]() {
+      auto next = touchConfig;
+      switch (next.sideTapMode) {
+      case input::SideTapMode::EdgeLane:
+        next.sideTapMode = next.tapToScratch ? input::SideTapMode::Scratch
+                                           : input::SideTapMode::Ignore;
+        break;
+      case input::SideTapMode::Scratch:
+        next.sideTapMode = input::SideTapMode::Ignore;
+        break;
+      case input::SideTapMode::Ignore:
+        next.sideTapMode = input::SideTapMode::EdgeLane;
+        break;
+      }
+      commitPlayfieldTouchSetting(touchKeyMode, next);
+    });
+    touchBody->addView(sideButton);
+    touchBody->addView(makeWrappedText(
+        inputPlayfieldTouchSettingsError.empty()
+            ? ""
+            : i18n::message("settings.input.setting.error",
+                            {{"prefix", i18n::message("settings.input.not_saved.prefix")},
+                             {"error", inputPlayfieldTouchSettingsError}}),
+        metrics.smallTextSize, ui_theme::coral()));
+    cards->addView(makeCard(
+        metrics, i18n::message("settings.input.playfield_touch.label"),
+        gameplay::keyModeLabel(touchKeyMode), touchBody,
+        metrics.compact ? 280 : 250, metrics.cardsWidth));
+  }
 
   if (gameplay::virtualControllerTouchInputSupported() &&
       gameplay::supportsVirtualControllerKeyMode(inputSelectedKeyMode)) {

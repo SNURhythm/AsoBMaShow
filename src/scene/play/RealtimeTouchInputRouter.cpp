@@ -433,6 +433,42 @@ hitTestRealtimeTouchLayout(const RealtimeTouchLayout &layout, float x, float y,
   if (firstAuthoredSkin.has_value()) {
     return firstAuthoredSkin;
   }
+  // Side policies concern the authored playfield, never virtual controls or
+  // gaps between authored lanes. Project sloped boundaries at this touch's Y.
+  if (layout.touchConfig.sideTapMode != input::SideTapMode::EdgeLane) {
+    float left = std::numeric_limits<float>::infinity();
+    float right = -std::numeric_limits<float>::infinity();
+    const auto edgeX = [y](RealtimeTouchPoint bottom, RealtimeTouchPoint top) {
+      const float height = top.y - bottom.y;
+      const float fraction = std::abs(height) <= kHitTestEpsilon
+                                 ? 0.0F : std::clamp((y - bottom.y) / height, 0.0F, 1.0F);
+      return std::lerp(bottom.x, top.x, fraction);
+    };
+    for (const auto &region : layout.laneRegions) {
+      if (region.requiresInside) continue;
+      const float a = edgeX(region.bottomLeft, region.topLeft);
+      const float b = edgeX(region.bottomRight, region.topRight);
+      left = std::min(left, std::min(a, b));
+      right = std::max(right, std::max(a, b));
+    }
+    if (left <= right && (x < left || x > right)) {
+      if (layout.touchConfig.sideTapMode == input::SideTapMode::Ignore) return std::nullopt;
+      if (layout.touchConfig.tapToScratch) {
+        std::optional<std::size_t> nearestScratch;
+        float distance = std::numeric_limits<float>::infinity();
+        for (std::size_t index = 0; index < layout.laneRegions.size(); ++index) {
+          const auto &region = layout.laneRegions[index];
+          if (region.requiresInside || !region.scratch) continue;
+          const float candidate = std::abs(center(region).x - x);
+          if (candidate < distance) {
+            distance = candidate;
+            nearestScratch = index;
+          }
+        }
+        return nearestScratch;
+      }
+    }
+  }
   if (requireInside) {
     return std::nullopt;
   }
@@ -629,6 +665,7 @@ bool RealtimeTouchInputRouter::beginLane(
   }
   finger.lane = lane;
   finger.scratch = region.scratch;
+  finger.tapScratch = region.scratch && !region.requiresInside && layout_.touchConfig.tapToScratch;
   finger.spinScratch = region.scratch && region.spinScratch &&
                        region.circle.has_value();
   finger.invertFlickScratchDirection = region.scratch && !finger.spinScratch &&
@@ -652,7 +689,7 @@ bool RealtimeTouchInputRouter::beginLane(
     }
   }
   finger.cancelDeadlineMicros = 0;
-  if (finger.scratch) {
+  if (finger.scratch && !finger.tapScratch) {
     return true;
   }
   if (!emit(RealtimeGameplayInputType::Press, lane, finger.replayControl,
@@ -679,6 +716,7 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   finger.pressed = false;
   finger.scratch = false;
   finger.spinScratch = false;
+  finger.tapScratch = false;
   finger.spinAngleInitialized = false;
   finger.spinRadiusX = 0.0F;
   finger.spinRadiusY = 0.0F;
@@ -691,6 +729,11 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
 
 bool RealtimeTouchInputRouter::handleScratchMove(
     FingerState &finger, const RealtimeTouchSample &sample) noexcept {
+  if (finger.tapScratch) {
+    finger.lastX = sample.normalizedX;
+    finger.lastY = sample.normalizedY;
+    return true;
+  }
   if (finger.spinScratch) {
     return handleSpinScratchMove(finger, sample);
   }
@@ -958,7 +1001,10 @@ bool RealtimeTouchInputRouter::consumeImpl(
             ? nextRegion.replayControl
             : replay::logicalControlForChartLane(layout_.keyMode, nextLane,
                                                  nextRegion.scratch);
+    const bool nextTapScratch = nextRegion.scratch && !nextRegion.requiresInside &&
+                                layout_.touchConfig.tapToScratch;
     if (finger->lane == nextLane && finger->scratch == nextRegion.scratch &&
+        finger->tapScratch == nextTapScratch &&
         finger->replayControl == nextReplayControl) {
       if (finger->scratch) {
         return handleScratchMove(*finger, sample);

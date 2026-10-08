@@ -309,6 +309,7 @@ private:
   float inputGyroscopeAxisValue = 0.0F;
   std::string inputGyroscopeSettingsError;
   std::string inputVirtualControllerSettingsError;
+  std::string inputPlayfieldTouchSettingsError;
   bool inputVirtualControllerEditorVisible = false;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
@@ -504,6 +505,7 @@ private:
   void requestInputViewRebuild();
   void commitGyroscopeTurntableSetting(bool stepAngle, std::string_view text);
   void commitVirtualControllerSetting(int keyMode, input::VirtualControllerConfig config);
+  void commitPlayfieldTouchSetting(int keyMode, input::PlayfieldTouchConfig config);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();

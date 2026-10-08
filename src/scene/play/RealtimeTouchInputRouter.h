@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RealtimeGameplayWorker.h"
+#include "../../input/PlayfieldTouchConfig.h"
 #include "../../skin/SkinPresentationTypes.h"
 
 #include <array>
@@ -63,6 +64,7 @@ struct RealtimeTouchLayout {
   std::size_t laneCount = 0;
   int keyMode = 7;
   bool dragMode = false;
+  input::PlayfieldTouchConfig touchConfig;
 };
 
 // Shared by native realtime ingress and SDL's legacy gameplay handler. Points
@@ -300,6 +302,7 @@ private:
     bool pressed = false;
     bool scratch = false;
     bool spinScratch = false;
+    bool tapScratch = false;
     bool invertFlickScratchDirection = false;
     int scratchDirection = 0;
     std::optional<replay::LogicalControl> replayControl;

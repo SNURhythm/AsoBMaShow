@@ -3,6 +3,7 @@
 #include "GyroscopeTurntable.h"
 #include "InputTypes.h"
 #include "VirtualControllerConfig.h"
+#include "PlayfieldTouchConfig.h"
 
 #include <functional>
 #include <map>
@@ -12,7 +13,7 @@
 #include <vector>
 
 struct InputProfile {
-  static constexpr int kSchemaVersion = 9;
+  static constexpr int kSchemaVersion = 10;
 
   int schemaVersion = kSchemaVersion;
   input::GyroscopeTurntableConfig gyroscopeTurntable;
@@ -29,6 +30,14 @@ struct InputProfile {
     if (found != virtualControllers.end()) return found->second;
     static const input::VirtualControllerConfig disabled;
     return disabled;
+  }
+  std::map<int, input::PlayfieldTouchConfig> playfieldTouch;
+
+  const input::PlayfieldTouchConfig &playfieldTouchForKeyMode(int keyMode) const {
+    const auto found = playfieldTouch.find(keyMode);
+    if (found != playfieldTouch.end()) return found->second;
+    static const input::PlayfieldTouchConfig defaults;
+    return defaults;
   }
   std::vector<input::InputBinding> bindings;
 

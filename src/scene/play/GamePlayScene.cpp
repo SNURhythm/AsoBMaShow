@@ -995,9 +995,11 @@ std::optional<gameplay::RealtimeTouchLayout>
 buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
                          bool dragMode, const bms_parser::ChartMeta &chartMeta,
                          const input::VirtualControllerConfig &virtualController,
+                         input::PlayfieldTouchConfig touchConfig,
                          const gameplay::RealtimeTouchUiTransform &transform) {
   auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
+  layout.touchConfig = touchConfig;
   const auto controller = currentVirtualControllerLayout(
       virtualController, chartMeta.KeyMode, transform);
   auto controllerRegions =
@@ -2075,6 +2077,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     touchLayout = buildRealtimeTouchLayout(
         *presentation, assist_options::isDragMode(options.assistOption),
         chart->Meta, virtualControllerConfig,
+        context.inputProfile.playfieldTouchForKeyMode(presentationKeyMode()),
         realtimeTouchUiTransform());
     if (!touchLayout.has_value()) {
       realtimeGameplayAuthorityWaitingForSkinGeometry =
@@ -2663,6 +2666,7 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
   const auto layout = buildRealtimeTouchLayout(
       *presentation, assist_options::isDragMode(options.assistOption),
       chart->Meta, virtualControllerConfig,
+      context.inputProfile.playfieldTouchForKeyMode(presentationKeyMode()),
       currentKey.uiTransform);
   if (!layout.has_value()) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,

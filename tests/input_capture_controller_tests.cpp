@@ -111,6 +111,7 @@ bool sameProfile(const InputProfile &left, const InputProfile &right) {
   if (left.schemaVersion != right.schemaVersion ||
       left.gyroscopeTurntable != right.gyroscopeTurntable ||
       left.virtualControllers != right.virtualControllers ||
+      left.playfieldTouch != right.playfieldTouch ||
       left.bindings.size() != right.bindings.size()) {
     return false;
   }
@@ -275,6 +276,42 @@ void testVirtualControllerConfigUpdateIsSanitizedAndTransactional() {
               saves == 3 && sameProfile(profile, beforeFailure) &&
               controller.lastError() == "injected virtual controller save failure",
           "a failed virtual controller save leaves the live profile unchanged");
+}
+
+void testPlayfieldTouchConfigIsIsolatedAndTransactional() {
+  RegistryHarness harness;
+  InputProfile profile = makeDefaultInputProfile();
+  const auto controllers = profile.virtualControllers;
+  bool allowSave = true;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+      [&](const InputProfile &, std::string &error) {
+        ++saves;
+        if (!allowSave) error = "disk full";
+        return allowSave;
+      });
+  const input::PlayfieldTouchConfig enabled{
+      .tapToScratch = true, .sideTapMode = input::SideTapMode::Scratch};
+  require(controller.updatePlayfieldTouchConfig(7, enabled) && saves == 1 &&
+              profile.playfieldTouchForKeyMode(7) == enabled &&
+              profile.playfieldTouchForKeyMode(5) == input::PlayfieldTouchConfig{} &&
+              profile.virtualControllers == controllers,
+          "playfield touch edits are per keymode and preserve virtual controllers");
+  require(controller.updatePlayfieldTouchConfig(7, enabled) && saves == 1,
+          "unchanged touch config does not save again");
+  const auto before = profile;
+  allowSave = false;
+  require(!controller.updatePlayfieldTouchConfig(7, {}) && saves == 2 &&
+              sameProfile(profile, before) && controller.lastError() == "disk full",
+          "failed touch save leaves all live settings intact");
+  allowSave = true;
+  require(controller.updatePlayfieldTouchConfig(7,
+              {.sideTapMode = input::SideTapMode::Scratch}) &&
+              profile.playfieldTouchForKeyMode(7) == input::PlayfieldTouchConfig{},
+          "disabling tap scratch resets its dependent side option");
+  require(controller.updatePlayfieldTouchConfig(-7, enabled) &&
+              profile.playfieldTouchForKeyMode(-7) == input::PlayfieldTouchConfig{},
+          "scratchless keymodes cannot enable tap scratch");
 }
 
 void testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess() {
@@ -976,6 +1013,7 @@ int main() {
     testMonitoringNoiseActivationRepeatsAndDuplicateIgnore();
     testGyroscopeConfigUpdateIsSanitizedAndTransactional();
     testVirtualControllerConfigUpdateIsSanitizedAndTransactional();
+    testPlayfieldTouchConfigIsIsolatedAndTransactional();
     testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess();
     testAxisCaptureUsesSensitiveHysteresis();
     testConflictConfirmationIsTransactionalAndScopeLimited();

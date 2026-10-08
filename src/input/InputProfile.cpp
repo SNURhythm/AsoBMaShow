@@ -43,6 +43,7 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
   }
 
   gyroscopeTurntable.sanitize(diagnostics);
+  for (auto &[keyMode, config] : playfieldTouch) config.sanitize(keyMode);
   for (auto &[keyMode, config] : virtualControllers) {
     config.sanitize(diagnostics);
     if (!input::VirtualControllerConfig::isScratchlessKeyMode(keyMode)) {

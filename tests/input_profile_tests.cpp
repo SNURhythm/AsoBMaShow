@@ -242,7 +242,7 @@ int main() {
     require(
         oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
             std::ranges::find(diagnostics,
-                              "Reset unsupported input schema version to 9.") !=
+                              "Reset unsupported input schema version to 10.") !=
                 diagnostics.end(),
         "schema repair diagnostics report the real current version");
 
@@ -652,7 +652,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 9") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 10") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -683,7 +683,7 @@ int main() {
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
     require(
-        gyroscopeRoundTripJson.find("\"schemaVersion\": 9") !=
+        gyroscopeRoundTripJson.find("\"schemaVersion\": 10") !=
                 std::string::npos &&
             gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                 std::string::npos &&
@@ -736,7 +736,7 @@ int main() {
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 9") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 10") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
                     std::string::npos &&
@@ -750,7 +750,7 @@ int main() {
                     std::string::npos &&
                 virtualControllerJson.find("\"keyGap\"") == std::string::npos,
             "virtual-controller geometry, player, and scratch mode serialize "
-            "in schema nine");
+            "in schema ten");
 
     const auto legacyVirtualControllerPath =
         testRoot / "virtual-controller-v4.json";
@@ -801,6 +801,34 @@ int main() {
                 modeDefaults.profile.virtualControllerForKeyMode(4) == input::VirtualControllerConfig::forKeyMode(4) &&
                 modeDefaults.profile.virtualControllerForKeyMode(7) == input::VirtualControllerConfig::forKeyMode(7),
             "missing or malformed mode entries keep mode-specific defaults");
+
+    require(modeDefaults.profile.playfieldTouch.empty() &&
+                modeDefaults.profile.playfieldTouchForKeyMode(7) == input::PlayfieldTouchConfig{},
+            "older profiles retain flick scratch and edge-lane side taps");
+    auto touchProfile = defaults;
+    touchProfile.playfieldTouch[7] = {.tapToScratch = true, .sideTapMode = input::SideTapMode::Scratch};
+    touchProfile.playfieldTouch[14] = {.tapToScratch = true, .sideTapMode = input::SideTapMode::Ignore};
+    touchProfile.playfieldTouch[9] = {.sideTapMode = input::SideTapMode::Ignore};
+    const auto touchPath = testRoot / "playfield-touch.json";
+    require(InputProfileStore::saveAtomic(touchPath, touchProfile, errorMessage),
+            "playfield touch config saves");
+    const auto touchRoundTrip = InputProfileStore::load(touchPath);
+    require(touchRoundTrip.status == InputProfileLoadStatus::Loaded &&
+                touchRoundTrip.profile.playfieldTouch == touchProfile.playfieldTouch &&
+                touchRoundTrip.profile.virtualControllers == defaults.virtualControllers,
+            "all per-keymode touch settings round trip independently of controllers");
+    writeFile(touchPath, R"({"schemaVersion":10,"playfieldTouch":{
+      "7":{"tapToScratch":false,"sideTapMode":"scratch"},
+      "-7":{"tapToScratch":true,"sideTapMode":"scratch"},
+      "5":{"tapToScratch":"bad","sideTapMode":42},
+      "14":{"tapToScratch":true,"sideTapMode":"ignore"},"4":null},"bindings":[]})");
+    const auto invalidTouch = InputProfileStore::load(touchPath);
+    require(invalidTouch.status == InputProfileLoadStatus::Loaded &&
+                invalidTouch.profile.playfieldTouchForKeyMode(7) == input::PlayfieldTouchConfig{} &&
+                invalidTouch.profile.playfieldTouchForKeyMode(-7) == input::PlayfieldTouchConfig{} &&
+                invalidTouch.profile.playfieldTouchForKeyMode(5) == input::PlayfieldTouchConfig{} &&
+                invalidTouch.profile.playfieldTouchForKeyMode(14) == touchProfile.playfieldTouch.at(14),
+            "invalid and ineligible touch options fall back without losing valid modes");
 
     const auto malformedPath = testRoot / "malformed.json";
     writeFile(malformedPath, "{ not valid json");

@@ -497,6 +497,23 @@ InputProfileStore::load(const std::filesystem::path &path) {
         }
       }
     }
+    if (schemaVersion >= 10) {
+      const auto configs = document.find("playfieldTouch");
+      if (configs != document.end() && configs->is_object()) {
+        for (const int mode : {4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48}) {
+          const auto entry = configs->find(std::to_string(mode));
+          if (entry == configs->end() || !entry->is_object()) continue;
+          input::PlayfieldTouchConfig config;
+          const auto tap = entry->find("tapToScratch");
+          if (tap != entry->end() && tap->is_boolean()) config.tapToScratch = tap->get<bool>();
+          const auto side = entry->find("sideTapMode");
+          if (side != entry->end() && *side == "scratch") config.sideTapMode = input::SideTapMode::Scratch;
+          else if (side != entry->end() && *side == "ignore") config.sideTapMode = input::SideTapMode::Ignore;
+          config.sanitize(mode);
+          result.profile.playfieldTouch[mode] = config;
+        }
+      }
+    }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
       result.profile.bindings.push_back(parseBinding(binding));
@@ -575,6 +592,7 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
            sanitized.gyroscopeTurntable.stepAngleDegrees},
           {"releaseDelayMs", sanitized.gyroscopeTurntable.releaseDelayMs}}},
         {"virtualControllers", Json::object()},
+        {"playfieldTouch", Json::object()},
         {"bindings", Json::array()}};
     for (const auto &[mode, config] : sanitized.virtualControllers) {
       document["virtualControllers"][std::to_string(mode)] = {
@@ -587,6 +605,12 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
           {"buttonSize", config.buttonSize},
           {"keySpacingX", config.keySpacingX}, {"keySpacingY", config.keySpacingY},
           {"scratchKeyplateSpacing", config.scratchKeyplateSpacing}};
+    }
+    for (const auto &[mode, config] : sanitized.playfieldTouch) {
+      document["playfieldTouch"][std::to_string(mode)] = {
+          {"tapToScratch", config.tapToScratch},
+          {"sideTapMode", config.sideTapMode == input::SideTapMode::Scratch ? "scratch"
+                          : config.sideTapMode == input::SideTapMode::Ignore ? "ignore" : "edgeLane"}};
     }
     for (const auto &binding : sanitized.bindings) {
       document["bindings"].push_back(serializeBinding(binding));

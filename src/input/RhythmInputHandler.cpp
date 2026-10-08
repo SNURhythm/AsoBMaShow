@@ -94,7 +94,7 @@ void RhythmInputHandler::beginFingerLane(SDL_FingerID fingerIndex, int lane,
                                          Vector3 normalizedLocation) {
   fingerToLane[fingerIndex] = lane;
   fingerLanePressed[fingerIndex] = false;
-  if (isScratchLane(lane)) {
+  if (isScratchLane(lane) && !touchConfig.tapToScratch) {
     flickStates[fingerIndex] = FlickState{normalizedLocation.x,
                                           normalizedLocation.y,
                                           SDL_GetTicks(),
@@ -195,12 +195,7 @@ void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
     return;
   }
 
-  const Vector3 renderLocation =
-      normalizedTouchToRenderLocation(normalizedLocation);
-  const std::optional<int> lane =
-      touchLaneLayout ? authoredTouchLane(normalizedLocation, dragModeEnabled)
-                      : dragModeEnabled ? touchToLaneIfInside(renderLocation)
-                                        : std::optional<int>(touchToLane(renderLocation));
+  const auto lane = playfieldTouchLane(normalizedLocation, dragModeEnabled);
   if (!lane.has_value() || isLaneOccupied(*lane, fingerIndex)) {
     return;
   }
@@ -233,11 +228,7 @@ void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
   //  normalizedLocation.y,
   //          normalizedLocation.z);
   if (dragModeEnabled) {
-    const Vector3 renderLocation =
-        normalizedTouchToRenderLocation(normalizedLocation);
-    const std::optional<int> targetLane =
-        touchLaneLayout ? authoredTouchLane(normalizedLocation, true)
-                        : touchToLaneIfInside(renderLocation);
+    const auto targetLane = playfieldTouchLane(normalizedLocation, true);
     const auto currentLaneIt = fingerToLane.find(fingerIndex);
     if (currentLaneIt == fingerToLane.end()) {
       if (targetLane.has_value() &&
@@ -506,6 +497,7 @@ void RhythmInputHandler::setTouchLaneLayout(
     }
     cancelGraceExpiry.clear();
   }
+  if (layout) layout->touchConfig = touchConfig;
   touchLaneLayout = std::move(layout);
 }
 
@@ -531,6 +523,25 @@ std::optional<int> RhythmInputHandler::authoredTouchLane(
       *touchLaneLayout, x, y, requireInside);
   return index ? std::optional<int>(touchLaneLayout->laneRegions[*index].lane)
                : std::nullopt;
+}
+
+std::optional<int> RhythmInputHandler::playfieldTouchLane(
+    Vector3 normalizedLocation, bool requireInside) const {
+  if (touchLaneLayout) return authoredTouchLane(normalizedLocation, requireInside);
+  if (laneOrder.empty() || totalLaneCount <= 0) return std::nullopt;
+  const int line = touchToLaneIndex(normalizedTouchToRenderLocation(normalizedLocation));
+  if (line < 0 || line >= totalLaneCount) {
+    if (touchConfig.sideTapMode == input::SideTapMode::Ignore) return std::nullopt;
+    if (touchConfig.sideTapMode == input::SideTapMode::Scratch && touchConfig.tapToScratch) {
+      for (std::size_t index = 0; index < laneOrder.size(); ++index) {
+        const int lane = laneOrder[line < 0 ? index : laneOrder.size() - 1 - index];
+        if (isScratchLane(lane)) return lane;
+      }
+      return std::nullopt;
+    }
+    if (requireInside) return std::nullopt;
+  }
+  return clampLane(line);
 }
 
 int RhythmInputHandler::clampLane(int lane) const {
@@ -587,6 +598,10 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
 
 void RhythmInputHandler::setBindings(
     const InputProfile &profile, std::vector<input::InputScope> activeScopes) {
+  const auto next = profile.playfieldTouchForKeyMode(activeScopes.empty() ? keyMode : activeScopes.front().keyMode);
+  if (next != touchConfig) discardPendingTouchEvents();
+  touchConfig = next;
+  if (touchLaneLayout) touchLaneLayout->touchConfig = touchConfig;
   logicalInputPipeline->setBindings(profile, std::move(activeScopes));
 }
 
@@ -615,6 +630,7 @@ RhythmInputHandler::RhythmInputHandler(
     LogicalGameplayInputAdapter::AppliedTransitionCallback
         configuredAppliedTransitionCallback)
     : inputDeviceRegistry(&registry), keyMode(meta.KeyMode), control(control) {
+  touchConfig = profile.playfieldTouchForKeyMode(activeScopes.empty() ? keyMode : activeScopes.front().keyMode);
   logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
       *control, profile, std::move(activeScopes), std::move(commandCallback),
       registryPolicy, std::move(configuredAppliedTransitionCallback));

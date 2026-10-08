@@ -71,6 +71,7 @@ public:
   int totalLaneCount = 8, scratchLaneCount = 1;
   float playAreaWidth = 8, playAreaLeftX = 0;
   bool dragModeEnabled = false;
+  input::PlayfieldTouchConfig touchConfig;
   std::vector<int> laneOrder{0, 1, 2, 3, 4, 5, 6, 7};
   std::optional<gameplay::RealtimeTouchLayout> touchLaneLayout;
   std::map<SDL_FingerID, int> fingerToLane;
@@ -97,6 +98,7 @@ public:
   int clampLane(int) const;
   bool isScratchLane(int) const;
   int touchToLaneIndex(Vector3) const;
+  std::optional<int> playfieldTouchLane(Vector3, bool) const;
   std::optional<int> touchToLaneIfInside(Vector3) const;
   int touchToLane(Vector3);
   void setTouchLaneLayout(std::optional<gameplay::RealtimeTouchLayout>);
@@ -194,6 +196,31 @@ int main() {
   const Vector3 firstLane{.1875F, .5F, 0};
   const Vector3 secondLane{.4375F, .5F, 0};
   const Vector3 gap{.28125F, .5F, 0};
+  for (const bool authored : {false, true}) {
+    for (const auto side : {input::SideTapMode::EdgeLane, input::SideTapMode::Scratch,
+                            input::SideTapMode::Ignore}) {
+      RhythmInputHandler taps;
+      taps.touchConfig = {.tapToScratch = true, .sideTapMode = side};
+      if (authored) taps.setTouchLaneLayout(skinLayout());
+      taps.onFingerDown(90, {-.3F, .5F, 0});
+      expect(side == input::SideTapMode::Scratch ? taps.presses == std::vector<int>{7}
+                 : side == input::SideTapMode::Ignore || authored ? taps.presses.empty()
+                 : taps.presses == std::vector<int>{0},
+             "legacy side taps follow each policy for built-in and authored layouts");
+      taps.discardPendingTouchEvents();
+      expect(taps.releases == taps.presses, "legacy side scratch is released on cancellation");
+    }
+    RhythmInputHandler taps;
+    taps.touchConfig.tapToScratch = true;
+    if (authored) taps.setTouchLaneLayout(skinLayout());
+    const Vector3 scratch{authored ? .8125F : 1.05F, .5F, 0};
+    taps.onFingerDown(91, scratch);
+    taps.onFingerMove(91, {scratch.x, .2F, 0});
+    expect(taps.presses == std::vector<int>{7} && taps.releases.empty() && taps.flickStates.empty(),
+           "legacy tap scratch presses immediately and remains held during movement");
+    taps.onFingerUp(91, scratch);
+    expect(taps.releases == std::vector<int>{7}, "legacy tap scratch releases on lift");
+  }
   RhythmInputHandler delayed;
   GamePlayScene delayedScene;
   delayed.setTouchLaneLayout(skinLayout());
