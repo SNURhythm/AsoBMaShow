@@ -415,6 +415,12 @@ public:
       "RIVAL_NEXT_1", "RIVAL_NEXT_2", "RIVAL_NEXT_3"};
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+  enum class ScratchlessMode { Disabled = 0, Enabled = 1, SelectedTables = 2 };
+  ScratchlessMode scratchlessMode = ScratchlessMode::SelectedTables;
+  std::vector<std::string> scratchlessTableUrls = {
+      "https://asumatoki.kr/table/aery/header.json",
+      "https://asumatoki.kr/table/aery7/header.json"};
+  bool aeryDifficultyTablesSeeded = false;
   bool defaultDifficultyTablesSeeded = false;
   std::map<std::string, ir::IrProviderSettings> irProviders = {
       {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},

@@ -502,6 +502,18 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
 }
 
 void AppSettings::sanitize() {
+  if (scratchlessMode < ScratchlessMode::Disabled ||
+      scratchlessMode > ScratchlessMode::SelectedTables) {
+    scratchlessMode = ScratchlessMode::SelectedTables;
+  }
+  std::vector<std::string> tableUrls;
+  for (const auto &url : scratchlessTableUrls) {
+    if (!url.empty() && url.size() <= 4096 && tableUrls.size() < 256 &&
+        std::find(tableUrls.begin(), tableUrls.end(), url) == tableUrls.end()) {
+      tableUrls.push_back(url);
+    }
+  }
+  scratchlessTableUrls = std::move(tableUrls);
   replayPreferences.sanitize();
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:

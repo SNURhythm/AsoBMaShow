@@ -1,3 +1,4 @@
+#include "ScratchlessGameplayPolicy.h"
 #include "GameplayKeyMode.h"
 #include "ReplayVideoExporter.h"
 #include "ExportFileName.h"
@@ -418,10 +419,12 @@ preflightReplayGameplayPresentation(
   authority.chartHasDocument = resolvedChartMetadata.chartHasDocument;
   authority.stageFileAvailable = resolvedChartMetadata.stageFileAvailable;
   authority.backBmpAvailable = resolvedChartMetadata.backBmpAvailable;
+  const int presentationKeyMode = gameplay::presentationKeyMode(
+      chart, settings, context.chartRepository);
   const auto configuration = replay_video_export::replayGameplayPresentationConfig(
-      settings, settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(chart)), chart,
+      settings, settings.playAreaWidthForKeyMode(presentationKeyMode), chart,
       resolvedOptions.renderTouchPoints, resolvedOptions.renderReplayGhosts,
-      constraints, replay.assistOption, &replay);
+      constraints, replay.assistOption, &replay, presentationKeyMode);
   const auto result =
       rendererReservationAlreadyHeld
           ? replay_video_export::preflightReplayGameplayPresentationWithReservedRenderer(
@@ -1335,17 +1338,20 @@ preflightCourseReplayGameplayPresentations(
   for (std::size_t stageIndex = 0; stageIndex < stages.size(); ++stageIndex) {
     auto &stage = stages[stageIndex];
     stage.gameplayPresentation.emplace();
+    const int presentationKeyMode = gameplay::presentationKeyMode(
+        *stage.chart, settings, context.chartRepository);
     preflightStages.push_back(
         {.chart = *stage.chart,
          .replay = stage.replay,
          .preparationPlan = stage.preparationPlan,
          .configuration = replay_video_export::replayGameplayPresentationConfig(
              settings,
-             settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*stage.chart)),
+             settings.playAreaWidthForKeyMode(presentationKeyMode),
              *stage.chart,
              resolvedOptions.renderTouchPoints,
              resolvedOptions.renderReplayGhosts, stage.constraints,
-             stage.replay.assistOption, &stage.replay),
+             stage.replay.assistOption, &stage.replay,
+             presentationKeyMode),
          .exportWidth = resolvedOptions.width,
          .exportHeight = resolvedOptions.height,
          .initialAuthority = {

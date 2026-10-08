@@ -396,6 +396,8 @@ public:
     bool ReplaceDifficultyTable(const difficulty_table::Document &document);
     bool DeleteDifficultyTable(int tableId);
     std::vector<DifficultyTableInfo> SelectDifficultyTables();
+    std::vector<std::string>
+    DifficultyTableSourcesForChart(const bms_parser::ChartMeta &meta);
     std::vector<DifficultyLevelInfo> SelectDifficultyLevels(int tableId);
     std::vector<DifficultyCourseTableInfo> SelectDifficultyCourseTables();
     std::vector<DifficultyCourseGroupInfo>

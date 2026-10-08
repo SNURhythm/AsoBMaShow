@@ -809,6 +809,9 @@ json settingsToJson(const AppSettings &settings) {
       {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
+      {"scratchlessMode", static_cast<int>(settings.scratchlessMode)},
+      {"scratchlessTableUrls", settings.scratchlessTableUrls},
+      {"aeryDifficultyTablesSeeded", settings.aeryDifficultyTablesSeeded},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
@@ -1130,6 +1133,9 @@ AppSettings settingsFromJson(const json &document,
             settings.selectedPlaybackRatePercent, diagnostics);
   readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,
            diagnostics);
+  readEnum(document, "scratchlessMode", settings.scratchlessMode, diagnostics);
+  readValue(document, "scratchlessTableUrls", settings.scratchlessTableUrls, diagnostics);
+  readValue(document, "aeryDifficultyTablesSeeded", settings.aeryDifficultyTablesSeeded, diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
 

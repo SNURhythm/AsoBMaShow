@@ -480,6 +480,31 @@ ChartRepository::Session::SelectDifficultyTables() {
   return selectDifficultyTables(impl_->database());
 }
 
+std::vector<std::string> ChartRepository::Session::DifficultyTableSourcesForChart(
+    const bms_parser::ChartMeta &meta) {
+  auto *db = impl_->database();
+  const auto sha256 = normalizedHash(meta.SHA256);
+  const auto md5 = normalizedHash(meta.MD5);
+  if ((sha256.empty() && md5.empty()) ||
+      !chart_repository_detail::EnsureDifficultySchema(db)) return {};
+  SqliteStatementHandle stmt;
+  const char *query =
+      "SELECT DISTINCT dt.source_url FROM difficulty_tables dt "
+      "JOIN difficulty_table_entries e ON e.table_id = dt.id "
+      "WHERE (?1 <> '' AND e.sha256 = ?1) OR (?2 <> '' AND e.md5 = ?2) "
+      "ORDER BY dt.source_url";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "matching scratchless difficulty tables",
+                                    logSqlErrorText)) return {};
+  sqlite3_bind_text(stmt.get(), 1, sha256.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt.get(), 2, md5.c_str(), -1, SQLITE_TRANSIENT);
+  std::vector<std::string> sources;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    sources.push_back(columnString(stmt.get(), 0));
+  }
+  return sources;
+}
+
 std::vector<DifficultyLevelInfo>
 ChartRepository::Session::SelectDifficultyLevels(int tableId) {
   return selectDifficultyLevels(impl_->database(), tableId);

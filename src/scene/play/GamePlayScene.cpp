@@ -1,3 +1,4 @@
+#include "../../ScratchlessGameplayPolicy.h"
 #include "RealtimeSdlTouchInput.h"
 #include "../../GameplayKeyMode.h"
 #include "../../i18n/Localization.h"
@@ -1730,7 +1731,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
     }
   };
   auto result = createGameplaySkinSession(std::move(services), {
-      .keyMode = gameplay::presentationKeyMode(*chart),
+      .keyMode = presentationKeyMode(),
       .chartModel = &playfieldChartVisualModel,
       .initialState = &capturedPlayfieldVisualState,
       .initialProjection = &capturedPlayfieldProjection,
@@ -2179,7 +2180,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 #endif
   if (!options.autoPlay) {
     const auto activeInputScopes =
-        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
+        makeGameplayInputScopes(presentationKeyMode());
     const auto realtimeInputProfile =
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
                                                    activeInputScopes);
@@ -2976,9 +2977,11 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              bms_parser::Chart *chart, StartOptions options)
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
+      scratchlessAllowed(gameplay::scratchlessAllowed(
+          context.settings, this->chart->Meta, context.chartRepository)),
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile,
-          gameplay::presentationKeyMode(*chart)))),
+          presentationKeyMode()))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
@@ -2998,9 +3001,11 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              std::unique_ptr<bms_parser::Chart> chart,
                              StartOptions options)
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
+      scratchlessAllowed(gameplay::scratchlessAllowed(
+          context.settings, this->chart->Meta, context.chartRepository)),
       options(enforceCoursePlaybackRules(
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
-                                       gameplay::presentationKeyMode(*this->chart)))),
+                                       presentationKeyMode()))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
@@ -3015,6 +3020,10 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     attemptProvenance = captureScoreProvenanceAtPlayStart(
         this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
   }
+}
+
+int GamePlayScene::presentationKeyMode() const {
+  return gameplay::presentationKeyMode(*chart, scratchlessAllowed);
 }
 
 GamePlayScene::~GamePlayScene() {
@@ -3197,14 +3206,14 @@ void GamePlayScene::init() {
           !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = context.settings.hispeedFixMode,
       .playAreaWidth =
-          context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart)),
+          context.settings.playAreaWidthForKeyMode(presentationKeyMode()),
       .orientation = context.settings.activePresentationOrientation(),
       .laneLength = context.settings.presentation().laneLength,
       .laneAngleDegrees = context.settings.presentation().laneAngleDegrees,
       .scratchLaneOnRight = context.settings.presentation().scratchLaneOnRight,
-      .hideEmptyScratchLane = chart->Meta.KeyMode == 5
+      .hideEmptyScratchLane = scratchlessAllowed && (chart->Meta.KeyMode == 5
           ? context.settings.presentation().hideEmptyScratchLane5K
-          : context.settings.presentation().hideEmptyScratchLane7K,
+          : context.settings.presentation().hideEmptyScratchLane7K),
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
@@ -3215,9 +3224,9 @@ void GamePlayScene::init() {
       .hiddenEnabled = playfieldHiddenEnabled,
       .hiddenRatio = playfieldHiddenRatio,
       .builtInNotes = built_in_notes::snapshotModeStyles(
-          context.settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(*chart))),
-      .builtInJudgeLine = context.settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(*chart)),
-      .builtInLane = context.settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(*chart)),
+          context.settings.builtInNotesForKeyMode(presentationKeyMode())),
+      .builtInJudgeLine = context.settings.builtInJudgeLineForKeyMode(presentationKeyMode()),
+      .builtInLane = context.settings.builtInLaneForKeyMode(presentationKeyMode()),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = context.settings.showInvisibleNotes,
       .showPastNotes = context.settings.showPastNotes,
@@ -3305,7 +3314,7 @@ void GamePlayScene::init() {
   }
   if (!isReplayPlayback() && !options.autoPlay) {
     const auto activeInputScopes =
-        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
+        makeGameplayInputScopes(presentationKeyMode());
     const auto gameplayInputProfile =
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
                                                    activeInputScopes);
@@ -3316,7 +3325,7 @@ void GamePlayScene::init() {
         [this](const input::LogicalInputTransition &transition) {
           handleLogicalInputCommand(transition);
         },
-        context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart)),
+        context.settings.playAreaWidthForKeyMode(presentationKeyMode()),
         LogicalGameplayRegistryPolicy{},
         [this](const auto &transition) {
           consumePracticeMenuLaneInput(transition.physicalLane,
@@ -3635,7 +3644,7 @@ bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
   if (ownedInputHandler != nullptr) {
     const auto scopes =
-        makeGameplayInputScopes(gameplay::presentationKeyMode(*chart));
+        makeGameplayInputScopes(presentationKeyMode());
     ownedInputHandler->setBindings(
         makeGameplayInputProfileWithEscapeFallback(context.inputProfile, scopes),
         scopes);
@@ -3659,7 +3668,7 @@ bool GamePlayScene::reset() {
   state = nullptr;
   presentation->reset();
   playfieldPresentationConfiguration.playAreaWidth =
-      context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*chart));
+      context.settings.playAreaWidthForKeyMode(presentationKeyMode());
   presentation->configure(playfieldPresentationConfiguration);
   gameplaySkinSafeBoundsInitialized = false;
   updateSkinResetLayoutVisibility();

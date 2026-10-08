@@ -575,6 +575,53 @@ void testReplayFrameAppliesConstantScrollWindowAndFade() {
          "the rendered projection");
 }
 
+void testScratchlessReplayPresentationPolicy() {
+  configureTestGameplayCamera(1920, 1080);
+  for (const int mode : {5, 7}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = mode;
+    chart.Meta.Bpm = chart.Meta.MinBpm = chart.Meta.MaxBpm = 120;
+    TestBga bga;
+    AppSettings settings;
+    for (const auto policy : {AppSettings::ScratchlessMode::Disabled,
+                              AppSettings::ScratchlessMode::Enabled,
+                              AppSettings::ScratchlessMode::SelectedTables}) {
+      settings.scratchlessMode = policy;
+      const int expected = policy == AppSettings::ScratchlessMode::Enabled ? -mode : mode;
+      const auto configuration = replay_video_export::replayGameplayPresentationConfig(
+          settings, 9.5F, chart, false, false);
+      expect(configuration.presentationKeyMode == expected &&
+                 configuration.hideEmptyScratchLane == (expected < 0),
+             "replay configuration respects disabled, enabled and unmatched table policy");
+      auto info = createInfo(chart, settings, configuration, bga);
+      int acquiredMode = 0;
+      info.skinServices.acquire = [&](int keyMode) {
+        acquiredMode = keyMode;
+        return skin::GameplaySkinAcquisition{
+            .disposition = skin::GameplaySkinAcquisitionDisposition::BuiltIn};
+      };
+      const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+      expect(created.presentation && acquiredMode == expected &&
+                 created.presentation->builtInRenderer().hidesScratchLane() == (expected < 0),
+             "replay skins and built-in scratch lane use the same policy");
+    }
+    // The exporter supplies the resolved table match to both normal and course preflight.
+    const auto matched = replay_video_export::replayGameplayPresentationConfig(
+        settings, 9.5F, chart, false, false, {}, assist_options::kOff, nullptr, -mode);
+    auto info = createInfo(chart, settings, matched, bga);
+    int acquiredMode = 0;
+    info.skinServices.acquire = [&](int keyMode) {
+      acquiredMode = keyMode;
+      return skin::GameplaySkinAcquisition{
+          .disposition = skin::GameplaySkinAcquisitionDisposition::BuiltIn};
+    };
+    const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+    expect(created.presentation && acquiredMode == -mode &&
+               created.presentation->builtInRenderer().hidesScratchLane(),
+           "matching table selection reaches replay skin and hidden scratch lane");
+  }
+}
+
 void testReplayExportConfigCarriesBpmGuide() {
   AppSettings settings;
   bms_parser::Chart chart;
@@ -2572,6 +2619,7 @@ int main() {
   testReplayExportConfigPreservesGameplayPresentationSettings();
   testReplayFrameAppliesConstantScrollWindowAndFade();
   testReplayExportConfigCarriesBpmGuide();
+  testScratchlessReplayPresentationPolicy();
   testCourseNoSpeedReplayExportConfigOverridesProfileSettings();
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
   testReplayExportPersonalBestAuthorityUsesSavedBestReplay();

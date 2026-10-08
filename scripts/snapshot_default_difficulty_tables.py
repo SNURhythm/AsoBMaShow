@@ -36,12 +36,17 @@ def main():
         raise ValueError("No default difficulty table URLs found")
     tables = []
     for url in urls:
-        page = TablePage()
-        page.feed(fetch(url))
-        if not page.header_url:
-            raise ValueError(f"No bmstable metadata at {url}")
-        header_url = urljoin(url, page.header_url)
-        header = json.loads(fetch(header_url))
+        source_text = fetch(url)
+        try:
+            header = json.loads(source_text)
+            header_url = url
+        except json.JSONDecodeError:
+            page = TablePage()
+            page.feed(source_text)
+            if not page.header_url:
+                raise ValueError(f"No bmstable metadata at {url}")
+            header_url = urljoin(url, page.header_url)
+            header = json.loads(fetch(header_url))
         data_url = urljoin(header_url, header["data_url"])
         data = json.loads(fetch(data_url))
         if not header.get("name") or not header.get("symbol") or not isinstance(data, list) or not data:

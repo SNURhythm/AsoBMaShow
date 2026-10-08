@@ -894,6 +894,8 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
       "https://miraiscarlet.github.io/bms/table/genocide_insane/insane_bms.html",
       "https://stellabms.xyz/sl/table.html",
       "https://stellabms.xyz/st/table.html",
+      "https://asumatoki.kr/table/aery/header.json",
+      "https://asumatoki.kr/table/aery7/header.json",
   };
   expect(result.disposition ==
              chart_library_tasks::TaskRunDisposition::Complete,

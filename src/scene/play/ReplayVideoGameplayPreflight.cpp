@@ -43,7 +43,12 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
     bool touchVisualizationEnabled,
     bool replayGhostRenderingEnabled,
     const CourseConstraintRules &constraints,
-    const std::string &assistOption, const ReplayData *replay) noexcept {
+    const std::string &assistOption, const ReplayData *replay,
+    int presentationKeyMode) noexcept {
+  if (presentationKeyMode == 0) {
+    presentationKeyMode = gameplay::presentationKeyMode(
+        chart, settings.scratchlessMode == AppSettings::ScratchlessMode::Enabled);
+  }
   const bool noSpeed = constraints.noSpeed;
   const auto covers = replay
       ? replayLaneCoverInitialState(*replay, settings, noSpeed).coverState
@@ -65,6 +70,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
        .laneCoverEnabled = laneCoverEnabled},
       gameplay_hispeed::summarizeChartBpm(chart));
   return {
+      .presentationKeyMode = presentationKeyMode,
       .visibleTimeDurationMilliseconds = visibleTimeDurationMilliseconds,
       .configuredHispeed = hispeed.hispeed(),
       .hispeedMultiplier = 1.0F,
@@ -76,9 +82,9 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .laneLength = settings.presentation().laneLength,
       .laneAngleDegrees = settings.presentation().laneAngleDegrees,
       .scratchLaneOnRight = settings.presentation().scratchLaneOnRight,
-      .hideEmptyScratchLane = chart.Meta.KeyMode == 5
+      .hideEmptyScratchLane = presentationKeyMode < 0 && (chart.Meta.KeyMode == 5
           ? settings.presentation().hideEmptyScratchLane5K
-          : settings.presentation().hideEmptyScratchLane7K,
+          : settings.presentation().hideEmptyScratchLane7K),
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = laneCoverEnabled,
@@ -89,9 +95,9 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .hiddenEnabled = covers.hiddenEnabled,
       .hiddenRatio = noSpeed ? 0.0F : covers.hiddenRatio,
       .builtInNotes = built_in_notes::snapshotModeStyles(
-          settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart))),
-      .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
-      .builtInLane = settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(chart)),
+          settings.builtInNotesForKeyMode(presentationKeyMode)),
+      .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(presentationKeyMode),
+      .builtInLane = settings.builtInLaneForKeyMode(presentationKeyMode),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .showPastNotes = settings.showPastNotes,

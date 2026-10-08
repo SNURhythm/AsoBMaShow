@@ -26,8 +26,9 @@ namespace gameplay {
   return true;
 }
 
-[[nodiscard]] inline int presentationKeyMode(const bms_parser::Chart &chart) {
-  return isScratchlessSinglePlay(chart) ? -chart.Meta.KeyMode : chart.Meta.KeyMode;
+[[nodiscard]] inline int presentationKeyMode(const bms_parser::Chart &chart,
+                                             bool scratchlessAllowed = true) {
+  return scratchlessAllowed && isScratchlessSinglePlay(chart) ? -chart.Meta.KeyMode : chart.Meta.KeyMode;
 }
 
 [[nodiscard]] inline std::string keyModeLabel(int keyMode) {

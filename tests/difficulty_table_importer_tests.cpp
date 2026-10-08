@@ -654,12 +654,18 @@ void testPackagedDefaultsImportWithoutNetwork() {
     assert(false && "Bundled defaults must never access the network");
     return std::nullopt;
   });
-  assert(importer.SeedBundledDefaults(*session) == 6);
+  assert(importer.SeedBundledDefaults(*session) == 8);
   const auto tables = session->SelectDifficultyTables();
   for (const std::string kind : {"normal", "insane"}) {
     const std::string source =
         "https://miraiscarlet.github.io/bms/table/genocide_" + kind + "/" +
         kind + "_bms.html";
+    assert(std::any_of(tables.begin(), tables.end(), [&](const auto &table) {
+      return table.sourceUrl == source && table.chartCount > 0;
+    }));
+  }
+  for (const auto &source : {"https://asumatoki.kr/table/aery/header.json",
+                              "https://asumatoki.kr/table/aery7/header.json"}) {
     assert(std::any_of(tables.begin(), tables.end(), [&](const auto &table) {
       return table.sourceUrl == source && table.chartCount > 0;
     }));
@@ -670,6 +676,11 @@ void testPackagedDefaultsImportWithoutNetwork() {
     assert(table.chartCount > 0);
   }
   assert(importer.SeedBundledDefaults(*session) == 0);
+  for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
+  assert(importer.SeedBundledDefaults(*session, "assets/difficulty-tables/defaults.json",
+      {"https://asumatoki.kr/table/aery/header.json",
+       "https://asumatoki.kr/table/aery7/header.json"}) == 2);
+  assert(session->SelectDifficultyTables().size() == 2);
 }
 
 int main() {

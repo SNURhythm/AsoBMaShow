@@ -75,6 +75,7 @@ def main():
         extract(source, signature).replace("#if TARGET_OS_ANDROID", "if (fixtureAndroid) {").replace("#endif", "}")
         if signature == "void GamePlayScene::onApplicationBackgroundChanged(" else extract(source, signature)
         for signature in signatures)
+    methods += "\n" + extract(source, "int GamePlayScene::presentationKeyMode() const")
     methods += "\n" + extract(source, "bool laneIsPressed(")
     methods += "\n" + extract(source, "void GamePlayScene::resetHellChargeGaugeTracking(")
     methods += "\n" + extract(source, "void GamePlayScene::updateHellChargeGauge(").replace(
@@ -128,6 +129,7 @@ def main():
         "Judge presentationJudgeForPolicy(",
         "std::optional<NoteTimeRange>\npracticeAllowedNoteRange(",
         "bool prepareRetryChart(",
+        "int GamePlayScene::presentationKeyMode() const",
         "GamePlayScene::GamePlayScene(ApplicationContext &context,\n                             bms_parser::Chart *chart",
         "GamePlayScene::GamePlayScene(ApplicationContext &context,\n                             std::unique_ptr<bms_parser::Chart> chart",
         "bool GamePlayScene::preparePracticeAttemptFromMenu(",
@@ -147,6 +149,8 @@ def main():
     preparation_methods += reset_source[reset_start:reset_end] + '\n}\n'
     preparation_methods = (preparation_methods
         .replace('GamePlayScene::GamePlayScene', 'PreparedGamePlayScene::PreparedGamePlayScene')
+        .replace('GamePlayScene::presentationKeyMode', 'PreparedGamePlayScene::presentationKeyMode')
+        .replace('gameplay::scratchlessAllowed', 'resolvePreparationScratchlessAllowed')
         .replace('GamePlayScene::preparePracticeAttemptFromMenu', 'PreparedGamePlayScene::preparePracticeAttemptFromMenu')
         .replace('ApplicationContext', 'PreparationContext')
         .replace(': Scene(context)', ': PreparationSceneBase(context)')

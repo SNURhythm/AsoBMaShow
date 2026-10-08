@@ -2,10 +2,20 @@
 
 struct PreparationContext {
   int inputProfile = 0;
+  int chartRepository = 0;
   struct {
+    bool scratchlessAllowed = false;
     AppSettings::NotePriorityMode notePriorityMode = AppSettings::NotePriorityMode::Lowest;
   } settings;
 };
+
+// The database policy is covered by chart_repository_tests. Inject its result
+// at this fixture's application-context boundary, as with input-device lookup.
+template <typename Settings>
+bool resolvePreparationScratchlessAllowed(const Settings &settings,
+                                          const bms_parser::ChartMeta &, int) {
+  return settings.scratchlessAllowed;
+}
 
 class PreparationSceneBase {
 public:
@@ -44,6 +54,8 @@ class PreparedGamePlayScene : public PreparationSceneBase {
 public:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart;
+  bool scratchlessAllowed = false;
+  int presentationKeyMode() const;
   StartOptions options;
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   Judge judge;

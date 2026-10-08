@@ -6,6 +6,7 @@
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "../view/CheckboxButtonContent.h"
 #include "../view/IconText.h"
 #include "../view/LaneCoverControlsView.h"
 #include "../view/OverlayPortal.h"
@@ -2446,6 +2447,68 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
 View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   loadDifficultyTables();
+
+  auto *scratchlessControls = new View();
+  scratchlessControls->setFlexDirection(FlexDirection::Column);
+  scratchlessControls->setGap(metrics.compact ? 10.0f : 12.0f);
+  scratchlessControls->setAlignSelf(YGAlignStretch);
+  auto *scratchlessMode = new DropdownView(
+      {.onOptionSelected = [this](const std::string &id) {
+        context.settings.scratchlessMode =
+            static_cast<AppSettings::ScratchlessMode>(std::stoi(id));
+        persistSettings();
+        lastLayoutWidth = -1;
+      }}, overlayPortal);
+  scratchlessMode->refresh({
+      .selectedId = std::to_string(static_cast<int>(context.settings.scratchlessMode)),
+      .options = {{.id = "0", .label = i18n::message("settings.scratchless.disabled.label")},
+                  {.id = "1", .label = i18n::message("settings.scratchless.enabled.label")},
+                  {.id = "2", .label = i18n::message("settings.scratchless.selected_tables.label")}},
+      .maxVisibleItems = 3});
+  scratchlessMode->setWidthPercent(100)->setMinWidth(0);
+  scratchlessMode->setHeight(metrics.actionButtonHeight);
+  scratchlessControls->addView(scratchlessMode);
+  if (context.settings.scratchlessMode == AppSettings::ScratchlessMode::SelectedTables) {
+    scratchlessControls->addView(makeWrappedText(
+        i18n::message("settings.scratchless.tables.message"),
+        metrics.bodyTextSize, ui_theme::textSecondary()));
+    for (const auto &table : difficultyTables) {
+      if (table.sourceUrl.empty()) continue;
+      auto *content = new CheckboxButtonContent(table.name, metrics.bodyTextSize,
+                                                metrics.bodyTextSize);
+      content->setThemedColor(ui_theme::textPrimary);
+      content->setJustifyContent(YGJustifyFlexStart);
+      content->setPadding(Edge::Left, 12.0f);
+      content->setPadding(Edge::Right, 12.0f);
+      content->labelView()->setFlex(1)->setMinWidth(0);
+      content->setChecked(std::ranges::find(context.settings.scratchlessTableUrls,
+                                           table.sourceUrl) !=
+                          context.settings.scratchlessTableUrls.end());
+      auto *button = makeControlButton(0, metrics.actionButtonHeight,
+                                       makeText("", metrics.bodyTextSize,
+                                                ui_theme::textPrimary()));
+      button->setContentView(content);
+      button->setWidthPercent(100)->setMinWidth(0);
+      button->setOnClickListener([this, url = table.sourceUrl, content]() {
+        auto &urls = context.settings.scratchlessTableUrls;
+        const auto found = std::ranges::find(urls, url);
+        if (found == urls.end()) urls.push_back(url);
+        else urls.erase(found);
+        content->setChecked(std::ranges::find(urls, url) != urls.end());
+        persistSettings();
+      });
+      scratchlessControls->addView(button);
+    }
+    if (difficultyTables.empty()) {
+      scratchlessControls->addView(makeWrappedText(
+          i18n::message("settings.difficulty_tables.no_difficulty_tables_installed.message"),
+          metrics.bodyTextSize, ui_theme::textSecondary()));
+    }
+  }
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.scratchless.title"),
+      i18n::message("settings.scratchless.description"), scratchlessControls,
+      metrics.modeCardHeight, metrics.cardsWidth));
 
   const i18n::Text tableCardDescription = i18n::message("settings.difficulty_tables.add_bmstable_url.message");
 

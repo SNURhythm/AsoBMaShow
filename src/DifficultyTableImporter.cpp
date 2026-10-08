@@ -1013,7 +1013,8 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
 }
 
 int DifficultyTableImporter::SeedBundledDefaults(
-    ChartRepository::Session &session, const std::string &assetPath) {
+    ChartRepository::Session &session, const std::string &assetPath,
+    const std::vector<std::string> &sourceUrls) {
   // SDL resolves packaged assets on Android and Apple platforms as well as
   // ordinary files on desktop. Never use the network for this fallback.
   std::size_t size = 0;
@@ -1038,7 +1039,9 @@ int DifficultyTableImporter::SeedBundledDefaults(
   for (const auto &table : snapshot["tables"]) {
     if (!table.is_object()) continue;
     const auto sourceUrl = jsonStringAt(table, "source_url");
-    if (sourceUrl.empty() || existingSources.contains(sourceUrl) ||
+    if ((!sourceUrls.empty() &&
+         std::find(sourceUrls.begin(), sourceUrls.end(), sourceUrl) == sourceUrls.end()) ||
+        sourceUrl.empty() || existingSources.contains(sourceUrl) ||
         !table.contains("header") || !table["header"].is_object() ||
         !table.contains("data") || !table["data"].is_array()) {
       continue;

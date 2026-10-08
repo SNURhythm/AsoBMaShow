@@ -1,4 +1,5 @@
 #include "../src/AppSettingsStore.h"
+#include "../src/ScratchlessGameplayPolicy.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
 #include "../src/settings/BuiltInNoteEditing.h"
@@ -2499,7 +2500,75 @@ void testBuiltInAppearancePresetColors() {
   check(built_in_judge_line::Style{}.color);
 }
 
+void testScratchlessPolicyDefaultsPersist() {
+  TempDirectory temp;
+  const auto path = temp.path() / "scratchless-policy.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), "default policy saves");
+  const auto json = nlohmann::json::parse(readFile(path));
+  expect(json.value("scratchlessMode", -1) == 2,
+         "scratchless mode defaults to selected difficulty tables");
+  expect(json.value("scratchlessTableUrls", std::vector<std::string>{}) ==
+             std::vector<std::string>{"https://asumatoki.kr/table/aery/header.json",
+                                      "https://asumatoki.kr/table/aery7/header.json"},
+         "both Aery tables are selected by default");
+}
+
+void testScratchlessPolicyRoundTripAndSelection() {
+  TempDirectory temp;
+  const auto path = temp.path() / "scratchless-policy.json";
+  AppSettings settings;
+  const auto defaults = settings.scratchlessTableUrls;
+  expect(gameplay::scratchlessAllowed(settings, {defaults.data(), 1}) &&
+             gameplay::scratchlessAllowed(settings, {defaults.data() + 1, 1}),
+         "either selected Aery table enables scratchless play");
+  expect(!gameplay::scratchlessAllowed(settings, {}),
+         "default policy leaves charts outside selected tables in canonical modes");
+  const std::vector<std::string> otherTable{"https://example.com/other.json"};
+  expect(!gameplay::scratchlessAllowed(settings, otherTable),
+         "unselected table candidates are excluded");
+  settings.scratchlessTableUrls.push_back(otherTable.front());
+  expect(gameplay::scratchlessAllowed(settings, otherTable) &&
+             gameplay::scratchlessAllowed(settings, defaults),
+         "multiple table selections remain independently enabled");
+  std::string error;
+  for (const auto mode : {AppSettings::ScratchlessMode::Disabled,
+                          AppSettings::ScratchlessMode::Enabled,
+                          AppSettings::ScratchlessMode::SelectedTables}) {
+    settings.scratchlessMode = mode;
+    expect(AppSettingsStore::Save(path, settings, error), "scratchless policy saves");
+    const auto loaded = AppSettingsStore::Load(path).settings;
+    expect(loaded.scratchlessMode == mode &&
+               loaded.scratchlessTableUrls == settings.scratchlessTableUrls,
+           "mode and all selected tables survive a restart");
+    expect(gameplay::scratchlessAllowed(loaded, defaults) ==
+               (mode != AppSettings::ScratchlessMode::Disabled),
+           "disabled overrides matching tables");
+    expect(gameplay::scratchlessAllowed(loaded, {}) ==
+               (mode == AppSettings::ScratchlessMode::Enabled),
+           "enabled permits charts without table membership");
+  }
+  settings.scratchlessTableUrls.clear();
+  expect(AppSettingsStore::Save(path, settings, error), "empty table selection saves");
+  const auto empty = AppSettingsStore::Load(path).settings;
+  expect(empty.scratchlessTableUrls.empty() &&
+             !gameplay::scratchlessAllowed(empty, defaults),
+         "deselecting every table persists without restoring Aery");
+  writeFile(path, R"({"schemaVersion":8,"scratchlessMode":99})");
+  const auto invalid = AppSettingsStore::Load(path).settings;
+  expect(invalid.scratchlessMode == AppSettings::ScratchlessMode::SelectedTables &&
+             invalid.scratchlessTableUrls == defaults,
+         "invalid modes and older settings use selected tables with Aery defaults");
+  writeFile(path, R"({"schemaVersion":8})");
+  const auto legacy = AppSettingsStore::Load(path).settings;
+  expect(legacy.scratchlessMode == AppSettings::ScratchlessMode::SelectedTables &&
+             legacy.scratchlessTableUrls == defaults,
+         "existing profiles receive the new default policy");
+}
+
 int main() {
+  testScratchlessPolicyDefaultsPersist();
+  testScratchlessPolicyRoundTripAndSelection();
   testBuiltInAppearancePresetColors();
   testBuiltInLaneAppearance();
   testBuiltInJudgeLineAppearance();

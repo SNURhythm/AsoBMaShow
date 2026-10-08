@@ -36,7 +36,8 @@ public:
   // Offline first-launch fallback. Existing sources always take precedence.
   int SeedBundledDefaults(
       ChartRepository::Session &session,
-      const std::string &assetPath = "assets/difficulty-tables/defaults.json");
+      const std::string &assetPath = "assets/difficulty-tables/defaults.json",
+      const std::vector<std::string> &sourceUrls = {});
 
   bool ImportFromUrl(
       ChartRepository::Session &session, const std::string &pageUrl,

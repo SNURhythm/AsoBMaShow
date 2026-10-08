@@ -1,4 +1,5 @@
 #include "../src/repositories/ChartRepository.h"
+#include "../src/ScratchlessGameplayPolicy.h"
 #include "../src/LongNoteModeUtils.h"
 #include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/repositories/ScoreCacheQueries.h"
@@ -4135,7 +4136,71 @@ void testSearchStatisticsAvoidRichRowsAndAutoplayKeepsRawMatches() {
   }
 }
 
+void testScratchlessTableMembership() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  assert(repository.EnsureReady());
+  AppSettings settings;
+  difficulty_table::Document table;
+  table.name = "Aery fixture";
+  table.symbol = "A";
+  table.sourceUrl = settings.scratchlessTableUrls.front();
+  table.charts = {{.level = "1", .md5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                  {.level = "2", .sha256 = std::string(64, 'b')}};
+  {
+    auto session = repository.OpenSession();
+    assert(session && session->ReplaceDifficultyTable(table));
+  }
+  for (int mode : {5, 7}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = mode;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    chart.Meta.MD5 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
+    chart.Meta.MD5.clear();
+    chart.Meta.SHA256 = std::string(64, 'B');
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
+    chart.Meta.TotalScratchNotes = 1;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    chart.Meta.TotalScratchNotes = 0;
+    auto *measure = new bms_parser::Measure;
+    auto *timeline = new bms_parser::TimeLine(16, false);
+    timeline->SetInvisibleNote(7, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    delete timeline->InvisibleNotes[7];
+    timeline->InvisibleNotes[7] = nullptr;
+    chart.Meta.IsDP = true;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    chart.Meta.IsDP = false;
+    settings.scratchlessMode = AppSettings::ScratchlessMode::Disabled;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    settings.scratchlessMode = AppSettings::ScratchlessMode::Enabled;
+    chart.Meta.SHA256.clear();
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
+    settings.scratchlessMode = AppSettings::ScratchlessMode::SelectedTables;
+  }
+  auto session = repository.OpenSession();
+  bms_parser::ChartMeta meta;
+  assert(session->DifficultyTableSourcesForChart(meta).empty());
+  meta.MD5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  assert(session->DifficultyTableSourcesForChart(meta) ==
+         std::vector<std::string>{table.sourceUrl});
+  table.name = "Second table";
+  table.sourceUrl = "https://example.com/second.json";
+  assert(session->ReplaceDifficultyTable(table));
+  assert(session->DifficultyTableSourcesForChart(meta).size() == 2);
+  table.charts.clear();
+  assert(session->ReplaceDifficultyTable(table));
+  assert(session->DifficultyTableSourcesForChart(meta).size() == 1);
+  for (const auto &installed : session->SelectDifficultyTables())
+    assert(session->DeleteDifficultyTable(installed.id));
+  assert(session->DifficultyTableSourcesForChart(meta).empty());
+}
+
 int main(int argc, char **argv) {
+  testScratchlessTableMembership();
   if (argc > 1) {
     try {
       if (argc == 2 && std::string_view(argv[1]) == "--search-paging-tests") {
