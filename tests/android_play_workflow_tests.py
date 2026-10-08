@@ -183,10 +183,70 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
             with self.subTest(private_value=private_value):
                 (self.root / "android/.env.local").write_text(
                     f"GITHUB_RUN_NUMBER='{private_value}'\n")
-                result = subprocess.run([str(helper), "--build-only"], cwd=self.root,
-                                        env=self.env, text=True, capture_output=True)
+                for arguments in ([], ["--build-only"]):
+                    result = subprocess.run([str(helper), *arguments], cwd=self.root,
+                                            env=self.env, text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(run_number_file.read_text(), "12")
+
+    def run_play_helper(self, *arguments):
+        helper = self.root / "scripts/android_play_deploy.sh"
+        shutil.copyfile(ROOT / "scripts/android_play_deploy.sh", helper)
+        helper.chmod(0o755)
+        (self.root / "android/.ruby-version").write_text("fixture\n")
+        binaries = self.root / "bin"
+        binaries.mkdir(exist_ok=True)
+        for name, body in {
+            "ruby": '#!/bin/sh\necho ruby >> "$FIXTURE_CALLS"\n',
+            "bundle": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FIXTURE_CALLS"\n',
+        }.items():
+            path = binaries / name
+            path.write_text(body)
+            path.chmod(0o755)
+        env = dict(self.env, PATH=str(binaries) + os.pathsep + self.env["PATH"],
+                   FIXTURE_CALLS=str(self.root / "calls.txt"))
+        return subprocess.run([str(helper), *arguments], cwd=self.root,
+                              env=env, text=True, capture_output=True)
+
+    def test_local_play_upload_requires_version_before_toolchain_setup(self):
+        result = self.run_play_helper()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ANDROID_VERSION_CODE", result.stderr)
+        self.assertFalse((self.root / "calls.txt").exists())
+
+    def test_play_upload_rejects_invalid_version_before_toolchain_setup(self):
+        for name in ("ANDROID_VERSION_CODE", "GITHUB_RUN_NUMBER"):
+            for value in ("0", "-1", "abc", "1.5", "2100000001", "999999999999999999999"):
+                with self.subTest(name=name, value=value):
+                    self.env[name] = value
+                    result = self.run_play_helper()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("2100000000", result.stderr)
+                    self.assertFalse((self.root / "calls.txt").exists())
+            self.env.pop(name)
+
+    def test_play_upload_accepts_explicit_version_or_ci_counter(self):
+        for values in ({"ANDROID_VERSION_CODE": "1"},
+                       {"ANDROID_VERSION_CODE": "2100000000"},
+                       {"GITHUB_RUN_NUMBER": "12"},
+                       {"ANDROID_VERSION_CODE": "77", "GITHUB_RUN_NUMBER": "invalid"}):
+            with self.subTest(values=values):
+                self.env.update(values)
+                result = self.run_play_helper()
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(run_number_file.read_text(), "12")
+                self.assertIn("exec fastlane android play_beta", (self.root / "calls.txt").read_text())
+                for name in values:
+                    self.env.pop(name)
+
+    def test_play_upload_loads_explicit_version_from_private_env(self):
+        (self.root / "android/.env.local").write_text("ANDROID_VERSION_CODE=77\n")
+        result = self.run_play_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_play_build_only_allows_default_local_version(self):
+        result = self.run_play_helper("--build-only")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("exec fastlane android build_bundle", (self.root / "calls.txt").read_text())
 
 
 if __name__ == "__main__":

@@ -132,16 +132,21 @@ From the repository root:
 # Build a signed AAB without Play credentials or an upload.
 scripts/android_play_deploy.sh --build-only
 
-# Build and upload a public beta draft (requires Play credentials).
+# Build and upload a public beta draft (requires Play credentials and an unused code).
+# Replace 123 with an unused code coordinated with the Play CI counter.
+export ANDROID_VERSION_CODE=123
 scripts/android_play_deploy.sh
 ```
 
 Both commands load `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
 Keep real signing and Play credentials in those private files or the environment.
 For a local upload, export `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` with the contents
-of a private JSON key file. No key file is written by the lane. Leave
-`ANDROID_VERSION_CODE` unset to use the workflow run number, or `1` for a local
-test build. An optional `ANDROID_VERSION_NAME` sets the version name.
+of a private JSON key file. No key file is written by the lane. CI uploads use
+`GITHUB_RUN_NUMBER` when `ANDROID_VERSION_CODE` is unset. Local uploads require
+an explicit, unused `ANDROID_VERSION_CODE` coordinated with the Play CI counter;
+the wrapper rejects missing or invalid upload codes before setting up Ruby or
+building. Local `--build-only` runs still default to `1`. An optional
+`ANDROID_VERSION_NAME` sets the version name.
 The output is
 `android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab`.
 Direct Fastlane commands, after selecting the project Ruby and installing its
