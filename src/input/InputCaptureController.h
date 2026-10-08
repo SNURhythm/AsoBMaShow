@@ -40,7 +40,8 @@ public:
   void toggleBindingInversion(std::string_view bindingId);
   void resetScopeToDefaults(input::InputScope);
   bool updateGyroscopeTurntableConfig(input::GyroscopeTurntableConfig config);
-  bool updateVirtualControllerConfig(input::VirtualControllerConfig config);
+  bool updatePlayfieldTouchConfig(int keyMode, input::PlayfieldTouchConfig config);
+  bool updateVirtualControllerConfig(int keyMode, input::VirtualControllerConfig config);
 
   [[nodiscard]] State state() const;
   [[nodiscard]] std::optional<input::PhysicalInputEvent> monitorSample() const;

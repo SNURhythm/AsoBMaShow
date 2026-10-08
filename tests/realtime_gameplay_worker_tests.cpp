@@ -217,7 +217,10 @@ struct RealtimeGameplaySession {
   std::atomic<std::uint64_t> requestedHitCaptureReset{0};
   std::uint64_t appliedRawHitCaptureReset = 0;
   gameplay::BoundedMpscQueue<gameplay::RealtimeTouchSample, 64> auxiliaryTouches;
-  void enqueueStartSelectInput(const gameplay::RealtimeGameplayInput &) {}
+  std::vector<gameplay::RealtimeGameplayInput> startSelectInputs;
+  void enqueueStartSelectInput(const gameplay::RealtimeGameplayInput &input) {
+    startSelectInputs.push_back(input);
+  }
 #include "android_realtime_touch_ingress_methods.h"
 };
 
@@ -296,6 +299,39 @@ void testAndroidTouchReachesWorkerWithoutRenderDrain() {
               converted->phase == gameplay::RealtimeTouchPhase::Down &&
               converted->steadyTimestampMicros == 123456,
           "mouse ingress uses published drawable scaling and preserves time");
+}
+
+void testCommandOnlyTouchScratchBypassesGameplayAndReplay() {
+  for (const int mode : {4, 6, 8}) {
+    FakeClock clock;
+    FakeAudio audio;
+    clock.nowMicros.store(1'000'000);
+    gameplay::RealtimeGameplayWorker worker(makeScratchlessDefinition(mode), makeConfig(clock, audio));
+    RealtimeGameplaySession session;
+    session.worker = &worker;
+    require(worker.start(), "command-only touch worker starts");
+    for (const auto type : {gameplay::RealtimeGameplayInputType::Press,
+                            gameplay::RealtimeGameplayInputType::Release}) {
+      require(RealtimeGameplaySession::emitTouchInput(&session,
+          {.epoch = 7, .type = type, .lane = -1, .steadyTimestampMicros = 1'000'000,
+           .hasReplayControl = true,
+           .replayControl = {.kind = replay::LogicalControlKind::ScratchClockwise}}),
+          "command-only touch scratch reaches the scene command queue");
+    }
+    require(RealtimeGameplaySession::emitTouchInput(&session,
+        {.epoch = 7, .type = gameplay::RealtimeGameplayInputType::Press, .lane = 0,
+         .steadyTimestampMicros = 1'000'000, .hasReplayControl = true,
+         .replayControl = {.kind = replay::LogicalControlKind::Lane, .lane = 0}}),
+        "a following real key still reaches gameplay");
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1; }),
+            "worker processes the real key after scratch commands");
+    worker.stop();
+    const auto recorded = worker.copyAcceptedReplayInputAfterStop();
+    require(recorded && recorded->size() == 1 &&
+                recorded->front().control.kind == replay::LogicalControlKind::Lane &&
+                session.startSelectInputs.size() == 3,
+            "command-only scratch reaches controls but never the note replay stream");
+  }
 }
 
 void testAndroidSyntheticMouseDoesNotStealPointerZero() {
@@ -2189,6 +2225,7 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+  testCommandOnlyTouchScratchBypassesGameplayAndReplay();
   testAndroidTouchReachesWorkerWithoutRenderDrain();
   testAndroidSyntheticMouseDoesNotStealPointerZero();
   testLr2SameKeyBatchUsesLatestEdgeAndRetainsReplayHistory();

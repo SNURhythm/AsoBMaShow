@@ -236,17 +236,30 @@ bool InputCaptureController::updateGyroscopeTurntableConfig(
   return persist(std::move(next));
 }
 
+bool InputCaptureController::updatePlayfieldTouchConfig(
+    int keyMode, input::PlayfieldTouchConfig config) {
+  lastError_.clear();
+  config.sanitize(keyMode);
+  if (config == profile_.playfieldTouchForKeyMode(keyMode)) return true;
+  InputProfile next = profile_;
+  next.playfieldTouch[keyMode] = config;
+  return persist(std::move(next));
+}
+
 bool InputCaptureController::updateVirtualControllerConfig(
-    input::VirtualControllerConfig config) {
+    int keyMode, input::VirtualControllerConfig config) {
   lastError_.clear();
   std::vector<std::string> ignoredDiagnostics;
   config.sanitize(ignoredDiagnostics);
-  if (config == profile_.virtualController) {
+  if (!input::VirtualControllerConfig::isScratchlessKeyMode(keyMode)) {
+    config.scratchEnabled = true;
+  }
+  if (config == profile_.virtualControllerForKeyMode(keyMode)) {
     return true;
   }
 
   InputProfile next = profile_;
-  next.virtualController = config;
+  next.virtualControllers.at(keyMode) = config;
   return persist(std::move(next));
 }
 

@@ -41,6 +41,7 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("GOOGLE_PLAY_", "SUPPLY_", "ANDROID_", "FIREBASE_"))}
+        self.env.pop("GITHUB_RUN_NUMBER", None)
 
     def run_lane(self, lane, *, fail_build=False, omit_bundle=False, stale_bundle=False):
         fastfile = ROOT / "android/fastlane/Fastfile"
@@ -143,10 +144,109 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertEqual((self.root / "gradle-args.txt").read_text().splitlines(),
                          ["-p", str(self.root / "android"), ":app:bundleRestricted_file_accessRelease", "--no-daemon"])
         self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "release.jks"))
-        self.assertTrue(1 <= int((self.root / "version-code.txt").read_text()) <= 2100000000)
+        self.assertEqual((self.root / "version-code.txt").read_text(), "1")
+        self.env["GITHUB_RUN_NUMBER"] = "12"
+        (self.root / ".env.local").write_text("GITHUB_RUN_NUMBER=''\n")
+        for arguments, expected in (([], "12"), (["--version-code", "77"], "77")):
+            result = subprocess.run(command + arguments, cwd=self.root, env=self.env,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((self.root / "version-code.txt").read_text(), expected)
+        self.env["ANDROID_VERSION_CODE"] = "88"
+        result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "version-code.txt").read_text(), "88")
         self.env["FIXTURE_GRADLE_EXIT"] = "19"
         result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 19)
+
+    def test_play_helper_preserves_ci_run_number_across_private_env_files(self):
+        helper = self.root / "scripts/android_play_deploy.sh"
+        shutil.copyfile(ROOT / "scripts/android_play_deploy.sh", helper)
+        helper.chmod(0o755)
+        (self.root / "android/.ruby-version").write_text("fixture\n")
+        binaries = self.root / "bin"
+        binaries.mkdir()
+        for name, body in {
+            "ruby": "#!/bin/sh\nexit 0\n",
+            "bundle": '#!/bin/sh\n[ "$1" = check ] && exit 0\n'
+                      'printf "%s" "$GITHUB_RUN_NUMBER" > "$FIXTURE_RUN_NUMBER_FILE"\n',
+        }.items():
+            path = binaries / name
+            path.write_text(body)
+            path.chmod(0o755)
+        run_number_file = self.root / "run-number.txt"
+        self.env.update({"PATH": str(binaries) + os.pathsep + self.env["PATH"],
+                         "GITHUB_RUN_NUMBER": "12",
+                         "FIXTURE_RUN_NUMBER_FILE": str(run_number_file)})
+        for private_value in ("", "99"):
+            with self.subTest(private_value=private_value):
+                (self.root / "android/.env.local").write_text(
+                    f"GITHUB_RUN_NUMBER='{private_value}'\n")
+                for arguments in ([], ["--build-only"]):
+                    result = subprocess.run([str(helper), *arguments], cwd=self.root,
+                                            env=self.env, text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(run_number_file.read_text(), "12")
+
+    def run_play_helper(self, *arguments):
+        helper = self.root / "scripts/android_play_deploy.sh"
+        shutil.copyfile(ROOT / "scripts/android_play_deploy.sh", helper)
+        helper.chmod(0o755)
+        (self.root / "android/.ruby-version").write_text("fixture\n")
+        binaries = self.root / "bin"
+        binaries.mkdir(exist_ok=True)
+        for name, body in {
+            "ruby": '#!/bin/sh\necho ruby >> "$FIXTURE_CALLS"\n',
+            "bundle": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FIXTURE_CALLS"\n',
+        }.items():
+            path = binaries / name
+            path.write_text(body)
+            path.chmod(0o755)
+        env = dict(self.env, PATH=str(binaries) + os.pathsep + self.env["PATH"],
+                   FIXTURE_CALLS=str(self.root / "calls.txt"))
+        return subprocess.run([str(helper), *arguments], cwd=self.root,
+                              env=env, text=True, capture_output=True)
+
+    def test_local_play_upload_requires_version_before_toolchain_setup(self):
+        result = self.run_play_helper()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ANDROID_VERSION_CODE", result.stderr)
+        self.assertFalse((self.root / "calls.txt").exists())
+
+    def test_play_upload_rejects_invalid_version_before_toolchain_setup(self):
+        for name in ("ANDROID_VERSION_CODE", "GITHUB_RUN_NUMBER"):
+            for value in ("0", "-1", "abc", "1.5", "2100000001", "999999999999999999999"):
+                with self.subTest(name=name, value=value):
+                    self.env[name] = value
+                    result = self.run_play_helper()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("2100000000", result.stderr)
+                    self.assertFalse((self.root / "calls.txt").exists())
+            self.env.pop(name)
+
+    def test_play_upload_accepts_explicit_version_or_ci_counter(self):
+        for values in ({"ANDROID_VERSION_CODE": "1"},
+                       {"ANDROID_VERSION_CODE": "2100000000"},
+                       {"GITHUB_RUN_NUMBER": "12"},
+                       {"ANDROID_VERSION_CODE": "77", "GITHUB_RUN_NUMBER": "invalid"}):
+            with self.subTest(values=values):
+                self.env.update(values)
+                result = self.run_play_helper()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("exec fastlane android play_beta", (self.root / "calls.txt").read_text())
+                for name in values:
+                    self.env.pop(name)
+
+    def test_play_upload_loads_explicit_version_from_private_env(self):
+        (self.root / "android/.env.local").write_text("ANDROID_VERSION_CODE=77\n")
+        result = self.run_play_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_play_build_only_allows_default_local_version(self):
+        result = self.run_play_helper("--build-only")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("exec fastlane android build_bundle", (self.root / "calls.txt").read_text())
 
 
 if __name__ == "__main__":

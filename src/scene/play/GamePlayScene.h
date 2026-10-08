@@ -28,6 +28,7 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../input/InputTypes.h"
+#include "../../input/VirtualControllerConfig.h"
 #include "../../practice/PracticeResultFlow.h"
 #include "../../replay/ChartReplayCapture.h"
 #include "../../replay/ReplayInputRecorder.h"
@@ -58,9 +59,10 @@ private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
   bool scratchlessAllowed = false;
+  input::VirtualControllerConfig virtualControllerConfig;
   [[nodiscard]] int presentationKeyMode() const;
   bool isGamePaused = false;
-  bool escapeHandledByInputPipeline = false;
+  bool pauseHandledByInputPipeline = false;
   bool profileGameplayBlockerActive = false;
   std::atomic_bool isCancelled = false;
   long long latePoorTiming;
@@ -353,7 +355,6 @@ private:
   GameplaySkinSessionStopOwner gameplaySkinSessionStopOwner;
   BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
-  [[nodiscard]] bool hideVirtualControllerScratch() const noexcept;
   std::unique_ptr<PlayfieldPresentationEventFanout>
       ownedPresentationEventFanout;
   PlayfieldPresentationEventFanout *presentationEventFanout = nullptr;

@@ -226,12 +226,22 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn('export ANDROID_VERSION_NAME="0.0.1"', self.android_deploy)
         self.assertNotIn('ANDROID_VERSION_NAME="1.0.${ANDROID_VERSION_CODE}"', self.android_deploy)
 
-    def test_android_automatic_build_identity_has_second_resolution(self):
+    def test_android_version_code_uses_ci_counter_or_local_default(self):
         version_function = self.android_deploy.split(
-            "android_timestamp_version_code()", 1
+            "android_default_version_code()", 1
         )[1].split("apply_cli_overrides()", 1)[0]
-        self.assertIn("date -u +%s", version_function)
-        self.assertNotIn("+%y%j%H%M", version_function)
+        version_function = "android_default_version_code()" + version_function
+        for run_number, expected in ((None, 1), ("", 1), ("1", 1), ("2", 2), ("345", 345)):
+            with self.subTest(run_number=run_number):
+                environment = os.environ.copy()
+                environment.pop("GITHUB_RUN_NUMBER", None)
+                if run_number is not None:
+                    environment["GITHUB_RUN_NUMBER"] = run_number
+                command = version_function + '\nandroid_default_version_code\n'
+                result = subprocess.run(["bash", "-c", command], env=environment,
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), str(expected))
 
         android_job = self.android_workflow.split("  android-firebase:", 1)[1]
         self.assertIn("group: android-firebase-distribution", android_job)

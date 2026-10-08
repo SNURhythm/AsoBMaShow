@@ -3,7 +3,9 @@
 
 #include <SDL2/SDL_scancode.h>
 
+#include <algorithm>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -55,6 +57,40 @@ void addKeyboardScratchBinding(InputProfile &profile, input::InputScope scope,
 }
 
 } // namespace
+
+bool input_profile::addMissingGameplayCommandBindings(InputProfile &profile) {
+  const auto originalSize = profile.bindings.size();
+  for (const int mode : {4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48}) {
+    for (const auto [key, action] : {
+             std::pair{SDL_SCANCODE_Q, input::LogicalActionKind::Start},
+             std::pair{SDL_SCANCODE_W, input::LogicalActionKind::Select},
+             std::pair{SDL_SCANCODE_ESCAPE, input::LogicalActionKind::Pause},
+             std::pair{SDL_SCANCODE_UP, input::LogicalActionKind::LaneCoverDecrease},
+             std::pair{SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease},
+             std::pair{SDL_SCANCODE_LSHIFT, input::LogicalActionKind::ScratchCounterClockwise},
+             std::pair{SDL_SCANCODE_RSHIFT, input::LogicalActionKind::ScratchClockwise}}) {
+      const bool scratch = action == input::LogicalActionKind::ScratchClockwise ||
+                           action == input::LogicalActionKind::ScratchCounterClockwise;
+      if (scratch && !input::VirtualControllerConfig::isScratchlessKeyMode(mode)) continue;
+      // Preserve remapped actions and keys used by either player in DP.
+      const bool occupied = std::ranges::any_of(profile.bindings, [&](const auto &binding) {
+        return binding.scope.keyMode == mode &&
+               (binding.scope.player == 1 || mode == 10 || mode == 14 || mode == 48) &&
+               (binding.action.kind == action ||
+                (binding.control.deviceClass == input::DeviceClass::Keyboard &&
+                 binding.control.kind == input::ControlKind::Key && binding.control.index == key));
+      });
+      if (occupied) continue;
+      profile.bindings.push_back({
+          .id = "default-keyboard-command-k" + std::to_string(mode) + "-scancode" + std::to_string(key),
+          .scope = {1, mode}, .action = {action, 0},
+          .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                      .kind = input::ControlKind::Key, .index = key,
+                      .direction = input::ControlDirection::Any}});
+    }
+  }
+  return profile.bindings.size() != originalSize;
+}
 
 InputProfile makeDefaultInputProfile() {
   InputProfile profile;
@@ -156,5 +192,6 @@ InputProfile makeDefaultInputProfile() {
     }
   }
 
+  input_profile::addMissingGameplayCommandBindings(profile);
   return profile;
 }

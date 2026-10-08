@@ -19,6 +19,23 @@
 	<string>AsoBMaShow saves exported replay videos to your Photos library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>AsoBMaShow needs Photos access to save exported replay videos.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>SDLSceneConfiguration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>SDLUIKitSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

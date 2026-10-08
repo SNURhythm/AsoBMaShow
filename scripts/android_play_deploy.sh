@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export LANG=en_US.UTF-8
+INHERITED_GITHUB_RUN_NUMBER="${GITHUB_RUN_NUMBER:-}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/android"
@@ -33,6 +34,25 @@ for env_file in "${ENV_FILES[@]}"; do
     set +a
   fi
 done
+
+# Keep the Actions counter intact before Fastlane invokes the shared build helper.
+if [ -n "${INHERITED_GITHUB_RUN_NUMBER}" ]; then
+  export GITHUB_RUN_NUMBER="${INHERITED_GITHUB_RUN_NUMBER}"
+fi
+
+# Local test builds may reuse 1, but uploads must deliberately select a code.
+if [ "${LANE}" = "play_beta" ]; then
+  play_version_code="${ANDROID_VERSION_CODE:-${GITHUB_RUN_NUMBER:-}}"
+  if [ -z "${play_version_code}" ]; then
+    echo "Local Play uploads require an explicit, unused ANDROID_VERSION_CODE; use the Play workflow for its automatic GITHUB_RUN_NUMBER, or --build-only for a local test build." >&2
+    exit 1
+  fi
+  if ! [[ "${play_version_code}" =~ ^[1-9][0-9]{0,9}$ ]] ||
+     [ "${play_version_code}" -gt 2100000000 ]; then
+    echo "Play upload version code (ANDROID_VERSION_CODE or GITHUB_RUN_NUMBER) must be an integer from 1 to 2100000000." >&2
+    exit 1
+  fi
+fi
 
 ruby_version="$(tr -d '[:space:]' < "${ANDROID_DIR}/.ruby-version")"
 if ! ruby -e 'exit RUBY_VERSION == ARGV.fetch(0) ? 0 : 1' "${ruby_version}" >/dev/null 2>&1; then

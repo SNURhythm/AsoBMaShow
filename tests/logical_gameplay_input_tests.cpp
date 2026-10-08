@@ -4,6 +4,7 @@
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
 #include "scene/play/RhythmState.h"
+#include "scene/play/StartSelectControl.h"
 
 #include <SDL2/SDL_scancode.h>
 
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -118,6 +120,103 @@ void testGameplayScopesEnableBothPlayersOnlyForDp() {
               std::vector<input::InputScope>{{.player = 1, .keyMode = 14},
                                              {.player = 2, .keyMode = 14}},
           "double-play modes activate both existing player scopes");
+}
+
+void testDenseDoublePlayActivatesSecondPlayerBindings() {
+  InputProfile profile;
+  profile.bindings.push_back({.id = "24k-double-p2-first", .scope = {2, 48},
+      .action = {input::LogicalActionKind::Lane, 24},
+      .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key, .index = SDL_SCANCODE_Q}});
+  profile.bindings.push_back({.id = "24k-double-p2-last", .scope = {2, 48},
+      .action = {input::LogicalActionKind::Lane, 47},
+      .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key, .index = SDL_SCANCODE_P}});
+  input_profile::addMissingGameplayCommandBindings(profile);
+  const auto scopes = makeGameplayInputScopes(48);
+  require(!hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_Q,
+              input::LogicalActionKind::Start),
+          "24K Double command defaults preserve player two's occupied keys");
+  RecordingControl notes;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputPipeline pipeline(notes, profile, scopes, {}, {},
+      [&](const auto &edge) { applied.push_back(edge); });
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, true);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_P, true);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, false);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_P, false);
+  require(notes.calls == std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Press, .lane = 24},
+              {.kind = ControlCall::Kind::Press, .lane = 47},
+              {.kind = ControlCall::Kind::Release, .lane = 24},
+              {.kind = ControlCall::Kind::Release, .lane = 47}},
+          "24K Double player two bindings reach the dense chart lane boundaries");
+  require(applied.size() == 4, "24K Double records each boundary key edge");
+  for (std::size_t index = 0; index < applied.size(); ++index) {
+    require(applied[index].hasReplayControl &&
+                replay::physicalChartLaneForLogicalControl(48, applied[index].control) ==
+                    std::optional<int>{index % 2 == 0 ? 24 : 47},
+            "24K Double replay controls roundtrip the original physical channels");
+  }
+}
+
+void testDenseDoublePlayCommandKeysUsePhysicalPlayerHalves() {
+  constexpr std::array deltas{
+      -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1,
+      -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1};
+  for (const int player : {1, 2}) {
+    for (int position = 0; position < 24; ++position) {
+      for (const auto modifier : {input::LogicalActionKind::Start,
+                                  input::LogicalActionKind::Select}) {
+        const int physicalLane = (player - 1) * 24 + position;
+        InputProfile profile;
+        profile.bindings.push_back({.id = "modifier", .scope = {player, 48},
+            .action = {modifier},
+            .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                        .kind = input::ControlKind::Key, .index = SDL_SCANCODE_Q}});
+        profile.bindings.push_back({.id = "note", .scope = {player, 48},
+            .action = {input::LogicalActionKind::Lane, physicalLane},
+            .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                        .kind = input::ControlKind::Key, .index = SDL_SCANCODE_D}});
+        RecordingControl notes;
+        gameplay::StartSelectControl commands({.keyMode = 48});
+        std::vector<gameplay::StartSelectControlAction> actions;
+        std::vector<LogicalGameplayInputAdapter::AppliedTransition> recorded;
+        LogicalGameplayInputPipeline pipeline(notes, profile, makeGameplayInputScopes(48), {}, {},
+            [&](const auto &edge) {
+              require(edge.hasReplayControl, "48K command keys retain replay controls");
+              recorded.push_back(edge);
+              const auto next = commands.apply(edge.control, edge.pressed, edge.source.timestampMicros);
+              actions.insert(actions.end(), next.begin(), next.end());
+            });
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, true);
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_D, true);
+        const std::vector<gameplay::StartSelectControlAction> expected{{
+            .kind = modifier == input::LogicalActionKind::Start
+                        ? gameplay::StartSelectControlActionKind::AdjustHispeed
+                        : gameplay::StartSelectControlActionKind::AdjustDuration,
+            .delta = deltas[position]}};
+        require(actions == expected,
+                "all 24 keys on both 48K sides use matching Start/Select adjustments");
+        require(commands.tick(recorded.back().source.timestampMicros + 100'000).empty(),
+                "48K note keys never become held lane-cover controls");
+        require(replay::physicalChartLaneForLogicalControl(48, recorded.back().control) ==
+                    std::optional<int>{physicalLane},
+                "48K command normalization preserves the original replay lane encoding");
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_D, false);
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, false);
+        require(actions == expected, "48K command key releases emit no adjustments");
+
+        gameplay::StartSelectControl playback({.keyMode = 48});
+        std::vector<gameplay::StartSelectControlAction> replayActions;
+        for (const auto &edge : recorded) {
+          const auto next = playback.apply(edge.control, edge.pressed, edge.source.timestampMicros);
+          replayActions.insert(replayActions.end(), next.begin(), next.end());
+        }
+        require(replayActions == expected, "replayed 48K command keys match live adjustments");
+      }
+    }
+  }
 }
 
 void testScratchReversalAndLateReleaseOrdering() {
@@ -905,42 +1004,53 @@ void testScratchReversalKeepsAnOverlappingDigitalHoldCoherent() {
       "scratch reversal remains ordered while a digital scratch hold overlaps");
 }
 
-void testEscapeFallbackYieldsToAnActiveLogicalPauseBinding() {
-  InputProfile profile = makeDefaultInputProfile();
-  profile.bindings.push_back({
-      .id = "pause-escape",
-      .scope = {1, 7},
-      .action = {input::LogicalActionKind::Pause, 0},
-      .control = {.deviceId = "keyboard",
-                  .deviceClass = input::DeviceClass::Keyboard,
-                  .kind = input::ControlKind::Key,
-                  .index = SDL_SCANCODE_ESCAPE,
-                  .direction = input::ControlDirection::Any},
-  });
-  const auto activeScopes = makeGameplayInputScopes(7);
-  require(hasActiveKeyboardActionBinding(profile, activeScopes,
-                                         SDL_SCANCODE_ESCAPE,
-                                         input::LogicalActionKind::Pause),
-          "the Escape fallback detects an active logical Pause binding");
-  const auto inactiveScopes = makeGameplayInputScopes(8);
-  require(!hasActiveKeyboardActionBinding(profile, inactiveScopes,
-                                          SDL_SCANCODE_ESCAPE,
-                                          input::LogicalActionKind::Pause),
-          "inactive key-mode bindings do not suppress the Escape fallback");
-
-  const auto withFallback =
-      makeGameplayInputProfileWithEscapeFallback(profile, activeScopes);
-  require(std::ranges::count_if(withFallback.bindings, [](const auto &binding) {
-            return binding.action.kind == input::LogicalActionKind::Pause;
-          }) == 1,
-          "an explicit active Escape pause binding is not duplicated");
+void testSavedCommandBindingsRespectRebindingAndRemoval() {
+  for (const auto [action, defaultKey, reboundKey] : {
+           std::tuple{input::LogicalActionKind::Start, SDL_SCANCODE_Q, SDL_SCANCODE_E},
+           std::tuple{input::LogicalActionKind::Select, SDL_SCANCODE_W, SDL_SCANCODE_R},
+           std::tuple{input::LogicalActionKind::Pause, SDL_SCANCODE_ESCAPE, SDL_SCANCODE_P}}) {
+    auto profile = makeDefaultInputProfile();
+    const auto scopes = makeGameplayInputScopes(7);
+    require(hasActiveKeyboardActionBinding(profile, scopes, defaultKey, action),
+            "Start, Select, and Pause defaults are real profile bindings");
+    for (auto &binding : profile.bindings) {
+      if (binding.scope == input::InputScope{1, 7} && binding.action.kind == action) {
+        binding.control.index = reboundKey;
+      }
+    }
+    std::vector<input::RealtimePhysicalInputTransition> edges;
+    input::RealtimePhysicalInputRouter router(profile, scopes, [&](const auto &edge) {
+      edges.push_back(edge);
+      return true;
+    });
+    router.setGameplayEnabled(true, 0);
+    router.consume(keyEvent(defaultKey, true), 100'000);
+    require(edges.empty(), "rebound command stops responding to its old default key");
+    router.consume(keyEvent(reboundKey, true), 110'000);
+    require(std::ranges::count_if(edges, [&](const auto &edge) {
+              return edge.type == input::RealtimePhysicalInputTransitionType::Command &&
+                     edge.command.action.kind == action && edge.command.pressed;
+            }) == 1,
+            "rebound command responds through the configured input pipeline");
+    std::erase_if(profile.bindings, [&](const auto &binding) {
+      return binding.scope == input::InputScope{1, 7} && binding.action.kind == action;
+    });
+    edges.clear();
+    input::RealtimePhysicalInputRouter cleared(profile, scopes, [&](const auto &edge) {
+      edges.push_back(edge);
+      return true;
+    });
+    cleared.setGameplayEnabled(true, 0);
+    cleared.consume(keyEvent(defaultKey, true), 120'000);
+    cleared.consume(keyEvent(reboundKey, true), 130'000);
+    require(edges.empty(), "cleared command stays unbound without a hidden fallback");
+  }
 }
 
-void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
+void testDefaultPauseRunsInTheOrderedLogicalPipeline() {
   RecordingControl control;
   const auto scopes = makeGameplayInputScopes(7);
-  const InputProfile profile = makeGameplayInputProfileWithEscapeFallback(
-      makeDefaultInputProfile(), scopes);
+  const InputProfile profile = makeDefaultInputProfile();
   std::vector<input::LogicalInputTransition> commands;
   std::size_t controlCallsAtPause = 0;
   LogicalGameplayInputPipeline pipeline(
@@ -961,17 +1071,17 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
               commands.size() == 1 && commands.front().pressed &&
               commands.front().action.kind == input::LogicalActionKind::Pause &&
               controlCallsAtPause == 1,
-          "the lane edge is applied before the queued Escape pause fallback");
+          "the lane edge is applied before the queued Escape pause binding");
 }
 
 void testCoverShortcutsRespectCustomBindings() {
   const auto scopes = makeGameplayInputScopes(14);
-  auto profile = makeGameplayInputProfileWithEscapeFallback(makeDefaultInputProfile(), scopes);
+  auto profile = makeDefaultInputProfile();
   require(hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_Q, input::LogicalActionKind::Start) &&
               hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_W, input::LogicalActionKind::Select) &&
               hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_UP, input::LogicalActionKind::LaneCoverDecrease) &&
               hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease),
-          "keyboard fallback provides Beatoraja START, SELECT, and cover arrows once for DP");
+          "saved defaults provide START, SELECT, and cover arrows once for DP");
   InputProfile custom;
   custom.bindings.push_back({.id = "custom-q", .scope = {2, 14},
       .action = {input::LogicalActionKind::Lane, 8},
@@ -981,10 +1091,115 @@ void testCoverShortcutsRespectCustomBindings() {
       .action = {input::LogicalActionKind::Select, 0},
       .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
                   .kind = input::ControlKind::Key, .index = SDL_SCANCODE_E}});
-  const auto merged = makeGameplayInputProfileWithEscapeFallback(custom, scopes);
+  input_profile::addMissingGameplayCommandBindings(custom);
+  const auto &merged = custom;
   require(!hasActiveKeyboardActionBinding(merged, scopes, SDL_SCANCODE_Q, input::LogicalActionKind::Start) &&
               !hasActiveKeyboardActionBinding(merged, scopes, SDL_SCANCODE_W, input::LogicalActionKind::Select),
           "cover defaults never steal another player's key or duplicate a rebound command");
+}
+
+void testScratchlessStartSelectScratchCommands() {
+  for (const int mode : {-5, -7, 4, 6, 8, 9, 24, 48}) {
+    for (const auto modifier : {SDL_SCANCODE_Q, SDL_SCANCODE_W}) {
+      for (const auto scratch : {SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT}) {
+        const auto scopes = makeGameplayInputScopes(mode);
+        auto profile = makeDefaultInputProfile();
+        if (mode == 9 || mode == 24 || mode == 48) {
+          profile.bindings.push_back({.id = "dense-command-scratch", .scope = {1, mode},
+              .action = {scratch == SDL_SCANCODE_LSHIFT
+                             ? input::LogicalActionKind::ScratchCounterClockwise
+                             : input::LogicalActionKind::ScratchClockwise},
+              .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                          .kind = input::ControlKind::Key, .index = scratch}});
+        }
+        gameplay::StartSelectControl commands({.keyMode = std::abs(mode)});
+        input::RealtimePhysicalInputRouter router(profile, scopes, [&](const auto &edge) {
+          if (edge.type == input::RealtimePhysicalInputTransitionType::Command) {
+            if (const auto control = scratchCommandControl(edge.command)) {
+              (void)commands.apply(*control, edge.command.pressed, edge.steadyTimestampMicros);
+            }
+          }
+          if (mode > 0 && edge.type != input::RealtimePhysicalInputTransitionType::Command) {
+            require(edge.replayOnly && !replay::isDirectionalScratchControl(edge.replayControl.kind),
+                    "command scratches never press note lanes or enter replays");
+          }
+          if (edge.hasReplayControl) {
+            (void)commands.apply(edge.replayControl,
+                edge.type == input::RealtimePhysicalInputTransitionType::Press,
+                edge.steadyTimestampMicros);
+          }
+          return true;
+        });
+        router.setGameplayEnabled(true, 0);
+        router.consume(keyEvent(modifier, true), 100'000);
+        router.consume(keyEvent(scratch, true), 110'000);
+        const auto actions = commands.tick(120'000);
+        require(actions.size() == 1 &&
+                    actions[0].kind == (modifier == SDL_SCANCODE_Q
+                        ? gameplay::StartSelectControlActionKind::AdjustLaneCover
+                        : gameplay::StartSelectControlActionKind::AdjustDuration) &&
+                    actions[0].delta == (scratch == SDL_SCANCODE_LSHIFT ? -1 : 1),
+                "scratchless Start/Select plus either scratch direction adjusts cover/duration");
+        router.consume(keyEvent(scratch, false), 130'000);
+        require(commands.tick(200'000).empty(),
+                "releasing scratch stops scratchless command repeats");
+      }
+    }
+  }
+}
+
+void testScratchlessScratchFallbackRespectsCustomBindings() {
+  for (const int mode : {-5, -7, 4, 6, 8}) {
+    InputProfile saved;
+    saved.bindings.push_back({.id = "occupied-shift", .scope = {1, mode},
+        .action = {input::LogicalActionKind::Lane, 0},
+        .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                    .kind = input::ControlKind::Key, .index = SDL_SCANCODE_LSHIFT}});
+    saved.bindings.push_back({.id = "custom-scratch", .scope = {1, mode},
+        .action = {input::LogicalActionKind::ScratchClockwise},
+        .control = {.deviceId = "pad", .deviceClass = input::DeviceClass::GameController,
+                    .kind = input::ControlKind::Button, .index = 0}});
+    const auto scopes = makeGameplayInputScopes(mode);
+    input_profile::addMissingGameplayCommandBindings(saved);
+    const auto &profile = saved;
+    require(!hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_LSHIFT,
+                input::LogicalActionKind::ScratchCounterClockwise) &&
+            !hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_RSHIFT,
+                input::LogicalActionKind::ScratchClockwise),
+            "scratchless scratch fallbacks yield to occupied keys and custom controller actions");
+
+  }
+}
+
+void testCommandScratchPreservesDenseKeysAndHeldDirection() {
+  for (const int mode : {8, 9, 24, 48, 130}) {
+    RecordingControl notes;
+    gameplay::StartSelectControl commands({.keyMode = mode});
+    (void)commands.apply({.kind = replay::LogicalControlKind::Start}, true, 100'000);
+    LogicalGameplayInputAdapter adapter(notes, [&](const auto &edge) {
+      if (const auto control = scratchCommandControl(edge)) {
+        (void)commands.apply(*control, edge.pressed, edge.timestampMicros);
+      }
+    });
+    adapter.apply(std::vector{
+        transition({1, mode}, input::LogicalActionKind::Lane, true, 7),
+        transition({1, mode}, input::LogicalActionKind::ScratchClockwise, true),
+        transition({1, mode}, input::LogicalActionKind::ScratchCounterClockwise, true),
+        transition({1, mode}, input::LogicalActionKind::ScratchCounterClockwise, false),
+    });
+    const auto actions = commands.tick(200'000);
+    require(actions.size() == 1 && actions[0].delta == 1,
+            "releasing the newest command scratch restores the older held direction");
+    adapter.apply(std::vector{
+        transition({1, mode}, input::LogicalActionKind::ScratchClockwise, false),
+        transition({1, mode}, input::LogicalActionKind::Lane, false, 7),
+    });
+    require(notes.calls == std::vector<ControlCall>{
+                {.kind = ControlCall::Kind::Press, .lane = 7},
+                {.kind = ControlCall::Kind::Release, .lane = 7}},
+            "command scratch never presses or releases the overlapping key lane");
+    require(commands.tick(300'000).empty(), "command scratch releases stop repeats");
+  }
 }
 
 void testIndependentScratchlessGameplayBindings() {
@@ -992,7 +1207,8 @@ void testIndependentScratchlessGameplayBindings() {
     auto profile = makeDefaultInputProfile();
     const auto canonicalKey = mode == 5 ? SDL_SCANCODE_D : SDL_SCANCODE_S;
     for (auto &binding : profile.bindings) {
-      if (binding.scope == input::InputScope{1, -mode} && binding.action.lane == 0) {
+      if (binding.scope == input::InputScope{1, -mode} &&
+          binding.action.kind == input::LogicalActionKind::Lane && binding.action.lane == 0) {
         binding.control.index = SDL_SCANCODE_A;
       }
     }
@@ -1527,6 +1743,8 @@ int main() {
   testLegacyScratchAndReplayKeepTheTriggerTimestamp();
   testLaneTransitionsPreserveDpLaneNumbers();
   testGameplayScopesEnableBothPlayersOnlyForDp();
+  testDenseDoublePlayActivatesSecondPlayerBindings();
+  testDenseDoublePlayCommandKeysUsePhysicalPlayerHalves();
   testScratchReversalAndLateReleaseOrdering();
   testScratchReversalFallsBackToOlderHeldDirection();
   testSecondPlayerScratchUsesLaneFifteen();
@@ -1550,10 +1768,13 @@ int main() {
   testTouchAndHardwareShareOneLaneOwnershipBoundary();
   testTouchScratchAndDigitalScratchShareOneOwnershipBoundary();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
-  testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
-  testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testSavedCommandBindingsRespectRebindingAndRemoval();
+  testDefaultPauseRunsInTheOrderedLogicalPipeline();
   testCoverShortcutsRespectCustomBindings();
   testIndependentScratchlessGameplayBindings();
+  testScratchlessStartSelectScratchCommands();
+  testScratchlessScratchFallbackRespectsCustomBindings();
+  testCommandScratchPreservesDenseKeysAndHeldDirection();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testNonStockKeyModesCaptureBmsChannelReplayControls();
   testArbitraryLaneInputDoesNotDependOnBrdControls();

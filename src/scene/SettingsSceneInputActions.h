@@ -12,7 +12,7 @@
 
 namespace settings_scene {
 
-inline constexpr std::array<int, 9> kInputKeyModes = {4, -5, 5, 6, -7, 7, 8, 10, 14};
+inline constexpr std::array<int, 12> kInputKeyModes = {4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48};
 
 constexpr bool isScratchlessInputSelection(int keyMode) {
   return keyMode == -5 || keyMode == -7;
@@ -46,9 +46,9 @@ inline std::vector<InputActionDefinition> inputActionsForScope(
   std::vector<InputActionDefinition> result;
   int firstLane = 0;
   int noteLanes = scratchless ? -scope.keyMode : scope.keyMode;
-  if (scope.keyMode == 10 || scope.keyMode == 14) {
+  if (scope.keyMode == 10 || scope.keyMode == 14 || scope.keyMode == 48) {
     noteLanes = scope.keyMode / 2;
-    firstLane = scope.player == 1 ? 0 : 8;
+    firstLane = scope.player == 1 ? 0 : scope.keyMode == 48 ? 24 : 8;
   }
   for (int localLane = 0; localLane < noteLanes; ++localLane) {
     int physicalLane = firstLane + localLane;
@@ -72,13 +72,11 @@ inline std::vector<InputActionDefinition> inputActionsForScope(
          .label = i18n::message("settings.input.actions.scratch_legacy_digital.label"),
          .bindable = false});
   }
-  if (!scratchless) {
-    result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
-                     .label = i18n::message("settings.input.actions.scratch_clockwise.label")});
-    result.push_back(
-        {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
-         .label = i18n::message("settings.input.actions.scratch_counter_clockwise.label")});
-  }
+  result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
+                   .label = i18n::message("settings.input.actions.scratch_clockwise.label")});
+  result.push_back(
+      {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
+       .label = i18n::message("settings.input.actions.scratch_counter_clockwise.label")});
   result.push_back(
       {.action = {input::LogicalActionKind::Start, 0}, .label = i18n::message("settings.input.actions.start.label")});
   result.push_back(

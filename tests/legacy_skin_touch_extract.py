@@ -21,6 +21,7 @@ signatures = (
     "void RhythmInputHandler::onFingerDown(",
     "void RhythmInputHandler::onFingerUp(",
     "void RhythmInputHandler::onFingerMove(",
+    "std::optional<int> RhythmInputHandler::playfieldTouchLane(",
     "int RhythmInputHandler::clampLane(",
     "bool RhythmInputHandler::isScratchLane(",
     "int RhythmInputHandler::touchToLaneIndex(",

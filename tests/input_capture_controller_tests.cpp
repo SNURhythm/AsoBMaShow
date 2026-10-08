@@ -110,7 +110,8 @@ bool sameBinding(const input::InputBinding &left,
 bool sameProfile(const InputProfile &left, const InputProfile &right) {
   if (left.schemaVersion != right.schemaVersion ||
       left.gyroscopeTurntable != right.gyroscopeTurntable ||
-      left.virtualController != right.virtualController ||
+      left.virtualControllers != right.virtualControllers ||
+      left.playfieldTouch != right.playfieldTouch ||
       left.bindings.size() != right.bindings.size()) {
     return false;
   }
@@ -233,7 +234,7 @@ void testVirtualControllerConfigUpdateIsSanitizedAndTransactional() {
         return false;
       });
 
-  require(controller.updateVirtualControllerConfig(
+  require(controller.updateVirtualControllerConfig(7,
               {.enabled = true,
                .centerX = -1.0F,
                .centerY = 2.0F,
@@ -242,18 +243,29 @@ void testVirtualControllerConfigUpdateIsSanitizedAndTransactional() {
                .keySpacingY = -0.50F,
                .scratchKeyplateSpacing = -1.0F}),
           "a virtual controller configuration edit is committed");
-  require(saves == 1 && profile.virtualController.enabled &&
-              profile.virtualController.centerX == 0.0F &&
-              profile.virtualController.centerY == 1.0F &&
-              profile.virtualController.buttonSize == 0.30F &&
-              profile.virtualController.keySpacingX == -0.75F &&
-              profile.virtualController.keySpacingY == -0.50F &&
-              profile.virtualController.scratchKeyplateSpacing == -1.0F,
+  require(saves == 1 && profile.virtualControllerForKeyMode(7).enabled &&
+              profile.virtualControllerForKeyMode(7).centerX == 0.0F &&
+              profile.virtualControllerForKeyMode(7).centerY == 1.0F &&
+              profile.virtualControllerForKeyMode(7).buttonSize == 0.30F &&
+              profile.virtualControllerForKeyMode(7).keySpacingX == -0.75F &&
+              profile.virtualControllerForKeyMode(7).keySpacingY == -0.50F &&
+              profile.virtualControllerForKeyMode(7).scratchKeyplateSpacing == -1.0F,
           "virtual controller keeps intentional axis overlap before persistence");
+
+  auto scratchlessConfig = profile.virtualControllerForKeyMode(-7);
+  scratchlessConfig.enabled = true;
+  scratchlessConfig.centerX = 0.33F;
+  scratchlessConfig.scratchEnabled = true;
+  const auto sevenKeyConfig = profile.virtualControllerForKeyMode(7);
+  require(controller.updateVirtualControllerConfig(-7, scratchlessConfig) &&
+              profile.virtualControllerForKeyMode(-7) == scratchlessConfig &&
+              profile.virtualControllerForKeyMode(7) == sevenKeyConfig &&
+              profile.virtualControllerForKeyMode(-5) == input::VirtualControllerConfig::forKeyMode(-5),
+          "editing scratchless 7K changes only that mode, including its optional platter");
 
   const InputProfile beforeFailure = profile;
   allowSave = false;
-  require(!controller.updateVirtualControllerConfig(
+  require(!controller.updateVirtualControllerConfig(7,
               {.enabled = false,
                .centerX = 0.4F,
                .centerY = 0.6F,
@@ -261,9 +273,45 @@ void testVirtualControllerConfigUpdateIsSanitizedAndTransactional() {
                .keySpacingX = 0.4F,
                .keySpacingY = 0.2F,
                .scratchKeyplateSpacing = 0.3F}) &&
-              saves == 2 && sameProfile(profile, beforeFailure) &&
+              saves == 3 && sameProfile(profile, beforeFailure) &&
               controller.lastError() == "injected virtual controller save failure",
           "a failed virtual controller save leaves the live profile unchanged");
+}
+
+void testPlayfieldTouchConfigIsIsolatedAndTransactional() {
+  RegistryHarness harness;
+  InputProfile profile = makeDefaultInputProfile();
+  const auto controllers = profile.virtualControllers;
+  bool allowSave = true;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+      [&](const InputProfile &, std::string &error) {
+        ++saves;
+        if (!allowSave) error = "disk full";
+        return allowSave;
+      });
+  const input::PlayfieldTouchConfig enabled{
+      .tapToScratch = true, .sideTapMode = input::SideTapMode::Scratch};
+  require(controller.updatePlayfieldTouchConfig(7, enabled) && saves == 1 &&
+              profile.playfieldTouchForKeyMode(7) == enabled &&
+              profile.playfieldTouchForKeyMode(5) == input::PlayfieldTouchConfig{} &&
+              profile.virtualControllers == controllers,
+          "playfield touch edits are per keymode and preserve virtual controllers");
+  require(controller.updatePlayfieldTouchConfig(7, enabled) && saves == 1,
+          "unchanged touch config does not save again");
+  const auto before = profile;
+  allowSave = false;
+  require(!controller.updatePlayfieldTouchConfig(7, {}) && saves == 2 &&
+              sameProfile(profile, before) && controller.lastError() == "disk full",
+          "failed touch save leaves all live settings intact");
+  allowSave = true;
+  require(controller.updatePlayfieldTouchConfig(7,
+              {.sideTapMode = input::SideTapMode::Scratch}) &&
+              profile.playfieldTouchForKeyMode(7) == input::PlayfieldTouchConfig{},
+          "disabling tap scratch resets its dependent side option");
+  require(controller.updatePlayfieldTouchConfig(-7, enabled) &&
+              profile.playfieldTouchForKeyMode(-7) == input::PlayfieldTouchConfig{},
+          "scratchless keymodes cannot enable tap scratch");
 }
 
 void testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess() {
@@ -609,7 +657,7 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
   profile.bindings.push_back(binding("scratchless-custom", {1, -7}, lane(0),
                                      buttonControl("pad:one", 5)));
   controller.resetScopeToDefaults({1, -7});
-  require(saves == 3 && profile.bindingsFor({1, -7}).size() == 7,
+  require(saves == 3 && profile.bindingsFor({1, -7}).size() == 14,
           "scratchless reset restores its independent defaults");
   for (const auto &original : originalBindings) {
     require(std::ranges::any_of(profile.bindings, [&](const auto &value) {
@@ -965,6 +1013,7 @@ int main() {
     testMonitoringNoiseActivationRepeatsAndDuplicateIgnore();
     testGyroscopeConfigUpdateIsSanitizedAndTransactional();
     testVirtualControllerConfigUpdateIsSanitizedAndTransactional();
+    testPlayfieldTouchConfigIsIsolatedAndTransactional();
     testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess();
     testAxisCaptureUsesSensitiveHysteresis();
     testConflictConfirmationIsTransactionalAndScopeLimited();

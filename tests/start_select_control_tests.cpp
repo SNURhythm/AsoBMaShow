@@ -69,6 +69,100 @@ void testStartAndSelectUseBeatorajaKeyBindings() {
           "Select plus the first 7-key input lowers green number");
 }
 
+void testEvenKeyModesUseSkinIndependentLaneRoles() {
+  struct Case {
+    int mode;
+    std::vector<int> lanes;
+    std::vector<int> deltas;
+  };
+  for (const auto &example : {
+           Case{4, {0, 1, 3, 4}, {-1, 1, 1, -1}},
+           Case{6, {0, 1, 2, 4, 5, 6}, {-1, 1, -1, -1, 1, -1}},
+           Case{8, {7, 0, 1, 2, 3, 4, 5, 6}, {-1, 1, -1, 1, 1, -1, 1, -1}}}) {
+    for (const auto modifier : {start(), select()}) {
+      gameplay::StartSelectControl control({.keyMode = example.mode});
+      (void)control.apply(modifier, true, 1'000);
+      for (std::size_t index = 0; index < example.lanes.size(); ++index) {
+        const auto key = lane(example.lanes[index]);
+        require(control.apply(key, true, 1'001) == std::vector<Action>{
+                    {.kind = modifier.kind == ControlKind::Start
+                         ? ActionKind::AdjustHispeed : ActionKind::AdjustDuration,
+                     .delta = example.deltas[index]}},
+                "4K/6K/8K canonical white-role keys decrease and blue-role keys increase");
+        require(control.apply(key, false, 1'002).empty(),
+                "key release does not repeat a speed adjustment");
+      }
+      require(control.apply(lane(-1), true, 1'003).empty() &&
+                  control.apply(lane(8), true, 1'003).empty(),
+              "invalid lanes never adjust speed");
+      if (example.mode != 8) {
+        require(control.apply(lane(example.mode == 4 ? 2 : 3), true, 1'004).empty(),
+                "omitted sparse lanes have no speed command");
+      }
+      (void)control.apply(modifier, false, 1'005);
+      require(control.apply(lane(example.lanes.front()), true, 1'006).empty(),
+              "releasing the modifier ends speed control");
+    }
+  }
+}
+
+void testLegacyAndSingleKeyboardCommandMappingsRemainUnchanged() {
+  for (const int mode : {5, 7, 10, 14, 24}) {
+    const int players = mode == 10 || mode == 14 ? 2 : 1;
+    const int keys = mode == 10 ? 5 : mode == 14 ? 7 : mode;
+    constexpr std::array keyboardDeltas{
+        -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1,
+        -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1};
+    for (int player = 1; player <= players; ++player) {
+      for (const auto modifier : {start(), select()}) {
+        gameplay::StartSelectControl control({.keyMode = mode});
+        (void)control.apply(modifier, true, 1'000);
+        for (int position = 0; position < keys; ++position) {
+          const Control key{.kind = ControlKind::Lane, .player = player, .lane = position};
+          require(control.apply(key, true, 1'001) == std::vector<Action>{{
+                      .kind = modifier.kind == ControlKind::Start
+                                  ? ActionKind::AdjustHispeed : ActionKind::AdjustDuration,
+                      .delta = mode == 24 ? keyboardDeltas[position] : position % 2 == 0 ? -1 : 1}},
+                  "legacy beat and 24K single command key roles remain unchanged");
+          require(control.apply(key, false, 1'002).empty(),
+                  "legacy command key releases emit no adjustment");
+        }
+      }
+    }
+  }
+  for (const int specialLane : {24, 25}) {
+    gameplay::StartSelectControl control({.keyMode = 24});
+    (void)control.apply(start(), true, 100'000);
+    require(control.apply(lane(specialLane), true, 100'001).empty(),
+            "24K single extra controls retain their held behavior");
+    require(control.tick(150'002) == std::vector<Action>{{
+                .kind = ActionKind::AdjustLaneCover, .delta = specialLane == 24 ? -1 : 1}},
+            "24K single extra controls retain their lane-cover direction");
+  }
+}
+
+void testDenseDoublePlayReservedReplayLanesDoNotAdjustCommands() {
+  for (const auto modifier : {start(), select()}) {
+    gameplay::StartSelectControl control({.keyMode = 48});
+    (void)control.apply(modifier, true, 100'000);
+    // BRD's 26-wide player namespace includes channels beyond the 48 chart keys.
+    for (int reserved = 22; reserved <= 25; ++reserved) {
+      const Control key{.kind = ControlKind::Lane, .player = 2, .lane = reserved};
+      require(control.apply(key, true, 100'001).empty() &&
+                  control.tick(200'002).empty() &&
+                  control.apply(key, false, 200'003).empty(),
+              "48K reserved replay channels do not wrap into note or held commands");
+    }
+    for (const Control invalid : {
+             Control{.kind = ControlKind::Lane, .player = 1, .lane = -1},
+             Control{.kind = ControlKind::Lane, .player = 1, .lane = 26},
+             Control{.kind = ControlKind::Lane, .player = 3, .lane = 0}}) {
+      require(control.apply(invalid, true, 200'004).empty(),
+              "invalid 48K replay lanes produce no command adjustment");
+    }
+  }
+}
+
 void testStartDoublePressAndConjunctionMatchBeatorajaEdges() {
   gameplay::StartSelectControl control({.keyMode = 7});
   require(control.apply(start(), true, 1'000).empty(),
@@ -167,6 +261,9 @@ void testResetDiscardsHeldAndTimedGestureState() {
 
 int main() {
   testStartAndSelectUseBeatorajaKeyBindings();
+  testEvenKeyModesUseSkinIndependentLaneRoles();
+  testLegacyAndSingleKeyboardCommandMappingsRemainUnchanged();
+  testDenseDoublePlayReservedReplayLanesDoNotAdjustCommands();
   testStartDoublePressAndConjunctionMatchBeatorajaEdges();
   testStartAndSelectAtNoteEndExitImmediately();
   testHeldSpecialKeysRepeatLikeBeatorajaScratchBindings();

@@ -141,7 +141,7 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
   };
 
   require(defaults.bindings.size() ==
-              expectedLanes.size() + expectedScratch.size() + 12,
+              expectedLanes.size() + expectedScratch.size() + 82,
           "default profile contains exactly the keyboard bindings");
   for (const auto &binding : expectedLanes) {
     require(defaults.hasDigitalBinding(
@@ -155,11 +155,11 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
             "default directional scratch binding is present");
   }
 
-  require(defaults.bindingsFor({1, 10}).size() == 6,
+  require(defaults.bindingsFor({1, 10}).size() == 11,
           "10-key player one has five keys and left scratch");
   require(defaults.bindingsFor({2, 10}).size() == 6,
           "10-key player two has five keys and right scratch");
-  require(defaults.bindingsFor({1, 14}).size() == 8,
+  require(defaults.bindingsFor({1, 14}).size() == 13,
           "14-key player one has seven keys and left scratch");
   require(defaults.bindingsFor({2, 14}).size() == 8,
           "14-key player two has seven keys and right scratch");
@@ -186,8 +186,22 @@ int main() {
     require(defaults.gyroscopeTurntable ==
                 input::GyroscopeTurntableConfig{},
             "defaults use the canonical gyroscope turntable settings");
-    require(defaults.virtualController == input::VirtualControllerConfig{},
+    require(defaults.virtualControllerForKeyMode(7) == input::VirtualControllerConfig{},
             "defaults keep the optional virtual controller disabled");
+    for (const int mode : {4, -5, 6, -7, 8}) {
+      require(!defaults.virtualControllerForKeyMode(mode).scratchEnabled,
+              "scratchless modes default to no virtual platter");
+    }
+    for (const int mode : {0, 9, 24, 48}) {
+      require(!defaults.virtualControllerForKeyMode(mode).enabled,
+              "unsupported virtual controller modes remain playable without an overlay");
+    }
+    for (const int mode : {4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48}) {
+      require(defaults.hasDigitalBinding({1, mode}, {input::LogicalActionKind::Start}, "keyboard", SDL_SCANCODE_Q) &&
+                  defaults.hasDigitalBinding({1, mode}, {input::LogicalActionKind::Select}, "keyboard", SDL_SCANCODE_W) &&
+                  defaults.hasDigitalBinding({1, mode}, {input::LogicalActionKind::Pause}, "keyboard", SDL_SCANCODE_ESCAPE),
+              "every gameplay mode has editable Start, Select, and Pause defaults");
+    }
     verifyCurrentKeyboardDefaults(defaults);
 
     input::InputBinding invalid = defaults.bindings.front();
@@ -228,7 +242,7 @@ int main() {
     require(
         oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
             std::ranges::find(diagnostics,
-                              "Reset unsupported input schema version to 8.") !=
+                              "Reset unsupported input schema version to 10.") !=
                 diagnostics.end(),
         "schema repair diagnostics report the real current version");
 
@@ -305,7 +319,7 @@ int main() {
         InputProfileStore::load(fixturePath("input-v1.json"));
     require(fixtureResult.status == InputProfileLoadStatus::Loaded,
             "version-one fixture loads");
-    require(fixtureResult.profile.bindings.size() == 1 + 12,
+    require(fixtureResult.profile.bindings.size() == 1 + 81,
             "version-one fixture retains its binding");
     require(fixtureResult.profile.bindings.front().control.deviceId.empty(),
             "omitted fixture device ID is represented as missing");
@@ -321,8 +335,8 @@ int main() {
             "version-one profiles migrate with default gyroscope settings");
 
     for (const int mode : {5, 7}) {
-      require(defaults.bindingsFor({1, -mode}).size() == mode,
-              "scratchless defaults have independent key-only scopes");
+      require(defaults.bindingsFor({1, -mode}).size() == mode + 7,
+              "scratchless defaults have independent key and command scopes");
       for (int lane = 0; lane < mode; ++lane) {
         const auto &binding = defaults.bindingsFor({1, -mode})[lane].get();
         require(binding.action.kind == input::LogicalActionKind::Lane &&
@@ -339,7 +353,7 @@ int main() {
     const auto scratchlessPath = testRoot / "independent-scratchless.json";
     writeFile(scratchlessPath, R"({"schemaVersion":7,"bindings":[]})");
     auto migratedScratchless = InputProfileStore::load(scratchlessPath);
-    require(migratedScratchless.profile.bindings.size() == 12,
+    require(migratedScratchless.profile.bindings.size() == 82,
             "schema seven gains standard independent scratchless defaults");
     migratedScratchless.profile.bindings.front().control.index = SDL_SCANCODE_A;
     std::string scratchlessSaveError;
@@ -347,7 +361,7 @@ int main() {
                 migratedScratchless.profile, scratchlessSaveError),
             "independent scratchless bindings save");
     auto savedScratchless = InputProfileStore::load(scratchlessPath);
-    require(savedScratchless.profile.bindings.size() == 12 &&
+    require(savedScratchless.profile.bindings.size() == 82 &&
                 savedScratchless.profile.bindings.front().scope.keyMode == -5 &&
                 savedScratchless.profile.bindings.front().control.index == SDL_SCANCODE_A,
             "scratchless scope and custom binding survive sanitizing and reload");
@@ -412,7 +426,7 @@ int main() {
     const auto repairedIdsResult = InputProfileStore::load(repairedIdsPath);
     require(repairedIdsResult.status == InputProfileLoadStatus::Loaded,
             "an imported profile with repairable IDs still loads");
-    require(repairedIdsResult.profile.bindings.size() == 3 + 12 &&
+    require(repairedIdsResult.profile.bindings.size() == 3 + 82 &&
                 hasNonemptyUniqueBindingIds(repairedIdsResult.profile),
             "load sanitization retains distinct bindings and repairs their "
             "IDs");
@@ -456,7 +470,9 @@ int main() {
     const std::vector<int> migratedScratchlessLanes = [&] {
       std::vector<int> lanes;
       for (const auto &binding : compactScratchlessV2.profile.bindings) {
-        if (binding.scope.keyMode > 0) lanes.push_back(binding.action.lane);
+        if (binding.scope.keyMode > 0 && binding.action.kind == input::LogicalActionKind::Lane) {
+          lanes.push_back(binding.action.lane);
+        }
       }
       return lanes;
     }();
@@ -502,7 +518,7 @@ int main() {
                 gyroscopeV2Result.profile.gyroscopeTurntable.releaseDelayMs ==
                     350,
             "version-two gyroscope settings persist");
-    require(gyroscopeV2Result.profile.bindings.size() == 1 + 12 &&
+    require(gyroscopeV2Result.profile.bindings.size() == 1 + 82 &&
                 gyroscopeV2Result.profile.bindings.front()
                         .control.deviceClass == input::DeviceClass::Gyroscope,
             "gyroscope device class persists on an axis binding");
@@ -569,7 +585,7 @@ int main() {
     require(missingConfigObjectResult.status == InputProfileLoadStatus::Loaded &&
                 missingConfigObjectResult.profile.gyroscopeTurntable ==
                     input::GyroscopeTurntableConfig{} &&
-                missingConfigObjectResult.profile.bindings.size() == 1 + 12 &&
+                missingConfigObjectResult.profile.bindings.size() == 1 + 82 &&
                 missingConfigObjectResult.profile.bindings.front().id ==
                     "surviving-binding",
             "a missing config object recovers defaults without losing bindings");
@@ -625,7 +641,7 @@ int main() {
     require(versionZeroResult.status == InputProfileLoadStatus::Loaded &&
                 versionZeroResult.profile.schemaVersion ==
                     InputProfile::kSchemaVersion &&
-                versionZeroResult.profile.bindings.size() == 1 + 12 &&
+                versionZeroResult.profile.bindings.size() == 1 + 81 &&
                 sameBinding(versionZeroResult.profile.bindings.front(),
                             fixtureResult.profile.bindings.front()),
             "version-zero input migrates in memory to the current schema");
@@ -636,7 +652,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 8") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 10") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -654,7 +670,7 @@ int main() {
     const auto roundTripResult = InputProfileStore::load(roundTripPath);
     require(roundTripResult.status == InputProfileLoadStatus::Loaded,
             "saved profile reloads");
-    require(roundTripResult.profile.bindings.size() == 1 + 12 &&
+    require(roundTripResult.profile.bindings.size() == 1 + 81 &&
                 sameBinding(roundTripResult.profile.bindings.front(),
                             fixtureResult.profile.bindings.front()),
             "JSON round trip preserves a missing device ID and binding fields");
@@ -667,7 +683,7 @@ int main() {
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
     require(
-        gyroscopeRoundTripJson.find("\"schemaVersion\": 8") !=
+        gyroscopeRoundTripJson.find("\"schemaVersion\": 10") !=
                 std::string::npos &&
             gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                 std::string::npos &&
@@ -683,13 +699,13 @@ int main() {
     require(gyroscopeRoundTripResult.status == InputProfileLoadStatus::Loaded &&
                 gyroscopeRoundTripResult.profile.gyroscopeTurntable ==
                     gyroscopeV2Result.profile.gyroscopeTurntable &&
-                gyroscopeRoundTripResult.profile.bindings.size() == 1 + 12 &&
+                gyroscopeRoundTripResult.profile.bindings.size() == 1 + 82 &&
                 sameBinding(gyroscopeRoundTripResult.profile.bindings.front(),
                             gyroscopeV2Result.profile.bindings.front()),
             "version-two gyroscope profile round trips without loss");
 
     InputProfile virtualControllerProfile = defaults;
-    virtualControllerProfile.virtualController = {
+    virtualControllerProfile.virtualControllers.at(7) = {
         .enabled = true,
         .scratchMode = input::VirtualControllerScratchMode::Spin,
         .player = input::VirtualControllerPlayer::Player2,
@@ -700,6 +716,11 @@ int main() {
         .keySpacingY = 0.21F,
         .scratchKeyplateSpacing = -0.12F,
     };
+    virtualControllerProfile.virtualControllers.at(-7).enabled = true;
+    virtualControllerProfile.virtualControllers.at(-7).centerX = 0.30F;
+    virtualControllerProfile.virtualControllers.at(4).scratchEnabled = true;
+    virtualControllerProfile.virtualControllers.at(4).scratchMode =
+        input::VirtualControllerScratchMode::Spin;
     const auto virtualControllerRoundTripPath =
         testRoot / "virtual-controller-round-trip.json";
     errorMessage.clear();
@@ -710,12 +731,12 @@ int main() {
     const auto virtualControllerRoundTrip =
         InputProfileStore::load(virtualControllerRoundTripPath);
     require(virtualControllerRoundTrip.status == InputProfileLoadStatus::Loaded &&
-                virtualControllerRoundTrip.profile.virtualController ==
-                    virtualControllerProfile.virtualController,
+                virtualControllerRoundTrip.profile.virtualControllers ==
+                    virtualControllerProfile.virtualControllers,
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 8") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 10") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
                     std::string::npos &&
@@ -729,7 +750,7 @@ int main() {
                     std::string::npos &&
                 virtualControllerJson.find("\"keyGap\"") == std::string::npos,
             "virtual-controller geometry, player, and scratch mode serialize "
-            "in schema eight");
+            "in schema ten");
 
     const auto legacyVirtualControllerPath =
         testRoot / "virtual-controller-v4.json";
@@ -738,18 +759,76 @@ int main() {
     const auto legacyVirtualController =
         InputProfileStore::load(legacyVirtualControllerPath);
     require(legacyVirtualController.status == InputProfileLoadStatus::Loaded &&
-                legacyVirtualController.profile.virtualController.enabled &&
-                legacyVirtualController.profile.virtualController.scratchMode ==
+                legacyVirtualController.profile.virtualControllerForKeyMode(7).enabled &&
+                legacyVirtualController.profile.virtualControllerForKeyMode(7).scratchMode ==
                     input::VirtualControllerScratchMode::Flick &&
-                legacyVirtualController.profile.virtualController.player ==
+                legacyVirtualController.profile.virtualControllerForKeyMode(7).player ==
                     input::VirtualControllerPlayer::Player1 &&
-                legacyVirtualController.profile.virtualController.keySpacingX ==
+                legacyVirtualController.profile.virtualControllerForKeyMode(7).keySpacingX ==
                     0.3F &&
-                legacyVirtualController.profile.virtualController.keySpacingY ==
+                legacyVirtualController.profile.virtualControllerForKeyMode(7).keySpacingY ==
                     0.3F &&
-                legacyVirtualController.profile.virtualController
+                legacyVirtualController.profile.virtualControllerForKeyMode(7)
                         .scratchKeyplateSpacing == 0.3F,
             "schema-four virtual controller profiles migrate their legacy gap to every explicit spacing relation");
+
+    for (const int mode : {4, -5, 5, 6, -7, 7, 8, 10, 14}) {
+      const auto &config = legacyVirtualController.profile.virtualControllerForKeyMode(mode);
+      require(config.enabled && config.centerY == 0.7F && config.buttonSize == 0.1F &&
+                  config.scratchEnabled == !input::VirtualControllerConfig::isScratchlessKeyMode(mode),
+              "legacy global controller migrates to each mode with scratchless platter disabled");
+    }
+    const auto commandMigrationPath = testRoot / "editable-commands-v8.json";
+    writeFile(commandMigrationPath, R"({"schemaVersion":8,"bindings":[
+      {"id":"custom-pause","scope":{"player":1,"keyMode":7},"action":{"kind":"pause"},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":19}},
+      {"id":"occupied-escape","scope":{"player":2,"keyMode":14},"action":{"kind":"lane","lane":8},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":41}}
+    ]})");
+    const auto migratedCommands = InputProfileStore::load(commandMigrationPath);
+    require(migratedCommands.status == InputProfileLoadStatus::Loaded &&
+                migratedCommands.profile.hasDigitalBinding({1, 7}, {input::LogicalActionKind::Pause}, "keyboard", SDL_SCANCODE_P) &&
+                !migratedCommands.profile.hasDigitalBinding({1, 7}, {input::LogicalActionKind::Pause}, "keyboard", SDL_SCANCODE_ESCAPE) &&
+                !migratedCommands.profile.hasDigitalBinding({1, 14}, {input::LogicalActionKind::Pause}, "keyboard", SDL_SCANCODE_ESCAPE) &&
+                migratedCommands.profile.hasDigitalBinding({1, 7}, {input::LogicalActionKind::Start}, "keyboard", SDL_SCANCODE_Q),
+            "command migration preserves custom Pause and occupied DP keys while materializing missing defaults");
+
+    const auto modeDefaultsPath = testRoot / "virtual-controller-partial-v9.json";
+    writeFile(modeDefaultsPath,
+              R"({"schemaVersion":9,"virtualControllers":{"-7":{"enabled":true,"scratchEnabled":"bad"},"4":null},"bindings":[]})");
+    const auto modeDefaults = InputProfileStore::load(modeDefaultsPath);
+    require(modeDefaults.status == InputProfileLoadStatus::Loaded &&
+                modeDefaults.profile.virtualControllerForKeyMode(-7).enabled &&
+                !modeDefaults.profile.virtualControllerForKeyMode(-7).scratchEnabled &&
+                modeDefaults.profile.virtualControllerForKeyMode(4) == input::VirtualControllerConfig::forKeyMode(4) &&
+                modeDefaults.profile.virtualControllerForKeyMode(7) == input::VirtualControllerConfig::forKeyMode(7),
+            "missing or malformed mode entries keep mode-specific defaults");
+
+    require(modeDefaults.profile.playfieldTouch.empty() &&
+                modeDefaults.profile.playfieldTouchForKeyMode(7) == input::PlayfieldTouchConfig{},
+            "older profiles retain flick scratch and edge-lane side taps");
+    auto touchProfile = defaults;
+    touchProfile.playfieldTouch[7] = {.tapToScratch = true, .sideTapMode = input::SideTapMode::Scratch};
+    touchProfile.playfieldTouch[14] = {.tapToScratch = true, .sideTapMode = input::SideTapMode::Ignore};
+    touchProfile.playfieldTouch[9] = {.sideTapMode = input::SideTapMode::Ignore};
+    const auto touchPath = testRoot / "playfield-touch.json";
+    require(InputProfileStore::saveAtomic(touchPath, touchProfile, errorMessage),
+            "playfield touch config saves");
+    const auto touchRoundTrip = InputProfileStore::load(touchPath);
+    require(touchRoundTrip.status == InputProfileLoadStatus::Loaded &&
+                touchRoundTrip.profile.playfieldTouch == touchProfile.playfieldTouch &&
+                touchRoundTrip.profile.virtualControllers == defaults.virtualControllers,
+            "all per-keymode touch settings round trip independently of controllers");
+    writeFile(touchPath, R"({"schemaVersion":10,"playfieldTouch":{
+      "7":{"tapToScratch":false,"sideTapMode":"scratch"},
+      "-7":{"tapToScratch":true,"sideTapMode":"scratch"},
+      "5":{"tapToScratch":"bad","sideTapMode":42},
+      "14":{"tapToScratch":true,"sideTapMode":"ignore"},"4":null},"bindings":[]})");
+    const auto invalidTouch = InputProfileStore::load(touchPath);
+    require(invalidTouch.status == InputProfileLoadStatus::Loaded &&
+                invalidTouch.profile.playfieldTouchForKeyMode(7) == input::PlayfieldTouchConfig{} &&
+                invalidTouch.profile.playfieldTouchForKeyMode(-7) == input::PlayfieldTouchConfig{} &&
+                invalidTouch.profile.playfieldTouchForKeyMode(5) == input::PlayfieldTouchConfig{} &&
+                invalidTouch.profile.playfieldTouchForKeyMode(14) == touchProfile.playfieldTouch.at(14),
+            "invalid and ineligible touch options fall back without losing valid modes");
 
     const auto malformedPath = testRoot / "malformed.json";
     writeFile(malformedPath, "{ not valid json");

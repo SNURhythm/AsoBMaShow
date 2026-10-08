@@ -148,6 +148,26 @@ private:
 
   [[nodiscard]] int laneBinding(int lane) const noexcept {
     switch (configuration_.keyMode) {
+    case 4: {
+      // Canonical BMS channels; absent keys have no command binding.
+      constexpr std::array bindings{-1, 1, 0, 1, -1};
+      return lane >= 0 && lane < static_cast<int>(bindings.size())
+                 ? bindings[static_cast<std::size_t>(lane)]
+                 : 0;
+    }
+    case 6: {
+      constexpr std::array bindings{-1, 1, -1, 0, -1, 1, -1};
+      return lane >= 0 && lane < static_cast<int>(bindings.size())
+                 ? bindings[static_cast<std::size_t>(lane)]
+                 : 0;
+    }
+    case 8: {
+      // Display order is 7,0,1,2,3,4,5,6, with mirrored key roles.
+      constexpr std::array bindings{1, -1, 1, 1, -1, 1, -1, -1};
+      return lane >= 0 && lane < static_cast<int>(bindings.size())
+                 ? bindings[static_cast<std::size_t>(lane)]
+                 : 0;
+    }
     case 5:
     case 10: {
       constexpr std::array bindings{-1, 1, -1, 1, -1};
@@ -217,7 +237,18 @@ private:
   void applyLane(const replay::LogicalControl &control, bool pressed,
                  std::int64_t timestampMicros,
                  std::vector<StartSelectControlAction> &actions) {
-    const int binding = laneBinding(control.lane);
+    int lane = control.lane;
+    if (configuration_.keyMode == 48) {
+      // BRD retains a 26-channel player stride; the chart has two dense
+      // 24-key halves. Decode that namespace before choosing a key's role.
+      const auto physicalLane =
+          replay::physicalChartLaneForLogicalControl(48, control);
+      if (!physicalLane || *physicalLane < 0 || *physicalLane >= 48) {
+        return;
+      }
+      lane = *physicalLane % 24;
+    }
+    const int binding = laneBinding(lane);
     // Beatoraja's +/-2 bindings are held digital controls (the final two
     // Pop'n/keyboard inputs), not two-step one-shot changes. Route them
     // through the same repeat state as a scratch control.

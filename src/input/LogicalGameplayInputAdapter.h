@@ -15,13 +15,12 @@
 #include <vector>
 
 std::vector<input::InputScope> makeGameplayInputScopes(int keyMode);
+[[nodiscard]] std::optional<replay::LogicalControl>
+scratchCommandControl(const input::LogicalInputTransition &transition);
 bool hasActiveKeyboardActionBinding(
     const InputProfile &profile,
     std::span<const input::InputScope> activeScopes, int scancode,
     input::LogicalActionKind actionKind);
-InputProfile makeGameplayInputProfileWithEscapeFallback(
-    const InputProfile &profile,
-    std::span<const input::InputScope> activeScopes);
 
 class LogicalGameplayInputAdapter {
 public:

@@ -58,6 +58,16 @@ class IOSBuildSetupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.project = PROJECT.read_text(encoding="utf-8")
 
+    def test_app_uses_sdl_single_window_scene_lifecycle(self):
+        with INFO_PLIST.open("rb") as stream:
+            info = plistlib.load(stream)
+        manifest = info["UIApplicationSceneManifest"]
+        self.assertFalse(manifest["UIApplicationSupportsMultipleScenes"])
+        configurations = manifest["UISceneConfigurations"]["UIWindowSceneSessionRoleApplication"]
+        self.assertEqual(len(configurations), 1)
+        self.assertEqual(configurations[0]["UISceneDelegateClassName"], "SDLUIKitSceneDelegate")
+        self.assertNotIn("UISceneStoryboardFile", configurations[0])
+
     def test_app_target_owns_synchronized_src_group(self):
         target = object_block(
             self.project, TARGET_ID, "/* End PBXNativeTarget section */"
@@ -155,7 +165,7 @@ int main() { return 0; }
                     *cmake_files,
                 ]
             ),
-            paths,
+            sorted(paths),
         )
         self.assertIn(f"target = {TARGET_ID}", exceptions)
 

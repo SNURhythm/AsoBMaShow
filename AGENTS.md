@@ -33,7 +33,7 @@
 - Android Gradle builds select `ninja` from `PATH`, matching desktop builds and shell diagnostics. Keep the same executable when inspecting an existing build directory; check its `CMAKE_MAKE_PROGRAM` in `CMakeCache.txt` before running Ninja directly. Older Android build directories may still reference the SDK-bundled Ninja.
 - Use `scripts/android_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
-- Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.
+- Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. APK and AAB builds use `GITHUB_RUN_NUMBER` in CI and default to `1` locally; the script does not query Firebase releases for versioning. Each workflow has its own counter, and reruns reuse that run's code. Start a new Play workflow run for a new upload. The old high-code Play draft was removed before publication; existing high-code test installations cannot accept a lower-code update (see `android/README.md`).
 - Android release builds require `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The same release signing config is used for Firebase App Distribution and Google Play builds. Keep real values in private env files, runner environment, or GitHub Actions secrets only.
 - The `restricted_file_access` flavor omits `MANAGE_EXTERNAL_STORAGE` and is the default for Firebase testing and Google Play. The `all_file_access` flavor requests that permission. For an explicit all-files release compile check, run:
   `scripts/android_firebase_deploy.sh --build-only --variant all_file_accessRelease`
@@ -47,7 +47,7 @@
 - Use `scripts/android_play_deploy.sh --build-only` to build without uploading or needing Play credentials. The underlying shared build command is `scripts/android_firebase_deploy.sh --build-only --bundle --variant restricted_file_accessRelease`.
 - The `android play_beta` lane uploads only the restricted-access AAB to the public beta/open-testing `beta` track as a **draft**. It does not publish the release or update store metadata.
 - `.github/workflows/android-play-deploy.yml` is manual-only and serializes Play uploads. It reuses the Android release signing secrets and requires `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` containing a service account JSON key with Play testing-track access. This does not replace or change Firebase authentication.
-- Configure the app, first build, open testing and upload certificate in Play Console before the first CI upload. See `android/README.md` for setup. Keep all real credentials private and leave `ANDROID_VERSION_CODE` unset for automatic timestamp versioning.
+- Configure the app, first build, open testing and upload certificate in Play Console before the first CI upload. See `android/README.md` for setup. Keep all real credentials private and leave `ANDROID_VERSION_CODE` unset to use the workflow run number.
 - Running the helper without `--build-only` uploads a draft. Only do so when the user explicitly requests deployment.
 
 ## Android Documents Storage

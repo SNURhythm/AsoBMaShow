@@ -1,7 +1,7 @@
 #pragma once
 
 struct PreparationContext {
-  int inputProfile = 0;
+  InputProfile inputProfile;
   int chartRepository = 0;
   struct {
     bool scratchlessAllowed = false;
@@ -23,7 +23,7 @@ public:
   PreparationContext &context;
 };
 
-StartOptions resolvePreparationInputDevices(StartOptions options, int, int) {
+StartOptions resolvePreparationInputDevices(StartOptions options, const InputProfile &, int) {
   if (options.practiceSession) {
     applyPracticeConfigurationToStartOptions(options, options.practiceSession->configuration());
   }
@@ -55,6 +55,7 @@ public:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart;
   bool scratchlessAllowed = false;
+  input::VirtualControllerConfig virtualControllerConfig;
   int presentationKeyMode() const;
   StartOptions options;
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;

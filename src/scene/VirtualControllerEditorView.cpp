@@ -44,8 +44,8 @@ void renderElement(rendering::SimpleBatchRenderer &batch,
 } // namespace
 
 VirtualControllerEditorView::VirtualControllerEditorView(
-    input::VirtualControllerConfig config, CommitCallback onCommit)
-    : config_(config), onCommit_(std::move(onCommit)) {
+    input::VirtualControllerConfig config, int keyMode, CommitCallback onCommit)
+    : config_(config), keyMode_(keyMode), onCommit_(std::move(onCommit)) {
   std::vector<std::string> ignoredDiagnostics;
   config_.sanitize(ignoredDiagnostics);
 }
@@ -61,7 +61,7 @@ gameplay::VirtualControllerCanvas VirtualControllerEditorView::canvas() const
 }
 
 gameplay::VirtualControllerLayout VirtualControllerEditorView::layout() const {
-  return gameplay::makeVirtualControllerLayout(config_, 7, canvas());
+  return gameplay::makeVirtualControllerLayout(config_, keyMode_, canvas());
 }
 
 VirtualControllerEditorView::HandleCenters
@@ -142,12 +142,12 @@ VirtualControllerEditorView::hitDragMode(float uiX, float uiY) const {
                uiY)) {
     return DragMode::KeySpacingX;
   }
-  if (contains(handleRect(handles.keySpacingYX, handles.keySpacingYY), uiX,
-               uiY)) {
+  if ((keyMode_ % 2 != 0 || keyMode_ == 10 || keyMode_ == 14) &&
+      contains(handleRect(handles.keySpacingYX, handles.keySpacingYY), uiX, uiY)) {
     return DragMode::KeySpacingY;
   }
-  if (contains(handleRect(handles.scratchSpacingX, handles.scratchSpacingY),
-               uiX, uiY)) {
+  if (config_.scratchEnabled &&
+      contains(handleRect(handles.scratchSpacingX, handles.scratchSpacingY), uiX, uiY)) {
     return DragMode::ScratchKeyplateSpacing;
   }
   if (contains(handleRect(handles.moveX, handles.moveY), uiX, uiY)) {
@@ -340,10 +340,12 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
     addHandle(handles.moveX, handles.moveY, ui_theme::lime());
     addHandle(handles.resizeX, handles.resizeY, ui_theme::amber());
     addHandle(handles.keySpacingXX, handles.keySpacingXY, ui_theme::cyan());
-    addHandle(handles.keySpacingYX, handles.keySpacingYY,
-              ui_theme::violetAction());
-    addHandle(handles.scratchSpacingX, handles.scratchSpacingY,
-              ui_theme::coral());
+    if (keyMode_ % 2 != 0 || keyMode_ == 10 || keyMode_ == 14) {
+      addHandle(handles.keySpacingYX, handles.keySpacingYY, ui_theme::violetAction());
+    }
+    if (config_.scratchEnabled) {
+      addHandle(handles.scratchSpacingX, handles.scratchSpacingY, ui_theme::coral());
+    }
   }
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);

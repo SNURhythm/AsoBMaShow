@@ -44,6 +44,7 @@ private:
   float playAreaWidth = 8.0f;
   float playAreaLeftX = 0.0f;
   bool dragModeEnabled = false;
+  input::PlayfieldTouchConfig touchConfig;
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
   std::vector<int> chartLaneOrder;
   std::vector<int> laneOrder;
@@ -56,6 +57,7 @@ private:
   bool isScratchLane(int lane) const;
   bool isLaneOccupied(int lane, SDL_FingerID exceptFinger) const;
   int touchToLaneIndex(Vector3 location) const;
+  std::optional<int> playfieldTouchLane(Vector3 normalizedLocation, bool requireInside) const;
   std::optional<int> touchToLaneIfInside(Vector3 location) const;
   std::optional<int> authoredTouchLane(Vector3 normalizedLocation,
                                       bool requireInside) const;

@@ -2,6 +2,7 @@
 
 #include "../../yoga/lib/nlohmann/json.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
@@ -174,92 +175,96 @@ void parseVirtualControllerConfigMember(const Json &config, const char *name,
   }
 }
 
-void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
+void parseVirtualControllerConfig(const Json &document, input::VirtualControllerConfig &settings,
                                   bool hasAxisSpacing,
                                   bool hasScratchMode,
                                   bool hasPlayer,
                                   std::vector<std::string> &diagnostics) {
   const auto config = document.find("virtualController");
   if (config == document.end() || !config->is_object()) {
-    profile.virtualController = {};
+    settings = {};
     diagnostics.emplace_back(
         "Reset missing or invalid virtual controller settings.");
     return;
   }
+  const auto scratchEnabled = config->find("scratchEnabled");
+  if (scratchEnabled != config->end() && scratchEnabled->is_boolean()) {
+    settings.scratchEnabled = scratchEnabled->get<bool>();
+  }
   const auto enabled = config->find("enabled");
   if (enabled == config->end() || !enabled->is_boolean()) {
-    profile.virtualController.enabled = false;
+    settings.enabled = false;
     diagnostics.emplace_back(
         "Reset missing or invalid virtual controller enabled setting.");
   } else {
-    profile.virtualController.enabled = enabled->get<bool>();
+    settings.enabled = enabled->get<bool>();
   }
   if (hasScratchMode) {
     const auto scratchMode = config->find("scratchMode");
     if (scratchMode == config->end() || !scratchMode->is_string()) {
-      profile.virtualController.scratchMode =
+      settings.scratchMode =
           input::VirtualControllerScratchMode::Flick;
       diagnostics.emplace_back(
           "Reset missing or invalid virtual controller scratch mode.");
     } else if (*scratchMode == "flick") {
-      profile.virtualController.scratchMode =
+      settings.scratchMode =
           input::VirtualControllerScratchMode::Flick;
     } else if (*scratchMode == "spin") {
-      profile.virtualController.scratchMode =
+      settings.scratchMode =
           input::VirtualControllerScratchMode::Spin;
     } else {
-      profile.virtualController.scratchMode =
+      settings.scratchMode =
           input::VirtualControllerScratchMode::Flick;
       diagnostics.emplace_back("Reset invalid virtual controller scratch mode.");
     }
   } else {
-    profile.virtualController.scratchMode =
+    settings.scratchMode =
         input::VirtualControllerScratchMode::Flick;
   }
   if (hasPlayer) {
     const auto player = config->find("player");
     if (player == config->end() || !player->is_number_integer()) {
-      profile.virtualController.player =
+      settings.player =
           input::VirtualControllerPlayer::Player1;
       diagnostics.emplace_back(
           "Reset missing or invalid virtual controller player.");
     } else if (*player == 1) {
-      profile.virtualController.player =
+      settings.player =
           input::VirtualControllerPlayer::Player1;
     } else if (*player == 2) {
-      profile.virtualController.player =
+      settings.player =
           input::VirtualControllerPlayer::Player2;
     } else {
-      profile.virtualController.player =
+      settings.player =
           input::VirtualControllerPlayer::Player1;
       diagnostics.emplace_back("Reset invalid virtual controller player.");
     }
   } else {
-    profile.virtualController.player = input::VirtualControllerPlayer::Player1;
+    settings.player = input::VirtualControllerPlayer::Player1;
   }
   parseVirtualControllerConfigMember(
       *config, "centerX", input::VirtualControllerConfig::kDefaultCenterX,
-      profile.virtualController.centerX, diagnostics);
+      settings.centerX, diagnostics);
   parseVirtualControllerConfigMember(
       *config, "centerY", input::VirtualControllerConfig::kDefaultCenterY,
-      profile.virtualController.centerY, diagnostics);
+      settings.centerY, diagnostics);
   parseVirtualControllerConfigMember(
       *config, "buttonSize",
       input::VirtualControllerConfig::kDefaultButtonSize,
-      profile.virtualController.buttonSize, diagnostics);
+      settings.buttonSize, diagnostics);
   if (hasAxisSpacing) {
     parseVirtualControllerConfigMember(
         *config, "keySpacingX",
-        input::VirtualControllerConfig::kDefaultKeySpacingX,
-        profile.virtualController.keySpacingX, diagnostics);
+        settings.keySpacingX,
+        settings.keySpacingX, diagnostics);
     parseVirtualControllerConfigMember(
         *config, "keySpacingY",
         input::VirtualControllerConfig::kDefaultKeySpacingY,
-        profile.virtualController.keySpacingY, diagnostics);
+        settings.keySpacingY, diagnostics);
     parseVirtualControllerConfigMember(
         *config, "scratchKeyplateSpacing",
         input::VirtualControllerConfig::kDefaultScratchKeyplateSpacing,
-        profile.virtualController.scratchKeyplateSpacing, diagnostics);
+        settings.scratchKeyplateSpacing, diagnostics);
     return;
   }
 
@@ -269,9 +274,9 @@ void parseVirtualControllerConfig(const Json &document, InputProfile &profile,
   float legacyKeyGap = input::VirtualControllerConfig::kDefaultKeySpacingY;
   parseVirtualControllerConfigMember(
       *config, "keyGap", legacyKeyGap, legacyKeyGap, diagnostics);
-  profile.virtualController.keySpacingX = legacyKeyGap;
-  profile.virtualController.keySpacingY = legacyKeyGap;
-  profile.virtualController.scratchKeyplateSpacing = legacyKeyGap;
+  settings.keySpacingX = legacyKeyGap;
+  settings.keySpacingY = legacyKeyGap;
+  settings.scratchKeyplateSpacing = legacyKeyGap;
 }
 
 input::ControlKind parseControlKind(std::string_view value) {
@@ -464,10 +469,50 @@ InputProfileStore::load(const std::filesystem::path &path) {
     if (schemaVersion >= 2) {
       parseGyroscopeConfig(document, result.profile, result.diagnostics);
     }
-    if (schemaVersion >= 4) {
-      parseVirtualControllerConfig(document, result.profile, schemaVersion >= 5,
+    if (schemaVersion >= 9) {
+      const auto configs = document.find("virtualControllers");
+      if (configs != document.end() && configs->is_object()) {
+        for (auto &[mode, config] : result.profile.virtualControllers) {
+          const auto entry = configs->find(std::to_string(mode));
+          if (entry != configs->end() && entry->is_object()) {
+            parseVirtualControllerConfig(Json{{"virtualController", *entry}},
+                                         config, true, true, true,
+                                         result.diagnostics);
+          }
+        }
+      } else {
+        result.diagnostics.emplace_back("Reset missing per-mode virtual controller settings.");
+      }
+    } else if (schemaVersion >= 4) {
+      input::VirtualControllerConfig legacy;
+      parseVirtualControllerConfig(document, legacy, schemaVersion >= 5,
                                    schemaVersion >= 6, schemaVersion >= 7,
                                    result.diagnostics);
+      for (auto &[mode, config] : result.profile.virtualControllers) {
+        config = legacy;
+        config.scratchEnabled = !input::VirtualControllerConfig::isScratchlessKeyMode(mode);
+        // Previously staggered even-key decks now need a non-overlapping row.
+        if (mode == 4 || mode == 6 || mode == 8) {
+          config.keySpacingX = std::max(0.20F, config.keySpacingX);
+        }
+      }
+    }
+    if (schemaVersion >= 10) {
+      const auto configs = document.find("playfieldTouch");
+      if (configs != document.end() && configs->is_object()) {
+        for (const int mode : {4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48}) {
+          const auto entry = configs->find(std::to_string(mode));
+          if (entry == configs->end() || !entry->is_object()) continue;
+          input::PlayfieldTouchConfig config;
+          const auto tap = entry->find("tapToScratch");
+          if (tap != entry->end() && tap->is_boolean()) config.tapToScratch = tap->get<bool>();
+          const auto side = entry->find("sideTapMode");
+          if (side != entry->end() && *side == "scratch") config.sideTapMode = input::SideTapMode::Scratch;
+          else if (side != entry->end() && *side == "ignore") config.sideTapMode = input::SideTapMode::Ignore;
+          config.sanitize(mode);
+          result.profile.playfieldTouch[mode] = config;
+        }
+      }
     }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
@@ -485,6 +530,10 @@ InputProfileStore::load(const std::filesystem::path &path) {
         }
       }
       result.diagnostics.emplace_back("Added independent 5K and 7K defaults.");
+    }
+    if (schemaVersion < 9 &&
+        input_profile::addMissingGameplayCommandBindings(result.profile)) {
+      result.diagnostics.emplace_back("Migrated gameplay shortcuts to editable bindings.");
     }
     result.profile.sanitize(result.diagnostics);
     return result;
@@ -542,21 +591,27 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
          {{"stepAngleDegrees",
            sanitized.gyroscopeTurntable.stepAngleDegrees},
           {"releaseDelayMs", sanitized.gyroscopeTurntable.releaseDelayMs}}},
-        {"virtualController",
-         {{"enabled", sanitized.virtualController.enabled},
-          {"scratchMode", sanitized.virtualController.scratchMode ==
-                                  input::VirtualControllerScratchMode::Spin
-                              ? "spin"
-                              : "flick"},
-          {"player", static_cast<int>(sanitized.virtualController.player)},
-          {"centerX", sanitized.virtualController.centerX},
-          {"centerY", sanitized.virtualController.centerY},
-          {"buttonSize", sanitized.virtualController.buttonSize},
-          {"keySpacingX", sanitized.virtualController.keySpacingX},
-          {"keySpacingY", sanitized.virtualController.keySpacingY},
-          {"scratchKeyplateSpacing",
-           sanitized.virtualController.scratchKeyplateSpacing}}},
+        {"virtualControllers", Json::object()},
+        {"playfieldTouch", Json::object()},
         {"bindings", Json::array()}};
+    for (const auto &[mode, config] : sanitized.virtualControllers) {
+      document["virtualControllers"][std::to_string(mode)] = {
+          {"enabled", config.enabled},
+          {"scratchEnabled", config.scratchEnabled},
+          {"scratchMode", config.scratchMode == input::VirtualControllerScratchMode::Spin
+                              ? "spin" : "flick"},
+          {"player", static_cast<int>(config.player)},
+          {"centerX", config.centerX}, {"centerY", config.centerY},
+          {"buttonSize", config.buttonSize},
+          {"keySpacingX", config.keySpacingX}, {"keySpacingY", config.keySpacingY},
+          {"scratchKeyplateSpacing", config.scratchKeyplateSpacing}};
+    }
+    for (const auto &[mode, config] : sanitized.playfieldTouch) {
+      document["playfieldTouch"][std::to_string(mode)] = {
+          {"tapToScratch", config.tapToScratch},
+          {"sideTapMode", config.sideTapMode == input::SideTapMode::Scratch ? "scratch"
+                          : config.sideTapMode == input::SideTapMode::Ignore ? "ignore" : "edgeLane"}};
+    }
     for (const auto &binding : sanitized.bindings) {
       document["bindings"].push_back(serializeBinding(binding));
     }

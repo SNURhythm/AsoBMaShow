@@ -1009,11 +1009,33 @@ void testScratchlessInputModesUseIndependentKeyBindings() {
         return row.action.kind == input::LogicalActionKind::Lane;
       }) == mode);
       assert(std::ranges::none_of(actions, [](const auto &row) {
-        return row.action.kind == input::LogicalActionKind::ScratchClockwise ||
-               row.action.kind == input::LogicalActionKind::ScratchCounterClockwise ||
-               (row.action.kind == input::LogicalActionKind::Lane &&
+        return (row.action.kind == input::LogicalActionKind::Lane &&
                 (row.action.lane == 7 || row.action.lane == 15));
       }));
+      for (const auto kind : {input::LogicalActionKind::ScratchClockwise,
+                              input::LogicalActionKind::ScratchCounterClockwise}) {
+        assert(std::ranges::any_of(actions, [kind](const auto &row) {
+          return row.action.kind == kind && row.bindable;
+        }));
+      }
+    }
+  }
+}
+
+void testDenseDoublePlaySettingsSplitChartLanesByPlayer() {
+  for (const int player : {1, 2}) {
+    const auto actions = settings_scene::inputActionsForScope(
+        {player, 48}, std::span<const input::InputBinding>{});
+    std::vector<int> lanes;
+    for (const auto &row : actions) {
+      if (row.action.kind == input::LogicalActionKind::Lane) {
+        assert(row.bindable);
+        lanes.push_back(row.action.lane);
+      }
+    }
+    assert(lanes.size() == 24);
+    for (int position = 0; position < 24; ++position) {
+      assert(lanes[position] == (player == 1 ? position : position + 24));
     }
   }
 }
@@ -1154,6 +1176,7 @@ int main() {
   testInputBindingEditorStaysInsidePaddedActionGroup();
   testLegacyDigitalScratchBindingsRemainManageable();
   testScratchlessInputModesUseIndependentKeyBindings();
+  testDenseDoublePlaySettingsSplitChartLanesByPlayer();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

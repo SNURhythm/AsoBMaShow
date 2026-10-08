@@ -233,11 +233,24 @@ void SettingsScene::commitGyroscopeTurntableSetting(bool stepAngle,
 }
 
 void SettingsScene::commitVirtualControllerSetting(
-    input::VirtualControllerConfig config) {
-  if (inputCaptureController->updateVirtualControllerConfig(config)) {
+    int keyMode, input::VirtualControllerConfig config) {
+  if (inputCaptureController->updateVirtualControllerConfig(keyMode, config)) {
     inputVirtualControllerSettingsError.clear();
   } else {
     inputVirtualControllerSettingsError =
+        inputCaptureController->lastError().empty()
+            ? i18n::tr("settings.input.failed_save_input_profile.message")
+            : std::string(inputCaptureController->lastError());
+  }
+  requestInputViewRebuild();
+}
+
+void SettingsScene::commitPlayfieldTouchSetting(
+    int keyMode, input::PlayfieldTouchConfig config) {
+  if (inputCaptureController->updatePlayfieldTouchConfig(keyMode, config)) {
+    inputPlayfieldTouchSettingsError.clear();
+  } else {
+    inputPlayfieldTouchSettingsError =
         inputCaptureController->lastError().empty()
             ? i18n::tr("settings.input.failed_save_input_profile.message")
             : std::string(inputCaptureController->lastError());
@@ -249,8 +262,11 @@ std::string SettingsScene::inputViewSignature() const {
   if (inputCaptureController == nullptr) {
     return {};
   }
+  const auto &controller = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
+  const auto &touch = context.inputProfile.playfieldTouchForKeyMode(inputSelectedKeyMode);
   std::ostringstream output;
-  output << inputSelectedPlayer << ':' << inputSelectedKeyMode << ':'
+  output << touch.tapToScratch << ':' << static_cast<int>(touch.sideTapMode) << ':'
+         << inputPlayfieldTouchSettingsError << ':' << inputSelectedPlayer << ':' << inputSelectedKeyMode << ':'
          << inputSelectedDeviceId << ':'
          << static_cast<int>(inputCaptureController->state()) << ':'
          << inputCaptureController->lastError() << ':'
@@ -258,17 +274,18 @@ std::string SettingsScene::inputViewSignature() const {
          << inputVirtualControllerSettingsError << ':'
          << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
          << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':'
-         << context.inputProfile.virtualController.enabled << ':'
-         << static_cast<int>(context.inputProfile.virtualController.scratchMode)
+         << controller.scratchEnabled << ':'
+         << controller.enabled << ':'
+         << static_cast<int>(controller.scratchMode)
          << ':'
-         << static_cast<int>(context.inputProfile.virtualController.player)
+         << static_cast<int>(controller.player)
          << ':'
-         << context.inputProfile.virtualController.centerX << ':'
-         << context.inputProfile.virtualController.centerY << ':'
-         << context.inputProfile.virtualController.buttonSize << ':'
-         << context.inputProfile.virtualController.keySpacingX << ':'
-         << context.inputProfile.virtualController.keySpacingY << ':'
-         << context.inputProfile.virtualController.scratchKeyplateSpacing
+         << controller.centerX << ':'
+         << controller.centerY << ':'
+         << controller.buttonSize << ':'
+         << controller.keySpacingX << ':'
+         << controller.keySpacingY << ':'
+         << controller.scratchKeyplateSpacing
          << ':' << inputVirtualControllerEditorVisible << ':';
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
@@ -566,11 +583,98 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       metrics, i18n::message("settings.input.binding_scope.label"), i18n::message("settings.input.choose_player_key_mode_device.message"),
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
 
-  if (gameplay::virtualControllerTouchInputSupported()) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
+  constexpr bool showPlayfieldTouchSettings = true;
+#else
+  constexpr bool showPlayfieldTouchSettings = false;
+#endif
+  if (showPlayfieldTouchSettings) {
+    auto *touchBody = new View();
+    touchBody->setFlexDirection(FlexDirection::Column);
+    touchBody->setGap(metrics.compact ? 10.0F : 14.0F);
+    const int touchKeyMode = inputSelectedKeyMode;
+    const auto touchConfig = context.inputProfile.playfieldTouchForKeyMode(touchKeyMode);
+    const int labelWidth = std::min(220, bodyWidth / 4);
+    auto makeModeRow = [&](const char *label) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Row);
+      row->setAlignItems(YGAlignCenter);
+      row->setGap(static_cast<float>(layout.selectorGap));
+      auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
+                            ui_theme::textPrimary(), TextView::LEFT, TextView::MIDDLE);
+      text->setWidth(static_cast<float>(labelWidth));
+      text->setHeight(static_cast<float>(metrics.actionButtonHeight));
+      text->setFlexShrink(0.0F);
+      text->setAutoFitText(true);
+      row->addView(text);
+      auto *buttons = new View();
+      buttons->setFlexDirection(FlexDirection::Row);
+      buttons->setFlexWrap(YGWrapWrap);
+      buttons->setGap(static_cast<float>(layout.selectorGap));
+      buttons->setWidth(static_cast<float>(std::max(0, bodyWidth - labelWidth - layout.selectorGap)));
+      row->addView(buttons);
+      touchBody->addView(row);
+      return buttons;
+    };
+    auto makeModeButton = [&](const char *label, bool selected, bool available = true) {
+      auto *text = makeText(i18n::message(label), metrics.bodyTextSize + 1,
+                            available ? ui_theme::textPrimary() : ui_theme::textSecondary(),
+                            TextView::CENTER, TextView::MIDDLE);
+      auto *button = selected
+          ? makeAccentButton(kFitContentWidth, metrics.actionButtonHeight, text, ui_theme::cyan())
+          : makeControlButton(kFitContentWidth, metrics.actionButtonHeight, text);
+      button->setFlexShrink(0.0F);
+      button->setEnabled(available);
+      return button;
+    };
+    if (input::PlayfieldTouchConfig::supportsTapToScratch(touchKeyMode)) {
+      auto *scratchModes = makeModeRow("settings.input.scratch_mode.label");
+      for (const auto &[tap, label] : {
+               std::pair{false, "settings.input.tap_scratch_off.label"},
+               std::pair{true, "settings.input.tap_scratch_on.label"}}) {
+        auto *button = makeModeButton(label, touchConfig.tapToScratch == tap);
+        button->setOnClickListener([this, touchKeyMode, touchConfig, tap]() {
+          auto next = touchConfig;
+          next.tapToScratch = tap;
+          commitPlayfieldTouchSetting(touchKeyMode, next);
+        });
+        scratchModes->addView(button);
+      }
+    }
+    auto *sideModes = makeModeRow("settings.input.side_taps.label");
+    for (const auto &[mode, label] : {
+             std::pair{input::SideTapMode::EdgeLane, "settings.input.side_taps_edge.label"},
+             std::pair{input::SideTapMode::Scratch, "settings.input.side_taps_scratch.label"},
+             std::pair{input::SideTapMode::Ignore, "settings.input.side_taps_ignore.label"}}) {
+      auto *button = makeModeButton(label, touchConfig.sideTapMode == mode,
+          mode != input::SideTapMode::Scratch || touchConfig.tapToScratch);
+      button->setOnClickListener([this, touchKeyMode, touchConfig, mode]() {
+        auto next = touchConfig;
+        next.sideTapMode = mode;
+        commitPlayfieldTouchSetting(touchKeyMode, next);
+      });
+      sideModes->addView(button);
+    }
+    touchBody->addView(makeWrappedText(
+        inputPlayfieldTouchSettingsError.empty()
+            ? ""
+            : i18n::message("settings.input.setting.error",
+                            {{"prefix", i18n::message("settings.input.not_saved.prefix")},
+                             {"error", inputPlayfieldTouchSettingsError}}),
+        metrics.smallTextSize, ui_theme::coral()));
+    cards->addView(makeCard(
+        metrics, i18n::message("settings.input.playfield_touch.label"),
+        gameplay::keyModeLabel(touchKeyMode), touchBody,
+        metrics.compact ? 280 : 250, metrics.cardsWidth));
+  }
+
+  if (gameplay::virtualControllerTouchInputSupported() &&
+      gameplay::supportsVirtualControllerKeyMode(inputSelectedKeyMode)) {
     auto *virtualControllerBody = new View();
     virtualControllerBody->setFlexDirection(FlexDirection::Column);
     virtualControllerBody->setGap(metrics.compact ? 10.0F : 14.0F);
-    const auto virtualControllerConfig = context.inputProfile.virtualController;
+    const int controllerKeyMode = inputSelectedKeyMode;
+    const auto virtualControllerConfig = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
     auto *virtualControllerToggle = makeAccentButton(
         std::min(bodyWidth, metrics.actionButtonWidth),
         metrics.actionButtonHeight,
@@ -580,30 +684,47 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                  TextView::CENTER, TextView::MIDDLE),
         virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
     virtualControllerToggle->setOnClickListener(
-        [this, virtualControllerConfig]() {
+        [this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
           next.enabled = !next.enabled;
-          commitVirtualControllerSetting(next);
+          commitVirtualControllerSetting(controllerKeyMode, next);
         });
     virtualControllerBody->addView(virtualControllerToggle);
     if (virtualControllerConfig.enabled) {
-      const bool spinScratch = virtualControllerConfig.scratchMode ==
-                               input::VirtualControllerScratchMode::Spin;
-      auto *scratchModeButton = makeControlButton(
-          std::min(bodyWidth, metrics.actionButtonWidth),
-          metrics.actionButtonHeight,
-          makeText(spinScratch ? i18n::message("settings.input.scratch_spin_mode.label") : i18n::message("settings.input.scratch_flick_mode.label"),
-                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      scratchModeButton->setOnClickListener(
-          [this, virtualControllerConfig, spinScratch]() {
-            auto next = virtualControllerConfig;
-            next.scratchMode = spinScratch
-                                   ? input::VirtualControllerScratchMode::Flick
-                                   : input::VirtualControllerScratchMode::Spin;
-            commitVirtualControllerSetting(next);
-          });
-      virtualControllerBody->addView(scratchModeButton);
+      if (input::VirtualControllerConfig::isScratchlessKeyMode(controllerKeyMode)) {
+        auto *scratchToggle = makeControlButton(
+            std::min(bodyWidth, metrics.actionButtonWidth), metrics.actionButtonHeight,
+            makeText(virtualControllerConfig.scratchEnabled
+                         ? i18n::message("settings.input.virtual_scratch_on.label")
+                         : i18n::message("settings.input.virtual_scratch_off.label"),
+                     metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                     TextView::CENTER, TextView::MIDDLE));
+        scratchToggle->setOnClickListener([this, controllerKeyMode, virtualControllerConfig]() {
+          auto next = virtualControllerConfig;
+          next.scratchEnabled = !next.scratchEnabled;
+          commitVirtualControllerSetting(controllerKeyMode, next);
+        });
+        virtualControllerBody->addView(scratchToggle);
+      }
+      if (virtualControllerConfig.scratchEnabled) {
+        const bool spinScratch = virtualControllerConfig.scratchMode ==
+                                 input::VirtualControllerScratchMode::Spin;
+        auto *scratchModeButton = makeControlButton(
+            std::min(bodyWidth, metrics.actionButtonWidth),
+            metrics.actionButtonHeight,
+            makeText(spinScratch ? i18n::message("settings.input.scratch_spin_mode.label") : i18n::message("settings.input.scratch_flick_mode.label"),
+                     metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                     TextView::CENTER, TextView::MIDDLE));
+        scratchModeButton->setOnClickListener(
+            [this, controllerKeyMode, virtualControllerConfig, spinScratch]() {
+              auto next = virtualControllerConfig;
+              next.scratchMode = spinScratch
+                                     ? input::VirtualControllerScratchMode::Flick
+                                     : input::VirtualControllerScratchMode::Spin;
+              commitVirtualControllerSetting(controllerKeyMode, next);
+            });
+        virtualControllerBody->addView(scratchModeButton);
+      }
       const bool playerTwo = virtualControllerConfig.player ==
                              input::VirtualControllerPlayer::Player2;
       auto *playerButton = makeControlButton(
@@ -613,11 +734,11 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                    metrics.bodyTextSize + 1, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       playerButton->setOnClickListener(
-          [this, virtualControllerConfig, playerTwo]() {
+          [this, controllerKeyMode, virtualControllerConfig, playerTwo]() {
             auto next = virtualControllerConfig;
             next.player = playerTwo ? input::VirtualControllerPlayer::Player1
                                     : input::VirtualControllerPlayer::Player2;
-            commitVirtualControllerSetting(next);
+            commitVirtualControllerSetting(controllerKeyMode, next);
           });
       virtualControllerBody->addView(playerButton);
       auto *editButton =
@@ -640,8 +761,9 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                              {"error", inputVirtualControllerSettingsError}}),
         metrics.smallTextSize, ui_theme::coral()));
     cards->addView(makeCard(
-        metrics, i18n::message("settings.input.virtual_controller.label"), "", virtualControllerBody,
-        virtualControllerConfig.enabled ? (metrics.compact ? 340 : 300)
+        metrics, i18n::message("settings.input.virtual_controller.label"),
+        gameplay::keyModeLabel(controllerKeyMode), virtualControllerBody,
+        virtualControllerConfig.enabled ? (metrics.compact ? 400 : 360)
                                         : (metrics.compact ? 220 : 200),
         metrics.cardsWidth));
   }
@@ -1046,7 +1168,7 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 void SettingsScene::buildInputVirtualControllerEditorOverlay(
     const LayoutMetrics &metrics) {
   if (activeTab != SettingsTab::Input || !inputVirtualControllerEditorVisible ||
-      !context.inputProfile.virtualController.enabled ||
+      !context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode).enabled ||
       !gameplay::virtualControllerTouchInputSupported()) {
     return;
   }
@@ -1107,9 +1229,9 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
       metrics.smallTextSize, ui_theme::textSecondary()));
 
   auto *editor = new VirtualControllerEditorView(
-      context.inputProfile.virtualController,
-      [this](input::VirtualControllerConfig config) {
-        commitVirtualControllerSetting(config);
+      context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode), inputSelectedKeyMode,
+      [this, keyMode = inputSelectedKeyMode](input::VirtualControllerConfig config) {
+        commitVirtualControllerSetting(keyMode, config);
       });
   editor->setFlex(1.0F);
   inputVirtualControllerEditorOverlayRoot->addView(editor);
