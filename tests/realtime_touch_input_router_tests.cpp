@@ -2245,22 +2245,23 @@ void testFailedCancelExpiryRequestsRecovery() {
           "a failed grace-expiry release remains owned and succeeds through fail-closed recovery");
 }
 
-void testScratchlessVirtualControllerOmitsPlatter() {
+void testScratchlessVirtualControllerKeepsPlatter() {
   input::VirtualControllerConfig config;
   config.enabled = true;
   const gameplay::VirtualControllerCanvas canvas{0, 0, 1000, 600};
   for (int mode : {5, 7}) {
-    const auto layout = gameplay::makeVirtualControllerLayout(config, mode, canvas, true);
-    require(layout.valid() && layout.elements.size() == static_cast<std::size_t>(mode + 2),
-            "scratchless controller keeps exactly the keys, Start and Select");
-    require(std::ranges::none_of(layout.elements, [](const auto &element) { return element.scratch; }),
-            "hidden scratch has no virtual platter or scratch hit region");
-    const auto original = gameplay::makeVirtualControllerLayout(config, mode, canvas, false);
-    require(original.elements.size() == static_cast<std::size_t>(mode + 3),
-            "restoring scratch restores its virtual control");
+    const auto layout = gameplay::makeVirtualControllerLayout(config, mode, canvas);
+    require(layout.valid() && layout.elements.size() == static_cast<std::size_t>(mode + 3),
+            "scratchless controller keeps its platter for Start/Select commands");
+    const auto regions = gameplay::makeVirtualControllerTouchRegions(
+        layout, {.renderWidth = 1000, .renderHeight = 600,
+                 .uiScaleX = 1.0F, .uiScaleY = 1.0F,
+                 .uiWidth = 1000, .uiHeight = 600});
+    require(std::ranges::any_of(regions, [](const auto &region) { return region.scratch; }),
+            "scratchless controller retains a touchable scratch region");
   }
-  require(gameplay::makeVirtualControllerLayout(config, 14, canvas, true).elements.size() == 10,
-          "double-play virtual scratch is never removed by the single-play option");
+  require(gameplay::makeVirtualControllerLayout(config, 14, canvas).elements.size() == 10,
+          "double-play virtual scratch also remains available");
 }
 
 void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
@@ -2600,7 +2601,7 @@ int main() {
   testPublishedNativeCancelIsNotSynthesizedAgain();
   testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
   testFailedCancelExpiryRequestsRecovery();
-  testScratchlessVirtualControllerOmitsPlatter();
+  testScratchlessVirtualControllerKeepsPlatter();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
   testVirtualControllerAvailabilityMatchesTouchRouterPlatform();
   testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise();

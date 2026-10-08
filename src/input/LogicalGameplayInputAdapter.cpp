@@ -70,7 +70,14 @@ InputProfile makeGameplayInputProfileWithEscapeFallback(
            std::pair{SDL_SCANCODE_Q, input::LogicalActionKind::Start},
            std::pair{SDL_SCANCODE_W, input::LogicalActionKind::Select},
            std::pair{SDL_SCANCODE_UP, input::LogicalActionKind::LaneCoverDecrease},
-           std::pair{SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease}}) {
+           std::pair{SDL_SCANCODE_DOWN, input::LogicalActionKind::LaneCoverIncrease},
+           std::pair{SDL_SCANCODE_LSHIFT, input::LogicalActionKind::ScratchCounterClockwise},
+           std::pair{SDL_SCANCODE_RSHIFT, input::LogicalActionKind::ScratchClockwise}}) {
+    // Scratchless profiles still need scratch directions for Start/Select
+    // commands, including profiles saved before these actions were exposed.
+    const bool scratch = action == input::LogicalActionKind::ScratchClockwise ||
+                         action == input::LogicalActionKind::ScratchCounterClockwise;
+    if (scratch && scope.keyMode != -5 && scope.keyMode != -7) continue;
     const bool occupied = std::ranges::any_of(result.bindings, [&](const auto &binding) {
       return std::ranges::find(activeScopes, binding.scope) != activeScopes.end() &&
              (binding.action.kind == action ||

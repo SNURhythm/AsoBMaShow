@@ -72,13 +72,11 @@ inline std::vector<InputActionDefinition> inputActionsForScope(
          .label = i18n::message("settings.input.actions.scratch_legacy_digital.label"),
          .bindable = false});
   }
-  if (!scratchless) {
-    result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
-                     .label = i18n::message("settings.input.actions.scratch_clockwise.label")});
-    result.push_back(
-        {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
-         .label = i18n::message("settings.input.actions.scratch_counter_clockwise.label")});
-  }
+  result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
+                   .label = i18n::message("settings.input.actions.scratch_clockwise.label")});
+  result.push_back(
+      {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
+       .label = i18n::message("settings.input.actions.scratch_counter_clockwise.label")});
   result.push_back(
       {.action = {input::LogicalActionKind::Start, 0}, .label = i18n::message("settings.input.actions.start.label")});
   result.push_back(

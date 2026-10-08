@@ -542,13 +542,13 @@ std::uint64_t effectiveRealtimeTouchLayoutRevision(
 
 gameplay::VirtualControllerLayout currentVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
-    const gameplay::RealtimeTouchUiTransform &transform, bool hideScratch = false) {
+    const gameplay::RealtimeTouchUiTransform &transform) {
   return gameplay::makeVirtualControllerLayout(
       config, keyMode,
       {.x = 0.0F,
        .y = 0.0F,
        .width = static_cast<float>(transform.uiWidth),
-       .height = static_cast<float>(transform.uiHeight)}, hideScratch);
+       .height = static_cast<float>(transform.uiHeight)});
 }
 
 void appendVirtualControllerHitRegions(
@@ -997,10 +997,7 @@ buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
   auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
   const auto controller = currentVirtualControllerLayout(
-      virtualController, chartMeta.KeyMode, transform,
-      presentation.activeMode() == PresentationMode::BuiltIn &&
-          layout.laneCount > 0 && layout.scratch.size() == layout.laneCount &&
-          std::ranges::none_of(layout.scratch, [](bool scratch) { return scratch; }));
+      virtualController, chartMeta.KeyMode, transform);
   auto controllerRegions =
       gameplay::makeVirtualControllerTouchRegions(controller, transform);
   if (!controllerRegions.empty()) {
@@ -1693,11 +1690,6 @@ struct GamePlayScene::RealtimeGameplaySession {
 bool GamePlayScene::realtimeGameplayAuthorityActive() const noexcept {
   return realtimeGameplaySession != nullptr &&
          realtimeGameplaySession->worker != nullptr;
-}
-
-bool GamePlayScene::hideVirtualControllerScratch() const noexcept {
-  return presentation != nullptr && presentation->activeMode() == PresentationMode::BuiltIn &&
-         builtInPresentation != nullptr && builtInPresentation->hidesScratchLane();
 }
 
 void GamePlayScene::acquireGameplaySkinForAttempt() {
@@ -2415,8 +2407,7 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
           snapshot.regionsTopmostFirst,
           currentVirtualControllerLayout(context.inputProfile.virtualController,
                                          chart->Meta.KeyMode,
-                                         session.layoutRefreshKey.uiTransform,
-                                         hideVirtualControllerScratch()),
+                                         session.layoutRefreshKey.uiTransform),
           session.layoutRefreshKey.layoutRevision);
     }
     auto presentationRegions = presentation->touchHitRegions();
@@ -6930,7 +6921,7 @@ void GamePlayScene::renderScene() {
     if (virtualControllerReady) {
       renderVirtualControllerOverlay(currentVirtualControllerLayout(
           context.inputProfile.virtualController, chart->Meta.KeyMode,
-          realtimeTouchUiTransform(), hideVirtualControllerScratch()),
+          realtimeTouchUiTransform()),
                                      spinScratchRotationDegrees, lanePressed,
                                      startButtonPressed, selectButtonPressed);
     }

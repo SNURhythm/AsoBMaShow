@@ -353,7 +353,6 @@ private:
   GameplaySkinSessionStopOwner gameplaySkinSessionStopOwner;
   BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
-  [[nodiscard]] bool hideVirtualControllerScratch() const noexcept;
   std::unique_ptr<PlayfieldPresentationEventFanout>
       ownedPresentationEventFanout;
   PlayfieldPresentationEventFanout *presentationEventFanout = nullptr;

@@ -4,6 +4,7 @@
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
 #include "scene/play/RhythmState.h"
+#include "scene/play/StartSelectControl.h"
 
 #include <SDL2/SDL_scancode.h>
 
@@ -987,6 +988,62 @@ void testCoverShortcutsRespectCustomBindings() {
           "cover defaults never steal another player's key or duplicate a rebound command");
 }
 
+void testScratchlessStartSelectScratchCommands() {
+  for (const int mode : {5, 7}) {
+    for (const auto modifier : {SDL_SCANCODE_Q, SDL_SCANCODE_W}) {
+      for (const auto scratch : {SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT}) {
+        const auto scopes = makeGameplayInputScopes(-mode);
+        const auto savedProfile = makeDefaultInputProfile();
+        const auto profile = makeGameplayInputProfileWithEscapeFallback(savedProfile, scopes);
+        gameplay::StartSelectControl commands({.keyMode = mode});
+        input::RealtimePhysicalInputRouter router(profile, scopes, [&](const auto &edge) {
+          if (edge.hasReplayControl) {
+            (void)commands.apply(edge.replayControl,
+                edge.type == input::RealtimePhysicalInputTransitionType::Press,
+                edge.steadyTimestampMicros);
+          }
+          return true;
+        });
+        router.setGameplayEnabled(true, 0);
+        router.consume(keyEvent(modifier, true), 100'000);
+        router.consume(keyEvent(scratch, true), 110'000);
+        const auto actions = commands.tick(120'000);
+        require(actions.size() == 1 &&
+                    actions[0].kind == (modifier == SDL_SCANCODE_Q
+                        ? gameplay::StartSelectControlActionKind::AdjustLaneCover
+                        : gameplay::StartSelectControlActionKind::AdjustDuration) &&
+                    actions[0].delta == (scratch == SDL_SCANCODE_LSHIFT ? -1 : 1),
+                "scratchless Start/Select plus either scratch direction adjusts cover/duration");
+        router.consume(keyEvent(scratch, false), 130'000);
+        require(commands.tick(200'000).empty(),
+                "releasing scratch stops scratchless command repeats");
+      }
+    }
+  }
+}
+
+void testScratchlessScratchFallbackRespectsCustomBindings() {
+  for (const int mode : {-5, -7}) {
+    InputProfile saved;
+    saved.bindings.push_back({.id = "occupied-shift", .scope = {1, mode},
+        .action = {input::LogicalActionKind::Lane, 0},
+        .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                    .kind = input::ControlKind::Key, .index = SDL_SCANCODE_LSHIFT}});
+    saved.bindings.push_back({.id = "custom-scratch", .scope = {1, mode},
+        .action = {input::LogicalActionKind::ScratchClockwise},
+        .control = {.deviceId = "pad", .deviceClass = input::DeviceClass::GameController,
+                    .kind = input::ControlKind::Button, .index = 0}});
+    const auto scopes = makeGameplayInputScopes(mode);
+    const auto profile = makeGameplayInputProfileWithEscapeFallback(saved, scopes);
+    require(!hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_LSHIFT,
+                input::LogicalActionKind::ScratchCounterClockwise) &&
+            !hasActiveKeyboardActionBinding(profile, scopes, SDL_SCANCODE_RSHIFT,
+                input::LogicalActionKind::ScratchClockwise),
+            "scratchless scratch fallbacks yield to occupied keys and custom controller actions");
+    require(saved.bindings.size() == 2, "fallbacks never modify the saved profile");
+  }
+}
+
 void testIndependentScratchlessGameplayBindings() {
   for (const int mode : {5, 7}) {
     auto profile = makeDefaultInputProfile();
@@ -1554,6 +1611,8 @@ int main() {
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testCoverShortcutsRespectCustomBindings();
   testIndependentScratchlessGameplayBindings();
+  testScratchlessStartSelectScratchCommands();
+  testScratchlessScratchFallbackRespectsCustomBindings();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testNonStockKeyModesCaptureBmsChannelReplayControls();
   testArbitraryLaneInputDoesNotDependOnBrdControls();

@@ -78,7 +78,7 @@ struct VirtualControllerLayout {
 // rather than a visual-column-to-lane assumption.
 [[nodiscard]] VirtualControllerLayout makeVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
-    VirtualControllerCanvas canvas, bool hideScratch = false);
+    VirtualControllerCanvas canvas);
 
 [[nodiscard]] std::vector<RealtimeTouchLaneRegion>
 makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
