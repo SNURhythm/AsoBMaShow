@@ -69,6 +69,43 @@ void testStartAndSelectUseBeatorajaKeyBindings() {
           "Select plus the first 7-key input lowers green number");
 }
 
+void testEvenKeyModesUseSkinIndependentLaneRoles() {
+  struct Case {
+    int mode;
+    std::vector<int> lanes;
+    std::vector<int> deltas;
+  };
+  for (const auto &example : {
+           Case{4, {0, 1, 3, 4}, {-1, 1, 1, -1}},
+           Case{6, {0, 1, 2, 4, 5, 6}, {-1, 1, -1, -1, 1, -1}},
+           Case{8, {7, 0, 1, 2, 3, 4, 5, 6}, {-1, 1, -1, 1, 1, -1, 1, -1}}}) {
+    for (const auto modifier : {start(), select()}) {
+      gameplay::StartSelectControl control({.keyMode = example.mode});
+      (void)control.apply(modifier, true, 1'000);
+      for (std::size_t index = 0; index < example.lanes.size(); ++index) {
+        const auto key = lane(example.lanes[index]);
+        require(control.apply(key, true, 1'001) == std::vector<Action>{
+                    {.kind = modifier.kind == ControlKind::Start
+                         ? ActionKind::AdjustHispeed : ActionKind::AdjustDuration,
+                     .delta = example.deltas[index]}},
+                "4K/6K/8K canonical white-role keys decrease and blue-role keys increase");
+        require(control.apply(key, false, 1'002).empty(),
+                "key release does not repeat a speed adjustment");
+      }
+      require(control.apply(lane(-1), true, 1'003).empty() &&
+                  control.apply(lane(8), true, 1'003).empty(),
+              "invalid lanes never adjust speed");
+      if (example.mode != 8) {
+        require(control.apply(lane(example.mode == 4 ? 2 : 3), true, 1'004).empty(),
+                "omitted sparse lanes have no speed command");
+      }
+      (void)control.apply(modifier, false, 1'005);
+      require(control.apply(lane(example.lanes.front()), true, 1'006).empty(),
+              "releasing the modifier ends speed control");
+    }
+  }
+}
+
 void testStartDoublePressAndConjunctionMatchBeatorajaEdges() {
   gameplay::StartSelectControl control({.keyMode = 7});
   require(control.apply(start(), true, 1'000).empty(),
@@ -167,6 +204,7 @@ void testResetDiscardsHeldAndTimedGestureState() {
 
 int main() {
   testStartAndSelectUseBeatorajaKeyBindings();
+  testEvenKeyModesUseSkinIndependentLaneRoles();
   testStartDoublePressAndConjunctionMatchBeatorajaEdges();
   testStartAndSelectAtNoteEndExitImmediately();
   testHeldSpecialKeysRepeatLikeBeatorajaScratchBindings();

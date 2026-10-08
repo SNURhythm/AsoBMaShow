@@ -328,6 +328,8 @@ private:
   [[nodiscard]] FingerState *allocateFinger(std::int64_t fingerId) noexcept;
   [[nodiscard]] std::optional<replay::LogicalControl>
   replayControlFor(const RealtimeTouchLaneRegion &region) const noexcept;
+  [[nodiscard]] std::optional<replay::LogicalControl>
+  scratchControlFor(const FingerState &finger, int direction) const noexcept;
   [[nodiscard]] bool laneOccupied(
       int lane, std::optional<replay::LogicalControl> replayControl,
                                   std::int64_t exceptFinger) const noexcept;

@@ -29,6 +29,23 @@ std::vector<input::InputScope> makeGameplayInputScopes(int keyMode) {
   return scopes;
 }
 
+std::optional<replay::LogicalControl>
+scratchCommandControl(const input::LogicalInputTransition &transition) {
+  if (!input_profile::usesCommandOnlyScratch(transition.scope.keyMode)) {
+    return std::nullopt;
+  }
+  switch (transition.action.kind) {
+  case input::LogicalActionKind::ScratchClockwise:
+    return replay::LogicalControl{.kind = replay::LogicalControlKind::ScratchClockwise,
+                                  .player = transition.scope.player};
+  case input::LogicalActionKind::ScratchCounterClockwise:
+    return replay::LogicalControl{.kind = replay::LogicalControlKind::ScratchCounterClockwise,
+                                  .player = transition.scope.player};
+  default:
+    return std::nullopt;
+  }
+}
+
 bool hasActiveKeyboardActionBinding(
     const InputProfile &profile,
     std::span<const input::InputScope> activeScopes, int scancode,
@@ -77,7 +94,8 @@ InputProfile makeGameplayInputProfileWithEscapeFallback(
     // commands, including profiles saved before these actions were exposed.
     const bool scratch = action == input::LogicalActionKind::ScratchClockwise ||
                          action == input::LogicalActionKind::ScratchCounterClockwise;
-    if (scratch && scope.keyMode != -5 && scope.keyMode != -7) continue;
+    if (scratch && scope.keyMode != -5 && scope.keyMode != -7 &&
+        !input_profile::usesCommandOnlyScratch(scope.keyMode)) continue;
     const bool occupied = std::ranges::any_of(result.bindings, [&](const auto &binding) {
       return std::ranges::find(activeScopes, binding.scope) != activeScopes.end() &&
              (binding.action.kind == action ||
@@ -207,7 +225,7 @@ void LogicalGameplayInputAdapter::reset() {
     }
   }
   for (const int lane : effectiveHeldLanes) {
-    control_.releaseLane(lane, 0.0, false);
+    if (lane >= 0) control_.releaseLane(lane, 0.0, false);
   }
   heldLaneOwners_.clear();
   scratchLaneStates_.clear();
@@ -218,6 +236,11 @@ void LogicalGameplayInputAdapter::reset() {
 
 int LogicalGameplayInputAdapter::physicalScratchLane(
     input::InputScope scope) {
+  // Negative slots retain normal scratch ownership/reversal semantics without
+  // sharing a note lane. In particular, lane 7 is a normal key in 8K.
+  if (input_profile::usesCommandOnlyScratch(scope.keyMode)) {
+    return scope.player == 2 ? -2 : -1;
+  }
   return scope.player == 2 ? kSecondPlayerScratchLane : kFirstPlayerScratchLane;
 }
 
@@ -229,6 +252,7 @@ bool LogicalGameplayInputAdapter::isLaneHeld(int lane) const {
 }
 
 bms_parser::Note *LogicalGameplayInputAdapter::pressPhysicalLane(int lane, std::uint64_t timestampMicros) {
+  if (lane < 0) return nullptr;
   ++pendingPhysicalEdges_[lane];
   latestPressedNote_ = control_.pressLaneAt(lane, timestampMicros);
   return latestPressedNote_;
@@ -237,6 +261,7 @@ bms_parser::Note *LogicalGameplayInputAdapter::pressPhysicalLane(int lane, std::
 void LogicalGameplayInputAdapter::releasePhysicalLane(int lane,
                                                       bool backSpin,
                                                       std::uint64_t timestampMicros) {
+  if (lane < 0) return;
   ++pendingPhysicalEdges_[lane];
   control_.releaseLaneAt(lane, timestampMicros, backSpin);
 }
@@ -377,7 +402,7 @@ replay::LogicalControl LogicalGameplayInputAdapter::replayLaneControl(
 
 std::optional<replay::LogicalControl>
 LogicalGameplayInputAdapter::effectiveScratchReplayControl(int lane) const {
-  const int player = lane == kSecondPlayerScratchLane ? 2 : 1;
+  const int player = lane == kSecondPlayerScratchLane || lane == -2 ? 2 : 1;
   const auto scratch = scratchLaneStates_.find(lane);
   if (scratch != scratchLaneStates_.end() &&
       scratch->second.activeDirection.has_value()) {
@@ -422,6 +447,17 @@ void LogicalGameplayInputAdapter::synchronizeScratchReplayControl(
 void LogicalGameplayInputAdapter::notifyApplied(
     const input::LogicalInputTransition &source,
     int physicalLane, replay::LogicalControl control, bool pressed) {
+  if (physicalLane < 0 && scratchCommandControl(source).has_value()) {
+    if (commandCallback_) {
+      auto command = source;
+      command.action.kind = control.kind == replay::LogicalControlKind::ScratchClockwise
+                                ? input::LogicalActionKind::ScratchClockwise
+                                : input::LogicalActionKind::ScratchCounterClockwise;
+      command.pressed = pressed;
+      commandCallback_(command);
+    }
+    return;
+  }
   const auto pending = pendingPhysicalEdges_.find(physicalLane);
   const bool replayOnly = pending == pendingPhysicalEdges_.end();
   if (!replayOnly && --pending->second == 0) {

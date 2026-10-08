@@ -2249,7 +2249,7 @@ void testScratchlessVirtualControllerKeepsPlatter() {
   input::VirtualControllerConfig config;
   config.enabled = true;
   const gameplay::VirtualControllerCanvas canvas{0, 0, 1000, 600};
-  for (int mode : {5, 7}) {
+  for (int mode : {4, 5, 6, 7, 8}) {
     const auto layout = gameplay::makeVirtualControllerLayout(config, mode, canvas);
     require(layout.valid() && layout.elements.size() == static_cast<std::size_t>(mode + 3),
             "scratchless controller keeps its platter for Start/Select commands");
@@ -2262,6 +2262,57 @@ void testScratchlessVirtualControllerKeepsPlatter() {
   }
   require(gameplay::makeVirtualControllerLayout(config, 14, canvas).elements.size() == 10,
           "double-play virtual scratch also remains available");
+}
+
+void testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes() {
+  for (const int mode : {4, 6, 8}) {
+    for (const auto scratchMode : {input::VirtualControllerScratchMode::Flick,
+                                   input::VirtualControllerScratchMode::Spin}) {
+      input::VirtualControllerConfig config;
+      config.enabled = true;
+      config.scratchMode = scratchMode;
+      const auto controller = gameplay::makeVirtualControllerLayout(config, mode, {0, 0, 1000, 600});
+      std::vector<int> keys;
+      const gameplay::VirtualControllerElement *scratch = nullptr;
+      for (const auto &element : controller.elements) {
+        if (element.control == gameplay::VirtualControllerControl::Key) keys.push_back(element.lane);
+        if (element.scratch) scratch = &element;
+      }
+      const std::vector<int> expected = mode == 4 ? std::vector<int>{0, 1, 3, 4}
+          : mode == 6 ? std::vector<int>{0, 1, 2, 4, 5, 6}
+                      : std::vector<int>{7, 0, 1, 2, 3, 4, 5, 6};
+      require(keys == expected && scratch != nullptr && scratch->lane == -1,
+              "4K/6K/8K virtual keys retain canonical lanes beside a command-only platter");
+      gameplay::RealtimeTouchLayout layout;
+      layout.keyMode = mode;
+      layout.laneRegions = gameplay::makeVirtualControllerTouchRegions(controller,
+          {.renderWidth = 1000, .renderHeight = 600, .uiScaleX = 1, .uiScaleY = 1,
+           .uiWidth = 1000, .uiHeight = 600});
+      InputCapture capture;
+      gameplay::RealtimeTouchInputRouter router(7, std::move(layout),
+          {.context = &capture, .emit = &InputCapture::emit,
+           .emitAnalogScratchTicks = &InputCapture::emitAnalogScratchTicks});
+      const float x = (scratch->bounds.centerX() + scratch->bounds.width * 0.4F) / 1000;
+      const float y = scratch->bounds.centerY() / 600;
+      require(router.consume({.fingerId = 400, .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = x, .normalizedY = y, .steadyTimestampMicros = 100'000}) &&
+              router.consume({.fingerId = 400, .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = x, .normalizedY = y + .04F, .steadyTimestampMicros = 110'000}),
+              "command-only platter accepts a flick or rotation");
+      require(capture.events.size() == 1 && capture.events[0].lane == -1 &&
+                  capture.events[0].hasReplayControl &&
+                  capture.events[0].replayControl.kind == replay::LogicalControlKind::ScratchClockwise,
+              "flick and spin emit scratch commands without borrowing an 8K key lane");
+      if (scratchMode == input::VirtualControllerScratchMode::Spin) {
+        require(!capture.analogScratchTicks.empty() && capture.analogScratchTicks[0].ticks > 0,
+                "command-only spin also emits analog adjustment ticks");
+      }
+      require(router.cancelAll(120'000) && capture.events.size() == 2 &&
+                  capture.events[1].type == gameplay::RealtimeGameplayInputType::Release &&
+                  capture.events[1].replayControl == capture.events[0].replayControl,
+              "command-only scratch cancellation releases the same direction");
+    }
+  }
 }
 
 void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
@@ -2602,6 +2653,7 @@ int main() {
   testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
   testFailedCancelExpiryRequestsRecovery();
   testScratchlessVirtualControllerKeepsPlatter();
+  testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
   testVirtualControllerAvailabilityMatchesTouchRouterPlatform();
   testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise();

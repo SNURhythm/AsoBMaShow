@@ -73,7 +73,7 @@ struct VirtualControllerLayout {
 
 [[nodiscard]] bool supportsVirtualControllerKeyMode(int keyMode) noexcept;
 
-// The controller owns 5/7-key single-play and either independently selected
+// The controller owns 4/5/6/7/8-key single-play and either independently selected
 // deck on 10/14-key double-play. It uses the chart's canonical lane mapping
 // rather than a visual-column-to-lane assumption.
 [[nodiscard]] VirtualControllerLayout makeVirtualControllerLayout(

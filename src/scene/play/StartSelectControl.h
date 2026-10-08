@@ -148,6 +148,26 @@ private:
 
   [[nodiscard]] int laneBinding(int lane) const noexcept {
     switch (configuration_.keyMode) {
+    case 4: {
+      // Canonical BMS channels; absent keys have no command binding.
+      constexpr std::array bindings{-1, 1, 0, 1, -1};
+      return lane >= 0 && lane < static_cast<int>(bindings.size())
+                 ? bindings[static_cast<std::size_t>(lane)]
+                 : 0;
+    }
+    case 6: {
+      constexpr std::array bindings{-1, 1, -1, 0, -1, 1, -1};
+      return lane >= 0 && lane < static_cast<int>(bindings.size())
+                 ? bindings[static_cast<std::size_t>(lane)]
+                 : 0;
+    }
+    case 8: {
+      // Display order is 7,0,1,2,3,4,5,6, with mirrored key roles.
+      constexpr std::array bindings{1, -1, 1, 1, -1, 1, -1, -1};
+      return lane >= 0 && lane < static_cast<int>(bindings.size())
+                 ? bindings[static_cast<std::size_t>(lane)]
+                 : 0;
+    }
     case 5:
     case 10: {
       constexpr std::array bindings{-1, 1, -1, 1, -1};

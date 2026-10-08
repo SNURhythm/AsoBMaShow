@@ -565,8 +565,24 @@ bool RealtimeTouchInputRouter::laneOccupied(
       return finger.lane == lane;
     }
     return replayControl.has_value() && finger.lane < 0 &&
-           finger.replayControl == replayControl;
+           (finger.replayControl == replayControl ||
+            (finger.replayControl.has_value() &&
+             finger.replayControl->player == replayControl->player &&
+             replay::isDirectionalScratchControl(finger.replayControl->kind) &&
+             replay::isDirectionalScratchControl(replayControl->kind)));
   });
+}
+
+std::optional<replay::LogicalControl>
+RealtimeTouchInputRouter::scratchControlFor(const FingerState &finger,
+                                           int direction) const noexcept {
+  const auto kind = direction > 0 ? replay::LogicalControlKind::ScratchClockwise
+                                  : replay::LogicalControlKind::ScratchCounterClockwise;
+  if (finger.lane < 0 && finger.replayControl.has_value() &&
+      replay::isDirectionalScratchControl(finger.replayControl->kind)) {
+    return replay::LogicalControl{.kind = kind, .player = finger.replayControl->player};
+  }
+  return replay::logicalControlForChartLane(layout_.keyMode, finger.lane, true, kind);
 }
 
 bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
@@ -705,10 +721,7 @@ bool RealtimeTouchInputRouter::handleScratchMove(
     return false;
   }
   finger.pressed = false;
-  const auto replayControl = replay::logicalControlForChartLane(
-      layout_.keyMode, finger.lane, true,
-      direction > 0 ? replay::LogicalControlKind::ScratchClockwise
-                    : replay::LogicalControlKind::ScratchCounterClockwise);
+  const auto replayControl = scratchControlFor(finger, direction);
   if (!emit(RealtimeGameplayInputType::Press, finger.lane, replayControl,
             sample.steadyTimestampMicros)) {
     return false;
@@ -769,10 +782,7 @@ bool RealtimeTouchInputRouter::handleSpinScratchMove(
       static_cast<float>(completedTicks) * kSpinScratchStepDegrees;
   finger.spinLastStepMicros = sample.steadyTimestampMicros;
   const int direction = completedTicks > 0 ? 1 : -1;
-  const auto replayControl = replay::logicalControlForChartLane(
-      layout_.keyMode, finger.lane, true,
-      direction > 0 ? replay::LogicalControlKind::ScratchClockwise
-                    : replay::LogicalControlKind::ScratchCounterClockwise);
+  const auto replayControl = scratchControlFor(finger, direction);
   if (finger.pressed && direction == finger.scratchDirection) {
     if (replayControl.has_value()) {
       emitAnalogScratchTicks(*replayControl, std::abs(completedTicks),

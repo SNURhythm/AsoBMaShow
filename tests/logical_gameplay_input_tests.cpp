@@ -989,14 +989,23 @@ void testCoverShortcutsRespectCustomBindings() {
 }
 
 void testScratchlessStartSelectScratchCommands() {
-  for (const int mode : {5, 7}) {
+  for (const int mode : {-5, -7, 4, 6, 8}) {
     for (const auto modifier : {SDL_SCANCODE_Q, SDL_SCANCODE_W}) {
       for (const auto scratch : {SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT}) {
-        const auto scopes = makeGameplayInputScopes(-mode);
+        const auto scopes = makeGameplayInputScopes(mode);
         const auto savedProfile = makeDefaultInputProfile();
         const auto profile = makeGameplayInputProfileWithEscapeFallback(savedProfile, scopes);
-        gameplay::StartSelectControl commands({.keyMode = mode});
+        gameplay::StartSelectControl commands({.keyMode = std::abs(mode)});
         input::RealtimePhysicalInputRouter router(profile, scopes, [&](const auto &edge) {
+          if (edge.type == input::RealtimePhysicalInputTransitionType::Command) {
+            if (const auto control = scratchCommandControl(edge.command)) {
+              (void)commands.apply(*control, edge.command.pressed, edge.steadyTimestampMicros);
+            }
+          }
+          if (mode > 0 && edge.type != input::RealtimePhysicalInputTransitionType::Command) {
+            require(edge.replayOnly && !replay::isDirectionalScratchControl(edge.replayControl.kind),
+                    "4K/6K/8K command scratches never press note lanes or enter replays");
+          }
           if (edge.hasReplayControl) {
             (void)commands.apply(edge.replayControl,
                 edge.type == input::RealtimePhysicalInputTransitionType::Press,
@@ -1023,7 +1032,7 @@ void testScratchlessStartSelectScratchCommands() {
 }
 
 void testScratchlessScratchFallbackRespectsCustomBindings() {
-  for (const int mode : {-5, -7}) {
+  for (const int mode : {-5, -7, 4, 6, 8}) {
     InputProfile saved;
     saved.bindings.push_back({.id = "occupied-shift", .scope = {1, mode},
         .action = {input::LogicalActionKind::Lane, 0},
@@ -1042,6 +1051,35 @@ void testScratchlessScratchFallbackRespectsCustomBindings() {
             "scratchless scratch fallbacks yield to occupied keys and custom controller actions");
     require(saved.bindings.size() == 2, "fallbacks never modify the saved profile");
   }
+}
+
+void testCommandScratchPreserves8KKeysAndHeldDirection() {
+  RecordingControl notes;
+  gameplay::StartSelectControl commands({.keyMode = 8});
+  (void)commands.apply({.kind = replay::LogicalControlKind::Start}, true, 100'000);
+  LogicalGameplayInputAdapter adapter(notes, [&](const auto &edge) {
+    if (const auto control = scratchCommandControl(edge)) {
+      (void)commands.apply(*control, edge.pressed, edge.timestampMicros);
+    }
+  });
+  adapter.apply(std::vector{
+      transition({1, 8}, input::LogicalActionKind::Lane, true, 7),
+      transition({1, 8}, input::LogicalActionKind::ScratchClockwise, true),
+      transition({1, 8}, input::LogicalActionKind::ScratchCounterClockwise, true),
+      transition({1, 8}, input::LogicalActionKind::ScratchCounterClockwise, false),
+  });
+  const auto actions = commands.tick(200'000);
+  require(actions.size() == 1 && actions[0].delta == 1,
+          "releasing the newest command scratch restores the older held direction");
+  adapter.apply(std::vector{
+      transition({1, 8}, input::LogicalActionKind::ScratchClockwise, false),
+      transition({1, 8}, input::LogicalActionKind::Lane, false, 7),
+  });
+  require(notes.calls == std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release, .lane = 7}},
+          "8K command scratch never presses or releases the overlapping key lane");
+  require(commands.tick(300'000).empty(), "command scratch releases stop repeats");
 }
 
 void testIndependentScratchlessGameplayBindings() {
@@ -1613,6 +1651,7 @@ int main() {
   testIndependentScratchlessGameplayBindings();
   testScratchlessStartSelectScratchCommands();
   testScratchlessScratchFallbackRespectsCustomBindings();
+  testCommandScratchPreserves8KKeysAndHeldDirection();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testNonStockKeyModesCaptureBmsChannelReplayControls();
   testArbitraryLaneInputDoesNotDependOnBrdControls();

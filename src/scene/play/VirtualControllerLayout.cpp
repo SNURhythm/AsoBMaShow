@@ -12,6 +12,10 @@ namespace {
 
 [[nodiscard]] int keysPerVirtualControllerPlayer(int keyMode) noexcept {
   switch (keyMode) {
+  case 4:
+  case 6:
+  case 8:
+    return keyMode;
   case 5:
   case 10:
     return 5;
@@ -114,7 +118,9 @@ VirtualControllerLayout makeVirtualControllerLayout(
   const bool drawPlayerTwo =
       config.player == input::VirtualControllerPlayer::Player2;
   const int chartPlayer = drawPlayerTwo && isDoublePlayKeyMode(keyMode) ? 2 : 1;
-  const auto scratchLanes = meta.GetScratchLaneIndices();
+  const bool commandOnlyScratch = input_profile::usesCommandOnlyScratch(keyMode);
+  const auto scratchLanes = commandOnlyScratch ? std::vector<int>{-1}
+                                             : meta.GetScratchLaneIndices();
   const auto allKeyLanes = meta.GetKeyLaneIndices();
   const std::size_t keyOffset =
       chartPlayer == 2 ? static_cast<std::size_t>(keysPerPlayer) : 0U;
@@ -196,6 +202,11 @@ VirtualControllerLayout makeVirtualControllerLayout(
          .invertFlickScratchDirection =
              config.scratchMode == input::VirtualControllerScratchMode::Flick &&
              !drawPlayerTwo,
+         .replayControl = commandOnlyScratch
+             ? std::optional(replay::LogicalControl{
+                   .kind = replay::LogicalControlKind::ScratchClockwise,
+                   .player = chartPlayer})
+             : std::nullopt,
          .bounds = {.x = 0.0F,
                     .y = scratchTop,
                     .width = scratchDiameter,

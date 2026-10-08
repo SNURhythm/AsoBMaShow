@@ -1266,6 +1266,13 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     auto owned = input;
     owned.source = gameplay::RealtimeGameplayInputSource::Touch;
+    // A platter in 4K/6K/8K controls Start/Select without creating a note
+    // input or an invalid scratch event in the chart's replay stream.
+    if (owned.lane < 0 && owned.hasReplayControl &&
+        replay::isDirectionalScratchControl(owned.replayControl.kind)) {
+      session.enqueueStartSelectInput(owned);
+      return true;
+    }
     const bool accepted = session.worker->enqueueInput(owned);
     if (accepted) {
       session.enqueueStartSelectInput(owned);
@@ -1370,6 +1377,14 @@ struct GamePlayScene::RealtimeGameplaySession {
         input::RealtimePhysicalInputTransitionType::Command) {
       if (session.inputInterrupted.load(std::memory_order_acquire) &&
           !session.inputInterruptionAcknowledged.load(std::memory_order_acquire)) {
+        return true;
+      }
+      if (const auto control = scratchCommandControl(transition.command)) {
+        session.enqueueStartSelectInput({
+            .type = transition.command.pressed ? gameplay::RealtimeGameplayInputType::Press
+                                               : gameplay::RealtimeGameplayInputType::Release,
+            .steadyTimestampMicros = transition.steadyTimestampMicros,
+            .hasReplayControl = true, .replayControl = *control});
         return true;
       }
       if (!session.inputCommands.tryPush(transition.command)) {
@@ -4518,6 +4533,11 @@ void GamePlayScene::togglePauseMenuFromInput() {
 
 void GamePlayScene::handleLogicalInputCommand(
     const input::LogicalInputTransition &transition) {
+  if (const auto control = scratchCommandControl(transition)) {
+    consumeStartSelectInput({.control = *control, .pressed = transition.pressed,
+        .timestampMicros = static_cast<std::int64_t>(transition.timestampMicros)});
+    return;
+  }
   if (!transition.pressed) {
     return;
   }
