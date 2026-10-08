@@ -75,7 +75,7 @@ bool input_profile::addMissingGameplayCommandBindings(InputProfile &profile) {
       // Preserve remapped actions and keys used by either player in DP.
       const bool occupied = std::ranges::any_of(profile.bindings, [&](const auto &binding) {
         return binding.scope.keyMode == mode &&
-               (binding.scope.player == 1 || mode == 10 || mode == 14) &&
+               (binding.scope.player == 1 || mode == 10 || mode == 14 || mode == 48) &&
                (binding.action.kind == action ||
                 (binding.control.deviceClass == input::DeviceClass::Keyboard &&
                  binding.control.kind == input::ControlKind::Key && binding.control.index == key));

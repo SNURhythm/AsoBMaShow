@@ -7,7 +7,8 @@
 namespace input_profile {
 
 [[nodiscard]] constexpr bool usesCommandOnlyScratch(int keyMode) {
-  return keyMode == 4 || keyMode == 6 || keyMode == 8;
+  return keyMode > 0 && keyMode != 5 && keyMode != 7 &&
+         keyMode != 10 && keyMode != 14;
 }
 
 // Binding scopes distinguish scratchless modes; chart and replay lanes do not.

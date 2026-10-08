@@ -2563,6 +2563,14 @@ bool GamePlayScene::drainRealtimeInputInterruption() {
   context.inputDeviceRegistry.completeRealtimeInputFallback();
   input::LogicalInputTransition ignoredCommand;
   while (session.inputCommands.tryPop(ignoredCommand)) {}
+  // Command-only scratch releases can be dropped before fallback is ready.
+  // Retire both held controls and queued edges before accepting fresh input.
+  gameplay::StartSelectControlInput ignoredControl;
+  while (session.startSelectInputs.tryPop(ignoredControl)) {}
+  session.startSelectInputOverflow.store(false, std::memory_order_release);
+  if (startSelectControl) startSelectControl->reset();
+  startButtonPressed = false;
+  selectButtonPressed = false;
   inputInterruptionPause = true;
   showPauseMenu(true);
   session.inputInterruptionAcknowledged.store(true, std::memory_order_release);

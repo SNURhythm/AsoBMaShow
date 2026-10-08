@@ -1022,6 +1022,24 @@ void testScratchlessInputModesUseIndependentKeyBindings() {
   }
 }
 
+void testDenseDoublePlaySettingsSplitChartLanesByPlayer() {
+  for (const int player : {1, 2}) {
+    const auto actions = settings_scene::inputActionsForScope(
+        {player, 48}, std::span<const input::InputBinding>{});
+    std::vector<int> lanes;
+    for (const auto &row : actions) {
+      if (row.action.kind == input::LogicalActionKind::Lane) {
+        assert(row.bindable);
+        lanes.push_back(row.action.lane);
+      }
+    }
+    assert(lanes.size() == 24);
+    for (int position = 0; position < 24; ++position) {
+      assert(lanes[position] == (player == 1 ? position : position + 24));
+    }
+  }
+}
+
 void testGyroscopeSettingsLayoutAndPresentation() {
   const auto wide = settings_scene::resolveGyroscopeSettingsLayout(900, false);
   assert(!wide.stackEditors);
@@ -1158,6 +1176,7 @@ int main() {
   testInputBindingEditorStaysInsidePaddedActionGroup();
   testLegacyDigitalScratchBindingsRemainManageable();
   testScratchlessInputModesUseIndependentKeyBindings();
+  testDenseDoublePlaySettingsSplitChartLanesByPlayer();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

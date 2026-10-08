@@ -46,9 +46,9 @@ inline std::vector<InputActionDefinition> inputActionsForScope(
   std::vector<InputActionDefinition> result;
   int firstLane = 0;
   int noteLanes = scratchless ? -scope.keyMode : scope.keyMode;
-  if (scope.keyMode == 10 || scope.keyMode == 14) {
+  if (scope.keyMode == 10 || scope.keyMode == 14 || scope.keyMode == 48) {
     noteLanes = scope.keyMode / 2;
-    firstLane = scope.player == 1 ? 0 : 8;
+    firstLane = scope.player == 1 ? 0 : scope.keyMode == 48 ? 24 : 8;
   }
   for (int localLane = 0; localLane < noteLanes; ++localLane) {
     int physicalLane = firstLane + localLane;

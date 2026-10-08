@@ -1657,6 +1657,54 @@ void testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume() {
   worker.stop();
 }
 
+void testNativeFailureClearsHeldAndQueuedScratchCommands() {
+  for (const auto modifier : {replay::LogicalControlKind::Start,
+                              replay::LogicalControlKind::Select}) {
+    for (const int player : {1, 2}) {
+      GamePlayScene scene;
+      scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+      auto &session = *scene.realtimeGameplaySession;
+      session.audio = &scene.context.jukebox;
+      session.worker = std::make_unique<FixtureWorker>();
+      scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{.keyMode = 8});
+      const replay::LogicalControl button{.kind = modifier};
+      const replay::LogicalControl scratch{
+          .kind = replay::LogicalControlKind::ScratchClockwise, .player = player};
+      scene.consumeStartSelectInput({.control = button, .pressed = true,
+                                     .timestampMicros = 1'000'000});
+      scene.consumeStartSelectInput({.control = scratch, .pressed = true,
+                                     .timestampMicros = 1'010'000});
+      require(!scene.startSelectControl->tick(1'100'000).empty(),
+              "held command scratch initially repeats modifier adjustments");
+      // Another pre-interruption edge may still be queued when the main
+      // thread stalls. Its native release is discarded before fallback ack.
+      require(session.startSelectInputs.tryPush({.control = button, .pressed = true,
+                                                 .timestampMicros = 1'110'000}) &&
+                  session.startSelectInputs.tryPush({.control = scratch, .pressed = true,
+                                                     .timestampMicros = 1'120'000}),
+              "pre-interruption control edges remain queued");
+      session.interruptInput({input::DeviceClass::Keyboard, 1'130'000, false});
+      session.interruptInput({input::DeviceClass::Keyboard, 1'130'000, true});
+      require(scene.drainRealtimeInputInterruption() &&
+                  session.inputInterruptionAcknowledged &&
+                  !scene.startButtonPressed && !scene.selectButtonPressed,
+              "accepting fallback clears held Start and Select flags");
+      scene.drainRealtimeStartSelectInputs();
+      require(scene.startSelectControl->tick(2'000'000).empty(),
+              "fallback retires held and queued scratch state after a lost release");
+      scene.closePauseMenu();
+      scene.consumeStartSelectInput({.control = button, .pressed = true,
+                                     .timestampMicros = 2'010'000});
+      require(scene.startSelectControl->tick(2'100'000).empty(),
+              "a fresh modifier after resume cannot reactivate the old scratch direction");
+      scene.consumeStartSelectInput({.control = scratch, .pressed = true,
+                                     .timestampMicros = 2'110'000});
+      require(!scene.startSelectControl->tick(2'200'000).empty(),
+              "fresh fallback scratch still controls adjustments normally");
+    }
+  }
+}
+
 void testNativeFailureRacingOrdinaryPauseResumeIsNotCleared() {
   GamePlayScene scene;
   scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
@@ -2249,6 +2297,7 @@ int main(int argc, char **argv) {
                               "back", "dismiss", "dismiss-background"}) {
     testGuidedAccessReminderStartup(scenario);
   }
+  testNativeFailureClearsHeldAndQueuedScratchCommands();
   testNativeFailureRacingOrdinaryPauseResumeIsNotCleared();
   testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume();
   {

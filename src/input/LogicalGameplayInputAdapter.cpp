@@ -23,7 +23,7 @@ bool isValidGameplayLane(int lane) {
 
 std::vector<input::InputScope> makeGameplayInputScopes(int keyMode) {
   std::vector<input::InputScope> scopes{{.player = 1, .keyMode = keyMode}};
-  if (keyMode == 10 || keyMode == 14) {
+  if (keyMode == 10 || keyMode == 14 || keyMode == 48) {
     scopes.push_back({.player = 2, .keyMode = keyMode});
   }
   return scopes;
