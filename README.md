@@ -38,6 +38,7 @@ git submodule update --init --recursive
 - [ ] Support PMS
 - [ ] Portrait mode (mobile)
 - [x] Support skin (Lua gameplay skins are enabled on desktop builds)
+- [ ] Use responsive layouts for menus and dialogs based on available window space and density-independent sizing. Keep text and touch targets readable, adapt columns to screen size and orientation, and preserve the fixed gameplay canvas.
 
 ### Repository guide
 
