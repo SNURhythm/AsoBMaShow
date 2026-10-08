@@ -160,6 +160,65 @@ void testDenseDoublePlayActivatesSecondPlayerBindings() {
   }
 }
 
+void testDenseDoublePlayCommandKeysUsePhysicalPlayerHalves() {
+  constexpr std::array deltas{
+      -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1,
+      -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1};
+  for (const int player : {1, 2}) {
+    for (int position = 0; position < 24; ++position) {
+      for (const auto modifier : {input::LogicalActionKind::Start,
+                                  input::LogicalActionKind::Select}) {
+        const int physicalLane = (player - 1) * 24 + position;
+        InputProfile profile;
+        profile.bindings.push_back({.id = "modifier", .scope = {player, 48},
+            .action = {modifier},
+            .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                        .kind = input::ControlKind::Key, .index = SDL_SCANCODE_Q}});
+        profile.bindings.push_back({.id = "note", .scope = {player, 48},
+            .action = {input::LogicalActionKind::Lane, physicalLane},
+            .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                        .kind = input::ControlKind::Key, .index = SDL_SCANCODE_D}});
+        RecordingControl notes;
+        gameplay::StartSelectControl commands({.keyMode = 48});
+        std::vector<gameplay::StartSelectControlAction> actions;
+        std::vector<LogicalGameplayInputAdapter::AppliedTransition> recorded;
+        LogicalGameplayInputPipeline pipeline(notes, profile, makeGameplayInputScopes(48), {}, {},
+            [&](const auto &edge) {
+              require(edge.hasReplayControl, "48K command keys retain replay controls");
+              recorded.push_back(edge);
+              const auto next = commands.apply(edge.control, edge.pressed, edge.source.timestampMicros);
+              actions.insert(actions.end(), next.begin(), next.end());
+            });
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, true);
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_D, true);
+        const std::vector<gameplay::StartSelectControlAction> expected{{
+            .kind = modifier == input::LogicalActionKind::Start
+                        ? gameplay::StartSelectControlActionKind::AdjustHispeed
+                        : gameplay::StartSelectControlActionKind::AdjustDuration,
+            .delta = deltas[position]}};
+        require(actions == expected,
+                "all 24 keys on both 48K sides use matching Start/Select adjustments");
+        require(commands.tick(recorded.back().source.timestampMicros + 100'000).empty(),
+                "48K note keys never become held lane-cover controls");
+        require(replay::physicalChartLaneForLogicalControl(48, recorded.back().control) ==
+                    std::optional<int>{physicalLane},
+                "48K command normalization preserves the original replay lane encoding");
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_D, false);
+        pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, false);
+        require(actions == expected, "48K command key releases emit no adjustments");
+
+        gameplay::StartSelectControl playback({.keyMode = 48});
+        std::vector<gameplay::StartSelectControlAction> replayActions;
+        for (const auto &edge : recorded) {
+          const auto next = playback.apply(edge.control, edge.pressed, edge.source.timestampMicros);
+          replayActions.insert(replayActions.end(), next.begin(), next.end());
+        }
+        require(replayActions == expected, "replayed 48K command keys match live adjustments");
+      }
+    }
+  }
+}
+
 void testScratchReversalAndLateReleaseOrdering() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -1685,6 +1744,7 @@ int main() {
   testLaneTransitionsPreserveDpLaneNumbers();
   testGameplayScopesEnableBothPlayersOnlyForDp();
   testDenseDoublePlayActivatesSecondPlayerBindings();
+  testDenseDoublePlayCommandKeysUsePhysicalPlayerHalves();
   testScratchReversalAndLateReleaseOrdering();
   testScratchReversalFallsBackToOlderHeldDirection();
   testSecondPlayerScratchUsesLaneFifteen();

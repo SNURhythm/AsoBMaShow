@@ -162,9 +162,10 @@ counter is specific to each workflow, so Firebase and Play do not share a global
 sequence. Rerunning a workflow keeps its code; start a new workflow run for each
 new Play upload. If a code has already been uploaded, do not reuse it.
 
-The previous Unix-second scheme produced the first Play draft with version code
-`1791476715`. Replace that high-code draft with a newly built bundle before
-publishing; do not roll out the old draft.
+The previous Unix-second scheme produced an unpublished Play draft with version
+code `1791476715`. That draft was removed before release; the small-counter
+sequence starts before the app's first publication. Once a version is released,
+subsequent releases must use a higher code; never reuse a previously used code.
 
 Android also rejects lower-code updates over existing high-code Firebase or
 sideloaded APK installations. Back up charts, profiles and other app data before
