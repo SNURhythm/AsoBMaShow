@@ -74,22 +74,28 @@ public class AsoBMaShowActivity extends SDLActivity {
         int[] buttonIds = args.getIntArray("buttonIds");
         String[] buttonTexts = args.getStringArray("buttonTexts");
         // SDL's custom message layout does not scroll long help text. The
-        // platform message area scrolls while keeping its dismiss button visible.
+        // platform message area scrolls while keeping its action buttons visible.
         if ((args.getInt("flags") & 0x40 /* SDL_MESSAGEBOX_INFORMATION */) == 0
-                || buttonIds == null || buttonIds.length != 1
-                || buttonTexts == null || buttonTexts.length != 1) {
+                || buttonIds == null || buttonIds.length < 1 || buttonIds.length > 2
+                || buttonTexts == null || buttonTexts.length != buttonIds.length) {
             super.messageboxCreateAndShow(args);
             return;
         }
         try {
-            new AlertDialog.Builder(this)
+            int primaryButton = buttonIds.length - 1;
+            AlertDialog.Builder builder = new AlertDialog.Builder(this)
                     .setTitle(args.getString("title"))
                     .setMessage(args.getString("message"))
-                    .setPositiveButton(buttonTexts[0], (dialog, which) -> messageboxSelection[0] = buttonIds[0])
+                    .setPositiveButton(buttonTexts[primaryButton],
+                            (dialog, which) -> messageboxSelection[0] = buttonIds[primaryButton])
                     .setOnDismissListener(dialog -> {
                         synchronized (messageboxSelection) { messageboxSelection.notifyAll(); }
-                    })
-                    .show();
+                    });
+            if (buttonIds.length == 2) {
+                builder.setNegativeButton(buttonTexts[0],
+                        (dialog, which) -> messageboxSelection[0] = buttonIds[0]);
+            }
+            builder.show();
         } catch (RuntimeException error) {
             Log.w("AsoBMaShow", "Could not show information dialog", error);
             synchronized (messageboxSelection) { messageboxSelection.notifyAll(); }

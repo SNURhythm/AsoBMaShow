@@ -996,6 +996,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   fileActionsModalRoot_ = nullptr;
   fileActionsPanel_ = nullptr;
   folderImportPanel_ = nullptr;
+  computerImportPanel_ = nullptr;
 #endif
   parseLogRecyclerView = nullptr;
   parseLogExportStatusText = nullptr;
@@ -4700,7 +4701,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
 void MainMenuScene::buildFileActionsModal() {
   if (rootLayout == nullptr) return;
 
-  // The scene view tree owns both panels for their entire lifetime. Switching
+  // The scene view tree owns all panels for their entire lifetime. Switching
   // panels only changes visibility, including inside button callbacks.
   fileActionsModalRoot_ = new BlockingOverlayView(
       0, 0, rendering::window_width, rendering::window_height);
@@ -4778,14 +4779,12 @@ void MainMenuScene::buildFileActionsModal() {
       helpText->setAlign(TextView::LEFT);
       helpText->setWrap(true);
       helpText->setThemedColor(ui_theme::cyan);
-      help->setOnClickListener([] {
-        const auto path = ChartRepository::DefaultBmsFolderPath().string();
-        const auto instructions = i18n::format(
-            "menu.manage_files.computer.instructions", {{"path", path}});
-        SDL_ShowSimpleMessageBox(
-            SDL_MESSAGEBOX_INFORMATION,
-            i18n::tr("menu.manage_files.computer.label"),
-            instructions.c_str(), nullptr);
+      help->setOnClickListener([this] {
+        fileActionsPanel_->setVisible(false);
+        fileActionsPanel_->setDisplay(YGDisplayNone);
+        computerImportPanel_->setVisible(true);
+        computerImportPanel_->setDisplay(YGDisplayFlex);
+        fileActionsModalRoot_->applyYogaLayout();
       });
       footer->addView(help);
       footer->addView(close);
@@ -4922,6 +4921,49 @@ void MainMenuScene::buildFileActionsModal() {
             [importFolder]() { importFolder(true); });
   folderImportPanel_->setVisible(false);
   folderImportPanel_->setDisplay(YGDisplayNone);
+
+  auto *computerActions = makePanel(
+      "menu.manage_files.computer.label", "menu.manage_files.computer.choice",
+      "library.tasks.back.label", [this]() { showFileActionsModal(); },
+      &computerImportPanel_);
+  auto showComputerGuide = [this](const char *titleKey, const char *instructionsKey) {
+    const auto path = ChartRepository::DefaultBmsFolderPath().string();
+    const auto instructions = i18n::format(instructionsKey, {{"path", path}});
+    const SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0,
+         i18n::tr("library.tasks.back.label")},
+        {0, 1, i18n::tr("menu.refresh_library.label")},
+    };
+    SDL_MessageBoxData messageBox{};
+    messageBox.flags = SDL_MESSAGEBOX_INFORMATION;
+    messageBox.title = i18n::tr(titleKey);
+    messageBox.message = instructions.c_str();
+    messageBox.numbuttons = 2;
+    messageBox.buttons = buttons;
+    int selectedButton = -1;
+    if (SDL_ShowMessageBox(&messageBox, &selectedButton) == 0 && selectedButton == 1) {
+      fileActionsModalRoot_->setVisible(false);
+      startLibraryRefresh();
+      showTasksModal();
+    }
+  };
+  auto *computerCards = addRow(computerActions);
+  addAction(computerCards, 0xf1c6 /* file-zipper */,
+            "menu.manage_files.computer.regular.label",
+            "menu.manage_files.computer.regular.description",
+            [showComputerGuide] {
+              showComputerGuide("menu.manage_files.computer.regular.label",
+                                "menu.manage_files.computer.regular.instructions");
+            });
+  addAction(computerCards, 0xf120 /* terminal */,
+            "menu.manage_files.computer.advanced.label",
+            "menu.manage_files.computer.advanced.description",
+            [showComputerGuide] {
+              showComputerGuide("menu.manage_files.computer.advanced.label",
+                                "menu.manage_files.computer.advanced.instructions");
+            });
+  computerImportPanel_->setVisible(false);
+  computerImportPanel_->setDisplay(YGDisplayNone);
   rootLayout->addView(fileActionsModalRoot_);
   resizeFileActionsModal();
 }
@@ -4949,7 +4991,7 @@ void MainMenuScene::resizeFileActionsModal() {
       text->setAlign(vertical ? TextView::CENTER : TextView::LEFT);
     }
   };
-  for (auto *panel : {fileActionsPanel_, folderImportPanel_}) {
+  for (auto *panel : {fileActionsPanel_, folderImportPanel_, computerImportPanel_}) {
     auto *scroll = static_cast<ScrollView *>(panel->findViewByName("fileActionsScroll"));
     auto *content = scroll->getContentView();
     auto *row = content->findViewByName("fileActionCards");
@@ -4987,6 +5029,8 @@ void MainMenuScene::showFileActionsModal() {
   fileActionsPanel_->setDisplay(YGDisplayFlex);
   folderImportPanel_->setVisible(false);
   folderImportPanel_->setDisplay(YGDisplayNone);
+  computerImportPanel_->setVisible(false);
+  computerImportPanel_->setDisplay(YGDisplayNone);
   fileActionsModalRoot_->setVisible(true);
   fileActionsModalRoot_->applyYogaLayout();
 }
@@ -7577,6 +7621,7 @@ void MainMenuScene::cleanupScene() {
   fileActionsModalRoot_ = nullptr;
   fileActionsPanel_ = nullptr;
   folderImportPanel_ = nullptr;
+  computerImportPanel_ = nullptr;
 #endif
   parseLogRecyclerView = nullptr;
   parseLogExportStatusText = nullptr;
