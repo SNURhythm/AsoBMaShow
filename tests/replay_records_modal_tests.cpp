@@ -191,6 +191,16 @@ void testKeysoundSelectionFlowsThroughWatchAndExport() {
   clickModalButton(*modal, "records.export_video.label");
   expect(!exportedAuto && !modal->autoKeySound(),
          "export selector switches both consumers back to input timing");
+  clickModalButton(*modal, "settings.controls.keysound.auto_timed.label");
+  modal->hide();
+  ChartMetaRecord nextChart;
+  nextChart.meta.Title = "Another chart";
+  modal->showChart(nextChart);
+  modal->selectRecord(record);
+  expect(!modal->autoKeySound(), "reopening records restores input timing");
+  clickModalButton(*modal, "records.export_video.label");
+  clickModalButton(*modal, "records.export_video.label");
+  expect(!exportedAuto, "reopened export does not reuse the previous chart timing");
 }
 
 void testCourseTargetsHaveIndependentIdentity() {
@@ -294,6 +304,10 @@ int main() {
                 .exportAutoPlay = [&](const ChartMetaRecord &,
                                       ReplayVideoExportOptions) { exported = true; }}));
     modal->showChart(chart);
+    if (!loaded.empty()) modal->selectRecord(loaded.front());
+    expect(modal->autoKeySound(), "autoplay exposes automatic keysound timing");
+    modal->selectRecord(modernChartRecord());
+    expect(!modal->autoKeySound(), "autoplay does not overwrite the saved replay timing choice");
     if (!loaded.empty()) modal->selectRecord(loaded.front());
     expect(modal->activate(ReplayRecordsModalAction::Watch) && watched,
            "unplayed selector chart watches autoplay through the actual modal loader");

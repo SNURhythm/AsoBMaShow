@@ -1067,6 +1067,7 @@ void ReplayRecordsModal::showChart(const ChartMetaRecord &record) {
   clearSelection();
   selectedReplayRenderTouchPoints_ = touchVisualizationEnabled_;
   selectedReplayRenderGhosts_ = true;
+  selectedReplayAutoKeySound_ = false;
   filters_ = {};
   reloadRecords(false);
   if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));

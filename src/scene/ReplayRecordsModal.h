@@ -122,7 +122,7 @@ public:
     return selectedReplayRenderTouchPoints_;
   }
   [[nodiscard]] bool autoKeySound() const noexcept {
-    return selectedReplayAutoKeySound_;
+    return selectedIsAutoPlay() || selectedReplayAutoKeySound_;
   }
   [[nodiscard]] bool renderReplayGhosts() const noexcept {
     return selectedReplayRenderGhosts_;
