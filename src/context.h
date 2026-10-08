@@ -604,15 +604,16 @@ public:
     // Tables belong to the shared chart database. Migrate evidence from every
     // profile, including an inactive profile whose user already deleted a table.
     const auto previousApplicationState = applicationUiState;
-    if (!applicationUiState.defaultDifficultyTablesSeeded ||
-        applicationUiState.bundledDifficultyTablesRevision <
-            difficulty_table::kBundledSeedRevision) {
+    if (applicationUiStateLoadResult.status != ApplicationUiStateLoadStatus::FutureVersion &&
+        (applicationUiState.onlineDifficultyTablesRevision < difficulty_table::kBundledSeedRevision ||
+         applicationUiState.bundledDifficultyTablesRevision < difficulty_table::kBundledSeedRevision)) {
       for (const auto &profile : profileManager.listProfiles()) {
         const auto loaded = AppSettingsStore::Load(
             profileManager.pathsFor(profile.id).settingsJson);
         if (loaded.status != AppSettingsLoadStatus::Loaded) continue;
-        applicationUiState.defaultDifficultyTablesSeeded |=
-            loaded.settings.defaultDifficultyTablesSeeded;
+        applicationUiState.onlineDifficultyTablesRevision = std::max(
+            applicationUiState.onlineDifficultyTablesRevision,
+            loaded.settings.defaultDifficultyTablesSeeded ? 1 : 0);
         applicationUiState.bundledDifficultyTablesRevision = std::max(
             applicationUiState.bundledDifficultyTablesRevision,
             loaded.settings.aeryDifficultyTablesSeeded ? 2
@@ -639,13 +640,17 @@ public:
             chart_library_tasks::ChartLibraryOperationsDependencies{
                 .repository = chartRepository,
                 .tablesDirectory = Utils::GetDocumentsPath("tables"),
-                .defaultDifficultyTablesSeeded = [this] {
+                .onlineDifficultyTablesRevision = [this] {
                   std::lock_guard lock(applicationUiStateMutex);
-                  return applicationUiState.defaultDifficultyTablesSeeded;
+                  // A newer state may already record completion we cannot read.
+                  if (applicationUiStateLoadResult.status == ApplicationUiStateLoadStatus::FutureVersion) {
+                    return difficulty_table::kBundledSeedRevision;
+                  }
+                  return applicationUiState.onlineDifficultyTablesRevision;
                 },
-                .setDefaultDifficultyTablesSeeded = [this](bool seeded) {
+                .setOnlineDifficultyTablesRevision = [this](int revision) {
                   std::lock_guard lock(applicationUiStateMutex);
-                  applicationUiState.defaultDifficultyTablesSeeded = seeded;
+                  applicationUiState.onlineDifficultyTablesRevision = revision;
                 },
                 .saveSettings = [this] { return saveApplicationUiState(); },
                 .requestReload = [this](bool includeFolders) {

@@ -485,8 +485,7 @@ std::vector<std::string> ChartRepository::Session::DifficultyTableSourcesForChar
   auto *db = impl_->database();
   const auto sha256 = normalizedHash(meta.SHA256);
   const auto md5 = normalizedHash(meta.MD5);
-  if ((sha256.empty() && md5.empty()) ||
-      !chart_repository_detail::EnsureDifficultySchema(db)) return {};
+  if (sha256.empty() && md5.empty()) return {};
   SqliteStatementHandle stmt;
   const char *query =
       "SELECT DISTINCT dt.source_url FROM difficulty_tables dt "

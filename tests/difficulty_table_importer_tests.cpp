@@ -688,7 +688,7 @@ void testSharedSeedStatePreservesDeletedTables() {
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   ApplicationUiState applicationState;
-  applicationState.defaultDifficultyTablesSeeded = true;
+  applicationState.onlineDifficultyTablesRevision = 1;
   applicationState.bundledDifficultyTablesRevision = 1;
   DifficultyTableImporter importer;
   {
@@ -723,13 +723,30 @@ void testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport() {
   assert(tables.size() == 8);
   for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
   // Offline snapshot completion is independent of the pending online refresh.
-  assert(!state.defaultDifficultyTablesSeeded);
+  assert(state.onlineDifficultyTablesRevision == 0);
   assert(!importer.SeedBundledDefaultsForApplication(*session, state));
   assert(session->SelectDifficultyTables().empty());
   state.bundledDifficultyTablesRevision = 7;
   assert(!importer.SeedBundledDefaultsForApplication(*session, state));
   assert(state.bundledDifficultyTablesRevision == 7);
   assert(session->SelectDifficultyTables().empty());
+}
+
+void testCompletedOnlineRevisionPreventsBundledRestoration() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  // The snapshot was unavailable, online seeding succeeded, and the user
+  // subsequently deleted the tables before restarting with a valid snapshot.
+  ApplicationUiState state;
+  state.onlineDifficultyTablesRevision = 2;
+  DifficultyTableImporter importer;
+  assert(importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(state.bundledDifficultyTablesRevision == 2);
+  assert(session->SelectDifficultyTables().empty());
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
 }
 
 int main() {
@@ -739,6 +756,7 @@ int main() {
   testPackagedDefaultsImportWithoutNetwork();
   testSharedSeedStatePreservesDeletedTables();
   testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport();
+  testCompletedOnlineRevisionPreventsBundledRestoration();
 #if !defined(_WIN32)
   testDesktopDownloadsEnforceIncrementalResponseBudget();
 #endif

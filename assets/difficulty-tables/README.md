@@ -16,20 +16,24 @@ The sources include Aery 5K and 7K at `https://asumatoki.kr/table/aery/header.js
 and `https://asumatoki.kr/table/aery7/header.json`. The script accepts both table
 webpages and direct JSON headers.
 
-The script reads the default URLs from `ChartLibraryOperations.cpp` and only
+The script reads the default URLs from `src/DifficultyTableDefaults.h` and only
 replaces the snapshot after every download succeeds. Review the resulting
 snapshot before committing it. Desktop, iOS, and Android package this directory
 through their existing shared-assets rules.
 
-Before showing the initial UI, startup imports missing source URLs from the
-bundle if the first-launch online update has not completed. Existing tables
-always win. Snapshot import does not set `defaultDifficultyTablesSeeded`:
-the normal background downloads still refresh these same sources and persist
-completion only after all eight succeed. Offline/failed updates leave snapshots
-available and retry on a later library refresh. Once the online seed completes,
-startup does not restore tables the user has subsequently deleted.
+The source registry assigns each table a seed revision: revision 1 contains
+six original sources, and revision 2 adds Aery 5K and 7K. Add future sources
+under a new revision without renumbering existing entries.
 
-Existing installations also receive the two Aery snapshots once, tracked by
-`aeryDifficultyTablesSeeded`. This upgrade imports only those sources and
-preserves installed copies. It does not restore other deleted default tables.
-After the upgrade and online seed complete, deleted Aery tables stay deleted.
+Startup imports pending revisions from the bundle before showing the initial
+UI. Existing sources always win. The background library refresh separately
+downloads pending revisions from their online sources. Both completion markers
+live in application-wide state alongside the shared chart database; profiles
+do not own them. Each marker advances only after its revision completes, so
+failed downloads retry without repeating completed older revisions. Completed
+online revisions also satisfy the bundled fallback if the snapshot was unavailable.
+
+Legacy completion flags migrate to the appropriate revisions. Profile imports
+clear those device-local flags, and older builds leave application state from
+newer schema versions untouched. Once bundled and online seeding for a revision
+complete, deleting one of its tables does not cause seeding to restore it.

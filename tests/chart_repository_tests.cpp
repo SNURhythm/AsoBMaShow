@@ -4238,8 +4238,36 @@ void testScratchlessCourseOnlyMembership() {
   assert(session->DifficultyTableSourcesForChart(chart.Meta).empty());
 }
 
+void testScratchlessMembershipWhileAnotherConnectionWrites() {
+  TempDirectory temp;
+  const auto path = temp.path() / "chart.db";
+  ChartRepository repository(path);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  difficulty_table::Document table;
+  table.name = "Concurrent membership";
+  table.symbol = "C";
+  table.sourceUrl = "https://example.test/table.json";
+  const std::string md5(32, 'e');
+  table.charts = {{.md5 = md5}};
+  table.courses = {{.name = "Grade", .charts = {{.md5 = md5}}}};
+  assert(session->ReplaceDifficultyTable(table));
+  auto writer = openDatabase(path);
+  assert(writer);
+  // Pending course metadata repair must not turn a membership read into a write.
+  assert(execute(writer.get(), "UPDATE difficulty_courses SET course_key = ''"));
+  assert(execute(writer.get(), "BEGIN IMMEDIATE"));
+  bms_parser::ChartMeta meta;
+  meta.MD5 = md5;
+  assert(session->DifficultyTableSourcesForChart(meta) ==
+         std::vector<std::string>{table.sourceUrl});
+  assert(execute(writer.get(), "ROLLBACK"));
+}
+
 int main(int argc, char **argv) {
   testScratchlessCourseOnlyMembership();
+  testScratchlessMembershipWhileAnotherConnectionWrites();
   testScratchlessTableMembership();
   if (argc > 1) {
     try {

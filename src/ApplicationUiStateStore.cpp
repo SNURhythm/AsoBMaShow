@@ -93,21 +93,26 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
 
   const auto defaults = loaded.document.find("defaultDifficultyTablesSeeded");
   if (defaults != loaded.document.end() && defaults->is_boolean()) {
-    result.state.defaultDifficultyTablesSeeded = defaults->get<bool>();
+    result.state.onlineDifficultyTablesRevision = defaults->get<bool>() ? 1 : 0;
   }
   // Revision 1 shipped the original defaults; revision 2 added the Aery pair.
   // Read old flags only for migration, and preserve revisions from newer builds.
   result.state.bundledDifficultyTablesRevision =
-      result.state.defaultDifficultyTablesSeeded ? 1 : 0;
+      result.state.onlineDifficultyTablesRevision;
   const auto aery = loaded.document.find("aeryDifficultyTablesSeeded");
   if (aery != loaded.document.end() && aery->is_boolean() && aery->get<bool>()) {
     result.state.bundledDifficultyTablesRevision = 2;
   }
-  const auto revision = loaded.document.find("bundledDifficultyTablesRevision");
-  if (revision != loaded.document.end() && revision->is_number_integer() &&
-      *revision >= 0 && *revision <= std::numeric_limits<int>::max()) {
-    result.state.bundledDifficultyTablesRevision = std::max(
-        result.state.bundledDifficultyTablesRevision, revision->get<int>());
+  for (const auto &[key, value] : {
+           std::pair{"bundledDifficultyTablesRevision",
+                     &result.state.bundledDifficultyTablesRevision},
+           std::pair{"onlineDifficultyTablesRevision",
+                     &result.state.onlineDifficultyTablesRevision}}) {
+    const auto revision = loaded.document.find(key);
+    if (revision != loaded.document.end() && revision->is_number_integer() &&
+        *revision >= 0 && *revision <= std::numeric_limits<int>::max()) {
+      *value = std::max(*value, revision->get<int>());
+    }
   }
 
   const auto toolbar = loaded.document.find("musicSelectToolbar");
@@ -149,13 +154,17 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
 bool ApplicationUiStateStore::SaveAtomic(const std::filesystem::path &path,
                                          const ApplicationUiState &state,
                                          std::string &diagnostic) {
+  if (Load(path).status == ApplicationUiStateLoadStatus::FutureVersion) {
+    diagnostic = "application state was written by a newer version";
+    return false;
+  }
   const auto &toolbar = state.musicSelectToolbar;
   const json document = {
       {"schemaVersion", ApplicationUiState::kSchemaVersion},
       {"language", i18n::isLanguagePreference(state.language)
                        ? state.language : "system"},
       {"newcomerTutorialCompleted", state.newcomerTutorialCompleted},
-      {"defaultDifficultyTablesSeeded", state.defaultDifficultyTablesSeeded},
+      {"onlineDifficultyTablesRevision", state.onlineDifficultyTablesRevision},
       {"bundledDifficultyTablesRevision", state.bundledDifficultyTablesRevision},
       {"musicSelectToolbar",
        {{"mode", modeName(toolbar.mode)},

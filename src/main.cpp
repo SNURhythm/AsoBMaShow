@@ -1699,11 +1699,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 static void runReadyApplication(ApplicationContext &context) {
   // Make defaults visible to the first selector load. Leave the online seed
   // pending so the normal background refresh replaces these snapshots.
-  if (auto session = context.chartRepository.OpenSession()) {
-    DifficultyTableImporter importer;
-    if (importer.SeedBundledDefaultsForApplication(
-            *session, context.applicationUiState)) {
-      context.saveApplicationUiState();
+  if (context.applicationUiStateLoadResult.status !=
+      ApplicationUiStateLoadStatus::FutureVersion) {
+    if (auto session = context.chartRepository.OpenSession()) {
+      DifficultyTableImporter importer;
+      if (importer.SeedBundledDefaultsForApplication(
+              *session, context.applicationUiState)) {
+        context.saveApplicationUiState();
+      }
     }
   }
   application_result_recovery::execute(

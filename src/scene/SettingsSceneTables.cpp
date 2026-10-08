@@ -238,11 +238,13 @@ void SettingsScene::refreshTablesIfLibraryChanged() {
 
   observedLibraryRevision = revision;
   if (activeTab != SettingsTab::DifficultyTables &&
+      activeTab != SettingsTab::GameplaySkins &&
       activeTab != SettingsTab::BmsLibrary) {
     return;
   }
 
-  if (activeTab == SettingsTab::DifficultyTables) {
+  if (activeTab == SettingsTab::DifficultyTables ||
+      activeTab == SettingsTab::GameplaySkins) {
     loadDifficultyTables();
   } else {
     loadChartEntries();

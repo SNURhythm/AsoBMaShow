@@ -156,6 +156,58 @@ int main() {
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_open_skins_tab_refreshes_table_choices_on_library_changes(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneTables.cpp").read_text()
+        refresh = extract(source, "void SettingsScene::refreshTablesIfLibraryChanged()")
+        fixture = r'''
+#include <cassert>
+#include <cstdint>
+#include <string>
+#include <vector>
+enum class SettingsTab { GameplaySkins, DifficultyTables, BmsLibrary, Misc };
+struct Repository {
+  std::uint64_t revision = 0;
+  std::vector<std::string> tables;
+  std::uint64_t GetLibraryRevision() { return revision; }
+};
+struct SettingsScene {
+  struct { Repository chartRepository; } context;
+  SettingsTab activeTab = SettingsTab::GameplaySkins;
+  std::uint64_t observedLibraryRevision = 0;
+  int lastLayoutWidth = 800;
+  std::vector<std::string> difficultyTables;
+  void loadDifficultyTables() { difficultyTables = context.chartRepository.tables; }
+  void loadChartEntries() {}
+  void refreshChartEntryBackupStatuses() {}
+  void refreshTablesIfLibraryChanged();
+};
+REFRESH_METHOD
+int main() {
+  SettingsScene scene;
+  scene.context.chartRepository.tables = {"new table"};
+  scene.context.chartRepository.revision = 1;
+  scene.refreshTablesIfLibraryChanged();
+  assert(scene.difficultyTables == std::vector<std::string>{"new table"});
+  assert(scene.lastLayoutWidth == -1);
+  scene.lastLayoutWidth = 800;
+  scene.refreshTablesIfLibraryChanged();
+  assert(scene.lastLayoutWidth == 800);
+  scene.context.chartRepository.tables.clear();
+  scene.context.chartRepository.revision = 2;
+  scene.refreshTablesIfLibraryChanged();
+  assert(scene.difficultyTables.empty() && scene.lastLayoutWidth == -1);
+}
+'''
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source_path = directory / "scratchless_table_refresh.cpp"
+            source_path.write_text(fixture.replace("REFRESH_METHOD", refresh))
+            binary = directory / ("scratchless_table_refresh" + compiler.executable_suffix)
+            compiler.build([source_path], binary, directory)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_retained_gameplay_skins_tab_refreshes_before_first_layout(self) -> None:
         source = (ROOT / "src/scene/SettingsScene.cpp").read_text(encoding="utf-8")
         init = re.search(

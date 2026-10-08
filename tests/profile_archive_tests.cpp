@@ -1738,6 +1738,31 @@ void testArchiveUsesNativeUnicodeFilesystemPaths() {
          "Unicode import cleans its private workspace");
 }
 
+void testImportClearsDeviceLocalTableSeedMarkers() {
+  Fixture fixture;
+  const auto sourcePaths = fixture.manager.pathsFor(fixture.sourceId);
+  auto settings = Json::parse(readFile(sourcePaths.settingsJson));
+  settings["defaultDifficultyTablesSeeded"] = true;
+  settings["aeryDifficultyTablesSeeded"] = true;
+  settings["unknownPortableField"] = "preserve";
+  writeFile(sourcePaths.settingsJson, settings.dump(2) + "\n");
+  const auto archive = exportFixture(fixture, "seed-markers.asobprofile");
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(imported.ok() && imported.profile, "profile with legacy markers imports");
+  if (!imported.profile) return;
+  const auto path = fixture.manager.pathsFor(imported.profile->id).settingsJson;
+  const auto importedSettings = AppSettingsStore::Load(path);
+  expect(!importedSettings.settings.defaultDifficultyTablesSeeded &&
+             !importedSettings.settings.aeryDifficultyTablesSeeded,
+         "imported seed markers cannot suppress this installation's table seeding");
+  const auto document = Json::parse(readFile(path));
+  expect(document.value("unknownPortableField", "") == "preserve",
+         "clearing device markers preserves unknown portable settings");
+  expect(Json::parse(readFile(sourcePaths.settingsJson)) == settings,
+         "import does not change the source profile");
+}
+
 void testCreateImportUsesNewIdAndRoundTripsExactly() {
   Fixture fixture;
   const auto archive =
@@ -3555,6 +3580,7 @@ void runPortableShard() {
   testMalformedOptionalPracticeRemainsVisibleButCannotExport();
   testArchiveUsesNativeUnicodeFilesystemPaths();
   testCreateImportUsesNewIdAndRoundTripsExactly();
+  testImportClearsDeviceLocalTableSeedMarkers();
   testVersionOneArchiveImportsWithEmptyPracticeDirectory();
   testCreateImportRetriesUnsafeAndOccupiedGeneratedIds();
   testOverwriteIsRestrictedAndReplacesInactiveProfile();

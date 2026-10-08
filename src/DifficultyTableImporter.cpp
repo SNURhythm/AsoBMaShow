@@ -1016,8 +1016,14 @@ bool DifficultyTableImporter::SeedBundledDefaultsForApplication(
     ChartRepository::Session &session, ApplicationUiState &state,
     const std::string &assetPath) {
   const int previousRevision = state.bundledDifficultyTablesRevision;
-  if (previousRevision >= difficulty_table::kBundledSeedRevision) return false;
-  for (int revision = previousRevision + 1;
+  // Successful online seeding also satisfies the offline fallback. Otherwise a
+  // previously unavailable snapshot could later restore deliberately deleted tables.
+  state.bundledDifficultyTablesRevision = std::max(
+      previousRevision, state.onlineDifficultyTablesRevision);
+  if (state.bundledDifficultyTablesRevision >= difficulty_table::kBundledSeedRevision) {
+    return state.bundledDifficultyTablesRevision != previousRevision;
+  }
+  for (int revision = state.bundledDifficultyTablesRevision + 1;
        revision <= difficulty_table::kBundledSeedRevision; ++revision) {
     std::vector<std::string> sources;
     for (const auto &source : difficulty_table::kDefaultSources) {

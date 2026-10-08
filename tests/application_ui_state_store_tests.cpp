@@ -116,7 +116,7 @@ void testDifficultyTableSeedStateSurvivesRestart() {
   TempDirectory temp;
   const auto path = applicationUiStatePath(temp.path());
   ApplicationUiState state;
-  state.defaultDifficultyTablesSeeded = true;
+  state.onlineDifficultyTablesRevision = 1;
   state.bundledDifficultyTablesRevision = 2;
   std::string diagnostic;
   expect(ApplicationUiStateStore::SaveAtomic(path, state, diagnostic),
@@ -125,11 +125,11 @@ void testDifficultyTableSeedStateSurvivesRestart() {
          "both table seed markers survive restart independently of profiles");
   nlohmann::json document;
   { std::ifstream input(path); input >> document; }
-  document.erase("defaultDifficultyTablesSeeded");
+  document.erase("onlineDifficultyTablesRevision");
   document.erase("bundledDifficultyTablesRevision");
   { std::ofstream output(path); output << document; }
   const auto loaded = ApplicationUiStateStore::Load(path);
-  expect(!loaded.state.defaultDifficultyTablesSeeded &&
+  expect(loaded.state.onlineDifficultyTablesRevision == 0 &&
              loaded.state.bundledDifficultyTablesRevision == 0,
          "older application state leaves table seed migration pending");
 }
@@ -155,6 +155,7 @@ void testLegacyTableSeedFlagsMigrateToRevision() {
   expect(!document.contains("aeryDifficultyTablesSeeded"),
          "new state saves a revision instead of the Aery-specific marker");
   document.erase("bundledDifficultyTablesRevision");
+  document["defaultDifficultyTablesSeeded"] = true;
   { std::ofstream output(path); output << document; }
   expect(ApplicationUiStateStore::Load(path).state.bundledDifficultyTablesRevision == 1,
          "legacy original defaults migrate to revision 1 without skipping additions");
@@ -176,6 +177,24 @@ void testLegacyTableSeedFlagsMigrateToRevision() {
   expect(ApplicationUiStateStore::Load(path).state.bundledDifficultyTablesRevision == 7,
          "newer seed revision survives restart");
 
+}
+
+void testFutureSchemaIsNeverOverwritten() {
+  TempDirectory temp;
+  const auto path = applicationUiStatePath(temp.path());
+  const std::string original = R"({"schemaVersion":99,"language":"ko","futureField":{"keep":true}})";
+  { std::ofstream output(path); output << original; }
+  const auto loaded = ApplicationUiStateStore::Load(path);
+  expect(loaded.status == ApplicationUiStateLoadStatus::FutureVersion,
+         "newer application state is recognized");
+  auto candidate = loaded.state;
+  candidate.bundledDifficultyTablesRevision = 2;
+  std::string diagnostic;
+  expect(!ApplicationUiStateStore::SaveAtomic(path, candidate, diagnostic),
+         "seeding cannot overwrite newer application state");
+  std::ifstream input(path);
+  const std::string actual((std::istreambuf_iterator<char>(input)), {});
+  expect(actual == original, "future application state remains byte-for-byte intact");
 }
 
 void testTutorialCompletionSurvivesRestart() {
@@ -213,6 +232,7 @@ int main() {
   testTutorialCompletionSurvivesRestart();
   testDifficultyTableSeedStateSurvivesRestart();
   testLegacyTableSeedFlagsMigrateToRevision();
+  testFutureSchemaIsNeverOverwritten();
   if (failures != 0) {
     std::cerr << failures << " application UI state test(s) failed\n";
     return 1;
