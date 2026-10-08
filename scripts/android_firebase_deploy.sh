@@ -278,10 +278,10 @@ setup_android_signing_env() {
   fi
 }
 
-android_timestamp_version_code() {
-  # Unix seconds are monotonic, have finer collision resistance than the old
-  # minute code, and remain below Android's 2,100,000,000 ceiling until 2036.
-  date -u +%s
+android_default_version_code() {
+  # GitHub increments this counter for each new run of a workflow. Local test
+  # builds can reuse 1 or select a code explicitly when updating an installation.
+  printf '%s\n' "${GITHUB_RUN_NUMBER:-1}"
 }
 
 apply_cli_overrides() {
@@ -448,7 +448,7 @@ setup_java_env() {
 
 setup_build_metadata() {
   local default_version_code release_notes
-  default_version_code="$(android_timestamp_version_code)"
+  default_version_code="$(android_default_version_code)"
 
   export GITHUB_ACTIONS=true
   export GITHUB_EVENT_NAME=pull_request

@@ -85,7 +85,8 @@ scripts/android_firebase_deploy.sh --env-file /path/to/private.env
 
 Deployment requires `FIREBASE_ANDROID_APP_ID` plus Firebase CLI auth. Leave
 `ANDROID_VERSION_CODE` empty for automatic versioning. Build-only and deploy
-runs both use a compact UTC timestamp version code. `restricted_file_accessRelease` and
+runs both use `GITHUB_RUN_NUMBER` in CI and default to `1` locally.
+`restricted_file_accessRelease` and
 `all_file_accessRelease` builds also require release signing env values:
 `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
 `ANDROID_KEY_PASSWORD`. The same signing config is used for Firebase and Google
@@ -139,8 +140,8 @@ Both commands load `.env`, `.env.local`, `android/.env`, and `android/.env.local
 Keep real signing and Play credentials in those private files or the environment.
 For a local upload, export `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` with the contents
 of a private JSON key file. No key file is written by the lane. Leave
-`ANDROID_VERSION_CODE` unset to use the same automatic UTC timestamp versioning
-as Firebase. An optional `ANDROID_VERSION_NAME` sets the version name.
+`ANDROID_VERSION_CODE` unset to use the workflow run number, or `1` for a local
+test build. An optional `ANDROID_VERSION_NAME` sets the version name.
 The output is
 `android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab`.
 Direct Fastlane commands, after selecting the project Ruby and installing its
@@ -148,6 +149,28 @@ bundle, are `bundle exec fastlane android build_bundle` and
 `bundle exec fastlane android play_beta` from `android/`; prefer the wrapper for
 environment and Ruby setup. Run `python3 tests/android_play_workflow_tests.py`
 to exercise build/upload boundaries without contacting Play.
+
+### Version-code transition
+
+Version codes now use small workflow counters (`1`, `2`, `3`, etc.). GitHub's
+counter is specific to each workflow, so Firebase and Play do not share a global
+sequence. Rerunning a workflow keeps its code; start a new workflow run for each
+new Play upload. If a code has already been uploaded, do not reuse it.
+
+The previous Unix-second scheme produced the first Play draft with version code
+`1791476715`. Replace that high-code draft with a newly built bundle before
+publishing; do not roll out the old draft.
+
+Android also rejects lower-code updates over existing high-code Firebase or
+sideloaded APK installations. Back up charts, profiles and other app data before
+uninstalling such a test build and installing a new one; uninstalling can delete
+the app's Documents directory. If retaining an existing installation is required,
+use the Firebase helper's `--version-code N` option with a code at least as high
+as its installed code for that local APK. This also applies when switching
+between workflows or installing a local build over a CI build. That override
+should not be used for the new Play release sequence. Local Play uploads need
+an explicit, unused `ANDROID_VERSION_CODE` coordinated with the Play CI counter;
+prefer the workflow for uploads.
 
 Before building after shader changes, generate all shader profiles:
 

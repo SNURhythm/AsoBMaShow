@@ -41,6 +41,7 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("GOOGLE_PLAY_", "SUPPLY_", "ANDROID_", "FIREBASE_"))}
+        self.env.pop("GITHUB_RUN_NUMBER", None)
 
     def run_lane(self, lane, *, fail_build=False, omit_bundle=False, stale_bundle=False):
         fastfile = ROOT / "android/fastlane/Fastfile"
@@ -143,7 +144,17 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertEqual((self.root / "gradle-args.txt").read_text().splitlines(),
                          ["-p", str(self.root / "android"), ":app:bundleRestricted_file_accessRelease", "--no-daemon"])
         self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "release.jks"))
-        self.assertTrue(1 <= int((self.root / "version-code.txt").read_text()) <= 2100000000)
+        self.assertEqual((self.root / "version-code.txt").read_text(), "1")
+        self.env["GITHUB_RUN_NUMBER"] = "12"
+        for arguments, expected in (([], "12"), (["--version-code", "77"], "77")):
+            result = subprocess.run(command + arguments, cwd=self.root, env=self.env,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((self.root / "version-code.txt").read_text(), expected)
+        self.env["ANDROID_VERSION_CODE"] = "88"
+        result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "version-code.txt").read_text(), "88")
         self.env["FIXTURE_GRADLE_EXIT"] = "19"
         result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 19)
