@@ -586,7 +586,10 @@ void testScratchlessReplayPresentationPolicy() {
     for (const auto policy : {AppSettings::ScratchlessMode::Disabled,
                               AppSettings::ScratchlessMode::Enabled,
                               AppSettings::ScratchlessMode::SelectedTables}) {
-      settings.scratchlessMode = policy;
+      settings.scratchlessForKeyMode(mode).mode = policy;
+      settings.scratchlessForKeyMode(mode == 5 ? 7 : 5).mode =
+          policy == AppSettings::ScratchlessMode::Enabled
+              ? AppSettings::ScratchlessMode::Disabled : AppSettings::ScratchlessMode::Enabled;
       const int expected = policy == AppSettings::ScratchlessMode::Enabled ? -mode : mode;
       const auto configuration = replay_video_export::replayGameplayPresentationConfig(
           settings, 9.5F, chart, false, false);

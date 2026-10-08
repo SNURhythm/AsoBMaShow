@@ -2506,69 +2506,118 @@ void testScratchlessPolicyDefaultsPersist() {
   std::string error;
   expect(AppSettingsStore::Save(path, AppSettings{}, error), "default policy saves");
   const auto json = nlohmann::json::parse(readFile(path));
-  expect(json.value("scratchlessMode", -1) == 2,
-         "scratchless mode defaults to selected difficulty tables");
-  expect(json.value("scratchlessTableUrls", std::vector<std::string>{}) ==
-             std::vector<std::string>{"https://asumatoki.kr/table/aery/header.json",
-                                      "https://asumatoki.kr/table/aery7/header.json"},
-         "both Aery tables are selected by default");
+  for (const auto &key : {"scratchless5K", "scratchless7K"}) {
+    const auto policy = json.value(key, nlohmann::json::object());
+    expect(policy.value("mode", -1) == 2,
+           std::string(key) + " defaults to selected difficulty tables");
+    const std::string url = std::string(key) == "scratchless5K"
+        ? "https://asumatoki.kr/table/aery/header.json"
+        : "https://asumatoki.kr/table/aery7/header.json";
+    expect(policy.value("tableUrls", std::vector<std::string>{}) ==
+               std::vector<std::string>{url},
+           std::string(key) + " defaults only to its matching Aery table");
+  }
 }
 
 void testScratchlessPolicyRoundTripAndSelection() {
   TempDirectory temp;
   const auto path = temp.path() / "scratchless-policy.json";
-  AppSettings settings;
-  const auto defaults = settings.scratchlessTableUrls;
-  expect(gameplay::scratchlessAllowed(settings, {defaults.data(), 1}) &&
-             gameplay::scratchlessAllowed(settings, {defaults.data() + 1, 1}),
-         "either selected Aery table enables scratchless play");
-  expect(!gameplay::scratchlessAllowed(settings, {}),
-         "default policy leaves charts outside selected tables in canonical modes");
+  const AppSettings defaults;
   const std::vector<std::string> otherTable{"https://example.com/other.json"};
-  expect(!gameplay::scratchlessAllowed(settings, otherTable),
-         "unselected table candidates are excluded");
-  settings.scratchlessTableUrls.push_back(otherTable.front());
-  expect(gameplay::scratchlessAllowed(settings, otherTable) &&
-             gameplay::scratchlessAllowed(settings, defaults),
-         "multiple table selections remain independently enabled");
   std::string error;
-  for (const auto mode : {AppSettings::ScratchlessMode::Disabled,
-                          AppSettings::ScratchlessMode::Enabled,
-                          AppSettings::ScratchlessMode::SelectedTables}) {
-    settings.scratchlessMode = mode;
-    expect(AppSettingsStore::Save(path, settings, error), "scratchless policy saves");
-    const auto loaded = AppSettingsStore::Load(path).settings;
-    expect(loaded.scratchlessMode == mode &&
-               loaded.scratchlessTableUrls == settings.scratchlessTableUrls,
-           "mode and all selected tables survive a restart");
-    expect(gameplay::scratchlessAllowed(loaded, defaults) ==
-               (mode != AppSettings::ScratchlessMode::Disabled),
-           "disabled overrides matching tables");
-    expect(gameplay::scratchlessAllowed(loaded, {}) ==
-               (mode == AppSettings::ScratchlessMode::Enabled),
-           "enabled permits charts without table membership");
+  for (int keyMode : {5, 7}) {
+    AppSettings settings;
+    const int otherMode = keyMode == 5 ? 7 : 5;
+    const auto otherDefault = settings.scratchlessForKeyMode(otherMode);
+    auto &policy = settings.scratchlessForKeyMode(keyMode);
+    expect(gameplay::scratchlessAllowed(settings, keyMode, policy.tableUrls),
+           "matching Aery table enables its key mode by default");
+    expect(!gameplay::scratchlessAllowed(settings, keyMode, otherDefault.tableUrls),
+           "other Aery table is not selected by default");
+    expect(!gameplay::scratchlessAllowed(settings, keyMode, {}) &&
+               !gameplay::scratchlessAllowed(settings, keyMode, otherTable),
+           "unmatched candidates are excluded");
+    policy.tableUrls.push_back(otherTable.front());
+    policy.tableUrls.push_back(otherDefault.tableUrls.front());
+    expect(gameplay::scratchlessAllowed(settings, keyMode, otherTable) &&
+               gameplay::scratchlessAllowed(settings, keyMode, otherDefault.tableUrls),
+           "each key mode permits multiple independently selected tables");
+    for (const auto mode : {AppSettings::ScratchlessMode::Disabled,
+                            AppSettings::ScratchlessMode::Enabled,
+                            AppSettings::ScratchlessMode::SelectedTables}) {
+      policy.mode = mode;
+      expect(AppSettingsStore::Save(path, settings, error), "per-mode policy saves");
+      const auto loaded = AppSettingsStore::Load(path).settings;
+      expect(loaded.scratchlessForKeyMode(keyMode) == policy &&
+                 loaded.scratchlessForKeyMode(-keyMode) == policy &&
+                 loaded.scratchlessForKeyMode(otherMode) == otherDefault,
+             "mode and multiple tables persist without changing the other key mode");
+      expect(gameplay::scratchlessAllowed(loaded, keyMode, policy.tableUrls) ==
+                 (mode != AppSettings::ScratchlessMode::Disabled),
+             "disabled overrides matching tables only for this key mode");
+      expect(gameplay::scratchlessAllowed(loaded, keyMode, {}) ==
+                 (mode == AppSettings::ScratchlessMode::Enabled),
+             "enabled permits charts without membership only for this key mode");
+    }
+    policy.tableUrls.clear();
+    expect(AppSettingsStore::Save(path, settings, error), "empty selection saves");
+    const auto empty = AppSettingsStore::Load(path).settings;
+    expect(empty.scratchlessForKeyMode(keyMode).tableUrls.empty() &&
+               empty.scratchlessForKeyMode(otherMode) == otherDefault,
+           "deselecting every table preserves the other mode and does not restore Aery");
   }
-  settings.scratchlessTableUrls.clear();
-  expect(AppSettingsStore::Save(path, settings, error), "empty table selection saves");
-  const auto empty = AppSettingsStore::Load(path).settings;
-  expect(empty.scratchlessTableUrls.empty() &&
-             !gameplay::scratchlessAllowed(empty, defaults),
-         "deselecting every table persists without restoring Aery");
-  writeFile(path, R"({"schemaVersion":8,"scratchlessMode":99})");
+  writeFile(path, R"({"schemaVersion":8,"scratchless5K":{"mode":99},"scratchless7K":{"mode":0}})");
   const auto invalid = AppSettingsStore::Load(path).settings;
-  expect(invalid.scratchlessMode == AppSettings::ScratchlessMode::SelectedTables &&
-             invalid.scratchlessTableUrls == defaults,
-         "invalid modes and older settings use selected tables with Aery defaults");
+  expect(invalid.scratchless5K == defaults.scratchless5K &&
+             invalid.scratchless7K.mode == AppSettings::ScratchlessMode::Disabled,
+         "invalid mode sanitization is independent");
   writeFile(path, R"({"schemaVersion":8})");
   const auto legacy = AppSettingsStore::Load(path).settings;
-  expect(legacy.scratchlessMode == AppSettings::ScratchlessMode::SelectedTables &&
-             legacy.scratchlessTableUrls == defaults,
-         "existing profiles receive the new default policy");
+  expect(legacy.scratchless5K == defaults.scratchless5K &&
+             legacy.scratchless7K == defaults.scratchless7K,
+         "existing profiles receive mode-specific Aery defaults");
+}
+
+void testSharedScratchlessPolicyMigration() {
+  TempDirectory temp;
+  const auto path = temp.path() / "shared-scratchless.json";
+  const AppSettings defaults;
+  nlohmann::json shared = {
+      {"schemaVersion", 8}, {"scratchlessMode", 2},
+      {"scratchlessTableUrls", {defaults.scratchless5K.tableUrls.front(),
+                                defaults.scratchless7K.tableUrls.front()}}};
+  writeFile(path, shared.dump());
+  const auto split = AppSettingsStore::Load(path).settings;
+  expect(split.scratchless5K == defaults.scratchless5K &&
+             split.scratchless7K == defaults.scratchless7K,
+         "the former shared Aery defaults split into matching tables");
+  for (const auto &urls : {std::vector<std::string>{},
+                          std::vector<std::string>{"https://example.com/a.json",
+                                                   "https://example.com/b.json"}}) {
+    shared["scratchlessMode"] = 0;
+    shared["scratchlessTableUrls"] = urls;
+    writeFile(path, shared.dump());
+    const auto migrated = AppSettingsStore::Load(path).settings;
+    for (int keyMode : {5, 7}) {
+      const auto &policy = migrated.scratchlessForKeyMode(keyMode);
+      expect(policy.mode == AppSettings::ScratchlessMode::Disabled && policy.tableUrls == urls,
+             "shared explicit mode and customized or empty selections are retained");
+    }
+    shared["scratchless7K"] = {{"mode", 1}, {"tableUrls", {"https://example.com/7.json"}}};
+    writeFile(path, shared.dump());
+    const auto overridden = AppSettingsStore::Load(path).settings;
+    expect(overridden.scratchless5K == migrated.scratchless5K &&
+               overridden.scratchless7K.mode == AppSettings::ScratchlessMode::Enabled &&
+               overridden.scratchless7K.tableUrls == std::vector<std::string>{"https://example.com/7.json"},
+           "per-mode settings override legacy shared values");
+    shared.erase("scratchless7K");
+  }
 }
 
 int main() {
   testScratchlessPolicyDefaultsPersist();
   testScratchlessPolicyRoundTripAndSelection();
+  testSharedScratchlessPolicyMigration();
   testBuiltInAppearancePresetColors();
   testBuiltInLaneAppearance();
   testBuiltInJudgeLineAppearance();

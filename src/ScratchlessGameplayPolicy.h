@@ -10,14 +10,17 @@
 namespace gameplay {
 
 [[nodiscard]] inline bool scratchlessAllowed(
-    const AppSettings &settings, std::span<const std::string> chartTableUrls) {
-  switch (settings.scratchlessMode) {
+    const AppSettings &settings, int keyMode,
+    std::span<const std::string> chartTableUrls) {
+  if (keyMode != 5 && keyMode != 7) return false;
+  const auto &policy = settings.scratchlessForKeyMode(keyMode);
+  switch (policy.mode) {
   case AppSettings::ScratchlessMode::Disabled: return false;
   case AppSettings::ScratchlessMode::Enabled: return true;
   case AppSettings::ScratchlessMode::SelectedTables:
     return std::ranges::any_of(chartTableUrls, [&](const auto &url) {
-      return std::ranges::find(settings.scratchlessTableUrls, url) !=
-             settings.scratchlessTableUrls.end();
+      return std::ranges::find(policy.tableUrls, url) !=
+             policy.tableUrls.end();
     });
   }
   return false;
@@ -27,12 +30,14 @@ namespace gameplay {
 [[nodiscard]] inline bool scratchlessAllowed(
     const AppSettings &settings, const bms_parser::ChartMeta &meta,
     ChartRepository &repository) {
-  if (settings.scratchlessMode != AppSettings::ScratchlessMode::SelectedTables)
-    return scratchlessAllowed(settings, {});
-  if (settings.scratchlessTableUrls.empty() || meta.IsDP ||
-      (meta.KeyMode != 5 && meta.KeyMode != 7)) return false;
+  if (meta.IsDP || (meta.KeyMode != 5 && meta.KeyMode != 7)) return false;
+  const auto &policy = settings.scratchlessForKeyMode(meta.KeyMode);
+  if (policy.mode != AppSettings::ScratchlessMode::SelectedTables)
+    return scratchlessAllowed(settings, meta.KeyMode, {});
+  if (policy.tableUrls.empty()) return false;
   auto session = repository.OpenSession();
-  return session && scratchlessAllowed(settings, session->DifficultyTableSourcesForChart(meta));
+  return session && scratchlessAllowed(
+      settings, meta.KeyMode, session->DifficultyTableSourcesForChart(meta));
 }
 
 [[nodiscard]] inline int presentationKeyMode(

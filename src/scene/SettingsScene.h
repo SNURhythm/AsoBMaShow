@@ -560,6 +560,9 @@ private:
   void appendGameplaySkinViewportSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
+  void appendScratchlessModeSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
+      bool enabled);
   void appendBuiltInGameplayTraitSettings(
       View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
       bool followsOriginal = false);

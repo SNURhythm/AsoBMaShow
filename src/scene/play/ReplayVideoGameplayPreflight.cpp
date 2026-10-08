@@ -47,7 +47,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
     int presentationKeyMode) noexcept {
   if (presentationKeyMode == 0) {
     presentationKeyMode = gameplay::presentationKeyMode(
-        chart, settings.scratchlessMode == AppSettings::ScratchlessMode::Enabled);
+        chart, settings.scratchlessForKeyMode(chart.Meta.KeyMode).mode ==
+                   AppSettings::ScratchlessMode::Enabled);
   }
   const bool noSpeed = constraints.noSpeed;
   const auto covers = replay

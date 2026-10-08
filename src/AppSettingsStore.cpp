@@ -809,8 +809,10 @@ json settingsToJson(const AppSettings &settings) {
       {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
-      {"scratchlessMode", static_cast<int>(settings.scratchlessMode)},
-      {"scratchlessTableUrls", settings.scratchlessTableUrls},
+      {"scratchless5K", {{"mode", static_cast<int>(settings.scratchless5K.mode)},
+                         {"tableUrls", settings.scratchless5K.tableUrls}}},
+      {"scratchless7K", {{"mode", static_cast<int>(settings.scratchless7K.mode)},
+                         {"tableUrls", settings.scratchless7K.tableUrls}}},
       {"aeryDifficultyTablesSeeded", settings.aeryDifficultyTablesSeeded},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
       {"audio",
@@ -1133,8 +1135,32 @@ AppSettings settingsFromJson(const json &document,
             settings.selectedPlaybackRatePercent, diagnostics);
   readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,
            diagnostics);
-  readEnum(document, "scratchlessMode", settings.scratchlessMode, diagnostics);
-  readValue(document, "scratchlessTableUrls", settings.scratchlessTableUrls, diagnostics);
+  // Migrate the former shared policy. Split the old Aery defaults by mode,
+  // while retaining explicitly customized or empty selections for both modes.
+  auto sharedMode = AppSettings::ScratchlessMode::SelectedTables;
+  readEnum(document, "scratchlessMode", sharedMode, diagnostics);
+  settings.scratchless5K.mode = settings.scratchless7K.mode = sharedMode;
+  std::vector<std::string> sharedUrls;
+  if (readValue(document, "scratchlessTableUrls", sharedUrls, diagnostics)) {
+    const bool previousDefaults = sharedUrls.size() == 2 &&
+        std::ranges::find(sharedUrls, settings.scratchless5K.tableUrls.front()) != sharedUrls.end() &&
+        std::ranges::find(sharedUrls, settings.scratchless7K.tableUrls.front()) != sharedUrls.end();
+    if (!previousDefaults) {
+      settings.scratchless5K.tableUrls = settings.scratchless7K.tableUrls = sharedUrls;
+    }
+  }
+  for (const auto keyMode : {5, 7}) {
+    const char *key = keyMode == 5 ? "scratchless5K" : "scratchless7K";
+    if (const auto found = document.find(key); found != document.end()) {
+      if (found->is_object()) {
+        auto &policy = settings.scratchlessForKeyMode(keyMode);
+        readEnum(*found, "mode", policy.mode, diagnostics);
+        readValue(*found, "tableUrls", policy.tableUrls, diagnostics);
+      } else {
+        invalidValue(key, "expected object", diagnostics);
+      }
+    }
+  }
   readValue(document, "aeryDifficultyTablesSeeded", settings.aeryDifficultyTablesSeeded, diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);

@@ -11,6 +11,7 @@
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "../view/CheckboxButtonContent.h"
 
 #include <algorithm>
 #include <charconv>
@@ -524,6 +525,79 @@ DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
        .maxVisibleItems = metrics.compact ? 5 : 7,
        .menuWidth = menuWidth});
   return skinDropdown;
+}
+
+void SettingsScene::appendScratchlessModeSettings(
+    View *body, const LayoutMetrics &metrics, int keyMode, bool enabled) {
+  const auto &policy = context.settings.scratchlessForKeyMode(keyMode);
+  loadDifficultyTables();
+  auto *scratchlessControls = new View();
+  scratchlessControls->setFlexDirection(FlexDirection::Column);
+  scratchlessControls->setGap(metrics.compact ? 10.0f : 12.0f);
+  scratchlessControls->setAlignSelf(YGAlignStretch);
+  scratchlessControls->addView(makeWrappedText(
+      i18n::message("settings.scratchless.title"), metrics.bodyTextSize,
+      ui_theme::textPrimary()));
+  scratchlessControls->addView(makeWrappedText(
+      i18n::message("settings.scratchless.description"), metrics.smallTextSize,
+      ui_theme::textSecondary()));
+  auto *scratchlessMode = new DropdownView(
+      {.onOptionSelected = [this, keyMode](const std::string &id) {
+        context.settings.scratchlessForKeyMode(keyMode).mode =
+            static_cast<AppSettings::ScratchlessMode>(std::stoi(id));
+        persistSettings();
+        lastLayoutWidth = -1;
+      }}, overlayPortal);
+  scratchlessMode->refresh({
+      .selectedId = std::to_string(static_cast<int>(policy.mode)),
+      .options = {{.id = "0", .label = i18n::message("settings.scratchless.disabled.label")},
+                  {.id = "1", .label = i18n::message("settings.scratchless.enabled.label")},
+                  {.id = "2", .label = i18n::message("settings.scratchless.selected_tables.label")}},
+      .enabled = enabled,
+      .maxVisibleItems = 3});
+  scratchlessMode->setWidthPercent(100)->setMinWidth(0);
+  scratchlessMode->setHeight(metrics.actionButtonHeight);
+  scratchlessControls->addView(scratchlessMode);
+  if (context.settings.scratchlessForKeyMode(keyMode).mode == AppSettings::ScratchlessMode::SelectedTables) {
+    scratchlessControls->addView(makeWrappedText(
+        i18n::message("settings.scratchless.tables.message",
+                      {{"table", keyMode == -5 ? "5KEYS AERY" : "7KEYS AERY"}}),
+        metrics.bodyTextSize, ui_theme::textSecondary()));
+    for (const auto &table : difficultyTables) {
+      if (table.sourceUrl.empty()) continue;
+      auto *content = new CheckboxButtonContent(table.name, metrics.bodyTextSize,
+                                                metrics.bodyTextSize);
+      content->setThemedColor(ui_theme::textPrimary);
+      content->setJustifyContent(YGJustifyFlexStart);
+      content->setPadding(Edge::Left, 12.0f);
+      content->setPadding(Edge::Right, 12.0f);
+      content->labelView()->setFlex(1)->setMinWidth(0);
+      content->setChecked(std::ranges::find(policy.tableUrls,
+                                           table.sourceUrl) !=
+                          policy.tableUrls.end());
+      auto *button = makeControlButton(0, metrics.actionButtonHeight,
+                                       makeText("", metrics.bodyTextSize,
+                                                ui_theme::textPrimary()));
+      button->setContentView(content);
+      button->setWidthPercent(100)->setMinWidth(0);
+      button->setEnabled(enabled);
+      button->setOnClickListener([this, keyMode, url = table.sourceUrl, content]() {
+        auto &urls = context.settings.scratchlessForKeyMode(keyMode).tableUrls;
+        const auto found = std::ranges::find(urls, url);
+        if (found == urls.end()) urls.push_back(url);
+        else urls.erase(found);
+        content->setChecked(std::ranges::find(urls, url) != urls.end());
+        persistSettings();
+      });
+      scratchlessControls->addView(button);
+    }
+    if (difficultyTables.empty()) {
+      scratchlessControls->addView(makeWrappedText(
+          i18n::message("settings.difficulty_tables.no_difficulty_tables_installed.message"),
+          metrics.bodyTextSize, ui_theme::textSecondary()));
+    }
+  }
+  body->addView(scratchlessControls);
 }
 
 void SettingsScene::appendBuiltInGameplayTraitSettings(
@@ -1481,6 +1555,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   skinDropdownRow->addView(skinDropdownLabel);
   skinDropdownRow->addView(skinDropdown);
   traitPanel->addView(skinDropdownRow);
+  if (activeTrait->skinType == -5 || activeTrait->skinType == -7) {
+    appendScratchlessModeSettings(traitPanel, metrics, activeTrait->skinType,
+                                 ordinaryActionsEnabled);
+  }
   if (selection.hasSelectedEntry && selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
         i18n::message("settings.skins.selection.missing_skin_notice"),

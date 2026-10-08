@@ -4144,7 +4144,7 @@ void testScratchlessTableMembership() {
   difficulty_table::Document table;
   table.name = "Aery fixture";
   table.symbol = "A";
-  table.sourceUrl = settings.scratchlessTableUrls.front();
+  table.sourceUrl = settings.scratchless5K.tableUrls.front();
   table.charts = {{.level = "1", .md5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                   {.level = "2", .sha256 = std::string(64, 'b')}};
   {
@@ -4156,6 +4156,9 @@ void testScratchlessTableMembership() {
     chart.Meta.KeyMode = mode;
     assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
     chart.Meta.MD5 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    assert(gameplay::presentationKeyMode(chart, settings, repository) ==
+           (mode == 5 ? -mode : mode));
+    if (mode == 7) settings.scratchless7K.tableUrls.push_back(table.sourceUrl);
     assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
     chart.Meta.MD5.clear();
     chart.Meta.SHA256 = std::string(64, 'B');
@@ -4174,12 +4177,12 @@ void testScratchlessTableMembership() {
     chart.Meta.IsDP = true;
     assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
     chart.Meta.IsDP = false;
-    settings.scratchlessMode = AppSettings::ScratchlessMode::Disabled;
+    settings.scratchlessForKeyMode(mode).mode = AppSettings::ScratchlessMode::Disabled;
     assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
-    settings.scratchlessMode = AppSettings::ScratchlessMode::Enabled;
+    settings.scratchlessForKeyMode(mode).mode = AppSettings::ScratchlessMode::Enabled;
     chart.Meta.SHA256.clear();
     assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
-    settings.scratchlessMode = AppSettings::ScratchlessMode::SelectedTables;
+    settings.scratchlessForKeyMode(mode).mode = AppSettings::ScratchlessMode::SelectedTables;
   }
   auto session = repository.OpenSession();
   bms_parser::ChartMeta meta;
