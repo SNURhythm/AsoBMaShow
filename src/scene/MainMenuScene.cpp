@@ -5979,8 +5979,6 @@ void MainMenuScene::openReplayRecordsForSelection() {
     return;
   }
   replayIrObservedRevisions.clear();
-  recordsModal_->setTouchVisualizationEnabled(
-      context.settings.touchVisualizationEnabled);
   recordsModal_->showChart(*selectedMeta);
   setReplayButtonVisible(true);
 }
@@ -6067,6 +6065,11 @@ void MainMenuScene::applyReplayFileDocumentHandoff() {
 
 ReplayRecordsModalCallbacks MainMenuScene::makeRecordsModalCallbacks() {
   ReplayRecordsModalCallbacks callbacks;
+  callbacks.loadPreferences = [this] { return context.settings.replayPreferences; };
+  callbacks.savePreferences = [this](const player_settings::ReplayPreferences &preferences) {
+    context.settings.replayPreferences = preferences;
+    if (!context.saveSettings()) SDL_Log("Failed to save replay preferences");
+  };
   callbacks.loadRecords = [this](const ChartMetaRecord &record) {
     return loadRecordsForModal(record);
   };
@@ -6273,6 +6276,7 @@ void MainMenuScene::startModernReplayPlayback(
   if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const std::string pacemakerTarget =
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+  const bool replayAutoKeySound = recordsModal_ && recordsModal_->autoKeySound();
   const bool renderTouchPoints =
       recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
   const bool renderGhosts =
@@ -6283,7 +6287,7 @@ void MainMenuScene::startModernReplayPlayback(
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), pacemakerTarget,
        renderTouchPoints,
-       renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) mutable {
+       renderGhosts, replayAutoKeySound](std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
@@ -6319,7 +6323,7 @@ void MainMenuScene::startModernReplayPlayback(
               Completion{.loaded = std::move(loaded)});
           queueReplayLoadCompletion(
               [this, completion, pacemakerTarget, renderTouchPoints,
-               renderGhosts]() mutable {
+               renderGhosts, replayAutoKeySound]() mutable {
                 auto &loaded = completion->loaded;
                 if (!loaded.diagnostic.empty()) {
                   publishReplayLoadDiagnostic(i18n::tr("menu.watch_warning.label"),
@@ -6335,7 +6339,7 @@ void MainMenuScene::startModernReplayPlayback(
                 }
                 StartOptions replayOptions{
                     .startPosition = 0,
-                    .autoKeySound = false,
+                    .autoKeySound = replayAutoKeySound,
                     .autoPlay = false,
                     .gaugeType = loaded.replayData->initialGaugeType,
                     .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
@@ -6496,6 +6500,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
   }
   if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const auto pacemakerTarget = profileSelections.pacemakerTarget;
+  const bool replayAutoKeySound = recordsModal_ && recordsModal_->autoKeySound();
   const bool renderTouchPoints =
       recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
   const bool renderGhosts =
@@ -6506,7 +6511,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
   startReplayLoadWorker(
       [this, modern = std::move(modern), chartPaths = std::move(chartPaths),
        renderTouchPoints, pacemakerTarget,
-       renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) mutable {
+       renderGhosts, replayAutoKeySound](std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
@@ -6531,6 +6536,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
           auto session = replay::makeCourseReplayLaunchSession(
               std::move(loaded), replay::CourseReplayLaunchMode::Watch,
               renderTouchPoints, renderGhosts);
+          if (session != nullptr) session->autoKeySound = replayAutoKeySound;
           if (session == nullptr) {
             queueReplayLoadCompletion([this]() {
               (void)finishReplayLoadFailure(

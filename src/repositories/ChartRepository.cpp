@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "ChartRepository.h"
+#include "../archive/ArchiveSourceAccess.h"
 #include "ChartRepositoryInternal.h"
 #include "ChartSqlExpressions.h"
 #include "ChartStorageIdentity.h"
@@ -1756,7 +1757,8 @@ static bool isAndroidTreeVirtualPath(const std::filesystem::path &path) {
 static bool isPrimaryStorageEligible(const std::filesystem::path &path) {
   return !path.empty() &&
          !ChartRepository::IsDefaultBmsFolderPath(path) &&
-         !isAndroidTreeVirtualPath(path);
+         !isAndroidTreeVirtualPath(path) &&
+         !archive_source::isReference(path.lexically_normal());
 }
 
 static std::optional<std::string> storedEntryPathForResolvedPath(

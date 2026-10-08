@@ -2,6 +2,7 @@ package com.snurhythm.asobmashow;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.Intent;
@@ -62,6 +63,8 @@ import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -129,6 +132,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private final AtomicReference<Uri> archivePickerUri = new AtomicReference<>(null);
     private final AtomicReference<String> archivePickerName = new AtomicReference<>("");
     private final AtomicReference<Boolean> archivePickerTree = new AtomicReference<>(false);
+    private final AtomicInteger archivePickerGrantFlags = new AtomicInteger();
     private final AtomicReference<String> archivePickerError = new AtomicReference<>("");
     private final Object documentHandoffLock = new Object();
     private DocumentHandoffOperation documentHandoffOperation;
@@ -178,8 +182,14 @@ public class AsoBMaShowActivity extends SDLActivity {
         final boolean isTree;
         final boolean moveSource;
         final String error;
+        final int grantFlags;
 
         PendingImportRequest(Uri uri, String displayName, boolean isTree, String error, boolean moveSource) {
+            this(uri, displayName, isTree, error, moveSource, 0);
+        }
+
+        PendingImportRequest(Uri uri, String displayName, boolean isTree, String error, boolean moveSource, int grantFlags) {
+            this.grantFlags = grantFlags;
             this.uri = uri;
             this.displayName = displayName;
             this.isTree = isTree;
@@ -439,7 +449,11 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static native void nativeChartImportProgress(String token, int files, int totalFiles,
             long bytes, long totalBytes, String name, int phase);
     private static native boolean nativeFinishChartImport(
-            String token, boolean isTree, String path, String error, String retainedError);
+            String token, boolean isTree, String path, String error, String retainedError,
+            String archiveUri, boolean newGrant);
+    private static native String nativeInspectArchiveImport(String token, String path, String uri);
+    private static native void nativeDiscardArchiveImport(String path, String newlyGrantedUri);
+    private static native String nativeArchiveImportText(String key);
     private static native void nativeSkinDirectoryImportProgress(String token, long bytes, long files);
     private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
@@ -655,8 +669,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                     finishArchivePicker();
                     return;
                 }
-                // Imports run once within this Activity lifetime and use its transient
-                // grants. Only Add Folder needs persisted access after an app restart.
+                // Retain the grant only if the user chooses to use the archive directly.
+                archivePickerGrantFlags.set(data.getFlags());
                 archivePickerUri.set(importUri);
                 archivePickerName.set(displayName);
                 archivePickerTree.set(isTree);
@@ -761,7 +775,8 @@ public class AsoBMaShowActivity extends SDLActivity {
             archiveIntent.addCategory(Intent.CATEGORY_OPENABLE);
             archiveIntent.setType("*/*");
             archiveIntent.putExtra(Intent.EXTRA_MIME_TYPES, archiveMimeTypes());
-            archiveIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            archiveIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
 
             try {
                 startActivityForResult(archiveIntent, REQUEST_OPEN_ARCHIVE);
@@ -793,7 +808,8 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             return ERROR_PREFIX + "Archive selection was cancelled.";
         }
-        return startPendingImportCopy(uri, archivePickerName.get(), archivePickerTree.get(), "");
+        return startPendingImportCopy(uri, archivePickerName.get(), archivePickerTree.get(), "",
+                false, archivePickerGrantFlags.get());
     }
 
     public String pickFolderForImport(String operation) {
@@ -2832,7 +2848,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                     "Selected file is not a supported archive.");
             return;
         }
-        startPendingImportCopy(archiveUri, displayName, false, "");
+        startPendingImportCopy(archiveUri, displayName, false, "", false, intent.getFlags());
     }
 
     private String startPendingImportCopy(Uri importUri, String displayName,
@@ -2842,12 +2858,17 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private String startPendingImportCopy(Uri importUri, String displayName,
                                           boolean isTree, String error, boolean moveSource) {
+        return startPendingImportCopy(importUri, displayName, isTree, error, moveSource, 0);
+    }
+
+    private String startPendingImportCopy(Uri importUri, String displayName,
+                                          boolean isTree, String error, boolean moveSource, int grantFlags) {
         synchronized (pendingArchiveImportLock) {
             if (pendingArchiveImportsDestroyed) {
                 return ERROR_PREFIX + "Chart import cancelled.";
             }
             pendingArchiveImportRequests.addLast(
-                    new PendingImportRequest(importUri, displayName, isTree, error, moveSource));
+                    new PendingImportRequest(importUri, displayName, isTree, error, moveSource, grantFlags));
             startNextPendingImportCopyLocked();
         }
         return PENDING_IMPORT_RESULT;
@@ -2865,6 +2886,8 @@ public class AsoBMaShowActivity extends SDLActivity {
             String path = "";
             String error = "";
             String retainedError = "";
+            String archiveUri = "";
+            boolean newGrant = false;
             try {
                 while (true) {
                     int started;
@@ -2900,8 +2923,10 @@ public class AsoBMaShowActivity extends SDLActivity {
                         throw new IOException(copied.error);
                     }
                 } else {
-                    path = copyArchiveUriToInternalStorage(request.uri, request.displayName, control);
-                    control.checkpoint();
+                    ChartArchiveImport.Result archive = prepareArchiveImport(request, control);
+                    path = archive.path;
+                    archiveUri = archive.uri;
+                    newGrant = archive.newGrant;
                 }
             } catch (Exception e) {
                 error = e.getMessage() == null ? "Could not import charts." : e.getMessage();
@@ -2911,10 +2936,11 @@ public class AsoBMaShowActivity extends SDLActivity {
                 if (pendingArchiveImportsDestroyed && !(request.moveSource && !path.isEmpty())) {
                     error = "Chart import cancelled.";
                 }
-                accepted = nativeFinishChartImport(request.token, request.isTree, path, error, retainedError);
+                accepted = nativeFinishChartImport(request.token, request.isTree, path, error, retainedError,
+                        archiveUri, newGrant);
             }
             if ((!accepted || !error.isEmpty()) && !path.isEmpty() && !request.moveSource) {
-                deleteRecursively(new File(path));
+                discardArchiveImport(path, newGrant ? archiveUri : "");
             }
             synchronized (pendingArchiveImportLock) {
                 pendingArchiveImportCopyRunning = false;
@@ -2927,13 +2953,180 @@ public class AsoBMaShowActivity extends SDLActivity {
         pendingArchiveImportWorker.start();
     }
 
+    private File directArchiveFile(Uri uri) {
+        try {
+            if (ContentResolver.SCHEME_FILE.equals(uri.getScheme())) {
+                File file = new File(uri.getPath()).getCanonicalFile();
+                return file.isFile() && file.canRead() ? file : null;
+            }
+            if (AsoBMaShowDocumentsProvider.AUTHORITY.equals(uri.getAuthority())) {
+                File file = AsoBMaShowDocumentsProvider.initializeDocuments(this)
+                        .resolve(DocumentsContract.getDocumentId(uri));
+                return file.isFile() && file.canRead() ? file : null;
+            }
+            if (!"com.android.externalstorage.documents".equals(uri.getAuthority())) return null;
+            String id = DocumentsContract.getDocumentId(uri);
+            int separator = id.indexOf(':');
+            if (separator < 1) return null;
+            String volumeId = id.substring(0, separator);
+            File root = null;
+            if ("primary".equalsIgnoreCase(volumeId)) {
+                root = Environment.getExternalStorageDirectory();
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.os.storage.StorageManager storage = getSystemService(android.os.storage.StorageManager.class);
+                if (storage != null) for (android.os.storage.StorageVolume volume : storage.getStorageVolumes()) {
+                    if (volumeId.equalsIgnoreCase(volume.getUuid())) { root = volume.getDirectory(); break; }
+                }
+            }
+            File file = ArchiveDirectPath.resolve(root, id.substring(separator + 1));
+            if (file == null) return null;
+            if (hasManageExternalStorageAccess()) return file;
+            // Scoped app storage is also durable without acquiring a URI grant.
+            for (File owned : getExternalFilesDirs(null)) if (ArchiveDirectPath.within(owned, file)) return file;
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    public int openArchiveFileDescriptor(String uri, String unused) {
+        File direct = directArchiveFile(Uri.parse(uri));
+        if (direct != null) {
+            try (ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(direct, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                return descriptor.detachFd();
+            } catch (Exception ignored) {
+                // Permissions or mounts may change between resolution and open.
+            }
+        }
+        try (ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(Uri.parse(uri), "r")) {
+            return descriptor == null ? -1 : descriptor.detachFd();
+        } catch (Exception error) {
+            return -1;
+        }
+    }
+
+    private ArchivePermissionOwnership.Store archivePermissionStore() {
+        android.content.SharedPreferences preferences = getSharedPreferences("archive-permissions", MODE_PRIVATE);
+        return new ArchivePermissionOwnership.Store() {
+            public java.util.Set<String> read() {
+                return preferences.getStringSet("owned", java.util.Collections.emptySet());
+            }
+            public boolean write(java.util.Set<String> uris) {
+                return preferences.edit().putStringSet("owned", uris).commit();
+            }
+        };
+    }
+
+    public String releaseArchivePermission(String uri) {
+        return ArchivePermissionOwnership.release(archivePermissionStore(), uri,
+                () -> getContentResolver().releasePersistableUriPermission(Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                ? SUCCESS_RESULT : ERROR_PREFIX + "Could not release archive access.";
+    }
+
+    private boolean hasArchivePermission(Uri uri) {
+        for (android.content.UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
+            if (permission.isReadPermission() && uri.equals(permission.getUri())) return true;
+        }
+        return false;
+    }
+
+    private void discardArchiveImport(String path, String newlyGrantedUri) {
+        if (path.startsWith("@androidarchive@/")) nativeDiscardArchiveImport(path, newlyGrantedUri);
+        else deleteRecursively(new File(path));
+    }
+
+    private ChartArchiveImport.Result prepareArchiveImport(PendingImportRequest request,
+                                                           ChartImportCopyControl control) throws Exception {
+        return ChartArchiveImport.run(new ChartArchiveImport.Backend() {
+            public String referencePath() {
+                return "@androidarchive@/" + request.token + "/" + sanitizeFileName(request.displayName);
+            }
+            public String uri() { return request.uri.toString(); }
+            public String inspect(String path, String uri) {
+                return nativeInspectArchiveImport(request.token, path, uri);
+            }
+            public String stage() throws Exception {
+                return copyArchiveUriToInternalStorage(request.uri, request.displayName, control);
+            }
+            public boolean hasPermission() {
+                return directArchiveFile(request.uri) != null || hasArchivePermission(request.uri);
+            }
+            public boolean canPersist() {
+                int required = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+                return (request.grantFlags & required) == required;
+            }
+            public boolean persist() {
+                try {
+                    getContentResolver().takePersistableUriPermission(request.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    if (!hasPermission()) return false;
+                    if (ArchivePermissionOwnership.record(archivePermissionStore(), uri())) return true;
+                    getContentResolver().releasePersistableUriPermission(request.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    return false;
+                } catch (Exception error) { return false; }
+            }
+            public int choose(String kind, boolean direct) throws Exception {
+                return chooseArchiveImport(kind, direct, control);
+            }
+            public void checkpoint() throws Exception { control.checkpoint(); }
+            public void discard(String path, String newlyGrantedUri) { discardArchiveImport(path, newlyGrantedUri); }
+        });
+    }
+
+    private int chooseArchiveImport(String kind, boolean direct, ChartImportCopyControl control) throws Exception {
+        CountDownLatch choiceReady = new CountDownLatch(1);
+        AtomicInteger choice = new AtomicInteger(ChartArchiveImport.CANCEL);
+        AtomicReference<AlertDialog> dialog = new AtomicReference<>();
+        runOnUiThread(() -> {
+            if (pendingArchiveImportsDestroyed || choiceReady.getCount() == 0) {
+                choiceReady.countDown();
+                return;
+            }
+            try {
+                String message = kind.equals("solid") ? "import.archive.solid"
+                        : direct ? "import.archive.non_solid" : "import.archive.extract_only";
+                AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                        .setTitle(nativeArchiveImportText("import.archive.title"))
+                        .setMessage(nativeArchiveImportText(message))
+                        .setNegativeButton(nativeArchiveImportText("import.archive.cancel"), (d, which) -> choiceReady.countDown())
+                        .setOnCancelListener(d -> choiceReady.countDown());
+                if (direct) {
+                    builder.setPositiveButton(nativeArchiveImportText("import.archive.use"), (d, which) -> {
+                        choice.set(ChartArchiveImport.USE_ARCHIVE);
+                        choiceReady.countDown();
+                    });
+                    builder.setNeutralButton(nativeArchiveImportText("import.archive.extract"), (d, which) -> {
+                        choice.set(ChartArchiveImport.EXTRACT);
+                        choiceReady.countDown();
+                    });
+                } else {
+                    builder.setPositiveButton(nativeArchiveImportText("import.archive.extract"), (d, which) -> {
+                        choice.set(ChartArchiveImport.EXTRACT);
+                        choiceReady.countDown();
+                    });
+                }
+                dialog.set(builder.show());
+            } catch (Exception error) {
+                choiceReady.countDown();
+            }
+        });
+        try {
+            while (!choiceReady.await(100, TimeUnit.MILLISECONDS)) control.checkpoint();
+            control.checkpoint();
+            return choice.get();
+        } finally {
+            choiceReady.countDown();
+            runOnUiThread(() -> {
+                AlertDialog active = dialog.get();
+                if (active != null) active.dismiss();
+            });
+        }
+    }
+
     private void cancelPendingChartImports() {
         synchronized (pendingArchiveImportLock) {
             pendingArchiveImportsDestroyed = true;
             pendingArchiveImportRequests.clear();
             if (activePendingImportRequest != null) {
                 nativeFinishChartImport(activePendingImportRequest.token,
-                        activePendingImportRequest.isTree, "", "Chart import cancelled.", "");
+                        activePendingImportRequest.isTree, "", "Chart import cancelled.", "", "", false);
             }
             if (pendingArchiveImportWorker != null) {
                 pendingArchiveImportWorker.interrupt();

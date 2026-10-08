@@ -501,14 +501,16 @@ ReplayRecordsModal::Create(View *parent,
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderTouchPoints_ = true;
+    raw->replayPreferences_.renderTouchPoints = true;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   touchHideButton->setOnClickListener([raw = modal.get()]() {
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderTouchPoints_ = false;
+    raw->replayPreferences_.renderTouchPoints = false;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   replayTouchRow->addView(replayTouchLabel);
@@ -530,20 +532,57 @@ ReplayRecordsModal::Create(View *parent,
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderGhosts_ = true;
+    raw->replayPreferences_.renderGhosts = true;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   ghostHideButton->setOnClickListener([raw = modal.get()]() {
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderGhosts_ = false;
+    raw->replayPreferences_.renderGhosts = false;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   replayGhostRow->addView(replayGhostLabel);
   replayGhostRow->addView(ghostShowButton);
   replayGhostRow->addView(ghostHideButton);
   watchOptionsContent->addView(replayGhostRow);
+  auto addKeysoundRow = [raw = modal.get()](
+                            View *parent, Button **autoButton,
+                            TextView **autoText, Button **inputButton,
+                            TextView **inputText) {
+    auto *row = makeModalOptionRow();
+    auto *label = makeModalLabel(i18n::message("records.keysound.label"));
+    label->setWidth(180);
+    label->setHeight(58);
+    label->setVAlign(TextView::MIDDLE);
+    *autoButton = makeModalButton(
+        i18n::message("settings.controls.keysound.auto_timed.label"), 18, autoText);
+    *inputButton = makeModalButton(
+        i18n::message("settings.controls.keysound.input_trigger.label"), 18, inputText);
+    (*autoButton)->setFlex(1);
+    (*inputButton)->setFlex(1);
+    (*autoButton)->setOnClickListener([raw]() {
+      if (raw->operationInProgress() || raw->selectedIsAutoPlay()) return;
+      raw->replayPreferences_.autoKeySound = true;
+      raw->saveReplayPreferences();
+      raw->refreshExportOptionButtons();
+    });
+    (*inputButton)->setOnClickListener([raw]() {
+      if (raw->operationInProgress() || raw->selectedIsAutoPlay()) return;
+      raw->replayPreferences_.autoKeySound = false;
+      raw->saveReplayPreferences();
+      raw->refreshExportOptionButtons();
+    });
+    row->addView(label);
+    row->addView(*autoButton);
+    row->addView(*inputButton);
+    parent->addView(row);
+  };
+  addKeysoundRow(watchOptionsContent, &modal->keysoundAutoButton_,
+                &modal->keysoundAutoButtonText_, &modal->keysoundInputButton_,
+                &modal->keysoundInputButtonText_);
   contentFrame->addView(watchOptionsContent);
 
   auto *exportOptionsContent = new View();
@@ -558,8 +597,12 @@ ReplayRecordsModal::Create(View *parent,
       ->setGap(6);
   exportOptionsContent->setVisible(false);
 
-  exportOptionsContent->addView(makeModalLabel(i18n::message("records.frame_rate.label")));
   auto *fpsRow = makeModalOptionRow();
+  auto *fpsLabel = makeModalLabel(i18n::message("records.frame_rate.label"));
+  fpsLabel->setWidth(180);
+  fpsLabel->setHeight(58);
+  fpsLabel->setVAlign(TextView::MIDDLE);
+  fpsRow->addView(fpsLabel);
   auto *fps60Button = makeModalButton("60 fps", 20, &modal->fps60ButtonText_);
   auto *fps120Button =
       makeModalButton("120 fps", 20, &modal->fps120ButtonText_);
@@ -569,22 +612,28 @@ ReplayRecordsModal::Create(View *parent,
     if (raw->exportInProgress_) {
       return;
     }
-    raw->selectedExportFps_ = 60;
+    raw->replayPreferences_.exportFps = 60;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   fps120Button->setOnClickListener([raw = modal.get()]() {
     if (raw->exportInProgress_) {
       return;
     }
-    raw->selectedExportFps_ = 120;
+    raw->replayPreferences_.exportFps = 120;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   fpsRow->addView(fps60Button);
   fpsRow->addView(fps120Button);
   exportOptionsContent->addView(fpsRow);
 
-  exportOptionsContent->addView(makeModalLabel(i18n::message("records.resolution.label")));
   auto *resolutionRow = makeModalOptionRow();
+  auto *resolutionLabel = makeModalLabel(i18n::message("records.resolution.label"));
+  resolutionLabel->setWidth(180);
+  resolutionLabel->setHeight(58);
+  resolutionLabel->setVAlign(TextView::MIDDLE);
+  resolutionRow->addView(resolutionLabel);
   auto *resolution1080Button = makeModalButton(
       "1080p", 20, &modal->resolution1080ButtonText_);
   auto *resolutionFullButton = makeModalButton(
@@ -595,22 +644,28 @@ ReplayRecordsModal::Create(View *parent,
     if (raw->exportInProgress_) {
       return;
     }
-    raw->selectedExportFullResolution_ = false;
+    raw->replayPreferences_.exportFullResolution = false;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   resolutionFullButton->setOnClickListener([raw = modal.get()]() {
     if (raw->exportInProgress_) {
       return;
     }
-    raw->selectedExportFullResolution_ = true;
+    raw->replayPreferences_.exportFullResolution = true;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   resolutionRow->addView(resolution1080Button);
   resolutionRow->addView(resolutionFullButton);
   exportOptionsContent->addView(resolutionRow);
 
-  exportOptionsContent->addView(makeModalLabel(i18n::message("records.result_screen.label")));
   auto *resultRow = makeModalOptionRow();
+  auto *resultLabel = makeModalLabel(i18n::message("records.result_screen.label"));
+  resultLabel->setWidth(180);
+  resultLabel->setHeight(58);
+  resultLabel->setVAlign(TextView::MIDDLE);
+  resultRow->addView(resultLabel);
   auto *resultIncludeButton = makeModalButton(
       i18n::message("records.include.label"), 20, &modal->resultIncludeButtonText_);
   auto *resultSkipButton =
@@ -650,14 +705,16 @@ ReplayRecordsModal::Create(View *parent,
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderTouchPoints_ = true;
+    raw->replayPreferences_.renderTouchPoints = true;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   exportTouchHideButton->setOnClickListener([raw = modal.get()]() {
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderTouchPoints_ = false;
+    raw->replayPreferences_.renderTouchPoints = false;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   exportTouchRow->addView(exportTouchLabel);
@@ -680,20 +737,26 @@ ReplayRecordsModal::Create(View *parent,
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderGhosts_ = true;
+    raw->replayPreferences_.renderGhosts = true;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   exportGhostHideButton->setOnClickListener([raw = modal.get()]() {
     if (raw->exportInProgress_ || raw->selectedIsAutoPlay()) {
       return;
     }
-    raw->selectedReplayRenderGhosts_ = false;
+    raw->replayPreferences_.renderGhosts = false;
+    raw->saveReplayPreferences();
     raw->refreshExportOptionButtons();
   });
   exportGhostRow->addView(exportGhostLabel);
   exportGhostRow->addView(exportGhostShowButton);
   exportGhostRow->addView(exportGhostHideButton);
   exportOptionsContent->addView(exportGhostRow);
+  addKeysoundRow(exportOptionsContent, &modal->exportKeysoundAutoButton_,
+                &modal->exportKeysoundAutoButtonText_,
+                &modal->exportKeysoundInputButton_,
+                &modal->exportKeysoundInputButtonText_);
   contentFrame->addView(exportOptionsContent);
 
   auto *exportProgressContent = new View();
@@ -1016,8 +1079,10 @@ void ReplayRecordsModal::showChart(const ChartMetaRecord &record) {
   irUploadInProgress_ = false;
   deleteConfirmation_.cancel();
   clearSelection();
-  selectedReplayRenderTouchPoints_ = touchVisualizationEnabled_;
-  selectedReplayRenderGhosts_ = true;
+  if (callbacks_.loadPreferences) {
+    replayPreferences_ = callbacks_.loadPreferences();
+  }
+  replayPreferences_.sanitize();
   filters_ = {};
   reloadRecords(false);
   if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));
@@ -1081,8 +1146,8 @@ void ReplayRecordsModal::setStatus(i18n::Text text) {
   }
 }
 
-void ReplayRecordsModal::setTouchVisualizationEnabled(bool enabled) {
-  touchVisualizationEnabled_ = enabled;
+void ReplayRecordsModal::saveReplayPreferences() {
+  if (callbacks_.savePreferences) callbacks_.savePreferences(replayPreferences_);
 }
 
 void ReplayRecordsModal::reloadRecords(bool preserveViewState) {
@@ -1275,11 +1340,7 @@ void ReplayRecordsModal::select(int index) {
   selectedIndex_ = index;
   selected_ = visibleRecords_[static_cast<std::size_t>(index)];
   stableKey_ = selected_->stableKey();
-  if (selectedIsAutoPlay()) {
-    selectedReplayRenderTouchPoints_ = false;
-    selectedReplayRenderGhosts_ = false;
-    refreshExportOptionButtons();
-  }
+  refreshExportOptionButtons();
   refreshActions();
 }
 
@@ -1522,16 +1583,19 @@ void ReplayRecordsModal::refreshFilterSortButtons() {
 
 void ReplayRecordsModal::refreshExportOptionButtons() {
   const bool autoPlaySelection = selectedIsAutoPlay();
-  if (autoPlaySelection) {
-    selectedReplayRenderTouchPoints_ = false;
-    selectedReplayRenderGhosts_ = false;
-  }
-  styleOptionButton(fps60Button_, fps60ButtonText_, selectedExportFps_ == 60);
-  styleOptionButton(fps120Button_, fps120ButtonText_, selectedExportFps_ == 120);
+  const bool autoKeySound = autoPlaySelection || replayPreferences_.autoKeySound;
+  styleOptionButton(keysoundAutoButton_, keysoundAutoButtonText_, autoKeySound);
+  styleOptionButton(keysoundInputButton_, keysoundInputButtonText_, !autoKeySound);
+  styleOptionButton(exportKeysoundAutoButton_, exportKeysoundAutoButtonText_, autoKeySound);
+  styleOptionButton(exportKeysoundInputButton_, exportKeysoundInputButtonText_, !autoKeySound);
+  keysoundInputButton_->setEnabled(!autoPlaySelection);
+  exportKeysoundInputButton_->setEnabled(!autoPlaySelection);
+  styleOptionButton(fps60Button_, fps60ButtonText_, replayPreferences_.exportFps == 60);
+  styleOptionButton(fps120Button_, fps120ButtonText_, replayPreferences_.exportFps == 120);
   styleOptionButton(resolution1080Button_, resolution1080ButtonText_,
-                    !selectedExportFullResolution_);
+                    !replayPreferences_.exportFullResolution);
   styleOptionButton(resolutionFullButton_, resolutionFullButtonText_,
-                    selectedExportFullResolution_);
+                    replayPreferences_.exportFullResolution);
   styleOptionButton(resultIncludeButton_, resultIncludeButtonText_,
                     selectedExportIncludeResultScreen_);
   styleOptionButton(resultSkipButton_, resultSkipButtonText_,
@@ -1556,21 +1620,21 @@ void ReplayRecordsModal::refreshExportOptionButtons() {
     return;
   }
   styleOptionButton(touchShowButton_, touchShowButtonText_,
-                    selectedReplayRenderTouchPoints_);
+                    replayPreferences_.renderTouchPoints);
   styleOptionButton(touchHideButton_, touchHideButtonText_,
-                    !selectedReplayRenderTouchPoints_);
+                    !replayPreferences_.renderTouchPoints);
   styleOptionButton(exportTouchShowButton_, exportTouchShowButtonText_,
-                    selectedReplayRenderTouchPoints_);
+                    replayPreferences_.renderTouchPoints);
   styleOptionButton(exportTouchHideButton_, exportTouchHideButtonText_,
-                    !selectedReplayRenderTouchPoints_);
+                    !replayPreferences_.renderTouchPoints);
   styleOptionButton(ghostShowButton_, ghostShowButtonText_,
-                    selectedReplayRenderGhosts_);
+                    replayPreferences_.renderGhosts);
   styleOptionButton(ghostHideButton_, ghostHideButtonText_,
-                    !selectedReplayRenderGhosts_);
+                    !replayPreferences_.renderGhosts);
   styleOptionButton(exportGhostShowButton_, exportGhostShowButtonText_,
-                    selectedReplayRenderGhosts_);
+                    replayPreferences_.renderGhosts);
   styleOptionButton(exportGhostHideButton_, exportGhostHideButtonText_,
-                    !selectedReplayRenderGhosts_);
+                    !replayPreferences_.renderGhosts);
 }
 
 void ReplayRecordsModal::showFilterSortOptions() {
@@ -1608,13 +1672,7 @@ void ReplayRecordsModal::showExportOptions() {
   if (deleteConfirmationContent_ != nullptr) {
     deleteConfirmationContent_->setVisible(false);
   }
-  selectedExportFps_ = 120;
-  selectedExportFullResolution_ = true;
   selectedExportIncludeResultScreen_ = true;
-  if (exportSelection_->autoPlay) {
-    selectedReplayRenderTouchPoints_ = false;
-    selectedReplayRenderGhosts_ = false;
-  }
   refreshExportOptionButtons();
   refreshActions();
   root_->applyYogaLayoutFromRoot();
@@ -1689,13 +1747,14 @@ void ReplayRecordsModal::dispatchExport(const ResultRecordSummary &summary) {
     return;
   }
   ReplayVideoExportOptions options;
-  options.fps = selectedExportFps_;
+  options.fps = replayPreferences_.exportFps;
+  options.autoKeySound = summary.autoPlay || replayPreferences_.autoKeySound;
   options.includeResultScreen = selectedExportIncludeResultScreen_;
   options.renderTouchPoints =
-      summary.autoPlay ? false : selectedReplayRenderTouchPoints_;
+      summary.autoPlay ? false : replayPreferences_.renderTouchPoints;
   options.renderReplayGhosts =
-      summary.autoPlay ? false : selectedReplayRenderGhosts_;
-  if (!selectedExportFullResolution_) {
+      summary.autoPlay ? false : replayPreferences_.renderGhosts;
+  if (!replayPreferences_.exportFullResolution) {
     options.height = 1080;
   }
   if (target == ResultRecordActionTarget::ModernCourse &&

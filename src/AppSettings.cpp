@@ -502,6 +502,7 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
 }
 
 void AppSettings::sanitize() {
+  replayPreferences.sanitize();
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:
   case NotePriorityMode::Combo:
@@ -982,6 +983,7 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
     }
     return false;
   }
+  settings.replayPreferences.renderTouchPoints = settings.touchVisualizationEnabled;
   settings.sanitize();
   return true;
 }

@@ -5,6 +5,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.lang.reflect.Method;
 import java.io.File;
 import java.util.Locale;
@@ -234,6 +235,7 @@ class PickerActivity extends FakeSdlActivity {
     final AtomicReference<String> archivePickerName = new AtomicReference<>("");
     final AtomicReference<String> archivePickerError = new AtomicReference<>("");
     final AtomicReference<Boolean> archivePickerTree = new AtomicReference<>(false);
+    final AtomicInteger archivePickerGrantFlags = new AtomicInteger();
     void completeDocumentSelectionLocked(DocumentHandoffOperation operation, Uri uri, String result) {}
     final Dummy resolver = new Dummy();
     Dummy getContentResolver() { return resolver; }

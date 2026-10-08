@@ -250,7 +250,9 @@ bool ChartLibraryTaskService::updateAndroidImportProgress(
 
 bool ChartLibraryTaskService::finishAndroidImport(
     const std::string &token, bool folder, const std::filesystem::path &path,
-    const std::string &error, const std::string &retainedError) {
+    const std::string &error, const std::string &retainedError,
+    const std::string &archiveUri, bool archiveGrantAcquired,
+    std::shared_ptr<AndroidArchiveImportOwner> archiveOwner) {
   std::uint64_t id = 0;
   {
     std::lock_guard lock(stateMutex_);
@@ -289,7 +291,10 @@ bool ChartLibraryTaskService::finishAndroidImport(
              .androidImportPath = path,
              .androidImportFolder = folder,
              .androidImportMove = found->second.moveSource,
-             .androidImportRetainedError = retainedError});
+             .androidImportRetainedError = retainedError,
+             .androidArchiveUri = folder ? std::string{} : archiveUri,
+             .androidArchiveGrantAcquired = !folder && archiveGrantAcquired,
+             .androidArchiveOwner = std::move(archiveOwner)});
     androidImports_.erase(found);
   }
   if (queued) {

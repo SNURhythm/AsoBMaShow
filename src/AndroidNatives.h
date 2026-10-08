@@ -99,6 +99,10 @@ bool ValidateAndroidTemporaryDocument(const std::filesystem::path &localPath,
                                       std::string &errorMessage);
 bool CleanupAndroidTemporaryDocument(const std::filesystem::path &localPath,
                                      std::string &errorMessage);
+void RegisterAndroidArchiveReference(const std::filesystem::path &path,
+                                     const std::string &uri, bool refresh = false);
+void DiscardAndroidArchiveReference(const std::filesystem::path &path,
+                                    const std::string &newGrantUri = {});
 void RegisterAndroidChartFolder(const std::filesystem::path &rootPath,
                                 const std::string &treeUri);
 bool IsAndroidTreePath(const std::filesystem::path &path);

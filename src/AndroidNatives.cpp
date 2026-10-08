@@ -4,6 +4,12 @@
 #if TARGET_OS_ANDROID
 
 #include "StableHash.h"
+#include "ArchiveFile.h"
+#include "archive/ArchiveReferenceRegistry.h"
+#include "i18n/Localization.h"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <thread>
 #include "PlatformDocumentHandoff.h"
 #include "skin/package/SkinDirectoryRename.h"
 #include "audio/NativeMusicPlayer.h"
@@ -708,6 +714,102 @@ void screen_orientation::apply(Mode mode, bool lockCurrent) {
   env->DeleteLocalRef(activity);
 }
 
+namespace {
+std::mutex androidArchiveLifecycleMutex;
+archive_source::Registry &androidArchiveSources() {
+  static archive_source::Registry sources([](const std::string &uri) -> archive_source::Access {
+    std::string error;
+    const auto descriptor = callActivityIntMethod2("openArchiveFileDescriptor",
+        "(Ljava/lang/String;Ljava/lang/String;)I", uri.c_str(), "", error);
+    if (!descriptor || *descriptor < 0) return {{}, {}, error.empty() ? "Could not open archive source." : error};
+    auto owner = std::shared_ptr<int>(new int(*descriptor), [](int *fd) { ::close(*fd); delete fd; });
+    struct stat state{};
+    if (::fstat(*descriptor, &state) != 0 || !S_ISREG(state.st_mode) ||
+        ::lseek(*descriptor, 0, SEEK_SET) < 0) {
+      return {{}, {}, "__STREAM_ONLY__:This provider does not support direct archive reads."};
+    }
+    const auto path = std::filesystem::path("/proc/self/fd") / std::to_string(*descriptor);
+    // A fresh open, unlike dup(), owns an independent offset for every decoder.
+    const int probe = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (probe < 0) return {{}, {}, "__STREAM_ONLY__:This provider cannot reopen archive readers."};
+    ::close(probe);
+    return {path, std::move(owner), {}};
+  });
+  return sources;
+}
+}
+
+void RegisterAndroidArchiveReference(const std::filesystem::path &path,
+                                     const std::string &uri, bool refresh) {
+  std::lock_guard lock(androidArchiveLifecycleMutex);
+  androidArchiveSources().registerSource(path, uri);
+  if (refresh) androidArchiveSources().invalidate(path);
+  archive_source::setResolver([](const auto &source) { return androidArchiveSources().acquire(source); });
+}
+
+void DiscardAndroidArchiveReference(const std::filesystem::path &path,
+                                    const std::string &newGrantUri) {
+  std::lock_guard lock(androidArchiveLifecycleMutex);
+  const auto removedUri = androidArchiveSources().remove(path);
+  const auto &uri = removedUri.empty() ? newGrantUri : removedUri;
+  if (!uri.empty() && !androidArchiveSources().referencesUri(uri)) {
+    std::string error;
+    callActivityStringMethod("releaseArchivePermission", "(Ljava/lang/String;)Ljava/lang/String;",
+                             uri.c_str(), error);
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeInspectArchiveImport(
+    JNIEnv *env, jclass, jstring tokenValue, jstring pathValue, jstring uriValue) {
+  try {
+    const auto token = jstringToUtf8(env, tokenValue);
+    const auto path = std::filesystem::path(jstringToUtf8(env, pathValue));
+    const auto uri = jstringToUtf8(env, uriValue);
+    if (!uri.empty()) {
+      if (!archive_source::validReference(path)) return utf8ToJString(env, "__ERROR__:Invalid archive reference.");
+      RegisterAndroidArchiveReference(path, uri);
+    }
+    const auto source = archive_source::resolve(path);
+    if (!source) return utf8ToJString(env, (source.error.starts_with("__STREAM_ONLY__:")
+        ? source.error : "__ERROR__:" + source.error).c_str());
+    const auto checkpoint = [&] {
+      for (;;) {
+        int state;
+        {
+          std::lock_guard lock(gAndroidImportTasksMutex);
+          state = gAndroidImportTasks ? gAndroidImportTasks->androidImportCopyState(token) : -1;
+        }
+        if (state != 0) return state > 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+    };
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    if (!archive_file::listEntriesBounded(path, entries, 1'000'000, &error, checkpoint))
+      return utf8ToJString(env, ("__ERROR__:" + error).c_str());
+    const bool solid = std::any_of(entries.begin(), entries.end(), [](const auto &entry) { return !entry.directory && entry.solid; });
+    return utf8ToJString(env, solid ? "solid" : "non-solid");
+  } catch (const std::exception &error) {
+    return utf8ToJString(env, (std::string("__ERROR__:") + error.what()).c_str());
+  } catch (...) {
+    return utf8ToJString(env, "__ERROR__:Could not inspect archive.");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDiscardArchiveImport(
+    JNIEnv *env, jclass, jstring path, jstring grantUri) {
+  try { DiscardAndroidArchiveReference(jstringToUtf8(env, path), jstringToUtf8(env, grantUri)); }
+  catch (...) { SDL_Log("Could not retire archive import source"); }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeArchiveImportText(
+    JNIEnv *env, jclass, jstring key) {
+  return utf8ToJString(env, i18n::tr(jstringToUtf8(env, key)).c_str());
+}
+
 void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks) {
   std::lock_guard lock(gAndroidImportTasksMutex);
   gAndroidImportTasks = &tasks;
@@ -793,15 +895,23 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportCopyState(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeFinishChartImport(
     JNIEnv *env, jclass, jstring token, jboolean folder, jstring path,
-    jstring error, jstring retainedError) {
-  std::lock_guard lock(gAndroidImportTasksMutex);
-  return gAndroidImportTasks != nullptr &&
-                 gAndroidImportTasks->finishAndroidImport(
-                     jstringToUtf8(env, token), folder == JNI_TRUE,
-                     std::filesystem::path(jstringToUtf8(env, path)),
-                     jstringToUtf8(env, error), jstringToUtf8(env, retainedError))
-             ? JNI_TRUE
-             : JNI_FALSE;
+    jstring error, jstring retainedError, jstring archiveUri, jboolean newGrant) {
+  try {
+    const auto sourcePath = std::filesystem::path(jstringToUtf8(env, path));
+    const auto uri = jstringToUtf8(env, archiveUri);
+    std::shared_ptr<chart_library_tasks::AndroidArchiveImportOwner> owner;
+    if (folder != JNI_TRUE && archive_source::isReference(sourcePath)) {
+      owner = std::make_shared<chart_library_tasks::AndroidArchiveImportOwner>();
+      owner->cleanup = [sourcePath, grant = newGrant == JNI_TRUE ? uri : std::string{}](bool retained) {
+        if (!retained) DiscardAndroidArchiveReference(sourcePath, grant);
+      };
+    }
+    std::lock_guard lock(gAndroidImportTasksMutex);
+    return gAndroidImportTasks != nullptr && gAndroidImportTasks->finishAndroidImport(
+        jstringToUtf8(env, token), folder == JNI_TRUE, sourcePath,
+        jstringToUtf8(env, error), jstringToUtf8(env, retainedError), uri,
+        newGrant == JNI_TRUE, std::move(owner)) ? JNI_TRUE : JNI_FALSE;
+  } catch (...) { return JNI_FALSE; }
 }
 
 extern "C" JNIEXPORT void JNICALL

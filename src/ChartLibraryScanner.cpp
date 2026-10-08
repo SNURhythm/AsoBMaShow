@@ -1,6 +1,7 @@
 #include "ChartLibraryScanner.h"
 
 #include "ArchiveFile.h"
+#include "archive/ArchiveSourceAccess.h"
 #include "BmsChartFile.h"
 #include "BmsMetadataText.h"
 #include "CanonicalDigest.h"
@@ -362,21 +363,9 @@ std::int64_t fileTimeToUnixSeconds(std::filesystem::file_time_type time) {
 
 bool archiveFileState(const std::filesystem::path &path,
                       std::int64_t &archiveSize, std::int64_t &mtimeNs) {
-  std::error_code error;
-  const bool regularFile = std::filesystem::is_regular_file(path, error);
-  if (error || !regularFile) {
-    return false;
-  }
-  error.clear();
-  const auto size = std::filesystem::file_size(path, error);
-  if (error) {
-    return false;
-  }
-  error.clear();
-  const auto mtime = std::filesystem::last_write_time(path, error);
-  if (error) {
-    return false;
-  }
+  std::uintmax_t size = 0;
+  std::filesystem::file_time_type mtime{};
+  if (!archive_source::fileState(path, size, mtime)) return false;
   archiveSize =
       clampScanInteger(static_cast<std::uint64_t>(std::min<std::uintmax_t>(
           size, std::numeric_limits<std::uint64_t>::max())));
@@ -398,9 +387,9 @@ archiveBatchSourcePreference(const std::filesystem::path &archivePath,
   if (!archive_file::hasSupportedArchiveExtension(archivePath)) {
     return std::nullopt;
   }
-  std::error_code error;
-  const std::uintmax_t size = std::filesystem::file_size(archivePath, error);
-  if (error) {
+  std::uintmax_t size = 0;
+  std::filesystem::file_time_type mtime{};
+  if (!archive_source::fileState(archivePath, size, mtime)) {
     return archive_file::SourcePreference{.priority = 3, .archiveSize = 0};
   }
   return archive_file::SourcePreference{
@@ -1628,6 +1617,17 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       continue;
     }
 #endif
+    if (archive_source::isReference(root)) {
+      std::int64_t size = 0, mtime = 0;
+      if (archive_source::validReference(root) && archiveFileState(root, size, mtime)) {
+        scheduleArchivePath(root);
+      } else {
+        traversalHealthy = false;
+        archive_file::appendDebugLogLine("Referenced archive is unavailable: " + fspath_to_utf8(root));
+      }
+      ++scannedRootCount;
+      continue;
+    }
     std::error_code error;
     const bool rootExists = std::filesystem::exists(root, error);
     if (error) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ReplayRecordFilters.h"
+#include "../settings/ReplayPreferences.h"
 #include "../i18n/Localization.h"
 #include "../ResultRecordSummary.h"
 #include "../replay/ReplayFileActionSelection.h"
@@ -85,6 +86,8 @@ struct ReplayRecordsModalCallbacks {
   std::function<void(const replay::ReplayFileActionRequest &)> remove;
   std::function<void(const ModernChartResultRecord &)> irUpload;
   std::function<void(ir::IrRecordState)> irStatusFeedback;
+  std::function<player_settings::ReplayPreferences()> loadPreferences;
+  std::function<void(const player_settings::ReplayPreferences &)> savePreferences;
 };
 
 class ReplayRecordsModal final {
@@ -105,7 +108,6 @@ public:
   void update();
 
   void setStatus(i18n::Text text);
-  void setTouchVisualizationEnabled(bool enabled);
   void reloadRecords(bool preserveViewState = true);
   void refresh();
   void setExportInProgress(bool inProgress);
@@ -119,10 +121,13 @@ public:
   void returnToList(const i18n::Text &status = {});
   void showIrFeedback(const i18n::Text &message);
   [[nodiscard]] bool renderTouchPoints() const noexcept {
-    return selectedReplayRenderTouchPoints_;
+    return !selectedIsAutoPlay() && replayPreferences_.renderTouchPoints;
+  }
+  [[nodiscard]] bool autoKeySound() const noexcept {
+    return selectedIsAutoPlay() || replayPreferences_.autoKeySound;
   }
   [[nodiscard]] bool renderReplayGhosts() const noexcept {
-    return selectedReplayRenderGhosts_;
+    return !selectedIsAutoPlay() && replayPreferences_.renderGhosts;
   }
   [[nodiscard]] const std::vector<ResultRecordSummary> &
   records() const noexcept {
@@ -152,6 +157,7 @@ private:
   void refreshActions();
   void refreshFilterSortButtons();
   void refreshExportOptionButtons();
+  void saveReplayPreferences();
   void showFilterSortOptions();
   void showExportOptions();
   void showDeleteConfirmation();
@@ -205,6 +211,10 @@ private:
   Button *exportTouchHideButton_ = nullptr;
   Button *exportGhostShowButton_ = nullptr;
   Button *exportGhostHideButton_ = nullptr;
+  Button *keysoundAutoButton_ = nullptr;
+  Button *keysoundInputButton_ = nullptr;
+  Button *exportKeysoundAutoButton_ = nullptr;
+  Button *exportKeysoundInputButton_ = nullptr;
   TextView *watchButtonText_ = nullptr;
   TextView *gbattleButtonText_ = nullptr;
   TextView *resultButtonText_ = nullptr;
@@ -229,6 +239,10 @@ private:
   TextView *exportTouchHideButtonText_ = nullptr;
   TextView *exportGhostShowButtonText_ = nullptr;
   TextView *exportGhostHideButtonText_ = nullptr;
+  TextView *keysoundAutoButtonText_ = nullptr;
+  TextView *keysoundInputButtonText_ = nullptr;
+  TextView *exportKeysoundAutoButtonText_ = nullptr;
+  TextView *exportKeysoundInputButtonText_ = nullptr;
 
   ReplayRecordsModalCallbacks callbacks_;
   ChartMetaRecord record_;
@@ -246,12 +260,8 @@ private:
   std::optional<std::string> stableKey_;
   replay::ReplayFileDeleteConfirmation deleteConfirmation_;
   std::optional<ResultRecordSummary> exportSelection_;
-  int selectedExportFps_ = 120;
-  bool selectedExportFullResolution_ = true;
+  player_settings::ReplayPreferences replayPreferences_;
   bool selectedExportIncludeResultScreen_ = true;
-  bool selectedReplayRenderTouchPoints_ = false;
-  bool selectedReplayRenderGhosts_ = true;
-  bool touchVisualizationEnabled_ = false;
   bool exportInProgress_ = false;
   bool resultRecallInProgress_ = false;
   bool irUploadInProgress_ = false;

@@ -4,6 +4,7 @@
 #include "archive/UnzipOutput.h"
 #include "archive/IndexBuildCoordinator.h"
 #include "ArchiveSourceIdentity.h"
+#include "archive/ArchiveSourceAccess.h"
 #include "FileExtensionResolver.h"
 
 #include "BmsMetadataText.h"
@@ -213,7 +214,7 @@ enum class RarSignature {
 };
 
 RarSignature rarSignature(const std::filesystem::path &path) {
-  std::ifstream file(path, std::ios::binary);
+  archive_source::InputFile file(path, std::ios::binary);
   if (!file) {
     return RarSignature::Unknown;
   }
@@ -462,13 +463,7 @@ std::string archiveKey(const std::filesystem::path &path) {
 
 bool fileState(const std::filesystem::path &path, std::uintmax_t &size,
                std::filesystem::file_time_type &mtime) {
-  std::error_code error;
-  size = std::filesystem::file_size(path, error);
-  if (error) {
-    return false;
-  }
-  mtime = std::filesystem::last_write_time(path, error);
-  return !error;
+  return archive_source::fileState(path, size, mtime);
 }
 
 std::string fileStateKey(const std::filesystem::path &path) {
@@ -679,7 +674,8 @@ public:
       ::close(fd_);
       fd_ = -1;
     }
-    const std::string pathText = fspath_to_utf8(path);
+    const auto source = archive_source::resolve(path);
+    const std::string pathText = fspath_to_utf8(source.path);
     fd_ = ::open(pathText.c_str(), O_RDONLY);
     if (fd_ < 0) {
       if (errorMessage != nullptr) {
@@ -829,7 +825,7 @@ private:
 bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
-  std::ifstream file(path, std::ios::binary);
+  archive_source::InputFile file(path, std::ios::binary);
 #if TARGET_OS_ANDROID
   if (!file) {
     const std::string assetPath = path.generic_string();
@@ -967,7 +963,7 @@ bool readRegularFileBounded(const std::filesystem::path &path,
   }
 #endif
 
-  std::ifstream file(path, std::ios::binary);
+  archive_source::InputFile file(path, std::ios::binary);
   if (file) {
     for (;;) {
       if (stop.stop_requested() || !pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -1038,7 +1034,7 @@ unsigned short readUInt16Le(const unsigned char *data) {
                                      (static_cast<unsigned short>(data[1]) << 8));
 }
 
-bool readRar4BaseHeader(std::ifstream &file, std::int64_t offset,
+bool readRar4BaseHeader(archive_source::InputFile &file, std::int64_t offset,
                         unsigned char &type, unsigned short &flags,
                         unsigned short &size) {
   if (offset < 0) {
@@ -1056,7 +1052,7 @@ bool readRar4BaseHeader(std::ifstream &file, std::int64_t offset,
   return size >= sizeof(header);
 }
 
-bool readRar4MainSolidFlag(std::ifstream &file, bool &mainSolid) {
+bool readRar4MainSolidFlag(archive_source::InputFile &file, bool &mainSolid) {
   unsigned char type = 0;
   unsigned short flags = 0;
   unsigned short size = 0;
@@ -1068,7 +1064,7 @@ bool readRar4MainSolidFlag(std::ifstream &file, bool &mainSolid) {
   return true;
 }
 
-bool readRar4EntrySolidFlagAtOffset(std::ifstream &file, std::int64_t offset,
+bool readRar4EntrySolidFlagAtOffset(archive_source::InputFile &file, std::int64_t offset,
                                     bool mainSolid, bool &solid) {
   unsigned char type = 0;
   unsigned short flags = 0;
@@ -1095,7 +1091,8 @@ bool openUnarrRarArchive(const std::filesystem::path &archivePath,
                          UnarrStreamHandle &stream,
                          UnarrArchiveHandle &archive,
                          std::string *errorMessage) {
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   stream.reset(ar_open_file(archiveText.c_str()));
   if (stream == nullptr) {
     if (errorMessage != nullptr) {
@@ -1129,7 +1126,7 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
     return false;
   }
 
-  std::ifstream headerFile(archivePath, std::ios::binary);
+  archive_source::InputFile headerFile(archivePath, std::ios::binary);
   bool mainSolid = false;
   if (!headerFile || !readRar4MainSolidFlag(headerFile, mainSolid)) {
     if (errorMessage != nullptr) {
@@ -1517,7 +1514,7 @@ public:
 private:
   static constexpr std::size_t kInputBufferSize = 1u << 20;
   std::array<char, kInputBufferSize> buffer_{};
-  std::ifstream file_;
+  archive_source::InputFile file_;
   UInt64 size_ = 0;
   PauseCallback pauseCallback_;
   ULONG refCount_ = 0;
@@ -2976,7 +2973,8 @@ ArchiveReadHandle openArchive(const std::filesystem::path &archivePath,
   }
   configureArchiveReader(archiveHandle);
 
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   const int status =
       archive_read_open_filename(archiveHandle, archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
@@ -3694,7 +3692,7 @@ std::size_t pruneArchiveIndexCacheImpl(
     if (orphanTmpIndex && fileNameHash.has_value()) {
       continue;
     }
-    std::ifstream file(filePath, std::ios::binary);
+    archive_source::InputFile file(filePath, std::ios::binary);
     if (!file) {
       continue;
     }
@@ -3824,7 +3822,7 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
   if (sizeError || fileBytes == 0) {
     return nullptr;
   }
-  std::ifstream file(filePath, std::ios::binary);
+  archive_source::InputFile file(filePath, std::ios::binary);
   if (!file) {
     return nullptr;
   }
@@ -4920,7 +4918,8 @@ bool listZipEntries(const std::filesystem::path &archivePath,
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -5242,7 +5241,8 @@ bool readZipEntriesByName(
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -5347,7 +5347,8 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -5497,7 +5498,8 @@ bool readZipEntriesByIndex(
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -5621,7 +5623,8 @@ bool readZipEntriesByIndexStreaming(
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -5795,7 +5798,8 @@ bool readZipEntriesByIndexConcurrent(
   }
   mz_zip_archive prepareArchive{};
   mz_zip_zero_struct(&prepareArchive);
-  const std::string archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&prepareArchive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -8409,7 +8413,7 @@ bool isReservedUnzipEntryPath(const std::filesystem::path &path) {
 
 bool unzipMarkerMatches(const std::filesystem::path &markerPath,
                         const std::string &key) {
-  std::ifstream marker(markerPath, std::ios::binary);
+  archive_source::InputFile marker(markerPath, std::ios::binary);
   if (!marker) {
     return false;
   }
@@ -8622,7 +8626,8 @@ bool splitVirtualPath(const std::filesystem::path &path,
       current /= part;
       if (hasSupportedArchiveExtension(current)) {
         std::error_code error;
-        if (std::filesystem::is_regular_file(current, error) && !error) {
+        if (archive_source::validReference(current) ||
+            (std::filesystem::is_regular_file(current, error) && !error)) {
           archivePath = current;
           foundArchive = true;
         }
@@ -9414,7 +9419,8 @@ entryRangeForFolder(const std::filesystem::path &folderPath) {
   if (!splitVirtualPath(folderPath, archivePath, innerPath)) {
     std::error_code error;
     if (!hasSupportedArchiveExtension(folderPath) ||
-        !std::filesystem::is_regular_file(folderPath, error) || error) {
+        (!archive_source::validReference(folderPath) &&
+         (!std::filesystem::is_regular_file(folderPath, error) || error))) {
       return std::nullopt;
     }
     archivePath = folderPath;
@@ -9462,7 +9468,8 @@ bool exists(const std::filesystem::path &path) {
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
     std::error_code error;
-    return std::filesystem::exists(path, error) && !error;
+    const auto source = archive_source::resolve(path);
+    return source && std::filesystem::exists(source.path, error) && !error;
   }
   return resolveInnerPath(archivePath, innerPath).has_value();
 }
@@ -10308,7 +10315,8 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
   }
   if (files.empty()) return std::nullopt;
   mz_zip_archive preflight{};
-  const auto archiveText = fspath_to_utf8(archivePath);
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  const auto archiveText = fspath_to_utf8(sourceAccess.path);
   if (!mz_zip_reader_init_file_v2(&preflight, archiveText.c_str(),
                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) return std::nullopt;
   const auto closePreflight = makeScopeExit([&] { mz_zip_reader_end(&preflight); });
@@ -10343,7 +10351,8 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
   const auto worker = [&](std::size_t fileIndex) {
     try {
       mz_zip_archive archive{};
-      const auto archiveText = fspath_to_utf8(archivePath);
+      const auto sourceAccess = archive_source::resolve(archivePath);
+      const auto archiveText = fspath_to_utf8(sourceAccess.path);
       if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                      MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) {
         fail("Could not open ZIP central directory.");
@@ -10496,7 +10505,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   }
 
   std::error_code error;
-  if (!std::filesystem::is_regular_file(archivePath, error) || error) {
+  const auto sourceAccess = archive_source::resolve(archivePath);
+  if (!sourceAccess || !std::filesystem::is_regular_file(sourceAccess.path, error) || error) {
     if (errorMessage != nullptr) {
       *errorMessage = "Selected archive path is not a file.";
     }

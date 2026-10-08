@@ -1,6 +1,7 @@
 #include "../src/ArchiveFile.h"
 #include "../src/ArchiveRAII.h"
 #include "../src/ArchiveSourceIdentity.h"
+#include "../src/archive/ArchiveSourceAccess.h"
 #include "../src/scene/play/GameplayBmsResourceAvailability.h"
 #include "fixtures/archive/rar_fixtures.h"
 #include "fixtures/archive/sevenzip_block_fixtures.h"
@@ -285,6 +286,47 @@ void writeStoredZip(const std::filesystem::path &path,
     assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
   }
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testReferencedArchivesUseOriginalSource() {
+  TempDirectory temporary;
+  for (const std::string extension : {".zip", ".7z", ".rar"}) {
+    const auto original = temporary.path() / ("original" + extension);
+    if (extension == ".zip") writeStoredZip(original, {"readme.txt"});
+    else if (extension == ".7z") writeSevenZip(original, "reference payload");
+    else {
+      std::ofstream out(original, std::ios::binary);
+      out.write(reinterpret_cast<const char *>(archive_rar_fixtures::nonSolid),
+                sizeof(archive_rar_fixtures::nonSolid));
+    }
+    const auto logical = std::filesystem::path("@androidarchive@/source-test") / ("named" + extension);
+    archive_source::setResolver([&](const auto &path) -> archive_source::Access {
+      return path == logical ? archive_source::Access{original, {}, {}}
+                             : archive_source::Access{{}, {}, "missing source"};
+    });
+    std::vector<archive_file::Entry> expected, actual;
+    std::string error;
+    assert(archive_file::listEntries(original, expected, &error));
+    assert(archive_file::listEntries(logical, actual, &error));
+    assert(actual.size() == expected.size());
+    for (const auto &entry : expected) {
+      if (entry.directory) continue;
+      std::vector<unsigned char> a, b;
+      assert(archive_file::readFile(archive_file::makeVirtualPath(original, entry.path), a, &error));
+      const bool read = archive_file::readFile(archive_file::makeVirtualPath(logical, entry.path), b, &error);
+      if (!read) std::cerr << extension << " " << entry.path << ": " << error << '\n';
+      assert(read);
+      assert(a == b);
+    }
+    assert(!archive_source_identity::KeyForPath(logical).empty());
+    const auto output = temporary.path() / ("out" + extension);
+    const auto unzipped = archive_file::unzipArchiveFully(logical, output, &error);
+    if (!unzipped) std::cerr << error << '\n';
+    assert(unzipped);
+    assert(std::filesystem::exists(original));
+    archive_source::setResolver({});
+    assert(!archive_file::exists(logical));
+  }
 }
 
 void testZipIndexAmortizesPausePolling() {
@@ -3589,6 +3631,10 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--source-reference") {
+    testReferencedArchivesUseOriginalSource();
+    return 0;
+  }
   if (argc == 4 && std::string(argv[1]) == "--allocation-failure") {
     testConcurrentOversizedEntries(argv[2], std::stoi(argv[3]));
     return 0;

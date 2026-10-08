@@ -4,6 +4,7 @@
 #include "../RAII.h"
 #include "../path.h"
 #include "../targets.h"
+#include "../archive/ArchiveSourceAccess.h"
 
 #include <SDL2/SDL.h>
 
@@ -50,6 +51,15 @@ void clearFolderAccess() {
 #endif
 }
 
+void removeFolderAccess(const ChartEntry &entry) {
+#if TARGET_OS_ANDROID
+  if (archive_source::validReference(entry.path) && entry.iosBookmark.starts_with("android-archive-uri:"))
+    DiscardAndroidArchiveReference(entry.path, entry.iosBookmark.substr(20));
+#else
+  (void)entry;
+#endif
+}
+
 void refreshFolderAccess(const std::vector<ChartEntry> &entries) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   std::lock_guard<std::mutex> lock(folderAccessMutex);
@@ -75,6 +85,11 @@ void refreshFolderAccess(const std::vector<ChartEntry> &entries) {
       folderAccessHandles.push_back(handle);
     }
   }
+#elif TARGET_OS_ANDROID
+  for (const auto &entry : entries) {
+    if (archive_source::validReference(entry.path) && entry.iosBookmark.starts_with("android-archive-uri:"))
+      RegisterAndroidArchiveReference(entry.path, entry.iosBookmark.substr(20), true);
+  }
 #else
   (void)entries;
 #endif
@@ -90,7 +105,10 @@ std::filesystem::path resolveFolderEntryPath(const ChartEntry &entry) {
   return std::filesystem::path(entry.path);
 #elif TARGET_OS_ANDROID
   std::filesystem::path root(entry.path);
-  RegisterAndroidChartFolder(root, entry.iosBookmark);
+  if (archive_source::validReference(root) && entry.iosBookmark.starts_with("android-archive-uri:"))
+    RegisterAndroidArchiveReference(root, entry.iosBookmark.substr(20));
+  else
+    RegisterAndroidChartFolder(root, entry.iosBookmark);
   return root;
 #else
   return std::filesystem::path(entry.path);

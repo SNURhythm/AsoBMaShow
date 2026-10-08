@@ -2504,6 +2504,11 @@ void testFindBmsDownloadEntryRejectsIneligiblePaths() {
   assert(!session->SelectPrimaryStorageEntry());
   assert(!session->SetPrimaryStorageEntry(virtualTree));
   assert(!session->SetPrimaryStorageEntry(temporary.path() / "missing"));
+  const std::filesystem::path virtualArchive = "@androidarchive@/archive-id/chart.zip";
+  assert(session->InsertEntry(virtualArchive, "android-archive-uri:content://archive/example"));
+  assert(!session->SelectPrimaryStorageEntry());
+  assert(!session->SetPrimaryStorageEntry(virtualArchive));
+
 
   assert(session->InsertEntry(normal));
   const auto entries = session->SelectAllEntries();

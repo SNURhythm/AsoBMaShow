@@ -488,6 +488,31 @@ if(ANDROID)
     target_compile_definitions(main PRIVATE ASOBMASHOW_USE_OPENSSL_SHA256=1)
 endif()
 
+if(ANDROID)
+    # Keep 7-Zip archive/codec registrations that otherwise have no references.
+    # Extract these objects rather than whole-archiving SDK PPMd duplicates.
+    set(SEVENZIP_ANDROID_SUPPORT_DIR "${CMAKE_CURRENT_BINARY_DIR}/7zip-android-support")
+    set(SEVENZIP_ANDROID_OBJECT_NAMES
+        7zRegister.cpp.o LzmaRegister.cpp.o Lzma2Register.cpp.o DeltaFilter.cpp.o
+        RarHandler.cpp.o Rar5Handler.cpp.o RarCodecsRegister.cpp.o)
+    set(SEVENZIP_ANDROID_LINK_OBJECTS)
+    foreach(object_name IN LISTS SEVENZIP_ANDROID_OBJECT_NAMES)
+        list(APPEND SEVENZIP_ANDROID_LINK_OBJECTS "${SEVENZIP_ANDROID_SUPPORT_DIR}/${object_name}")
+    endforeach()
+    add_custom_command(
+        OUTPUT ${SEVENZIP_ANDROID_LINK_OBJECTS}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SEVENZIP_ANDROID_SUPPORT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${SEVENZIP_ANDROID_LINK_OBJECTS}
+        COMMAND ${CMAKE_COMMAND} -E chdir "${SEVENZIP_ANDROID_SUPPORT_DIR}"
+            ${CMAKE_AR} -x "$<TARGET_FILE:7zip::7zip>" ${SEVENZIP_ANDROID_OBJECT_NAMES}
+        DEPENDS "$<TARGET_FILE:7zip::7zip>"
+        COMMENT "Extracting Android 7-Zip archive and codec registrations"
+        VERBATIM)
+    set_source_files_properties(${SEVENZIP_ANDROID_LINK_OBJECTS}
+        PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+    target_sources(main PRIVATE ${SEVENZIP_ANDROID_LINK_OBJECTS})
+endif()
+
 if (PLATFORM_MACOS)
     # 7-Zip registers archive handlers through static initialization. With a
     # static lib, pull the RAR handler objects explicitly without loading the
@@ -4157,6 +4182,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(windows_extraction_path_policy_tests PRIVATE cxx_std_23)
 
+    add_executable(archive_source_access_tests tests/archive_source_access_tests.cpp)
+    target_include_directories(archive_source_access_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(archive_source_access_tests PRIVATE cxx_std_23)
+    add_test(NAME archive_source_access_tests COMMAND archive_source_access_tests)
+
     add_executable(archive_file_concurrency_tests
         tests/archive_file_concurrency_tests.cpp
         src/ArchiveFile.cpp
@@ -4175,6 +4205,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
     )
     target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
+    add_test(NAME archive_reference_reader_tests COMMAND archive_file_concurrency_tests --source-reference)
     if(NOT WIN32)
         set(SEVENZIP_TEST_SUPPORT_DIR
             "${CMAKE_CURRENT_BINARY_DIR}/7zip-test-support")

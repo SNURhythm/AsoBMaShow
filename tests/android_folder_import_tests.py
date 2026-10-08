@@ -23,10 +23,15 @@ class AndroidFolderImportTests(unittest.TestCase):
                             str(source / "ImportCopyWorkers.java"),
                             str(source / "ChartImportCopyControl.java"),
                             str(source / "ChartFolderImport.java"),
+                            str(source / "ChartArchiveImport.java"),
+                            str(source / "ArchivePermissionOwnership.java"),
+                            str(source / "ArchiveDirectPath.java"),
+                            str(ROOT / "tests/java/ArchiveDirectPathTests.java"),
+                            str(ROOT / "tests/java/ChartArchiveImportTests.java"),
                             str(ROOT / "tests/java/ChartFolderImportTests.java"),
                             str(ROOT / "tests/java/ImportCopyWorkersTests.java"),
                             str(ROOT / "tests/java/ChartImportCopyControlTests.java")], check=True)
-            for test in ("ImportCopyWorkersTests", "ChartFolderImportTests", "ChartImportCopyControlTests"):
+            for test in ("ImportCopyWorkersTests", "ChartFolderImportTests", "ChartImportCopyControlTests", "ChartArchiveImportTests", "ArchiveDirectPathTests"):
                 subprocess.run([java, "-cp", output,
                                 "com.snurhythm.asobmashow." + test], check=True)
 

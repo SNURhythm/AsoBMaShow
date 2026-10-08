@@ -716,6 +716,32 @@ void testReservedPlatformCopyTaskCanBeQueuedOrFailed() {
   service.shutdown();
 }
 
+void testAndroidArchiveOwnershipFollowsQueueLifetime() {
+  using namespace chart_library_tasks;
+  for (const bool retained : {false, true}) {
+    int cleanups = 0;
+    bool retainedAtCleanup = false;
+    {
+      ChartLibraryTaskService service([](const auto &, const auto &, auto, auto) {
+        return TaskRunResult{};
+      });
+      service.setGameplayPaused(true);
+      expect(service.beginAndroidImport("owned-reference", false), "reserve archive ownership test");
+      auto owner = std::make_shared<AndroidArchiveImportOwner>();
+      owner->retained.store(retained);
+      owner->cleanup = [&](bool kept) { ++cleanups; retainedAtCleanup = kept; };
+      expect(service.finishAndroidImport("owned-reference", false,
+                 "@androidarchive@/owner/test.zip", "", "", "content://owner", true, owner),
+             "archive owner enters the queue");
+      owner.reset();
+      expect(cleanups == 0, "queue retains archive source until work is retired");
+      service.shutdown();
+    }
+    expect(cleanups == 1 && retainedAtCleanup == retained,
+           "shutdown retires one owner and preserves the durable registration decision");
+  }
+}
+
 void testAndroidImportsKeepOriginAcrossInterleavedResults() {
   std::mutex mutex;
   std::vector<chart_library_tasks::TaskRequest> requests;
@@ -752,7 +778,7 @@ void testAndroidImportsKeepOriginAcrossInterleavedResults() {
   expect(!service.finishAndroidImport("shared-zip", true, "wrong", ""),
          "a mismatched result type cannot consume an import reservation");
   expect(!service.active(), "a mismatched import type does not start a worker");
-  expect(service.finishAndroidImport("shared-zip", false, "shared.zip", ""),
+  expect(service.finishAndroidImport("shared-zip", false, "@androidarchive@/id/shared.zip", "", "", "content://source", true),
          "shared archive completion matches its originating token");
   expect(service.finishAndroidImport("manual-folder", true, "BMS/folder", ""),
          "manual folder completion matches its originating token");
@@ -767,7 +793,9 @@ void testAndroidImportsKeepOriginAcrossInterleavedResults() {
   std::lock_guard lock(mutex);
   expect(requests.size() == 2 && requests[0].id == archiveId &&
              !requests[0].androidImportFolder &&
-             requests[0].androidImportPath == "shared.zip" &&
+             requests[0].androidImportPath == "@androidarchive@/id/shared.zip" &&
+             requests[0].androidArchiveUri == "content://source" &&
+             requests[0].androidArchiveGrantAcquired &&
              requests[1].id == folderId && requests[1].androidImportFolder &&
              requests[1].androidImportPath == "BMS/folder",
          "archive and folder retain their own ID, path, and type");
@@ -908,6 +936,7 @@ int main() {
   testProgressUpdatesTaskRowAndProgressSnapshotTogether();
   testFailuresCompletionsAndHistoryRemainObservable();
   testReservedPlatformCopyTaskCanBeQueuedOrFailed();
+  testAndroidArchiveOwnershipFollowsQueueLifetime();
   testAndroidImportsKeepOriginAcrossInterleavedResults();
   testAndroidFolderCopyProgressAndRetainedMove();
   testAndroidCopyCheckpointsFollowPauseAndLifecycle();

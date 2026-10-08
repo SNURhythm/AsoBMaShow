@@ -15,6 +15,7 @@ class ChartLibraryTaskService;
 namespace chart_library_platform {
 
 void clearFolderAccess();
+void removeFolderAccess(const ChartEntry &entry);
 void refreshFolderAccess(const std::vector<ChartEntry> &entries);
 std::filesystem::path resolveFolderEntryPath(const ChartEntry &entry);
 

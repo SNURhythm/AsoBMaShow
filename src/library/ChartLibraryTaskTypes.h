@@ -5,6 +5,9 @@
 #include "../scene/MainMenuLibrary.h"
 
 #include <cstdint>
+#include <atomic>
+#include <memory>
+#include <functional>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -24,6 +27,14 @@ enum class TaskKind {
   AndroidImport
 };
 
+struct AndroidArchiveImportOwner {
+  std::atomic_bool retained{false};
+  std::function<void(bool)> cleanup;
+  ~AndroidArchiveImportOwner() {
+    if (cleanup) { try { cleanup(retained.load()); } catch (...) {} }
+  }
+};
+
 struct TaskRequest {
   std::uint64_t id = 0;
   TaskKind kind = TaskKind::RefreshLibrary;
@@ -40,6 +51,9 @@ struct TaskRequest {
   bool androidImportFolder = false;
   bool androidImportMove = false;
   std::string androidImportRetainedError;
+  std::string androidArchiveUri;
+  bool androidArchiveGrantAcquired = false;
+  std::shared_ptr<AndroidArchiveImportOwner> androidArchiveOwner;
   bool rebuildLibraryMetadata = false;
   bool folderRegistrationCompleted = false;
 };

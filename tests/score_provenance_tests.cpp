@@ -965,8 +965,12 @@ void testCourseReplaySelectsMatchingStageJudgeWindows() {
 
   auto session = std::make_shared<CoursePlaySession>();
   session->constraints.judgement = CourseJudgementConstraint::NoGood;
+  session->autoKeySound = true;
   const StartOptions options =
       makeCourseReplayStageStartOptions(session, stageReplay);
+  assert(options.autoKeySound);
+  session->autoKeySound = false;
+  assert(!makeCourseReplayStageStartOptions(session, stageReplay).autoKeySound);
   assert(options.replayRulesetOverride.has_value());
   const Judge restored =
       makeEffectiveJudgeAtPlayStart(options, stageReplay->chartMeta);

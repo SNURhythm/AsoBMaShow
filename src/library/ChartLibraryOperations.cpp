@@ -3,6 +3,8 @@
 #include "ArchiveUnzipRecovery.h"
 
 #include "../ArchiveFile.h"
+#include "../archive/ArchiveSourceAccess.h"
+#include "../RAII.h"
 #include "../scene/ArchiveUnzipPresentation.h"
 #include "../Utils.h"
 #include "../path.h"
@@ -572,6 +574,16 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
     throw TaskError(i18n::message("library.tasks.import_empty"));
   }
 
+  const bool referencedSource = archive_source::isReference(importPath);
+  const bool keepArchive = !request.androidArchiveUri.empty();
+  if (keepArchive && !archive_source::validReference(importPath))
+    throw TaskError("Invalid archive reference.");
+  ScopeExit discardStaging([&] {
+    if (!request.androidImportFolder && !referencedSource) {
+      std::error_code ignored;
+      std::filesystem::remove(importPath, ignored);
+    }
+  });
   std::error_code importPathError;
   const bool importingFolder =
       request.androidImportFolder ||
@@ -596,13 +608,13 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
 
   std::string errorMessage;
   std::error_code fsError;
-  if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
+  if (!keepArchive && !Utils::EnsureDirectoryExists(outputRoot, fsError)) {
     throw TaskError(i18n::message("library.tasks.import_directory_failed",
                                   {{"detail", fsError.message()}}));
   }
 
   std::filesystem::path outputFolder;
-  if (importingFolder) {
+  if (importingFolder || keepArchive) {
     outputFolder = importPath;
     postImportProgress(0.90, i18n::message("library.tasks.refreshing_library"));
   } else {
@@ -636,7 +648,15 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
         : "library.tasks.import_archive_refresh_failed"));
   }
   session->EnsureSchema();
-  session->InsertEntry(outputRoot);
+  if (keepArchive) {
+    if (!session->InsertEntry(importPath, "android-archive-uri:" + request.androidArchiveUri))
+      throw TaskError("Could not save archive reference.");
+    // A failed scan can be retried from this durable entry; its URI grant must
+    // remain available even when the source temporarily disappears.
+    if (request.androidArchiveOwner) request.androidArchiveOwner->retained.store(true);
+  } else {
+    session->InsertEntry(outputRoot);
+  }
 
   std::vector<std::filesystem::path> roots{outputFolder};
   postImportProgress(0.92, i18n::message("library.tasks.refreshing_library"));
@@ -664,9 +684,6 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
         : "library.tasks.import_archive_refresh_failed"));
   }
 
-  if (!importingFolder) {
-    std::filesystem::remove(importPath, fsError);
-  }
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }

@@ -42,7 +42,6 @@ void MusicSelectScene::openChartRecords() {
   recordsIrRevisions_.clear();
   if (playOptionsModal_ != nullptr) playOptionsModal_->hide();
   if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
-  recordsModal_->setTouchVisualizationEnabled(context.settings.touchVisualizationEnabled);
   recordsModal_->showChart(*record);
 }
 
@@ -162,11 +161,12 @@ void MusicSelectScene::launchChartReplay(
   const audio::PlaybackRate playback{
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode};
+  const bool replayAutoKeySound = recordsModal_ && recordsModal_->autoKeySound();
   const bool renderTouchPoints = recordsModal_ && recordsModal_->renderTouchPoints();
   const bool renderGhosts = !recordsModal_ || recordsModal_->renderReplayGhosts();
   startRecordsWork(
       [this, record, modern, ghostBattle, selections, autoKeySound, playback, table,
-       renderTouchPoints, renderGhosts, clubMode](std::shared_ptr<std::atomic_bool> cancelled) {
+       renderTouchPoints, renderGhosts, replayAutoKeySound, clubMode](std::shared_ptr<std::atomic_bool> cancelled) {
         auto consumer = replay::makeRuntimeChartReplayConsumer(context.replayRepository);
         auto loaded = consumer.load(modern, record.meta.BmsPath, *cancelled);
         if (cancelled->load()) return;
@@ -182,7 +182,7 @@ void MusicSelectScene::launchChartReplay(
         if (cancelled->load()) return;
         StartOptions options{
             .startPosition = 0,
-            .autoKeySound = false,
+            .autoKeySound = replayAutoKeySound,
             .autoPlay = false,
             .gaugeType = loaded.replayData->initialGaugeType,
             .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
@@ -266,11 +266,12 @@ void MusicSelectScene::launchCourseReplay(
   if (!beginRecordsOperation(false)) return;
   const auto pacemaker = context.settings.selectedPacemakerTarget;
   const auto table = musicSelectTableContextForLaunch(bars_.readView());
+  const bool replayAutoKeySound = recordsModal_ && recordsModal_->autoKeySound();
   const bool renderTouchPoints = recordsModal_ && recordsModal_->renderTouchPoints();
   const bool renderGhosts = !recordsModal_ || recordsModal_->renderReplayGhosts();
   startRecordsWork(
       [this, modern, paths = selection->completedChartPaths, pacemaker, table,
-       renderTouchPoints, renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) {
+       renderTouchPoints, renderGhosts, replayAutoKeySound](std::shared_ptr<std::atomic_bool> cancelled) {
         auto consumer = replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
         auto loaded = consumer.load(modern, paths, *cancelled);
         if (cancelled->load()) return;
@@ -284,6 +285,7 @@ void MusicSelectScene::launchCourseReplay(
         auto session = replay::makeCourseReplayLaunchSession(
             std::move(loaded), replay::CourseReplayLaunchMode::Watch,
             renderTouchPoints, renderGhosts);
+        if (session) session->autoKeySound = replayAutoKeySound;
         if (!session || !session->hasCourseReplayStage(session->currentIndex)) {
           recordsTask_.publish([this] {
             finishRecordsFailure(i18n::tr("music_select.records.prepared_course_replay_session_unavailable.message"));
@@ -698,6 +700,11 @@ void MusicSelectScene::updateRecordServices() {
 
 ReplayRecordsModalCallbacks MusicSelectScene::makeRecordsModalCallbacks() {
   ReplayRecordsModalCallbacks callbacks;
+  callbacks.loadPreferences = [this] { return context.settings.replayPreferences; };
+  callbacks.savePreferences = [this](const player_settings::ReplayPreferences &preferences) {
+    context.settings.replayPreferences = preferences;
+    if (!context.saveSettings()) SDL_Log("Failed to save replay preferences");
+  };
   callbacks.loadRecords = [this](const ChartMetaRecord &record) {
     return loadRecordsForSelector(record);
   };
