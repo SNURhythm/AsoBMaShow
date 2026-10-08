@@ -1,6 +1,8 @@
 #pragma once
 
+#include "ApplicationUiState.h"
 #include "DifficultyTableModel.h"
+#include "DifficultyTableDefaults.h"
 #include "repositories/ChartRepository.h"
 
 #include <filesystem>
@@ -36,6 +38,12 @@ public:
   // Offline first-launch fallback. Existing sources always take precedence.
   int SeedBundledDefaults(
       ChartRepository::Session &session,
+      const std::string &assetPath = "assets/difficulty-tables/defaults.json",
+      const std::vector<std::string> &sourceUrls = {});
+
+  // Returns true when shared seed state changed and should be persisted.
+  bool SeedBundledDefaultsForApplication(
+      ChartRepository::Session &session, ApplicationUiState &state,
       const std::string &assetPath = "assets/difficulty-tables/defaults.json");
 
   bool ImportFromUrl(

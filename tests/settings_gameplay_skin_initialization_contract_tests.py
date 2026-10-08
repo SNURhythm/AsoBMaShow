@@ -83,6 +83,131 @@ int main() {
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_scratchless_skin_callbacks_keep_mode_and_multiple_tables_independent(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneControls.cpp").read_text()
+        controls = extract(source, "void SettingsScene::appendScratchlessModeSettings(")
+        mode_callback = extract(controls, "[this, keyMode](const std::string &id)")
+        table_callback = extract(controls, "[this, keyMode, url = table.sourceUrl, content]()")
+        fixture = r'''
+#include "AppSettings.h"
+#include <algorithm>
+#include <cassert>
+#include <functional>
+#include <string>
+#include <vector>
+struct Checkbox {
+  bool checked = false;
+  void setChecked(bool value) { checked = value; }
+};
+struct Table { std::string sourceUrl; };
+struct SettingsScene {
+  struct { AppSettings settings; } context;
+  int lastLayoutWidth = 100;
+  int saves = 0;
+  void persistSettings() { ++saves; }
+  std::function<void(const std::string &)> modeCallback(int keyMode) {
+    return MODE_CALLBACK;
+  }
+  std::function<void()> tableCallback(int keyMode, const Table &table, Checkbox *content) {
+    return TABLE_CALLBACK;
+  }
+};
+int main() {
+  SettingsScene scene;
+  const auto original5 = scene.context.settings.scratchless5K;
+  const auto original7 = scene.context.settings.scratchless7K;
+  auto mode5 = scene.modeCallback(-5);
+  auto mode7 = scene.modeCallback(-7);
+  mode5("0");
+  mode7("1");
+  assert(scene.context.settings.scratchless5K.mode == AppSettings::ScratchlessMode::Disabled);
+  assert(scene.context.settings.scratchless7K.mode == AppSettings::ScratchlessMode::Enabled);
+  assert(scene.lastLayoutWidth == -1);
+  mode5("2");
+  assert(scene.context.settings.scratchless7K.mode == AppSettings::ScratchlessMode::Enabled);
+  Checkbox add7To5, extra5, remove7;
+  auto add7 = scene.tableCallback(-5, {original7.tableUrls.front()}, &add7To5);
+  auto addExtra = scene.tableCallback(-5, {"https://example.com/another.json"}, &extra5);
+  auto toggle7 = scene.tableCallback(-7, {original7.tableUrls.front()}, &remove7);
+  add7();
+  addExtra();
+  assert(add7To5.checked && extra5.checked);
+  assert(scene.context.settings.scratchless5K.tableUrls.size() == 3);
+  assert(scene.context.settings.scratchless7K.tableUrls == original7.tableUrls);
+  toggle7();
+  assert(!remove7.checked && scene.context.settings.scratchless7K.tableUrls.empty());
+  assert(scene.context.settings.scratchless5K.tableUrls.size() == 3);
+  add7();
+  assert(!add7To5.checked && extra5.checked);
+  assert(scene.context.settings.scratchless5K.tableUrls ==
+         (std::vector<std::string>{original5.tableUrls.front(), "https://example.com/another.json"}));
+  assert(scene.saves == 7);
+}
+'''
+        fixture = fixture.replace("MODE_CALLBACK", mode_callback).replace("TABLE_CALLBACK", table_callback)
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source_path = directory / "scratchless_skin_callbacks.cpp"
+            source_path.write_text(fixture)
+            binary = directory / ("scratchless_skin_callbacks" + compiler.executable_suffix)
+            compiler.build([source_path, ROOT / "src/settings/AudioVideoSettings.cpp"], binary,
+                           directory, includes=[ROOT / "src"])
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_open_skins_tab_refreshes_table_choices_on_library_changes(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneTables.cpp").read_text()
+        refresh = extract(source, "void SettingsScene::refreshTablesIfLibraryChanged()")
+        fixture = r'''
+#include <cassert>
+#include <cstdint>
+#include <string>
+#include <vector>
+enum class SettingsTab { GameplaySkins, DifficultyTables, BmsLibrary, Misc };
+struct Repository {
+  std::uint64_t revision = 0;
+  std::vector<std::string> tables;
+  std::uint64_t GetLibraryRevision() { return revision; }
+};
+struct SettingsScene {
+  struct { Repository chartRepository; } context;
+  SettingsTab activeTab = SettingsTab::GameplaySkins;
+  std::uint64_t observedLibraryRevision = 0;
+  int lastLayoutWidth = 800;
+  std::vector<std::string> difficultyTables;
+  void loadDifficultyTables() { difficultyTables = context.chartRepository.tables; }
+  void loadChartEntries() {}
+  void refreshChartEntryBackupStatuses() {}
+  void refreshTablesIfLibraryChanged();
+};
+REFRESH_METHOD
+int main() {
+  SettingsScene scene;
+  scene.context.chartRepository.tables = {"new table"};
+  scene.context.chartRepository.revision = 1;
+  scene.refreshTablesIfLibraryChanged();
+  assert(scene.difficultyTables == std::vector<std::string>{"new table"});
+  assert(scene.lastLayoutWidth == -1);
+  scene.lastLayoutWidth = 800;
+  scene.refreshTablesIfLibraryChanged();
+  assert(scene.lastLayoutWidth == 800);
+  scene.context.chartRepository.tables.clear();
+  scene.context.chartRepository.revision = 2;
+  scene.refreshTablesIfLibraryChanged();
+  assert(scene.difficultyTables.empty() && scene.lastLayoutWidth == -1);
+}
+'''
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source_path = directory / "scratchless_table_refresh.cpp"
+            source_path.write_text(fixture.replace("REFRESH_METHOD", refresh))
+            binary = directory / ("scratchless_table_refresh" + compiler.executable_suffix)
+            compiler.build([source_path], binary, directory)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_retained_gameplay_skins_tab_refreshes_before_first_layout(self) -> None:
         source = (ROOT / "src/scene/SettingsScene.cpp").read_text(encoding="utf-8")
         init = re.search(

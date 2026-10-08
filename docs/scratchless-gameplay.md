@@ -1,9 +1,27 @@
 # Scratchless 5K and 7K
 
 Skin settings distinguish **5K / 7K** from the original **5K1S / 7K1S** modes
-(`S` means scratch). A single-play 5- or 7-key chart with no scratch content
-uses the corresponding scratchless skin selection. Normal scratches, long
-scratches, invisible scratch keysounds, and scratch mines prevent this switch.
+(`S` means scratch). Settings → Skins → **5K** or **7K** includes a
+**Scratchless mode** preference for that mode. Each independently controls
+when a chart without scratch content uses its skin and input settings:
+
+- **Disabled**: always use 5K1S / 7K1S, including charts with no scratches.
+- **Enabled**: use 5K / 7K for every eligible chart.
+- **Enabled for selected difficulty tables** (default): select any number of
+  installed tables using independent checkboxes. A chart qualifies when its
+  MD5 or SHA-256 belongs to any selected table, regardless of which folder it
+  was launched from. Both **5KEYS AERY** and **7KEYS AERY** are selected by
+  default for their respective modes: 5K selects only Aery 5K, and 7K selects
+  only Aery 7K. Selecting no tables disables automatic scratchless selection
+  for that mode.
+
+Each mode’s policy and table selections are saved independently per player.
+The controls are available with Built-in, Follow, and imported skins. Live play, retries,
+replay viewing, and replay video exports use the same policy. Layout previews
+still allow editing either mode directly.
+
+For all enabled modes, normal scratches, long scratches, invisible scratch
+keysounds, and scratch mines prevent this switch.
 Play modifiers are checked against the resulting chart, too.
 
 Each scratchless skin dropdown offers:

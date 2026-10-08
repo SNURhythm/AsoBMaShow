@@ -415,6 +415,24 @@ public:
       "RIVAL_NEXT_1", "RIVAL_NEXT_2", "RIVAL_NEXT_3"};
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+  enum class ScratchlessMode { Disabled = 0, Enabled = 1, SelectedTables = 2 };
+  struct ScratchlessSettings {
+    ScratchlessMode mode = ScratchlessMode::SelectedTables;
+    std::vector<std::string> tableUrls;
+    bool operator==(const ScratchlessSettings &) const = default;
+  };
+  ScratchlessSettings scratchless5K{
+      .tableUrls = {"https://asumatoki.kr/table/aery/header.json"}};
+  ScratchlessSettings scratchless7K{
+      .tableUrls = {"https://asumatoki.kr/table/aery7/header.json"}};
+  [[nodiscard]] const ScratchlessSettings &scratchlessForKeyMode(int keyMode) const {
+    return keyMode == 5 || keyMode == -5 ? scratchless5K : scratchless7K;
+  }
+  [[nodiscard]] ScratchlessSettings &scratchlessForKeyMode(int keyMode) {
+    return keyMode == 5 || keyMode == -5 ? scratchless5K : scratchless7K;
+  }
+  // Legacy profile-scoped markers, read only to migrate to application state.
+  bool aeryDifficultyTablesSeeded = false;
   bool defaultDifficultyTablesSeeded = false;
   std::map<std::string, ir::IrProviderSettings> irProviders = {
       {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},

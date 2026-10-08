@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile GamePlayScene with Lua gameplay skins disabled."""
+"""Compile gameplay and its settings with Lua gameplay skins disabled."""
 
 import argparse
 import json
@@ -76,29 +76,23 @@ def main() -> int:
     arguments = parser.parse_args()
     database_path = arguments.build_dir / "compile_commands.json"
     database = json.loads(database_path.read_text(encoding="utf-8"))
-    matches = [
-        entry
-        for entry in database
-        if Path(entry["file"]).as_posix().endswith(SOURCE_SUFFIX)
-    ]
-    if len(matches) != 1:
-        print(
-            f"error: expected one GamePlayScene compile command, found {len(matches)}",
-            file=sys.stderr,
-        )
-        return 1
-    entry = matches[0]
-    command = syntax_only(feature_off(compile_arguments(entry)))
-    result = subprocess.run(
-        command,
-        cwd=entry["directory"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        sys.stderr.write(result.stdout)
-        sys.stderr.write(result.stderr)
-    return result.returncode
+    for source in (SOURCE_SUFFIX, "src/scene/SettingsSceneControls.cpp",
+                   "src/scene/SettingsSceneSkins.cpp", "src/scene/SettingsSceneSkinsUnavailable.cpp"):
+        matches = [entry for entry in database
+                   if Path(entry["file"]).as_posix().endswith(source)]
+        if len(matches) != 1:
+            print(f"error: expected one {source} compile command, found {len(matches)}",
+                  file=sys.stderr)
+            return 1
+        entry = matches[0]
+        command = syntax_only(feature_off(compile_arguments(entry)))
+        result = subprocess.run(command, cwd=entry["directory"],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            sys.stderr.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            return result.returncode
+    return 0
 
 
 if __name__ == "__main__":

@@ -20,17 +20,6 @@
 
 namespace chart_library_tasks {
 
-namespace {
-constexpr const char *kDefaultDifficultyTableUrls[] = {
-    "https://rattoto10.jounin.jp/table.html",
-    "https://rattoto10.jounin.jp/table_insane.html",
-    "https://miraiscarlet.github.io/bms/table/genocide_normal/normal_bms.html",
-    "https://miraiscarlet.github.io/bms/table/genocide_insane/insane_bms.html",
-    "https://stellabms.xyz/sl/table.html",
-    "https://stellabms.xyz/st/table.html",
-};
-} // namespace
-
 ChartLibraryOperations::ChartLibraryOperations(
     ChartLibraryOperationsDependencies dependencies)
     : dependencies_(std::move(dependencies)) {
@@ -394,21 +383,16 @@ bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     ChartRepository::Session &session, const std::stop_token &stopToken,
     const TaskProgressCallback &progress,
     const TaskPauseCallback &waitForResume) {
-  if ((dependencies_.defaultDifficultyTablesSeeded &&
-       dependencies_.defaultDifficultyTablesSeeded()) ||
+  const int completedRevision = dependencies_.onlineDifficultyTablesRevision
+      ? dependencies_.onlineDifficultyTablesRevision() : 0;
+  if (completedRevision >= difficulty_table::kBundledSeedRevision ||
       stopToken.stop_requested()) {
     return true;
   }
 
-  constexpr int totalTables =
-      static_cast<int>(sizeof(kDefaultDifficultyTableUrls) /
-                       sizeof(kDefaultDifficultyTableUrls[0]));
   int successfulTables = 0;
-  bool allSucceeded = true;
   bool interrupted = false;
   const DifficultyTableImportCheckpoint checkpoint = [&] {
-    // Non-blocking pause probe: abort to Paused when gameplay pauses instead
-    // of blocking this thread in waitForResume until gameplay ends.
     if (stopToken.stop_requested() ||
         (dependencies_.pauseRequested && dependencies_.pauseRequested())) {
       interrupted = true;
@@ -420,48 +404,53 @@ bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     return stopToken.stop_requested() ||
            (dependencies_.pauseRequested && dependencies_.pauseRequested());
   };
-  for (int i = 0; i < totalTables; ++i) {
-    if (!checkpoint()) {
-      return false;
+  for (int revision = completedRevision + 1;
+       revision <= difficulty_table::kBundledSeedRevision; ++revision) {
+    std::vector<const char *> sources;
+    for (const auto &source : difficulty_table::kDefaultSources) {
+      if (source.seedRevision == revision) sources.push_back(source.url);
     }
-    const char *url = kDefaultDifficultyTableUrls[i];
-    progress({.current = i,
-              .total = totalTables,
-              .stage = ChartScanProgressStage::Preparing},
-             i18n::message("library.tasks.adding_default_tables"));
-    std::string errorMessage;
-    const bool ok = dependencies_.importDifficultyTableFromUrl(
-        session, url, &errorMessage,
-        [&progress, i, totalTables,
-         url](const DifficultyTableImportProgress &value) {
-          const std::string detail = value.tableName.empty()
-                                         ? std::string(url)
-                                         : value.tableName;
-          progress({.current = i + (value.current > 0 ? 1 : 0),
-                    .total = totalTables,
-                    .stage = ChartScanProgressStage::Preparing},
-                   i18n::message("library.tasks.adding_default_table", {{"name", detail}}));
-        },
-        checkpoint, pauseRequested);
-    if (interrupted || stopToken.stop_requested()) {
-      return false;
+    if (sources.empty()) break;
+    bool allSucceeded = true;
+    const int totalTables = static_cast<int>(sources.size());
+    for (int i = 0; i < totalTables; ++i) {
+      if (!checkpoint()) return false;
+      const char *url = sources[i];
+      progress({.current = i,
+                .total = totalTables,
+                .stage = ChartScanProgressStage::Preparing},
+               i18n::message("library.tasks.adding_default_tables"));
+      std::string errorMessage;
+      const bool ok = dependencies_.importDifficultyTableFromUrl(
+          session, url, &errorMessage,
+          [&progress, i, totalTables,
+           url](const DifficultyTableImportProgress &value) {
+            const std::string detail = value.tableName.empty()
+                                           ? std::string(url)
+                                           : value.tableName;
+            progress({.current = i + (value.current > 0 ? 1 : 0),
+                      .total = totalTables,
+                      .stage = ChartScanProgressStage::Preparing},
+                     i18n::message("library.tasks.adding_default_table", {{"name", detail}}));
+          },
+          checkpoint, pauseRequested);
+      if (interrupted || stopToken.stop_requested()) return false;
+      if (ok) {
+        ++successfulTables;
+      } else {
+        allSucceeded = false;
+        SDL_Log("Failed to import default difficulty table %s: %s", url,
+                errorMessage.empty() ? "unknown error" : errorMessage.c_str());
+      }
     }
-    if (ok) {
-      ++successfulTables;
-    } else {
-      allSucceeded = false;
-      SDL_Log("Failed to import default difficulty table %s: %s", url,
-              errorMessage.empty() ? "unknown error" : errorMessage.c_str());
-    }
-  }
-
-  if (interrupted || stopToken.stop_requested()) {
-    return false;
-  }
-  if (allSucceeded && dependencies_.setDefaultDifficultyTablesSeeded) {
-    dependencies_.setDefaultDifficultyTablesSeeded(true);
-    if (dependencies_.saveSettings && !dependencies_.saveSettings()) {
-      SDL_Log("Failed to save default difficulty table seed setting");
+    if (!allSucceeded) break;
+    if (dependencies_.setOnlineDifficultyTablesRevision) {
+      dependencies_.setOnlineDifficultyTablesRevision(revision);
+      if (dependencies_.saveSettings && !dependencies_.saveSettings()) {
+        dependencies_.setOnlineDifficultyTablesRevision(revision - 1);
+        SDL_Log("Failed to save default difficulty table seed revision");
+        break;
+      }
     }
   }
   if (successfulTables > 0 && dependencies_.requestReload) {

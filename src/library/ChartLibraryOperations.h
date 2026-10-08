@@ -13,8 +13,8 @@ namespace chart_library_tasks {
 struct ChartLibraryOperationsDependencies {
   ChartRepository &repository;
   std::filesystem::path tablesDirectory;
-  std::function<bool()> defaultDifficultyTablesSeeded;
-  std::function<void(bool)> setDefaultDifficultyTablesSeeded;
+  std::function<int()> onlineDifficultyTablesRevision;
+  std::function<void(int)> setOnlineDifficultyTablesRevision;
   std::function<bool()> saveSettings;
   std::function<void(bool includeFolders)> requestReload;
   std::function<bool()> pauseRequested;

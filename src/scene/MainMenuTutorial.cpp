@@ -18,9 +18,14 @@ void MainMenuScene::buildTutorial() {
   tutorial_ = new NewcomerTutorialView({
       .saveLanguage = [this](const std::string &language) {
         auto &preference = context.applicationUiState.language;
-        const auto previous = preference;
-        preference = language;
+        std::string previous;
+        {
+          std::lock_guard lock(context.applicationUiStateMutex);
+          previous = preference;
+          preference = language;
+        }
         if (!context.saveApplicationUiState()) {
+          std::lock_guard lock(context.applicationUiStateMutex);
           preference = previous;
           return false;
         }
@@ -30,9 +35,14 @@ void MainMenuScene::buildTutorial() {
       },
       .complete = [this] {
         auto &completed = context.applicationUiState.newcomerTutorialCompleted;
-        const bool previous = completed;
-        completed = true;
+        bool previous;
+        {
+          std::lock_guard lock(context.applicationUiStateMutex);
+          previous = completed;
+          completed = true;
+        }
         if (!context.saveApplicationUiState()) {
+          std::lock_guard lock(context.applicationUiStateMutex);
           completed = previous;
           return false;
         }

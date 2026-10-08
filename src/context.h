@@ -601,6 +601,29 @@ public:
       return;
     }
 
+    // Tables belong to the shared chart database. Migrate evidence from every
+    // profile, including an inactive profile whose user already deleted a table.
+    const auto previousApplicationState = applicationUiState;
+    if (applicationUiStateLoadResult.status != ApplicationUiStateLoadStatus::FutureVersion &&
+        (applicationUiState.onlineDifficultyTablesRevision < difficulty_table::kBundledSeedRevision ||
+         applicationUiState.bundledDifficultyTablesRevision < difficulty_table::kBundledSeedRevision)) {
+      for (const auto &profile : profileManager.listProfiles()) {
+        const auto loaded = AppSettingsStore::Load(
+            profileManager.pathsFor(profile.id).settingsJson);
+        if (loaded.status != AppSettingsLoadStatus::Loaded) continue;
+        applicationUiState.onlineDifficultyTablesRevision = std::max(
+            applicationUiState.onlineDifficultyTablesRevision,
+            loaded.settings.defaultDifficultyTablesSeeded ? 1 : 0);
+        applicationUiState.bundledDifficultyTablesRevision = std::max(
+            applicationUiState.bundledDifficultyTablesRevision,
+            loaded.settings.aeryDifficultyTablesSeeded ? 2
+                : loaded.settings.defaultDifficultyTablesSeeded ? 1 : 0);
+      }
+      if (applicationUiState != previousApplicationState) {
+        saveApplicationUiState();
+      }
+    }
+
     retryPendingIrCredentialCleanup();
 
     inputDeviceRegistry.configureGyroscopeTurntable(
@@ -617,12 +640,19 @@ public:
             chart_library_tasks::ChartLibraryOperationsDependencies{
                 .repository = chartRepository,
                 .tablesDirectory = Utils::GetDocumentsPath("tables"),
-                .defaultDifficultyTablesSeeded =
-                    [this] { return settings.defaultDifficultyTablesSeeded; },
-                .setDefaultDifficultyTablesSeeded = [this](bool seeded) {
-                  settings.defaultDifficultyTablesSeeded = seeded;
+                .onlineDifficultyTablesRevision = [this] {
+                  std::lock_guard lock(applicationUiStateMutex);
+                  // A newer state may already record completion we cannot read.
+                  if (applicationUiStateLoadResult.status == ApplicationUiStateLoadStatus::FutureVersion) {
+                    return difficulty_table::kBundledSeedRevision;
+                  }
+                  return applicationUiState.onlineDifficultyTablesRevision;
                 },
-                .saveSettings = [this] { return saveSettings(); },
+                .setOnlineDifficultyTablesRevision = [this](int revision) {
+                  std::lock_guard lock(applicationUiStateMutex);
+                  applicationUiState.onlineDifficultyTablesRevision = revision;
+                },
+                .saveSettings = [this] { return saveApplicationUiState(); },
                 .requestReload = [this](bool includeFolders) {
                   if (includeFolders) {
                     chartLibraryFoldersReloadRequested = true;

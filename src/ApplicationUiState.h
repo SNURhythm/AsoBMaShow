@@ -18,6 +18,8 @@ struct ApplicationUiState {
   MusicSelectToolbarState musicSelectToolbar;
   std::string language = "system";
   bool newcomerTutorialCompleted = false;
+  int onlineDifficultyTablesRevision = 0;
+  int bundledDifficultyTablesRevision = 0;
 
   bool operator==(const ApplicationUiState &) const = default;
 };

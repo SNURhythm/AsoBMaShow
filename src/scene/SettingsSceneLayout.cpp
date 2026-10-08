@@ -2323,11 +2323,16 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
       {.onOptionSelectedResult =
            [this, languageStatus](const std::string &id) {
              auto &preference = context.applicationUiState.language;
-             const auto previous = preference;
-             preference = id;
+             std::string previous;
+             {
+               std::lock_guard lock(context.applicationUiStateMutex);
+               previous = preference;
+               preference = id;
+             }
              std::string error;
              const bool saved = context.saveApplicationUiState(&error);
              if (!saved) {
+               std::lock_guard lock(context.applicationUiStateMutex);
                preference = previous;
              } else {
                i18n::initializePlatformLanguage(id);

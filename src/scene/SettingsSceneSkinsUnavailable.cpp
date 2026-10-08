@@ -24,6 +24,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       metrics.smallTextSize, ui_theme::textMuted()));
   column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability.label"), body,
                            metrics.modeCardHeight, metrics.cardsWidth));
+  appendScratchlessFallbackSettings(column, metrics);
   return column;
 }
 

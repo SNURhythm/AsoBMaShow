@@ -54,6 +54,8 @@ struct PlayfieldFrameClock {
 };
 
 struct PlayfieldPresentationConfig {
+  // Resolved settings/input identity; zero means the caller has not resolved it.
+  int presentationKeyMode = 0;
   // Beatoraja PlayConfig.duration, retained without a green-number round trip.
   int visibleTimeDurationMilliseconds = 667;
   // Live LaneRenderer.getHispeed() state. An engaged value, including zero,

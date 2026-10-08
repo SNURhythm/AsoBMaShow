@@ -1,4 +1,5 @@
 #include "../src/repositories/ChartRepository.h"
+#include "../src/ScratchlessGameplayPolicy.h"
 #include "../src/LongNoteModeUtils.h"
 #include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/repositories/ScoreCacheQueries.h"
@@ -4135,7 +4136,139 @@ void testSearchStatisticsAvoidRichRowsAndAutoplayKeepsRawMatches() {
   }
 }
 
+void testScratchlessTableMembership() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  assert(repository.EnsureReady());
+  AppSettings settings;
+  difficulty_table::Document table;
+  table.name = "Aery fixture";
+  table.symbol = "A";
+  table.sourceUrl = settings.scratchless5K.tableUrls.front();
+  table.charts = {{.level = "1", .md5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                  {.level = "2", .sha256 = std::string(64, 'b')}};
+  {
+    auto session = repository.OpenSession();
+    assert(session && session->ReplaceDifficultyTable(table));
+  }
+  for (int mode : {5, 7}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = mode;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    chart.Meta.MD5 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    assert(gameplay::presentationKeyMode(chart, settings, repository) ==
+           (mode == 5 ? -mode : mode));
+    if (mode == 7) settings.scratchless7K.tableUrls.push_back(table.sourceUrl);
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
+    chart.Meta.MD5.clear();
+    chart.Meta.SHA256 = std::string(64, 'B');
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
+    chart.Meta.TotalScratchNotes = 1;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    chart.Meta.TotalScratchNotes = 0;
+    auto *measure = new bms_parser::Measure;
+    auto *timeline = new bms_parser::TimeLine(16, false);
+    timeline->SetInvisibleNote(7, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    delete timeline->InvisibleNotes[7];
+    timeline->InvisibleNotes[7] = nullptr;
+    chart.Meta.IsDP = true;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    chart.Meta.IsDP = false;
+    settings.scratchlessForKeyMode(mode).mode = AppSettings::ScratchlessMode::Disabled;
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    settings.scratchlessForKeyMode(mode).mode = AppSettings::ScratchlessMode::Enabled;
+    chart.Meta.SHA256.clear();
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
+    settings.scratchlessForKeyMode(mode).mode = AppSettings::ScratchlessMode::SelectedTables;
+  }
+  auto session = repository.OpenSession();
+  bms_parser::ChartMeta meta;
+  assert(session->DifficultyTableSourcesForChart(meta).empty());
+  meta.MD5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  assert(session->DifficultyTableSourcesForChart(meta) ==
+         std::vector<std::string>{table.sourceUrl});
+  table.name = "Second table";
+  table.sourceUrl = "https://example.com/second.json";
+  assert(session->ReplaceDifficultyTable(table));
+  assert(session->DifficultyTableSourcesForChart(meta).size() == 2);
+  table.charts.clear();
+  assert(session->ReplaceDifficultyTable(table));
+  assert(session->DifficultyTableSourcesForChart(meta).size() == 1);
+  for (const auto &installed : session->SelectDifficultyTables())
+    assert(session->DeleteDifficultyTable(installed.id));
+  assert(session->DifficultyTableSourcesForChart(meta).empty());
+}
+
+void testScratchlessCourseOnlyMembership() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  assert(repository.EnsureReady());
+  AppSettings settings;
+  difficulty_table::Document table;
+  table.name = "Course-only scratchless fixture";
+  table.symbol = "C";
+  table.sourceUrl = settings.scratchless5K.tableUrls.front();
+  const std::string md5(32, 'c');
+  const std::string sha256(64, 'd');
+  table.courses = {{.name = "Grade", .charts = {{.md5 = md5}, {.sha256 = sha256}}}};
+  {
+    auto session = repository.OpenSession();
+    assert(session && session->ReplaceDifficultyTable(table));
+    bms_parser::ChartMeta meta;
+    meta.MD5 = md5;
+    assert(session->DifficultyTableSourcesForChart(meta) ==
+           std::vector<std::string>{table.sourceUrl});
+    meta.MD5.clear();
+    meta.SHA256 = sha256;
+    assert(session->DifficultyTableSourcesForChart(meta) ==
+           std::vector<std::string>{table.sourceUrl});
+  }
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.MD5 = md5;
+  assert(gameplay::presentationKeyMode(chart, settings, repository) == -5);
+  auto session = repository.OpenSession();
+  table.charts = {{.md5 = md5}, {.sha256 = sha256}};
+  assert(session->ReplaceDifficultyTable(table));
+  assert(session->DifficultyTableSourcesForChart(chart.Meta).size() == 1);
+  assert(session->DeleteDifficultyTable(session->SelectDifficultyTables().front().id));
+  assert(session->DifficultyTableSourcesForChart(chart.Meta).empty());
+}
+
+void testScratchlessMembershipWhileAnotherConnectionWrites() {
+  TempDirectory temp;
+  const auto path = temp.path() / "chart.db";
+  ChartRepository repository(path);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  difficulty_table::Document table;
+  table.name = "Concurrent membership";
+  table.symbol = "C";
+  table.sourceUrl = "https://example.test/table.json";
+  const std::string md5(32, 'e');
+  table.charts = {{.md5 = md5}};
+  table.courses = {{.name = "Grade", .charts = {{.md5 = md5}}}};
+  assert(session->ReplaceDifficultyTable(table));
+  auto writer = openDatabase(path);
+  assert(writer);
+  // Pending course metadata repair must not turn a membership read into a write.
+  assert(execute(writer.get(), "UPDATE difficulty_courses SET course_key = ''"));
+  assert(execute(writer.get(), "BEGIN IMMEDIATE"));
+  bms_parser::ChartMeta meta;
+  meta.MD5 = md5;
+  assert(session->DifficultyTableSourcesForChart(meta) ==
+         std::vector<std::string>{table.sourceUrl});
+  assert(execute(writer.get(), "ROLLBACK"));
+}
+
 int main(int argc, char **argv) {
+  testScratchlessCourseOnlyMembership();
+  testScratchlessMembershipWhileAnotherConnectionWrites();
+  testScratchlessTableMembership();
   if (argc > 1) {
     try {
       if (argc == 2 && std::string_view(argv[1]) == "--search-paging-tests") {

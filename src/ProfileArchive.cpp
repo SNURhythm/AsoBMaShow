@@ -2077,6 +2077,23 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
                                     errorMessage)
                 : AppSettingsStore::Save(staging.settingsJson,
                                          loadedSettings.settings, errorMessage);
+        // Portable profiles cannot establish seeding history for this device's
+        // shared chart database. Keep all unrelated current-schema JSON intact.
+        if (settingsWritten &&
+            (loadedSettings.settings.defaultDifficultyTablesSeeded ||
+             loadedSettings.settings.aeryDifficultyTablesSeeded)) {
+          const auto bytes = readMetadataFile(staging.settingsJson, errorMessage);
+          if (!bytes) return false;
+          auto document = Json::parse(*bytes, nullptr, false);
+          if (!document.is_object()) {
+            errorMessage = "unable to sanitize imported settings";
+            return false;
+          }
+          document.erase("defaultDifficultyTablesSeeded");
+          document.erase("aeryDifficultyTablesSeeded");
+          if (!writeTextFile(staging.settingsJson, document.dump(2) + "\n",
+                             errorMessage)) return false;
+        }
         const bool inputWritten =
             validated.manifest->inputSchemaVersion ==
                     InputProfile::kSchemaVersion

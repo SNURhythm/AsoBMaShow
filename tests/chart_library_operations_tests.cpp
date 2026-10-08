@@ -145,8 +145,8 @@ dependencies(ChartRepository &repository, const std::filesystem::path &root,
   return {
       .repository = repository,
       .tablesDirectory = root / "tables",
-      .defaultDifficultyTablesSeeded = [] { return true; },
-      .setDefaultDifficultyTablesSeeded = [](bool) {},
+      .onlineDifficultyTablesRevision = [] { return 2; },
+      .setOnlineDifficultyTablesRevision = [](int) {},
       .saveSettings = [] { return true; },
       .pauseRequested = std::move(pauseProbe),
       .requestReload = [&](bool includeFolders) {
@@ -856,12 +856,12 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
   ChartRepository repository(temporary.path() / "chart.db");
   expect(repository.EnsureReady(), "table seed repository is ready");
   bool reloadRequested = false;
-  bool seeded = false;
+  int seeded = 0;
   int saveCalls = 0;
   std::vector<std::string> importedUrls;
   auto deps = dependencies(repository, temporary.path(), reloadRequested);
-  deps.defaultDifficultyTablesSeeded = [&] { return seeded; };
-  deps.setDefaultDifficultyTablesSeeded = [&](bool value) { seeded = value; };
+  deps.onlineDifficultyTablesRevision = [&] { return seeded; };
+  deps.setOnlineDifficultyTablesRevision = [&](int value) { seeded = value; };
   deps.saveSettings = [&] {
     ++saveCalls;
     return true;
@@ -894,16 +894,72 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
       "https://miraiscarlet.github.io/bms/table/genocide_insane/insane_bms.html",
       "https://stellabms.xyz/sl/table.html",
       "https://stellabms.xyz/st/table.html",
+      "https://asumatoki.kr/table/aery/header.json",
+      "https://asumatoki.kr/table/aery7/header.json",
   };
   expect(result.disposition ==
              chart_library_tasks::TaskRunDisposition::Complete,
          "refresh completes after default table seeding");
   expect(importedUrls == expectedUrls,
          "refresh imports the exact default table URLs in order");
-  expect(seeded, "all successful default imports persist the seeded flag");
-  expect(saveCalls == 1, "successful default imports save settings once");
+  expect(seeded == 2, "all successful default imports persist the online revision");
+  expect(saveCalls == 2, "successful default imports save each completed revision");
   expect(reloadRequested,
          "successful default table imports request selector reload");
+}
+
+void testRefreshUpgradesOnlineDefaultsWithoutReimportingOldSources() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "online upgrade repository is ready");
+  bool reloadRequested = false;
+  int revision = 1;
+  bool failDownload = true;
+  bool failSave = false;
+  std::vector<std::string> importedUrls;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.onlineDifficultyTablesRevision = [&] { return revision; };
+  deps.setOnlineDifficultyTablesRevision = [&](int value) { revision = value; };
+  deps.saveSettings = [&] { return !failSave; };
+  deps.importDifficultyTableFromUrl =
+      [&](ChartRepository::Session &, const std::string &url,
+          std::string *, DifficultyTableImportProgressCallback,
+          const DifficultyTableImportCheckpoint &,
+          const DifficultyTableImportPauseProbe &) {
+        importedUrls.push_back(url);
+        return !failDownload || !url.contains("aery7");
+      };
+  deps.importDifficultyTablesFromDirectory =
+      [](ChartRepository::Session &, const std::filesystem::path &,
+         const DifficultyTableImportCheckpoint &) { return 0; };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+  const auto run = [&] {
+    return operations.run(
+        {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+         .title = "Refresh Library"},
+        std::stop_token{}, [](const ChartScanProgress &, const i18n::Text &) {},
+        [] { return true; });
+  };
+  run();
+  expect(importedUrls == std::vector<std::string>{
+             "https://asumatoki.kr/table/aery/header.json",
+             "https://asumatoki.kr/table/aery7/header.json"},
+         "revision-1 installations fetch only the revision-2 sources");
+  expect(revision == 1, "partial downloads retain the completed older revision");
+  importedUrls.clear();
+  failDownload = false;
+  failSave = true;
+  run();
+  expect(revision == 1, "failed persistence keeps the online upgrade pending");
+  expect(importedUrls.size() == 2, "retry does not download older sources");
+  importedUrls.clear();
+  failSave = false;
+  run();
+  expect(revision == 2 && importedUrls.size() == 2,
+         "successful retry records online revision 2");
+  importedUrls.clear();
+  run();
+  expect(importedUrls.empty(), "completed online revisions do not run again");
 }
 
 void testRefreshPausesInsideDefaultTableSeeding() {
@@ -911,14 +967,14 @@ void testRefreshPausesInsideDefaultTableSeeding() {
   ChartRepository repository(temporary.path() / "chart.db");
   expect(repository.EnsureReady(), "pausable table seed repository is ready");
   bool reloadRequested = false;
-  bool seeded = false;
+  int seeded = 0;
   bool gameplayPaused = false;
   int importCalls = 0;
   int saveCalls = 0;
   auto deps = dependencies(repository, temporary.path(), reloadRequested,
                            [&] { return gameplayPaused; });
-  deps.defaultDifficultyTablesSeeded = [&] { return seeded; };
-  deps.setDefaultDifficultyTablesSeeded = [&](bool value) { seeded = value; };
+  deps.onlineDifficultyTablesRevision = [&] { return seeded; };
+  deps.setOnlineDifficultyTablesRevision = [&](int value) { seeded = value; };
   deps.saveSettings = [&] {
     ++saveCalls;
     return true;
@@ -1259,6 +1315,7 @@ int main() {
   testPathRefreshReparsesSamePathAndFolderPreview();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
+  testRefreshUpgradesOnlineDefaultsWithoutReimportingOldSources();
   testRefreshPausesInsideDefaultTableSeeding();
   testRefreshPausesInsideLocalTableImport();
   testDifficultyTableUpdateUsesTheSharedTaskOperation();

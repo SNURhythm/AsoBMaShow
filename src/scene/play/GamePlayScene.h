@@ -57,6 +57,8 @@ public:
 private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
+  bool scratchlessAllowed = false;
+  [[nodiscard]] int presentationKeyMode() const;
   bool isGamePaused = false;
   bool escapeHandledByInputPipeline = false;
   bool profileGameplayBlockerActive = false;

@@ -215,7 +215,11 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
       *model, initialState, initialProjectionRequest(creation.configuration,
                                                      *renderer));
 
-  creation.skinInput.keyMode = gameplay::presentationKeyMode(creation.chart);
+  creation.skinInput.keyMode = creation.configuration.presentationKeyMode != 0
+      ? creation.configuration.presentationKeyMode
+      : gameplay::presentationKeyMode(creation.chart,
+          creation.settings.scratchlessForKeyMode(creation.chart.Meta.KeyMode).mode ==
+              AppSettings::ScratchlessMode::Enabled);
   creation.skinInput.chartModel = model.get();
   creation.skinInput.initialState = &initialState;
   creation.skinInput.initialProjection = &initialProjection;

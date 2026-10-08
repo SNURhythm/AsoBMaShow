@@ -50,7 +50,8 @@ replayGameplayPresentationConfig(const AppSettings &, float playAreaWidth,
                                  const CourseConstraintRules &constraints = {},
                                  const std::string &assistOption =
                                      assist_options::kOff,
-                                 const ReplayData *replay = nullptr)
+                                 const ReplayData *replay = nullptr,
+                                 int presentationKeyMode = 0)
     noexcept;
 
 // Export failures occur after BGA preparation but before either selected-skin

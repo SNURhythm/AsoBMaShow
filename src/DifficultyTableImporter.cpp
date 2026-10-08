@@ -1012,8 +1012,41 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
   return document;
 }
 
+bool DifficultyTableImporter::SeedBundledDefaultsForApplication(
+    ChartRepository::Session &session, ApplicationUiState &state,
+    const std::string &assetPath) {
+  const int previousRevision = state.bundledDifficultyTablesRevision;
+  // Successful online seeding also satisfies the offline fallback. Otherwise a
+  // previously unavailable snapshot could later restore deliberately deleted tables.
+  state.bundledDifficultyTablesRevision = std::max(
+      previousRevision, state.onlineDifficultyTablesRevision);
+  if (state.bundledDifficultyTablesRevision >= difficulty_table::kBundledSeedRevision) {
+    return state.bundledDifficultyTablesRevision != previousRevision;
+  }
+  for (int revision = state.bundledDifficultyTablesRevision + 1;
+       revision <= difficulty_table::kBundledSeedRevision; ++revision) {
+    std::vector<std::string> sources;
+    for (const auto &source : difficulty_table::kDefaultSources) {
+      if (source.seedRevision == revision) sources.emplace_back(source.url);
+    }
+    if (sources.empty()) break;
+    SeedBundledDefaults(session, assetPath, sources);
+    const auto installed = session.SelectDifficultyTables();
+    if (!std::ranges::all_of(sources, [&](const auto &source) {
+          return std::ranges::any_of(installed, [&](const auto &table) {
+            return table.sourceUrl == source;
+          });
+        })) {
+      break;
+    }
+    state.bundledDifficultyTablesRevision = revision;
+  }
+  return state.bundledDifficultyTablesRevision != previousRevision;
+}
+
 int DifficultyTableImporter::SeedBundledDefaults(
-    ChartRepository::Session &session, const std::string &assetPath) {
+    ChartRepository::Session &session, const std::string &assetPath,
+    const std::vector<std::string> &sourceUrls) {
   // SDL resolves packaged assets on Android and Apple platforms as well as
   // ordinary files on desktop. Never use the network for this fallback.
   std::size_t size = 0;
@@ -1038,7 +1071,9 @@ int DifficultyTableImporter::SeedBundledDefaults(
   for (const auto &table : snapshot["tables"]) {
     if (!table.is_object()) continue;
     const auto sourceUrl = jsonStringAt(table, "source_url");
-    if (sourceUrl.empty() || existingSources.contains(sourceUrl) ||
+    if ((!sourceUrls.empty() &&
+         std::find(sourceUrls.begin(), sourceUrls.end(), sourceUrl) == sourceUrls.end()) ||
+        sourceUrl.empty() || existingSources.contains(sourceUrl) ||
         !table.contains("header") || !table["header"].is_object() ||
         !table.contains("data") || !table["data"].is_array()) {
       continue;

@@ -184,6 +184,8 @@ class GamePlayScene {
 public:
   bms_parser::Chart ownedChart;
   bms_parser::Chart *chart = &ownedChart;
+  bool scratchlessAllowed = false;
+  int presentationKeyMode() const;
   std::unique_ptr<RhythmState> state;
   StartOptions options;
   struct {
@@ -1937,6 +1939,10 @@ void testRetryRefreshesIndependentInputScope() {
     scene.chart->Meta.TotalScratchNotes = 0;
     scene.chart->Meta.TotalBackSpinNotes = 0;
     scene.ownedInputHandler = std::make_unique<FixtureInput>();
+    scene.resetAttemptBoundaryForTest();
+    require(scene.ownedInputHandler->activeScopes == makeGameplayInputScopes(mode),
+            "disabled scratchless policy keeps canonical input bindings on retry");
+    scene.scratchlessAllowed = true;
     scene.resetAttemptBoundaryForTest();
     require(scene.ownedInputHandler->activeScopes == makeGameplayInputScopes(-mode),
             "actual retry boundary selects independent scratchless bindings");

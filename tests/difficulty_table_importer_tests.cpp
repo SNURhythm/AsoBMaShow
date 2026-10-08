@@ -654,12 +654,18 @@ void testPackagedDefaultsImportWithoutNetwork() {
     assert(false && "Bundled defaults must never access the network");
     return std::nullopt;
   });
-  assert(importer.SeedBundledDefaults(*session) == 6);
+  assert(importer.SeedBundledDefaults(*session) == 8);
   const auto tables = session->SelectDifficultyTables();
   for (const std::string kind : {"normal", "insane"}) {
     const std::string source =
         "https://miraiscarlet.github.io/bms/table/genocide_" + kind + "/" +
         kind + "_bms.html";
+    assert(std::any_of(tables.begin(), tables.end(), [&](const auto &table) {
+      return table.sourceUrl == source && table.chartCount > 0;
+    }));
+  }
+  for (const auto &source : {"https://asumatoki.kr/table/aery/header.json",
+                              "https://asumatoki.kr/table/aery7/header.json"}) {
     assert(std::any_of(tables.begin(), tables.end(), [&](const auto &table) {
       return table.sourceUrl == source && table.chartCount > 0;
     }));
@@ -670,6 +676,77 @@ void testPackagedDefaultsImportWithoutNetwork() {
     assert(table.chartCount > 0);
   }
   assert(importer.SeedBundledDefaults(*session) == 0);
+  for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
+  assert(importer.SeedBundledDefaults(*session, "assets/difficulty-tables/defaults.json",
+      {"https://asumatoki.kr/table/aery/header.json",
+       "https://asumatoki.kr/table/aery7/header.json"}) == 2);
+  assert(session->SelectDifficultyTables().size() == 2);
+}
+
+void testSharedSeedStatePreservesDeletedTables() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  ApplicationUiState applicationState;
+  applicationState.onlineDifficultyTablesRevision = 1;
+  applicationState.bundledDifficultyTablesRevision = 1;
+  DifficultyTableImporter importer;
+  {
+    auto session = repository.OpenSession();
+    assert(session);
+    assert(importer.SeedBundledDefaultsForApplication(*session, applicationState));
+    assert(applicationState.bundledDifficultyTablesRevision == 2);
+    const auto tables = session->SelectDifficultyTables();
+    assert(tables.size() == 2);
+    for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
+  }
+  // Reopening the shared database under another profile uses the same state.
+  auto session = repository.OpenSession();
+  assert(session);
+  assert(!importer.SeedBundledDefaultsForApplication(*session, applicationState));
+  assert(session->SelectDifficultyTables().empty());
+}
+
+void testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ApplicationUiState state;
+  DifficultyTableImporter importer;
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state, "missing.json"));
+  assert(state.bundledDifficultyTablesRevision == 0);
+  assert(importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(state.bundledDifficultyTablesRevision == 2);
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 8);
+  for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
+  // Offline snapshot completion is independent of the pending online refresh.
+  assert(state.onlineDifficultyTablesRevision == 0);
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(session->SelectDifficultyTables().empty());
+  state.bundledDifficultyTablesRevision = 7;
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(state.bundledDifficultyTablesRevision == 7);
+  assert(session->SelectDifficultyTables().empty());
+}
+
+void testCompletedOnlineRevisionPreventsBundledRestoration() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  // The snapshot was unavailable, online seeding succeeded, and the user
+  // subsequently deleted the tables before restarting with a valid snapshot.
+  ApplicationUiState state;
+  state.onlineDifficultyTablesRevision = 2;
+  DifficultyTableImporter importer;
+  assert(importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(state.bundledDifficultyTablesRevision == 2);
+  assert(session->SelectDifficultyTables().empty());
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
 }
 
 int main() {
@@ -677,6 +754,9 @@ int main() {
   testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson();
   testBundledDefaultsSurviveOfflineAndYieldToUpdates();
   testPackagedDefaultsImportWithoutNetwork();
+  testSharedSeedStatePreservesDeletedTables();
+  testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport();
+  testCompletedOnlineRevisionPreventsBundledRestoration();
 #if !defined(_WIN32)
   testDesktopDownloadsEnforceIncrementalResponseBudget();
 #endif

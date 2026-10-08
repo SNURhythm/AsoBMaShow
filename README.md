@@ -1,3 +1,6 @@
+# TestFlight is now available!
+[Join TestFlight](https://testflight.apple.com/join/D2UfeQVW) to get the latest beta version of AsoBMaShow for iOS.
+
 # AsoBMaShow
 ![iOS Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/mobile-beta-deploy.yml/badge.svg)
 ![Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/macos-build.yml/badge.svg)

@@ -1150,6 +1150,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     }
     column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability.label"), body,
                              metrics.modeCardHeight, metrics.cardsWidth));
+    appendScratchlessFallbackSettings(column, metrics);
     return column;
   }
 
@@ -1481,6 +1482,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   skinDropdownRow->addView(skinDropdownLabel);
   skinDropdownRow->addView(skinDropdown);
   traitPanel->addView(skinDropdownRow);
+  if (activeTrait->skinType == -5 || activeTrait->skinType == -7) {
+    appendScratchlessModeSettings(traitPanel, metrics, activeTrait->skinType,
+                                 ordinaryActionsEnabled);
+  }
   if (selection.hasSelectedEntry && selectedRow == nullptr) {
     traitPanel->addView(makeWrappedText(
         i18n::message("settings.skins.selection.missing_skin_notice"),
