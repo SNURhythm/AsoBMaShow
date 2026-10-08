@@ -52,7 +52,10 @@ member/total limits documented in `docs/find-bms-archive-limits.md`.
 Renderer order on Android is Vulkan first, then OpenGLES fallback. Package both
 `shaders/spirv` and `shaders/essl` into the APK.
 
-Build from the repository root with a configured Android SDK/NDK and `VCPKG_ROOT`:
+Build from the repository root with a configured Android SDK/NDK, `VCPKG_ROOT`,
+and Ninja on `PATH`. Gradle uses that Ninja executable, matching desktop builds
+and shell diagnostics instead of the SDK-bundled copy. Changing Ninja versions
+can require a one-time native rebuild.
 
 ```sh
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
