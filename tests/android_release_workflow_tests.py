@@ -209,7 +209,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         functions = self.deploy_script.split("variant_task_name() {", 1)[1]
         functions = "variant_task_name() {" + functions.split("run_gradle_build() {", 1)[0]
         command = (functions + '\nVARIANT="$1"\nANDROID_DIR="$2"\nAPK_PATH=""\n'
-                   'variant_task_name\nartifact_path_for_variant\n')
+                   'BUILD_BUNDLE=0\nvariant_task_name\nartifact_path_for_variant\n')
         for flavor in ("restricted_file_access", "all_file_access"):
             for build_type in ("Debug", "Release"):
                 with self.subTest(flavor=flavor, build_type=build_type):

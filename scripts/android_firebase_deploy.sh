@@ -7,6 +7,7 @@ ANDROID_DIR="${ROOT_DIR}/android"
 GRADLEW="${ROOT_DIR}/android/gradlew"
 REQUIRED_ANDROID_NDK_VERSION="28.2.13676358"
 BUILD_ONLY=0
+BUILD_BUNDLE=0
 SKIP_BUILD=0
 VARIANT="restricted_file_accessRelease"
 APK_PATH=""
@@ -28,12 +29,13 @@ usage() {
 Usage: scripts/android_firebase_deploy.sh [options]
 
 Builds the Android app and deploys the APK to Firebase App Distribution.
-With --build-only, runs a plain Gradle assemble task and skips upload.
+With --build-only, runs a plain Gradle assemble task (or bundle with --bundle) and skips upload.
 Secrets are read from the current environment or optional shell-compatible .env files.
 
 Options:
   --env-file PATH       Load an additional env file.
   --build-only          Build only; do not upload.
+  --bundle              Build an AAB instead of an APK; requires --build-only.
   --skip-build          Upload an existing APK from --apk.
   --variant NAME        Gradle build variant to assemble. Default: restricted_file_accessRelease.
   --apk PATH            APK to upload. Defaults to android/app/build/outputs/apk/<variant>/app-<variant>.apk.
@@ -72,6 +74,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --build-only)
       BUILD_ONLY=1
+      shift
+      ;;
+    --bundle)
+      BUILD_BUNDLE=1
       shift
       ;;
     --skip-build)
@@ -156,6 +162,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "${BUILD_BUNDLE}" -eq 1 ] && { [ "${BUILD_ONLY}" -ne 1 ] || [ "${SKIP_BUILD}" -eq 1 ]; }; then
+  echo "--bundle requires --build-only and cannot be combined with --skip-build." >&2
+  exit 2
+fi
 
 cleanup() {
   if [ -n "${SERVICE_CREDENTIALS_FILE}" ] && [ -f "${SERVICE_CREDENTIALS_FILE}" ]; then
@@ -470,10 +481,13 @@ setup_build_metadata() {
 }
 
 variant_task_name() {
-  local first rest
+  local first rest task="assemble"
+  if [ "${BUILD_BUNDLE}" -eq 1 ]; then
+    task="bundle"
+  fi
   first="$(printf '%s' "${VARIANT:0:1}" | tr '[:lower:]' '[:upper:]')"
   rest="${VARIANT:1}"
-  printf 'assemble%s%s\n' "${first}" "${rest}"
+  printf '%s%s%s\n' "${task}" "${first}" "${rest}"
 }
 
 artifact_path_for_variant() {
@@ -512,9 +526,12 @@ artifact_path_for_variant() {
 }
 
 run_gradle_build() {
-  local task
+  local task format="APK"
+  if [ "${BUILD_BUNDLE}" -eq 1 ]; then
+    format="AAB"
+  fi
   task="$(variant_task_name)"
-  echo "Building Android ${VARIANT} APK with versionCode=${ANDROID_VERSION_CODE}, versionName=${ANDROID_VERSION_NAME}"
+  echo "Building Android ${VARIANT} ${format} with versionCode=${ANDROID_VERSION_CODE}, versionName=${ANDROID_VERSION_NAME}"
   "${GRADLEW}" -p "${ANDROID_DIR}" ":app:${task}" --no-daemon
 }
 

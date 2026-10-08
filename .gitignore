@@ -5,6 +5,10 @@ CMakeUserPresets.json
 .env.local
 android/.env
 android/.env.local
+android/.bundle/
+android/vendor/bundle/
+android/fastlane/report.xml
+android/fastlane/README.md
 *.jks
 *.keystore
 *.p12

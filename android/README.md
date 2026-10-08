@@ -96,6 +96,59 @@ the manual **Build & Deploy Android Beta (Manual)** workflow in
 The script builds first, then uploads the APK with
 `firebase appdistribution:distribute`.
 
+## Google Play App Bundles
+
+The manual **Build & Upload Android Play Beta Draft (Manual)** workflow in
+`.github/workflows/android-play-deploy.yml` runs the Android Fastlane `play_beta`
+lane. It builds the signed `restricted_file_accessRelease` AAB, then uploads it
+to the `beta` track (public beta/open testing) with `release_status: draft`.
+Finish the release in Play Console when ready. Pushes, tags and pull requests
+do not trigger uploads. Store text, images, screenshots and changelogs are not
+changed by this lane. The workflow retains the AAB as an Actions artifact for
+14 days, including when the subsequent Play upload fails.
+
+Set up `com.snurhythm.asobmashow` in Play Console, configure open testing, and
+upload the first build manually before using Fastlane, as described in the
+[Fastlane setup guide](https://docs.fastlane.tools/actions/upload_to_play_store/#quick-start).
+Enable the Google Play Developer API and invite a service account with access
+to this app and permission to release to testing tracks; see
+[Google's API setup guide](https://developers.google.com/android-publisher/getting_started).
+Add its JSON key contents as the GitHub Actions secret
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`. This is separate from the runner's Firebase
+CLI login. The workflow reuses the four `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*`
+signing secrets listed above. Their key must match the app's registered Play
+upload certificate (or the signing certificate when Play App Signing is not used).
+
+The self-hosted macOS runner needs Ruby from `android/.ruby-version` in addition
+to the existing Android SDK, NDK, Ninja, Java and vcpkg setup. The wrapper selects
+that Ruby from the current environment, asdf or rbenv and installs the locked
+Android-only bundle into `~/Library/Caches/AsoBMaShow/android-play/`.
+`ANDROID_PLAY_BUNDLE_PATH` can override the gem cache directory.
+
+From the repository root:
+
+```sh
+# Build a signed AAB without Play credentials or an upload.
+scripts/android_play_deploy.sh --build-only
+
+# Build and upload a public beta draft (requires Play credentials).
+scripts/android_play_deploy.sh
+```
+
+Both commands load `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
+Keep real signing and Play credentials in those private files or the environment.
+For a local upload, export `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` with the contents
+of a private JSON key file. No key file is written by the lane. Leave
+`ANDROID_VERSION_CODE` unset to use the same automatic UTC timestamp versioning
+as Firebase. An optional `ANDROID_VERSION_NAME` sets the version name.
+The output is
+`android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab`.
+Direct Fastlane commands, after selecting the project Ruby and installing its
+bundle, are `bundle exec fastlane android build_bundle` and
+`bundle exec fastlane android play_beta` from `android/`; prefer the wrapper for
+environment and Ruby setup. Run `python3 tests/android_play_workflow_tests.py`
+to exercise build/upload boundaries without contacting Play.
+
 Before building after shader changes, generate all shader profiles:
 
 ```sh

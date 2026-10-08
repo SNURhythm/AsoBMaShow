@@ -39,7 +39,16 @@
   `scripts/android_firebase_deploy.sh --build-only --variant all_file_accessRelease`
 - Debug variants remain debug-signed. Do not use debug signing for Firebase or Play release builds.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
-- GitHub Actions deploys Android only through a manual `workflow_dispatch` run of `.github/workflows/android-beta-deploy.yml`. It does not run on pushes, tags, or pull requests. The job reads Android signing values from GitHub Actions secrets, and the self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
+- GitHub Actions deploys Android Firebase only through a manual `workflow_dispatch` run of `.github/workflows/android-beta-deploy.yml`. It does not run on pushes, tags, or pull requests. The job reads Android signing values from GitHub Actions secrets, and the self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
+
+## Android Google Play Deploy
+
+- Use `scripts/android_play_deploy.sh` for signed AAB builds and Google Play uploads. It selects `android/.ruby-version`, installs the locked Android Fastlane bundle, and loads the same private env files as the Firebase helper.
+- Use `scripts/android_play_deploy.sh --build-only` to build without uploading or needing Play credentials. The underlying shared build command is `scripts/android_firebase_deploy.sh --build-only --bundle --variant restricted_file_accessRelease`.
+- The `android play_beta` lane uploads only the restricted-access AAB to the public beta/open-testing `beta` track as a **draft**. It does not publish the release or update store metadata.
+- `.github/workflows/android-play-deploy.yml` is manual-only and serializes Play uploads. It reuses the Android release signing secrets and requires `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` containing a service account JSON key with Play testing-track access. This does not replace or change Firebase authentication.
+- Configure the app, first build, open testing and upload certificate in Play Console before the first CI upload. See `android/README.md` for setup. Keep all real credentials private and leave `ANDROID_VERSION_CODE` unset for automatic timestamp versioning.
+- Running the helper without `--build-only` uploads a draft. Only do so when the user explicitly requests deployment.
 
 ## Android Documents Storage
 

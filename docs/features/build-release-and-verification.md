@@ -16,6 +16,8 @@ surface without accidentally uploading an artifact.
   wrappers prepare native dependencies and build directories.
 - `scripts/android_firebase_deploy.sh` and `scripts/ios_firebase_deploy.sh`
   are the only local Firebase App Distribution entry points.
+- `scripts/android_play_deploy.sh` runs Android Fastlane to build a signed AAB
+  and upload a Google Play public beta draft. The separate Play workflow is manual-only.
 - `scripts/ios_release_verify.sh`, artifact-audit scripts, and
   `.github/workflows/` express release verification and distribution gates.
 - `shader_src/make.py` compiles source shaders with the local bgfx compiler.
@@ -34,6 +36,8 @@ avoid bypassing them with direct distribution lanes.
 - iOS non-distribution release check: `scripts/ios_release_verify.sh`.
 - iOS Firebase compile-only: `scripts/ios_firebase_deploy.sh --build-only`.
 - Android Firebase compile-only: `scripts/android_firebase_deploy.sh --build-only`.
+- Android Play AAB compile-only: `scripts/android_play_deploy.sh --build-only`.
+- Android Play lane checks: `python3 tests/android_play_workflow_tests.py`.
 - Shader compilation: run `shader_src/make.py` with the configured local
   `shadercRelease` path described in `AGENTS.md`.
 
