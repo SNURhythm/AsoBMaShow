@@ -146,6 +146,7 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "release.jks"))
         self.assertEqual((self.root / "version-code.txt").read_text(), "1")
         self.env["GITHUB_RUN_NUMBER"] = "12"
+        (self.root / ".env.local").write_text("GITHUB_RUN_NUMBER=''\n")
         for arguments, expected in (([], "12"), (["--version-code", "77"], "77")):
             result = subprocess.run(command + arguments, cwd=self.root, env=self.env,
                                     text=True, capture_output=True)
@@ -158,6 +159,34 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.env["FIXTURE_GRADLE_EXIT"] = "19"
         result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 19)
+
+    def test_play_helper_preserves_ci_run_number_across_private_env_files(self):
+        helper = self.root / "scripts/android_play_deploy.sh"
+        shutil.copyfile(ROOT / "scripts/android_play_deploy.sh", helper)
+        helper.chmod(0o755)
+        (self.root / "android/.ruby-version").write_text("fixture\n")
+        binaries = self.root / "bin"
+        binaries.mkdir()
+        for name, body in {
+            "ruby": "#!/bin/sh\nexit 0\n",
+            "bundle": '#!/bin/sh\n[ "$1" = check ] && exit 0\n'
+                      'printf "%s" "$GITHUB_RUN_NUMBER" > "$FIXTURE_RUN_NUMBER_FILE"\n',
+        }.items():
+            path = binaries / name
+            path.write_text(body)
+            path.chmod(0o755)
+        run_number_file = self.root / "run-number.txt"
+        self.env.update({"PATH": str(binaries) + os.pathsep + self.env["PATH"],
+                         "GITHUB_RUN_NUMBER": "12",
+                         "FIXTURE_RUN_NUMBER_FILE": str(run_number_file)})
+        for private_value in ("", "99"):
+            with self.subTest(private_value=private_value):
+                (self.root / "android/.env.local").write_text(
+                    f"GITHUB_RUN_NUMBER='{private_value}'\n")
+                result = subprocess.run([str(helper), "--build-only"], cwd=self.root,
+                                        env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(run_number_file.read_text(), "12")
 
 
 if __name__ == "__main__":

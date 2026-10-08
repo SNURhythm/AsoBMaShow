@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export LANG=en_US.UTF-8
+INHERITED_GITHUB_RUN_NUMBER="${GITHUB_RUN_NUMBER:-}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/android"
@@ -631,6 +632,11 @@ run_firebase_deploy() {
 for env_file in "${ENV_FILES[@]}"; do
   load_env_file "${env_file}"
 done
+
+# Private templates must not replace the CI counter; explicit CLI flags still win.
+if [ -n "${INHERITED_GITHUB_RUN_NUMBER}" ]; then
+  export GITHUB_RUN_NUMBER="${INHERITED_GITHUB_RUN_NUMBER}"
+fi
 
 apply_cli_overrides
 capture_version_fixed_flags

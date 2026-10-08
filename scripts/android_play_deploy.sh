@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export LANG=en_US.UTF-8
+INHERITED_GITHUB_RUN_NUMBER="${GITHUB_RUN_NUMBER:-}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/android"
@@ -33,6 +34,11 @@ for env_file in "${ENV_FILES[@]}"; do
     set +a
   fi
 done
+
+# Keep the Actions counter intact before Fastlane invokes the shared build helper.
+if [ -n "${INHERITED_GITHUB_RUN_NUMBER}" ]; then
+  export GITHUB_RUN_NUMBER="${INHERITED_GITHUB_RUN_NUMBER}"
+fi
 
 ruby_version="$(tr -d '[:space:]' < "${ANDROID_DIR}/.ruby-version")"
 if ! ruby -e 'exit RUBY_VERSION == ARGV.fetch(0) ? 0 : 1' "${ruby_version}" >/dev/null 2>&1; then
