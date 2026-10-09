@@ -4,6 +4,7 @@
 #include "ExportFileName.h"
 #include "replay/CourseReplayConsumer.h"
 #include "replay/ReplayOption.h"
+#include "replay/ReplayPixelConverter.h"
 
 #include "BeatorajaScoreMetrics.h"
 #include "ChartPlaybackDuration.h"
@@ -2099,19 +2100,7 @@ public:
         && !useVImageBgraToNv12
 #endif
     ) {
-      swsContext = sws_alloc_context();
-      if (swsContext == nullptr) {
-        return failOpen("Failed to create video pixel converter");
-      }
-      swsContext->flags = SWS_FAST_BILINEAR;
-      swsContext->threads = pixelConvertThreadCount;
-      swsContext->src_w = width;
-      swsContext->src_h = height;
-      swsContext->src_format = AV_PIX_FMT_BGRA;
-      swsContext->dst_w = width;
-      swsContext->dst_h = height;
-      swsContext->dst_format = videoContext->pix_fmt;
-      ret = sws_init_context(swsContext, nullptr, nullptr);
+      ret = pixelConverter.initialize(videoFrame, pixelConvertThreadCount);
       if (ret < 0) {
         return failOpen("Failed to initialize video pixel converter: " +
                         ffmpegError(ret));
@@ -2128,7 +2117,7 @@ public:
 #endif
     } else {
       replayExportLog(log,
-                      "Replay video export pixel converter: swscale, threads: %d",
+                      "Replay video export pixel converter: swscale frame API, threads: %d",
                       pixelConvertThreadCount);
     }
 
@@ -2257,10 +2246,11 @@ public:
       }
 #endif
     } else {
-      const uint8_t *sourceData[4] = {bgraFrame, nullptr, nullptr, nullptr};
-      const int sourceLinesize[4] = {width * 4, 0, 0, 0};
-      sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
-                videoFrame->data, videoFrame->linesize);
+      ret = pixelConverter.convert(bgraFrame, videoFrame);
+      if (ret < 0) {
+        errorMessage = "Failed to convert replay video frame: " + ffmpegError(ret);
+        return false;
+      }
     }
     pixelConvertMicrosTotal += elapsedMicros(pixelConvertStart);
 
@@ -2366,10 +2356,7 @@ private:
       sf_close(audioFile);
       audioFile = nullptr;
     }
-    if (swsContext != nullptr) {
-      sws_freeContext(swsContext);
-      swsContext = nullptr;
-    }
+    pixelConverter.reset();
     av_packet_free(&audioPacket);
     av_packet_free(&videoPacket);
     av_frame_free(&audioFrame);
@@ -2400,7 +2387,7 @@ private:
   AVFrame *audioFrame = nullptr;
   AVPacket *videoPacket = nullptr;
   AVPacket *audioPacket = nullptr;
-  SwsContext *swsContext = nullptr;
+  replay_video_export::ReplayPixelConverter pixelConverter;
   SNDFILE *audioFile = nullptr;
   std::vector<float> audioBuffer;
 #if __APPLE__

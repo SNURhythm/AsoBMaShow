@@ -8521,6 +8521,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         SQLite3 Threads::Threads ${CMAKE_DL_LIBS})
     asobmashow_register_test(profile_database_ownership_tests)
 
+    add_executable(replay_pixel_converter_tests tests/replay_pixel_converter_tests.cpp)
+    target_include_directories(replay_pixel_converter_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${FFMPEG_INCLUDE_DIRS}
+    )
+    target_compile_features(replay_pixel_converter_tests PRIVATE cxx_std_23)
+    target_link_libraries(replay_pixel_converter_tests PRIVATE ${FFMPEG_LIBRARIES})
+    asobmashow_register_test(replay_pixel_converter_tests)
+
     add_executable(replay_export_job_tests
         tests/replay_export_job_tests.cpp
         tests/support/AllocationFailure.cpp
