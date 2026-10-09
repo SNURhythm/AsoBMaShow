@@ -12,6 +12,7 @@
 #define ASOBMASHOW_BENCHMARK_HAS_STATIC_FORMATS 0
 #endif
 #include "skin/beatoraja/PlaySkinSession.h"
+#include "skin/beatoraja/MusicSelectSkinSession.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -298,7 +299,9 @@ public:
       entries_.push_back({.entry = *normalized,
                           .relativePath = relative,
                           .settings = *validated.reconciledSettings,
-                          .digest = std::move(validated.configurationDigest)});
+                          .digest = std::move(validated.configurationDigest),
+                          .musicSelect = validated.metadata &&
+                                         validated.metadata->skinType == 5});
     }
   }
 
@@ -315,6 +318,49 @@ public:
       auto device = std::make_shared<BenchmarkTextureDevice>();
       auto movieDevice = std::make_shared<BenchmarkMovieDevice>();
       auto counters = std::make_shared<SkinLiveResourceCounters>();
+      if (entry.musicSelect) {
+        MusicSelectSkinFrame frame;
+        frame.serial = 1;
+        frame.elapsedMillis = 2'000;
+        frame.properties.integers = {{21, 2026}, {22, 10}, {23, 9}};
+        frame.songList.elapsedMillis = 2'000;
+        frame.songList.selectedIndex = 8;
+        for (int index = 0; index < 17; ++index) {
+          frame.songList.bars.push_back(
+              {.kind = MusicSelectBarKind::Song,
+               .title = "Chart " + std::to_string(index),
+               .exists = true,
+               .difficulty = 2,
+               .level = 10});
+        }
+        auto created = MusicSelectSkinSession::create(
+            {.sessionSerial = ++sessionSerial,
+             .profileId = profile_,
+             .activation = {.revision = lease_->clone(),
+                            .entry = entry.entry,
+                            .reconciledSettings = entry.settings,
+                            .configurationDigest = entry.digest}},
+            {.storageRoots = roots_,
+             .resourcePreparation = preparation,
+             .initialFrame = std::move(frame),
+             .textureDevice = device,
+             .movieDevice = movieDevice,
+             .liveResourceCounters = counters});
+        if (!created.session) {
+          for (const auto &diagnostic : created.diagnostics) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+          }
+          return std::nullopt;
+        }
+        created.session.reset();
+        if (device->created != device->destroyed ||
+            !movieDevice->materializedPathsValid ||
+            movieDevice->loaded != movieDevice->destroyed ||
+            counters->snapshot() != SkinLiveResourceSnapshot{}) {
+          return std::nullopt;
+        }
+        continue;
+      }
       auto created = PlaySkinSession::create(
           {.revision = lease_->clone(),
            .entry = entry.entry,
@@ -684,6 +730,7 @@ private:
     std::string relativePath;
     EntryProfileSettings settings;
     std::string digest;
+    bool musicSelect = false;
   };
 
   void prepareAcceptanceState() {

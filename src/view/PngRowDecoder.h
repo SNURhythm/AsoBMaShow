@@ -206,6 +206,13 @@ inline std::optional<DecodedImageData> decodePngRows(std::span<const std::byte> 
                                filter == 3 ? (a + b) / 2 : filter == 4 ? pngPaeth(a, b, c) : 0;
         row[i] = static_cast<unsigned char>(row[i] + prediction);
       }
+      if (!image.interlaced && image.depth == 8 && image.color == 6) {
+        if (auto output = reducer.directRow(y); !output.empty()) {
+          std::copy(row.begin(), row.end(), output.begin());
+          row.swap(prior);
+          continue;
+        }
+      }
       for (int x = 0; x < width; ++x) {
         std::array<unsigned, 4> sample{};
         for (int channel = 0; channel < image.channels; ++channel) {

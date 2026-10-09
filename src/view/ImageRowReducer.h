@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -51,6 +52,15 @@ public:
       sums_.resize(static_cast<std::size_t>(outputWidth) * 4 *
                    (interlaced_ ? outputHeight : 2));
     }
+  }
+
+  // Sequential decoders can write native-size RGBA rows directly. Resizing
+  // still goes through add() so its area weighting and storage stay intact.
+  std::span<unsigned char> directRow(int y) {
+    if (reducing_ || y < 0 || y >= image_.height) return {};
+    const auto rowBytes = static_cast<std::size_t>(image_.width) * 4;
+    return std::span(*image_.rgba).subspan(static_cast<std::size_t>(y) * rowBytes,
+                                          rowBytes);
   }
 
   void add(int x, int y, const std::array<unsigned char, 4> &rgba) {

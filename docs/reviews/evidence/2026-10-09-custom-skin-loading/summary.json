@@ -1,0 +1,66 @@
+[
+  {
+    "case": "litone-gameplay",
+    "mode": "cold",
+    "samplesPerVariant": 9,
+    "beforeMedianMicros": 446751,
+    "afterMedianMicros": 336014,
+    "reductionPercent": 24.787185702997867
+  },
+  {
+    "case": "litone-gameplay",
+    "mode": "warm",
+    "samplesPerVariant": 8,
+    "beforeMedianMicros": 352631.0,
+    "afterMedianMicros": 273182.0,
+    "reductionPercent": 22.53035042296338
+  },
+  {
+    "case": "litone-select",
+    "mode": "cold",
+    "samplesPerVariant": 9,
+    "beforeMedianMicros": 306870,
+    "afterMedianMicros": 253072,
+    "reductionPercent": 17.531202137713038
+  },
+  {
+    "case": "litone-select",
+    "mode": "warm",
+    "samplesPerVariant": 8,
+    "beforeMedianMicros": 240769.0,
+    "afterMedianMicros": 202603.0,
+    "reductionPercent": 15.85170848406564
+  },
+  {
+    "case": "modern-gameplay",
+    "mode": "cold",
+    "samplesPerVariant": 9,
+    "beforeMedianMicros": 577477,
+    "afterMedianMicros": 439999,
+    "reductionPercent": 23.80666242984569
+  },
+  {
+    "case": "modern-gameplay",
+    "mode": "warm",
+    "samplesPerVariant": 8,
+    "beforeMedianMicros": 99459.5,
+    "afterMedianMicros": 78372.0,
+    "reductionPercent": 21.20209733610163
+  },
+  {
+    "case": "modern-select",
+    "mode": "cold",
+    "samplesPerVariant": 9,
+    "beforeMedianMicros": 367984,
+    "afterMedianMicros": 271912,
+    "reductionPercent": 26.107656854645853
+  },
+  {
+    "case": "modern-select",
+    "mode": "warm",
+    "samplesPerVariant": 8,
+    "beforeMedianMicros": 205500.5,
+    "afterMedianMicros": 141961.0,
+    "reductionPercent": 30.91938949053652
+  }
+]
