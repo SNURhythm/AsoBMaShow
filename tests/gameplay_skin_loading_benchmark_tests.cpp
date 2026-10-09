@@ -161,6 +161,7 @@ struct BenchmarkOptions {
   bool acceptanceMatrix = false;
   bool warm = false;
   std::size_t samples = 1;
+  std::size_t frameSamples = 0;
   std::optional<fs::path> skin;
   std::optional<std::string> entry;
   std::optional<std::string> entryIdentity;
@@ -188,6 +189,18 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
         return std::nullopt;
       }
       if (result.samples == 0 || result.samples > 100) return std::nullopt;
+    } else if (argument == "--frame-samples" && index + 1 < argc) {
+      try {
+        const std::string value(argv[++index]);
+        std::size_t consumed = 0;
+        result.frameSamples = std::stoull(value, &consumed);
+        if (consumed != value.size()) return std::nullopt;
+      } catch (...) {
+        return std::nullopt;
+      }
+      if (result.frameSamples == 0 || result.frameSamples > 100'000) {
+        return std::nullopt;
+      }
     } else if (argument == "--skin" && index + 1 < argc) {
       result.skin = fs::path(argv[++index]);
     } else if (argument == "--entry" && index + 1 < argc) {
@@ -220,6 +233,7 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
     return std::nullopt;
   }
   if (result.acceptanceMatrix && !result.skin) return std::nullopt;
+  if (result.frameSamples != 0 && !result.acceptanceReport) return std::nullopt;
   return result;
 }
 
@@ -405,7 +419,7 @@ public:
   }
 
   std::optional<nlohmann::json>
-  acceptanceReport(std::string_view entryIdentity) {
+  acceptanceReport(std::string_view entryIdentity, std::size_t frameSamples = 0) {
     if (!ready() || entries_.size() != 1 || entryIdentity.empty()) {
       return std::nullopt;
     }
@@ -508,6 +522,17 @@ public:
            measuredLoadMicros.count() <= 0 ? 0 : measuredLoadMicros.count()}}}};
 
     if (created.session) {
+      if (frameSamples != 0) {
+        const auto &model = created.session->modelForTesting().model;
+        report["frameModel"] = {
+            {"objects", model.objects.size()},
+            {"destinations", model.destinations.size()},
+            {"propertyBindings", model.booleanProperties.size() +
+                                     model.integerProperties.size() +
+                                     model.floatProperties.size() +
+                                     model.stringProperties.size() +
+                                     model.timerProperties.size()}};
+      }
       std::map<SkinObjectId, std::string> familyByObject;
       for (const auto &object : created.session->modelForTesting().model.objects) {
         std::string family;
@@ -531,18 +556,33 @@ public:
 
       std::uint64_t maximumCallbackMicros = 0;
       int framesEvaluated = 0;
-      for (std::uint64_t serial = 2; serial <= 4; ++serial) {
+      const std::size_t warmup = frameSamples != 0 ? 256 : 0;
+      const std::size_t frameCount = frameSamples != 0 ? frameSamples + warmup : 3;
+      std::vector<std::int64_t> frameNanos;
+      frameNanos.reserve(frameSamples);
+      std::uint64_t measuredCommands = 0;
+      for (std::uint64_t serial = 2; serial < 2 + frameCount; ++serial) {
         auto state = initialState_;
         auto projection = initialProjection_;
         state.clock.serial = serial;
-        state.clock.visualTimeMicros = static_cast<long long>(serial) * 750'000;
+        state.clock.visualTimeMicros = frameSamples != 0
+            ? 2'000'000 + static_cast<long long>(serial) * 500
+            : static_cast<long long>(serial) * 750'000;
         state.clock.gameplayTimeMicros = state.clock.visualTimeMicros;
         state.clock.playTimer = {.active = true,
                                  .startMicros = 0,
                                  .elapsedMillisExact = true,
                                  .playtimeMillis = 12'000};
         projection.frameSerial = serial;
+        const auto frameStarted = std::chrono::steady_clock::now();
         const auto frame = created.session->prepareFrame(state, projection, {});
+        const auto frameElapsed = std::chrono::steady_clock::now() - frameStarted;
+        if (frameSamples != 0 && serial >= 2 + warmup) {
+          if (!frame.ready() || !frame.evaluation.submitReady) return std::nullopt;
+          frameNanos.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  frameElapsed).count());
+          measuredCommands += frame.evaluation.submitReady->commands.size();
+        }
         for (const auto &diagnostic : frame.diagnostics) {
           rememberDiagnostic(diagnostic);
         }
@@ -562,6 +602,18 @@ public:
       report["callbackBudget"]["framesEvaluated"] = framesEvaluated;
       report["callbackBudget"]["maximumFrameWallMicros"] =
           maximumCallbackMicros;
+      if (!frameNanos.empty()) {
+        const auto rawSamples = frameNanos;
+        std::ranges::sort(frameNanos);
+        report["frameEvaluation"] = {
+            {"warmupFrames", warmup},
+            {"measuredFrames", frameNanos.size()},
+            {"commands", measuredCommands},
+            {"medianNanos", frameNanos[frameNanos.size() / 2]},
+            {"p95Nanos", frameNanos[(frameNanos.size() - 1) * 95 / 100]},
+            {"samplesNanos", rawSamples},
+            {"scope", "CPU prepareFrame only; synthetic chart state; no GPU submission"}};
+      }
       report["resourcePreparation"]["allReferencedResourcesPrepared"] =
           created.session->preparedTextureCountForTesting() ==
               created.loadingTelemetry.resources.textureUploads &&
@@ -966,8 +1018,14 @@ int runBenchmark(const BenchmarkOptions &options) {
     return 1;
   }
   if (options.acceptanceReport) {
-    const auto report = fixture.acceptanceReport(*options.entryIdentity);
+    const auto report = fixture.acceptanceReport(*options.entryIdentity,
+                                                 options.frameSamples);
     if (!report) return 1;
+    if (options.frameSamples != 0 && !report->contains("frameEvaluation")) {
+      std::cerr << "frame benchmark could not create a gameplay session: "
+                << (*report)["diagnosticCodes"].dump() << '\n';
+      return 1;
+    }
     std::cout << report->dump() << '\n';
     return 0;
   }
@@ -995,6 +1053,16 @@ int runBenchmark(const BenchmarkOptions &options) {
                (*acceptance)["graphFamilies"]["hitErrorVisualizer"]["commands"] > 0,
            "acceptance reporter exercises production loading and all four "
            "gameplay graph command families");
+    const auto measured =
+        acceptanceFixture.acceptanceReport("entry-synthetic-fixture", 8);
+    expect(measured && (*measured)["sessionPublished"] == true &&
+               (*measured)["callbackBudget"]["framesEvaluated"] == 264 &&
+               (*measured)["frameEvaluation"]["warmupFrames"] == 256 &&
+               (*measured)["frameEvaluation"]["measuredFrames"] == 8 &&
+               (*measured)["frameEvaluation"]["samplesNanos"].size() == 8 &&
+               (*measured)["frameEvaluation"]["commands"] > 0 &&
+               (*measured)["frameEvaluation"]["medianNanos"] > 0,
+           "frame benchmark measures ready frames after excluding warmup");
     return failures == 0 ? 0 : 1;
   }
   const auto samples = runSamples(fixture, options.warm, options.samples);
@@ -1020,7 +1088,8 @@ int main(int argc, char **argv) {
     std::cerr << "usage: gameplay_skin_loading_benchmark_tests "
                  "[--benchmark --mode cold|warm --samples N] [--skin PATH] "
                  "[--acceptance-report --skin PATH --entry PATH "
-                 "--entry-identity ID] [--acceptance-matrix --skin PATH]\n";
+                 "--entry-identity ID [--frame-samples N]] "
+                 "[--acceptance-matrix --skin PATH]\n";
     return 2;
   }
   const int status = runBenchmark(*options);
