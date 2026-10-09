@@ -3224,6 +3224,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       std::chrono::steady_clock::now() - std::chrono::milliseconds(500);
   long long bufferWaitMicros = 0;
   long long renderSubmitMicros = 0;
+  long long drawMicros = 0;
+  long long frameAdvanceMicros = 0;
+  long long readbackRequestMicros = 0;
   long long readbackWaitMicros = 0;
 
   struct PendingReadback {
@@ -3331,10 +3334,15 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     renderFrame();
     bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
                0, 0, outputTexture);
+    drawMicros += elapsedMicros(renderStart);
+    const auto frameAdvanceStart = std::chrono::steady_clock::now();
     currentFrame = bgfx::frame();
+    frameAdvanceMicros += elapsedMicros(frameAdvanceStart);
+    const auto readbackRequestStart = std::chrono::steady_clock::now();
     const uint32_t expectedFrame = bgfx::readTexture(
         readbackTextures[readbackTextureIndex],
         encoder.frameData(static_cast<size_t>(frameBufferIndex)));
+    readbackRequestMicros += elapsedMicros(readbackRequestStart);
     renderSubmitMicros += elapsedMicros(renderStart);
     pendingReadbacks.push_back(
         {.frameIndex = frameIndex,
@@ -3605,6 +3613,12 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   static_cast<double>(readbackWaitMicros) / 1000000.0,
                   static_cast<double>(encoder.encodedMicros()) / 1000000.0,
                   static_cast<double>(bufferWaitMicros) / 1000000.0);
+  replayExportLog(log,
+                  "Replay video render detail: %.2fs draw preparation, %.2fs "
+                  "frame advance, %.2fs readback request",
+                  static_cast<double>(drawMicros) / 1000000.0,
+                  static_cast<double>(frameAdvanceMicros) / 1000000.0,
+                  static_cast<double>(readbackRequestMicros) / 1000000.0);
   replayExportLog(log,
                   "Replay video encoder profile: %.2fs audio, %.2fs frame "
                   "prepare, %.2fs pixel convert, %.2fs video encode/write",
@@ -3904,6 +3918,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       std::chrono::steady_clock::now() - std::chrono::milliseconds(500);
   long long bufferWaitMicros = 0;
   long long renderSubmitMicros = 0;
+  long long drawMicros = 0;
+  long long frameAdvanceMicros = 0;
+  long long readbackRequestMicros = 0;
   long long readbackWaitMicros = 0;
 
   struct PendingReadback {
@@ -4009,10 +4026,15 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     renderFrame();
     bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
                0, 0, outputTexture);
+    drawMicros += elapsedMicros(renderStart);
+    const auto frameAdvanceStart = std::chrono::steady_clock::now();
     currentFrame = bgfx::frame();
+    frameAdvanceMicros += elapsedMicros(frameAdvanceStart);
+    const auto readbackRequestStart = std::chrono::steady_clock::now();
     const uint32_t expectedFrame = bgfx::readTexture(
         readbackTextures[readbackTextureIndex],
         encoder.frameData(static_cast<size_t>(frameBufferIndex)));
+    readbackRequestMicros += elapsedMicros(readbackRequestStart);
     renderSubmitMicros += elapsedMicros(renderStart);
     pendingReadbacks.push_back(
         {.frameIndex = frameIndex,
@@ -4547,6 +4569,12 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                   static_cast<double>(readbackWaitMicros) / 1000000.0,
                   static_cast<double>(encoder.encodedMicros()) / 1000000.0,
                   static_cast<double>(bufferWaitMicros) / 1000000.0);
+  replayExportLog(log,
+                  "Replay video render detail: %.2fs draw preparation, %.2fs "
+                  "frame advance, %.2fs readback request",
+                  static_cast<double>(drawMicros) / 1000000.0,
+                  static_cast<double>(frameAdvanceMicros) / 1000000.0,
+                  static_cast<double>(readbackRequestMicros) / 1000000.0);
   replayExportLog(log,
                   "Replay video encoder profile: %.2fs audio, %.2fs frame "
                   "prepare, %.2fs pixel convert, %.2fs video encode/write",

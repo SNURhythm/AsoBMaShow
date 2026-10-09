@@ -699,6 +699,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 --source ${ASOBMASHOW_BGFX_VULKAN_SOURCE}
                 --compiler ${CMAKE_CXX_COMPILER}
                 --compiler-id ${CMAKE_CXX_COMPILER_ID})
+    add_test(NAME bgfx_vulkan_readback_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/bgfx_vulkan_readback_tests.py
+                --source ${ASOBMASHOW_BGFX_VULKAN_SOURCE}
+                --compiler ${CMAKE_CXX_COMPILER}
+                --compiler-id ${CMAKE_CXX_COMPILER_ID})
     find_package(BZip2 REQUIRED)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
