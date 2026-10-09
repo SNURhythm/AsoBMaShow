@@ -778,11 +778,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_display_refresh_rate_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_display_refresh_rate_tests.py -v)
+    add_test(NAME android_replay_codec_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_replay_codec_tests.py -v)
     add_test(NAME android_gameplay_orientation_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_gameplay_orientation_tests.py -v)
     set_tests_properties(android_window_presentation_tests
                          android_gameplay_orientation_tests
+                         android_replay_codec_tests
                          android_display_refresh_rate_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS platform_android

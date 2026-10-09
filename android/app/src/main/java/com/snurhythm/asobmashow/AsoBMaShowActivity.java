@@ -547,6 +547,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         return getResources().getConfiguration().getLocales().toLanguageTags();
     }
 
+    public String findReplayVideoEncoder(int width, int height, int fps, int bitrate) {
+        return AndroidReplayCodec.findEncoder(width, height, fps, bitrate);
+    }
+
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
     }

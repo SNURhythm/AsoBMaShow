@@ -49,6 +49,11 @@
 #include "view/UiTheme.h"
 #include "view/View.h"
 #include "targets.h"
+#if TARGET_OS_ANDROID
+#include "replay/AndroidReplaySurface.h"
+#include <SDL3/SDL_system.h>
+#include <jni.h>
+#endif
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "iOSNatives.hpp"
 #endif
@@ -857,7 +862,7 @@ class ScopedReplayVideoBgfxAccess {
 public:
   explicit ScopedReplayVideoBgfxAccess(ApplicationContext &context)
       : context(context), access(context.rendererAccess.acquireExport()) {
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
     originalResetFlags = context.bgfxResetFlags.load(std::memory_order_relaxed);
     if ((originalResetFlags & BGFX_RESET_VSYNC) != 0) {
       bgfx::reset(rendering::render_width, rendering::render_height,
@@ -873,7 +878,7 @@ public:
     if (released) {
       return;
     }
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
     if (restoreResetFlags) {
       bgfx::reset(rendering::render_width, rendering::render_height,
                   originalResetFlags);
@@ -1548,6 +1553,39 @@ const AVCodec *findReplayVideoEncoder() {
 #endif
 }
 
+#if TARGET_OS_ANDROID
+std::string findAndroidReplayHardwareEncoder(int width, int height, int fps,
+                                             int bitrate) {
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  if (env == nullptr) return {};
+  if (env->PushLocalFrame(8) < 0) {
+    env->ExceptionClear();
+    return {};
+  }
+  std::string name;
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+  if (activity != nullptr) {
+    jclass activityClass = env->GetObjectClass(activity);
+    jmethodID method = activityClass == nullptr ? nullptr : env->GetMethodID(
+        activityClass, "findReplayVideoEncoder", "(IIII)Ljava/lang/String;");
+    if (method != nullptr) {
+      auto result = static_cast<jstring>(env->CallObjectMethod(
+          activity, method, width, height, fps, bitrate));
+      if (!env->ExceptionCheck() && result != nullptr) {
+        const char *value = env->GetStringUTFChars(result, nullptr);
+        if (value != nullptr) {
+          name = value;
+          env->ReleaseStringUTFChars(result, value);
+        }
+      }
+    }
+  }
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  env->PopLocalFrame(nullptr);
+  return name;
+}
+#endif
+
 bool codecSupportsPixelFormat(const AVCodec *codec, AVPixelFormat format) {
   const void *configs = nullptr;
   int configCount = 0;
@@ -1860,6 +1898,31 @@ public:
   bool open(const std::filesystem::path &wavPath,
             const std::filesystem::path &outputPath, int width, int height,
             int fps, ReplayVideoExportLog *log, std::string &errorMessage) {
+#if TARGET_OS_ANDROID
+    const std::string hardwareName = findAndroidReplayHardwareEncoder(
+        width, height, fps, static_cast<int>(replayVideoBitRate(width, height, fps)));
+    const AVCodec *hardwareCodec = avcodec_find_encoder_by_name("h264_mediacodec");
+    if (!hardwareName.empty() && hardwareCodec != nullptr) {
+      replayExportLog(log, "Replay video trying Android hardware encoder: %s",
+                      hardwareName.c_str());
+      if (openWithEncoder(wavPath, outputPath, width, height, fps, log,
+                           hardwareCodec, hardwareName, errorMessage)) return true;
+      replayExportLog(log, "Replay video hardware setup failed; using software: %s",
+                      errorMessage.c_str());
+      errorMessage.clear();
+    } else {
+      replayExportLog(log, "Replay video hardware Surface encoder unavailable for "
+                          "%dx%d @ %dfps; using software", width, height, fps);
+    }
+#endif
+    return openWithEncoder(wavPath, outputPath, width, height, fps, log,
+                            findReplayVideoEncoder(), {}, errorMessage);
+  }
+
+  bool openWithEncoder(const std::filesystem::path &wavPath,
+            const std::filesystem::path &outputPath, int width, int height,
+            int fps, ReplayVideoExportLog *log, const AVCodec *videoCodec,
+            const std::string &hardwareName, std::string &errorMessage) {
     this->outputPath = outputPath;
     this->width = width;
     this->height = height;
@@ -1878,14 +1941,20 @@ public:
       return failOpen("Failed to create MP4 muxer: " + ffmpegError(ret));
     }
 
-    const AVCodec *videoCodec = findReplayVideoEncoder();
     if (videoCodec == nullptr) {
       return failOpen("Replay video encoder was not found");
     }
     const std::string videoCodecName =
         videoCodec->name != nullptr ? videoCodec->name : "";
     const bool videoCodecIsH264 = videoCodec->id == AV_CODEC_ID_H264;
+#if TARGET_OS_ANDROID
+    useAndroidSurface = videoCodecName == "h264_mediacodec";
+    const auto videoPixelFormat = useAndroidSurface
+        ? std::optional<AVPixelFormat>(AV_PIX_FMT_MEDIACODEC)
+        : chooseVideoPixelFormat(videoCodec);
+#else
     const auto videoPixelFormat = chooseVideoPixelFormat(videoCodec);
+#endif
     if (!videoPixelFormat.has_value()) {
       return failOpen("Replay video encoder does not support a BGRA-convertible "
                       "format");
@@ -1932,7 +2001,21 @@ public:
       videoContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface && !androidSurface.prepare(videoContext, errorMessage))
+      return failOpen(errorMessage);
+#endif
+
     AVDictionary *videoOptions = nullptr;
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface) {
+      av_dict_set(&videoOptions, "ndk_codec", "1", 0);
+      av_dict_set(&videoOptions, "codec_name", hardwareName.c_str(), 0);
+      av_dict_set(&videoOptions, "bitrate_mode", "vbr", 0);
+      videoContext->color_range = AVCOL_RANGE_MPEG;
+      videoContext->colorspace = AVCOL_SPC_SMPTE170M;
+    }
+#endif
     if (videoCodecName == "libx264") {
       av_dict_set(&videoOptions, "preset", "ultrafast", 0);
       av_dict_set(&videoOptions, "crf", "22", 0);
@@ -1963,6 +2046,10 @@ public:
       return failOpen("Failed to open replay video encoder: " +
                       ffmpegError(ret));
     }
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface && !androidSurface.initialize(videoContext, errorMessage))
+      return failOpen(errorMessage);
+#endif
     videoFrameDuration = 1;
     const char *pixelFormatName = av_get_pix_fmt_name(videoContext->pix_fmt);
     if (videoCodecIsH264) {
@@ -2054,7 +2141,18 @@ public:
     videoFrame->format = videoContext->pix_fmt;
     videoFrame->width = width;
     videoFrame->height = height;
-    ret = av_frame_get_buffer(videoFrame, 32);
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface) {
+      // A refcounted marker keeps FFmpeg's send/receive protocol active while
+      // the real image and timestamp arrive through the encoder Surface.
+      videoFrame->buf[0] = av_buffer_alloc(1);
+      ret = videoFrame->buf[0] != nullptr ? 0 : AVERROR(ENOMEM);
+      if (ret == 0) videoFrame->data[0] = videoFrame->buf[0]->data;
+    } else
+#endif
+    {
+      ret = av_frame_get_buffer(videoFrame, 32);
+    }
     if (ret < 0) {
       return failOpen("Failed to allocate video frame buffer: " +
                       ffmpegError(ret));
@@ -2082,6 +2180,9 @@ public:
     }
     replayExportLog(
         log,
+#if TARGET_OS_ANDROID
+        useAndroidSurface ? "Replay video export FFmpeg buffers: refcounted Surface frame markers" :
+#endif
         "Replay video export FFmpeg buffers: refcounted AVFrames via "
         "av_frame_get_buffer");
 
@@ -2096,6 +2197,9 @@ public:
     }
 #endif
     if (videoContext->pix_fmt != AV_PIX_FMT_BGRA
+#if TARGET_OS_ANDROID
+        && !useAndroidSurface
+#endif
 #if __APPLE__
         && !useVImageBgraToNv12
 #endif
@@ -2106,6 +2210,12 @@ public:
                         ffmpegError(ret));
       }
     }
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface) {
+      replayExportLog(log, "Replay video export pixel converter: Android encoder "
+                          "Surface (GPU BGRA upload, no CPU YUV conversion)");
+    } else
+#endif
     if (videoContext->pix_fmt == AV_PIX_FMT_BGRA) {
       replayExportLog(log, "Replay video export pixel converter: bgra copy");
 #if __APPLE__
@@ -2171,6 +2281,19 @@ public:
     }
     audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
 
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface) {
+      const auto uploadStart = std::chrono::steady_clock::now();
+      const int64_t timestampNanos = av_rescale_q(
+          static_cast<int64_t>(frameIndex), videoContext->time_base,
+          AVRational{1, 1000000000});
+      if (!androidSurface.submit(bgraFrame, timestampNanos, errorMessage)) return false;
+      pixelConvertMicrosTotal += elapsedMicros(uploadStart);
+      maxVideoFrameBufferRefCount = std::max(maxVideoFrameBufferRefCount,
+          av_buffer_get_ref_count(videoFrame->buf[0]));
+    } else
+#endif
+    {
     const auto framePrepareStart = std::chrono::steady_clock::now();
     std::array<AVBufferRef *, AV_NUM_DATA_POINTERS> bufferRefsBefore{};
     std::array<uint8_t *, AV_NUM_DATA_POINTERS> dataPointersBefore{};
@@ -2253,6 +2376,7 @@ public:
       }
     }
     pixelConvertMicrosTotal += elapsedMicros(pixelConvertStart);
+    }
 
     videoFrame->pts = static_cast<int64_t>(frameIndex);
     videoFrame->duration = videoFrameDuration;
@@ -2268,6 +2392,7 @@ public:
     videoStallMicrosTotal += profile.stallMicros;
     videoPacketCount += profile.packetCount;
     videoStalledRetries += profile.stalledRetries;
+    if (success) ++submittedVideoFrames;
     return success;
   }
 
@@ -2315,6 +2440,11 @@ public:
     videoStallMicrosTotal += videoFlushProfile.stallMicros;
     videoPacketCount += videoFlushProfile.packetCount;
     videoStalledRetries += videoFlushProfile.stalledRetries;
+#if TARGET_OS_ANDROID
+    if (useAndroidSurface && videoPacketCount != submittedVideoFrames) {
+      return fail("Android hardware encoder returned an incomplete replay video");
+    }
+#endif
     const auto audioEncodeFlushStart = std::chrono::steady_clock::now();
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
                      audioPacket, errorMessage)) {
@@ -2357,6 +2487,10 @@ private:
       audioFile = nullptr;
     }
     pixelConverter.reset();
+#if TARGET_OS_ANDROID
+    androidSurface.reset();
+    useAndroidSurface = false;
+#endif
     av_packet_free(&audioPacket);
     av_packet_free(&videoPacket);
     av_frame_free(&audioFrame);
@@ -2388,6 +2522,11 @@ private:
   AVPacket *videoPacket = nullptr;
   AVPacket *audioPacket = nullptr;
   replay_video_export::ReplayPixelConverter pixelConverter;
+#if TARGET_OS_ANDROID
+  replay_video_export::AndroidReplaySurface androidSurface;
+  bool useAndroidSurface = false;
+#endif
+  long long submittedVideoFrames = 0;
   SNDFILE *audioFile = nullptr;
   std::vector<float> audioBuffer;
 #if __APPLE__
