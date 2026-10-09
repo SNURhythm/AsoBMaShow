@@ -699,7 +699,6 @@ SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
 }
 
 TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
-  text_runtime::OperationGuard operation;
   if (fontFaces.empty()) {
     return {};
   }
@@ -709,6 +708,9 @@ TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
     return cached->second;
   }
 
+  // This view and its cached selections belong to the font's creating thread.
+  // Cache hits do not call SDL_ttf; guard only glyph lookup and font loading.
+  text_runtime::OperationGuard operation;
   for (const auto &face : fontFaces) {
     if (face.font != nullptr && TTF_FontHasGlyph(face.font, codepoint)) {
       SelectedFont source = {face.font, false};

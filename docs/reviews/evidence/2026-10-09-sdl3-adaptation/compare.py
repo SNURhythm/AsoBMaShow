@@ -15,6 +15,8 @@ parser.add_argument('--before', type=Path, required=True)
 parser.add_argument('--after', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--pairs', type=int, default=20)
+parser.add_argument('--baseline', default='53f52b9e',
+                    help='Application revision represented by the before binary')
 args = parser.parse_args()
 if args.pairs < 8 or args.pairs % 2:
     parser.error('--pairs must be an even number >= 8')
@@ -39,7 +41,7 @@ def sample(version):
     return data
 
 metadata = {
-    'baseline': command('git', 'rev-parse', '53f52b9e'),
+    'baseline': command('git', 'rev-parse', args.baseline),
     'candidate_base': command('git', 'rev-parse', 'HEAD'),
     'candidate_text_view_sha256': hashlib.sha256((repo/'src/view/TextView.cpp').read_bytes()).hexdigest(),
     'candidate_diff_sha256': hashlib.sha256(subprocess.check_output(['git', 'diff', '--binary'], cwd=repo)).hexdigest(),
