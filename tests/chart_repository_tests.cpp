@@ -1225,6 +1225,46 @@ void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
   }));
 }
 
+void testCourseFallbackLookupUsesHashIndexes() {
+  TempDirectory temporary;
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  auto database = openDatabase(charts.DatabasePath());
+  assert(execute(database.get(),
+      "INSERT INTO difficulty_tables(id,name,symbol) VALUES(1,'Large','L'),(2,'Other','O');"
+      "WITH RECURSIVE entries(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM entries WHERE n<10000) "
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,md5,title,sort_order) "
+      "SELECT 1,'1',printf('%064x',n),printf('%032x',n),'Unrelated',n FROM entries;"
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,md5,title,sort_order) VALUES"
+      "(1,'2','sha-only','','Zulu',20000),"
+      "(1,'3','','md5-only','Alpha',20000),"
+      "(1,'4','sha-only','md5-only','Both',30000),"
+      "(2,'9','sha-only','md5-only','Wrong table',0),"
+      "(1,'8','','','Empty hashes',0);"
+      "INSERT INTO difficulty_courses(id,table_id,name,course_key) VALUES(1,1,'Course','key');"
+      "INSERT INTO difficulty_course_entries(course_id,sha256,md5,sort_order) VALUES"
+      "(1,'sha-only','md5-only',0),(1,'sha-only','',1),"
+      "(1,'','',2),(1,'missing-sha','missing-md5',3)"));
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  auto session = charts.OpenSession();
+  assert(session);
+  cancelReadSql = "FROM difficulty_course_entries dce JOIN";
+  observedReadVmSteps = 0;
+  const auto table = MusicSelectRepositoryProjection::loadTableMetadata(*session, 1, 0);
+  cancelReadSql.clear();
+  assert(table && table->courses.size() == 1);
+  const auto &stages = table->courses.front().stages;
+  assert(stages.size() == 4);
+  assert(stages[0].meta.Title == "Alpha" && stages[0].difficultyTableLabels == "L3");
+  assert(stages[1].meta.Title == "Zulu" && stages[1].difficultyTableLabels == "L2");
+  assert(stages[2].meta.Title == "Course chart 3");
+  assert(stages[3].meta.Title == "missing-sha");
+  assert(std::ranges::all_of(stages, [](const auto &stage) { return stage.unavailable; }));
+  std::cout << "Course fallback lookup VM steps: " << observedReadVmSteps << std::endl;
+  assert(observedReadVmSteps > 0 && observedReadVmSteps < 5000);
+}
+
 void testDirectoryRecordsIncludeDirectChartsAndRawDescendants() {
   TempDirectory temporary;
   ChartRepository charts(temporary.path() / "chart.db");
@@ -4266,6 +4306,12 @@ void testScratchlessMembershipWhileAnotherConnectionWrites() {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--course-lookup-test") {
+    testCourseFallbackLookupUsesHashIndexes();
+    testChartQueryBehaviorMatrix();
+    testDifficultyEntryDownloadUrlsFollowTheirSourceRows();
+    return 0;
+  }
   testScratchlessCourseOnlyMembership();
   testScratchlessMembershipWhileAnotherConnectionWrites();
   testScratchlessTableMembership();
@@ -4315,6 +4361,7 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+  testCourseFallbackLookupUsesHashIndexes();
   testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder();
   testSearchProviderBoundsAndSnapshotRecovery();
   testSearchDurationFallbackAndCancellationKeepKeywordRestriction();

@@ -1033,17 +1033,20 @@ std::string matchedDifficultyEntryIdSubquery(
     const std::string &courseEntryAlias = "dce",
     const std::string &courseAlias = "dc",
     const std::string &matchAlias = "dte_match") {
-  return "(SELECT " + matchAlias +
-         ".id FROM difficulty_table_entries " + matchAlias + " WHERE " +
-         matchAlias + ".table_id = " + courseAlias + ".table_id AND ((" +
-         sqlHashColumnHasValue(courseEntryAlias, "sha256") + " AND " +
-         storedHashColumn(matchAlias, "sha256") +
-         " = " + storedHashColumn(courseEntryAlias, "sha256") +
-         ") OR (" + sqlHashColumnHasValue(courseEntryAlias, "md5") +
-         " AND " + storedHashColumn(matchAlias, "md5") +
-         " = " + storedHashColumn(courseEntryAlias, "md5") +
-         ")) ORDER BY " + matchAlias +
-         ".sort_order, " + matchAlias + ".title COLLATE NOCASE LIMIT 1)";
+  // An OR plus ORDER BY lets SQLite scan the table's sort-order index for
+  // every course stage. Collect candidates through both hash indexes first,
+  // then preserve the authored ordering across their union.
+  const auto candidates = [&](std::string_view hash) {
+    return "SELECT " + matchAlias + ".id, " + matchAlias + ".sort_order, " +
+           matchAlias + ".title FROM difficulty_table_entries " + matchAlias +
+           " WHERE " + matchAlias + ".table_id = " + courseAlias +
+           ".table_id AND " + sqlHashColumnHasValue(courseEntryAlias, hash) +
+           " AND " + storedHashColumn(matchAlias, hash) + " = " +
+           storedHashColumn(courseEntryAlias, hash);
+  };
+  return "(SELECT id FROM (" + candidates("sha256") + " UNION " +
+         candidates("md5") +
+         ") ORDER BY sort_order, title COLLATE NOCASE LIMIT 1)";
 }
 
 void appendKeywordFilter(std::string &query, const std::string &alias,
