@@ -3,6 +3,8 @@
 # shader uniforms and renders a black screen. Keep the legacy reflection path
 # through iOS 16; use MTLBinding on iOS 17 and later.
 # https://github.com/bkaradzic/bgfx/issues/3392#issuecomment-2582292135
+include("${CMAKE_CURRENT_LIST_DIR}/BgfxMetalReadback.cmake")
+
 function(asobmashow_ios_bgfx_metal_compatibility)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         return()
@@ -24,6 +26,7 @@ function(asobmashow_ios_bgfx_metal_compatibility)
         message(FATAL_ERROR "bgfx Metal reflection gate changed; review iOS 16 compatibility")
     endif()
     string(REPLACE "${old_gate}" "${new_gate}" content "${content}")
+    asobmashow_patch_bgfx_metal_readback(content)
 
     # Compile a generated copy, leaving the pinned upstream submodule intact.
     # COPYONLY preserves the output timestamp when its contents are unchanged.

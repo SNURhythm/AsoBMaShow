@@ -621,7 +621,12 @@ int main() { return 0; }
                 "m_usesMTLBindings, macOS 13.0, iOS 17.0,",
             )
             self.assertNotEqual(original, expected, "upstream gate changed; review workaround")
-            self.assertEqual(expected, compiled.read_text())
+            patched = compiled.read_text()
+            self.assertIn("m_usesMTLBindings, macOS 13.0, iOS 17.0,", patched)
+            self.assertNotIn("m_usesMTLBindings, macOS 13.0, iOS 16.0,", patched)
+            self.assertIn("newTextureWithDescriptor:desc offset:0 bytesPerRow:pitch", patched)
+            self.assertIn("nativeTexture.bufferBytesPerRow", patched)
+            self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)
