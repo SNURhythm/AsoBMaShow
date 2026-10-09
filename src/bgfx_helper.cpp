@@ -39,6 +39,11 @@ bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow,
     pd.nwh = SDL_GetPointerProperty(properties,
         SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
     pd.type = bgfx::NativeWindowHandleType::Wayland;
+  } else if (driver != nullptr && SDL_strcmp(driver, "vivante") == 0) {
+    pd.ndt = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_VIVANTE_DISPLAY_POINTER, nullptr);
+    pd.nwh = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_VIVANTE_WINDOW_POINTER, nullptr);
   }
 #endif
 #endif

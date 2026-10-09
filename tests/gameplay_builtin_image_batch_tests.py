@@ -15,7 +15,8 @@ root = pathlib.Path(__file__).resolve().parents[1]
 source = (root / "src/scene/play/GamePlayScene.cpp").read_text(encoding="utf-8")
 start = source.index("[](const std::map<int, std::filesystem::path> &paths,",
                      source.index(".builtinImageBatchReader ="))
-end = source.index(",\n          .liveResourceCounters", start)
+# Stop at the next designated member, regardless of which optional fields follow.
+end = source.index(",\n          .", start)
 callback = source[start:end]
 fixture = r'''
 #include <algorithm>

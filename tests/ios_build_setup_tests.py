@@ -742,8 +742,8 @@ int main() { return 0; }
         source = MAIN_SOURCE.read_text(encoding="utf-8")
         start = source.index("  int windowCreateWidth = 1280;")
         create = source[start:source.index("  if (win == nullptr)", start)]
-        mobile_start = source.index("#if TARGET_OS_IPHONE || TARGET_OS_ANDROID", start)
-        transition = source[mobile_start:source.index("  SDL_GetWindowSize(win", mobile_start)] + "\n#endif\n"
+        transition_start = source.index("  s_window = win;", start)
+        transition = source[transition_start:source.index("  bgfx::PlatformData pd{};", transition_start)]
         compiler = shutil.which("clang++") or shutil.which("c++")
         self.assertIsNotNone(compiler)
         harness = r'''
@@ -757,6 +757,21 @@ struct SDL_Window { SDL_WindowFlags flags; } testWindow;
 bool portrait = false;
 bool hiddenAtCreation = false;
 int exclusiveRequests = 0;
+SDL_Window *s_window = nullptr;
+namespace rendering {
+float widthScale, heightScale;
+void updateUIScale(int, int) {}
+}
+#define APP_DEBUG_LOG(...) ((void)0)
+bool SDL_GetWindowSize(SDL_Window *, int *width, int *height) {
+  *width = portrait ? 720 : 1280;
+  *height = portrait ? 1280 : 720;
+  return true;
+}
+void getWindowDrawableSize(SDL_Window *, int width, int height, int &rw, int &rh) {
+  rw = width * 2;
+  rh = height * 2;
+}
 SDL_Window *SDL_CreateWindow(const char *, int, int, SDL_WindowFlags flags) {
   testWindow.flags = flags;
   hiddenAtCreation = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS)) != 0;
@@ -848,7 +863,7 @@ int main() {
         source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
         self.assertIn("std::string GetIOSApplicationSupportPath();", header)
         implementation_start = source.index("GetIOSApplicationSupportPath()")
-        implementation_end = source.index("\n}\n\n// get nwh", implementation_start)
+        implementation_end = source.index("\n}", implementation_start)
         implementation = source[implementation_start:implementation_end]
         self.assertIn("NSApplicationSupportDirectory", implementation)
         self.assertIn("createDirectoryAtURL", implementation)
