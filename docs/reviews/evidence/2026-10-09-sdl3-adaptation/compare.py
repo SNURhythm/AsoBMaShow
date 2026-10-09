@@ -17,6 +17,8 @@ parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--pairs', type=int, default=20)
 parser.add_argument('--baseline', default='53f52b9e',
                     help='Application revision represented by the before binary')
+parser.add_argument('--harness', type=Path,
+                    default=Path(__file__).parent.parent / '2026-10-09-sdl3-performance' / 'probe.cpp')
 args = parser.parse_args()
 if args.pairs < 8 or args.pairs % 2:
     parser.error('--pairs must be an even number >= 8')
@@ -33,8 +35,8 @@ def sample(version):
                             cwd=repo, text=True, capture_output=True, check=True)
     data = json.loads(result.stdout)
     assert data['sdl_major'] == 3 and data['checksum'] > 0
-    assert len(data['metrics']) == 15
-    assert len({m['name'] for m in data['metrics']}) == 15
+    assert data['metrics']
+    assert len({m['name'] for m in data['metrics']}) == len(data['metrics'])
     assert all(m['operations'] > 0 and math.isfinite(m['ns_per_op']) and
                m['ns_per_op'] > 0 for m in data['metrics'])
     data['process_seconds'] = time.monotonic() - start
@@ -53,7 +55,7 @@ metadata = {
     'memory_bytes': int(command('sysctl', '-n', 'hw.memsize')),
     'os': command('sw_vers', '-productVersion'),
     'font_sha256': hashlib.sha256(font.read_bytes()).hexdigest(),
-    'harness_sha256': hashlib.sha256((Path(__file__).parent.parent / '2026-10-09-sdl3-performance' / 'probe.cpp').read_bytes()).hexdigest(),
+    'harness_sha256': hashlib.sha256(args.harness.read_bytes()).hexdigest(),
     'seed': seed, 'pairs': args.pairs, 'build_type': 'Release (-O3 -DNDEBUG)',
     'units': 'nanoseconds per operation',
     'method': 'Balanced shuffled AB/BA order; one excluded process warmup per version; '

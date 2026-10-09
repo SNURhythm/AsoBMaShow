@@ -5390,6 +5390,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(text_input_box_tests PRIVATE
         SDL_ClearComposition=TextInputBoxTest_ClearComposition
         SDL_SetTextInputArea=TextInputBoxTest_SetTextInputArea
+        TTF_GetStringSize=TextInputBoxTest_GetStringSize
     )
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore

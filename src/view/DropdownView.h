@@ -79,6 +79,8 @@ private:
   bool deferredOptionViewClearScheduled = false;
   float resolvedWidth = kDefaultWidth;
   float triggerWidth = 0.0f;
+  mutable std::optional<float> cachedPreferredWidth;
+  mutable std::uint64_t preferredWidthLanguageRevision = 0;
 
   void buildView();
   void applyRefresh(State state);

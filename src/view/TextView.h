@@ -82,7 +82,7 @@ protected:
   void includeFontMetrics(TTF_Font *loadedFont);
   void includeIOSSystemFontMetrics();
   [[nodiscard]] TTF_Font *loadFallbackFontAt(size_t pathIndex, bool required);
-  [[nodiscard]] std::vector<std::string> wrappedTextLines(int wrapWidth);
+  [[nodiscard]] const std::vector<std::string> &wrappedTextLines(int wrapWidth);
   [[nodiscard]] SDL_Surface *renderFallbackTextSurface(int wrapWidth,
                                                        int &surfaceWidth,
                                                        int &surfaceHeight);
@@ -129,6 +129,10 @@ protected:
   void createTexture();
 
 private:
+  // One layout for the current text. Raster size and cached glyph selections
+  // stay fixed for a view; alignment/color do not change its line breaks.
+  std::vector<std::string> cachedWrappedLines;
+  int cachedLineWrapWidth = -1;
   i18n::Text localizedText_{""};
   void setResolvedText(const std::string &newText);
   void releaseFontResources();

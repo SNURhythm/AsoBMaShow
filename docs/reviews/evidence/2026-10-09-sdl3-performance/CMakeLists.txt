@@ -21,6 +21,9 @@ execute_process(COMMAND ${CMAKE_COMMAND} -E env
   "PKG_CONFIG_PATH=" pkg-config --static --libs SDL2_ttf
   OUTPUT_VARIABLE baseline_links OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 separate_arguments(baseline_links NATIVE_COMMAND "${baseline_links}")
+if(NOT PROBE_SOURCE)
+  set(PROBE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/probe.cpp")
+endif()
 foreach(version IN ITEMS 2 3)
   if(version EQUAL 2)
     set(tree "${BASELINE}")
@@ -29,7 +32,7 @@ foreach(version IN ITEMS 2 3)
     set(tree "${CANDIDATE}")
     set(sdl_libs SDL3::SDL3 SDL3_ttf::SDL3_ttf)
   endif()
-  add_executable(probe${version} probe.cpp
+  add_executable(probe${version} "${PROBE_SOURCE}"
     "${tree}/src/input/SDLTouchInputSource.cpp"
     "${tree}/src/i18n/Localization.cpp"
     "${tree}/src/rendering/Color.cpp"
@@ -39,6 +42,12 @@ foreach(version IN ITEMS 2 3)
     "${tree}/src/view/SdlTtfRuntime.cpp"
     "${tree}/src/view/TextView.cpp"
     "${tree}/src/view/View.cpp")
+  if(PROBE_DROPDOWNS)
+    target_sources(probe${version} PRIVATE
+      "${tree}/src/view/DropdownView.cpp"
+      "${tree}/src/view/Button.cpp"
+      "${tree}/src/view/ScrollView.cpp")
+  endif()
   if(version EQUAL 2)
     target_include_directories(probe${version} PRIVATE
       "${REPO}/cmake-build-release/vcpkg_installed/arm64-osx/include"

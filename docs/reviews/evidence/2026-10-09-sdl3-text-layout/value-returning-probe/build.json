@@ -1,0 +1,47 @@
+{
+  "baseline": "abaefa1c5a4e977848b1ad1487e26d723be6da85",
+  "sources": {
+    "src/view/TextView.cpp": {
+      "before_sha256": "82bccc7f4c319adde165d3ddb5d3c290f2e5c34d562a24c14943369d4aa0cc55",
+      "after_sha256": "d599d8b2794e26e7e44d037589424dd400f47345c852b0dc489a169ec22ba2d7"
+    },
+    "src/view/TextView.h": {
+      "before_sha256": "ca817384f44f5fef5f3d39f862216175477db741a211c328b1aba1438bb7e145",
+      "after_sha256": "7550996afd13dd19d74d89739368ed95a4f1138a108c67a3d87504628baad209"
+    },
+    "src/view/DropdownView.cpp": {
+      "before_sha256": "ee0e5af2b83b5f98842370693d897cf984fa891cf1e1e33aa5f4c5b0307e65bb",
+      "after_sha256": "1f697185d75a15dd3632c3dd4b75f183f2be504c6eae291be2f63ab850703d69"
+    },
+    "src/view/DropdownView.h": {
+      "before_sha256": "f2a19e7300cd3f66d78e27cde39deae006928ba4536e7dec8afc98402bb6edf8",
+      "after_sha256": "cbae01c0c4f8338fdb9321d45f13fa017a0eb481b4342e2c80184a928c162574"
+    }
+  },
+  "fonts": {
+    "assets/fonts/notosanscjkjp.ttf": "7ae5f8546575719853db6bc20d6cbaf61d8fdfc90d68204bc24f7f5e5e317636",
+    "assets/fonts/fa-solid-900.ttf": "b4990d0d0c5f5d38d62e936eea120674e584c7eea8dcee38a975c0cf9a37539b"
+  },
+  "candidate_compile_commands": [
+    {
+      "directory": "/tmp/asobmashow-sdl3-performance/build",
+      "command": "/usr/bin/c++ -DBENCH_SDL=3 -DBX_CONFIG_DEBUG=0 -I/Users/xf/workspace/SNURhythm/AsoBMaShow/src -I/Users/xf/workspace/SNURhythm/AsoBMaShow/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bimg/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga/lib -I/tmp/asobmashow-sdl3-performance/build/SDL/include-revision -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL_ttf/include -O3 -DNDEBUG -std=gnu++2b -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -fPIE -o CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/docs/reviews/evidence/2026-10-09-sdl3-text-layout/probe.cpp.o -c /Users/xf/workspace/SNURhythm/AsoBMaShow/docs/reviews/evidence/2026-10-09-sdl3-text-layout/probe.cpp",
+      "file": "/Users/xf/workspace/SNURhythm/AsoBMaShow/docs/reviews/evidence/2026-10-09-sdl3-text-layout/probe.cpp",
+      "output": "/tmp/asobmashow-sdl3-performance/build/CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/docs/reviews/evidence/2026-10-09-sdl3-text-layout/probe.cpp.o"
+    },
+    {
+      "directory": "/tmp/asobmashow-sdl3-performance/build",
+      "command": "/usr/bin/c++ -DBENCH_SDL=3 -DBX_CONFIG_DEBUG=0 -I/Users/xf/workspace/SNURhythm/AsoBMaShow/src -I/Users/xf/workspace/SNURhythm/AsoBMaShow/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bimg/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga/lib -I/tmp/asobmashow-sdl3-performance/build/SDL/include-revision -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL_ttf/include -O3 -DNDEBUG -std=gnu++2b -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -fPIE -o CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp.o -c /Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp",
+      "file": "/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp",
+      "output": "/tmp/asobmashow-sdl3-performance/build/CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp.o"
+    },
+    {
+      "directory": "/tmp/asobmashow-sdl3-performance/build",
+      "command": "/usr/bin/c++ -DBENCH_SDL=3 -DBX_CONFIG_DEBUG=0 -I/Users/xf/workspace/SNURhythm/AsoBMaShow/src -I/Users/xf/workspace/SNURhythm/AsoBMaShow/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bimg/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga/lib -I/tmp/asobmashow-sdl3-performance/build/SDL/include-revision -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL_ttf/include -O3 -DNDEBUG -std=gnu++2b -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -fPIE -o CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/DropdownView.cpp.o -c /Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/DropdownView.cpp",
+      "file": "/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/DropdownView.cpp",
+      "output": "/tmp/asobmashow-sdl3-performance/build/CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/DropdownView.cpp.o"
+    }
+  ],
+  "patch_sha256": "1bbef37ee801874b9307873034b989220702d2014918c6fe6f51846363ccf942",
+  "note": "Both probe3 binaries built serially with the same retained Release dependency archives. Before uses git archive abaefa1c src; after uses current source. New harness is identical on both sides."
+}

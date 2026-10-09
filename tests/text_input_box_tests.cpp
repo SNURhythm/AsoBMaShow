@@ -20,6 +20,11 @@
 #include <string>
 #include <vector>
 
+// Count real shaping requests without replacing SDL_ttf's measurements.
+#undef TTF_GetStringSize
+extern "C" bool SDLCALL TTF_GetStringSize(
+    TTF_Font *, const char *, size_t, int *, int *);
+
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
 bgfx::VertexLayout PosColorVertex::ms_decl;
@@ -68,6 +73,7 @@ struct ReminderUIFixture {
 #include "guided_access_reminder_ui.inc"
 
 int clearCompositionCalls = 0;
+int stringSizeCalls = 0;
 SDL_Rect nativeInputRect{};
 
 void expect(bool condition, const char *message) {
@@ -445,6 +451,70 @@ void testLanguageRefreshKeepsOpenDropdownScrollAndSelection() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testDropdownWidthReuseAndInvalidation() {
+  i18n::setLanguage(i18n::Language::English);
+  DropdownView dropdown({});
+  DropdownView::State state;
+  state.label = "Display";
+  state.selectedId = "one";
+  state.options = {{"one", "A long display option for width measurement"},
+                   {"two", "Another option"}};
+  dropdown.refresh(state);
+  const int initialWidth = dropdown.getWidth();
+  expect(initialWidth > 160, "fixture exceeds the minimum dropdown width");
+
+  stringSizeCalls = 0;
+  for (int width = 200; width < 210; ++width) dropdown.setTriggerWidth(width);
+  dropdown.setTriggerWidth(0);
+  dropdown.refresh(state);
+  expect(stringSizeCalls == 0,
+         "unchanged dropdown labels are not reshaped during resize or refresh");
+  expect(dropdown.getWidth() == initialWidth,
+         "releasing a fixed trigger width restores the cached natural width");
+
+  state.selectedId = "two";
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == initialWidth,
+         "selection does not change the widest option");
+  state.options[0].leadingColor = Color{255, 0, 0, 255};
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == initialWidth + 13,
+         "adding an indicator invalidates cached horizontal chrome");
+  state.options[0].leadingColor.reset();
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == initialWidth,
+         "removing an indicator restores the previous width");
+  state.label = "";
+  dropdown.refresh(state);
+  const int noPrefixWidth = dropdown.getWidth();
+  expect(noPrefixWidth < initialWidth,
+         "changing only the prefix invalidates the cached width");
+  state.options[0].label = "Short";
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() < noPrefixWidth,
+         "shortening only an option invalidates the cached width");
+  state.options.clear();
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == 160, "empty options restore the minimum width");
+
+  state.label = "A deliberately wide prefix";
+  state.options = {{"one", i18n::message("settings.options.reset.label")}};
+  dropdown.refresh(state);
+  const int englishWidth = dropdown.getWidth();
+  i18n::setLanguage(i18n::Language::Korean);
+  dropdown.setTriggerWidth(0);
+  const int koreanWidth = dropdown.getWidth();
+  expect(koreanWidth != englishWidth,
+         "language revision invalidates width even before view propagation");
+  dropdown.propagateLanguageChange();
+  expect(dropdown.getWidth() == koreanWidth,
+         "language propagation preserves the newly measured width");
+  i18n::setLanguage(i18n::Language::English);
+  dropdown.propagateLanguageChange();
+  expect(dropdown.getWidth() == englishWidth,
+         "switching back restores the original translated width");
+}
+
 void testLanguageRefreshReachesPortalOverlay() {
   i18n::setLanguage(i18n::Language::English);
   OverlayPortal portal;
@@ -473,6 +543,7 @@ public:
   using TextView::TextView;
   int lineHeight() const { return rasterTextLineHeight(); }
   int rasterWidth(const std::string &value) { return measureRasterTextWidth(value); }
+  std::vector<std::string> lines(int width) { return wrappedTextLines(width); }
   SDL_Surface *rasterizeRun(const std::string &value) {
     return renderFontSourceTextSurface(selectFont(static_cast<Uint32>(value.front())), value);
   }
@@ -482,6 +553,34 @@ public:
     return renderFallbackTextSurface(wrapWidth, width, height);
   }
 };
+
+void testFallbackLineBreakReuseAndInvalidation() {
+  MultilineTextProbe view("assets/fonts/fa-solid-900.ttf", 22);
+  view.setDeferredTextureMaterialization(true);
+  const std::string pair = "Mあ"; // Icon font plus a bundled CJK fallback.
+  const int pairWidth = view.rasterWidth(pair);
+  view.setText(pair + pair);
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, pair}),
+         "mixed-font wrapping keeps complete UTF-8 glyphs at the width boundary");
+  stringSizeCalls = 0;
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, pair}),
+         "reused line breaks preserve both lines");
+  expect(stringSizeCalls == 0, "unchanged line breaks do not reshape prefixes");
+
+  expect(view.lines(pairWidth * 2) == std::vector<std::string>({pair + pair}),
+         "a wider viewport invalidates line breaks");
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, pair}),
+         "returning to a narrower viewport recomputes line breaks");
+  view.setText(pair + "M");
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, "M"}),
+         "editing text invalidates line breaks at the same width");
+  view.setText("M\r\nあ");
+  expect(view.lines(pairWidth) == std::vector<std::string>({"M", "あ"}),
+         "explicit CRLF remains one line break after replacing text");
+  view.setText("");
+  expect(view.lines(pairWidth) == std::vector<std::string>({""}),
+         "clearing text discards cached lines");
+}
 
 std::uint64_t alphaCoverage(SDL_Surface *surface) {
   expect(surface != nullptr, "descender text rasterizes");
@@ -894,6 +993,12 @@ extern "C" bool SDLCALL TextInputBoxTest_SetTextInputArea(
   return true;
 }
 
+extern "C" bool SDLCALL TextInputBoxTest_GetStringSize(
+    TTF_Font *font, const char *text, size_t length, int *width, int *height) {
+  ++stringSizeCalls;
+  return TTF_GetStringSize(font, text, length, width, height);
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -911,6 +1016,8 @@ int main() {
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();
+  testDropdownWidthReuseAndInvalidation();
+  testFallbackLineBreakReuseAndInvalidation();
   testDefaultHorizontalPadding();
   testBorrowedSdl3TextIsCopied();
   testClearButtonVisibilityAndCallback();

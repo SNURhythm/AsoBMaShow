@@ -448,6 +448,8 @@ void TextView::setResolvedText(const std::string &newText) {
     return;
   }
   this->text = newText;
+  cachedLineWrapWidth = -1;
+  cachedWrappedLines.clear();
   marqueeStartedAt = SDL_GetTicks();
   metricsDirty = true;
   invalidateTexture();
@@ -829,7 +831,9 @@ void TextView::ensureFontsForText(const std::string &utf8) {
   }
 }
 
-std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) {
+const std::vector<std::string> &TextView::wrappedTextLines(int wrapWidth) {
+  wrapWidth = std::max(0, wrapWidth);
+  if (cachedLineWrapWidth == wrapWidth) return cachedWrappedLines;
   std::vector<std::string> lines;
   std::string currentLine;
   size_t lastBreak = std::string::npos;
@@ -908,7 +912,9 @@ std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) {
   if (!currentLine.empty() || lines.empty()) {
     lines.push_back(currentLine);
   }
-  return lines;
+  cachedWrappedLines = std::move(lines);
+  cachedLineWrapWidth = wrapWidth;
+  return cachedWrappedLines;
 }
 
 SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
@@ -927,7 +933,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
     return nullptr;
   }
 
-  const std::vector<std::string> lines =
+  const auto &lines =
       wrapWidth > 0 ? wrappedTextLines(wrapWidth) : wrappedTextLines(0);
   int width = 0;
   int lineHeight = metrics.height;
@@ -1150,7 +1156,7 @@ void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
       rect.h = 0;
       return;
     }
-    const auto lines = wrappedTextLines(rasterWrapWidth);
+    const auto &lines = wrappedTextLines(rasterWrapWidth);
     int lineHeight = lineHeightForFonts;
     for (const auto &line : lines) {
       int measuredHeight = 0;
