@@ -21,6 +21,11 @@
 
 namespace {
 
+std::string genericPathUtf8(const std::filesystem::path &path) {
+  const auto utf8 = path.generic_u8string();
+  return {utf8.begin(), utf8.end()};
+}
+
 std::filesystem::path chartResourcePath(
     const bms_parser::ChartMeta &metadata,
     const std::filesystem::path &declared) {
@@ -665,8 +670,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       .hasBga = !chart.ReferencedBmpTable.empty(),
       .hasRandomSequence = !chart.Meta.RandomValues.empty(),
       .hasBpmStop = hasBpmStop,
-      .stageFilePath = chart.Meta.StageFile.generic_string(),
-      .backBmpPath = chart.Meta.BackBmp.generic_string(),
+      .stageFilePath = genericPathUtf8(chart.Meta.StageFile),
+      .backBmpPath = genericPathUtf8(chart.Meta.BackBmp),
       .stageFileResourcePath =
           chartResourcePath(chart.Meta, chart.Meta.StageFile),
       .backBmpResourcePath = chartResourcePath(chart.Meta, chart.Meta.BackBmp),

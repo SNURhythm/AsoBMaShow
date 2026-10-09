@@ -24,6 +24,7 @@
 
 using path_t = std::string;
 std::string fspath_to_path_t(std::string_view path) { return std::string(path); }
+std::string utf8_to_path_t(std::string_view path) { return std::string(path); }
 std::string fspath_to_utf8(std::string_view path) { return std::string(path); }
 void SDL_Log(const char *, ...) {}
 

@@ -199,7 +199,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                 // offset-based pass (fast random access) instead of a
                 // per-image stream, which for an audio-heavy archived chart
                 // decompressed the whole archive once per image.
-                std::map<std::string,
+                std::map<std::filesystem::path,
                          std::vector<std::pair<int, std::filesystem::path>>>
                     byArchive;
                 std::vector<std::pair<int, std::filesystem::path>> plain;
@@ -207,7 +207,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   std::filesystem::path archivePath, innerPath;
                   if (archive_file::splitVirtualPath(path, archivePath,
                                                      innerPath)) {
-                    byArchive[archivePath.generic_string()].emplace_back(
+                    byArchive[archivePath].emplace_back(
                         reference, innerPath);
                   } else {
                     plain.emplace_back(reference, path);
@@ -231,7 +231,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   std::vector<archive_file::FileData> files;
                   std::string batchError;
                   if (archive_file::readArchiveEntries(
-                          std::filesystem::path(archive), innerPaths, files,
+                          archive, innerPaths, files,
                           &batchError,
                           [&stop] { return !stop.stop_requested(); })) {
                     for (auto &file : files) {
@@ -255,8 +255,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                     std::vector<unsigned char> bytes;
                     std::string readError;
                     if (archive_file::readFileBounded(
-                            archive_file::makeVirtualPath(
-                                std::filesystem::path(archive), inner),
+                            archive_file::makeVirtualPath(archive, inner),
                             bytes, maximumBytes, &readError, stop)) {
                       out.push_back({.reference = reference,
                                      .bytes = std::move(bytes)});

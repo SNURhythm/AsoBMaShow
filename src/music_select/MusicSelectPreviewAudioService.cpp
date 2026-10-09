@@ -1,4 +1,5 @@
 #include "MusicSelectPreview.h"
+#include "../path.h"
 
 #include <SDL3/SDL.h>
 
@@ -120,7 +121,7 @@ private:
       }
 
       SDL_Log("[select-audio] worker play target=%s",
-              target.string().c_str());
+              fspath_to_utf8(target).c_str());
       bool ok = port_.play(target, true, cancellation, stop);
       SDL_Log("[select-audio] worker play result=%d", ok ? 1 : 0);
       bool stale = false;

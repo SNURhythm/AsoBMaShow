@@ -58,11 +58,12 @@ public:
 
   // Returns true when the worker should abandon work for the given path:
   // a stop was requested or a different request has been queued since.
+  // The path is UTF-8, matching fspath_to_utf8 at scene call sites.
   [[nodiscard]] bool superseded(std::string_view path) const;
 
   // Returns true when a request for this path is queued or currently being
   // processed. A caller can use this to wait for a preload to finish instead
-  // of re-doing the work itself.
+  // of re-doing the work itself. The path is UTF-8.
   [[nodiscard]] bool isRequesting(std::string_view path) const;
 
   void setOnIdle(std::function<void()> onIdle);

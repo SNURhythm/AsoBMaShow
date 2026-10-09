@@ -281,11 +281,18 @@ sevenZipFormatCandidates(const std::filesystem::path &path) {
 }
 #endif
 
+// Archive names and index keys are UTF-8 with forward slashes on every OS.
+// generic_string() uses the Windows code page and can throw for valid names.
+std::string genericPathUtf8(const std::filesystem::path &path) {
+  const auto utf8 = path.generic_u8string();
+  return {reinterpret_cast<const char *>(utf8.data()), utf8.size()};
+}
+
 std::string normalizeEntryName(std::string value) {
   value = replaceAll(std::move(value), "\\", "/");
-  std::filesystem::path path(value);
+  std::filesystem::path path(utf8_to_path_t(value));
   path = path.lexically_normal();
-  std::string normalized = path.generic_string();
+  std::string normalized = genericPathUtf8(path);
   while (!normalized.empty() && normalized.front() == '/') {
     normalized.erase(normalized.begin());
   }
@@ -313,7 +320,7 @@ bool safeEntryPath(const std::string &name, std::filesystem::path &outPath) {
     return false;
   }
   const std::string normalized = normalizeEntryName(name);
-  std::filesystem::path relative(normalized);
+  std::filesystem::path relative(utf8_to_path_t(normalized));
   if (relative.empty() || relative.is_absolute() || relative.has_root_path()) {
     return false;
   }
@@ -328,10 +335,10 @@ bool safeEntryPath(const std::string &name, std::filesystem::path &outPath) {
 
 bool isCanonicalEntryPath(const std::filesystem::path &path) {
   if (path.empty() || path.has_root_path()) return false;
-  const auto name = path.generic_string();
+  const auto name = genericPathUtf8(path);
   if (name.find('\0') != std::string::npos ||
       name.find('\\') != std::string::npos ||
-      name != path.lexically_normal().generic_string()) return false;
+      name != genericPathUtf8(path.lexically_normal())) return false;
   for (const auto &part : path) {
     if (part == "." || part == "..") return false;
   }
@@ -340,8 +347,8 @@ bool isCanonicalEntryPath(const std::filesystem::path &path) {
 
 bool pathIsInsideFolder(const std::filesystem::path &path,
                         const std::filesystem::path &folderPath) {
-  const std::string normalized = normalizeEntryName(path.generic_string());
-  const std::string folder = normalizeEntryName(folderPath.generic_string());
+  const std::string normalized = normalizeEntryName(genericPathUtf8(path));
+  const std::string folder = normalizeEntryName(genericPathUtf8(folderPath));
   if (folder.empty()) {
     return !normalized.empty();
   }
@@ -405,14 +412,14 @@ bool isSystemFileComponent(const std::string &component,
 }
 
 bool isSystemEntryPath(const std::filesystem::path &path) {
-  const std::string normalized = normalizeEntryName(path.generic_string());
+  const std::string normalized = normalizeEntryName(genericPathUtf8(path));
   if (normalized.empty()) {
     return false;
   }
 
-  std::filesystem::path relative(normalized);
+  std::filesystem::path relative(utf8_to_path_t(normalized));
   for (const auto &part : relative) {
-    const std::string component = part.generic_string();
+    const std::string component = genericPathUtf8(part);
     if (component.empty() || component == "." || component == "..") {
       continue;
     }
@@ -828,7 +835,7 @@ bool readRegularFile(const std::filesystem::path &path,
   archive_source::InputFile file(path, std::ios::binary);
 #if TARGET_OS_ANDROID
   if (!file) {
-    const std::string assetPath = path.generic_string();
+    const std::string assetPath = genericPathUtf8(path);
     UniqueResource<SDL_IOStream, SDL_CloseIO> rw(
         SDL_IOFromFile(assetPath.c_str(), "rb"));
     if (rw) {
@@ -994,7 +1001,7 @@ bool readRegularFileBounded(const std::filesystem::path &path,
   // iOS Files-app storage (and the bundle resource tree) is not openable with
   // plain fopen/ifstream; SDL_IOFromFile is the read that reaches those. Use it
   // as a fallback on iOS/Android when the ordinary stream cannot open the file.
-  const std::string assetPath = path.generic_string();
+  const std::string assetPath = genericPathUtf8(path);
   UniqueResource<SDL_IOStream, SDL_CloseIO> input(
       SDL_IOFromFile(assetPath.c_str(), "rb"));
   if (input) {
@@ -3073,7 +3080,7 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
                       std::uintmax_t maximumBytes =
                           std::numeric_limits<std::uintmax_t>::max()) {
   bytes.clear();
-  const std::string target = normalizeEntryName(innerPath.generic_string());
+  const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
   if (target.empty()) {
     if (errorMessage != nullptr) {
       *errorMessage = "Archive entry path is empty.";
@@ -3116,7 +3123,7 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
       archive_read_data_skip(archiveHandle);
       continue;
     }
-    if (normalizeEntryName(relativePath.generic_string()) != target) {
+    if (normalizeEntryName(genericPathUtf8(relativePath)) != target) {
       archive_read_data_skip(archiveHandle);
       continue;
     }
@@ -3185,7 +3192,7 @@ bool readArchiveEntriesUncached(
 
   std::unordered_map<std::string, std::filesystem::path> targets;
   for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(innerPath.generic_string());
+    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
     if (!target.empty()) {
       targets.emplace(target, innerPath);
     }
@@ -3251,7 +3258,7 @@ bool readArchiveEntriesUncached(
     }
 
     const std::string normalized =
-        normalizeEntryName(info.relativePath.generic_string());
+        normalizeEntryName(genericPathUtf8(info.relativePath));
     const auto targetIt = targets.find(normalized);
     if (targetIt == targets.end()) {
       archive_read_data_skip(archiveHandle);
@@ -3305,7 +3312,7 @@ bool readArchiveEntriesUncachedStreaming(
 
   std::unordered_map<std::string, std::filesystem::path> targets;
   for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(innerPath.generic_string());
+    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
     if (!target.empty()) {
       targets.emplace(target, innerPath);
     }
@@ -3370,7 +3377,7 @@ bool readArchiveEntriesUncachedStreaming(
     }
 
     const std::string normalized =
-        normalizeEntryName(info.relativePath.generic_string());
+        normalizeEntryName(genericPathUtf8(info.relativePath));
     const auto targetIt = targets.find(normalized);
     if (targetIt == targets.end()) {
       archive_read_data_skip(archiveHandle);
@@ -3577,7 +3584,7 @@ void buildIndexLookups(CachedIndex &index) {
     if (entry.directory) {
       continue;
     }
-    const std::string normalized = entry.path.generic_string();
+    const std::string normalized = genericPathUtf8(entry.path);
     if (normalized.empty()) {
       continue;
     }
@@ -3753,7 +3760,7 @@ bool writeCachedIndexToDisk(const std::string &key,
     writeU8(index.sevenZipFormat);
     writeU64(index.entries.size());
     for (const auto &entry : index.entries) {
-      const std::string pathText = entry.path.generic_string();
+      const std::string pathText = genericPathUtf8(entry.path);
       writeU64(pathText.size());
       stream.write(pathText.data(),
                    static_cast<std::streamsize>(pathText.size()));
@@ -3878,7 +3885,7 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
     file.read(pathText.data(), static_cast<std::streamsize>(pathLen));
     Entry entry;
     entry.path = utf8_to_path_t(pathText);
-    if (!isCanonicalEntryPath(entry.path) || entry.path.generic_string() != pathText) {
+    if (!isCanonicalEntryPath(entry.path) || genericPathUtf8(entry.path) != pathText) {
       return nullptr;
     }
     entry.directory = readU8() != 0;
@@ -4184,7 +4191,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
 
 const Entry *findIndexedEntry(const CachedIndex &index,
                               const std::filesystem::path &innerPath) {
-  const std::string target = normalizeEntryName(innerPath.generic_string());
+  const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
   if (target.empty()) {
     return nullptr;
   }
@@ -4316,9 +4323,9 @@ bool readArchiveEntriesByCachedOrder(
     }
 
     const std::string actual =
-        normalizeEntryName(info.relativePath.generic_string());
+        normalizeEntryName(genericPathUtf8(info.relativePath));
     const std::string expected =
-        normalizeEntryName(target.entryPath.generic_string());
+        normalizeEntryName(genericPathUtf8(target.entryPath));
     if (actual != expected) {
       return fail("Cached archive entry path did not match archive stream.");
     }
@@ -4460,9 +4467,9 @@ bool readArchiveEntriesByCachedOrderStreaming(
     }
 
     const std::string actual =
-        normalizeEntryName(info.relativePath.generic_string());
+        normalizeEntryName(genericPathUtf8(info.relativePath));
     const std::string expected =
-        normalizeEntryName(target.entryPath.generic_string());
+        normalizeEntryName(genericPathUtf8(target.entryPath));
     if (actual != expected) {
       return fail("Cached archive entry path did not match archive stream.");
     }
@@ -4604,7 +4611,7 @@ std::optional<std::string> normalizedZipEntryName(const std::string &filename,
       }
       convertedAny = true;
       if (safeEntryPath(*converted, convertedPath)) {
-        return convertedPath.generic_string();
+        return genericPathUtf8(convertedPath);
       }
     }
     if (knownMismatch != nullptr) {
@@ -4620,7 +4627,7 @@ std::optional<std::string> normalizedZipEntryName(const std::string &filename,
 
   std::filesystem::path minizPath;
   if (safeEntryPath(filename, minizPath)) {
-    return minizPath.generic_string();
+    return genericPathUtf8(minizPath);
   }
 
   if (knownMismatch != nullptr) {
@@ -4969,7 +4976,7 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     }
 
     entries.push_back({
-        .path = std::filesystem::path(*normalized),
+        .path = utf8_to_path_t(*normalized),
         .directory = stat.m_is_directory != 0,
         .size = stat.m_uncomp_size,
         .order = static_cast<std::size_t>(fileIndex),
@@ -5228,7 +5235,7 @@ bool readZipEntriesByName(
   exactTargets.reserve(innerPaths.size());
   lowerTargets.reserve(innerPaths.size());
   for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(innerPath.generic_string());
+    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
     if (target.empty()) {
       continue;
     }
@@ -5286,7 +5293,7 @@ bool readZipEntriesByName(
         continue;
       }
       targetIt = exactTargets.find(normalizeEntryName(
-          lowerIt->second.generic_string()));
+          genericPathUtf8(lowerIt->second)));
       if (targetIt == exactTargets.end()) {
         continue;
       }
@@ -5392,7 +5399,7 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
     return fail("Could not read ZIP central directory filename.");
   }
   if (compareZipEntryName(*filename,
-                          normalizeEntryName(entry.path.generic_string())) ==
+                          normalizeEntryName(genericPathUtf8(entry.path))) ==
       ZipNameMatch::Mismatches) {
     return fail("ZIP central directory order did not match archive index.");
   }
@@ -5424,7 +5431,7 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
     if (produced > maximumBytes - bytes.size()) {
       mz_zip_reader_extract_iter_free(iterator);
       return fail("Archive entry exceeds bounded read limit: " +
-                      entry.path.generic_string(),
+                      genericPathUtf8(entry.path),
                   true);
     }
     reserveBoundedAppend(bytes, produced, maximumBytes);
@@ -5453,7 +5460,7 @@ bool readZipEntriesByIndex(
 
   std::unordered_map<std::string, std::filesystem::path> targets;
   for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(innerPath.generic_string());
+    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
     if (!target.empty()) {
       targets.emplace(target, innerPath);
     }
@@ -5482,7 +5489,7 @@ bool readZipEntriesByIndex(
     }
 
     readTargets.push_back({
-        .normalized = normalizeEntryName(entry->path.generic_string()),
+        .normalized = normalizeEntryName(genericPathUtf8(entry->path)),
         .entryPath = entry->path,
         .order = entry->order,
         .size = entry->size,
@@ -5578,7 +5585,7 @@ bool readZipEntriesByIndexStreaming(
 
   std::unordered_map<std::string, std::filesystem::path> targets;
   for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(innerPath.generic_string());
+    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
     if (!target.empty()) {
       targets.emplace(target, innerPath);
     }
@@ -5607,7 +5614,7 @@ bool readZipEntriesByIndexStreaming(
     }
 
     readTargets.push_back({
-        .normalized = normalizeEntryName(entry->path.generic_string()),
+        .normalized = normalizeEntryName(genericPathUtf8(entry->path)),
         .entryPath = entry->path,
         .order = entry->order,
         .size = entry->size,
@@ -5725,7 +5732,7 @@ bool readZipEntriesByIndexConcurrent(
 
   std::unordered_map<std::string, std::filesystem::path> targets;
   for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(innerPath.generic_string());
+    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
     if (!target.empty()) {
       targets.emplace(target, innerPath);
     }
@@ -5760,7 +5767,7 @@ bool readZipEntriesByIndexConcurrent(
     }
 
     readTargets.push_back({
-        .normalized = normalizeEntryName(entry->path.generic_string()),
+        .normalized = normalizeEntryName(genericPathUtf8(entry->path)),
         .entryPath = entry->path,
         .order = entry->order,
         .size = entry->size,
@@ -6196,8 +6203,8 @@ bool readUnarrRarEntriesByOffset(
     const char *actualName = ar_entry_get_name(archive.get());
     std::filesystem::path actualPath;
     if (actualName == nullptr || !safeEntryPath(actualName, actualPath) ||
-        normalizeEntryName(actualPath.generic_string()) !=
-            normalizeEntryName(target.entryPath.generic_string())) {
+        normalizeEntryName(genericPathUtf8(actualPath)) !=
+            normalizeEntryName(genericPathUtf8(target.entryPath))) {
       if (errorMessage != nullptr) {
         *errorMessage = "unarr RAR offset did not match cached entry path.";
       }
@@ -6340,8 +6347,8 @@ bool readUnarrRarEntriesByOffsetStreaming(
     const char *actualName = ar_entry_get_name(archive.get());
     std::filesystem::path actualPath;
     if (actualName == nullptr || !safeEntryPath(actualName, actualPath) ||
-        normalizeEntryName(actualPath.generic_string()) !=
-            normalizeEntryName(target.entryPath.generic_string())) {
+        normalizeEntryName(genericPathUtf8(actualPath)) !=
+            normalizeEntryName(genericPathUtf8(target.entryPath))) {
       if (errorMessage != nullptr) {
         *errorMessage = "unarr RAR offset did not match cached entry path.";
       }
@@ -6404,8 +6411,8 @@ bool readUnarrRarTargetByOffset(ar_archive *archive,
   const char *actualName = ar_entry_get_name(archive);
   std::filesystem::path actualPath;
   if (actualName == nullptr || !safeEntryPath(actualName, actualPath) ||
-      normalizeEntryName(actualPath.generic_string()) !=
-          normalizeEntryName(target.entryPath.generic_string())) {
+      normalizeEntryName(genericPathUtf8(actualPath)) !=
+          normalizeEntryName(genericPathUtf8(target.entryPath))) {
     if (errorMessage != nullptr) {
       *errorMessage = "unarr RAR offset did not match cached entry path.";
     }
@@ -6961,8 +6968,8 @@ bool readSevenZipEntriesByIndex(
     std::filesystem::path relativePath;
     if (!actualPath.has_value() ||
         !safeEntryPath(*actualPath, relativePath) ||
-        normalizeEntryName(relativePath.generic_string()) !=
-            normalizeEntryName(target.entryPath.generic_string())) {
+        normalizeEntryName(genericPathUtf8(relativePath)) !=
+            normalizeEntryName(genericPathUtf8(target.entryPath))) {
       if (errorMessage != nullptr) {
         *errorMessage = "7-Zip archive index did not match cached entry path.";
       }
@@ -7188,8 +7195,8 @@ bool readSevenZipEntriesByIndexStreaming(
     std::filesystem::path relativePath;
     if (!actualPath.has_value() ||
         !safeEntryPath(*actualPath, relativePath) ||
-        normalizeEntryName(relativePath.generic_string()) !=
-            normalizeEntryName(target.entryPath.generic_string())) {
+        normalizeEntryName(genericPathUtf8(relativePath)) !=
+            normalizeEntryName(genericPathUtf8(target.entryPath))) {
       if (errorMessage != nullptr) {
         *errorMessage = "7-Zip archive index did not match cached entry path.";
       }
@@ -7295,8 +7302,8 @@ bool sevenZipEntryMatchesTarget(IInArchive *archive, UInt32 itemIndex,
   }
   std::filesystem::path relativePath;
   if (!actualPath.has_value() || !safeEntryPath(*actualPath, relativePath) ||
-      normalizeEntryName(relativePath.generic_string()) !=
-          normalizeEntryName(target.entryPath.generic_string())) {
+      normalizeEntryName(genericPathUtf8(relativePath)) !=
+          normalizeEntryName(genericPathUtf8(target.entryPath))) {
     if (errorMessage != nullptr) {
       *errorMessage = "7-Zip archive index did not match cached entry path.";
     }
@@ -8375,10 +8382,10 @@ std::string readableUnzipFolderName(const std::filesystem::path &archivePath,
                                     const std::filesystem::path &folderPath) {
   std::string name;
   if (!folderPath.empty()) {
-    name = folderPath.filename().generic_string();
+    name = genericPathUtf8(folderPath.filename());
   }
   if (name.empty() || name == "." || name == "..") {
-    name = archivePath.stem().generic_string();
+    name = genericPathUtf8(archivePath.stem());
   }
   if (name.empty()) {
     name = "Unzipped Chart";
@@ -8402,7 +8409,7 @@ std::string readableUnzipFolderName(const std::filesystem::path &archivePath,
 
 bool isReservedUnzipEntryPath(const std::filesystem::path &path) {
   if (path.empty()) return false;
-  auto name = lowerCopy(path.begin()->generic_string());
+  auto name = lowerCopy(genericPathUtf8(*path.begin()));
   const auto stream = name.find(':');
   if (stream != std::string::npos) name.resize(stream);
   while (!name.empty() && (name.back() == '.' || name.back() == ' ')) name.pop_back();
@@ -9579,7 +9586,7 @@ bool readFile(const std::filesystem::path &path,
   if (isSystemEntryPath(innerPath)) {
     if (errorMessage != nullptr) {
       *errorMessage = "Archive entry is system metadata: " +
-                      innerPath.generic_string();
+                      genericPathUtf8(innerPath);
     }
     return false;
   }
@@ -9598,7 +9605,7 @@ bool readFile(const std::filesystem::path &path,
   const auto resolvedInner = resolveInnerPath(archivePath, innerPath);
   if (!resolvedInner.has_value()) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive entry not found: " + innerPath.generic_string();
+      *errorMessage = "Archive entry not found: " + genericPathUtf8(innerPath);
     }
     appendDebugLogLineImpl("Archive entry not found: " +
                            pathForLog(makeVirtualPath(archivePath,
@@ -9691,7 +9698,7 @@ bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
   if (isSystemEntryPath(innerPath)) {
     if (errorMessage != nullptr) {
       *errorMessage = "Archive entry is system metadata: " +
-                      innerPath.generic_string();
+                      genericPathUtf8(innerPath);
     }
     return false;
   }
@@ -9711,17 +9718,17 @@ bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
     // Diagnose: dump the target bytes and every indexed entry under the same
     // folder (name + bytes) so a name/encoding mismatch is visible on-device
     // without console access.
-    const std::string targetName = normalizeEntryName(innerPath.generic_string());
+    const std::string targetName = normalizeEntryName(genericPathUtf8(innerPath));
     const std::string targetFolder =
-        innerPath.parent_path().lexically_normal().generic_string();
+        genericPathUtf8(innerPath.parent_path().lexically_normal());
     std::ostringstream detail;
-    detail << "Archive entry not found: " << innerPath.generic_string()
+    detail << "Archive entry not found: " << genericPathUtf8(innerPath)
            << " [target bytes=" << indexDebugBytes(targetName)
            << " folder=" << targetFolder << " entries="
            << index->entries.size() << "]";
     for (const Entry &candidate : index->entries) {
       const std::string candidateName =
-          normalizeEntryName(candidate.path.generic_string());
+          normalizeEntryName(genericPathUtf8(candidate.path));
       if (targetFolder.empty() ||
           candidateName.rfind(targetFolder + "/", 0) == 0) {
         detail << " | " << candidateName << " bytes="
@@ -9738,7 +9745,7 @@ bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
   if (entry->size > maximumBytes) {
     if (errorMessage != nullptr) {
       *errorMessage = "Archive entry exceeds bounded read limit: " +
-                      entry->path.generic_string();
+                      genericPathUtf8(entry->path);
     }
     return false;
   }
@@ -9917,9 +9924,9 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   auto relativePathForEntry =
       [&folderInnerPath](const std::filesystem::path &entryPath)
       -> std::optional<std::filesystem::path> {
-    const std::string entryName = normalizeEntryName(entryPath.generic_string());
+    const std::string entryName = normalizeEntryName(genericPathUtf8(entryPath));
     const std::string folderName =
-        normalizeEntryName(folderInnerPath.generic_string());
+        normalizeEntryName(genericPathUtf8(folderInnerPath));
     std::string relative = entryName;
     if (!folderName.empty()) {
       if (entryName.size() <= folderName.size() ||
@@ -9953,7 +9960,7 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   for (int attempt = 0; attempt < 100; ++attempt) {
     const std::string folderName =
         attempt == 0 ? baseName : baseName + " " + std::to_string(attempt + 1);
-    const std::filesystem::path candidate = destinationRoot / folderName;
+    const std::filesystem::path candidate = destinationRoot / utf8_to_path_t(folderName);
     const std::filesystem::path candidateMarker =
         candidate / ".asobmashow_unzip_complete";
     const std::filesystem::path candidateChart = candidate / *chartRelative;
@@ -9989,7 +9996,7 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
 
   if (outputFolder.empty()) {
     outputFolder = destinationRoot /
-                   (baseName + " " + stable_hash::hex64(stable_hash::fnv1a64(key)));
+                   utf8_to_path_t(baseName + " " + stable_hash::hex64(stable_hash::fnv1a64(key)));
     outputChartPath = outputFolder / *chartRelative;
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
@@ -10117,7 +10124,7 @@ bool extractArchiveFullyWithBatchReader(
       continue;
     }
     std::filesystem::path safePath;
-    if (!safeEntryPath(entry.path.generic_string(), safePath) ||
+    if (!safeEntryPath(genericPathUtf8(entry.path), safePath) ||
         isSystemEntryPath(safePath)) {
       continue;
     }
@@ -10166,7 +10173,7 @@ bool extractArchiveFullyWithBatchReader(
       }
 
       std::filesystem::path relativePath;
-      if (!safeEntryPath(file.path.generic_string(), relativePath) ||
+      if (!safeEntryPath(genericPathUtf8(file.path), relativePath) ||
           isSystemEntryPath(relativePath)) {
         return false;
       }
@@ -10309,7 +10316,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
   std::unordered_set<std::string> names;
   for (const auto &entry : index.entries) {
     if (!entry.directory) {
-      if (!names.insert(lowerCopy(entry.path.generic_string())).second) return std::nullopt;
+      if (!names.insert(lowerCopy(genericPathUtf8(entry.path))).second) return std::nullopt;
       files.push_back(&entry);
     }
   }
@@ -10333,7 +10340,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
   for (const auto &entry : index.entries) {
     for (auto parent = entry.path.parent_path(); !parent.empty(); parent = parent.parent_path()) {
       if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
-      if (names.contains(lowerCopy(parent.generic_string()))) return std::nullopt;
+      if (names.contains(lowerCopy(genericPathUtf8(parent)))) return std::nullopt;
     }
   }
   workers = std::min(workers, files.size());
@@ -10370,7 +10377,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
         mz_zip_archive_file_stat stat{};
         const auto filename = minizFilename(&archive, order);
         if (!mz_zip_reader_file_stat(&archive, order, &stat) || !filename ||
-            compareZipEntryName(*filename, normalizeEntryName(entry.path.generic_string())) == ZipNameMatch::Mismatches ||
+            compareZipEntryName(*filename, normalizeEntryName(genericPathUtf8(entry.path))) == ZipNameMatch::Mismatches ||
             stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
           fail("ZIP entry does not match the extraction index.");
           return;
@@ -10615,7 +10622,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
         attempt == 0 ? baseName : baseName + " " +
             (attempt == 100 ? stable_hash::hex64(stable_hash::fnv1a64(key))
                             : std::to_string(attempt + 1));
-    const std::filesystem::path candidate = destinationRoot / folderName;
+    const std::filesystem::path candidate = destinationRoot / utf8_to_path_t(folderName);
     const std::filesystem::path candidateMarker =
         candidate / ".asobmashow_unzip_complete";
 

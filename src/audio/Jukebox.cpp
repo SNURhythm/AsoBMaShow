@@ -766,8 +766,8 @@ std::string lowerAsciiCopy(std::string value) {
 }
 
 std::string normalizeArchiveLookupPath(const std::filesystem::path &path) {
-  std::filesystem::path normalized = path.lexically_normal();
-  std::string value = normalized.generic_string();
+  const auto normalized = path.lexically_normal().generic_u8string();
+  std::string value(normalized.begin(), normalized.end());
   while (!value.empty() && value.front() == '/') {
     value.erase(value.begin());
   }
@@ -2217,7 +2217,8 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
       return;
     }
     const auto &wavPath = wavIt->second;
-    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
+    const std::filesystem::path basePath =
+        chart.Meta.Folder / utf8_to_path_t(wavPath);
     const auto resolvedPath =
         archive_file::findFileWithExtensions(basePath, audioExtensionViews);
     if (resolvedPath.has_value()) {
@@ -2302,7 +2303,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
     (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chart.Meta.Folder / wavPath,
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / utf8_to_path_t(wavPath),
                                        archivePath, innerPath)) {
       hasVirtualAssetBase = true;
       break;
@@ -2324,7 +2325,8 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
       return true;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
+    const std::filesystem::path basePath =
+        chart.Meta.Folder / utf8_to_path_t(wavPath);
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     std::optional<std::filesystem::path> resolvedPath;
@@ -2458,7 +2460,7 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
     }
     const auto &bmpPath = bmpIt->second;
     bool found = false;
-    std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
+    std::filesystem::path basePath = chart.Meta.Folder / utf8_to_path_t(bmpPath);
     std::filesystem::path path;
 
     if (auto resolvedVideoPath = findWithReplacedExtensions(
@@ -2498,7 +2500,7 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chart.Meta.Folder / bmpPath,
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / utf8_to_path_t(bmpPath),
                                        archivePath, innerPath)) {
       hasVirtualAssetBase = true;
       break;
@@ -2524,7 +2526,8 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
       return true;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
+    const std::filesystem::path basePath =
+        chart.Meta.Folder / utf8_to_path_t(bmpPath);
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     const bool baseIsVirtual =
@@ -2719,7 +2722,8 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
       break;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
+    const std::filesystem::path basePath =
+        chart.Meta.Folder / utf8_to_path_t(wavPath);
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     std::optional<std::filesystem::path> resolvedPath;
@@ -2765,7 +2769,8 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
       break;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
+    const std::filesystem::path basePath =
+        chart.Meta.Folder / utf8_to_path_t(bmpPath);
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     const bool baseIsVirtual =

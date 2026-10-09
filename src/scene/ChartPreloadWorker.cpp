@@ -68,16 +68,18 @@ bool ChartPreloadWorker::superseded(std::string_view path) const {
   // A newer request for a different chart supersedes the current one; a
   // re-request for the same chart is not a supersession (request() dedups it).
   return pending_.has_value() &&
-         fspath_to_path_t(pending_->meta.BmsPath) != fspath_to_path_t(path);
+         fspath_to_path_t(pending_->meta.BmsPath) !=
+             utf8_to_path_t(std::string(path));
 }
 
 bool ChartPreloadWorker::isRequesting(std::string_view path) const {
   std::unique_lock<std::mutex> lock(mutex_);
+  const auto nativePath = utf8_to_path_t(std::string(path));
   if (pending_ &&
-      fspath_to_path_t(pending_->meta.BmsPath) == fspath_to_path_t(path)) {
+      fspath_to_path_t(pending_->meta.BmsPath) == nativePath) {
     return true;
   }
-  return inFlightPath_.has_value() && *inFlightPath_ == fspath_to_path_t(path);
+  return inFlightPath_.has_value() && *inFlightPath_ == nativePath;
 }
 
 void ChartPreloadWorker::setOnIdle(std::function<void()> onIdle) {

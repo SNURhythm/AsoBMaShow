@@ -383,7 +383,8 @@ std::string checkpointPathTextForDb(const std::filesystem::path &path) {
 }
 
 std::string checkpointInnerPathText(const std::filesystem::path &path) {
-  return path.lexically_normal().generic_string();
+  const auto text = path.lexically_normal().generic_u8string();
+  return {text.begin(), text.end()};
 }
 
 std::optional<archive_file::SourcePreference>

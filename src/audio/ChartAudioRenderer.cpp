@@ -106,7 +106,8 @@ resolveSoundPath(const bms_parser::Chart &chart, int wav) {
     return std::nullopt;
   }
 
-  const std::filesystem::path basePath = chart.Meta.Folder / wavIt->second;
+  const std::filesystem::path basePath =
+      chart.Meta.Folder / utf8_to_path_t(wavIt->second);
   std::vector<std::string_view> extensions(
       asobmshow::chart_assets::kAudioExtensions.begin(),
       asobmshow::chart_assets::kAudioExtensions.end());

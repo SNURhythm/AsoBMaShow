@@ -395,9 +395,9 @@ void testScalableFontOutlineWorkIsBounded() {
       1,
       {.font = 1,
        .pointSize = 24,
-       .fallbackChainDigest = "outline-fixture",
        .outlineRgba = {255, 0, 0, 255},
-       .outlineWidth = 1.25},
+       .outlineWidth = 1.25,
+       .fallbackChainDigest = "outline-fixture"},
       faces, std::set<char32_t>{U'A'}, {});
   expect(ordinary.atlas && ordinary.error.empty(),
          "an ordinary fractional outline still produces a scalable glyph atlas");
@@ -453,9 +453,9 @@ void testScalableFontOutlineWorkIsBounded() {
       4,
       {.font = 1,
        .pointSize = 24,
-       .fallbackChainDigest = "outline-width-fixture",
        .outlineRgba = {255, 0, 0, 255},
-       .outlineWidth = 8.25},
+       .outlineWidth = 8.25,
+       .fallbackChainDigest = "outline-width-fixture"},
       faces, std::set<char32_t>{U'A'}, {});
   expect(!oversized.atlas &&
              oversized.error ==
@@ -470,9 +470,9 @@ void testScalableFontOutlineWorkIsBounded() {
       2,
       {.font = 1,
        .pointSize = 192,
-       .fallbackChainDigest = "outline-work-fixture",
        .outlineRgba = {255, 0, 0, 255},
-       .outlineWidth = 8.0},
+       .outlineWidth = 8.0,
+       .fallbackChainDigest = "outline-work-fixture"},
       faces, printableAscii, {});
   if (excessive.error !=
       "font outline work exceeds atlas preparation limit") {
@@ -488,9 +488,9 @@ void testScalableFontOutlineWorkIsBounded() {
       10,
       {.font = 1,
        .pointSize = 192,
-       .fallbackChainDigest = "outline-override-fixture",
        .outlineRgba = {255, 0, 0, 255},
-       .outlineWidth = 8.0},
+       .outlineWidth = 8.0,
+       .fallbackChainDigest = "outline-override-fixture"},
       faces, printableAscii, {}, skin::SkinSafetyPolicy{},
       std::numeric_limits<std::size_t>::max());
   expect(!attemptedOverride.atlas &&
@@ -504,10 +504,10 @@ void testScalableFontOutlineWorkIsBounded() {
         11 + static_cast<skin::SkinTextAtlasId>(attempt),
         {.font = 1,
          .pointSize = 24,
-         .fallbackChainDigest = "late-glyph-fixture-" +
-                                std::to_string(attempt),
          .outlineRgba = {255, 0, 0, 255},
-         .outlineWidth = 2.0},
+         .outlineWidth = 2.0,
+         .fallbackChainDigest = "late-glyph-fixture-" +
+                                std::to_string(attempt)},
         faces, std::set<char32_t>{U'A', U'\U0010ffff'}, {});
     expect(lateGlyphFailure.atlas.has_value(),
            "an unsupported codepoint falls back to the synthetic missing "
@@ -572,9 +572,9 @@ void testScalableFontOutlineWorkIsBounded() {
       3,
       {.font = 1,
        .pointSize = 24,
-       .fallbackChainDigest = "outline-cancellation-fixture",
        .outlineRgba = {255, 0, 0, 255},
-       .outlineWidth = 2.0},
+       .outlineWidth = 2.0,
+       .fallbackChainDigest = "outline-cancellation-fixture"},
       faces, std::set<char32_t>{U'A'}, {}, skin::SkinSafetyPolicy{},
       skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations,
       [&] { return ++cancellationChecks == 2; });
@@ -586,9 +586,9 @@ void testScalableFontOutlineWorkIsBounded() {
   const skin::SkinTextAtlasKey cachedKey{
       .font = 1,
       .pointSize = 24,
-      .fallbackChainDigest = "glyph-cache-fixture",
       .outlineRgba = {255, 0, 0, 255},
-      .outlineWidth = 2.0};
+      .outlineWidth = 2.0,
+      .fallbackChainDigest = "glyph-cache-fixture"};
   std::map<std::string, skin::SkinPreparedGlyphBitmap> glyphStore;
   skin::ScalableGlyphCacheAccessor glyphCache{
       .find = [&glyphStore](char32_t codepoint) {
@@ -938,7 +938,7 @@ void testWildcardImagesResolveListedPathsOnlyOnce() {
   }
 }
 
-void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
+void testChartBuiltinReaderOwnsBytesAndAccountingTransaction(bool unicodePath = false) {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
   const fs::path source = temporary.root / "visible" / "ChartBuiltinFixture";
@@ -979,7 +979,9 @@ void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
       std::istreambuf_iterator<char>(imageFile),
       std::istreambuf_iterator<char>()};
   returnedBytes.resize(32U * 1024U * 1024U + 1U);
-  const fs::path platformPath = temporary.root / "platform/stage.png";
+  const fs::path platformPath = temporary.root / (unicodePath
+      ? fs::path(u8"platform/\u97f3\u697d/\ud55c\uae00-\U0001f3b5.png")
+      : fs::path("platform/stage.png"));
   fs::create_directories(platformPath.parent_path());
   std::ofstream(platformPath, std::ios::binary).put('\0');
 
@@ -1041,6 +1043,10 @@ void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
              oversized.plan->builtinImageResources.contains(100) && !warned &&
              skin::skinResourceCommittedEncodedBytesForTesting() == 0,
          "cached chart input remains available with no authored-skin encoded budget");
+  expect(exact.plan && oversized.plan && !exact.plan->images.empty() &&
+             !oversized.plan->images.empty() &&
+             exact.plan->images.back().pixels.rgba == oversized.plan->images.back().pixels.rgba,
+         "repeated chart artwork preparation reuses decoded pixels for the same native path");
 
   skin::setSkinResourceAccountingLimitsForTesting(
       0, std::numeric_limits<std::size_t>::max(), 0, 0);
@@ -3543,7 +3549,16 @@ void testSkinImagesAreCachedAcrossDecodeRuns() {
          "re-decoding and charges the same decoded budget as the cold run");
 }
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--unicode-builtin") {
+    try {
+      testChartBuiltinReaderOwnsBytesAndAccountingTransaction(true);
+    } catch (const std::exception &error) {
+      std::cerr << "Unicode built-in artwork regression: " << error.what() << '\n';
+      return 1;
+    }
+    return failures ? 1 : 0;
+  }
 #ifndef _WIN32
   TemporaryDirectory documentsSandbox;
   const char *home = std::getenv("HOME");
@@ -3569,6 +3584,7 @@ int main() {
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
   testWildcardImagesResolveListedPathsOnlyOnce();
   testChartBuiltinReaderOwnsBytesAndAccountingTransaction();
+  testChartBuiltinReaderOwnsBytesAndAccountingTransaction(true);
   testChartBuiltinBatchPreservesSparseReferences();
   testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();
   testSecurePreparationLeaseAliasAndCatalogLifetime();

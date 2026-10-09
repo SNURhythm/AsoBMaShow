@@ -74,6 +74,21 @@ bool testStaticChartMetadata() {
     std::cerr << "chart visual model static metadata conversion failed\n";
     return false;
   }
+  const std::u8string stage = u8"\u753b\u50cf/\U0001f3b5-stage.png";
+  const std::u8string back = u8"\u753b\u50cf/\U0001f3b5-back.png";
+  chart.Meta.StageFile = stage;
+  chart.Meta.BackBmp = back;
+  const auto unicodeModel = buildPlayfieldChartVisualModel(chart, 0);
+  const auto &unicodeMetadata = unicodeModel.staticMetadata;
+  if (unicodeMetadata.stageFilePath != std::string(stage.begin(), stage.end()) ||
+      unicodeMetadata.backBmpPath != std::string(back.begin(), back.end()) ||
+      unicodeMetadata.stageFileResourcePath !=
+          chart.Meta.BmsPath.parent_path() / chart.Meta.StageFile ||
+      unicodeMetadata.backBmpResourcePath !=
+          chart.Meta.BmsPath.parent_path() / chart.Meta.BackBmp) {
+    std::cerr << "chart visual model Unicode artwork paths were not preserved\n";
+    return false;
+  }
   return true;
 }
 

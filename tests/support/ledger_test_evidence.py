@@ -52,6 +52,8 @@ def run_native(executable, cwd=ROOT):
         [str(executable), "--list-ledger-assertions"],
         cwd=cwd,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
@@ -112,6 +114,8 @@ def executed_coverage(build_dir, runners):
 
 
 def main():
+    # Native SDL diagnostics use UTF-8 even on non-UTF-8 Windows locales.
+    sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runners", type=Path)
     parser.add_argument("--executable", type=Path)

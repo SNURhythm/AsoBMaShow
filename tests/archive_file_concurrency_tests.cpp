@@ -563,6 +563,100 @@ void writeStoredZipContents(const std::filesystem::path &path,
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
 }
 
+void testUnicodeZipArtworkPaths(const std::string &operation) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "unicode-artwork.zip";
+  const auto entryPath = std::filesystem::path(u8"\u97f3\u697d/\ud55c\uae00-\U0001f3b5.png");
+  const auto missingPath = std::filesystem::path(u8"\u97f3\u697d/\ubbf8\ub4f1\ub85d-\U0001f3b5.png");
+  const std::string payload = "unicode artwork bytes";
+  // Two stored entries with UTF-8 filename flags and CRC-checked payloads.
+  // Embed the fixture to avoid the libarchive writer's Windows locale handling.
+  static constexpr unsigned char fixture[] = {
+      0x50,0x4b,0x03,0x04,0x14,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0xeb,0x65,
+      0x2d,0x5b,0x15,0x00,0x00,0x00,0x15,0x00,0x00,0x00,0x16,0x00,0x00,0x00,0xe9,0x9f,
+      0xb3,0xe6,0xa5,0xbd,0x2f,0xed,0x95,0x9c,0xea,0xb8,0x80,0x2d,0xf0,0x9f,0x8e,0xb5,
+      0x2e,0x70,0x6e,0x67,0x75,0x6e,0x69,0x63,0x6f,0x64,0x65,0x20,0x61,0x72,0x74,0x77,
+      0x6f,0x72,0x6b,0x20,0x62,0x79,0x74,0x65,0x73,0x50,0x4b,0x03,0x04,0x14,0x00,0x00,
+      0x08,0x00,0x00,0x00,0x00,0x00,0x00,0xeb,0x65,0x2d,0x5b,0x15,0x00,0x00,0x00,0x15,
+      0x00,0x00,0x00,0x10,0x00,0x00,0x00,0xe9,0x9f,0xb3,0xe6,0xa5,0xbd,0x2f,0x63,0x68,
+      0x61,0x72,0x74,0x2e,0x62,0x6d,0x73,0x75,0x6e,0x69,0x63,0x6f,0x64,0x65,0x20,0x61,
+      0x72,0x74,0x77,0x6f,0x72,0x6b,0x20,0x62,0x79,0x74,0x65,0x73,0x50,0x4b,0x01,0x02,
+      0x14,0x00,0x14,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0xeb,0x65,0x2d,0x5b,
+      0x15,0x00,0x00,0x00,0x15,0x00,0x00,0x00,0x16,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xe9,0x9f,0xb3,0xe6,0xa5,0xbd,
+      0x2f,0xed,0x95,0x9c,0xea,0xb8,0x80,0x2d,0xf0,0x9f,0x8e,0xb5,0x2e,0x70,0x6e,0x67,
+      0x50,0x4b,0x01,0x02,0x14,0x00,0x14,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,
+      0xeb,0x65,0x2d,0x5b,0x15,0x00,0x00,0x00,0x15,0x00,0x00,0x00,0x10,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x49,0x00,0x00,0x00,0xe9,0x9f,
+      0xb3,0xe6,0xa5,0xbd,0x2f,0x63,0x68,0x61,0x72,0x74,0x2e,0x62,0x6d,0x73,0x50,0x4b,
+      0x05,0x06,0x00,0x00,0x00,0x00,0x02,0x00,0x02,0x00,0x82,0x00,0x00,0x00,0x8c,0x00,
+      0x00,0x00,0x00,0x00,
+  };
+  {
+    std::ofstream output(archivePath, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
+    output.close();
+    assert(output);
+  }
+  std::string error;
+  if (operation == "read" || operation == "missing") {
+    std::vector<unsigned char> bytes{'s', 't', 'a', 'l', 'e'};
+    const auto virtualPath = archive_file::makeVirtualPath(
+        archivePath, operation == "read" ? entryPath : missingPath);
+    const bool read = archive_file::readFileBounded(virtualPath, bytes, payload.size(), &error);
+    if (operation == "read") {
+      assert(read && std::string(bytes.begin(), bytes.end()) == payload);
+      assert(!archive_file::readFileBounded(virtualPath, bytes, payload.size() - 1, &error));
+      assert(bytes.empty() && !error.empty());
+    } else {
+      assert(!read && bytes.empty());
+      const auto missingName = missingPath.generic_u8string();
+      assert(error.find(reinterpret_cast<const char *>(missingName.c_str())) != std::string::npos);
+    }
+  } else {
+    const auto cacheDirectory = temporary.path() / "index";
+    archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+    for (int restart = 0; restart < 2; ++restart) {
+      std::vector<archive_file::Entry> entries;
+      assert(archive_file::listEntries(archivePath, entries, &error));
+      assert(entries.size() == 2);
+      assert(std::any_of(entries.begin(), entries.end(), [&](const auto &entry) {
+        return entry.path == entryPath;
+      }));
+      if (restart == 1) {
+        assert(archive_file::debugLogText().find("Loaded archive index from disk cache: " +
+            fspath_to_utf8(archivePath)) != std::string::npos);
+      }
+      archive_file::clearArchiveIndexCacheForTesting();
+      archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+    }
+    for (std::size_t workers : {1, 4}) {
+      archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers}};
+      const auto result = archive_file::unzipArchiveFully(
+          archivePath, temporary.path() / std::to_string(workers), &error, nullptr,
+          nullptr, nullptr, false, nullptr, &budget);
+      assert(result && result->fileCount == 2);
+      assert(readTestFile(result->outputFolder / entryPath) == payload);
+    }
+    const auto fallbackRoot = temporary.path() / "folder-collisions";
+    const auto baseName = entryPath.parent_path();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      auto folderName = baseName;
+      if (attempt > 0) folderName += " " + std::to_string(attempt + 1);
+      std::filesystem::create_directories(fallbackRoot / folderName);
+    }
+    const auto chartPath = archive_file::makeVirtualPath(archivePath, baseName / "chart.bms");
+    const auto extractedChart = archive_file::unzipVirtualFolderForChart(chartPath, fallbackRoot, &error);
+    assert(extractedChart);
+    auto expectedPrefix = baseName;
+    expectedPrefix += " ";
+    assert(extractedChart->parent_path().filename().native().starts_with(expectedPrefix.native()));
+    assert(readTestFile(extractedChart->parent_path() / entryPath.filename()) == payload);
+    archive_file::setArchiveIndexCacheDirectory({});
+    archive_file::clearArchiveIndexCacheForTesting();
+  }
+}
+
 void testLargeZipCancellation(bool deflated, bool concurrent,
                               bool afterOutputProduced) {
   TempDirectory temporary;
@@ -1857,10 +1951,10 @@ void testFullUnzipCountsExplicitDirectoriesAndEmptyFiles(const std::string &exte
   const auto accepted = archive_file::unzipArchiveFully(path, temporary.path() / "exact", &error,
       nullptr, nullptr, nullptr, true, nullptr, &exact);
   assert(accepted && exact.admittedEntries == 3 && accepted->fileCount == 2);
-  archive_file::UnzipBudget small{.limits = {.maximumArchiveEntries = 2}};
+  archive_file::UnzipBudget limitedBudget{.limits = {.maximumArchiveEntries = 2}};
   bool prepared = false;
   assert(!archive_file::unzipArchiveFully(path, temporary.path() / "small", &error,
-      nullptr, nullptr, nullptr, true, [&](const auto &, const auto &) { prepared = true; return true; }, &small));
+      nullptr, nullptr, nullptr, true, [&](const auto &, const auto &) { prepared = true; return true; }, &limitedBudget));
   assert(!prepared && error.find("entry-count") != std::string::npos);
 }
 
@@ -3631,6 +3725,15 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 3 && std::string(argv[1]) == "--unicode-entry") {
+    try {
+      testUnicodeZipArtworkPaths(argv[2]);
+    } catch (const std::exception &error) {
+      std::cerr << "Unicode archive regression: " << error.what() << '\n';
+      return 1;
+    }
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--source-reference") {
     testReferencedArchivesUseOriginalSource();
     return 0;
@@ -3696,6 +3799,9 @@ int main(int argc, char **argv) {
   // these bounded-read tests index real archives, which would otherwise pollute
   // that assertion's retained debug-log window.
   testZipBoundedReadStreamsFullInBoundsEntry();
+  for (const auto *operation : {"read", "missing", "extract"}) {
+    testUnicodeZipArtworkPaths(operation);
+  }
   testZipBoundedReadAcceptsEmptyStoredEntry();
   testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc();
   testBoundedReadFallsBackToAlternativeAudioExtension();

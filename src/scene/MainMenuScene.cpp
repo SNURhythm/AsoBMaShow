@@ -4929,7 +4929,7 @@ void MainMenuScene::buildFileActionsModal() {
       "library.tasks.back.label", [this]() { showFileActionsModal(); },
       &computerImportPanel_);
   auto showComputerGuide = [this](const char *titleKey, const char *instructionsKey) {
-    const auto path = ChartRepository::DefaultBmsFolderPath().string();
+    const auto path = fspath_to_utf8(ChartRepository::DefaultBmsFolderPath());
     const auto instructions = i18n::format(instructionsKey, {{"path", path}});
     const SDL_MessageBoxButtonData buttons[] = {
         {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0,

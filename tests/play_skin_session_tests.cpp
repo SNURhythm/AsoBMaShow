@@ -50,6 +50,7 @@
 #include <span>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -4332,8 +4333,8 @@ void testMusicSelectAcceptsOversizedSelectedArtwork() {
   }
 }
 
-void testMusicSelectContainsArtworkAllocationFailures() {
-  for (const bool lengthFailure : {false, true}) {
+void testMusicSelectContainsArtworkFailures() {
+  for (const int failure : {0, 1, 2}) {
     for (const bool bannerFailure : {false, true}) {
       ActivationFixture fixture(
           {.skinType = 5, .musicSelectBuiltinImageBearing = true});
@@ -4348,7 +4349,9 @@ void testMusicSelectContainsArtworkAllocationFailures() {
               std::size_t, std::string *, std::stop_token) {
             if (path == "unallocatable.ppm") {
               ++failedReads;
-              if (lengthFailure) throw std::length_error("artwork size");
+              if (failure == 1) throw std::length_error("artwork size");
+              if (failure == 2) throw std::system_error(
+                  std::make_error_code(std::errc::io_error));
               throw std::bad_alloc();
             }
             bytes.assign(pixels.begin(), pixels.end());
@@ -4391,13 +4394,13 @@ void testMusicSelectContainsArtworkAllocationFailures() {
       expect(!exceptionEscaped && rendered && failedReads == 1 &&
                  fixture.device()->createCalls == uploads + 1 &&
                  fixture.device()->destroyCalls == destroys + 1,
-             "allocation failures clear stale artwork, render normally, and do not retry each frame");
+             "artwork failures clear stale artwork, render normally, and do not retry each frame");
       if (exceptionEscaped) continue;
       path = "available.ppm";
       renderUntilUploads(uploads + 2);
       expect(rendered && fixture.device()->createCalls == uploads + 2 &&
                  failedReads == 1,
-             "selector loads artwork after navigating away from a failed allocation");
+             "selector loads artwork after navigating away from a failed read or allocation");
     }
   }
 }
@@ -4436,6 +4439,8 @@ void testMusicSelectRetriesCancelledArtworkAfterReturningToChart(int allocationF
           cancellationObserved = stop.stop_requested();
           if (allocationFailure == 1) throw std::bad_alloc();
           if (allocationFailure == 2) throw std::length_error("artwork size");
+          if (allocationFailure == 3) throw std::system_error(
+              std::make_error_code(std::errc::io_error));
           return false;
         }
         if (path != "chart-a.png") return false;
@@ -11131,6 +11136,12 @@ int main(int argc, char **argv) {
   // These tests verify session state and instruction limits, not host scheduling.
   // Real callback/frame deadlines remain covered by lua_skin_runtime_tests.
   LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
+  if (argc == 2 && std::string_view(argv[1]) == "--music-select-artwork") {
+    testMusicSelectContainsArtworkFailures();
+    for (const int failure : {0, 1, 2, 3})
+      testMusicSelectRetriesCancelledArtworkAfterReturningToChart(failure);
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--authored-result-ir") {
     testResultIrNumericFactoriesReachLiveLua();
     testAuthoredResultIrFactories(fs::path(argv[2]) / "ModernChic");
@@ -11210,8 +11221,8 @@ int main(int argc, char **argv) {
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
   testMusicSelectAcceptsOversizedSelectedArtwork();
-  testMusicSelectContainsArtworkAllocationFailures();
-  for (const int allocationFailure : {0, 1, 2})
+  testMusicSelectContainsArtworkFailures();
+  for (const int allocationFailure : {0, 1, 2, 3})
     testMusicSelectRetriesCancelledArtworkAfterReturningToChart(allocationFailure);
   testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
   testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();

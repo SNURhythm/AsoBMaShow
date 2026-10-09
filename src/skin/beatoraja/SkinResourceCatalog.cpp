@@ -3228,8 +3228,9 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       digest.update(std::span<const std::byte>(
           reinterpret_cast<const std::byte *>(encoded.data()),
           encoded.size()));
+      const auto pathUtf8 = virtualPathByReference.at(reference).generic_u8string();
       const std::string cacheKey =
-          "builtin:" + virtualPathByReference.at(reference).generic_string() +
+          "builtin:" + std::string(pathUtf8.begin(), pathUtf8.end()) +
           ":" + digest.finalHex();
       std::optional<image_decode::DecodedImageData> decoded;
       // Reuse an image already decoded for selector/decide display (the same

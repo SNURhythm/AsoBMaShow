@@ -2340,6 +2340,37 @@ void testSolidArchiveClassificationMigration() {
   }
 }
 
+void testUnicodeSolidArchiveNameSurvivesScanAndBrowsing() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto path = temporary.path() / u8"\u97f3\u697d-\U0001f3b5.7z";
+  std::ofstream(path) << "fixture";
+  auto batch = session->BeginScanBatch();
+  assert(batch);
+  assert(batch->UpsertSolidArchive(
+      {.path = path, .uncompressedSize = 4096, .fileCount = 2}));
+  assert(batch->Commit());
+  const std::u8string expectedName = u8"\u97f3\u697d-\U0001f3b5.7z";
+  const std::string expectedUtf8(expectedName.begin(), expectedName.end());
+  Database database = openDatabase(databasePath);
+  assert(queryString(database.get(), "SELECT name FROM solid_archives") ==
+         expectedUtf8);
+  const MusicSelectBar directory{
+      .id = {"container:solid-archives"},
+      .kind = skin::MusicSelectBarKind::Container,
+      .title = "Solid Archives (1)"};
+  const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, directory, 0);
+  assert(records.size() == 1);
+  assert(records.front().solidArchive);
+  assert(records.front().meta.Title == expectedUtf8);
+  assert(records.front().meta.BmsPath == path);
+}
+
 void testSolidArchiveDirectoryLoadsOnlyArchiveRecords() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -4306,6 +4337,15 @@ void testScratchlessMembershipWhileAnotherConnectionWrites() {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--unicode-archive-test") {
+    try {
+      testUnicodeSolidArchiveNameSurvivesScanAndBrowsing();
+      return 0;
+    } catch (const std::exception &error) {
+      std::cerr << "Unicode solid archive regression: " << error.what() << '\n';
+      return 1;
+    }
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--course-lookup-test") {
     testCourseFallbackLookupUsesHashIndexes();
     testChartQueryBehaviorMatrix();
@@ -4410,6 +4450,7 @@ int main(int argc, char **argv) {
   testSolidArchiveClassificationMigration();
   testParserSemanticsMigrationIsResumable();
   testSolidArchiveDirectoryLoadsOnlyArchiveRecords();
+  testUnicodeSolidArchiveNameSurvivesScanAndBrowsing();
   testChartMigrationReleaseFailureDoesNotReportSuccess();
   testLegacyIosContainerPathRebasesToCurrentDocuments();
   testFindBmsDownloadEntrySelectionLifecycle();

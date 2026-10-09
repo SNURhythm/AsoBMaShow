@@ -3195,7 +3195,7 @@ void MusicSelectScene::executeEvent(
           std::string error;
           if (!platform_open::openPath(path, error)) {
             SDL_Log("Failed to open chart document %s: %s",
-                    path.string().c_str(), error.c_str());
+                    fspath_to_utf8(path).c_str(), error.c_str());
           }
         }
       }
