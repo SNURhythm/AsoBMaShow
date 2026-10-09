@@ -1,12 +1,12 @@
 [submodule "SDL"]
 	path = SDL
 	url = https://github.com/SNURhythm/SDL.git
-    branch = release-3.4.x
+    branch = asobmashow/release-3.4.x
 	shallow = true
 [submodule "SDL_ttf"]
 	path = SDL_ttf
 	url = https://github.com/SNURhythm/SDL_ttf.git
-    branch = SDL2
+    branch = asobmashow/release-3.2.x
 	shallow = true
 [submodule "bgfx"]
 	path = bgfx
