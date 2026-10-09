@@ -1,7 +1,7 @@
 [submodule "SDL"]
 	path = SDL
 	url = https://github.com/SNURhythm/SDL.git
-    branch = SDL2
+    branch = release-3.4.x
 	shallow = true
 [submodule "SDL_ttf"]
 	path = SDL_ttf
