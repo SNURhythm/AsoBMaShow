@@ -355,13 +355,13 @@ bool MusicSelectToolbarView::insideDragHandle(float x, float y) const {
 }
 
 void MusicSelectToolbarView::onPointerEventConsumed(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEBUTTONUP && mouseDragging_ &&
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && mouseDragging_ &&
       event.button.button == SDL_BUTTON_LEFT &&
       event.button.which != SDL_TOUCH_MOUSEID) {
     mouseDragging_ = false;
-  } else if (event.type == SDL_FINGERUP && touchDragging_ != -1 &&
+  } else if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) && touchDragging_ != -1 &&
              !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
-             event.tfinger.fingerId == touchDragging_) {
+             event.tfinger.fingerID == touchDragging_) {
     touchDragging_ = -1;
   } else {
     return;
@@ -376,7 +376,7 @@ bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {
   float x = 0.0F;
   float y = 0.0F;
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return true;
@@ -389,14 +389,14 @@ bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {
     dragPointerOffsetX_ = x - getX();
     dragPointerOffsetY_ = y - getY();
     return false;
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     if (!mouseDragging_) {
       return true;
     }
     mousePosition(event.motion, x, y);
     place(x - dragPointerOffsetX_, y - dragPointerOffsetY_);
     return false;
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (!mouseDragging_ || event.button.button != SDL_BUTTON_LEFT) {
       return true;
     }
@@ -408,7 +408,7 @@ bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {
     state_.hasPosition = true;
     persist();
     return false;
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     if (touchDragging_ != -1) {
       return true;
     }
@@ -416,19 +416,19 @@ bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {
     if (!insideDragHandle(x, y)) {
       return true;
     }
-    touchDragging_ = event.tfinger.fingerId;
+    touchDragging_ = event.tfinger.fingerID;
     dragPointerOffsetX_ = x - getX();
     dragPointerOffsetY_ = y - getY();
     return false;
-  case SDL_FINGERMOTION:
-    if (touchDragging_ != event.tfinger.fingerId) {
+  case SDL_EVENT_FINGER_MOTION:
+    if (touchDragging_ != event.tfinger.fingerID) {
       return true;
     }
     touchPosition(event.tfinger, x, y);
     place(x - dragPointerOffsetX_, y - dragPointerOffsetY_);
     return false;
-  case SDL_FINGERUP:
-    if (touchDragging_ != event.tfinger.fingerId) {
+  case SDL_EVENT_FINGER_UP:
+    if (touchDragging_ != event.tfinger.fingerID) {
       return true;
     }
     touchPosition(event.tfinger, x, y);

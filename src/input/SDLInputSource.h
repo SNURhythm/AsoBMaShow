@@ -6,7 +6,7 @@
 #include "IInputSource.h"
 class SDLInputSource : public IInputSource {
 public:
-  static int EventHandler(void *userdata, SDL_Event *event);
+  static bool EventHandler(void *userdata, SDL_Event *event);
   IInputHandler *handler = nullptr;
   SDLInputSource();
   ~SDLInputSource() override;

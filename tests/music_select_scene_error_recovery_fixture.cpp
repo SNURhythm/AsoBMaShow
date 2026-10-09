@@ -9,19 +9,19 @@
 #include <vector>
 
 enum {
-  SDL_KEYDOWN, SDL_KEYUP, SDL_CONTROLLERBUTTONDOWN, SDL_CONTROLLERBUTTONUP,
-  SDL_MOUSEBUTTONUP, SDLK_RETURN, SDLK_KP_ENTER, SDLK_6, SDLK_ESCAPE, SDLK_DOWN,
-  SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_START,
-  SDL_CONTROLLER_BUTTON_BACK, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
-  SDL_MOUSEMOTION, SDL_MOUSEBUTTONDOWN, SDL_FINGERDOWN, SDL_FINGERMOTION,
+  SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP, SDL_EVENT_GAMEPAD_BUTTON_DOWN, SDL_EVENT_GAMEPAD_BUTTON_UP,
+  SDL_EVENT_MOUSE_BUTTON_UP, SDLK_RETURN, SDLK_KP_ENTER, SDLK_6, SDLK_ESCAPE, SDLK_DOWN,
+  SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_START,
+  SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+  SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION,
   SDL_TOUCH_MOUSEID, SDL_MOUSE_TOUCHID
 };
 struct SDL_Event {
-  int type = SDL_KEYDOWN;
-  struct { int repeat = 0; struct { int sym = 0; } keysym; } key;
-  struct { int button = 0; } cbutton;
+  int type = SDL_EVENT_KEY_DOWN;
+  struct { int repeat = 0; int key = 0; } key;
+  struct { int button = 0; } gbutton;
   struct { int which = 0, x = 0, y = 0; } motion, button;
-  struct { int touchId = 0; float x = 0, y = 0; } tfinger;
+  struct { int touchID = 0; float x = 0, y = 0; } tfinger;
 };
 namespace rendering {
 constexpr float widthScale = 1.0F, heightScale = 1.0F;
@@ -134,17 +134,17 @@ struct MusicSelectScene : Scene {
 
 SCENE_METHODS
 
-SDL_Event keyEvent(int key, int type = SDL_KEYDOWN, int repeat = 0) {
+SDL_Event keyEvent(int key, int type = SDL_EVENT_KEY_DOWN, int repeat = 0) {
   SDL_Event event;
   event.type = type;
-  event.key.keysym.sym = key;
+  event.key.key = key;
   event.key.repeat = repeat;
   return event;
 }
-SDL_Event controllerEvent(int button, int type = SDL_CONTROLLERBUTTONDOWN) {
+SDL_Event controllerEvent(int button, int type = SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
   SDL_Event event;
   event.type = type;
-  event.cbutton.button = button;
+  event.gbutton.button = button;
   return event;
 }
 
@@ -161,8 +161,8 @@ void enterFailure(MusicSelectScene &scene) {
 
 void testSettingsRecovery() {
   for (auto event : {keyEvent(SDLK_RETURN), keyEvent(SDLK_KP_ENTER),
-                     keyEvent(SDLK_6), controllerEvent(SDL_CONTROLLER_BUTTON_A),
-                     controllerEvent(SDL_CONTROLLER_BUTTON_START)}) {
+                     keyEvent(SDLK_6), controllerEvent(SDL_GAMEPAD_BUTTON_SOUTH),
+                     controllerEvent(SDL_GAMEPAD_BUTTON_START)}) {
     MusicSelectScene scene;
     enterFailure(scene);
     scene.handleEvents(event);
@@ -178,8 +178,8 @@ void testSettingsRecovery() {
 }
 
 void testBackRecovery() {
-  for (auto event : {keyEvent(SDLK_ESCAPE), controllerEvent(SDL_CONTROLLER_BUTTON_B),
-                     controllerEvent(SDL_CONTROLLER_BUTTON_BACK)}) {
+  for (auto event : {keyEvent(SDLK_ESCAPE), controllerEvent(SDL_GAMEPAD_BUTTON_EAST),
+                     controllerEvent(SDL_GAMEPAD_BUTTON_BACK)}) {
     MusicSelectScene scene;
     enterFailure(scene);
     scene.handleEvents(event);
@@ -192,16 +192,16 @@ void testBackRecovery() {
 void testErrorModalIsolation() {
   MusicSelectScene scene;
   enterFailure(scene);
-  for (auto event : {keyEvent(SDLK_RETURN, SDL_KEYDOWN, 1),
-                     keyEvent(SDLK_ESCAPE, SDL_KEYDOWN, 1),
-                     keyEvent(SDLK_6, SDL_KEYUP), keyEvent(SDLK_DOWN),
-                     controllerEvent(SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLERBUTTONUP),
-                     controllerEvent(SDL_CONTROLLER_BUTTON_DPAD_DOWN)}) {
+  for (auto event : {keyEvent(SDLK_RETURN, SDL_EVENT_KEY_DOWN, 1),
+                     keyEvent(SDLK_ESCAPE, SDL_EVENT_KEY_DOWN, 1),
+                     keyEvent(SDLK_6, SDL_EVENT_KEY_UP), keyEvent(SDLK_DOWN),
+                     controllerEvent(SDL_GAMEPAD_BUTTON_SOUTH, SDL_EVENT_GAMEPAD_BUTTON_UP),
+                     controllerEvent(SDL_GAMEPAD_BUTTON_DPAD_DOWN)}) {
     scene.handleEvents(event);
   }
   assert(scene.manager.transitions == 0 && scene.normalEvents == 0);
   SDL_Event pointer;
-  pointer.type = SDL_MOUSEBUTTONUP;
+  pointer.type = SDL_EVENT_MOUSE_BUTTON_UP;
   const auto before = scene.errorRoot.events;
   scene.handleEvents(pointer);
   assert(scene.errorRoot.events == before + 1 && scene.staleModal.events == 0 &&

@@ -1923,6 +1923,14 @@ void verifyOrUpdatePng(std::span<const std::uint8_t> actual) {
       ++mismatches;
     }
   }
+  if (mismatches != 0) {
+    const auto actualPath = std::filesystem::temp_directory_path() / "asobmashow-builtin-actual.png";
+    lodepng::encode(actualPath.string(),
+                   std::vector<std::uint8_t>(actual.begin(), actual.end()),
+                   kDrawableWidth, kDrawableHeight);
+    std::cerr << "Built-in pixel mismatches: " << mismatches
+              << "; actual image: " << actualPath << '\n';
+  }
   expect(mismatches == 0,
          "built-in renderer pixels stay within per-channel tolerance 2");
 }
@@ -2370,14 +2378,14 @@ template <typename T> std::vector<T *> descendants(View &root) {
 
 void clickAppearanceButton(View &dispatch, Button &button) {
   SDL_Event event{};
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   event.button.button = SDL_BUTTON_LEFT;
   event.button.x = int((rendering::ui_offset_x +
       (button.getX() + button.getWidth() / 2) * rendering::ui_scale_x) / rendering::widthScale);
   event.button.y = int((rendering::ui_offset_y +
       (button.getY() + button.getHeight() / 2) * rendering::ui_scale_y) / rendering::heightScale);
   dispatch.handleEvents(event);
-  event.type = SDL_MOUSEBUTTONUP;
+  event.type = SDL_EVENT_MOUSE_BUTTON_UP;
   dispatch.handleEvents(event);
 }
 
@@ -2450,7 +2458,7 @@ void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
         if (pickers.empty()) continue;
         auto *picker = pickers.front();
         SDL_Event drag{};
-        drag.type = SDL_MOUSEBUTTONDOWN;
+        drag.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
         drag.button.button = SDL_BUTTON_LEFT;
         drag.button.x = int((rendering::ui_offset_x +
             (picker->getX() + picker->getWidth() / 2) * rendering::ui_scale_x) / rendering::widthScale);
@@ -2461,7 +2469,7 @@ void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
         expect(draft != initial && previewColor() == draft && savedColor() == initial &&
                    scene.settingsCommits == 0,
                "real editor callbacks publish drafts to paused gameplay before mouse release without saving");
-        drag.type = SDL_MOUSEBUTTONUP;
+        drag.type = SDL_EVENT_MOUSE_BUTTON_UP;
         portal.handleEvents(drag);
         const auto actions = descendants<Button>(*scene.appearanceColorPopup);
         expect(actions.size() == 2, "popup provides Cancel and Confirm");
@@ -3566,7 +3574,7 @@ void verifyBuiltInLiftMovesJudgementAndScrollOrigin(const RenderTarget &target) 
 } // namespace
 
 int main() {
-  if (SDL_Init(SDL_INIT_TIMER) != 0) {
+  if (!SDL_Init(0)) {
     std::cerr << "FAIL: SDL timer initialization failed: " << SDL_GetError()
               << '\n';
     return 1;

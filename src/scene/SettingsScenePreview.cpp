@@ -337,7 +337,7 @@ void SettingsScene::syncPreviewTouchLayout() {
   const auto revision = previewPresentation->touchLayoutRevision();
   if (previewTouchRouter && previewTouchLayoutRevision == revision) return;
   previewTouchLayoutRevision = revision;
-  const auto now = static_cast<std::int64_t>(SDL_GetTicks64()) * 1000;
+  const auto now = static_cast<std::int64_t>(SDL_GetTicks()) * 1000;
   if (previewTouchRouter) {
     (void)previewTouchRouter->updateLayout(std::move(layout), now);
     return;
@@ -517,12 +517,12 @@ void SettingsScene::ensurePreviewInputHandler() {
                   ? gameplay::RealtimeTouchPhase::Up
               : gameplay::RealtimeTouchPhase::Move;
           if (rendering::render_width <= 0 || rendering::render_height <= 0) return true;
-          (void)previewTouchRouter->consume({.fingerId = finger, .phase = phase,
+          (void)previewTouchRouter->consume({.fingerId = static_cast<std::int64_t>(finger), .phase = phase,
               .normalizedX = (position.x * rendering::window_width * rendering::ui_scale_x +
                              rendering::ui_offset_x) / rendering::render_width,
               .normalizedY = (position.y * rendering::window_height * rendering::ui_scale_y +
                              rendering::ui_offset_y) / rendering::render_height,
-              .steadyTimestampMicros = static_cast<std::int64_t>(SDL_GetTicks64()) * 1000});
+              .steadyTimestampMicros = static_cast<std::int64_t>(SDL_GetTicks()) * 1000});
           return true;
         });
     previewInputHandler->startListenSDL();
@@ -532,7 +532,7 @@ void SettingsScene::ensurePreviewInputHandler() {
 
 void SettingsScene::destroyPreviewInputHandler() {
   if (previewTouchRouter) {
-    (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks64()) * 1000);
+    (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks()) * 1000);
     previewTouchRouter.reset();
   }
   previewTouchLayoutRevision = 0;
@@ -566,31 +566,35 @@ void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {
     return;
   }
   switch (event.type) {
-  case SDL_KEYDOWN:
-    previewInputHandler->onKeyDown(event.key.keysym.scancode, ScanCode);
+  case SDL_EVENT_KEY_DOWN:
+    previewInputHandler->onKeyDown(event.key.scancode, ScanCode);
     break;
-  case SDL_KEYUP:
-    previewInputHandler->onKeyUp(event.key.keysym.scancode, ScanCode);
+  case SDL_EVENT_KEY_UP:
+    previewInputHandler->onKeyUp(event.key.scancode, ScanCode);
     break;
-  case SDL_FINGERDOWN:
-  case SDL_FINGERUP:
-  case SDL_FINGERMOTION: {
+  case SDL_EVENT_FINGER_DOWN:
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_CANCELED:
+  case SDL_EVENT_FINGER_MOTION: {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event.tfinger.x, event.tfinger.y,
                                         uiNormX, uiNormY);
     const Vector3 location(uiNormX, uiNormY, 0.0f);
-    if (event.type == SDL_FINGERDOWN) {
-      previewInputHandler->onFingerDown(event.tfinger.fingerId, location);
-    } else if (event.type == SDL_FINGERUP) {
-      previewInputHandler->onFingerUp(event.tfinger.fingerId, location);
+    if (event.type == SDL_EVENT_FINGER_DOWN) {
+      previewInputHandler->onFingerDown(event.tfinger.fingerID, location);
+    } else if (event.type == SDL_EVENT_FINGER_UP) {
+      previewInputHandler->onFingerUp(event.tfinger.fingerID, location);
+    } else if (event.type == SDL_EVENT_FINGER_CANCELED) {
+      static_cast<IInputHandler &>(*previewInputHandler)
+          .onFingerCancel(event.tfinger.fingerID, location);
     } else {
-      previewInputHandler->onFingerMove(event.tfinger.fingerId, location);
+      previewInputHandler->onFingerMove(event.tfinger.fingerID, location);
     }
     break;
   }
-  case SDL_MOUSEBUTTONDOWN:
-  case SDL_MOUSEBUTTONUP: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
+  case SDL_EVENT_MOUSE_BUTTON_UP: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return;
@@ -602,14 +606,14 @@ void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {
         static_cast<float>(event.button.y) * rendering::heightScale, uiNormX,
         uiNormY);
     const Vector3 location(uiNormX, uiNormY, 0.0f);
-    if (event.type == SDL_MOUSEBUTTONDOWN) {
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
       previewInputHandler->onFingerDown(0, location);
     } else {
       previewInputHandler->onFingerUp(0, location);
     }
     break;
   }
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(

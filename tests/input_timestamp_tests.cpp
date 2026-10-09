@@ -83,16 +83,15 @@ void testRebasesWrappingSdlMillisecondTimestamps() {
 
 void testForegroundLifecycleEventsShareOneInputPolicy() {
   SDL_Event event{};
-  event.type = SDL_APP_DIDENTERFOREGROUND;
+  event.type = SDL_EVENT_DID_ENTER_FOREGROUND;
   require(input::isForegroundLifecycleEvent(event),
           "app foreground reanchors native input clocks");
 
-  event.type = SDL_WINDOWEVENT;
-  event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
   require(input::isForegroundLifecycleEvent(event),
           "desktop focus recovery uses the same input lifecycle policy");
 
-  event.type = SDL_APP_DIDENTERBACKGROUND;
+  event.type = SDL_EVENT_DID_ENTER_BACKGROUND;
   require(!input::isForegroundLifecycleEvent(event) &&
               input::isBackgroundLifecycleEvent(event),
           "background lifecycle never masquerades as a timestamp reanchor");

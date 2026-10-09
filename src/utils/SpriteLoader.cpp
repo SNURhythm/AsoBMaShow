@@ -9,9 +9,9 @@
 #include "../AndroidNatives.h"
 #include <unistd.h>
 #endif
-#include <SDL2/SDL_error.h>
-#include <SDL2/SDL_log.h>
-#include <SDL2/SDL_stdinc.h>
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_stdinc.h>
 #include <stb_image.h>
 #include <cstdio>
 #include <limits>

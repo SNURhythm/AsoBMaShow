@@ -8,7 +8,7 @@
 #include "../ArchiveFile.h"
 #include "../RAII.h"
 #include "../StbImageRAII.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <thread>
 #include "../Utils.h"
 #include "../game/GameState.h"

@@ -142,15 +142,15 @@ void SnappedSlider::renderImpl(RenderContext &context) {
 }
 
 void SnappedSlider::onPointerEventConsumed(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+  if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
     hovered = false;
-  } else if (event.type == SDL_MOUSEBUTTONUP &&
+  } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
              event.button.button == SDL_BUTTON_LEFT &&
              event.button.which != SDL_TOUCH_MOUSEID) {
     mouseDragging = false;
-  } else if (event.type == SDL_FINGERUP &&
+  } else if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
              !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
-             event.tfinger.fingerId == activeTouchId) {
+             event.tfinger.fingerID == activeTouchId) {
     activeTouchId = -1;
   }
 }
@@ -164,7 +164,7 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
   float x = 0.0F;
   float y = 0.0F;
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return true;
@@ -176,7 +176,7 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
     mouseDragging = true;
     updateFromX(x);
     return false;
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     mouseToUi(event.motion.x, event.motion.y, x, y);
     hovered = contains(x, y);
     if (!mouseDragging) {
@@ -184,7 +184,7 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
     }
     updateFromX(x);
     return false;
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID || !mouseDragging) {
       return true;
@@ -193,7 +193,7 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
     updateFromX(x);
     mouseDragging = false;
     return false;
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     if (activeTouchId != -1) {
       return true;
     }
@@ -201,27 +201,28 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
     if (!contains(x, y)) {
       return true;
     }
-    activeTouchId = event.tfinger.fingerId;
+    activeTouchId = event.tfinger.fingerID;
     updateFromX(x);
     return false;
-  case SDL_FINGERMOTION:
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_MOTION:
+    if (event.tfinger.fingerID != activeTouchId) {
       return true;
     }
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
     updateFromX(x);
     return false;
-  case SDL_FINGERUP:
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_UP:
+    if (event.tfinger.fingerID != activeTouchId) {
       return true;
     }
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
     updateFromX(x);
     activeTouchId = -1;
     return false;
-  case SDL_WINDOWEVENT:
-    if (event.window.event == SDL_WINDOWEVENT_LEAVE ||
-        event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+  case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+  case SDL_EVENT_WINDOW_FOCUS_LOST:
+    if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE ||
+        event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
       cancelInteraction();
     }
     return true;

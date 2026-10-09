@@ -18,9 +18,9 @@
 #include "repositories/ChartRepository.h"
 #include "platform/ScreenOrientation.h"
 
-#include <SDL2/SDL_events.h>
-#include <SDL2/SDL_log.h>
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_system.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -305,8 +305,8 @@ std::string callActivityStringMethod(const char *methodName,
                                      const char *argument,
                                      std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is not available.";
     return {};
@@ -364,8 +364,8 @@ std::string callActivityStringMethod2(const char *methodName,
                                       const char *argument2,
                                       std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is not available.";
     return {};
@@ -420,8 +420,8 @@ std::string callActivityStringMethod2Long(const char *methodName,
                                           jlong argument3,
                                           std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is not available.";
     return {};
@@ -475,8 +475,8 @@ std::string callActivityStringMethodLong(const char *methodName,
                                          jlong longArgument,
                                          std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is not available.";
     return {};
@@ -526,8 +526,8 @@ callActivityStringMethod4Long(const char *methodName, const char *signature,
                               const char *argument3, const char *argument4,
                               jlong argument5, std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is not available.";
     return {};
@@ -581,8 +581,8 @@ std::optional<int> callActivityIntMethod2(const char *methodName,
                                           const char *argument2,
                                           std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is not available.";
     return std::nullopt;
@@ -694,9 +694,9 @@ long long parseLongLongOrZero(const std::string &value) {
 } // namespace
 
 void screen_orientation::apply(Mode mode, bool lockCurrent) {
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
   if (env == nullptr) return;
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (activity == nullptr) return;
   jclass activityClass = env->GetObjectClass(activity);
   if (activityClass != nullptr) {
@@ -1020,7 +1020,7 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeCommitDocumentHandoff(
 }
 
 std::string GetAndroidExternalFilesDir() {
-  if (const char *external = SDL_AndroidGetExternalStoragePath();
+  if (const char *external = SDL_GetAndroidExternalStoragePath();
       external != nullptr && external[0] != '\0') {
     // SDL returns an absolute external path, which may still contain a system
     // alias. Resolve only this trusted container, before appending Documents.
@@ -1028,7 +1028,7 @@ std::string GetAndroidExternalFilesDir() {
     const auto container = std::filesystem::canonical(external, error);
     return error ? std::string(external) : container.string();
   }
-  if (const char *internal = SDL_AndroidGetInternalStoragePath();
+  if (const char *internal = SDL_GetAndroidInternalStoragePath();
       internal != nullptr && internal[0] != '\0') {
     return internal;
   }
@@ -1036,7 +1036,7 @@ std::string GetAndroidExternalFilesDir() {
 }
 
 std::string GetAndroidInternalFilesDir() {
-  if (const char *internal = SDL_AndroidGetInternalStoragePath();
+  if (const char *internal = SDL_GetAndroidInternalStoragePath();
       internal != nullptr && internal[0] != '\0') {
     return internal;
   }
@@ -1067,7 +1067,7 @@ std::string GetAndroidPreferredLanguageTags() {
   const std::string result = callActivityStringMethod(
       "getPreferredLanguageTags", "()Ljava/lang/String;", nullptr, callError);
   if (!callError.empty()) {
-    auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+    auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
     if (env != nullptr && env->ExceptionCheck()) env->ExceptionClear();
     return {};
   }
@@ -1075,7 +1075,7 @@ std::string GetAndroidPreferredLanguageTags() {
 }
 
 std::optional<std::string> ConvertAndroidMs932ToUtf8(std::string_view value) {
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
   if (env == nullptr ||
       value.size() > static_cast<std::size_t>(std::numeric_limits<jsize>::max())) {
     return std::nullopt;
@@ -1317,8 +1317,8 @@ int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
                                                const char *sourceName,
                                                int destinationParent,
                                                const char *destinationName) noexcept {
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errno = EIO;
     return -1;
@@ -1993,7 +1993,7 @@ void RequestAndroidExternalActivityRenderPause() {
   }
 
   SDL_Event event{};
-  event.type = SDL_USEREVENT;
+  event.type = SDL_EVENT_USER;
   event.user.code = kExternalActivityPauseWakeCode;
   SDL_PushEvent(&event);
 
@@ -2012,7 +2012,7 @@ void FinishAndroidExternalActivityRenderPause() {
   }
 
   SDL_Event event{};
-  event.type = SDL_USEREVENT;
+  event.type = SDL_EVENT_USER;
   event.user.code = kExternalActivityPauseWakeCode;
   SDL_PushEvent(&event);
   gExternalActivityPauseCv.notify_all();

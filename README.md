@@ -48,7 +48,7 @@ ownership, and focused test locations.
 
 ## Dependency
 
-- SDL2 + bgfx
+- SDL3 + bgfx
 - FFmpeg (for BGA rendering)
 - SQLite3
 - PortAudio (for desktop) + miniaudio (for mobile)

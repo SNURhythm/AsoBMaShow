@@ -555,7 +555,7 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
     return true;
   }
 
-  if (event.type == SDL_MOUSEBUTTONDOWN &&
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
       event.button.button == SDL_BUTTON_LEFT) {
     float uiX = 0.0f;
     float uiY = 0.0f;
@@ -569,7 +569,7 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
     return true;
   }
 
-  if (event.type == SDL_FINGERDOWN) {
+  if (event.type == SDL_EVENT_FINGER_DOWN) {
     float uiX = 0.0f;
     float uiY = 0.0f;
     fingerEventToUi(event.tfinger, uiX, uiY);

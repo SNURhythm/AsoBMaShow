@@ -7,7 +7,7 @@
 
 class SDLTouchInputSource : public IInputSource {
 public:
-  static int EventHandler(void *userdata, SDL_Event *event);
+  static bool EventHandler(void *userdata, SDL_Event *event);
   IInputHandler *handler = nullptr;
   explicit SDLTouchInputSource(bool deferEvents = false);
   ~SDLTouchInputSource() override;

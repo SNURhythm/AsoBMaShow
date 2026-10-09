@@ -13,8 +13,8 @@
 #include "NativeCallbackLifetime.h"
 
 #include <CoreMotion/CoreMotion.h>
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_log.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_log.h>
 #include <atomic>
 #include <cmath>
 #include <cstdint>

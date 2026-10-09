@@ -18,11 +18,11 @@
 #include <cmath>
 #include <algorithm>
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
-#include <SDL2/SDL_video.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+#include <SDL3/SDL_video.h>
 #if __APPLE__
-#include <SDL2/SDL_metal.h>
+#include <SDL3/SDL_metal.h>
 #endif
 #include "main.h"
 #include "path.h"
@@ -57,7 +57,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
-#include <SDL_uikit_rawtouch.h>
+#include <SDL3/SDL_uikit_rawtouch.h>
 // define something for iphone
 #include <dirent.h>
 #include <sys/stat.h>
@@ -158,7 +158,12 @@ void changeWorkingDirectoryToExecutableDir(
     return;
   }
 
-  const std::filesystem::path exeDir = exePath.parent_path();
+  std::filesystem::path exeDir = exePath.parent_path();
+#if TARGET_OS_OSX
+  // SDL3 IO no longer searches bundle resources implicitly. SDL_GetBasePath
+  // resolves Resources for a .app and the executable directory otherwise.
+  if (const char *basePath = SDL_GetBasePath()) exeDir = basePath;
+#endif
   if (exeDir.empty()) {
     return;
   }
@@ -214,11 +219,9 @@ void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
                            int &renderW, int &renderH) {
   renderW = 0;
   renderH = 0;
-#if SDL_VERSION_ATLEAST(2, 26, 0)
   if (window != nullptr) {
     SDL_GetWindowSizeInPixels(window, &renderW, &renderH);
   }
-#endif
   if (renderW <= 0 || renderH <= 0) {
     renderW = scaledDimension(logicalW);
     renderH = scaledDimension(logicalH);
@@ -255,7 +258,7 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
   renderW = 0;
   renderH = 0;
   if (window != nullptr) {
-    SDL_Metal_GetDrawableSize(window, &renderW, &renderH);
+    SDL_GetWindowSizeInPixels(window, &renderW, &renderH);
   }
   if (renderW <= 0 || renderH <= 0) {
     getWindowDrawableSize(window, logicalW, logicalH, renderW, renderH);
@@ -566,10 +569,9 @@ int main(int argv, char **args) {
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
   rendering::main_camera = &rendering::game_camera;
-  SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+  SDL_SetHint(SDL_HINT_IME_IMPLEMENTED_UI, "composition");
   SDL_SetHint(SDL_HINT_ORIENTATIONS,
               "Portrait PortraitUpsideDown LandscapeLeft LandscapeRight");
-  SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
 #if TARGET_OS_IPHONE
   // UIKit exposes a physical trackpad as a mouse. SDL otherwise mirrors every
   // mouse press as a synthetic finger press, which would activate UI controls
@@ -580,21 +582,16 @@ int main(int argv, char **args) {
 #if TARGET_OS_ANDROID
   // Keep the CPU gameplay tick alive; the main loop suspends bgfx explicitly.
   SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
-  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO, "1");
+  SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
 #endif
   // print bgfx version
   APP_DEBUG_LOG("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
   // print libsdl version
-  SDL_version compiled;
-  SDL_version linked;
-  SDL_VERSION(&compiled);
-  SDL_GetVersion(&linked);
-
-  APP_DEBUG_LOG(
-      "SDL compile version: %d.%d.%d", static_cast<int>(compiled.major),
-      static_cast<int>(compiled.minor), static_cast<int>(compiled.patch));
-  APP_DEBUG_LOG("SDL link version: %d.%d.%d", static_cast<int>(linked.major),
-                static_cast<int>(linked.minor), static_cast<int>(linked.patch));
+  const int linked = SDL_GetVersion();
+  APP_DEBUG_LOG("SDL compile version: %d.%d.%d", SDL_MAJOR_VERSION,
+                SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+  APP_DEBUG_LOG("SDL link version: %d.%d.%d", SDL_VERSIONNUM_MAJOR(linked),
+                SDL_VERSIONNUM_MINOR(linked), SDL_VERSIONNUM_MICRO(linked));
 
 #if TARGET_OS_OSX
   setSmoothScrolling(true);
@@ -602,7 +599,7 @@ int main(int argv, char **args) {
   using std::cerr;
   using std::endl;
 
-  if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_SENSOR)) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
@@ -622,18 +619,18 @@ int main(int argv, char **args) {
 
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
-  uint32_t windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+  SDL_WindowFlags windowFlags = SDL_WINDOW_RESIZABLE;
   if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
     // Use the current screen size in either launch orientation. An exclusive
     // mode based on the initial landscape dimensions can fail in portrait.
-    windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
+    windowFlags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS;
   }
   if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS) {
-    windowFlags |= SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI;
+    windowFlags |= SDL_WINDOW_METAL | SDL_WINDOW_HIGH_PIXEL_DENSITY;
   } else if (TARGET_PLATFORM == Android) {
-    windowFlags |= SDL_WINDOW_VULKAN | SDL_WINDOW_ALLOW_HIGHDPI;
+    windowFlags |= SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
   }
-  SDL_Window *win = SDL_CreateWindow("AsoBMaShow", 100, 100, windowCreateWidth,
+  SDL_Window *win = SDL_CreateWindow("AsoBMaShow", windowCreateWidth,
                                      windowCreateHeight, windowFlags);
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
@@ -682,28 +679,15 @@ int main(int argv, char **args) {
                 initialRenderW, initialRenderH, windowLogicalWidth,
                 windowLogicalHeight, s_renderScale);
 #endif
-#if !BX_PLATFORM_EMSCRIPTEN
-  SDL_SysWMinfo wmi;
-  SDL_VERSION(&wmi.version);
-  APP_DEBUG_LOG("SDL_major: %d, SDL_minor: %d, SDL_patch: %d\n",
-                wmi.version.major, wmi.version.minor, wmi.version.patch);
-  if (!SDL_GetWindowWMInfo(win, &wmi)) {
-    printf("SDL_SysWMinfo could not be retrieved. SDL_Error: %s\n",
-           SDL_GetError());
-#if TARGET_OS_IPHONE
-    APP_DEBUG_LOG("Continuing without SDL_SysWMinfo on iOS Metal path");
-#else
+  bgfx::PlatformData pd{};
+  if (!setup_bgfx_platform_data(pd, win)) {
+    SDL_Log("Could not obtain native rendering window: %s", SDL_GetError());
     SDL_DestroyWindow(win);
     s_window = nullptr;
     TextInputBox::releaseCachedCursors();
     SDL_Quit();
     return EXIT_FAILURE;
-#endif
   }
-#endif // !BX_PLATFORM_EMSCRIPTEN
-
-  bgfx::PlatformData pd{};
-  setup_bgfx_platform_data(pd, wmi, win);
 #if TARGET_OS_IPHONE
   s_iosMetalLayer = pd.nwh;
   int metalDrawableW = 0;
@@ -780,18 +764,18 @@ static void reportStartupFailure(const ApplicationContext &context,
     break;
   }
 
-  if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow Startup Error",
-                               result.userMessage.c_str(), s_window) != 0) {
+  if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow Startup Error",
+                               result.userMessage.c_str(), s_window)) {
     SDL_Log("Unable to show the startup error dialog: %s", SDL_GetError());
   }
 }
 
 static void reportResultRecoveryWarning(
     const replay::ChartReplayRecoverySummary &) {
-  if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+  if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
                                "AsoBMaShow Result Recovery",
                                replay::chartReplayRecoveryUserMessage().data(),
-                               s_window) != 0) {
+                               s_window)) {
     SDL_Log("Unable to show the result recovery warning: %s", SDL_GetError());
   }
 }
@@ -838,7 +822,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   sceneManager.changeScene("Intro");
 
   // SDL_RenderClear(ren);
-  // SDL_RenderCopy(ren, tex, nullptr, nullptr);
+  // SDL_RenderTexture(ren, tex, nullptr, nullptr);
   // SDL_RenderPresent(ren);
   SDL_Event e;
 
@@ -1148,14 +1132,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (s_window == nullptr) {
         return false;
       }
-      SDL_SysWMinfo wmi;
-      SDL_VERSION(&wmi.version);
-      if (!SDL_GetWindowWMInfo(s_window, &wmi)) {
+      bgfx::PlatformData pd{};
+      if (!setup_bgfx_platform_data(pd, s_window)) {
         SDL_Log("Failed to refresh Android window handle: %s", SDL_GetError());
         return false;
       }
-      bgfx::PlatformData pd{};
-      setup_bgfx_platform_data(pd, wmi, s_window);
       if (pd.nwh == nullptr) {
         SDL_Log("Android window handle is not ready yet");
         return false;
@@ -1231,11 +1212,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
         ++processedEventsInWindow;
       }
-      if (event.type == SDL_QUIT) {
+      if (event.type == SDL_EVENT_QUIT) {
         context.quitFlag = true;
       }
 
-      if (event.type == SDL_APP_LOWMEMORY) {
+      if (event.type == SDL_EVENT_LOW_MEMORY) {
         ImageView::evictDecodedImageCache();
         context.jukebox.handleMemoryPressure();
         SDL_Log("Released evictable resources after a low-memory warning");
@@ -1269,11 +1250,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
 
       // on window resize
-      if (event.type == SDL_WINDOWEVENT &&
-          (event.window.event == SDL_WINDOWEVENT_RESIZED ||
-           event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
-        const int logicalW = event.window.data1;
-        const int logicalH = event.window.data2;
+      if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
+          (event.type == SDL_EVENT_WINDOW_RESIZED ||
+           event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
+        int logicalW = 0, logicalH = 0;
+        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
         if (!applyWindowResize(logicalW, logicalH)) {
           deferWindowResize(logicalW, logicalH);
         }
@@ -1282,17 +1263,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (scene_event_routing::shouldDispatchToScene(event) &&
           !(TARGET_OS_ANDROID &&
             context.appInBackground.load(std::memory_order_acquire) &&
-            event.type != SDL_WINDOWEVENT)) {
+            (event.type < SDL_EVENT_WINDOW_FIRST || event.type > SDL_EVENT_WINDOW_LAST))) {
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;
         }
       }
 
-      if (event.type == SDL_TEXTEDITING_EXT) {
-        SDL_free(event.editExt.text);
-        event.editExt.text = nullptr;
-      }
+
     };
 
     auto flushPendingResize = [&]() {
@@ -1332,24 +1310,24 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
       // A later Start/touch callback may enter gameplay and lock orientation.
       // Apply earlier viewport changes before either input dispatch path.
-      const bool resizeEvent = e.type == SDL_WINDOWEVENT &&
-          (e.window.event == SDL_WINDOWEVENT_RESIZED ||
-           e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED);
+      const bool resizeEvent = (e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
+          (e.type == SDL_EVENT_WINDOW_RESIZED ||
+           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED);
       if (!resizeEvent) flushPendingResize();
       context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
-      if (e.type == SDL_MOUSEMOTION) {
+      if (e.type == SDL_EVENT_MOUSE_MOTION) {
         pendingMouseMotion = e;
         hasPendingMouseMotion = true;
         ++pendingMouseMotionCount;
         continue;
       }
-      if (e.type == SDL_FINGERMOTION) {
+      if (e.type == SDL_EVENT_FINGER_MOTION) {
         auto existing = std::find_if(
             pendingFingerMotions.begin(), pendingFingerMotions.end(),
             [&](const SDL_Event &pending) {
-              return pending.tfinger.touchId == e.tfinger.touchId &&
-                     pending.tfinger.fingerId == e.tfinger.fingerId;
+              return pending.tfinger.touchID == e.tfinger.touchID &&
+                     pending.tfinger.fingerID == e.tfinger.fingerID;
             });
         if (existing != pendingFingerMotions.end()) {
           *existing = e;
@@ -1359,9 +1337,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         ++pendingFingerMotionCount;
         continue;
       }
-      if (e.type == SDL_WINDOWEVENT &&
-          (e.window.event == SDL_WINDOWEVENT_RESIZED ||
-           e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+      if ((e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
+          (e.type == SDL_EVENT_WINDOW_RESIZED ||
+           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
         pendingResizeEvent = e;
         hasPendingResize = true;
         ++pendingResizeCount;

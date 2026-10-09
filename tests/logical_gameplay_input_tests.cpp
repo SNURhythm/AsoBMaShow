@@ -6,7 +6,7 @@
 #include "scene/play/RhythmState.h"
 #include "scene/play/StartSelectControl.h"
 
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_scancode.h>
 
 #include <limits>
 #include <chrono>
@@ -1512,7 +1512,7 @@ void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
        .control = {.deviceId = "pad:one",
                    .deviceClass = input::DeviceClass::GameController,
                    .kind = input::ControlKind::Button,
-                   .index = SDL_CONTROLLER_BUTTON_A}});
+                   .index = SDL_GAMEPAD_BUTTON_SOUTH}});
   std::vector<input::RealtimePhysicalInputTransition> output;
   input::RealtimePhysicalInputRouter router(
       profile, makeGameplayInputScopes(7),
@@ -1525,7 +1525,7 @@ void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
       {.control = {.deviceId = "pad:one",
                    .deviceClass = input::DeviceClass::GameController,
                    .kind = input::ControlKind::Button,
-                   .index = SDL_CONTROLLER_BUTTON_A},
+                   .index = SDL_GAMEPAD_BUTTON_SOUTH},
        .rawValue = 1.0,
        .normalizedValue = 1.0F},
       200);
@@ -1534,7 +1534,7 @@ void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
       {.control = {.deviceId = "pad:one",
                    .deviceClass = input::DeviceClass::GameController,
                    .kind = input::ControlKind::Button,
-                   .index = SDL_CONTROLLER_BUTTON_A},
+                   .index = SDL_GAMEPAD_BUTTON_SOUTH},
        .rawValue = 0.0,
        .normalizedValue = 0.0F},
       400);
@@ -1625,7 +1625,7 @@ void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
        .control = {.deviceId = "pad:one",
                    .deviceClass = input::DeviceClass::GameController,
                    .kind = input::ControlKind::Button,
-                   .index = SDL_CONTROLLER_BUTTON_A}});
+                   .index = SDL_GAMEPAD_BUTTON_SOUTH}});
   std::vector<input::RealtimePhysicalInputTransition> output;
   input::RealtimePhysicalInputRouter router(
       profile, makeGameplayInputScopes(7),
@@ -1638,7 +1638,7 @@ void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
       {.control = {.deviceId = "pad:one",
                    .deviceClass = input::DeviceClass::GameController,
                    .kind = input::ControlKind::Button,
-                   .index = SDL_CONTROLLER_BUTTON_A},
+                   .index = SDL_GAMEPAD_BUTTON_SOUTH},
        .rawValue = 1.0,
        .normalizedValue = 1.0F},
       200);
@@ -1653,7 +1653,7 @@ void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
       {.control = {.deviceId = "pad:one",
                    .deviceClass = input::DeviceClass::GameController,
                    .kind = input::ControlKind::Button,
-                   .index = SDL_CONTROLLER_BUTTON_A},
+                   .index = SDL_GAMEPAD_BUTTON_SOUTH},
        .rawValue = 0.0,
        .normalizedValue = 0.0F},
       500);

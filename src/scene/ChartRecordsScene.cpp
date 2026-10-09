@@ -129,7 +129,7 @@ void ChartRecordsScene::goBack() {
 }
 
 EventHandleResult ChartRecordsScene::handleEvents(SDL_Event &event) {
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
     goBack();
     return {};
   }

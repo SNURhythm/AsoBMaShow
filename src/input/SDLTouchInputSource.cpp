@@ -1,20 +1,25 @@
 #include "SDLTouchInputSource.h"
 #include "SDLPointerEvent.h"
+#include "InputTimestamp.h"
 #include "../rendering/common.h"
 #include <utility>
 #include <chrono>
-int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
+bool SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
   if (sdl_pointer_event::isTouchSynthesizedMouse(*event) ||
       sdl_pointer_event::isMouseSynthesizedTouch(*event)) return 0;
   switch (event->type) {
-  case SDL_FINGERDOWN: case SDL_FINGERUP: case SDL_FINGERMOTION:
-  case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: case SDL_MOUSEMOTION:
+  case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_MOTION:
+  case SDL_EVENT_FINGER_CANCELED:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: case SDL_EVENT_MOUSE_MOTION:
     break;
   default:
     return 0;
   }
-  const auto timestampMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+  const auto receipt = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
+  const auto timestampMicros = event->common.timestamp == 0 ? receipt
+      : input::rebaseTimestampMicros(event->common.timestamp / 1000,
+                                     SDL_GetTicksNS() / 1000, receipt);
   auto *source = static_cast<SDLTouchInputSource *>(userdata);
   if (source->rawEventCallback) {
     source->rawEventCallback(*event, timestampMicros);
@@ -73,11 +78,11 @@ void SDLTouchInputSource::discardPendingEvents() {
 void SDLTouchInputSource::dispatchFinger(Uint32 phase, SDL_FingerID finger,
                                         Vector3 point, std::uint64_t timestampMicros) {
   if (deferEvents) {
-    if (phase == SDL_FINGERDOWN) {
+    if (phase == SDL_EVENT_FINGER_DOWN) {
       activeTouches[finger] = point;
     } else if (!activeTouches.contains(finger)) {
       return;
-    } else if (phase == SDL_FINGERUP) {
+    } else if (phase == SDL_EVENT_FINGER_UP || phase == SDL_EVENT_FINGER_CANCELED) {
       activeTouches.erase(finger);
     } else {
       activeTouches[finger] = point;
@@ -93,67 +98,68 @@ int SDLTouchInputSource::dispatchEvent(SDL_Event *event,
     return 0;
   }
   switch (event->type) {
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event->tfinger.x, event->tfinger.y,
                                         uiNormX, uiNormY);
-    InputSource->dispatchFinger(SDL_FINGERDOWN, event->tfinger.fingerId,
+    InputSource->dispatchFinger(SDL_EVENT_FINGER_DOWN, event->tfinger.fingerID,
                                        Vector3(uiNormX, uiNormY, 0.0f), timestampMicros);
     break;
   }
-  case SDL_FINGERUP: {
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_CANCELED: {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event->tfinger.x, event->tfinger.y,
                                         uiNormX, uiNormY);
-    InputSource->dispatchFinger(SDL_FINGERUP, event->tfinger.fingerId,
+    InputSource->dispatchFinger(event->type, event->tfinger.fingerID,
                                      Vector3(uiNormX, uiNormY, 0.0f), timestampMicros);
     break;
   }
-  case SDL_FINGERMOTION: {
+  case SDL_EVENT_FINGER_MOTION: {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::normalizedToUiNormalized(event->tfinger.x, event->tfinger.y,
                                         uiNormX, uiNormY);
-    InputSource->dispatchFinger(SDL_FINGERMOTION, event->tfinger.fingerId,
+    InputSource->dispatchFinger(SDL_EVENT_FINGER_MOTION, event->tfinger.fingerID,
                                        Vector3(uiNormX, uiNormY, 0.0f), timestampMicros);
     break;
   }
     // emulate touch with click
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     float screenX = static_cast<float>(event->button.x) * rendering::widthScale;
     float screenY =
         static_cast<float>(event->button.y) * rendering::heightScale;
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->dispatchFinger(SDL_FINGERDOWN, sdl_pointer_event::kMouseFingerId,
+    InputSource->dispatchFinger(SDL_EVENT_FINGER_DOWN, sdl_pointer_event::kMouseFingerId,
                                        Vector3(uiNormX, uiNormY, 0.0f), timestampMicros);
   } break;
-  case SDL_MOUSEBUTTONUP: {
+  case SDL_EVENT_MOUSE_BUTTON_UP: {
     float screenX = static_cast<float>(event->button.x) * rendering::widthScale;
     float screenY =
         static_cast<float>(event->button.y) * rendering::heightScale;
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->dispatchFinger(SDL_FINGERUP, sdl_pointer_event::kMouseFingerId,
+    InputSource->dispatchFinger(SDL_EVENT_FINGER_UP, sdl_pointer_event::kMouseFingerId,
                                      Vector3(uiNormX, uiNormY, 0.0f), timestampMicros);
   } break;
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     float screenX = static_cast<float>(event->motion.x) * rendering::widthScale;
     float screenY =
         static_cast<float>(event->motion.y) * rendering::heightScale;
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->dispatchFinger(SDL_FINGERMOTION, sdl_pointer_event::kMouseFingerId,
+    InputSource->dispatchFinger(SDL_EVENT_FINGER_MOTION, sdl_pointer_event::kMouseFingerId,
                                        Vector3(uiNormX, uiNormY, 0.0f), timestampMicros);
   } break;
-    // case SDL_FINGERMOTION:
+    // case SDL_EVENT_FINGER_MOTION:
     //   InputSource->handler->onFingerMove(
-    //       event->tfinger.fingerId,
+    //       event->tfinger.fingerID,
     //       Vector3(event->tfinger.x, event->tfinger.y, 0.0f));
     //   break;
   }
@@ -165,7 +171,7 @@ SDLTouchInputSource::SDLTouchInputSource(bool deferEvents)
 
 SDLTouchInputSource::~SDLTouchInputSource() {
   if (isListening) {
-    SDL_DelEventWatch(EventHandler, this);
+    SDL_RemoveEventWatch(EventHandler, this);
   }
 }
 
@@ -173,10 +179,8 @@ bool SDLTouchInputSource::startListen() {
   if (isListening) {
     return false;
   }
-  isListening = true;
-
-  SDL_AddEventWatch(EventHandler, this);
-  return true;
+  isListening = SDL_AddEventWatch(EventHandler, this);
+  return isListening;
 }
 
 void SDLTouchInputSource::stopListen() {
@@ -184,7 +188,7 @@ void SDLTouchInputSource::stopListen() {
     return;
   }
   isListening = false;
-  SDL_DelEventWatch(EventHandler, this);
+  SDL_RemoveEventWatch(EventHandler, this);
   discardPendingEvents();
 }
 

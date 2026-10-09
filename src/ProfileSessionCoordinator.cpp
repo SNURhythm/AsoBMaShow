@@ -7,7 +7,7 @@
 #include "input/InputProfileStore.h"
 #include "replay/ReplayFileReconciler.h"
 
-#include <SDL2/SDL_log.h>
+#include <SDL3/SDL_log.h>
 
 #include <chrono>
 #include <exception>

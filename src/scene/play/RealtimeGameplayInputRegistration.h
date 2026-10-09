@@ -44,7 +44,7 @@ public:
   void close();
 
 private:
-  static int SDLCALL watch(void *, SDL_Event *);
+  static bool SDLCALL watch(void *, SDL_Event *);
 
   InputDeviceRegistry &registry_;
   std::atomic_bool &acceptingNativeInput_;

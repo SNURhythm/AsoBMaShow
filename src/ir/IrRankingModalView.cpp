@@ -17,7 +17,7 @@
 #include "../iOSNatives.hpp"
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -158,9 +158,9 @@ public:
 
 private:
   bool handleEventsImpl(SDL_Event &event) override {
-    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-        (event.key.keysym.sym == SDLK_ESCAPE ||
-         event.key.keysym.sym == SDLK_AC_BACK)) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+        (event.key.key == SDLK_ESCAPE ||
+         event.key.key == SDLK_AC_BACK)) {
       requestClose_();
     }
     return false;

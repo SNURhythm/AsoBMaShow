@@ -1,7 +1,7 @@
 #pragma once
 
-#include <SDL2/SDL_gamecontroller.h>
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_scancode.h>
 
 #include <array>
 #include <cstdint>
@@ -17,8 +17,8 @@ struct WindowsXInputSample {
 };
 
 struct WindowsGameControllerState {
-  std::array<bool, SDL_CONTROLLER_BUTTON_MAX> buttons{};
-  std::array<std::int16_t, SDL_CONTROLLER_AXIS_MAX> axes{};
+  std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{};
+  std::array<std::int16_t, SDL_GAMEPAD_AXIS_COUNT> axes{};
 };
 
 [[nodiscard]] SDL_Scancode windowsRealtimeSdlScancode(

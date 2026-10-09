@@ -31,7 +31,7 @@ std::uint64_t revision() { return 0; }
 }
 using Uint64 = std::uint64_t;
 static long long clockMicros = 1'000'000;
-Uint64 SDL_GetTicks64() { return static_cast<Uint64>(clockMicros / 1000); }
+Uint64 SDL_GetTicks() { return static_cast<Uint64>(clockMicros / 1000); }
 long long nowMicros() { return clockMicros; }
 struct SDL_Event {};
 struct UiLogicalPoint { float x = 0, y = 0; };

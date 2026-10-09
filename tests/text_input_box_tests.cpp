@@ -12,8 +12,8 @@
 #include "scene/play/GuidedAccessReminder.h"
 #include "scene/play/GuidedAccessButtonCue.h"
 
-#include <SDL2/SDL.h>
-#include <SDL_ttf.h>
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -86,15 +86,15 @@ public:
 
 void click(TextInputBox &input, int x, int y) {
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
-  down.button.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  down.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.which = 1;
   down.button.x = x;
   down.button.y = y;
   SDL_Event up = down;
-  up.type = SDL_MOUSEBUTTONUP;
-  up.button.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   input.handleEvents(down);
   input.handleEvents(up);
 }
@@ -107,6 +107,36 @@ void testDefaultHorizontalPadding() {
 
   expect(input.textRect().x == input.getX() + 12,
          "left-aligned text uses the default leading inset");
+}
+
+void testBorrowedSdl3TextIsCopied() {
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.beginEditing();
+  const std::string expected = std::string(96, 'a') + "한글";
+  {
+    std::string borrowed = expected;
+    SDL_Event event{};
+    event.type = SDL_EVENT_TEXT_EDITING;
+    event.edit.text = borrowed.c_str();
+    event.edit.start = 96;
+    event.edit.length = 2;
+    input.handleEvents(event);
+    borrowed.assign(borrowed.size(), 'x');
+  }
+  expect(input.getText() == expected,
+         "SDL3 composition copies borrowed text beyond the old fixed-size buffer");
+  {
+    std::string borrowed = expected;
+    SDL_Event event{};
+    event.type = SDL_EVENT_TEXT_INPUT;
+    event.text.text = borrowed.c_str();
+    input.handleEvents(event);
+    borrowed.clear();
+  }
+  expect(input.getText() == expected,
+         "committing SDL3 text replaces composition and owns the event text");
+  input.endEditing();
 }
 
 void testClearButtonVisibilityAndCallback() {
@@ -209,17 +239,17 @@ void testFocusedInputConsumesItsInitiatingTouch() {
   input.beginEditing();
 
   SDL_Event down{};
-  down.type = SDL_FINGERDOWN;
-  down.tfinger.type = SDL_FINGERDOWN;
-  down.tfinger.fingerId = 7;
+  down.type = SDL_EVENT_FINGER_DOWN;
+  down.tfinger.type = SDL_EVENT_FINGER_DOWN;
+  down.tfinger.fingerID = 7;
   down.tfinger.x = 570.0F / static_cast<float>(rendering::design_width);
   down.tfinger.y = 757.0F / static_cast<float>(rendering::design_height);
   expect(!input.handleEvents(down),
          "a focused native text input consumes its initiating touch");
 
   SDL_Event up = down;
-  up.type = SDL_FINGERUP;
-  up.tfinger.type = SDL_FINGERUP;
+  up.type = SDL_EVENT_FINGER_UP;
+  up.tfinger.type = SDL_EVENT_FINGER_UP;
   expect(!input.handleEvents(up),
          "the initiating text touch keeps its matching release");
   input.endEditing();
@@ -230,11 +260,11 @@ SDL_Event selectionPointer(bool touch, Uint32 type, int x, int y,
   SDL_Event event{};
   event.type = type;
   if (touch) {
-    event.tfinger.touchId = 1;
-    event.tfinger.fingerId = id;
+    event.tfinger.touchID = 1;
+    event.tfinger.fingerID = id;
     event.tfinger.x = static_cast<float>(x) / rendering::window_width;
     event.tfinger.y = static_cast<float>(y) / rendering::window_height;
-  } else if (type == SDL_MOUSEMOTION) {
+  } else if (type == SDL_EVENT_MOUSE_MOTION) {
     event.motion.which = 1;
     event.motion.state = SDL_BUTTON_LMASK;
     event.motion.x = x;
@@ -266,27 +296,27 @@ void testConsumedReleaseEndsTextSelectionWithoutEndingEditing() {
     int finished = 0;
     input->onTextChanged([&](const std::string &) { ++changes; });
     input->onEditingFinished([&](const std::string &) { ++finished; });
-    auto down = selectionPointer(touch, touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN,
+    auto down = selectionPointer(touch, touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN,
                                  120, 25);
     expect(!root.handleEvents(down), "focused field starts selection gesture");
-    auto unrelated = selectionPointer(touch, touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP,
+    auto unrelated = selectionPointer(touch, touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP,
                                       220, 80, 8);
     if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
     expect(!root.handleEvents(unrelated), "disabled sibling consumes unrelated text release");
-    auto move = selectionPointer(touch, touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION,
+    auto move = selectionPointer(touch, touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION,
                                  60, 25);
     expect(!root.handleEvents(move), "unrelated release preserves text selection gesture");
-    auto up = selectionPointer(touch, touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP,
+    auto up = selectionPointer(touch, touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP,
                                220, 80);
     expect(!root.handleEvents(up), "disabled sibling consumes text selection release");
     expect(input->getSelected() && input->getText() == "needle" &&
                changes == 0 && finished == 0,
            "covered selection release preserves focus and text without callbacks");
-    move = selectionPointer(touch, touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION,
+    move = selectionPointer(touch, touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION,
                             220, 25);
     expect(root.handleEvents(move),
            "released text selection does not capture subsequent pointer motion");
-    down = selectionPointer(touch, touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN,
+    down = selectionPointer(touch, touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN,
                             120, 25, 9);
     expect(!root.handleEvents(down), "focused input accepts the next selection gesture");
     input->endEditing();
@@ -304,17 +334,17 @@ void testConsumedReleaseCancelsPendingTextFocus() {
   disabled->setEnabled(false);
   root.addView(disabled);
   root.applyYogaLayout();
-  auto down = selectionPointer(true, SDL_FINGERDOWN, 120, 25);
+  auto down = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 120, 25);
   expect(!root.handleEvents(down) && !input->getSelected(),
          "unfocused input waits for its touch release before opening the editor");
-  auto up = selectionPointer(true, SDL_FINGERUP, 220, 80);
+  auto up = selectionPointer(true, SDL_EVENT_FINGER_UP, 220, 80);
   expect(!root.handleEvents(up) && !input->getSelected(),
          "covered pending-focus release does not focus the input");
-  up = selectionPointer(true, SDL_FINGERUP, 120, 25);
+  up = selectionPointer(true, SDL_EVENT_FINGER_UP, 120, 25);
   expect(root.handleEvents(up) && !input->getSelected(),
          "a later unmatched release cannot revive cancelled pending focus");
-  down = selectionPointer(true, SDL_FINGERDOWN, 120, 25, 9);
-  up = selectionPointer(true, SDL_FINGERUP, 120, 25, 9);
+  down = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 120, 25, 9);
+  up = selectionPointer(true, SDL_EVENT_FINGER_UP, 120, 25, 9);
   expect(!root.handleEvents(down) && !root.handleEvents(up) && input->getSelected(),
          "a fresh touch can still focus the input after cancellation");
   input->endEditing();
@@ -461,7 +491,7 @@ std::uint64_t alphaCoverage(SDL_Surface *surface) {
         static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
     for (int x = 0; x < surface->w; ++x) {
       Uint8 r, g, b, alpha;
-      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      SDL_GetRGBA(row[x], SDL_GetPixelFormatDetails(surface->format), nullptr, &r, &g, &b, &alpha);
       coverage += alpha;
     }
   }
@@ -491,14 +521,14 @@ void testComposedTextPreservesDescenders() {
         }
         expect(alphaCoverage(run) == alphaCoverage(composed),
                "line composition must preserve every descender pixel from the font renderer");
-        SDL_FreeSurface(composed);
+        SDL_DestroySurface(composed);
         view.setText(std::string(text) + "\n" + text);
         SDL_Surface *multiline = view.rasterizeLines();
         expect(alphaCoverage(multiline) == 2 * alphaCoverage(run),
                "every explicit line must retain its descenders without overlapping the next line");
         expect(view.textureHeight() == (multiline->h + 1) / 2,
                "deferred layout height must match the complete multiline raster");
-        SDL_FreeSurface(multiline);
+        SDL_DestroySurface(multiline);
 
         const int logicalWidth = (view.rasterWidth(text) + 1) / 2;
         view.setWidth(logicalWidth);
@@ -510,8 +540,8 @@ void testComposedTextPreservesDescenders() {
                "automatic wrapping must preserve all descender pixels");
         expect(view.textureHeight() == (wrapped->h + 1) / 2,
                "wrapped layout height must match the complete glyph raster");
-        SDL_FreeSurface(wrapped);
-        SDL_FreeSurface(run);
+        SDL_DestroySurface(wrapped);
+        SDL_DestroySurface(run);
       }
     }
   }
@@ -525,7 +555,7 @@ int firstInkX(SDL_Surface *surface, int top, int bottom) {
         static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
     for (int x = 0; x < surface->w; ++x) {
       Uint8 r, g, b, alpha;
-      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      SDL_GetRGBA(row[x], SDL_GetPixelFormatDetails(surface->format), nullptr, &r, &g, &b, &alpha);
       if (alpha != 0) first = std::min(first, x);
     }
   }
@@ -542,7 +572,7 @@ void testMultilineAlignmentAcrossFonts() {
     view.setText(longLine + "\n" + glyph);
     SDL_Surface *left = view.rasterizeLines();
     const int leftX = firstInkX(left, view.lineHeight(), view.lineHeight() * 2);
-    SDL_FreeSurface(left);
+    SDL_DestroySurface(left);
     const int spare = view.rasterWidth(longLine) - view.rasterWidth(glyph);
     view.setDeferredTextureMaterialization(false);
     expect(bgfx::isValid(view.textureHandle()), "left-aligned texture is materialized");
@@ -553,7 +583,7 @@ void testMultilineAlignmentAcrossFonts() {
              "changing multiline alignment invalidates the previously rasterized texture");
       SDL_Surface *aligned = view.rasterizeLines();
       const int alignedX = firstInkX(aligned, view.lineHeight(), view.lineHeight() * 2);
-      SDL_FreeSurface(aligned);
+      SDL_DestroySurface(aligned);
       expect(alignedX - leftX == (alignment == TextView::CENTER ? spare / 2 : spare),
              "alignment positions each primary or fallback text line independently");
     }
@@ -776,7 +806,7 @@ void testDeferredTextKeepsRasterizedLineHeight() {
   expect(font != nullptr, "test font opens for text geometry comparison");
   int rasterWidth = 0;
   int rasterHeight = 0;
-  expect(TTF_SizeUTF8(font, text, &rasterWidth, &rasterHeight) == 0,
+  expect(TTF_GetStringSize(font, text, 0, &rasterWidth, &rasterHeight),
          "SDL_ttf reports the unrendered text raster bounds");
   TTF_CloseFont(font);
 
@@ -800,7 +830,7 @@ void testDeferredWrappedTextKeepsRasterizedLineHeight() {
                                 logicalSize * rasterScale);
   expect(font != nullptr,
          "test font opens for wrapped text geometry comparison");
-  const int rasterHeight = TTF_FontLineSkip(font);
+  const int rasterHeight = TTF_GetFontLineSkip(font);
   TTF_CloseFont(font);
 
   expect(view.textureHeight() ==
@@ -811,13 +841,15 @@ void testDeferredWrappedTextKeepsRasterizedLineHeight() {
 
 } // namespace
 
-extern "C" void SDLCALL TextInputBoxTest_ClearComposition() {
+extern "C" bool SDLCALL TextInputBoxTest_ClearComposition(SDL_Window *) {
   ++clearCompositionCalls;
+  return true;
 }
 
-extern "C" void SDLCALL TextInputBoxTest_SetTextInputRect(
-    const SDL_Rect *rect) {
+extern "C" bool SDLCALL TextInputBoxTest_SetTextInputArea(
+    SDL_Window *, const SDL_Rect *rect, int) {
   nativeInputRect = rect != nullptr ? *rect : SDL_Rect{};
+  return true;
 }
 
 int main() {
@@ -838,6 +870,7 @@ int main() {
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();
   testDefaultHorizontalPadding();
+  testBorrowedSdl3TextIsCopied();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
   testEmptyInputKeepsItsVisibleFrame();

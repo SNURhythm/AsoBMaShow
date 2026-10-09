@@ -57,7 +57,7 @@
 #include <sys/sysctl.h>
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <sndfile.h>

@@ -5,7 +5,7 @@
 #include "../view/TextView.h"
 #include "../view/ImageView.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <chrono>
 #include <cstdio>
 #include <vector>

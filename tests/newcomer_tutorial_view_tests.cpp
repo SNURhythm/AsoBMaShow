@@ -88,8 +88,8 @@ void testChineseLanguageChoicesAndInitialSelection() {
     tour.back();
     for (const auto key : {SDLK_4, SDLK_5}) {
       SDL_Event event{};
-      event.type = SDL_KEYDOWN;
-      event.key.keysym.sym = key;
+      event.type = SDL_EVENT_KEY_DOWN;
+      event.key.key = key;
       tour.handleEvents(event);
       require(saved == (key == SDLK_4 ? "zh-Hans" : "zh-Hant"),
               "Chinese keyboard choices persist their distinct language codes");
@@ -104,7 +104,7 @@ void testSkipAndInputBlocking() {
       .complete = [&] { completed = true; return true; }});
   tour.updateLayout(1280, 720);
   SDL_Event event{};
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   event.button.button = SDL_BUTTON_LEFT;
   event.button.x = 4;
   event.button.y = 4;
@@ -180,24 +180,24 @@ void testSpotlightDoesNotActivateTheUnderlyingButton() {
       .target = [&](NewcomerTutorialStep) { return target; }});
   root.addView(tour);
   SDL_Event enter{};
-  enter.type = SDL_KEYDOWN;
-  enter.key.keysym.sym = SDLK_RETURN;
+  enter.type = SDL_EVENT_KEY_DOWN;
+  enter.key.key = SDLK_RETURN;
   require(!root.handleEvents(enter) && tour->step() == NewcomerTutorialStep::Tables,
           "Enter advances the tour while consuming the input");
   tour->updateLayout(1280, 720);
   SDL_Event click{};
-  click.type = SDL_MOUSEBUTTONDOWN;
+  click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   click.button.button = SDL_BUTTON_LEFT;
   click.button.x = target->getX() + 10;
   click.button.y = target->getY() + 10;
   root.handleEvents(click);
-  click.type = SDL_MOUSEBUTTONUP;
+  click.type = SDL_EVENT_MOUSE_BUTTON_UP;
   root.handleEvents(click);
   require(clicks == 0, "even the clear spotlight must block downloads and folder actions");
   tour->skip();
-  click.type = SDL_MOUSEBUTTONDOWN;
+  click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   root.handleEvents(click);
-  click.type = SDL_MOUSEBUTTONUP;
+  click.type = SDL_EVENT_MOUSE_BUTTON_UP;
   root.handleEvents(click);
   require(clicks == 1, "normal control interaction resumes after the tour");
 }

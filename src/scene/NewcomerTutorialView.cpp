@@ -260,8 +260,8 @@ void NewcomerTutorialView::updateLayout(int width, int height) {
 }
 
 bool NewcomerTutorialView::handleEventsImpl(SDL_Event &event) {
-  if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-    switch (event.key.keysym.sym) {
+  if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+    switch (event.key.key) {
     case SDLK_RETURN:
     case SDLK_KP_ENTER:
     case SDLK_RIGHT: advance(); break;

@@ -283,20 +283,21 @@ void Button::onResize(int newWidth, int newHeight) {
 
 void Button::onPointerEventConsumed(const SDL_Event &event) {
   switch (event.type) {
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     if (event.motion.which != SDL_TOUCH_MOUSEID) {
       isHovered = false;
     }
     break;
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (event.button.button == SDL_BUTTON_LEFT &&
         event.button.which != SDL_TOUCH_MOUSEID) {
       mousePressedInside = false;
     }
     break;
-  case SDL_FINGERUP:
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_CANCELED:
     if (!sdl_pointer_event::isMouseSynthesizedTouch(event) &&
-        event.tfinger.fingerId == activeTouchId) {
+        event.tfinger.fingerID == activeTouchId) {
       activeTouchId = -1;
       isHovered = false;
     }
@@ -316,20 +317,20 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     isHovered = false;
     activeTouchId = -1;
     switch (event.type) {
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEBUTTONUP: {
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
       int uiX = 0;
       int uiY = 0;
       mouseEventToUi(event.button, uiX, uiY);
       return !isInsideButton(*this, uiX, uiY);
     }
-    case SDL_MOUSEMOTION:
-    case SDL_FINGERMOTION:
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_FINGER_MOTION:
       // ScrollView treats consumed motion as a captured child drag. Inert
       // buttons leave motion available to scrollers, as enabled buttons do.
       return true;
-    case SDL_FINGERDOWN:
-    case SDL_FINGERUP: {
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP: {
       float uiX = 0.0f;
       float uiY = 0.0f;
       fingerEventToUi(event.tfinger, uiX, uiY);
@@ -351,7 +352,7 @@ bool Button::handleEventsImpl(SDL_Event &event) {
   }
 
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return true;
@@ -363,7 +364,7 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     mousePressedInside = isInsideButton(*this, uiX, uiY);
     return !mousePressedInside;
   }
-  case SDL_MOUSEBUTTONUP: {
+  case SDL_EVENT_MOUSE_BUTTON_UP: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return true;
@@ -383,7 +384,7 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     }
     return false;
   }
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     if (event.motion.which == SDL_TOUCH_MOUSEID) {
       return true;
     }
@@ -393,7 +394,7 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     isHovered = isInsideButton(*this, uiX, uiY);
     break;
   }
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     if (activeTouchId != -1) {
       return true;
     }
@@ -405,11 +406,11 @@ bool Button::handleEventsImpl(SDL_Event &event) {
       return true;
     }
 
-    activeTouchId = event.tfinger.fingerId;
+    activeTouchId = event.tfinger.fingerID;
     return false;
   }
-  case SDL_FINGERUP: {
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_UP: {
+    if (event.tfinger.fingerID != activeTouchId) {
       return true;
     }
 
@@ -423,8 +424,8 @@ bool Button::handleEventsImpl(SDL_Event &event) {
     }
     return false;
   }
-  case SDL_WINDOWEVENT:
-    if (event.window.event == SDL_WINDOWEVENT_LEAVE) {
+  case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
       isHovered = false;
     }
     break;

@@ -1125,8 +1125,8 @@ bool ReplayRecordsModal::handleEvents(SDL_Event &event) {
   if (!isVisible()) {
     return true;
   }
-  if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-      event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+      event.key.key == SDLK_ESCAPE) {
     hide();
     return false;
   }
@@ -1262,7 +1262,7 @@ void ReplayRecordsModal::showIrFeedback(const i18n::Text &message) {
     title_->setLocalizedText(message);
   }
   titleResetPending_ = true;
-  titleResetAt_ = SDL_GetTicks64() + 1400;
+  titleResetAt_ = SDL_GetTicks() + 1400;
   if (root_ != nullptr) {
     root_->applyYogaLayoutFromRoot();
   }
@@ -1847,7 +1847,7 @@ void ReplayRecordsModal::updateTitleReset() {
   if (irUploadInProgress_) {
     return;
   }
-  if (SDL_GetTicks64() < titleResetAt_) {
+  if (SDL_GetTicks() < titleResetAt_) {
     return;
   }
   titleResetPending_ = false;

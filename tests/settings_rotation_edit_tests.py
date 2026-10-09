@@ -29,7 +29,9 @@ class SettingsRotationEditTests(unittest.TestCase):
 #include <memory>
 #include <string>
 #include <vector>
-void SDL_StopTextInput() {}
+struct SDL_Window {};
+SDL_Window *SDL_GetKeyboardFocus() { return nullptr; }
+bool SDL_StopTextInput(SDL_Window *) { return true; }
 struct View {
   virtual ~View() = default;
   std::vector<View *> children;

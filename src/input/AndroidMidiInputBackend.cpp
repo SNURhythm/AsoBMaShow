@@ -5,7 +5,7 @@
 #include "QueuedMidiInputBackend.h"
 #include "Utf16ToUtf8.h"
 
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL_system.h>
 #include <jni.h>
 
 #include <atomic>
@@ -110,8 +110,8 @@ bool clearJavaException(JNIEnv *env, std::string &errorMessage) {
 
 std::string callStartMidiInput(std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is unavailable for MIDI input.";
     return {};
@@ -149,8 +149,8 @@ std::string callStartMidiInput(std::string &errorMessage) {
 }
 
 void callStopMidiInput() {
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     return;
   }

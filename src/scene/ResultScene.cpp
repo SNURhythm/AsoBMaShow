@@ -4326,7 +4326,7 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
                                     ? 0
                                     : std::max(0LL, nowMicros() - resultSkinStartedMicros);
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return false;
@@ -4335,7 +4335,7 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
                           event.button.y * rendering::heightScale,
                           point.x, point.y);
     break;
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     if (event.motion.which == SDL_TOUCH_MOUSEID || !resultSkinMouseCapture) {
       return false;
     }
@@ -4346,19 +4346,19 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
                                               eventMicros);
     consumeResultSkinBuiltinEvents();
     return true;
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID || !resultSkinMouseCapture) {
       return false;
     }
     resultSkinMouseCapture.reset();
     return true;
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                               point.y);
     break;
-  case SDL_FINGERMOTION: {
-    const auto capture = resultSkinTouchCaptures.find(event.tfinger.fingerId);
+  case SDL_EVENT_FINGER_MOTION: {
+    const auto capture = resultSkinTouchCaptures.find(event.tfinger.fingerID);
     if (capture == resultSkinTouchCaptures.end()) {
       return false;
     }
@@ -4369,8 +4369,9 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
     consumeResultSkinBuiltinEvents();
     return true;
   }
-  case SDL_FINGERUP:
-    if (resultSkinTouchCaptures.erase(event.tfinger.fingerId) == 0) {
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_CANCELED:
+    if (resultSkinTouchCaptures.erase(event.tfinger.fingerID) == 0) {
       return false;
     }
     return true;
@@ -4383,10 +4384,10 @@ bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
   }
   if (hit.kind == PresentationUiControlKind::Slider ||
       hit.kind == PresentationUiControlKind::LaneCover) {
-    if (event.type == SDL_MOUSEBUTTONDOWN) {
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
       resultSkinMouseCapture = hit;
     } else {
-      resultSkinTouchCaptures.insert_or_assign(event.tfinger.fingerId, hit);
+      resultSkinTouchCaptures.insert_or_assign(event.tfinger.fingerID, hit);
     }
   }
   consumeResultSkinBuiltinEvents();
@@ -4452,17 +4453,17 @@ EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<UiLogicalPoint> observedPointer;
   UiLogicalPoint point;
-  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+  if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
     rendering::screenToUi(event.motion.x * rendering::widthScale,
                           event.motion.y * rendering::heightScale, point.x, point.y);
     observedPointer = point;
-  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+  } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
              event.button.which != SDL_TOUCH_MOUSEID) {
     rendering::screenToUi(event.button.x * rendering::widthScale,
                           event.button.y * rendering::heightScale, point.x, point.y);
     observedPointer = point;
-  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
-             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+  } else if ((event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION) &&
+             event.tfinger.touchID != SDL_MOUSE_TOUCHID) {
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
     observedPointer = point;
   }
@@ -4478,7 +4479,7 @@ EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
   }
 #endif
   if (courseDetailsModalRoot != nullptr && courseDetailsModalRoot->getVisible()) {
-    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
       courseDetailsModalRoot->setVisible(false);
     } else {
       courseDetailsModalRoot->handleEvents(event);
@@ -4488,8 +4489,9 @@ EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
   // Result overlays and touch controls are rendered above a selected skin and
   // must receive the corresponding pointer event first.
   const bool resultSkinPointerContinuation =
-      event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONUP ||
-      event.type == SDL_FINGERMOTION || event.type == SDL_FINGERUP;
+      event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
+      event.type == SDL_EVENT_FINGER_MOTION || event.type == SDL_EVENT_FINGER_UP ||
+      event.type == SDL_EVENT_FINGER_CANCELED;
   if (resultSkinPointerContinuation && queueResultSkinPointerEvent(event)) {
     return {};
   }

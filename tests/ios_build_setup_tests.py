@@ -26,7 +26,7 @@ FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
 IOS_INIT = ROOT / "scripts/ios_init.sh"
 IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
-SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
+SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL3"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 IOS_NATIVES_HEADER = ROOT / "src/iOSNatives.hpp"
@@ -748,35 +748,32 @@ int main() { return 0; }
         self.assertIsNotNone(compiler)
         harness = r'''
 #define SDL_MAIN_HANDLED
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <cassert>
 #include <cstdint>
 enum TargetPlatform { Windows, MacOS, Linux, iOS, Android };
 constexpr TargetPlatform TARGET_PLATFORM = TEST_PLATFORM;
-struct SDL_Window { Uint32 flags; } testWindow;
+struct SDL_Window { SDL_WindowFlags flags; } testWindow;
 bool portrait = false;
 bool hiddenAtCreation = false;
 int exclusiveRequests = 0;
-SDL_Window *SDL_CreateWindow(const char *, int, int, int, int, Uint32 flags) {
+SDL_Window *SDL_CreateWindow(const char *, int, int, SDL_WindowFlags flags) {
   testWindow.flags = flags;
   hiddenAtCreation = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS)) != 0;
   return &testWindow;
 }
-int SDL_SetWindowFullscreen(SDL_Window *window, Uint32 flags) {
-  if (flags == SDL_WINDOW_FULLSCREEN) {
-    ++exclusiveRequests;
-    // UIKit rejects a landscape-sized exclusive mode while starting portrait.
-    if (portrait && TARGET_PLATFORM == iOS) return -1;
-  }
-  window->flags = flags;
-  return 0;
+bool SDL_SetWindowFullscreen(SDL_Window *window, bool fullscreen) {
+  ++exclusiveRequests;
+  if (fullscreen) window->flags |= SDL_WINDOW_FULLSCREEN;
+  else window->flags &= ~SDL_WINDOW_FULLSCREEN;
+  return true;
 }
 void startup() {
 CREATION
 TRANSITION
   if (TARGET_PLATFORM == iOS) {
     assert(hiddenAtCreation);
-    assert((win->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP);
+    assert((win->flags & SDL_WINDOW_FULLSCREEN) == SDL_WINDOW_FULLSCREEN);
     assert(exclusiveRequests == 0);
   } else if (TARGET_PLATFORM == Android) {
     assert(win->flags & SDL_WINDOW_FULLSCREEN);
@@ -981,7 +978,7 @@ int main() {
     def test_ios_uses_portable_stable_sdl_header_alias(self):
         self.assertTrue(SDL_HEADER_ALIAS.is_symlink())
         self.assertFalse(os.path.isabs(os.readlink(SDL_HEADER_ALIAS)))
-        self.assertEqual((ROOT / "SDL/include").resolve(), SDL_HEADER_ALIAS.resolve())
+        self.assertEqual((ROOT / "SDL/include/SDL3").resolve(), SDL_HEADER_ALIAS.resolve())
 
     def test_ios_links_7zip_archive_registration_for_device_and_simulator(self):
         xcodebuild = shutil.which("xcodebuild")

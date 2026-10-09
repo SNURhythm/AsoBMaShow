@@ -3,7 +3,7 @@
 #include "ArchiveUnzipOperation.h"
 #include "../i18n/Localization.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 #include <memory>
 

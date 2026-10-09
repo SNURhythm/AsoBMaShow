@@ -16,9 +16,9 @@
 		B72F4A012F2A000100F00D01 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = B72F4A022F2A000100F00D01 /* GoogleService-Info.plist */; };
 		B76AB0582DA4A70300E8327C /* assets in Resources */ = {isa = PBXBuildFile; fileRef = B7BAA5AD2DA3F87D008F6FCD /* assets */; };
 		B76AB0592DA4A70600E8327C /* shaders in Resources */ = {isa = PBXBuildFile; fileRef = B7BAA5572DA3F857008F6FCD /* shaders */; };
-		B77B0DFD2BF7BD3900945F27 /* SDL2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL2.framework */; };
-		B77B0E1C2BF7BDC400945F27 /* SDL2_ttf.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E062BF7BD6000945F27 /* SDL2_ttf.framework */; };
-		B77B0E1D2BF7BDC400945F27 /* SDL2_ttf.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E062BF7BD6000945F27 /* SDL2_ttf.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B77B0DFD2BF7BD3900945F27 /* SDL3.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL3.framework */; };
+		B77B0E1C2BF7BDC400945F27 /* SDL3_ttf.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E062BF7BD6000945F27 /* SDL3_ttf.framework */; };
+		B77B0E1D2BF7BDC400945F27 /* SDL3_ttf.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E062BF7BD6000945F27 /* SDL3_ttf.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B77B0E202BF7C46D00945F27 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E1E2BF7C46700945F27 /* Foundation.framework */; };
 		B79B1BCC2BFAC19F00FAD60F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B79B1BCB2BFAC19F00FAD60F /* Metal.framework */; };
 		B79B1BCE2BFAC1E700FAD60F /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B79B1BCD2BFAC1E700FAD60F /* MetalKit.framework */; };
@@ -54,13 +54,15 @@
 		B7E020012F62000100A50B01 /* CoreMIDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E020002F62000100A50B01 /* CoreMIDI.framework */; };
 		B7E030012F70000100A50B01 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E030002F70000100A50B01 /* UniformTypeIdentifiers.framework */; };
 		B7E040012F71000100A50B01 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E040002F71000100A50B01 /* CoreMotion.framework */; };
-		B7FFC2C32BF7D834000C838E /* SDL2.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL2.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B7FFC2C32BF7D834000C838E /* SDL3.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL3.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B7FFC39F2BFAAFA7000C838E /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E222BF7C48700945F27 /* CoreFoundation.framework */; };
 		B7FFC3A82BFAAFF3000C838E /* libbimg_encode.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FFC3192BFAAF67000C838E /* libbimg_encode.a */; };
 		E6E33EB08676F3525400255A /* libPods-AsoBMaShow.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 2CD33E8E87F5C66C37827A03 /* libPods-AsoBMaShow.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+        AABBCCDDEEFF001122334460 = {isa = PBXContainerItemProxy; containerPortal = B77B0DD82BF7BCDA00945F27; proxyType = 1; remoteGlobalIDString = BECDF5FE0761BA81005FE872; remoteInfo = SDL3; };
+        AABBCCDDEEFF001122334461 = {isa = PBXContainerItemProxy; containerPortal = B77B0DFF2BF7BD6000945F27; proxyType = 1; remoteGlobalIDString = BE48FD5D07AFA17000BB41DA; remoteInfo = SDL3_ttf; };
 		B77B0DE62BF7BCDA00945F27 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = B77B0DD82BF7BCDA00945F27 /* SDL.xcodeproj */;
@@ -72,7 +74,7 @@
 			isa = PBXContainerItemProxy;
 			containerPortal = B77B0DD82BF7BCDA00945F27 /* SDL.xcodeproj */;
 			proxyType = 2;
-			remoteGlobalIDString = A7D88B5423E2437C00DCD162;
+			remoteGlobalIDString = BECDF66C0761BA81005FE872;
 			remoteInfo = "Framework-iOS";
 		};
 		B77B0DEA2BF7BCDA00945F27 /* PBXContainerItemProxy */ = {
@@ -602,8 +604,8 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				B77B0E1D2BF7BDC400945F27 /* SDL2_ttf.framework in Embed Frameworks */,
-				B7FFC2C32BF7D834000C838E /* SDL2.framework in Embed Frameworks */,
+				B77B0E1D2BF7BDC400945F27 /* SDL3_ttf.framework in Embed Frameworks */,
+				B7FFC2C32BF7D834000C838E /* SDL3.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -798,10 +800,10 @@
 				B7FFC39F2BFAAFA7000C838E /* CoreFoundation.framework in Frameworks */,
 				B7EBA95C2F28D20B00B6D064 /* libbimg_decode.a in Frameworks */,
 				B7EBA95D2F28D20E00B6D064 /* libbx.a in Frameworks */,
-				B77B0E1C2BF7BDC400945F27 /* SDL2_ttf.framework in Frameworks */,
+				B77B0E1C2BF7BDC400945F27 /* SDL3_ttf.framework in Frameworks */,
 				B7FFC3A82BFAAFF3000C838E /* libbimg_encode.a in Frameworks */,
 				B77B0E202BF7C46D00945F27 /* Foundation.framework in Frameworks */,
-				B77B0DFD2BF7BD3900945F27 /* SDL2.framework in Frameworks */,
+				B77B0DFD2BF7BD3900945F27 /* SDL3.framework in Frameworks */,
 				B7EBA95E2F28D21300B6D064 /* libbimg.a in Frameworks */,
 				E6E33EB08676F3525400255A /* libPods-AsoBMaShow.a in Frameworks */,
 			);
@@ -938,17 +940,17 @@
 		B77B0DD92BF7BCDA00945F27 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B77B0DE72BF7BCDA00945F27 /* SDL2.framework */,
-				B77B0DE92BF7BCDA00945F27 /* SDL2.framework */,
-				B77B0DEB2BF7BCDA00945F27 /* SDL2.framework */,
-				B77B0DED2BF7BCDA00945F27 /* SDL2.framework */,
-				B77B0DEF2BF7BCDA00945F27 /* libSDL2.a */,
-				B77B0DF12BF7BCDA00945F27 /* libSDL2.a */,
-				B77B0DF32BF7BCDA00945F27 /* libSDL2.a */,
-				B77B0DF52BF7BCDA00945F27 /* libSDL2.dylib */,
-				B77B0DF72BF7BCDA00945F27 /* libSDL2.dylib */,
-				B77B0DF92BF7BCDA00945F27 /* libSDL2.dylib */,
-				B77B0DFB2BF7BCDA00945F27 /* SDL2 */,
+				B77B0DE72BF7BCDA00945F27 /* SDL3.framework */,
+				B77B0DE92BF7BCDA00945F27 /* SDL3.framework */,
+				B77B0DEB2BF7BCDA00945F27 /* SDL3.framework */,
+				B77B0DED2BF7BCDA00945F27 /* SDL3.framework */,
+				B77B0DEF2BF7BCDA00945F27 /* libSDL3.a */,
+				B77B0DF12BF7BCDA00945F27 /* libSDL3.a */,
+				B77B0DF32BF7BCDA00945F27 /* libSDL3.a */,
+				B77B0DF52BF7BCDA00945F27 /* libSDL3.dylib */,
+				B77B0DF72BF7BCDA00945F27 /* libSDL3.dylib */,
+				B77B0DF92BF7BCDA00945F27 /* libSDL3.dylib */,
+				B77B0DFB2BF7BCDA00945F27 /* SDL3 */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -956,8 +958,8 @@
 		B77B0E002BF7BD6000945F27 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B77B0E062BF7BD6000945F27 /* SDL2_ttf.framework */,
-				B77B0E082BF7BD6000945F27 /* libSDL2_ttf.a */,
+				B77B0E062BF7BD6000945F27 /* SDL3_ttf.framework */,
+				B77B0E082BF7BD6000945F27 /* libSDL3_ttf.a */,
 				B77B0E0A2BF7BD6000945F27 /* Create DMG */,
 			);
 			name = Products;
@@ -1059,6 +1061,8 @@
 			buildRules = (
 			);
 			dependencies = (
+                AABBCCDDEEFF001122334462,
+                AABBCCDDEEFF001122334463,
 			);
 			fileSystemSynchronizedGroups = (
 				B76AAF3F2DA4A1C400E8327C /* ../../../../src */,
@@ -1069,6 +1073,11 @@
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXTargetDependency section */
+        AABBCCDDEEFF001122334462 = {isa = PBXTargetDependency; name = SDL3; targetProxy = AABBCCDDEEFF001122334460; };
+        AABBCCDDEEFF001122334463 = {isa = PBXTargetDependency; name = SDL3_ttf; targetProxy = AABBCCDDEEFF001122334461; };
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		B70026F92BF7A8D8000DB8EC /* Project object */ = {
@@ -1115,94 +1124,94 @@
 /* End PBXProject section */
 
 /* Begin PBXReferenceProxy section */
-		B77B0DE72BF7BCDA00945F27 /* SDL2.framework */ = {
+		B77B0DE72BF7BCDA00945F27 /* SDL3.framework */ = {
 			isa = PBXReferenceProxy;
 			fileType = wrapper.framework;
-			path = SDL2.framework;
+			path = SDL3.framework;
 			remoteRef = B77B0DE62BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DE92BF7BCDA00945F27 /* SDL2.framework */ = {
+		B77B0DE92BF7BCDA00945F27 /* SDL3.framework */ = {
 			isa = PBXReferenceProxy;
 			fileType = wrapper.framework;
-			path = SDL2.framework;
+			path = SDL3.framework;
 			remoteRef = B77B0DE82BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DEB2BF7BCDA00945F27 /* SDL2.framework */ = {
+		B77B0DEB2BF7BCDA00945F27 /* SDL3.framework */ = {
 			isa = PBXReferenceProxy;
 			fileType = wrapper.framework;
-			path = SDL2.framework;
+			path = SDL3.framework;
 			remoteRef = B77B0DEA2BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DED2BF7BCDA00945F27 /* SDL2.framework */ = {
+		B77B0DED2BF7BCDA00945F27 /* SDL3.framework */ = {
 			isa = PBXReferenceProxy;
 			fileType = wrapper.framework;
-			path = SDL2.framework;
+			path = SDL3.framework;
 			remoteRef = B77B0DEC2BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DEF2BF7BCDA00945F27 /* libSDL2.a */ = {
+		B77B0DEF2BF7BCDA00945F27 /* libSDL3.a */ = {
 			isa = PBXReferenceProxy;
 			fileType = archive.ar;
-			path = libSDL2.a;
+			path = libSDL3.a;
 			remoteRef = B77B0DEE2BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DF12BF7BCDA00945F27 /* libSDL2.a */ = {
+		B77B0DF12BF7BCDA00945F27 /* libSDL3.a */ = {
 			isa = PBXReferenceProxy;
 			fileType = archive.ar;
-			path = libSDL2.a;
+			path = libSDL3.a;
 			remoteRef = B77B0DF02BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DF32BF7BCDA00945F27 /* libSDL2.a */ = {
+		B77B0DF32BF7BCDA00945F27 /* libSDL3.a */ = {
 			isa = PBXReferenceProxy;
 			fileType = archive.ar;
-			path = libSDL2.a;
+			path = libSDL3.a;
 			remoteRef = B77B0DF22BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DF52BF7BCDA00945F27 /* libSDL2.dylib */ = {
+		B77B0DF52BF7BCDA00945F27 /* libSDL3.dylib */ = {
 			isa = PBXReferenceProxy;
 			fileType = "compiled.mach-o.dylib";
-			path = libSDL2.dylib;
+			path = libSDL3.dylib;
 			remoteRef = B77B0DF42BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DF72BF7BCDA00945F27 /* libSDL2.dylib */ = {
+		B77B0DF72BF7BCDA00945F27 /* libSDL3.dylib */ = {
 			isa = PBXReferenceProxy;
 			fileType = "compiled.mach-o.dylib";
-			path = libSDL2.dylib;
+			path = libSDL3.dylib;
 			remoteRef = B77B0DF62BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DF92BF7BCDA00945F27 /* libSDL2.dylib */ = {
+		B77B0DF92BF7BCDA00945F27 /* libSDL3.dylib */ = {
 			isa = PBXReferenceProxy;
 			fileType = "compiled.mach-o.dylib";
-			path = libSDL2.dylib;
+			path = libSDL3.dylib;
 			remoteRef = B77B0DF82BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0DFB2BF7BCDA00945F27 /* SDL2 */ = {
+		B77B0DFB2BF7BCDA00945F27 /* SDL3 */ = {
 			isa = PBXReferenceProxy;
 			fileType = "compiled.mach-o.executable";
-			path = SDL2;
+			path = SDL3;
 			remoteRef = B77B0DFA2BF7BCDA00945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0E062BF7BD6000945F27 /* SDL2_ttf.framework */ = {
+		B77B0E062BF7BD6000945F27 /* SDL3_ttf.framework */ = {
 			isa = PBXReferenceProxy;
 			fileType = wrapper.framework;
-			path = SDL2_ttf.framework;
+			path = SDL3_ttf.framework;
 			remoteRef = B77B0E052BF7BD6000945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		B77B0E082BF7BD6000945F27 /* libSDL2_ttf.a */ = {
+		B77B0E082BF7BD6000945F27 /* libSDL3_ttf.a */ = {
 			isa = PBXReferenceProxy;
 			fileType = archive.ar;
-			path = libSDL2_ttf.a;
+			path = libSDL3_ttf.a;
 			remoteRef = B77B0E072BF7BD6000945F27 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};

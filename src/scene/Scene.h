@@ -2,7 +2,7 @@
 #include "../view/View.h"
 #include "../i18n/Localization.h"
 #include "../context.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <vector>
 #include <set>
 #include <memory>
@@ -56,7 +56,7 @@ public:
   virtual void update(float dt) = 0; // Update the scene logic
   void defer(const std::function<bool()> &func, Uint64 delay,
              bool shouldWaitFrame = false) {
-    Uint64 time = SDL_GetTicks64() + delay;
+    Uint64 time = SDL_GetTicks() + delay;
     if (deferred.find(time) == deferred.end()) {
       deferred[time] = {};
     }
@@ -79,7 +79,7 @@ public:
       return;
     }
 
-    Uint64 time = SDL_GetTicks64();
+    Uint64 time = SDL_GetTicks();
     auto it = deferred.begin();
     while (it != deferred.end()) {
       if (it->first <= time) {

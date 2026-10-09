@@ -1,7 +1,7 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "AudioWrapper.h"
 #include <stdexcept>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include "decoder.h"
 #include <sndfile.h>
 #include <stdio.h>

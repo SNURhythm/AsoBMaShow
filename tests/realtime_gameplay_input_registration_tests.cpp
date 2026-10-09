@@ -1,6 +1,6 @@
 #include "scene/play/RealtimeGameplayInputRegistration.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <atomic>
 #include <chrono>
@@ -73,8 +73,8 @@ struct Fixture {
   std::function<void()> onWatch;
   std::vector<std::pair<input::DeviceClass, bool>> legacy;
 
-  static int SDLCALL watch(void *context, SDL_Event *event) {
-    if (event->type == SDL_USEREVENT) {
+  static bool SDLCALL watch(void *context, SDL_Event *event) {
+    if (event->type == SDL_EVENT_USER) {
       auto &fixture = *static_cast<Fixture *>(context);
       ++fixture.watches;
       if (fixture.onWatch) fixture.onWatch();
@@ -83,7 +83,7 @@ struct Fixture {
   }
   void pushEvent() {
     SDL_Event event{};
-    event.type = SDL_USEREVENT;
+    event.type = SDL_EVENT_USER;
     require(SDL_PushEvent(&event) == 1, "SDL fixture event is accepted");
   }
   gameplay::RealtimeGameplayInputRegistration::Configuration configuration() {
@@ -307,7 +307,7 @@ void testCloseWaitsForInFlightCallback(int source) {
 } // namespace
 
 int main() {
-  if (SDL_Init(SDL_INIT_EVENTS) != 0) return 1;
+  if (!SDL_Init(SDL_INIT_EVENTS)) return 1;
   try {
     testInterruptionArrivesBeforeReleaseAndDetachesWithRegistration();
     testFailureDuringClaimReachesNewGameplayOwner();

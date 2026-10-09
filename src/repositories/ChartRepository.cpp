@@ -11,7 +11,7 @@
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "../Utils.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include "../path.h"
 
 #include <algorithm>

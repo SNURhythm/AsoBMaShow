@@ -1,4 +1,5 @@
 #include "InputProfileStore.h"
+#include "LegacyScancodeMigration.h"
 
 #include "../../yoga/lib/nlohmann/json.hpp"
 
@@ -516,7 +517,16 @@ InputProfileStore::load(const std::filesystem::path &path) {
     }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
-      result.profile.bindings.push_back(parseBinding(binding));
+      auto parsed = parseBinding(binding);
+      if (schemaVersion < 11 && parsed.control.deviceClass == input::DeviceClass::Keyboard &&
+          parsed.control.kind == input::ControlKind::Key) {
+        const int previous = parsed.control.index;
+        parsed.control.index = input::migrateSdl2Scancode(previous);
+        if (parsed.control.index < 0 && previous >= 0) {
+          result.diagnostics.emplace_back("Retained an unsupported SDL2 key binding for rebinding.");
+        }
+      }
+      result.profile.bindings.push_back(std::move(parsed));
     }
     if (schemaVersion < 3 &&
         input_profile::migrateCompactScratchlessLaneBindings(result.profile)) {

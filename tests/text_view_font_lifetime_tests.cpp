@@ -13,6 +13,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <thread>
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -70,7 +71,7 @@ void testConstructorRollback(const std::string &path) {
       }
       if (survivor) {
         text_runtime::OperationGuard operation;
-        assert(TTF_FontHeight(survivor->primaryFont()) > 0);
+        assert(TTF_GetFontHeight(survivor->primaryFont()) > 0);
       }
       construct();
       assert(text_runtime::activeReferencesForTesting() == baseline);
@@ -83,13 +84,30 @@ void testConstructorRollback(const std::string &path) {
   assert(text_runtime::activeReferencesForTesting() == initialReferences);
 }
 
+void testFontCacheUsesCreatingThread(const std::string &path) {
+  text_runtime::FontCacheSession session;
+  FontProbeView mainView(path, 16);
+  TTF_Font *mainFont = mainView.primaryFont();
+  assert(mainFont != nullptr);
+  std::thread worker([&] {
+    text_runtime::FontCacheSession workerSession;
+    FontProbeView workerView(path, 16);
+    assert(workerView.primaryFont() != nullptr && workerView.primaryFont() != mainFont);
+    int width = 0, height = 0;
+    assert(TTF_GetStringSize(workerView.primaryFont(), "SDL3", 0, &width, &height));
+    assert(width > 0 && height > 0);
+  });
+  worker.join();
+  assert(TTF_FontHasGlyph(mainFont, 'A'));
+}
+
 void testWarmFontCache(const std::string &path) {
   std::unique_ptr<FontProbeView> survivor;
   {
     text_runtime::FontCacheSession session;
     {
       FontProbeView first(path, 16);
-      assert(TTF_GlyphIsProvided32(first.primaryFont(), 'A'));
+      assert(TTF_FontHasGlyph(first.primaryFont(), 'A'));
     }
     const auto warm = text_runtime::fontCacheStatsForTesting();
     assert(warm.active == 0 && warm.idle == 1);
@@ -141,7 +159,7 @@ void testWarmFontCache(const std::string &path) {
   // A view can outlive the session; only idle fonts are closed at teardown.
   assert(text_runtime::fontCacheStatsForTesting().idle == 0);
   assert(text_runtime::fontCacheStatsForTesting().active == 1);
-  assert(TTF_FontHeight(survivor->primaryFont()) > 0);
+  assert(TTF_GetFontHeight(survivor->primaryFont()) > 0);
   survivor.reset();
   assert(text_runtime::activeReferencesForTesting() == 0);
   assert(TTF_WasInit() == 0);
@@ -165,8 +183,8 @@ void testFullStaticFonts() {
   assert(bold.primaryFont() == sharedBold.primaryFont());
   assert(regular.primaryFontPath() == root + "notosanscjkjp.ttf");
   assert(bold.primaryFontPath() == root + "notosanscjkjp-bold.otf");
-  assert(std::string(TTF_FontFaceStyleName(regular.primaryFont())) == "Regular");
-  assert(std::string(TTF_FontFaceStyleName(bold.primaryFont())) == "Bold");
+  assert(std::string(TTF_GetFontStyleName(regular.primaryFont())) == "Regular");
+  assert(std::string(TTF_GetFontStyleName(bold.primaryFont())) == "Bold");
 
   // Preserve the complete legacy coverage, including dynamic chart text.
   std::ifstream coverage(ASOBMASHOW_SOURCE_DIR "/tests/fixtures/ui_font_legacy_coverage.txt");
@@ -182,8 +200,8 @@ void testFullStaticFonts() {
       const auto first = std::stoul(range.substr(0, dash), nullptr, 16);
       const auto last = std::stoul(range.substr(dash + 1), nullptr, 16);
       for (Uint32 codepoint = first; codepoint <= last; ++codepoint) {
-        assert(TTF_GlyphIsProvided32(regular.primaryFont(), codepoint));
-        assert(TTF_GlyphIsProvided32(bold.primaryFont(), codepoint));
+        assert(TTF_FontHasGlyph(regular.primaryFont(), codepoint));
+        assert(TTF_FontHasGlyph(bold.primaryFont(), codepoint));
         ++legacyCharacters;
       }
     }
@@ -191,8 +209,8 @@ void testFullStaticFonts() {
   assert(legacyCharacters == 28926);
   size_t mappedCharacters = 0;
   for (Uint32 codepoint = 32; codepoint <= 0x10ffff; ++codepoint) {
-    const bool hasRegular = TTF_GlyphIsProvided32(regular.primaryFont(), codepoint) != 0;
-    const bool hasBold = TTF_GlyphIsProvided32(bold.primaryFont(), codepoint) != 0;
+    const bool hasRegular = TTF_FontHasGlyph(regular.primaryFont(), codepoint) != 0;
+    const bool hasBold = TTF_FontHasGlyph(bold.primaryFont(), codepoint) != 0;
     assert(hasRegular == hasBold);
     mappedCharacters += hasRegular;
   }
@@ -203,20 +221,19 @@ void testFullStaticFonts() {
     assert(reference);
     for (const auto glyph : {U'A', U'힣', U'ア', U'龘', U'𠮷', U'≒'}) {
       assert(entry.first->fontForGlyph(glyph) == entry.first->primaryFont());
-      assert(TTF_GlyphIsProvided32(entry.first->primaryFont(), glyph));
+      assert(TTF_FontHasGlyph(entry.first->primaryFont(), glyph));
     }
     for (const char *text : {"Guided Access", "사용법 유도 힣", "アクセスガイド 龘𠮷≒"}) {
-      SDL_Surface *actual = TTF_RenderUTF8_Blended(
-          entry.first->primaryFont(), text, {255, 255, 255, 255});
-      SDL_Surface *expected = TTF_RenderUTF8_Blended(reference, text, {255, 255, 255, 255});
+      SDL_Surface *actual = TTF_RenderText_Blended(entry.first->primaryFont(), text, 0, {255, 255, 255, 255});
+      SDL_Surface *expected = TTF_RenderText_Blended(reference, text, 0, {255, 255, 255, 255});
       assert(actual && expected && actual->w == expected->w && actual->h == expected->h);
       for (int y = 0; y < actual->h; ++y) {
         assert(std::memcmp(static_cast<char *>(actual->pixels) + y * actual->pitch,
                            static_cast<char *>(expected->pixels) + y * expected->pitch,
-                           actual->w * actual->format->BytesPerPixel) == 0);
+                           actual->w * SDL_BYTESPERPIXEL(actual->format)) == 0);
       }
-      SDL_FreeSurface(actual);
-      SDL_FreeSurface(expected);
+      SDL_DestroySurface(actual);
+      SDL_DestroySurface(expected);
     }
     TTF_CloseFont(reference);
   }
@@ -247,7 +264,7 @@ int main() {
   assert(text_runtime::activeReferencesForTesting() == 3);
   {
     text_runtime::OperationGuard operation;
-    assert(TTF_FontHeight(shared->primaryFont()) > 0);
+    assert(TTF_GetFontHeight(shared->primaryFont()) > 0);
   }
   for (auto *view : {&shared, &larger, &bold}) {
     test_support::FailNextAllocation failure;
@@ -258,6 +275,7 @@ int main() {
   testFullStaticFonts();
   assert(text_runtime::activeReferencesForTesting() == 0);
   testConstructorRollback(path);
+  testFontCacheUsesCreatingThread(path);
   testWarmFontCache(path);
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();

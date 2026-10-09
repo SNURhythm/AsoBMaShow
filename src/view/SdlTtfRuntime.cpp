@@ -1,6 +1,6 @@
 #include "SdlTtfRuntime.h"
 
-#include <SDL_ttf.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 namespace text_runtime {
 namespace {
@@ -14,7 +14,7 @@ OperationGuard::OperationGuard() noexcept : lock_(operationMutex) {}
 bool acquire() noexcept {
   std::lock_guard lifecycleLock(lifecycleMutex);
   std::lock_guard operationLock(operationMutex);
-  if (references == 0 && TTF_Init() != 0) return false;
+  if (references == 0 && !TTF_Init()) return false;
   ++references;
   return true;
 }

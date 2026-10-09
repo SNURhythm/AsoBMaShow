@@ -271,18 +271,18 @@ bool VirtualControllerEditorView::handleEventsImpl(SDL_Event &event) {
   float uiX = 0.0F;
   float uiY = 0.0F;
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.button != SDL_BUTTON_LEFT ||
         !mousePoint(event.button, uiX, uiY)) {
       return true;
     }
     return !beginDrag(0, uiX, uiY);
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     if (activePointerId_ != 0 || !mousePoint(event.motion, uiX, uiY)) {
       return true;
     }
     return !updateDrag(uiX, uiY);
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (event.button.button != SDL_BUTTON_LEFT || activePointerId_ != 0 ||
         !mousePoint(event.button, uiX, uiY)) {
       return true;
@@ -290,22 +290,25 @@ bool VirtualControllerEditorView::handleEventsImpl(SDL_Event &event) {
     (void)updateDrag(uiX, uiY);
     endDrag(0);
     return false;
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     fingerPoint(event.tfinger, uiX, uiY);
-    return !beginDrag(event.tfinger.fingerId, uiX, uiY);
-  case SDL_FINGERMOTION:
-    if (activePointerId_ != event.tfinger.fingerId) {
+    return !beginDrag(event.tfinger.fingerID, uiX, uiY);
+  case SDL_EVENT_FINGER_MOTION:
+    if (activePointerId_ != event.tfinger.fingerID) {
       return true;
     }
     fingerPoint(event.tfinger, uiX, uiY);
     return !updateDrag(uiX, uiY);
-  case SDL_FINGERUP:
-    if (activePointerId_ != event.tfinger.fingerId) {
+  case SDL_EVENT_FINGER_CANCELED:
+    endDrag(event.tfinger.fingerID);
+    return false;
+  case SDL_EVENT_FINGER_UP:
+    if (activePointerId_ != event.tfinger.fingerID) {
       return true;
     }
     fingerPoint(event.tfinger, uiX, uiY);
     (void)updateDrag(uiX, uiY);
-    endDrag(event.tfinger.fingerId);
+    endDrag(event.tfinger.fingerID);
     return false;
   default:
     return true;

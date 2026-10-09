@@ -5826,13 +5826,12 @@ SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
     CGContextRelease(context);
     CFRelease(line);
 
-    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(
-        0, width, height, 32, SDL_PIXELFORMAT_BGRA32);
+    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_BGRA32);
     if (surface == nullptr) {
       return nullptr;
     }
 
-    SDL_FillRect(surface, nullptr, SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+    SDL_FillSurfaceRect(surface, nullptr, SDL_MapSurfaceRGBA(surface, 0, 0, 0, 0));
     if (SDL_MUSTLOCK(surface)) {
       SDL_LockSurface(surface);
     }
@@ -5844,7 +5843,7 @@ SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
         const Uint8 alphaValue =
             static_cast<Uint8>((static_cast<int>(coverage) * color.a) / 255);
         Uint32 pixel =
-            SDL_MapRGBA(surface->format, color.r, color.g, color.b, alphaValue);
+            SDL_MapSurfaceRGBA(surface, color.r, color.g, color.b, alphaValue);
         std::memcpy(row + x * sizeof(Uint32), &pixel, sizeof(pixel));
       }
     }

@@ -14,7 +14,7 @@
 #include "SoundFileIO.h"
 #include "decoder.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <sndfile.h>
 
 #include <algorithm>

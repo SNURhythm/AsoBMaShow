@@ -133,18 +133,35 @@ if (NOT IOS)
     list(APPEND COMMON_LIBS utf8proc::utf8proc)
 endif()
 
-# 2. SDL2, SDL2_ttf, FFmpeg, Lua, LuaJIT
-if (IOS)
-    # --- iOS: Use Submodules ---
-    message(STATUS "Configuring for iOS - Using submodules for SDL2/SDL_ttf")
-
-    # Add subdirectories
+# 2. Pinned SDL forks, FFmpeg, Lua, LuaJIT
+# Scope SDL_ttf's BUILD_SHARED_LIBS to these dependencies only.
+function(asobmashow_add_sdl)
+    if(ANDROID OR IOS)
+        set(BUILD_SHARED_LIBS ON)
+        set(SDL_SHARED ON CACHE BOOL "Build shared SDL" FORCE)
+        set(SDL_STATIC OFF CACHE BOOL "Build static SDL" FORCE)
+    else()
+        set(BUILD_SHARED_LIBS OFF)
+        set(SDL_SHARED OFF CACHE BOOL "Build shared SDL" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "Build static SDL" FORCE)
+    endif()
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "Build SDL test library" FORCE)
+    set(SDL_TESTS OFF CACHE BOOL "Build SDL tests" FORCE)
+    set(SDL_DISABLE_INSTALL ON CACHE BOOL "Disable SDL installation" FORCE)
+    set(SDLTTF_INSTALL OFF CACHE BOOL "Disable SDL_ttf installation" FORCE)
+    set(SDLTTF_SAMPLES OFF CACHE BOOL "Disable SDL_ttf samples" FORCE)
+    set(SDLTTF_VENDORED ON CACHE BOOL "Use pinned font dependencies" FORCE)
     add_subdirectory(SDL)
     add_subdirectory(SDL_ttf)
+endfunction()
+asobmashow_add_sdl()
+list(APPEND COMMON_LIBS SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+# Header-only contract tests also consume SDL event and key types.
+include_directories(SDL/include SDL_ttf/include)
+if (IOS)
+    # --- iOS: Use Submodules ---
+    message(STATUS "Configuring for iOS - Using submodules for SDL3/SDL_ttf")
 
-    # Setup variables for linking
-    set(SDL2_LIB SDL2)
-    set(SDL2_TFF_LIB SDL2_ttf)
     # TODO: FFmpeg / Lua handling for iOS if needed
 
     find_library(UIKIT UIKit)
@@ -154,21 +171,11 @@ if (IOS)
     find_library(PHOTOS Photos)
     find_library(SECURITY Security)
     list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
-        ${CORE_TEXT} ${PHOTOS} ${SECURITY} ${SDL2_LIB} ${SDL2_TFF_LIB})
+        ${CORE_TEXT} ${PHOTOS} ${SECURITY})
 
 elseif(ANDROID)
     # --- Android: SDL submodules + vcpkg-compatible native packages ---
-    message(STATUS "Configuring for Android - Using submodules for SDL2/SDL_ttf")
-
-    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-    set(SDL2TTF_INSTALL OFF CACHE BOOL "" FORCE)
-    set(SDL2TTF_SAMPLES OFF CACHE BOOL "" FORCE)
-    set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
-
-    add_subdirectory(SDL)
-    add_subdirectory(SDL_ttf)
-
-    list(APPEND COMMON_LIBS SDL2 SDL2main SDL2_ttf)
+    message(STATUS "Configuring for Android - Using submodules for SDL3/SDL_ttf")
 
     find_package(FFMPEG REQUIRED)
     include_directories(${FFMPEG_INCLUDE_DIRS})
@@ -223,20 +230,6 @@ elseif(ANDROID)
 else()
     # --- Desktop: Use Vcpkg ---
     message(STATUS "Configuring for Desktop - Using vcpkg packages")
-
-    # SDL2
-    find_package(SDL2 CONFIG REQUIRED)
-    list(APPEND COMMON_LIBS
-        $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
-        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-    )
-
-    # SDL2_ttf
-    # Try different package names as vcpkg naming can vary
-    find_package(SDL2_ttf CONFIG REQUIRED)
-    list(APPEND COMMON_LIBS
-        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
-    )
 
     # FFmpeg
     find_package(FFMPEG REQUIRED)
@@ -1591,10 +1584,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_preview_tests PRIVATE cxx_std_23)
-        if(TARGET SDL2::SDL2)
-            target_link_libraries(music_select_preview_tests PRIVATE SDL2::SDL2)
-        elseif(TARGET SDL2::SDL2-static)
-            target_link_libraries(music_select_preview_tests PRIVATE SDL2::SDL2-static)
+        if(TARGET SDL3::SDL3)
+            target_link_libraries(music_select_preview_tests PRIVATE SDL3::SDL3)
+        elseif(TARGET SDL3::SDL3-static)
+            target_link_libraries(music_select_preview_tests PRIVATE SDL3::SDL3-static)
         endif()
         add_executable(music_select_system_sound_tests
             tests/music_select_system_sound_tests.cpp
@@ -2984,12 +2977,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(replay_file_action_service_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL3)
     endif()
 
     add_executable(replay_file_reconciler_tests
@@ -3106,12 +3099,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_replay_capture_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(course_replay_capture_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(course_replay_capture_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(course_replay_capture_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL3)
     endif()
 
     add_executable(result_record_summary_tests
@@ -3275,16 +3268,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(ir_score_import_projection_tests PRIVATE
         cxx_std_23
     )
-    if(TARGET SDL2::SDL2)
+    if(TARGET SDL3::SDL3)
         target_link_libraries(ir_score_import_projection_tests PRIVATE
-            SDL2::SDL2
+            SDL3::SDL3
         )
-    elseif(TARGET SDL2::SDL2-static)
+    elseif(TARGET SDL3::SDL3-static)
         target_link_libraries(ir_score_import_projection_tests PRIVATE
-            SDL2::SDL2-static
+            SDL3::SDL3-static
         )
-    elseif(TARGET SDL2)
-        target_link_libraries(ir_score_import_projection_tests PRIVATE SDL2)
+    elseif(TARGET SDL3)
+        target_link_libraries(ir_score_import_projection_tests PRIVATE SDL3)
     endif()
 
     add_executable(tachi_user_score_parser_tests
@@ -3403,12 +3396,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(ir_submission_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_submission_service_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(ir_submission_service_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(ir_submission_service_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(ir_submission_service_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL3)
     endif()
 
     add_executable(ir_ranking_service_tests
@@ -3553,12 +3546,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(replay_legacy_migration_tests PRIVATE
         ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS=1
     )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL3)
     endif()
 
     add_executable(legacy_result_summary_tests
@@ -3596,12 +3589,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(legacy_result_summary_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL3)
     endif()
 
     add_executable(replay_repository_modern_chart_tests
@@ -3640,15 +3633,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(replay_repository_modern_chart_tests PRIVATE
         cxx_std_23
     )
-    if(TARGET SDL2::SDL2)
+    if(TARGET SDL3::SDL3)
         target_link_libraries(replay_repository_modern_chart_tests PRIVATE
-            SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
+            SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
         target_link_libraries(replay_repository_modern_chart_tests PRIVATE
-            SDL2::SDL2-static)
-    elseif(TARGET SDL2)
+            SDL3::SDL3-static)
+    elseif(TARGET SDL3)
         target_link_libraries(replay_repository_modern_chart_tests PRIVATE
-            SDL2)
+            SDL3)
     endif()
 
     add_executable(replay_repository_modern_course_tests
@@ -3689,15 +3682,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(replay_repository_modern_course_tests PRIVATE
         cxx_std_23
     )
-    if(TARGET SDL2::SDL2)
+    if(TARGET SDL3::SDL3)
         target_link_libraries(replay_repository_modern_course_tests PRIVATE
-            SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
+            SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
         target_link_libraries(replay_repository_modern_course_tests PRIVATE
-            SDL2::SDL2-static)
-    elseif(TARGET SDL2)
+            SDL3::SDL3-static)
+    elseif(TARGET SDL3)
         target_link_libraries(replay_repository_modern_course_tests PRIVATE
-            SDL2)
+            SDL3)
     endif()
 
     add_executable(chart_replay_persistence_tests
@@ -3758,12 +3751,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_replay_persistence_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL3)
     endif()
 
     add_executable(replay_file_association_coordinator_tests
@@ -3835,12 +3828,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_replay_persistence_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(course_replay_persistence_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(course_replay_persistence_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(course_replay_persistence_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(course_replay_persistence_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(course_replay_persistence_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(course_replay_persistence_tests PRIVATE SDL3)
     endif()
 
     add_executable(chart_replay_context_tests
@@ -3893,12 +3886,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_replay_context_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(chart_replay_context_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(chart_replay_context_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(chart_replay_context_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(chart_replay_context_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(chart_replay_context_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(chart_replay_context_tests PRIVATE SDL3)
     endif()
 
     add_executable(course_replay_context_tests
@@ -3951,12 +3944,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_replay_context_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(course_replay_context_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(course_replay_context_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(course_replay_context_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL3)
     endif()
 
     add_executable(course_replay_consumer_tests
@@ -4138,12 +4131,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_repository_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(chart_repository_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(chart_repository_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(chart_repository_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(chart_repository_tests PRIVATE SDL3)
     endif()
     target_link_libraries(chart_repository_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
@@ -4294,12 +4287,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(chart_library_scanner_tests PRIVATE
         ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
     )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL3)
     endif()
     target_link_libraries(chart_library_scanner_tests PRIVATE ${COMMON_LIBS})
     if(NOT WIN32)
@@ -4380,12 +4373,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(difficulty_table_importer_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL3)
     endif()
     target_link_libraries(difficulty_table_importer_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
@@ -4411,12 +4404,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(result_persistence_model_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(result_persistence_model_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(result_persistence_model_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(result_persistence_model_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL3)
     endif()
     if(WIN32)
         target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
@@ -4437,12 +4430,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(modern_result_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(modern_result_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(modern_result_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(modern_result_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(modern_result_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(modern_result_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(modern_result_tests PRIVATE SDL3)
     endif()
 
     add_executable(result_contract_tests
@@ -4471,12 +4464,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(ir_submission_snapshot_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL3)
     endif()
 
     add_executable(modern_result_recall_tests
@@ -4501,12 +4494,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(modern_result_recall_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(modern_result_recall_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(modern_result_recall_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(modern_result_recall_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL3)
     endif()
     target_link_libraries(modern_result_recall_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
@@ -4545,12 +4538,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(score_provenance_db_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL3)
     endif()
 
     include(cmake/ReplayLoadTests.cmake)
@@ -4574,12 +4567,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(main_menu_library_tests PRIVATE
         ASOBMASHOW_FOLDER_QUERY_ONLY=1
     )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(main_menu_library_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(main_menu_library_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(main_menu_library_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(main_menu_library_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(main_menu_library_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(main_menu_library_tests PRIVATE SDL3)
     endif()
 
     add_executable(chart_library_task_service_tests
@@ -4631,12 +4624,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_library_operations_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(chart_library_operations_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(chart_library_operations_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(chart_library_operations_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL3)
     endif()
     target_link_libraries(chart_library_operations_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
@@ -4700,12 +4693,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(audio_video_settings_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(audio_video_settings_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(audio_video_settings_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(audio_video_settings_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL3)
     endif()
     target_link_libraries(audio_video_settings_tests PRIVATE utf8proc::utf8proc)
     if(WIN32)
@@ -5396,7 +5389,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(text_input_box_tests PRIVATE cxx_std_23)
     target_compile_definitions(text_input_box_tests PRIVATE
         SDL_ClearComposition=TextInputBoxTest_ClearComposition
-        SDL_SetTextInputRect=TextInputBoxTest_SetTextInputRect
+        SDL_SetTextInputArea=TextInputBoxTest_SetTextInputArea
     )
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
@@ -5434,12 +5427,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(play_option_summary_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(play_option_summary_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(play_option_summary_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(play_option_summary_tests PRIVATE SDL2::SDL2-static)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(play_option_summary_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(play_option_summary_tests PRIVATE SDL3::SDL3-static)
     else()
-        target_link_libraries(play_option_summary_tests PRIVATE SDL2)
+        target_link_libraries(play_option_summary_tests PRIVATE SDL3)
     endif()
 
     add_executable(play_options_panel_view_tests
@@ -5676,12 +5669,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(input_profile_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(input_profile_tests PRIVATE cxx_std_23)
     target_compile_definitions(input_profile_tests PRIVATE INPUT_PROFILE_STORE_TESTING)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(input_profile_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(input_profile_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(input_profile_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(input_profile_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(input_profile_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(input_profile_tests PRIVATE SDL3)
     endif()
 
     if (NOT IOS AND NOT PLATFORM_ANDROID)
@@ -5722,12 +5715,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(input_binding_resolver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(input_binding_resolver_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL3)
     endif()
 
     add_executable(windows_realtime_input_mapping_tests
@@ -5740,12 +5733,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(windows_realtime_input_mapping_tests PRIVATE
         cxx_std_23
     )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL3)
     endif()
 
     add_executable(input_timestamp_tests
@@ -5779,12 +5772,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(app_settings_store_tests PRIVATE
         APP_SETTINGS_STORE_TESTING
     )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(app_settings_store_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(app_settings_store_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(app_settings_store_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(app_settings_store_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(app_settings_store_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(app_settings_store_tests PRIVATE SDL3)
     endif()
     target_link_libraries(app_settings_store_tests PRIVATE utf8proc::utf8proc)
 
@@ -5795,12 +5788,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(localization_tests tests/localization_tests.cpp)
     target_include_directories(localization_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(localization_tests PRIVATE cxx_std_20)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(localization_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(localization_tests PRIVATE SDL2::SDL2-static)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(localization_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(localization_tests PRIVATE SDL3::SDL3-static)
     else()
-        target_link_libraries(localization_tests PRIVATE SDL2)
+        target_link_libraries(localization_tests PRIVATE SDL3)
     endif()
     set(scene_language_lifecycle_source
         ${CMAKE_CURRENT_BINARY_DIR}/generated/scene_language_lifecycle_tests.cpp)
@@ -6088,12 +6081,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME find_bms_verification_tests
         COMMAND find_bms_download_tests --verification)
     set_tests_properties(find_bms_verification_tests PROPERTIES TIMEOUT 60)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(find_bms_download_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL3)
     endif()
     target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
@@ -6320,7 +6313,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(graph_simulation_tests PRIVATE cxx_std_23)
     target_compile_definitions(graph_simulation_tests PRIVATE BX_CONFIG_DEBUG=1)
     target_link_libraries(graph_simulation_tests PRIVATE
-        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>)
+        $<IF:$<TARGET_EXISTS:SDL3_ttf::SDL3_ttf>,SDL3_ttf::SDL3_ttf,SDL3_ttf::SDL3_ttf-static>)
 
     add_executable(playfield_projection_tests
         tests/playfield_projection_tests.cpp
@@ -7100,12 +7093,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(gameplay_playback_startup_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(gameplay_playback_startup_tests PRIVATE SDL3)
     endif()
 
     add_executable(gameplay_practice_input_boundary_tests
@@ -7131,7 +7124,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
     target_link_libraries(gameplay_practice_input_boundary_tests PRIVATE
-        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+        $<IF:$<TARGET_EXISTS:SDL3_ttf::SDL3_ttf>,SDL3_ttf::SDL3_ttf,SDL3_ttf::SDL3_ttf-static>
     )
 
     add_executable(gameplay_simulation_tests
@@ -7156,7 +7149,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
     target_link_libraries(gameplay_simulation_tests PRIVATE
-        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+        $<IF:$<TARGET_EXISTS:SDL3_ttf::SDL3_ttf>,SDL3_ttf::SDL3_ttf,SDL3_ttf::SDL3_ttf-static>
     )
 
     add_executable(gameplay_automatic_authority_tests
@@ -7228,12 +7221,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
         ASOBMASHOW_ENABLE_PERF_TELEMETRY=1
     )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL3)
     endif()
     if(WIN32)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE avrt)
@@ -7280,6 +7273,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(legacy_skin_touch_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(legacy_skin_touch_tests PRIVATE cxx_std_23)
 
+    set(custom_touch_cancel_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/custom_touch_cancel_tests.cpp)
+    add_custom_command(
+        OUTPUT ${custom_touch_cancel_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/custom_touch_cancel_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${custom_touch_cancel_source}
+        DEPENDS tests/custom_touch_cancel_extract.py tests/custom_touch_cancel_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py
+                src/music_select/MusicSelectExternalActions.h
+                src/ir/IrRankingTableViewport.h src/scene/MusicSelectScene.cpp
+                src/scene/MusicPlayerScene.cpp src/scene/play/GamePlayScene.cpp
+                src/scene/ChartViewerScene.cpp src/scene/PracticeAnalyticsView.cpp
+                src/scene/SettingsScenePreview.cpp src/scene/ResultScene.cpp
+        VERBATIM
+    )
+    add_executable(custom_touch_cancel_tests
+        ${custom_touch_cancel_source}
+        src/scene/PracticeAnalyticsPresentation.cpp
+    )
+    target_include_directories(custom_touch_cancel_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(custom_touch_cancel_tests PRIVATE cxx_std_23)
+
     add_executable(sdl_touch_input_source_tests
         tests/sdl_touch_input_source_tests.cpp
         src/input/SDLTouchInputSource.cpp
@@ -7288,15 +7303,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
     target_compile_features(sdl_touch_input_source_tests PRIVATE cxx_std_23)
     target_compile_definitions(sdl_touch_input_source_tests PRIVATE SDL_MAIN_HANDLED)
-    if(TARGET SDL2::SDL2)
+    if(TARGET SDL3::SDL3)
         target_include_directories(sdl_touch_input_source_tests PRIVATE
-            $<TARGET_PROPERTY:SDL2::SDL2,INTERFACE_INCLUDE_DIRECTORIES>)
-    elseif(TARGET SDL2::SDL2-static)
+            $<TARGET_PROPERTY:SDL3::SDL3,INTERFACE_INCLUDE_DIRECTORIES>)
+    elseif(TARGET SDL3::SDL3-static)
         target_include_directories(sdl_touch_input_source_tests PRIVATE
-            $<TARGET_PROPERTY:SDL2::SDL2-static,INTERFACE_INCLUDE_DIRECTORIES>)
-    elseif(TARGET SDL2)
+            $<TARGET_PROPERTY:SDL3::SDL3-static,INTERFACE_INCLUDE_DIRECTORIES>)
+    elseif(TARGET SDL3)
         target_include_directories(sdl_touch_input_source_tests PRIVATE
-            $<TARGET_PROPERTY:SDL2,INTERFACE_INCLUDE_DIRECTORIES>)
+            $<TARGET_PROPERTY:SDL3,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
 
     add_executable(replay_keysound_schedule_tests
@@ -7562,12 +7577,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(player_profile_manager_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(player_profile_manager_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(player_profile_manager_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(player_profile_manager_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(player_profile_manager_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(player_profile_manager_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(player_profile_manager_tests PRIVATE SDL3)
     endif()
     target_link_libraries(player_profile_manager_tests PRIVATE utf8proc::utf8proc)
     if(WIN32)
@@ -7648,12 +7663,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(profile_switch_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(profile_switch_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(profile_switch_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(profile_switch_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(profile_switch_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(profile_switch_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(profile_switch_tests PRIVATE SDL3)
     endif()
     target_link_libraries(profile_switch_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
@@ -7753,12 +7768,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(logical_gameplay_input_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL3)
     endif()
 
     add_executable(guided_access_reminder_tests tests/guided_access_reminder_tests.cpp)
@@ -7862,12 +7877,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(sdl_display_backend_tests PRIVATE cxx_std_23)
     target_link_libraries(sdl_display_backend_tests PRIVATE bgfx)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL3)
     endif()
 
     add_executable(midi_input_tests
@@ -9214,6 +9229,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(realtime_gameplay_authority_policy_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)
     asobmashow_register_test(legacy_skin_touch_tests)
+    asobmashow_register_test(custom_touch_cancel_tests)
     asobmashow_register_test(sdl_touch_input_source_tests)
     asobmashow_register_test(replay_keysound_schedule_tests)
     asobmashow_register_test(practice_analytics_tests)

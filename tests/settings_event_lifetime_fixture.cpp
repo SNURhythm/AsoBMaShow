@@ -21,13 +21,15 @@ std::uint64_t revision() { return 0; }
 std::string tr(const char *key) { return key; }
 }
 using Uint64 = std::uint64_t;
-Uint64 SDL_GetTicks64() { return 1; }
+Uint64 SDL_GetTicks() { return 1; }
 enum {
-  SDL_APP_WILLENTERBACKGROUND = 1, SDL_APP_DIDENTERBACKGROUND,
-  SDL_WINDOWEVENT, SDL_WINDOWEVENT_FOCUS_LOST, SDL_WINDOWEVENT_MINIMIZED,
-  SDL_WINDOWEVENT_HIDDEN, SDL_MOUSEBUTTONUP
+  SDL_EVENT_WILL_ENTER_BACKGROUND = 1, SDL_EVENT_DID_ENTER_BACKGROUND,
+  SDL_EVENT_WINDOW_FOCUS_LOST, SDL_EVENT_WINDOW_MINIMIZED,
+  SDL_EVENT_WINDOW_HIDDEN, SDL_EVENT_MOUSE_BUTTON_UP
 };
-struct SDL_Event { int type = SDL_MOUSEBUTTONUP; struct { int event = 0; } window; };
+constexpr int SDL_EVENT_WINDOW_FIRST = SDL_EVENT_WINDOW_FOCUS_LOST;
+constexpr int SDL_EVENT_WINDOW_LAST = SDL_EVENT_WINDOW_HIDDEN;
+struct SDL_Event { int type = SDL_EVENT_MOUSE_BUTTON_UP; struct { int event = 0; } window; };
 class SceneManager;
 namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
 struct BackgroundTasks { void setGameplayPaused(bool) {} };
@@ -124,15 +126,14 @@ int main() {
     DisplaySession display;
     active->audioVideoSession = &display;
     context.settings.audioVideo.video = 42;
-    event.type = SDL_WINDOWEVENT;
-    event.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+    event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     manager.handleEvents(event);
     assert(display.focusLosses == 1 && active->displayDraft == 42);
     assert(active->displayStatus == "Display restored");
     assert(active->displayPreviewUpdates == 1);
     assert(active->previewInputCleanups == (previewActive ? 1 : 0));
     assert(active->previewEvents == (previewActive ? 1 : 0));
-    event.type = SDL_MOUSEBUTTONUP;
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
     active->views.front()->eventCallback = [&manager] {
       manager.changeScene("Intro");
       return false;

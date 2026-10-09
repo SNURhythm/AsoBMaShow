@@ -28,59 +28,59 @@ SDL_Keycode InputNormalizer::normalize(int keyCode, KeySource keySource) {
     case SCANCODE_9:
       return SDLK_9;
     case SCANCODE_A:
-      return SDLK_a;
+      return SDLK_A;
     case SCANCODE_B:
-      return SDLK_b;
+      return SDLK_B;
     case SCANCODE_C:
-      return SDLK_c;
+      return SDLK_C;
     case SCANCODE_D:
-      return SDLK_d;
+      return SDLK_D;
     case SCANCODE_E:
-      return SDLK_e;
+      return SDLK_E;
     case SCANCODE_F:
-      return SDLK_f;
+      return SDLK_F;
     case SCANCODE_G:
-      return SDLK_g;
+      return SDLK_G;
     case SCANCODE_H:
-      return SDLK_h;
+      return SDLK_H;
     case SCANCODE_I:
-      return SDLK_i;
+      return SDLK_I;
     case SCANCODE_J:
-      return SDLK_j;
+      return SDLK_J;
     case SCANCODE_K:
-      return SDLK_k;
+      return SDLK_K;
     case SCANCODE_L:
-      return SDLK_l;
+      return SDLK_L;
     case SCANCODE_M:
-      return SDLK_m;
+      return SDLK_M;
     case SCANCODE_N:
-      return SDLK_n;
+      return SDLK_N;
     case SCANCODE_O:
-      return SDLK_o;
+      return SDLK_O;
     case SCANCODE_P:
-      return SDLK_p;
+      return SDLK_P;
     case SCANCODE_Q:
-      return SDLK_q;
+      return SDLK_Q;
     case SCANCODE_R:
-      return SDLK_r;
+      return SDLK_R;
     case SCANCODE_S:
-      return SDLK_s;
+      return SDLK_S;
     case SCANCODE_T:
-      return SDLK_t;
+      return SDLK_T;
     case SCANCODE_U:
-      return SDLK_u;
+      return SDLK_U;
     case SCANCODE_V:
-      return SDLK_v;
+      return SDLK_V;
     case SCANCODE_W:
-      return SDLK_w;
+      return SDLK_W;
     case SCANCODE_X:
-      return SDLK_x;
+      return SDLK_X;
     case SCANCODE_Y:
-      return SDLK_y;
+      return SDLK_Y;
     case SCANCODE_Z:
-      return SDLK_z;
+      return SDLK_Z;
     case SCANCODE_APOSTROPHE:
-      return SDLK_QUOTE;
+      return SDLK_APOSTROPHE;
     case SCANCODE_BACKSLASH:
       return SDLK_BACKSLASH;
     case SCANCODE_COMMA:
@@ -88,7 +88,7 @@ SDL_Keycode InputNormalizer::normalize(int keyCode, KeySource keySource) {
     case SCANCODE_EQUAL:
       return SDLK_EQUALS;
     case SCANCODE_GRAVE:
-      return SDLK_BACKQUOTE;
+      return SDLK_GRAVE;
     case SCANCODE_LEFTBRACE:
       return SDLK_LEFTBRACKET;
     case SCANCODE_MINUS:
@@ -234,63 +234,63 @@ SDL_Keycode InputNormalizer::normalize(int keyCode, KeySource keySource) {
     case VK_KEY_9:
       return SDLK_9;
     case VK_KEY_A:
-      return SDLK_a;
+      return SDLK_A;
     case VK_KEY_B:
-      return SDLK_b;
+      return SDLK_B;
     case VK_KEY_C:
-      return SDLK_c;
+      return SDLK_C;
     case VK_KEY_D:
-      return SDLK_d;
+      return SDLK_D;
     case VK_KEY_E:
-      return SDLK_e;
+      return SDLK_E;
     case VK_KEY_F:
-      return SDLK_f;
+      return SDLK_F;
     case VK_KEY_G:
-      return SDLK_g;
+      return SDLK_G;
     case VK_KEY_H:
-      return SDLK_h;
+      return SDLK_H;
     case VK_KEY_I:
-      return SDLK_i;
+      return SDLK_I;
     case VK_KEY_J:
-      return SDLK_j;
+      return SDLK_J;
     case VK_KEY_K:
-      return SDLK_k;
+      return SDLK_K;
     case VK_KEY_L:
-      return SDLK_l;
+      return SDLK_L;
     case VK_KEY_M:
-      return SDLK_m;
+      return SDLK_M;
     case VK_KEY_N:
-      return SDLK_n;
+      return SDLK_N;
     case VK_KEY_O:
-      return SDLK_o;
+      return SDLK_O;
     case VK_KEY_P:
-      return SDLK_p;
+      return SDLK_P;
     case VK_KEY_Q:
-      return SDLK_q;
+      return SDLK_Q;
     case VK_KEY_R:
-      return SDLK_r;
+      return SDLK_R;
     case VK_KEY_S:
-      return SDLK_s;
+      return SDLK_S;
     case VK_KEY_T:
-      return SDLK_t;
+      return SDLK_T;
     case VK_KEY_U:
-      return SDLK_u;
+      return SDLK_U;
     case VK_KEY_V:
-      return SDLK_v;
+      return SDLK_V;
     case VK_KEY_W:
-      return SDLK_w;
+      return SDLK_W;
     case VK_KEY_X:
-      return SDLK_x;
+      return SDLK_X;
     case VK_KEY_Y:
-      return SDLK_y;
+      return SDLK_Y;
     case VK_KEY_Z:
-      return SDLK_z;
+      return SDLK_Z;
     case VK_OEM_1:
       return SDLK_SEMICOLON;
     case VK_OEM_2:
       return SDLK_SLASH;
     case VK_OEM_3:
-      return SDLK_BACKQUOTE;
+      return SDLK_GRAVE;
     case VK_OEM_4:
       return SDLK_LEFTBRACKET;
     case VK_OEM_5:
@@ -298,7 +298,7 @@ SDL_Keycode InputNormalizer::normalize(int keyCode, KeySource keySource) {
     case VK_OEM_6:
       return SDLK_RIGHTBRACKET;
     case VK_OEM_7:
-      return SDLK_QUOTE;
+      return SDLK_APOSTROPHE;
     case VK_OEM_COMMA:
       return SDLK_COMMA;
     case VK_OEM_PLUS:
@@ -422,10 +422,10 @@ SDL_Keycode InputNormalizer::normalize(int keyCode, KeySource keySource) {
 SDL_Scancode InputNormalizer::normalizeScancode(int keyCode,
                                                 KeySource keySource) {
   if (keySource == ScanCode) {
-    if (keyCode < SDL_SCANCODE_UNKNOWN || keyCode >= SDL_NUM_SCANCODES) {
+    if (keyCode < SDL_SCANCODE_UNKNOWN || keyCode >= SDL_SCANCODE_COUNT) {
       return SDL_SCANCODE_UNKNOWN;
     }
     return static_cast<SDL_Scancode>(keyCode);
   }
-  return SDL_GetScancodeFromKey(normalize(keyCode, keySource));
+  return SDL_GetScancodeFromKey(normalize(keyCode, keySource), nullptr);
 }

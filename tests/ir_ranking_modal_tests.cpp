@@ -214,49 +214,85 @@ void testRankingViewportScrollsOnlyWhenNeededAndKeepsSelection() {
   const auto finger = [&](Uint32 type, float x, float y) {
     SDL_Event event{};
     event.type = type;
-    event.tfinger.touchId = 1;
-    event.tfinger.fingerId = 42;
+    event.tfinger.touchID = 1;
+    event.tfinger.fingerID = 42;
     event.tfinger.x = x / rendering::window_width;
     event.tfinger.y = y / rendering::window_height;
     viewport.handleEvents(event);
   };
-  finger(SDL_FINGERDOWN, 500, 150);
-  finger(SDL_FINGERMOTION, 300, 150);
-  finger(SDL_FINGERUP, 300, 150);
+  finger(SDL_EVENT_FINGER_DOWN, 500, 150);
+  finger(SDL_EVENT_FINGER_MOTION, 300, 150);
+  finger(SDL_EVENT_FINGER_UP, 300, 150);
   REQUIRE(table->getX() == -200);
   REQUIRE(header->getX() == list->getX());
   REQUIRE(list->scrollOffset == 0 && selections == 0);
-  finger(SDL_FINGERDOWN, 400, 200);
-  finger(SDL_FINGERMOTION, 400, 100);
-  finger(SDL_FINGERUP, 400, 100);
+  finger(SDL_EVENT_FINGER_DOWN, 400, 200);
+  finger(SDL_EVENT_FINGER_MOTION, 400, 100);
+  finger(SDL_EVENT_FINGER_UP, 400, 100);
   REQUIRE(list->scrollOffset > 0 && selections == 0);
   REQUIRE(table->getX() == -200);
-  finger(SDL_FINGERDOWN, 400, 100);
-  finger(SDL_FINGERUP, 400, 100);
+  finger(SDL_EVENT_FINGER_DOWN, 400, 100);
+  finger(SDL_EVENT_FINGER_UP, 400, 100);
   REQUIRE(selections == 1);
   viewport.setSize(1080, 400);
   REQUIRE(table->getX() == 0 && table->getWidth() == 1080);
   REQUIRE(header->getX() == list->getX());
   viewport.setSize(600, 400);
   SDL_Event mouse{};
-  mouse.type = SDL_MOUSEBUTTONDOWN;
+  mouse.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   mouse.button.button = SDL_BUTTON_LEFT;
   mouse.button.x = 500;
   mouse.button.y = 150;
   viewport.handleEvents(mouse);
   REQUIRE(selections == 1);
   mouse = {};
-  mouse.type = SDL_MOUSEMOTION;
+  mouse.type = SDL_EVENT_MOUSE_MOTION;
   mouse.motion.x = 300;
   mouse.motion.y = 150;
   viewport.handleEvents(mouse);
   mouse = {};
-  mouse.type = SDL_MOUSEBUTTONUP;
+  mouse.type = SDL_EVENT_MOUSE_BUTTON_UP;
   mouse.button.button = SDL_BUTTON_LEFT;
   mouse.button.x = 300;
   mouse.button.y = 150;
   viewport.handleEvents(mouse);
   REQUIRE(selections == 1 && table->getX() == -200);
+}
+
+void testRankingCancellationKeepsFingerOwnershipAndFreshSelection() {
+  ir::RankingTableViewport viewport;
+  viewport.setSize(600, 400);
+  auto *list = new RecyclerView<int>([](int left, int right) { return left == right; });
+  list->itemHeight = 74;
+  list->onCreateView = [](const int &) { return new View(); };
+  const int row = 1;
+  list->setItemProvider(1, [&row](int) -> const int & { return row; });
+  int selections = 0;
+  list->onSelected = [&selections](const int &, int) { ++selections; };
+  viewport.setContentView(list);
+  const auto touch = [&](Uint32 type, SDL_FingerID id, bool consumed = false) {
+    SDL_Event event{};
+    event.type = type;
+    event.tfinger.touchID = 1;
+    event.tfinger.fingerID = id;
+    event.tfinger.x = 50.0F / rendering::window_width;
+    event.tfinger.y = 40.0F / rendering::window_height;
+    if (consumed) viewport.notifyPointerEventConsumed(event);
+    else viewport.handleEvents(event);
+  };
+  for (const bool consumed : {false, true}) {
+    touch(SDL_EVENT_FINGER_DOWN, 42);
+    touch(SDL_EVENT_FINGER_CANCELED, 99, consumed);
+    touch(SDL_EVENT_FINGER_DOWN, 99);
+    touch(SDL_EVENT_FINGER_UP, 99);
+    REQUIRE(selections == (consumed ? 1 : 0));
+    touch(SDL_EVENT_FINGER_CANCELED, 42, consumed);
+    touch(SDL_EVENT_FINGER_UP, 42);
+    REQUIRE(selections == (consumed ? 1 : 0));
+    touch(SDL_EVENT_FINGER_DOWN, 99);
+    touch(SDL_EVENT_FINGER_UP, 99);
+    REQUIRE(selections == (consumed ? 2 : 1));
+  }
 }
 
 void testRetainedModalTreesRefreshLanguageWhileHidden() {
@@ -769,15 +805,15 @@ void testRecyclerIgnoresMouseSynthesizedTouchSelection() {
   recycler.onSelected = [&](const int &, int) { ++selectionCount; };
 
   SDL_Event down{};
-  down.type = SDL_FINGERDOWN;
-  down.tfinger.type = SDL_FINGERDOWN;
-  down.tfinger.touchId = SDL_MOUSE_TOUCHID;
-  down.tfinger.fingerId = 0;
+  down.type = SDL_EVENT_FINGER_DOWN;
+  down.tfinger.type = SDL_EVENT_FINGER_DOWN;
+  down.tfinger.touchID = SDL_MOUSE_TOUCHID;
+  down.tfinger.fingerID = 0;
   down.tfinger.x = 0.005F;
   down.tfinger.y = 0.01F;
   SDL_Event up = down;
-  up.type = SDL_FINGERUP;
-  up.tfinger.type = SDL_FINGERUP;
+  up.type = SDL_EVENT_FINGER_UP;
+  up.tfinger.type = SDL_EVENT_FINGER_UP;
   recycler.handleEvents(down);
   recycler.handleEvents(up);
 
@@ -795,17 +831,17 @@ void testRecyclerUsesPreciseWheelDeltaAndNaturalDirection() {
   recycler.setItems(std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
 
   SDL_Event normal{};
-  normal.type = SDL_MOUSEWHEEL;
-  normal.wheel.type = SDL_MOUSEWHEEL;
+  normal.type = SDL_EVENT_MOUSE_WHEEL;
+  normal.wheel.type = SDL_EVENT_MOUSE_WHEEL;
   normal.wheel.y = 0;
-  normal.wheel.preciseY = 0.25F;
+  normal.wheel.y = 0.25F;
   normal.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
   recycler.scrollOffset = 100.0F;
   recycler.handleEvents(normal);
   REQUIRE(std::abs(recycler.scrollOffset - 96.25F) < 0.001F);
 
   SDL_Event natural = normal;
-  natural.wheel.preciseY = -0.25F;
+  natural.wheel.y = -0.25F;
   natural.wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
   recycler.scrollOffset = 100.0F;
   recycler.handleEvents(natural);
@@ -904,6 +940,7 @@ int main() {
   testRankingTimesFollowTimezoneAndDaylightSaving();
   testRankingViewsKeepEveryColumn();
   testRankingViewportScrollsOnlyWhenNeededAndKeepsSelection();
+  testRankingCancellationKeepsFingerOwnershipAndFreshSelection();
   testRetainedModalTreesRefreshLanguageWhileHidden();
   testLocalComparisonRetainsLocalizedLabelsAndRawMetrics();
   testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest();

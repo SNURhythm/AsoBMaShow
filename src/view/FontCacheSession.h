@@ -6,6 +6,7 @@
 namespace text_runtime {
 // Keep recently used TextView fonts alive across screen changes. Construct before
 // the application's views so retained fonts close before the SDL_ttf runtime.
+// Sessions and their views must be destroyed on their creating thread.
 class FontCacheSession {
 public:
   FontCacheSession() noexcept;

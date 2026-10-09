@@ -18,11 +18,11 @@
 #include <vector>
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-#include <SDL_uikit_rawtouch.h>
+#include <SDL3/SDL_uikit_rawtouch.h>
 #endif
 
 namespace {
-constexpr Uint32 kCancelledTouchGraceMs = 50;
+constexpr Uint64 kCancelledTouchGraceMs = 50;
 
 bool hasActiveLongNote(FlickState &flickState) {
   if (flickState.activeLongNote == nullptr) {
@@ -285,11 +285,11 @@ void RhythmInputHandler::releaseExpiredCancelledTouches() {
     return;
   }
 
-  const Uint32 now = SDL_GetTicks();
+  const Uint64 now = SDL_GetTicks();
   std::vector<SDL_FingerID> expiredFingers;
   expiredFingers.reserve(cancelGraceExpiry.size());
   for (const auto &[fingerId, expiry] : cancelGraceExpiry) {
-    if (SDL_TICKS_PASSED(now, expiry)) {
+    if (now >= expiry) {
       expiredFingers.push_back(fingerId);
     }
   }

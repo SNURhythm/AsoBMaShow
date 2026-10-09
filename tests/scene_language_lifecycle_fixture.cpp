@@ -19,7 +19,7 @@
 #include <vector>
 
 using Uint64 = std::uint64_t;
-Uint64 SDL_GetTicks64() { return 1; }
+Uint64 SDL_GetTicks() { return 1; }
 struct SDL_Event {};
 class SceneManager;
 struct BackgroundTasks {

@@ -17,9 +17,10 @@ public:
       ~Restore() { value = previous; }
     } restore{touchTimestampMicros_, touchTimestampMicros_};
     touchTimestampMicros_ = timestampMicros;
-    if (phase == SDL_FINGERDOWN) onFingerDown(finger, location);
-    else if (phase == SDL_FINGERUP) onFingerUp(finger, location);
-    else if (phase == SDL_FINGERMOTION) onFingerMove(finger, location);
+    if (phase == SDL_EVENT_FINGER_DOWN) onFingerDown(finger, location);
+    else if (phase == SDL_EVENT_FINGER_UP) onFingerUp(finger, location);
+    else if (phase == SDL_EVENT_FINGER_CANCELED) onFingerCancel(finger, location);
+    else if (phase == SDL_EVENT_FINGER_MOTION) onFingerMove(finger, location);
   }
   std::uint64_t touchEventTimestampMicros() const { return touchTimestampMicros_; }
   virtual ~IInputHandler() = default;
@@ -27,6 +28,9 @@ public:
   virtual void onKeyUp(int keyCode, KeySource keySource) = 0;
   virtual void onFingerDown(SDL_FingerID fingerIndex, Vector3 location) = 0;
   virtual void onFingerUp(SDL_FingerID fingerIndex, Vector3 location) = 0;
+  virtual void onFingerCancel(SDL_FingerID fingerIndex, Vector3 location) {
+    onFingerUp(fingerIndex, location);
+  }
   virtual void onFingerMove(SDL_FingerID fingerIndex, Vector3 location) = 0;
 private:
   std::uint64_t touchTimestampMicros_ = 0;

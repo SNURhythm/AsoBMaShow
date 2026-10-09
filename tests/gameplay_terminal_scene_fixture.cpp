@@ -22,8 +22,8 @@
 #include "replay/ReplaySetupProvenance.h"
 #include "replay/CourseReplayConsumer.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
-#include <SDL2/SDL_log.h>
-#include "../SDL/include/SDL_uikit_rawtouch.h"
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_uikit_rawtouch.h>
 #include <array>
 #include <deque>
 #include <yoga/Yoga.h>

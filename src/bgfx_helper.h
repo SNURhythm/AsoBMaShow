@@ -1,5 +1,5 @@
 #pragma once
-#include <SDL2/SDL_syswm.h>
+#include <SDL3/SDL_video.h>
 #include <bgfx/platform.h>
 
-void setup_bgfx_platform_data(bgfx::PlatformData &pd, const SDL_SysWMinfo &wmi, SDL_Window* sdlWindow);
+bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow);

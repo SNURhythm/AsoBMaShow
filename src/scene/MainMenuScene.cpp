@@ -638,9 +638,9 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   }
 #if TARGET_OS_ANDROID
   if (fileActionsModalRoot_ != nullptr && fileActionsModalRoot_->getVisible() &&
-      event.type == SDL_KEYUP &&
-      (event.key.keysym.sym == SDLK_ESCAPE ||
-       event.key.keysym.sym == SDLK_AC_BACK)) {
+      event.type == SDL_EVENT_KEY_UP &&
+      (event.key.key == SDLK_ESCAPE ||
+       event.key.key == SDLK_AC_BACK)) {
     if (folderImportPanel_->getVisible()) {
       showFileActionsModal();
     } else {
@@ -4943,7 +4943,7 @@ void MainMenuScene::buildFileActionsModal() {
     messageBox.numbuttons = 2;
     messageBox.buttons = buttons;
     int selectedButton = -1;
-    if (SDL_ShowMessageBox(&messageBox, &selectedButton) == 0 && selectedButton == 1) {
+    if (SDL_ShowMessageBox(&messageBox, &selectedButton) && selectedButton == 1) {
       fileActionsModalRoot_->setVisible(false);
       startLibraryRefresh();
       showTasksModal();

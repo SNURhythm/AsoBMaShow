@@ -45,8 +45,8 @@ class AndroidNativeStoragePathsTests(unittest.TestCase):
 namespace fs = std::filesystem;
 using skin::skinAncestorDirectoryOpenFlag;
 std::string externalPath, internalPath;
-const char *SDL_AndroidGetExternalStoragePath() { return externalPath.c_str(); }
-const char *SDL_AndroidGetInternalStoragePath() { return internalPath.c_str(); }
+const char *SDL_GetAndroidExternalStoragePath() { return externalPath.c_str(); }
+const char *SDL_GetAndroidInternalStoragePath() { return internalPath.c_str(); }
 std::string GetAndroidInternalFilesDir() { return internalPath; }
 struct Utils { static fs::path GetDocumentsPath(const fs::path &sub = {}); };
 struct SkinStorageRoots {

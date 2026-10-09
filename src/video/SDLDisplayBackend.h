@@ -35,7 +35,7 @@ struct SDLWindowState {
   int height = 0;
   int x = 0;
   int y = 0;
-  std::uint32_t windowFlags = 0;
+  std::uint64_t windowFlags = 0;
   bool maximized = false;
   std::optional<SDLNativeDisplayMode> requestedWindowMode;
 };

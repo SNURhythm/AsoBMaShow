@@ -39,11 +39,12 @@ struct CachedFont {
 };
 
 using FontCacheKey = std::tuple<std::string, int, int>;
+// SDL3_ttf fonts stay on their creating thread. Each UI thread owns its cache.
 // Borrowed tuple lookups avoid allocating a key while releasing a font.
-std::map<FontCacheKey, CachedFont, std::less<>> g_fontCache;
-std::uint64_t g_fontOpens = 0;
-unsigned g_fontCacheSessions = 0;
-std::uint64_t g_fontCacheUseSerial = 0;
+thread_local std::map<FontCacheKey, CachedFont, std::less<>> g_fontCache;
+thread_local std::uint64_t g_fontOpens = 0;
+thread_local unsigned g_fontCacheSessions = 0;
+thread_local std::uint64_t g_fontCacheUseSerial = 0;
 constexpr std::size_t kMaxIdleFonts = 8;
 constexpr int kMaxRetainedRasterSize = 128;
 
@@ -76,7 +77,7 @@ struct TextLineMetrics {
   int height = 0;
 };
 
-using SurfacePtr = UniqueResource<SDL_Surface, SDL_FreeSurface>;
+using SurfacePtr = UniqueResource<SDL_Surface, SDL_DestroySurface>;
 
 void addUniquePath(std::vector<std::string> &paths, std::string path) {
   if (path.empty()) {
@@ -88,7 +89,7 @@ void addUniquePath(std::vector<std::string> &paths, std::string path) {
 }
 
 bool canReadFile(const std::string &path) {
-  UniqueResource<SDL_RWops, SDL_RWclose> rw(SDL_RWFromFile(path.c_str(), "rb"));
+  UniqueResource<SDL_IOStream, SDL_CloseIO> rw(SDL_IOFromFile(path.c_str(), "rb"));
   if (rw == nullptr) {
     return false;
   }
@@ -185,7 +186,7 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
 
   UniqueResource<TTF_Font, TTF_CloseFont> opened(TTF_OpenFont(path.c_str(), fontSize));
   if (opened == nullptr && (required || canReadFile(path))) {
-    SDL_Log("Failed to load font '%s': %s", path.c_str(), TTF_GetError());
+    SDL_Log("Failed to load font '%s': %s", path.c_str(), SDL_GetError());
   }
   if (opened != nullptr) {
     ++g_fontOpens;
@@ -318,7 +319,7 @@ RasterTextSize sizeUtf8(TTF_Font *font, const std::string &utf8) {
   }
 
   RasterTextSize size;
-  if (TTF_SizeUTF8(font, utf8.c_str(), &size.width, &size.height) != 0) {
+  if (!TTF_GetStringSize(font, utf8.c_str(), 0, &size.width, &size.height)) {
     return {};
   }
   return size;
@@ -447,7 +448,7 @@ void TextView::setResolvedText(const std::string &newText) {
     return;
   }
   this->text = newText;
-  marqueeStartedAt = SDL_GetTicks64();
+  marqueeStartedAt = SDL_GetTicks();
   metricsDirty = true;
   invalidateTexture();
   updateTextMetrics();
@@ -592,10 +593,10 @@ void TextView::includeFontMetrics(TTF_Font *loadedFont) {
     return;
   }
 
-  fontLineHeight = std::max(fontLineHeight, TTF_FontHeight(loadedFont));
-  fontLineSkip = std::max(fontLineSkip, TTF_FontLineSkip(loadedFont));
-  fontAscent = std::max(fontAscent, TTF_FontAscent(loadedFont));
-  fontDescent = std::max(fontDescent, -TTF_FontDescent(loadedFont));
+  fontLineHeight = std::max(fontLineHeight, TTF_GetFontHeight(loadedFont));
+  fontLineSkip = std::max(fontLineSkip, TTF_GetFontLineSkip(loadedFont));
+  fontAscent = std::max(fontAscent, TTF_GetFontAscent(loadedFont));
+  fontDescent = std::max(fontDescent, -TTF_GetFontDescent(loadedFont));
 }
 
 void TextView::includeIOSSystemFontMetrics() {
@@ -678,7 +679,7 @@ int TextView::fontSourceAscent(const SelectedFont &source) {
   }
 #endif
 
-  return source.font == nullptr ? 0 : TTF_FontAscent(source.font);
+  return source.font == nullptr ? 0 : TTF_GetFontAscent(source.font);
 }
 
 SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
@@ -694,7 +695,7 @@ SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
   if (source.font == nullptr || utf8.empty()) {
     return nullptr;
   }
-  return TTF_RenderUTF8_Blended(source.font, utf8.c_str(), color);
+  return TTF_RenderText_Blended(source.font, utf8.c_str(), 0, color);
 }
 
 TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
@@ -709,7 +710,7 @@ TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
   }
 
   for (const auto &face : fontFaces) {
-    if (face.font != nullptr && TTF_GlyphIsProvided32(face.font, codepoint)) {
+    if (face.font != nullptr && TTF_FontHasGlyph(face.font, codepoint)) {
       SelectedFont source = {face.font, false};
       fontSelectionCache[codepoint] = source;
       return source;
@@ -724,7 +725,7 @@ TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
   while (nextFallbackFontPath < fallbackFontPaths.size()) {
     TTF_Font *opened = loadFallbackFontAt(nextFallbackFontPath, false);
     ++nextFallbackFontPath;
-    if (opened != nullptr && TTF_GlyphIsProvided32(opened, codepoint)) {
+    if (opened != nullptr && TTF_FontHasGlyph(opened, codepoint)) {
       SelectedFont source = {opened, false};
       fontSelectionCache[codepoint] = source;
       return source;
@@ -756,7 +757,7 @@ bool TextView::primaryFontSupportsText(const std::string &utf8) const {
     if (isExplicitLineBreak(token.codepoint)) {
       continue;
     }
-    if (!TTF_GlyphIsProvided32(font, token.codepoint)) {
+    if (!TTF_FontHasGlyph(font, token.codepoint)) {
       return false;
     }
   }
@@ -937,15 +938,14 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
   const int targetWidth = std::max(1, width);
   const int targetHeight =
       std::max(1, lineHeight * static_cast<int>(lines.size()));
-  SurfacePtr surface(SDL_CreateRGBSurfaceWithFormat(
-      0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_BGRA32));
+  SurfacePtr surface(SDL_CreateSurface(targetWidth, targetHeight, SDL_PIXELFORMAT_BGRA32));
   if (surface == nullptr) {
     SDL_Log("Failed to create text fallback surface: %s", SDL_GetError());
     return nullptr;
   }
 
-  SDL_FillRect(surface.get(), nullptr,
-               SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+  SDL_FillSurfaceRect(surface.get(), nullptr,
+               SDL_MapSurfaceRGBA(surface.get(), 0, 0, 0, 0));
 
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     const std::string &line = lines[lineIndex];
@@ -976,7 +976,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
 
       SurfacePtr runSurface(renderFontSourceTextSurface(run.source, run.text));
       if (runSurface == nullptr) {
-        SDL_Log("Failed to render fallback text run: %s", TTF_GetError());
+        SDL_Log("Failed to render fallback text run: %s", SDL_GetError());
         continue;
       }
 
@@ -1001,7 +1001,7 @@ float TextView::marqueeOffset(int viewportWidth) {
   }
 
   if (marqueeStartedAt == 0) {
-    marqueeStartedAt = SDL_GetTicks64();
+    marqueeStartedAt = SDL_GetTicks();
   }
 
   const float scrollDurationMs =
@@ -1010,7 +1010,7 @@ float TextView::marqueeOffset(int viewportWidth) {
       std::max<Uint64>(1, static_cast<Uint64>(std::round(scrollDurationMs)));
   const Uint64 cycleMs = kMarqueeStartDelayMs + scrollMs + kMarqueeEdgeDelayMs +
                          scrollMs + kMarqueeEdgeDelayMs;
-  Uint64 phase = (SDL_GetTicks64() - marqueeStartedAt) % cycleMs;
+  Uint64 phase = (SDL_GetTicks() - marqueeStartedAt) % cycleMs;
 
   if (phase < kMarqueeStartDelayMs) {
     return 0.0f;
@@ -1184,10 +1184,9 @@ void TextView::createTexture() {
       font != nullptr && text.find_first_of("\r\n") == std::string::npos &&
       (!wrapEnabled || align == TextAlign::LEFT) && primaryFontSupportsText(text);
   if (usePrimaryFont && wrapEnabled && rasterWrapWidth > 0) {
-    surface.reset(TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
-                                                 rasterWrapWidth));
+    surface.reset(TTF_RenderText_Blended_Wrapped(font, text.c_str(), 0, color, rasterWrapWidth));
   } else if (usePrimaryFont) {
-    surface.reset(TTF_RenderUTF8_Blended(font, text.c_str(), color));
+    surface.reset(TTF_RenderText_Blended(font, text.c_str(), 0, color));
   } else {
     surface.reset(renderFallbackTextSurface(
         wrapEnabled && rasterWrapWidth > 0 ? rasterWrapWidth : 0,
@@ -1199,7 +1198,7 @@ void TextView::createTexture() {
         fallbackSurfaceWidth, fallbackSurfaceHeight));
   }
   if (!surface) {
-    SDL_Log("Failed to render text: %s", TTF_GetError());
+    SDL_Log("Failed to render text: %s", SDL_GetError());
     return;
   }
   (void)fallbackSurfaceWidth;
@@ -1245,7 +1244,7 @@ void TextView::setOverflow(TextOverflow newOverflow) {
     return;
   }
   overflow = newOverflow;
-  marqueeStartedAt = SDL_GetTicks64();
+  marqueeStartedAt = SDL_GetTicks();
   YGNodeMarkDirty(getNode());
   applyYogaLayoutFromRoot();
 }

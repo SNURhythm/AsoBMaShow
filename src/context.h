@@ -22,7 +22,7 @@
 #include <system_error>
 #include <utility>
 #include <vector>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include "AppSettings.h"
 #include "AppSettingsStore.h"
 #include "ApplicationUiStateStore.h"

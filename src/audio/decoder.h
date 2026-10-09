@@ -33,9 +33,9 @@ bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
                                   std::atomic<bool> &isCancelled,
                                   std::size_t maximumPcmSamples);
 // Bundle-aware skin-sound decode for the music-select sound set. Reads the
-// encoded bytes through SDL_RWFromFile (which resolves relative asset paths
-// against the app bundle on iOS/macOS, so the bundled `assets/*.wav` default
-// sounds load there), decodes from memory with limits.maximumPcmSamples, and
+// encoded bytes through SDL_IOFromFile with an explicit iOS/macOS bundle
+// fallback, so bundled `assets/*.wav` default sounds load independently of the
+// working directory. Decodes from memory with limits.maximumPcmSamples, and
 // falls back to decodeAudioToPCMBounded for archive (virtual) paths and user
 // files with absolute paths that the bundle lookup cannot see. Returns false
 // when neither path yields decodable PCM within the limits or when |stop| is

@@ -40,7 +40,7 @@ struct RuntimeState {
   player_settings::VideoSettings settings;
   int windowX = 0;
   int windowY = 0;
-  std::uint32_t sdlWindowFlags = 0;
+  std::uint64_t sdlWindowFlags = 0;
   std::uint32_t bgfxResetFlags = 0;
   int exclusiveRefreshRateHz = 0;
   std::uint32_t exclusivePixelFormat = 0;

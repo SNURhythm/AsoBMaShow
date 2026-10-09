@@ -2,11 +2,11 @@
 #include "InputTimestamp.h"
 #include "ChartLaneBinding.h"
 
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 #include <chrono>
 #include <limits>
 
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_scancode.h>
 
 #include <algorithm>
 #include <utility>
@@ -89,10 +89,9 @@ void LogicalGameplayInputAdapter::applyOwned(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     if (transition.timestampMicros == 0) {
       transition.timestampMicros = receipt;
-    } else if (transition.timestampDomain == input::InputTimestampDomain::SdlMilliseconds) {
-      transition.timestampMicros = input::rebaseWrappingTimestampMillis(
-          static_cast<std::uint32_t>(transition.timestampMicros / 1000),
-          SDL_GetTicks(), receipt);
+    } else if (transition.timestampDomain == input::InputTimestampDomain::SdlTicks) {
+      transition.timestampMicros = input::rebaseTimestampMicros(
+          transition.timestampMicros, SDL_GetTicksNS() / 1000, receipt);
     }
     transition.timestampMicros = std::min<std::uint64_t>(
         transition.timestampMicros, std::numeric_limits<std::int64_t>::max());
@@ -474,7 +473,7 @@ bool LogicalGameplayInputPipeline::consumeRegistryEvent(
 
 bool LogicalGameplayInputPipeline::consumeDirectKeyboard(int scancode,
                                                          bool pressed) {
-  if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_NUM_SCANCODES) {
+  if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
     return false;
   }
   resolver_.consume({.control = {.deviceId = "keyboard",

@@ -2,7 +2,7 @@
 
 #include "Localization.h"
 #include "../targets.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
 #endif
@@ -31,9 +31,11 @@ inline void initializePlatformLanguage(std::string_view preference) {
       return;
     }
 #endif
-    SDL_Locale *locales = SDL_GetPreferredLocales();
+    int count = 0;
+    SDL_Locale **locales = SDL_GetPreferredLocales(&count);
     if (locales != nullptr) {
-      for (const SDL_Locale *locale = locales; locale->language; ++locale) {
+      for (int index = 0; index < count; ++index) {
+        const SDL_Locale *locale = locales[index];
         std::string code(locale->language);
         if (locale->country && locale->country[0] != '\0') {
           code += '-';

@@ -39,22 +39,22 @@ void testXInputMappingMatchesSdlControllerLayout() {
        .leftY = 2000,
        .rightX = 3000,
        .rightY = std::numeric_limits<std::int16_t>::min()});
-  expect(state.buttons[SDL_CONTROLLER_BUTTON_A],
+  expect(state.buttons[SDL_GAMEPAD_BUTTON_SOUTH],
          "XInput A maps to SDL controller A");
-  expect(state.buttons[SDL_CONTROLLER_BUTTON_DPAD_UP],
+  expect(state.buttons[SDL_GAMEPAD_BUTTON_DPAD_UP],
          "XInput dpad up maps to SDL controller dpad up");
-  expect(state.buttons[SDL_CONTROLLER_BUTTON_RIGHTSHOULDER],
+  expect(state.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER],
          "XInput shoulder maps to SDL controller shoulder");
-  expect(!state.buttons[SDL_CONTROLLER_BUTTON_B],
+  expect(!state.buttons[SDL_GAMEPAD_BUTTON_EAST],
          "inactive XInput buttons stay inactive");
-  expect(state.axes[SDL_CONTROLLER_AXIS_LEFTX] == -1234,
+  expect(state.axes[SDL_GAMEPAD_AXIS_LEFTX] == -1234,
          "horizontal stick axes retain XInput polarity");
-  expect(state.axes[SDL_CONTROLLER_AXIS_LEFTY] == -2000,
+  expect(state.axes[SDL_GAMEPAD_AXIS_LEFTY] == -2000,
          "vertical stick axes use SDL polarity");
-  expect(state.axes[SDL_CONTROLLER_AXIS_RIGHTY] == 32767,
+  expect(state.axes[SDL_GAMEPAD_AXIS_RIGHTY] == 32767,
          "minimum XInput Y saturates safely when inverted");
-  expect(state.axes[SDL_CONTROLLER_AXIS_TRIGGERLEFT] == 32767 &&
-             state.axes[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] == 0,
+  expect(state.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] == 32767 &&
+             state.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] == 0,
          "XInput triggers use SDL's zero-to-positive axis range");
 }
 } // namespace

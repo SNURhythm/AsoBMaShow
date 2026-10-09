@@ -6,8 +6,6 @@
     "dependencies": [
         "libsndfile",
         "utf8proc",
-        "sdl2",
-        "sdl2-ttf",
         {
             "name": "ffmpeg",
             "features": [

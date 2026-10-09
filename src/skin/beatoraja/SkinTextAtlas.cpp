@@ -4,8 +4,8 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../../view/SdlTtfRuntime.h"
 
-#include <SDL2/SDL.h>
-#include <SDL_ttf.h>
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #include <algorithm>
 #include <atomic>
@@ -189,10 +189,10 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       result.error = "font bytes are invalid";
       return result;
     }
-    SDL_RWops *rw = SDL_RWFromConstMem(face.encoded.data(), static_cast<int>(face.encoded.size()));
+    SDL_IOStream *rw = SDL_IOFromConstMem(face.encoded.data(), static_cast<int>(face.encoded.size()));
     if (!rw) { result.error = "font stream could not be opened"; return result; }
     OpenFace item;
-    item.font = TTF_OpenFontRW(rw, 1, key.pointSize);
+    item.font = TTF_OpenFontIO(rw, 1, key.pointSize);
     if (!item.font) { result.error = "font bytes are not a supported TTF or OTF"; return result; }
     opened.push_back(std::move(item));
   }
@@ -201,7 +201,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     std::size_t faceIndex = opened.size();
     char32_t sourceCodepoint = codepoint;
     for (std::size_t index = 0; index < opened.size(); ++index)
-      if (TTF_GlyphIsProvided32(opened[index].font,
+      if (TTF_FontHasGlyph(opened[index].font,
                                 static_cast<Uint32>(codepoint))) {
         faceIndex = index;
         break;
@@ -211,7 +211,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
       for (const char32_t candidate : missing) {
         for (std::size_t index = 0; index < opened.size(); ++index) {
-          if (TTF_GlyphIsProvided32(opened[index].font,
+          if (TTF_FontHasGlyph(opened[index].font,
                                     static_cast<Uint32>(candidate))) {
             faceIndex = index;
             sourceCodepoint = candidate;
@@ -240,11 +240,11 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     const auto leftFace = kerningFace(left);
     const auto rightFace = kerningFace(right);
-    const int amount = leftFace == rightFace && codepoints.contains(left) &&
-                               codepoints.contains(right)
-        ? TTF_GetFontKerningSizeGlyphs32(opened[leftFace].font,
-              static_cast<Uint32>(left), static_cast<Uint32>(right))
-        : 0;
+    int amount = 0;
+    if (leftFace == rightFace && codepoints.contains(left) && codepoints.contains(right)) {
+      TTF_GetGlyphKerning(opened[leftFace].font,
+                          static_cast<Uint32>(left), static_cast<Uint32>(right), &amount);
+    }
     kerning.emplace(std::pair{left, right}, amount);
   }
   if (metricsOnly) {
@@ -257,7 +257,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       U"MNBDCEFKAGHIJLOPQRSTUVWXYZ";
   int capHeight = 0;
   for (const char32_t codepoint : capCharacters) {
-    if (!TTF_GlyphIsProvided32(opened.front().font,
+    if (!TTF_FontHasGlyph(opened.front().font,
                                static_cast<Uint32>(codepoint))) {
       continue;
     }
@@ -266,21 +266,21 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     int minY = 0;
     int maxY = 0;
     int advance = 0;
-    if (TTF_GlyphMetrics32(opened.front().font,
+    if (TTF_GetGlyphMetrics(opened.front().font,
                            static_cast<Uint32>(codepoint), &minX, &maxX,
-                           &minY, &maxY, &advance) == 0) {
+                           &minY, &maxY, &advance)) {
       capHeight = maxY - minY;
       break;
     }
   }
   if (capHeight <= 0) {
-    capHeight = std::max(1, TTF_FontHeight(opened.front().font));
+    capHeight = std::max(1, TTF_GetFontHeight(opened.front().font));
   }
   if (capHeight > skinResourceDimensionLimit(safetyPolicy)) {
     result.error = "font cap height is unavailable";
     return result;
   }
-  const int primaryAscent = TTF_FontAscent(opened.front().font);
+  const int primaryAscent = TTF_GetFontAscent(opened.front().font);
   const int layoutAscent = primaryAscent - capHeight;
   const int outline = static_cast<int>(std::ceil(key.outlineWidth));
   const bool outlineActive = key.outlineRgba[3] != 0;
@@ -365,10 +365,10 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       maxX = missingWidth;
       maxY = missingHeight;
       advance = missingWidth + missingStroke;
-    } else if (TTF_GlyphMetrics32(
+    } else if (!TTF_GetGlyphMetrics(
                    opened[faceIndex].font,
                    static_cast<Uint32>(sourceCodepoint), &minX, &maxX, &minY,
-                   &maxY, &advance) != 0) {
+                   &maxY, &advance)) {
       result.error = "font glyph metrics failed";
       return std::nullopt;
     }
@@ -393,14 +393,13 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     SDL_Surface *surface = nullptr;
     if (syntheticMissing) {
-      surface = SDL_CreateRGBSurfaceWithFormat(
-          0, missingWidth, missingHeight, 32, SDL_PIXELFORMAT_RGBA32);
+      surface = SDL_CreateSurface(missingWidth, missingHeight, SDL_PIXELFORMAT_RGBA32);
       if (surface != nullptr) {
-        SDL_FillRect(surface, nullptr,
-                     SDL_MapRGBA(surface->format, 0, 0, 0, 0));
-        if (SDL_LockSurface(surface) == 0) {
+        SDL_FillSurfaceRect(surface, nullptr,
+                     SDL_MapSurfaceRGBA(surface, 0, 0, 0, 0));
+        if (SDL_LockSurface(surface)) {
           const Uint32 white =
-              SDL_MapRGBA(surface->format, 255, 255, 255, 255);
+              SDL_MapSurfaceRGBA(surface, 255, 255, 255, 255);
           for (int y = 0; y < missingHeight; ++y) {
             auto *row = reinterpret_cast<Uint32 *>(
                 static_cast<unsigned char *>(surface->pixels) +
@@ -417,15 +416,15 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         }
       }
     } else {
-      SDL_Surface *raw = TTF_RenderGlyph32_Blended(
+      SDL_Surface *raw = TTF_RenderGlyph_Blended(
           opened[faceIndex].font, static_cast<Uint32>(sourceCodepoint),
           SDL_Color{255,255,255,255});
       if (!raw) {
         result.error = "font glyph rasterization failed";
         return std::nullopt;
       }
-      surface = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_RGBA32, 0);
-      SDL_FreeSurface(raw);
+      surface = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
+      SDL_DestroySurface(raw);
     }
     if (!surface) {
       result.error = "font glyph conversion failed";
@@ -434,12 +433,12 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     if (surface->w <= 0 || surface->h <= 0 ||
         surface->w > skinResourceDimensionLimit(safetyPolicy) ||
         surface->h > skinResourceDimensionLimit(safetyPolicy)) {
-      SDL_FreeSurface(surface);
+      SDL_DestroySurface(surface);
       result.error = "font glyph dimensions exceed limits";
       return std::nullopt;
     }
-    if (SDL_LockSurface(surface) != 0) {
-      SDL_FreeSurface(surface);
+    if (!SDL_LockSurface(surface)) {
+      SDL_DestroySurface(surface);
       result.error = "font glyph surface lock failed";
       return std::nullopt;
     }
@@ -452,7 +451,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     for (int y = 0; y < surface->h; ++y) {
       if (cancellationRequested && cancellationRequested()) {
         SDL_UnlockSurface(surface);
-        SDL_FreeSurface(surface);
+        SDL_DestroySurface(surface);
         result.error = "font atlas preparation cancelled";
         return std::nullopt;
       }
@@ -481,7 +480,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         glyphWidth > skinResourceDimensionLimit(safetyPolicy) ||
         glyphHeight > skinResourceDimensionLimit(safetyPolicy)) {
       SDL_UnlockSurface(surface);
-      SDL_FreeSurface(surface);
+      SDL_DestroySurface(surface);
       result.error = "font cropped glyph dimensions exceed limits";
       return std::nullopt;
     }
@@ -490,7 +489,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     for (int y = alphaMinY; hasPixels && y <= alphaMaxY; ++y) {
       if (cancellationRequested && cancellationRequested()) {
         SDL_UnlockSurface(surface);
-        SDL_FreeSurface(surface);
+        SDL_DestroySurface(surface);
         result.error = "font atlas preparation cancelled";
         return std::nullopt;
       }
@@ -502,8 +501,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       }
     }
     SDL_UnlockSurface(surface);
-    SDL_FreeSurface(surface);
-    const int selectedFaceAscent = TTF_FontAscent(opened[faceIndex].font);
+    SDL_DestroySurface(surface);
+    const int selectedFaceAscent = TTF_GetFontAscent(opened[faceIndex].font);
     return GlyphBitmap{
         .codepoint = codepoint,
         .face = faceIndex,
@@ -683,8 +682,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   SkinPreparedGlyphAtlas atlas{.id=id, .key=std::move(key),
       .glyphs=std::move(metrics), .kerning=std::move(kerning),
       .ascent=primaryAscent, .capHeight=capHeight,
-      .descent=TTF_FontDescent(opened.front().font),
-      .lineHeight=TTF_FontHeight(opened.front().font),
+      .descent=TTF_GetFontDescent(opened.front().font),
+      .lineHeight=TTF_GetFontHeight(opened.front().font),
       .paintBlendOperations=paintBlendOperations};
   if (pagePixels.size() == 1) {
     atlas.pixels = {.width = atlasWidth,

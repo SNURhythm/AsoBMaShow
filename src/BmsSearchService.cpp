@@ -5,7 +5,7 @@
 #include "bms_search/Internal.h"
 #include "bms_search/PackageSourceDrivers.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <atomic>
 #include <filesystem>

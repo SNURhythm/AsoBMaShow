@@ -166,7 +166,7 @@ def main():
             parser.error("Missing parser test dependency object; build gameplay_simulation_tests first")
         include = args.build_dir / "vcpkg_installed/arm64-osx/include"
         sources = ["CompiledGameplayJudge", "GameplayCandidateRules", "GameplayGaugeRules", "GameplayJudgeRules", "GameplayNoteJudgeRole", "Judge", "GameplayDefinition", "GameplaySimulation", "SkinGameplayGraphState"]
-        run([args.cxx, "-std=c++23", "-O1", "-I", str(ROOT / "src"), "-I", str(include), "-I", str(include / "SDL2"), str(FIXTURES / "runtime_probe.cpp"), *[str(ROOT / "src/scene/play" / (name + ".cpp")) for name in sources], str(args.build_dir / parser_object.group(0)), str(args.build_dir / "libasobmashow_localization.a"), "-o", str(build / "runtime-native")])
+        run([args.cxx, "-std=c++23", "-O1", "-I", str(ROOT / "src"), "-I", str(include), "-I", str(ROOT / "SDL/include"), str(FIXTURES / "runtime_probe.cpp"), *[str(ROOT / "src/scene/play" / (name + ".cpp")) for name in sources], str(args.build_dir / parser_object.group(0)), str(args.build_dir / "libasobmashow_localization.a"), "-o", str(build / "runtime-native")])
         java_output = run(["java", "-cp", str(build / "java-classes"), "RuntimeReferenceProbe"], input=inputs, capture_output=True).stdout.splitlines()
         diagnostics = [line for line in java_output if line == "ERROR: UNABLE TO FIND TNOTE"]
         java = [line for line in java_output if line != "ERROR: UNABLE TO FIND TNOTE"]

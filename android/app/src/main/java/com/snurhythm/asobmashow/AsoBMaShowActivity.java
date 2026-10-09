@@ -462,8 +462,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     @Override
     protected String[] getLibraries() {
         return new String[] {
-                "SDL2",
-                "SDL2_ttf",
+                "SDL3",
+                "SDL3_ttf",
                 "main"
         };
     }

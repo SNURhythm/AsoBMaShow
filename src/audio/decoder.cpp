@@ -4,7 +4,7 @@
 #include "../RAII.h"
 #include "ChartAssetExtensions.h"
 #include "SoundFileIO.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -146,25 +146,34 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   return true;
 }
 
-// Reads an audio asset through SDL_RWFromFile, which resolves relative asset
-// paths against the app bundle on iOS/macOS (the same bundle-aware lookup the
-// skin image/font reads use). Returns std::nullopt when the lookup misses or
+// Reads an audio asset through SDL_IOFromFile with an explicit Apple bundle
+// fallback: SDL3 no longer performs SDL2's implicit Resources lookup.
+// Returns std::nullopt when the lookup misses or
 // the encoded file exceeds maximumEncodedBytes.
 std::optional<std::vector<unsigned char>>
 readBundleAwareAudioBytes(const path_t &path, std::size_t maximumEncodedBytes) {
   struct RwCloser {
-    void operator()(SDL_RWops *ops) const { SDL_RWclose(ops); }
+    void operator()(SDL_IOStream *ops) const { SDL_CloseIO(ops); }
   };
   auto owned = file_extension_resolver::find(
       std::filesystem::path(path), asobmshow::chart_assets::kAudioExtensions,
       [](const std::filesystem::path &candidate) {
         const auto utf8Path = fspath_to_utf8(candidate);
-        return std::unique_ptr<SDL_RWops, RwCloser>(SDL_RWFromFile(utf8Path.c_str(), "rb"));
+        std::unique_ptr<SDL_IOStream, RwCloser> stream(SDL_IOFromFile(utf8Path.c_str(), "rb"));
+#ifdef __APPLE__
+        if (!stream && !candidate.is_absolute()) {
+          if (const char *basePath = SDL_GetBasePath()) {
+            const auto bundledPath = fspath_to_utf8(std::filesystem::path(basePath) / candidate);
+            stream.reset(SDL_IOFromFile(bundledPath.c_str(), "rb"));
+          }
+        }
+#endif
+        return stream;
       });
   if (!owned) {
     return std::nullopt;
   }
-  const Sint64 reportedSize = SDL_RWsize(owned.get());
+  const Sint64 reportedSize = SDL_GetIOSize(owned.get());
   if (reportedSize >= 0) {
     const auto size = static_cast<std::uint64_t>(reportedSize);
     if (size > maximumEncodedBytes) {
@@ -172,7 +181,7 @@ readBundleAwareAudioBytes(const path_t &path, std::size_t maximumEncodedBytes) {
     }
     std::vector<unsigned char> result(static_cast<std::size_t>(size));
     if (!result.empty() &&
-        SDL_RWread(owned.get(), result.data(), 1, result.size()) !=
+        SDL_ReadIO(owned.get(), result.data(), result.size()) !=
             result.size()) {
       return std::nullopt;
     }
@@ -183,7 +192,7 @@ readBundleAwareAudioBytes(const path_t &path, std::size_t maximumEncodedBytes) {
   std::array<unsigned char, 64U * 1024U> buffer{};
   for (;;) {
     const std::size_t read =
-        SDL_RWread(owned.get(), buffer.data(), 1, buffer.size());
+        SDL_ReadIO(owned.get(), buffer.data(), buffer.size());
     if (read >
         maximumEncodedBytes - std::min(result.size(), maximumEncodedBytes)) {
       return std::nullopt;
@@ -236,7 +245,7 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
     return false;
   }
   const std::filesystem::path fsPath(displayPath);
-  // Bundle-aware read first: SDL_RWFromFile resolves relative asset paths
+  // Bundle-aware read first: the explicit fallback resolves relative assets
   // against the app bundle on iOS/macOS, and reads Files-app storage files that
   // plain fopen cannot (the same SDL read images use). Archive (virtual) paths
   // are excluded because their synthetic form must stay with the archive reader.
@@ -253,7 +262,7 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
       fileInfo = {};
     }
     // The SDL read missed (e.g. a path the bundle/filesystem layer cannot open
-    // with SDL_RWFromFile). Fall back to readFileBounded, which on iOS reads
+    // with SDL_IOFromFile). Fall back to readFileBounded, which on iOS reads
     // through the same SDL-backed path and on other platforms through ifstream;
     // decode the bytes from memory so we never rely on sf_open's plain fopen
     // (which cannot open iOS Files-app storage).

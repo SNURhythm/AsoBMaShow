@@ -35,18 +35,17 @@ void fingerEventToUi(const SDL_TouchFingerEvent &event, float &uiX,
 
 bool isBlockedInputEvent(Uint32 type) {
   switch (type) {
-  case SDL_MOUSEBUTTONDOWN:
-  case SDL_MOUSEBUTTONUP:
-  case SDL_MOUSEMOTION:
-  case SDL_MOUSEWHEEL:
-  case SDL_FINGERDOWN:
-  case SDL_FINGERUP:
-  case SDL_FINGERMOTION:
-  case SDL_KEYDOWN:
-  case SDL_KEYUP:
-  case SDL_TEXTINPUT:
-  case SDL_TEXTEDITING:
-  case SDL_TEXTEDITING_EXT:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
+  case SDL_EVENT_MOUSE_MOTION:
+  case SDL_EVENT_MOUSE_WHEEL:
+  case SDL_EVENT_FINGER_DOWN:
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_MOTION:
+  case SDL_EVENT_KEY_DOWN:
+  case SDL_EVENT_KEY_UP:
+  case SDL_EVENT_TEXT_INPUT:
+  case SDL_EVENT_TEXT_EDITING:
     return true;
   default:
     return false;
@@ -224,7 +223,7 @@ bool ContextMenuView::handleEventsImpl(SDL_Event &event) {
     return true;
   }
 
-  if (event.type == SDL_MOUSEBUTTONDOWN &&
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
       event.button.button == SDL_BUTTON_LEFT) {
     float uiX = 0.0F;
     float uiY = 0.0F;
@@ -234,7 +233,7 @@ bool ContextMenuView::handleEventsImpl(SDL_Event &event) {
     return false;
   }
 
-  if (event.type == SDL_FINGERDOWN) {
+  if (event.type == SDL_EVENT_FINGER_DOWN) {
     float uiX = 0.0F;
     float uiY = 0.0F;
     fingerEventToUi(event.tfinger, uiX, uiY);
@@ -242,9 +241,9 @@ bool ContextMenuView::handleEventsImpl(SDL_Event &event) {
     return false;
   }
 
-  if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-      (event.key.keysym.sym == SDLK_ESCAPE ||
-       event.key.keysym.sym == SDLK_AC_BACK)) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+      (event.key.key == SDLK_ESCAPE ||
+       event.key.key == SDLK_AC_BACK)) {
     dismiss();
     return false;
   }

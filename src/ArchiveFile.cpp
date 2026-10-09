@@ -16,7 +16,7 @@
 #include "AndroidNatives.h"
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #if __has_include(<TargetConditionals.h>)
 #include <TargetConditionals.h>
 #endif
@@ -111,7 +111,7 @@ UnzipExecutionPlan unzipExecutionPlan(const UnzipLimits &limits, std::size_t arc
   const auto memory = limits.maximumMemoryBytes > 0 ? limits.maximumMemoryBytes :
       std::clamp<std::uint64_t>(systemMemory / 8, memoryPerWorker, 1024ull * 1024 * 1024);
   const auto requested = limits.maximumWorkers > 0 ? limits.maximumWorkers :
-      static_cast<std::size_t>(std::max(1, SDL_GetCPUCount()));
+      static_cast<std::size_t>(std::max(1, SDL_GetNumLogicalCPUCores()));
   const auto workers = std::max<std::size_t>(1, std::min<std::uint64_t>(requested, memory / memoryPerWorker));
   const auto automaticArchives = std::max<std::size_t>(2, workers / 4);
   const auto archives = std::max<std::size_t>(1, std::min({archiveCount, workers,
@@ -576,7 +576,7 @@ void appendDebugLogLineImpl(std::string message) {
   }
 
   std::ostringstream line;
-  line << '[' << SDL_GetTicks64() << "ms] " << message;
+  line << '[' << SDL_GetTicks() << "ms] " << message;
 
   std::lock_guard<std::mutex> lock(gDebugLogMutex);
   gDebugLogLines.push_back(line.str());
@@ -829,11 +829,11 @@ bool readRegularFile(const std::filesystem::path &path,
 #if TARGET_OS_ANDROID
   if (!file) {
     const std::string assetPath = path.generic_string();
-    UniqueResource<SDL_RWops, SDL_RWclose> rw(
-        SDL_RWFromFile(assetPath.c_str(), "rb"));
+    UniqueResource<SDL_IOStream, SDL_CloseIO> rw(
+        SDL_IOFromFile(assetPath.c_str(), "rb"));
     if (rw) {
       bytes.clear();
-      const Sint64 size = SDL_RWsize(rw.get());
+      const Sint64 size = SDL_GetIOSize(rw.get());
       if (size > 0) {
         if (static_cast<std::uintmax_t>(size) > maxBufferedReadSize()) {
           if (errorMessage != nullptr) {
@@ -843,7 +843,7 @@ bool readRegularFile(const std::filesystem::path &path,
         }
         bytes.resize(static_cast<size_t>(size));
         const size_t read =
-            SDL_RWread(rw.get(), bytes.data(), 1, bytes.size());
+            SDL_ReadIO(rw.get(), bytes.data(), bytes.size());
         if (read != bytes.size()) {
           if (errorMessage != nullptr) {
             *errorMessage = "Could not read Android asset: " + assetPath;
@@ -855,7 +855,7 @@ bool readRegularFile(const std::filesystem::path &path,
         std::array<unsigned char, 64 * 1024> buffer{};
         for (;;) {
           const size_t read =
-              SDL_RWread(rw.get(), buffer.data(), 1, buffer.size());
+              SDL_ReadIO(rw.get(), buffer.data(), buffer.size());
           if (read > 0) {
             bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + read);
           }
@@ -992,11 +992,11 @@ bool readRegularFileBounded(const std::filesystem::path &path,
 
 #if TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR
   // iOS Files-app storage (and the bundle resource tree) is not openable with
-  // plain fopen/ifstream; SDL_RWFromFile is the read that reaches those. Use it
+  // plain fopen/ifstream; SDL_IOFromFile is the read that reaches those. Use it
   // as a fallback on iOS/Android when the ordinary stream cannot open the file.
   const std::string assetPath = path.generic_string();
-  UniqueResource<SDL_RWops, SDL_RWclose> input(
-      SDL_RWFromFile(assetPath.c_str(), "rb"));
+  UniqueResource<SDL_IOStream, SDL_CloseIO> input(
+      SDL_IOFromFile(assetPath.c_str(), "rb"));
   if (input) {
     for (;;) {
       if (stop.stop_requested() || !pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -1004,7 +1004,7 @@ bool readRegularFileBounded(const std::filesystem::path &path,
         return false;
       }
       const std::size_t count =
-          SDL_RWread(input.get(), buffer.data(), 1, buffer.size());
+          SDL_ReadIO(input.get(), buffer.data(), buffer.size());
       if (!appendBoundedRead(bytes, buffer.data(), count, maximumBytes, path,
                              errorMessage)) {
         return false;

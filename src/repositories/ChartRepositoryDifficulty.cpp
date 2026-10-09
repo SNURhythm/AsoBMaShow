@@ -12,7 +12,7 @@
 #include "SqliteRAII.h"
 #include "../Utils.h"
 #include "../yoga/lib/nlohmann/json.hpp"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include "../path.h"
 
 #include <algorithm>

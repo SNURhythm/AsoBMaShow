@@ -96,7 +96,7 @@ struct TimestampEpochMapping {
   }
 };
 
-// SDL event timestamps are 32-bit milliseconds and wrap. Treat differences
+// Legacy millisecond counters wrap after 32 bits. Treat differences
 // within half the counter range as signed offsets from the current SDL tick,
 // then move that offset into the process steady-clock epoch.
 constexpr std::int64_t rebaseWrappingTimestampMillis(

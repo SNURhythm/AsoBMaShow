@@ -22,7 +22,7 @@
 #include "../iOSNatives.hpp"
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cctype>
@@ -642,24 +642,24 @@ EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
   if (handleSeekEvents(event)) {
     return {};
   }
-  if (event.type == SDL_KEYDOWN) {
-    if (event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN) {
+    if (event.key.key == SDLK_ESCAPE) {
       goBack();
       return {};
     }
-    if (event.key.keysym.sym == SDLK_1) {
+    if (event.key.key == SDLK_1) {
       switchTab(MusicPlayerTab::Library);
       return {};
     }
-    if (event.key.keysym.sym == SDLK_2) {
+    if (event.key.key == SDLK_2) {
       switchTab(MusicPlayerTab::Favorites);
       return {};
     }
-    if (event.key.keysym.sym == SDLK_3) {
+    if (event.key.key == SDLK_3) {
       switchTab(MusicPlayerTab::Playlists);
       return {};
     }
-    if (event.key.keysym.sym == SDLK_4) {
+    if (event.key.key == SDLK_4) {
       switchTab(MusicPlayerTab::Player);
       return {};
     }
@@ -4246,6 +4246,13 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
                                                 View *progressTrack,
                                                 bool &mouseDown,
                                                 SDL_FingerID &activeTouchId) {
+  if (event.type == SDL_EVENT_FINGER_CANCELED) {
+    if (activeTouchId == -1 || event.tfinger.fingerID != activeTouchId) {
+      return false;
+    }
+    activeTouchId = -1;
+    return true;
+  }
   if (progressTrack == nullptr || !progressTrack->getVisible()) {
     return false;
   }
@@ -4258,7 +4265,7 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
   };
 
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return false;
@@ -4273,7 +4280,7 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
     seekAt(static_cast<float>(uiX));
     return true;
   }
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     if (!mouseDown || event.motion.which == SDL_TOUCH_MOUSEID) {
       return false;
     }
@@ -4284,7 +4291,7 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
     seekAt(static_cast<float>(uiX));
     return true;
   }
-  case SDL_MOUSEBUTTONUP: {
+  case SDL_EVENT_MOUSE_BUTTON_UP: {
     if (!mouseDown || event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return false;
@@ -4297,7 +4304,7 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
     seekAt(static_cast<float>(uiX));
     return true;
   }
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     if (activeTouchId != -1) {
       return false;
     }
@@ -4307,12 +4314,12 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
     if (!isInsideView(progressTrack, uiX, uiY)) {
       return false;
     }
-    activeTouchId = event.tfinger.fingerId;
+    activeTouchId = event.tfinger.fingerID;
     seekAt(uiX);
     return true;
   }
-  case SDL_FINGERMOTION: {
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_MOTION: {
+    if (event.tfinger.fingerID != activeTouchId) {
       return false;
     }
     float uiX = 0.0f;
@@ -4322,8 +4329,8 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
     seekAt(uiX);
     return true;
   }
-  case SDL_FINGERUP: {
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_UP: {
+    if (event.tfinger.fingerID != activeTouchId) {
       return false;
     }
     activeTouchId = -1;
@@ -4500,7 +4507,7 @@ void MusicPlayerScene::updateVideoFullscreen() {
   }
 
   if (videoControlsVisible && videoControlsVisibleUntil > 0 &&
-      SDL_GetTicks64() > videoControlsVisibleUntil && !videoSeekMouseDown &&
+      SDL_GetTicks() > videoControlsVisibleUntil && !videoSeekMouseDown &&
       activeVideoSeekTouchId == -1) {
     hideVideoControls();
   }
@@ -4623,7 +4630,7 @@ void MusicPlayerScene::showVideoControls(Uint64 durationMs) {
     return;
   }
   videoControlsVisible = true;
-  videoControlsVisibleUntil = SDL_GetTicks64() + durationMs;
+  videoControlsVisibleUntil = SDL_GetTicks() + durationMs;
   if (videoControlsPanel != nullptr) {
     videoControlsPanel->setVisible(true);
   }
@@ -4646,9 +4653,9 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
     return false;
   }
 
-  if (event.type == SDL_KEYDOWN) {
+  if (event.type == SDL_EVENT_KEY_DOWN) {
     showVideoControls();
-    switch (event.key.keysym.sym) {
+    switch (event.key.key) {
     case SDLK_ESCAPE:
       exitVideoFullscreen();
       return true;
@@ -4669,7 +4676,7 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
   const bool controlsVisible =
       videoControlsPanel != nullptr && videoControlsPanel->getVisible();
   if (controlsVisible) {
-    if (event.type == SDL_MOUSEBUTTONDOWN &&
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
         event.button.button == SDL_BUTTON_LEFT &&
         event.button.which != SDL_TOUCH_MOUSEID) {
       int uiX = 0;
@@ -4679,7 +4686,7 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
         hideVideoControls();
         return true;
       }
-    } else if (event.type == SDL_FINGERDOWN) {
+    } else if (event.type == SDL_EVENT_FINGER_DOWN) {
       float uiX = 0.0f;
       float uiY = 0.0f;
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
@@ -4698,20 +4705,21 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
   }
 
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.button == SDL_BUTTON_LEFT &&
         event.button.which != SDL_TOUCH_MOUSEID) {
       showVideoControls();
       return true;
     }
     break;
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     showVideoControls();
     return true;
-  case SDL_MOUSEBUTTONUP:
-  case SDL_MOUSEMOTION:
-  case SDL_FINGERUP:
-  case SDL_FINGERMOTION:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
+  case SDL_EVENT_MOUSE_MOTION:
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_CANCELED:
+  case SDL_EVENT_FINGER_MOTION:
     return true;
   default:
     break;

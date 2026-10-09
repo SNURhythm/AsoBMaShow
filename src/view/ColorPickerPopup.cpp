@@ -164,13 +164,12 @@ void ColorPickerPopup::fitToViewport(int width, int height, int left, int top, i
 }
 
 bool ColorPickerPopup::handleEventsImpl(SDL_Event &event) {
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)
     outcome = Result{false, draft};
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: case SDL_MOUSEMOTION:
-  case SDL_MOUSEWHEEL: case SDL_FINGERDOWN: case SDL_FINGERUP: case SDL_FINGERMOTION:
-  case SDL_KEYDOWN: case SDL_KEYUP: case SDL_TEXTINPUT: case SDL_TEXTEDITING:
-  case SDL_TEXTEDITING_EXT:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: case SDL_EVENT_MOUSE_MOTION:
+  case SDL_EVENT_MOUSE_WHEEL: case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_MOTION:
+  case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: case SDL_EVENT_TEXT_INPUT: case SDL_EVENT_TEXT_EDITING:
     return false;
   default:
     return true;

@@ -17,7 +17,7 @@
 #include <variant>
 #include <vector>
 
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_scancode.h>
 
 class InputDeviceRegistry {
 public:
@@ -108,7 +108,7 @@ private:
   class SDLInputBackend *sdlInputBackend_ = nullptr;
   mutable std::mutex legacyInputMutex_;
   std::optional<PointerPosition> pointerPosition_;
-  std::bitset<SDL_NUM_SCANCODES> pressedSdlScancodes_;
+  std::bitset<SDL_SCANCODE_COUNT> pressedSdlScancodes_;
   std::bitset<input::kLegacyInputMaximumGdxKeyCode + 1> pressedGdxKeys_;
   std::array<std::uint16_t, input::kLegacyInputMaximumGdxKeyCode + 1>
       pressedGdxKeyCounts_{};

@@ -1,6 +1,7 @@
 #include "video/FramePacer.h"
 #include "video/RendererAccessCoordinator.h"
 #include "video/SDLDisplayBackend.h"
+#include <SDL3/SDL.h>
 
 #include <atomic>
 #include <chrono>
@@ -932,9 +933,35 @@ void testMaximizedPreviewRollbackRestoresCachedNormalGeometry() {
               backend.capture().settings.height == 720,
           "rollback repairs the cached normal geometry as well as SDL");
 }
+void testNativeDisplayIdsStaySeparateFromSavedIndices() {
+  SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
+  require(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
+  SDL_Window *window = SDL_CreateWindow("SDL3 adapter test", 640, 480, SDL_WINDOW_HIDDEN);
+  require(window != nullptr, SDL_GetError());
+  {
+    display::SDLDisplayBackend backend(window, false, [] { return 0U; }, {});
+    const auto capabilities = backend.capabilities();
+    require(!capabilities.displays.empty() && capabilities.displays.front().index == 0 &&
+                !capabilities.displays.front().resolutions.empty(),
+            "native display ID is resolved before name and mode queries");
+    require(SDL_GetDisplayForWindow(window) != 0 && backend.capture().settings.displayIndex == 0,
+            "SDL3 nonzero display ID maps to the saved zero-based index");
+    require(SDL_SetWindowFullscreenMode(window, nullptr) && SDL_SetWindowFullscreen(window, true),
+            SDL_GetError());
+    require(backend.capture().settings.mode == DisplayMode::BorderlessFullscreen,
+            "null SDL3 fullscreen mode means borderless desktop");
+    require(SDL_SetWindowFullscreen(window, false), SDL_GetError());
+    require(backend.capture().settings.mode == DisplayMode::Windowed,
+            "leaving fullscreen restores the windowed state");
+  }
+  SDL_DestroyWindow(window);
+  SDL_Quit();
+}
+
 } // namespace
 
 int main() {
+  testNativeDisplayIdsStaySeparateFromSavedIndices();
   testDisplayMutationSynchronizesRendererWithUnchangedFlags();
   testReservationRejectsBeforeAnySDLMutation();
   testRendererFailureCanRestoreSDLAndRendererCoherently();

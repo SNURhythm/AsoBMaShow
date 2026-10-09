@@ -49,49 +49,48 @@ int main() {
                                            practice::TimelineDirection::Next));
 
   constexpr Uint32 previouslyForwarded[] = {
-      SDL_QUIT,
-      SDL_WINDOWEVENT,
-      SDL_KEYDOWN,
-      SDL_KEYUP,
-      SDL_TEXTINPUT,
-      SDL_TEXTEDITING,
-      SDL_TEXTEDITING_EXT,
-      SDL_MOUSEMOTION,
-      SDL_MOUSEBUTTONDOWN,
-      SDL_MOUSEBUTTONUP,
-      SDL_MOUSEWHEEL,
-      SDL_FINGERDOWN,
-      SDL_FINGERMOTION,
-      SDL_FINGERUP,
+      SDL_EVENT_QUIT,
+      SDL_EVENT_WINDOW_FOCUS_LOST,
+      SDL_EVENT_KEY_DOWN,
+      SDL_EVENT_KEY_UP,
+      SDL_EVENT_TEXT_INPUT,
+      SDL_EVENT_TEXT_EDITING,
+      SDL_EVENT_MOUSE_MOTION,
+      SDL_EVENT_MOUSE_BUTTON_DOWN,
+      SDL_EVENT_MOUSE_BUTTON_UP,
+      SDL_EVENT_MOUSE_WHEEL,
+      SDL_EVENT_FINGER_DOWN,
+      SDL_EVENT_FINGER_MOTION,
+      SDL_EVENT_FINGER_UP,
   };
   for (const Uint32 eventType : previouslyForwarded) {
     assert(scene_event_routing::shouldDispatchToScene(eventType));
   }
-  assert(scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERBUTTONDOWN));
-  assert(scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERBUTTONUP));
-  assert(!scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERAXISMOTION));
+  assert(scene_event_routing::shouldDispatchToScene(SDL_EVENT_GAMEPAD_BUTTON_DOWN));
+  assert(scene_event_routing::shouldDispatchToScene(SDL_EVENT_GAMEPAD_BUTTON_UP));
+  assert(!scene_event_routing::shouldDispatchToScene(SDL_EVENT_GAMEPAD_AXIS_MOTION));
   assert(
-      !scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERSENSORUPDATE));
-  assert(!scene_event_routing::shouldDispatchToScene(SDL_JOYBUTTONDOWN));
+      !scene_event_routing::shouldDispatchToScene(SDL_EVENT_GAMEPAD_SENSOR_UPDATE));
+  assert(!scene_event_routing::shouldDispatchToScene(SDL_EVENT_JOYSTICK_BUTTON_DOWN));
 
   SDL_Event mouseSynthesizedTouch{};
-  mouseSynthesizedTouch.type = SDL_FINGERDOWN;
-  mouseSynthesizedTouch.tfinger.type = SDL_FINGERDOWN;
-  mouseSynthesizedTouch.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  mouseSynthesizedTouch.type = SDL_EVENT_FINGER_DOWN;
+  mouseSynthesizedTouch.tfinger.type = SDL_EVENT_FINGER_DOWN;
+  mouseSynthesizedTouch.tfinger.touchID = SDL_MOUSE_TOUCHID;
   assert(!scene_event_routing::shouldDispatchToScene(mouseSynthesizedTouch));
 
   SDL_Event directTouch{};
-  directTouch.type = SDL_FINGERDOWN;
-  directTouch.tfinger.type = SDL_FINGERDOWN;
-  directTouch.tfinger.touchId = 42;
+  directTouch.type = SDL_EVENT_FINGER_DOWN;
+  directTouch.tfinger.type = SDL_EVENT_FINGER_DOWN;
+  directTouch.tfinger.touchID = 42;
   assert(scene_event_routing::shouldDispatchToScene(directTouch));
 
   SDL_Event lifecycle{};
-  lifecycle.type = SDL_WINDOWEVENT;
-  for (const Uint8 windowEvent : {SDL_WINDOWEVENT_FOCUS_LOST,
-                                  SDL_WINDOWEVENT_MINIMIZED,
-                                  SDL_WINDOWEVENT_HIDDEN}) {
-    lifecycle.window.event = windowEvent;
+  lifecycle.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+  for (const Uint32 windowEvent : {SDL_EVENT_WINDOW_FOCUS_LOST,
+                                  SDL_EVENT_WINDOW_MINIMIZED,
+                                  SDL_EVENT_WINDOW_HIDDEN}) {
+    lifecycle.type = windowEvent;
     assert(skin_text_input_lifecycle::shouldCommit(lifecycle, true));
     assert(!skin_text_input_lifecycle::shouldCommit(lifecycle, false));
     int commits = 0;
@@ -103,13 +102,12 @@ int main() {
            skin_text_input_lifecycle::CommitResult::Committed);
     assert(commits == 1);
   }
-  for (const Uint32 appEvent : {SDL_APP_WILLENTERBACKGROUND,
-                                SDL_APP_DIDENTERBACKGROUND}) {
+  for (const Uint32 appEvent : {SDL_EVENT_WILL_ENTER_BACKGROUND,
+                                SDL_EVENT_DID_ENTER_BACKGROUND}) {
     lifecycle.type = appEvent;
     assert(skin_text_input_lifecycle::shouldCommit(lifecycle, true));
   }
-  lifecycle.type = SDL_WINDOWEVENT;
-  lifecycle.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  lifecycle.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
   assert(!skin_text_input_lifecycle::shouldCommit(lifecycle, true));
   int commits = 0;
   assert(skin_text_input_lifecycle::route(
@@ -118,7 +116,7 @@ int main() {
                return true;
              }) == skin_text_input_lifecycle::CommitResult::NotRequested);
   assert(commits == 0);
-  lifecycle.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+  lifecycle.type = SDL_EVENT_WINDOW_FOCUS_LOST;
   assert(skin_text_input_lifecycle::route(
              lifecycle, true, [&] {
                ++commits;
