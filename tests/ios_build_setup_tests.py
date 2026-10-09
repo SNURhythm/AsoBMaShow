@@ -980,6 +980,30 @@ int main() {
         self.assertFalse(os.path.isabs(os.readlink(SDL_HEADER_ALIAS)))
         self.assertEqual((ROOT / "SDL/include/SDL3").resolve(), SDL_HEADER_ALIAS.resolve())
 
+    def test_app_archive_installs_only_the_application_product(self):
+        xcodebuild = shutil.which("xcodebuild")
+        if xcodebuild is None:
+            self.skipTest("xcodebuild is only available with Xcode")
+        targets = (
+            (PROJECT.parent, "AsoBMaShow", "NO"),
+            (ROOT / "SDL/Xcode/SDL/SDL.xcodeproj", "SDL3", "YES"),
+            (ROOT / "SDL_ttf/Xcode/SDL_ttf.xcodeproj", "SDL3_ttf", "YES"),
+        )
+        for configuration in ("Debug", "Release"):
+            for project, target, expected in targets:
+                with self.subTest(configuration=configuration, target=target):
+                    result = subprocess.run(
+                        [xcodebuild, "-project", str(project), "-target", target,
+                         "-configuration", configuration, "-sdk", "iphoneos",
+                         "-showBuildSettings", "-json"],
+                        cwd=ROOT, check=True, text=True, capture_output=True,
+                    )
+                    settings = next(
+                        entry["buildSettings"] for entry in json.loads(result.stdout)
+                        if entry["target"] == target
+                    )
+                    self.assertEqual(expected, settings["SKIP_INSTALL"])
+
     def test_ios_links_7zip_archive_registration_for_device_and_simulator(self):
         xcodebuild = shutil.which("xcodebuild")
         if xcodebuild is None:
