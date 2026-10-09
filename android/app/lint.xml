@@ -10,4 +10,12 @@
         <ignore path="../../SDL/android-project/app/src/main/java/org/libsdl/app/HIDDeviceManager.java" />
         <ignore path="../../SDL/android-project/app/src/main/java/org/libsdl/app/SDLAudioManager.java" />
     </issue>
+    <!-- SDLActivity instantiates SDLGenericMotionListener_API29 only on API 29+. -->
+    <issue id="NewApi">
+        <ignore regexp="Call requires API level 29 .*android\.view\.InputDevice#isExternal" />
+    </issue>
+    <!-- SDL3 uses the flagged USB receiver overload on API 33+; this is its older-API branch. -->
+    <issue id="UnspecifiedRegisterReceiverFlag">
+        <ignore regexp="`mUsbBroadcast` is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected broadcasts registered for org\.libsdl\.app\.USB_PERMISSION" />
+    </issue>
 </lint>

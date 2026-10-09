@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 AAB = "android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab"
+APK = "android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk"
 
 # Substitute only the external Fastlane actions; evaluate the actual lane bodies.
 HARNESS = r'''
@@ -103,13 +104,37 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertIn("AAB", result.stderr)
         self.assertFalse((self.root / "upload.json").exists())
 
+    def test_upload_existing_bundle_does_not_build(self):
+        self.env["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"] = "{}"
+        result = self.run_lane("upload_beta", stale_bundle=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.root / "build-args.txt").exists())
+        upload = json.loads((self.root / "upload.json").read_text())
+        self.assertEqual(upload["aab"], str(self.root / AAB))
+        self.assertEqual(upload["release_status"], "draft")
+        self.assertEqual((self.root / AAB).read_bytes(), b"old bundle")
+
+    def test_upload_existing_bundle_rejects_missing_or_empty_artifact(self):
+        self.env["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"] = "{}"
+        for empty in (False, True):
+            with self.subTest(empty=empty):
+                if empty:
+                    artifact = self.root / AAB
+                    artifact.parent.mkdir(parents=True)
+                    artifact.touch()
+                result = self.run_lane("upload_beta")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("AAB not found or empty", result.stderr)
+                self.assertFalse((self.root / "build-args.txt").exists())
+                self.assertFalse((self.root / "upload.json").exists())
+
     def test_bundle_flag_requires_build_only(self):
         result = subprocess.run([str(ROOT / "scripts/android_firebase_deploy.sh"), "--bundle"],
                                 env=self.env, text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--bundle requires --build-only", result.stderr)
 
-    def test_bundle_build_uses_signed_release_task_and_propagates_failure(self):
+    def prepare_build_fixture(self):
         shutil.copyfile(ROOT / "scripts/android_firebase_deploy.sh",
                         self.root / "scripts/android_firebase_deploy.sh")
         (self.root / "scripts/android_firebase_deploy.sh").chmod(0o755)
@@ -134,10 +159,71 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         })
         gradle = self.root / "android/gradlew"
         gradle.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > gradle-args.txt\n'
+                          'printf "call\\n" >> gradle-calls.txt\n'
                           'printf "%s" "$ANDROID_KEYSTORE_PATH" > signing-path.txt\n'
                           'printf "%s" "$ANDROID_VERSION_CODE" > version-code.txt\n'
                           'exit "${FIXTURE_GRADLE_EXIT:-0}"\n')
         gradle.chmod(0o755)
+
+    def test_combined_build_requests_both_artifacts_in_one_gradle_invocation(self):
+        self.prepare_build_fixture()
+        command = [str(self.root / "scripts/android_firebase_deploy.sh"),
+                   "--build-only", "--apk-and-bundle", "--version-code", "42"]
+        result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "gradle-args.txt").read_text().splitlines(),
+                         ["-p", str(self.root / "android"),
+                          ":app:assembleRestricted_file_accessRelease",
+                          ":app:bundleRestricted_file_accessRelease", "--no-daemon"])
+        self.assertEqual((self.root / "version-code.txt").read_text(), "42")
+        self.assertEqual((self.root / "gradle-calls.txt").read_text(), "call\n")
+        self.env["FIXTURE_GRADLE_EXIT"] = "19"
+        result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 19)
+
+    def test_workflow_build_uses_one_counter_and_rejects_stale_outputs(self):
+        workflow = json.loads(subprocess.check_output(
+            ["ruby", "-r", "yaml", "-r", "json", "-e",
+             "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))",
+             str(ROOT / ".github/workflows/android-play-deploy.yml")], text=True))
+        build = next(step for step in workflow["jobs"]["android-release"]["steps"]
+                     if step.get("id") == "build")
+        self.prepare_build_fixture()
+        self.env["GITHUB_RUN_NUMBER"] = "42"
+        (self.root / ".env.local").write_text("ANDROID_VERSION_CODE=99\nGITHUB_RUN_NUMBER=99\n")
+        gradle = self.root / "android/gradlew"
+        script = gradle.read_text().replace('exit "${FIXTURE_GRADLE_EXIT:-0}"', '')
+        for output in (APK, AAB):
+            artifact = self.root / output
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            script += f'printf fresh > "{artifact}"\n'
+        gradle.write_text(script)
+        result = subprocess.run(["bash", "-e", "-c", build["run"]], cwd=self.root,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "version-code.txt").read_text(), "42")
+        self.assertEqual((self.root / "gradle-calls.txt").read_text(), "call\n")
+        for output in (APK, AAB):
+            self.assertEqual((self.root / output).read_bytes(), b"fresh")
+
+        # A successful command that omits an artifact must not reuse a prior run's output.
+        gradle.write_text("#!/bin/sh\nexit 0\n")
+        result = subprocess.run(["bash", "-e", "-c", build["run"]], cwd=self.root,
+                                env=self.env, text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        for output in (APK, AAB):
+            self.assertFalse((self.root / output).exists())
+
+    def test_combined_build_cannot_deploy_or_skip_build(self):
+        for arguments in (["--apk-and-bundle"],
+                          ["--apk-and-bundle", "--build-only", "--skip-build"]):
+            result = subprocess.run([str(ROOT / "scripts/android_firebase_deploy.sh"), *arguments],
+                                    env=self.env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires --build-only", result.stderr)
+
+    def test_bundle_build_uses_signed_release_task_and_propagates_failure(self):
+        self.prepare_build_fixture()
         command = [str(self.root / "scripts/android_firebase_deploy.sh"), "--build-only", "--bundle"]
         result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -247,6 +333,20 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         result = self.run_play_helper("--build-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("exec fastlane android build_bundle", (self.root / "calls.txt").read_text())
+
+    def test_play_skip_build_selects_upload_only_lane(self):
+        self.env["GITHUB_RUN_NUMBER"] = "42"
+        result = self.run_play_helper("--skip-build")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("exec fastlane android upload_beta", (self.root / "calls.txt").read_text())
+
+    def test_play_rejects_conflicting_build_options(self):
+        for arguments in (["--build-only", "--skip-build"],
+                          ["--skip-build", "--build-only"]):
+            result = self.run_play_helper(*arguments)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cannot be combined", result.stderr)
+            self.assertFalse((self.root / "calls.txt").exists())
 
 
 if __name__ == "__main__":

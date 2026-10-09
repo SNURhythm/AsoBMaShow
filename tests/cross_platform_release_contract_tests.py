@@ -29,7 +29,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.info_plist = read("Info.plist")
         cls.macos_init = read("scripts/macos_init.sh")
         cls.macos_workflow = read(".github/workflows/macos-build.yml")
-        cls.android_workflow = read(".github/workflows/android-beta-deploy.yml")
+        cls.android_workflow = read(".github/workflows/android-play-deploy.yml")
         cls.android_gradle = read("android/app/build.gradle")
         cls.android_manifest = read("android/app/src/main/AndroidManifest.xml")
         cls.android_deploy = read("scripts/android_firebase_deploy.sh")
@@ -243,8 +243,8 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), str(expected))
 
-        android_job = self.android_workflow.split("  android-firebase:", 1)[1]
-        self.assertIn("group: android-firebase-distribution", android_job)
+        android_job = self.android_workflow.split("  android-release:", 1)[1]
+        self.assertIn("group: android-google-play", android_job)
         self.assertIn("cancel-in-progress: false", android_job)
 
     def test_android_enables_libcxx_stop_token_support(self):
@@ -542,7 +542,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         )
 
     def test_firebase_android_lane_remains_fast_iteration(self):
-        android_job = self.android_workflow.split("  android-firebase:", 1)[1]
+        android_job = self.android_workflow.split("  android-release:", 1)[1]
         self.assertNotIn("ctest --test-dir", android_job)
         self.assertNotIn("scripts/macos_artifact_audit.sh", android_job)
 

@@ -1,4 +1,4 @@
-name: Build & Upload Android Play Beta Draft (Manual)
+name: Build & Deploy Android Release (Firebase + Play Draft)
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  android-play:
-    name: Upload Google Play public beta draft
+  android-release:
+    name: Build once and distribute to Firebase and Google Play
     runs-on: [self-hosted, macOS]
     timeout-minutes: 60
     concurrency:
@@ -20,6 +20,8 @@ jobs:
       ANDROID_HOME: /opt/homebrew/share/android-commandlinetools
       ANDROID_SDK_ROOT: /opt/homebrew/share/android-commandlinetools
       VCPKG_ROOT: /Users/xf/vcpkg
+      FIREBASE_APP_DISTRIBUTION_GROUPS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_GROUPS || 'internal' }}
+      FIREBASE_APP_DISTRIBUTION_TESTERS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_TESTERS }}
       ANDROID_KEYSTORE_PATH: ${{ secrets.ANDROID_KEYSTORE_PATH }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -38,15 +40,29 @@ jobs:
           python3 tests/android_play_workflow_tests.py
       - name: Run fatal Android lint
         run: android/gradlew -p android lintRestricted_file_accessDebug
-      - name: Build and upload public beta draft
+      - name: Build restricted-file APK and AAB
+        id: build
+        run: |
+          rm -f android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk
+          rm -f android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab
+          ./scripts/android_firebase_deploy.sh --variant restricted_file_accessRelease --build-only --apk-and-bundle --version-code "$GITHUB_RUN_NUMBER"
+          test -s android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk
+          test -s android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab
+      - name: Upload APK to Firebase
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: ./scripts/android_firebase_deploy.sh --skip-build --version-code "$GITHUB_RUN_NUMBER" --apk android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk
+      - name: Upload AAB as public beta draft
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-        run: ./scripts/android_play_deploy.sh
-      - name: Retain signed app bundle
-        if: ${{ !cancelled() }}
+        run: ./scripts/android_play_deploy.sh --skip-build
+      - name: Retain signed release artifacts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: android-public-beta-aab
-          path: android/app/build/outputs/bundle/restricted_file_accessRelease/*.aab
-          if-no-files-found: ignore
+          name: android-release-${{ github.run_number }}
+          path: |
+            android/app/build/outputs/apk/restricted_file_access/release/app-restricted_file_access-release.apk
+            android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab
+          if-no-files-found: error
           retention-days: 14

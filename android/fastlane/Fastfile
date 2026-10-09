@@ -5,6 +5,14 @@ default_platform(:android)
 repository_root = File.expand_path("../..", __dir__)
 bundle_path = File.join(repository_root, "android/app/build/outputs/bundle/restricted_file_accessRelease/app-restricted_file_access-release.aab")
 
+def play_credentials
+  credentials = ENV["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"]
+  if credentials.to_s.strip.empty?
+    UI.user_error!("Set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON to the Play service account JSON before uploading.")
+  end
+  credentials
+end
+
 platform :android do
   desc "Build a signed restricted-access AAB without uploading"
   lane :build_bundle do
@@ -19,16 +27,19 @@ platform :android do
 
   desc "Build and upload a draft release to Google Play public beta (open testing)"
   lane :play_beta do
-    credentials = ENV["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"]
-    if credentials.to_s.strip.empty?
-      UI.user_error!("Set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON to the Play service account JSON before uploading.")
-    end
+    play_credentials
+    build_bundle
+    upload_beta
+  end
 
-    aab = build_bundle
+  desc "Upload the existing restricted-access AAB as a Google Play public beta draft"
+  lane :upload_beta do
+    credentials = play_credentials
+    UI.user_error!("AAB not found or empty: #{bundle_path}") unless File.file?(bundle_path) && File.size?(bundle_path)
     upload_to_play_store(
       package_name: "com.snurhythm.asobmashow",
       json_key_data: credentials,
-      aab: aab,
+      aab: bundle_path,
       track: "beta",
       release_status: "draft",
       skip_upload_apk: true,

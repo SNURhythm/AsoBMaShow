@@ -27,7 +27,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         cls.luajit_overlay = read("vcpkg-overlays/luajit/portfile.cmake")
         cls.root_gradle = read("android/build.gradle")
         cls.lint_config = read("android/app/lint.xml")
-        cls.workflow = read(".github/workflows/android-beta-deploy.yml")
+        cls.workflow = read(".github/workflows/android-play-deploy.yml")
         cls.deploy_script = read("scripts/android_firebase_deploy.sh")
         cls.android_readme = read("android/README.md")
         cls.manifest = read("android/app/src/main/AndroidManifest.xml")
@@ -437,7 +437,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             ],
         )
 
-        android_job = self.workflow.split("  android-firebase:", 1)[1]
+        android_job = self.workflow.split("  android-release:", 1)[1]
         self.assertIn(
             "android/gradlew -p android lintRestricted_file_accessDebug",
             android_job,
@@ -466,11 +466,24 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         )
 
     def test_sdl_dynamic_receivers_are_android_13_compatible(self):
-        self.assertIn("registerReceiverCompat(mUsbBroadcast, filter)",
-                      self.sdl_hid_manager)
-        self.assertIn("registerReceiverCompat(mBluetoothBroadcast, filter)",
-                      self.sdl_hid_manager)
-        self.assertIn("Context.RECEIVER_NOT_EXPORTED", self.sdl_hid_manager)
+        # SDL3 uses guarded platform calls rather than the old SDL2 compat helper.
+        for receiver in ("mUsbBroadcast", "mBluetoothBroadcast"):
+            self.assertRegex(
+                self.sdl_hid_manager,
+                r"if \(Build.VERSION.SDK_INT >= 33\) \{[^}]*"
+                rf"registerReceiver\({receiver}, filter, Context.RECEIVER_EXPORTED\);"
+                r"\s*\} else \{\s*"
+                rf"mContext.registerReceiver\({receiver}, filter\);",
+            )
+
+    def test_sdl_api_29_motion_listener_is_guarded(self):
+        activity = read("SDL/android-project/app/src/main/java/org/libsdl/app/SDLActivity.java")
+        factory = method(activity, "public static SDLGenericMotionListener_API14 getMotionListener()")
+        self.assertRegex(
+            factory,
+            r"if \(Build.VERSION.SDK_INT >= 29[^\n]*\{\s*"
+            r"mMotionListener = new SDLGenericMotionListener_API29\(\);",
+        )
 
 
 if __name__ == "__main__":

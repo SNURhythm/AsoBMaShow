@@ -9,6 +9,7 @@ GRADLEW="${ROOT_DIR}/android/gradlew"
 REQUIRED_ANDROID_NDK_VERSION="28.2.13676358"
 BUILD_ONLY=0
 BUILD_BUNDLE=0
+BUILD_APK_AND_BUNDLE=0
 SKIP_BUILD=0
 VARIANT="restricted_file_accessRelease"
 APK_PATH=""
@@ -37,6 +38,7 @@ Options:
   --env-file PATH       Load an additional env file.
   --build-only          Build only; do not upload.
   --bundle              Build an AAB instead of an APK; requires --build-only.
+  --apk-and-bundle      Build APK and AAB together; requires --build-only.
   --skip-build          Upload an existing APK from --apk.
   --variant NAME        Gradle build variant to assemble. Default: restricted_file_accessRelease.
   --apk PATH            APK to upload. Defaults to android/app/build/outputs/apk/<variant>/app-<variant>.apk.
@@ -79,6 +81,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --bundle)
       BUILD_BUNDLE=1
+      shift
+      ;;
+    --apk-and-bundle)
+      BUILD_BUNDLE=1
+      BUILD_APK_AND_BUNDLE=1
       shift
       ;;
     --skip-build)
@@ -165,7 +172,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "${BUILD_BUNDLE}" -eq 1 ] && { [ "${BUILD_ONLY}" -ne 1 ] || [ "${SKIP_BUILD}" -eq 1 ]; }; then
-  echo "--bundle requires --build-only and cannot be combined with --skip-build." >&2
+  echo "--bundle requires --build-only and cannot be combined with --skip-build. The same applies to --apk-and-bundle." >&2
   exit 2
 fi
 
@@ -528,12 +535,18 @@ artifact_path_for_variant() {
 
 run_gradle_build() {
   local task format="APK"
+  local tasks=()
   if [ "${BUILD_BUNDLE}" -eq 1 ]; then
     format="AAB"
   fi
   task="$(variant_task_name)"
+  if [ "${BUILD_APK_AND_BUNDLE}" -eq 1 ]; then
+    format="APK and AAB"
+    tasks+=(":app:assemble${task#bundle}")
+  fi
+  tasks+=(":app:${task}")
   echo "Building Android ${VARIANT} ${format} with versionCode=${ANDROID_VERSION_CODE}, versionName=${ANDROID_VERSION_NAME}"
-  "${GRADLEW}" -p "${ANDROID_DIR}" ":app:${task}" --no-daemon
+  "${GRADLEW}" -p "${ANDROID_DIR}" "${tasks[@]}" --no-daemon
 }
 
 has_firebase_auth() {

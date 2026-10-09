@@ -91,22 +91,28 @@ runs both use `GITHUB_RUN_NUMBER` in CI and default to `1` locally.
 `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
 `ANDROID_KEY_PASSWORD`. The same signing config is used for Firebase and Google
 Play release builds. In GitHub Actions, these values are supplied by secrets on
-the manual **Build & Deploy Android Beta (Manual)** workflow in
-`.github/workflows/android-beta-deploy.yml`. Start it from GitHub Actions using
+the manual **Build & Deploy Android Release (Firebase + Play Draft)** workflow in
+`.github/workflows/android-play-deploy.yml`. Start it from GitHub Actions using
 **Run workflow** and select the branch to build; pushes do not deploy Android.
 The script builds first, then uploads the APK with
 `firebase appdistribution:distribute`.
 
 ## Google Play App Bundles
 
-The manual **Build & Upload Android Play Beta Draft (Manual)** workflow in
-`.github/workflows/android-play-deploy.yml` runs the Android Fastlane `play_beta`
-lane. It builds the signed `restricted_file_accessRelease` AAB, then uploads it
-to the `beta` track (public beta/open testing) with `release_status: draft`.
+The manual **Build & Deploy Android Release (Firebase + Play Draft)** workflow in
+`.github/workflows/android-play-deploy.yml` builds the signed
+`restricted_file_accessRelease` APK and AAB together in one Gradle invocation,
+sharing compilation and one `versionCode` from `GITHUB_RUN_NUMBER`. It uploads
+the APK to Firebase and uses the Android Fastlane `upload_beta` lane to upload
+the existing AAB to the `beta` track (public beta/open testing) with
+`release_status: draft`. Neither upload rebuilds the app. Each upload is attempted
+after a successful build even if the other service fails; a failed upload still
+fails the workflow.
 Finish the release in Play Console when ready. Pushes, tags and pull requests
 do not trigger uploads. Store text, images, screenshots and changelogs are not
-changed by this lane. The workflow retains the AAB as an Actions artifact for
-14 days, including when the subsequent Play upload fails.
+changed by this lane. The workflow retains both signed artifacts for 14 days,
+including when either upload fails. The separate Firebase workflow has been
+removed; the existing Play workflow file and its run counter are retained.
 
 Set up `com.snurhythm.asobmashow` in Play Console, configure open testing, and
 upload the first build manually before using Fastlane, as described in the
@@ -117,8 +123,11 @@ to this app and permission to release to testing tracks; see
 Add its JSON key contents as the GitHub Actions secret
 `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`. This is separate from the runner's Firebase
 CLI login. The workflow reuses the four `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*`
-signing secrets listed above. Their key must match the app's registered Play
-upload certificate (or the signing certificate when Play App Signing is not used).
+signing secrets listed above. For this shared-key setup, their certificate must
+match both the registered Play upload certificate and the Play app signing
+certificate. Matching only the upload certificate does not make Firebase APKs
+compatible with Play installations. Keep the new app signing key locally and
+update the runner's private environment and signing secrets together.
 
 The self-hosted macOS runner needs Ruby from `android/.ruby-version` in addition
 to the existing Android SDK, NDK, Ninja, Java and vcpkg setup. The wrapper selects
@@ -132,13 +141,16 @@ From the repository root:
 # Build a signed AAB without Play credentials or an upload.
 scripts/android_play_deploy.sh --build-only
 
+# Build both restricted-file artifacts once without uploading.
+scripts/android_firebase_deploy.sh --build-only --apk-and-bundle
+
 # Build and upload a public beta draft (requires Play credentials and an unused code).
 # Replace 123 with an unused code coordinated with the Play CI counter.
 export ANDROID_VERSION_CODE=123
 scripts/android_play_deploy.sh
 ```
 
-Both commands load `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
+The helpers load `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
 Keep real signing and Play credentials in those private files or the environment.
 For a local upload, export `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` with the contents
 of a private JSON key file. No key file is written by the lane. CI uploads use
@@ -155,12 +167,20 @@ bundle, are `bundle exec fastlane android build_bundle` and
 environment and Ruby setup. Run `python3 tests/android_play_workflow_tests.py`
 to exercise build/upload boundaries without contacting Play.
 
+To retry only a failed upload, use the retained artifact from that release.
+For Firebase, pass `--skip-build --apk /path/to/release.apk --version-code N`
+to `scripts/android_firebase_deploy.sh`. For Play, restore the AAB to the output
+path above, set `ANDROID_VERSION_CODE` to its actual code, and run
+`scripts/android_play_deploy.sh --skip-build`. Do not repeat a successful Play
+upload with the same code.
+
 ### Version-code transition
 
-Version codes now use small workflow counters (`1`, `2`, `3`, etc.). GitHub's
-counter is specific to each workflow, so Firebase and Play do not share a global
-sequence. Rerunning a workflow keeps its code; start a new workflow run for each
-new Play upload. If a code has already been uploaded, do not reuse it.
+Version codes use the combined workflow's counter (`1`, `2`, `3`, etc.). Firebase
+and Play receive the same code and source revision in each run. The workflow
+passes the counter explicitly to the build, so private environment files cannot
+override it. Rerunning a workflow keeps its code; start a new workflow run for
+each new Play upload. If a code has already been uploaded, do not reuse it.
 
 The previous Unix-second scheme produced an unpublished Play draft with version
 code `1791476715`. That draft was removed before release; the small-counter

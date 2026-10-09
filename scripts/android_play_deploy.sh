@@ -6,17 +6,26 @@ INHERITED_GITHUB_RUN_NUMBER="${GITHUB_RUN_NUMBER:-}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/android"
 LANE="play_beta"
+BUILD_ONLY=0
+SKIP_BUILD=0
 ENV_FILES=("${ROOT_DIR}/.env" "${ROOT_DIR}/.env.local" "${ANDROID_DIR}/.env" "${ANDROID_DIR}/.env.local")
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --build-only)
       LANE="build_bundle"
+      BUILD_ONLY=1
+      shift
+      ;;
+    --skip-build)
+      LANE="upload_beta"
+      SKIP_BUILD=1
       shift
       ;;
     -h|--help)
-      echo "Usage: scripts/android_play_deploy.sh [--build-only]"
+      echo "Usage: scripts/android_play_deploy.sh [--build-only | --skip-build]"
       echo "Builds a signed AAB and uploads a Google Play public beta draft. --build-only skips upload."
+      echo "--skip-build uploads the existing restricted-file release AAB without rebuilding."
       exit 0
       ;;
     *)
@@ -25,6 +34,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "${BUILD_ONLY}" -eq 1 ] && [ "${SKIP_BUILD}" -eq 1 ]; then
+  echo "--build-only and --skip-build cannot be combined." >&2
+  exit 2
+fi
 
 for env_file in "${ENV_FILES[@]}"; do
   if [ -f "${env_file}" ]; then
@@ -41,7 +55,7 @@ if [ -n "${INHERITED_GITHUB_RUN_NUMBER}" ]; then
 fi
 
 # Local test builds may reuse 1, but uploads must deliberately select a code.
-if [ "${LANE}" = "play_beta" ]; then
+if [ "${BUILD_ONLY}" -eq 0 ]; then
   play_version_code="${ANDROID_VERSION_CODE:-${GITHUB_RUN_NUMBER:-}}"
   if [ -z "${play_version_code}" ]; then
     echo "Local Play uploads require an explicit, unused ANDROID_VERSION_CODE; use the Play workflow for its automatic GITHUB_RUN_NUMBER, or --build-only for a local test build." >&2
