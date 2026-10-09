@@ -22,6 +22,15 @@ checklist. Re-evaluate that decision if App Store validation, a bundled SDK's
 declared requirements, or Apple's submission requirements report a concrete
 manifest obligation.
 
+The app does not use a camera. The iOS build helpers and both distribution
+lanes pass `SDL_PREPROCESSOR_DEFINITIONS=SDL_CAMERA_DISABLED=1` to Xcode so
+the embedded SDL framework omits its camera backend. Manual Xcode builds
+must also set this on the SDL dependency target (not just the app target).
+The artifact audit rejects camera API imports in the app or its frameworks.
+Bluetooth support remains available, with `NSBluetoothAlwaysUsageDescription`
+explaining game-controller connections. In SDL, raw CoreBluetooth access is
+for Steam controllers; standard iOS controllers use GameController.
+
 ## App Store Connect metadata
 
 - [ ] Complete Privacy labels from the behavior documented in

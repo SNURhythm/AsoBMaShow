@@ -15,6 +15,8 @@
 	</dict>
 	<key>NSMotionUsageDescription</key>
 	<string>AsoBMaShow uses motion sensors to let you rotate your iPhone or iPad as a turntable controller.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>AsoBMaShow uses Bluetooth to connect to compatible game controllers for gameplay.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>AsoBMaShow saves exported replay videos to your Photos library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

@@ -242,6 +242,7 @@ class IOSArtifactAuditTests(unittest.TestCase):
                 }
             },
             "NSMotionUsageDescription": "Motion controls the turntable.",
+            "NSBluetoothAlwaysUsageDescription": "Connect game controllers.",
             "NSPhotoLibraryUsageDescription": "Replay export access.",
             "NSPhotoLibraryAddUsageDescription": "Save replay exports.",
             "NSAppTransportSecurity": {"NSAllowsArbitraryLoads": True},
@@ -320,6 +321,41 @@ class IOSArtifactAuditTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn("audit passed", result.stdout)
             self.assertIn("signature check skipped", result.stdout)
+
+    def test_missing_bluetooth_controller_purpose_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            self.mutate_plist(app, "NSBluetoothAlwaysUsageDescription", "")
+            result = self.run_audit(app)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("NSBluetoothAlwaysUsageDescription", result.stderr)
+
+    def test_camera_api_in_embedded_framework_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            app = self.make_app(root)
+            framework = app / "Frameworks/Camera.framework"
+            framework.mkdir(parents=True)
+            with (framework / "Info.plist").open("wb") as stream:
+                plistlib.dump({"CFBundleExecutable": "Camera"}, stream)
+            source = root / "camera.m"
+            source.write_text(
+                "#import <AVFoundation/AVFoundation.h>\n"
+                "Class cameraClass(void) { return [AVCaptureDevice class]; }\n"
+            )
+            sdk = subprocess.check_output(
+                ["xcrun", "--sdk", "iphoneos", "--show-sdk-path"], text=True
+            ).strip()
+            subprocess.run([
+                "xcrun", "clang", "-target", "arm64-apple-ios15.0", "-isysroot", sdk,
+                "-dynamiclib", str(source), "-framework", "AVFoundation",
+                "-framework", "Foundation", "-install_name", "@rpath/Camera.framework/Camera",
+                "-o", str(framework / "Camera"),
+            ], check=True, capture_output=True)
+            result = self.run_audit(app)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("camera API", result.stderr)
+            self.assertIn("Camera.framework", result.stderr)
 
     def test_valid_ipa_is_extracted_outside_the_source_tree(self):
         with tempfile.TemporaryDirectory() as temp:

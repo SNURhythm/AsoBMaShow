@@ -96,6 +96,7 @@ if ! xcodebuild \
   ASOBMASHOW_SOURCE_CLEAN=1 \
   DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
   CODE_SIGN_STYLE=Automatic \
+  SDL_PREPROCESSOR_DEFINITIONS=SDL_CAMERA_DISABLED=1 \
   build >/dev/null 2>&1; then
   fail "development-signed iOS build failed"
 fi

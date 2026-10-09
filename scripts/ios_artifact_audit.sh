@@ -107,6 +107,7 @@ ICON_FILE="$(find "${APP_PATH}" -maxdepth 1 -type f -name "${ICON_NAME}*.png" -p
 
 for permission in \
   NSMotionUsageDescription \
+  NSBluetoothAlwaysUsageDescription \
   NSPhotoLibraryUsageDescription \
   NSPhotoLibraryAddUsageDescription; do
   [ -n "$(plist_raw "${permission}")" ] || fail "${permission} is missing or empty"
@@ -211,6 +212,12 @@ for binary in "${BINARIES[@]}"; do
   binary_description="$(file "${binary}")"
   [[ "${binary_description}" == *"Mach-O"* ]] || \
     fail "embedded executable is not Mach-O: ${binary}"
+  # SDL's unused camera backend can trigger ITMS-90683 even when the app
+  # never initializes it. Check the final linked artifact, including SDL.
+  undefined_symbols="$(nm -u "${binary}")" || fail "unable to inspect imports: ${binary}"
+  if printf '%s\n' "${undefined_symbols}" | grep -E 'AVCapture(Device|Session|Video)' >/dev/null; then
+    fail "camera API reference in ${binary}; build SDL with SDL_CAMERA_DISABLED=1"
+  fi
   binary_architectures="$(lipo -archs "${binary}" 2>/dev/null || true)"
   [ "${binary_architectures}" = "arm64" ] || \
     fail "embedded binary architectures must be device arm64 only: ${binary} (${binary_architectures:-missing})"

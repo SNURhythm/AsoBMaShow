@@ -100,7 +100,10 @@ def release_build_identity
 end
 
 def build_identity_xcargs(xcargs, identity)
-  "#{xcargs} ASOBMASHOW_BUILD_COMMIT=#{identity.fetch(:commit)} " \
+  # Apply to SDL's dependency target too; an app-target define cannot remove
+  # camera API references from the embedded SDL framework.
+  "#{xcargs} SDL_PREPROCESSOR_DEFINITIONS=SDL_CAMERA_DISABLED=1 " \
+    "ASOBMASHOW_BUILD_COMMIT=#{identity.fetch(:commit)} " \
     "ASOBMASHOW_SOURCE_CLEAN=#{identity.fetch(:source_clean)}"
 end
 
