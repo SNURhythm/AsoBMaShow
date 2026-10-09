@@ -177,11 +177,6 @@ gameplaySkinSessionServices(ApplicationContext &context) {
               context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
-          .builtinImageCache = &ImageView::sharedDecodedImageCache(),
-          .builtinImageCacheKey =
-              [](const std::filesystem::path &path) {
-                return ImageView::chartImageCacheKey(path);
-              },
           .builtinImageBatchReader =
               [](const std::map<int, std::filesystem::path> &paths,
                  std::vector<skin::SkinBuiltinImageBatch> &out,
@@ -269,6 +264,11 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   }
                 }
                 return !stop.stop_requested();
+              },
+          .builtinImageCache = &ImageView::sharedDecodedImageCache(),
+          .builtinImageCacheKey =
+              [](const std::filesystem::path &path) {
+                return ImageView::chartImageCacheKey(path);
               },
           .liveResourceCounters = context.skinLiveResourceCounters,
           .createHttpTransport = [](std::stop_token stop) {

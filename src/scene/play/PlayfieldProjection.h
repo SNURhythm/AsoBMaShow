@@ -26,7 +26,7 @@ namespace gameplay_visible_time {
       speedMultiplier);
 }
 
-[[nodiscard]] constexpr int durationToGreenNumber(int duration) noexcept {
+[[nodiscard]] inline int durationToGreenNumber(int duration) noexcept {
   return gameplay_hispeed::durationToGreenNumber(duration);
 }
 

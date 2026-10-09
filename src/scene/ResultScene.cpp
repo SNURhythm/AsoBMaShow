@@ -562,7 +562,6 @@ ResultScene::ResultScene(
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
           .tableContext = std::move(tableContext),
-          .gameplayGraph = std::move(gameplayGraph),
           .ownedReusableRetryChart = std::move(ownedReusableRetryChart),
           .pacemakerTarget = pacemaker::normalizeTargetId(
               pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
@@ -583,6 +582,7 @@ ResultScene::ResultScene(
                                    .playedAtUnixMillis /
                                1'000)
                          : std::nullopt),
+          .gameplayGraph = std::move(gameplayGraph),
           .replayResult = replay == nullptr && retrySource != nullptr &&
                           !modernReplayAttemptId.has_value(),
           .retrySameAllowed = retrySameAllowed,
@@ -734,8 +734,8 @@ bool ResultScene::startSelectedResultSkin() {
       acquisition.request->activation.configurationDigest;
   auto created = skin::ResultSkinSession::create(
       std::move(acquisition.request->activation),
-      {.profileId = *profileId,
-       .expectedSkinType = skinType,
+      {.expectedSkinType = skinType,
+       .profileId = *profileId,
        .storageRoots = *context.skinStorageRoots,
        .resourcePreparation = *context.skinResourcePreparationService,
        .initialData = makeResultSkinData(),

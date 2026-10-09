@@ -32,7 +32,7 @@ SDL_DisplayID displayId(int index) {
 SDLNativeDisplayMode nativeMode(const SDL_DisplayMode &mode) {
   return {.width = mode.w, .height = mode.h,
           .refreshRateHz = static_cast<int>(std::lround(mode.refresh_rate)),
-          .pixelFormat = mode.format};
+          .pixelFormat = static_cast<std::uint32_t>(mode.format)};
 }
 
 std::string sdlFailure(std::string_view operation) {

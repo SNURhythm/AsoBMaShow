@@ -90,7 +90,11 @@ std::optional<int> resultNextRank(int score, int maximum) {
 
 int localCalendarField(int id, std::time_t time) {
   std::tm local{};
+#if defined(_WIN32)
+  localtime_s(&local, &time);
+#else
   localtime_r(&time, &local);
+#endif
   switch (id) {
   case 21: return local.tm_year + 1900;
   case 22: return local.tm_mon + 1;

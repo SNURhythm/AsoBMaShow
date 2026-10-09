@@ -354,9 +354,14 @@ std::int64_t fileTimeToSqlNs(std::filesystem::file_time_type time) {
 }
 
 std::int64_t fileTimeToUnixSeconds(std::filesystem::file_time_type time) {
+#if defined(_MSC_VER)
+  // MSVC's file clock converts through UTC rather than exposing to_sys.
+  const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(time);
+#else
+  const auto systemTime = std::chrono::file_clock::to_sys(time);
+#endif
   const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                           std::chrono::file_clock::to_sys(time)
-                               .time_since_epoch())
+                           systemTime.time_since_epoch())
                            .count();
   return static_cast<std::int64_t>(seconds);
 }
