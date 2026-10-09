@@ -848,6 +848,42 @@ void testRecyclerUsesPreciseWheelDeltaAndNaturalDirection() {
   REQUIRE(std::abs(recycler.scrollOffset - 103.75F) < 0.001F);
 }
 
+void testRecyclerTargetsPointerEventPosition() {
+  RecyclerView<int> recycler([](int left, int right) { return left == right; });
+  recycler.setPosition(100, 100);
+  recycler.setWidth(800)->setHeight(200)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  recycler.onCreateView = [](const int &) { return new View(); };
+  recycler.onBind = [](View *, const int &, int, bool) {};
+  recycler.setItems(std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8});
+  recycler.scrollOffset = 100.0F;
+
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.y = -0.5F;
+  wheel.wheel.mouse_x = recycler.getContentX() + 10.5F;
+  wheel.wheel.mouse_y = recycler.getContentY() + 10.5F;
+  recycler.handleEvents(wheel);
+  REQUIRE(std::abs(recycler.scrollOffset - 107.5F) < 0.001F);
+  wheel.wheel.mouse_x = 0;
+  wheel.wheel.mouse_y = 0;
+  recycler.handleEvents(wheel);
+  REQUIRE(std::abs(recycler.scrollOffset - 107.5F) < 0.001F);
+
+  recycler.scrollOffset = 0;
+  SDL_Event click{};
+  click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  click.button.button = SDL_BUTTON_LEFT;
+  click.button.x = recycler.getContentX() + 10.5F;
+  click.button.y = recycler.getContentY() + 74.5F;
+  recycler.handleEvents(click);
+  REQUIRE(recycler.selectedIndex == 1);
+  click.button.x = 0;
+  click.button.y = 0;
+  recycler.handleEvents(click);
+  REQUIRE(recycler.selectedIndex == 1);
+}
+
 void testRecyclerLanguageRefreshKeepsBoundRowsAndSelection() {
   struct Row : View {
     int languageChanges = 0;
@@ -958,6 +994,7 @@ int main() {
   testRecyclerBindingSeesAppliedRowWidth();
   testRecyclerIgnoresMouseSynthesizedTouchSelection();
   testRecyclerUsesPreciseWheelDeltaAndNaturalDirection();
+  testRecyclerTargetsPointerEventPosition();
   testBokutachiEligibilityRequiresSupportedModeNotesAndSha256();
   return 0;
 }

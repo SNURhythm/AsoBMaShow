@@ -680,7 +680,8 @@ int main(int argv, char **args) {
                 windowLogicalHeight, s_renderScale);
 #endif
   bgfx::PlatformData pd{};
-  if (!setup_bgfx_platform_data(pd, win)) {
+  SdlMetalViewOwner metalView;
+  if (!setup_bgfx_platform_data(pd, win, metalView)) {
     SDL_Log("Could not obtain native rendering window: %s", SDL_GetError());
     SDL_DestroyWindow(win);
     s_window = nullptr;
@@ -729,6 +730,7 @@ int main(int argv, char **args) {
 
   int appExitCode = runApplication(bgfx_init);
 
+  metalView.reset();
   SDL_DestroyWindow(win);
   s_window = nullptr;
 #if TARGET_OS_IPHONE
@@ -1133,7 +1135,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         return false;
       }
       bgfx::PlatformData pd{};
-      if (!setup_bgfx_platform_data(pd, s_window)) {
+      SdlMetalViewOwner metalView;
+      if (!setup_bgfx_platform_data(pd, s_window, metalView)) {
         SDL_Log("Failed to refresh Android window handle: %s", SDL_GetError());
         return false;
       }

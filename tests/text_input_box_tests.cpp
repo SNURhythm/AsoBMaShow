@@ -815,6 +815,48 @@ void testDeferredTextKeepsRasterizedLineHeight() {
          "deferred text preserves the rasterized line height before rendering");
 }
 
+void testPrimaryTextMetricsMatchSdl3Raster() {
+  constexpr const char *path = "assets/fonts/notosanscjkjp.ttf";
+  constexpr int logicalSize = 24;
+  TextView view(path, logicalSize);
+  TTF_Font *reference = TTF_OpenFont(path, logicalSize * 2);
+  expect(reference != nullptr, "reference font opens for SDL3 layout comparison");
+  view.setDeferredTextureMaterialization(true);
+  for (const int width : {83, 160, 300}) {
+    view.setWidth(static_cast<float>(width));
+    for (const bool wrapped : {false, true}) {
+      view.setWrap(wrapped);
+      for (const char *text : {"AVATAR office gjpqy", "  trailing spaces   ",
+                               "Supercalifragilisticexpialidocious",
+                               "音楽選択　設定 リプレイ 0123456789",
+                               "음악 선택 설정 리플레이 최고 기록"}) {
+        view.setText(text);
+        view.applyYogaLayout();
+        SDL_Surface *raster = wrapped
+            ? TTF_RenderText_Blended_Wrapped(reference, text, 0,
+                                             {255, 255, 255, 255}, width * 2)
+            : TTF_RenderText_Blended(reference, text, 0, {255, 255, 255, 255});
+        expect(raster != nullptr, "reference text rasterizes");
+        if (view.textureWidth() != (raster->w + 1) / 2 ||
+            view.textureHeight() != (raster->h + 1) / 2) {
+          std::cerr << "SDL3 layout mismatch: " << text << " wrap=" << wrapped
+                    << " width=" << width << " measured=" << view.textureWidth()
+                    << 'x' << view.textureHeight() << " raster=" << raster->w
+                    << 'x' << raster->h << '\n';
+        }
+        expect(view.textureWidth() == (raster->w + 1) / 2 &&
+               view.textureHeight() == (raster->h + 1) / 2,
+               "primary-font layout must match SDL3's rendered surface bounds");
+        SDL_DestroySurface(raster);
+      }
+    }
+  }
+  view.setText("");
+  expect(view.textureWidth() == 0 && view.textureHeight() == 0,
+         "clearing text resets both dimensions after a wrapped layout");
+  TTF_CloseFont(reference);
+}
+
 void testDeferredWrappedTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -877,6 +919,7 @@ int main() {
   testFocusedInputConsumesItsInitiatingTouch();
   testBeginEditingUsesTheLatestDeclaredInputFrame();
   testDeferredTextKeepsRasterizedLineHeight();
+  testPrimaryTextMetricsMatchSdl3Raster();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 
   TextInputBox::releaseCachedCursors();

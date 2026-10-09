@@ -5395,6 +5395,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    if(APPLE)
+        add_executable(bgfx_platform_data_tests
+            tests/bgfx_platform_data_tests.cpp
+            src/bgfx_helper.cpp
+        )
+        target_include_directories(bgfx_platform_data_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
+            ${CMAKE_SOURCE_DIR}/bgfx/bx/include
+        )
+        target_compile_features(bgfx_platform_data_tests PRIVATE cxx_std_23)
+        target_link_libraries(bgfx_platform_data_tests PRIVATE SDL3::Headers bgfx)
+    endif()
+
     add_executable(text_view_font_lifetime_tests
         tests/text_view_font_lifetime_tests.cpp
         tests/support/AllocationFailure.cpp
@@ -9173,6 +9187,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET skin_configuration_write_queue_tests)
         asobmashow_register_test(skin_configuration_write_queue_tests)
+    endif()
+    if(TARGET bgfx_platform_data_tests)
+        asobmashow_register_test(bgfx_platform_data_tests)
     endif()
     asobmashow_register_test(text_view_font_lifetime_tests)
     asobmashow_register_test(play_option_summary_tests)

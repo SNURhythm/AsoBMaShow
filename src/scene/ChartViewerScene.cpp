@@ -553,14 +553,10 @@ protected:
   bool handleEventsImpl(SDL_Event &event) override {
     switch (event.type) {
     case SDL_EVENT_MOUSE_WHEEL: {
-      float rawX = 0;
-      float rawY = 0;
-      SDL_GetMouseState(&rawX, &rawY);
-      const int screenX = static_cast<int>(rawX * rendering::widthScale);
-      const int screenY = static_cast<int>(rawY * rendering::heightScale);
-      int uiX = 0;
-      int uiY = 0;
-      rendering::screenToUi(screenX, screenY, uiX, uiY);
+      float uiX = 0;
+      float uiY = 0;
+      rendering::screenToUi(event.wheel.mouse_x * rendering::widthScale,
+                            event.wheel.mouse_y * rendering::heightScale, uiX, uiY);
       if (!containsPoint(static_cast<float>(uiX), static_cast<float>(uiY))) {
         return true;
       }

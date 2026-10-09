@@ -76,8 +76,8 @@ protected:
   bool handleEventsImpl(SDL_Event &event) override {
     if (!content_ || sdl_pointer_event::isMouseSynthesizedTouch(event)) return true;
     if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-      float mouseX, mouseY;
-      SDL_GetMouseState(&mouseX, &mouseY);
+      const float mouseX = event.wheel.mouse_x;
+      const float mouseY = event.wheel.mouse_y;
       float x, y;
       rendering::screenToUiNormalized(mouseX * rendering::widthScale,
                                       mouseY * rendering::heightScale, x, y);

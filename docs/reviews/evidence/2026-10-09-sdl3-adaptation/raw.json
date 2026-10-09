@@ -1,0 +1,3647 @@
+{
+  "metadata": {
+    "baseline": "53f52b9ec3ecf2a310442bcffc946ae27e2a3fef",
+    "candidate_base": "53f52b9ec3ecf2a310442bcffc946ae27e2a3fef",
+    "candidate_text_view_sha256": "4e17d894792c7603fcf6ffbb300944ea19755dbc89b5bc9198003a0038e2ed2a",
+    "candidate_diff_sha256": "44fc163bb9274c7de11d32a9764e5134bfb6032e1b8de86b05de3cad643d1b7a",
+    "binary_sha256": {
+      "before": "9f319f2690270594280b5b7e6cec48802b1b4af03557d47ee0e6c4769246abea",
+      "after": "07a0d0b7e3606b4362ed7d1b94c4a672af4628f90c20099151f194cb14a200f2"
+    },
+    "sdl3_commit": "3d22d98cf633b673aae4f278ea55775481ae9279",
+    "ttf3_commit": "661ba00eb142c060768b752c9420b50c961b909e",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode-27.1.0-Release.Candidate.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+    "cpu": "Apple M1 Pro",
+    "memory_bytes": 17179869184,
+    "os": "27.0.1",
+    "font_sha256": "7ae5f8546575719853db6bc20d6cbaf61d8fdfc90d68204bc24f7f5e5e317636",
+    "harness_sha256": "b9141cb9d010dce7cf7084c5bee6ba94e1ea8b3a7408e8a8bc230664d891cb10",
+    "seed": 20261009,
+    "pairs": 20,
+    "build_type": "Release (-O3 -DNDEBUG)",
+    "units": "nanoseconds per operation",
+    "method": "Balanced shuffled AB/BA order; one excluded process warmup per version; each metric also has one excluded full-batch warmup; all retained runs kept."
+  },
+  "pairs": [
+    {
+      "pair": 0,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44253184,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 53.0703
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.2337
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 962.912
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3521.97
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6833.08
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 766.031
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3131.96
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7029.67
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4258.46
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7449.93
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11050.2
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15123.2
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18401.3
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22220
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1423.48
+            }
+          ],
+          "process_seconds": 2.09223862500221
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43974656,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.2005
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1743
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 995.372
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 914.932
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7057.04
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 782.784
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 762.021
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7738.79
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4330.98
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4503.93
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11143.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15520.5
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15556.2
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22292.2
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1448.53
+            }
+          ],
+          "process_seconds": 1.7565004580028472
+        }
+      }
+    },
+    {
+      "pair": 1,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43958272,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.2235
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.0114
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 954.878
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3398.79
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6898.42
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 770.677
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2885.82
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6703.83
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4317.87
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7429.13
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11102.7
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16139.7
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 17966.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22323.2
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1430.13
+            }
+          ],
+          "process_seconds": 2.096695959000499
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43925504,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.0956
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1622
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1001.02
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 932.591
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7047.54
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 792.88
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 780.112
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7013.88
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4355.9
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4399.02
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11105.6
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15213
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15559
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22836.2
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1442.75
+            }
+          ],
+          "process_seconds": 1.7519369590008864
+        }
+      }
+    },
+    {
+      "pair": 2,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44302336,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.1382
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 90.8949
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 990.719
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 915.87
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7016.54
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 788.497
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 763.349
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6786.83
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4355.21
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4397.85
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11000.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15622
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15551.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22999.7
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1425.69
+            }
+          ],
+          "process_seconds": 1.7662598750030156
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44253184,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.9139
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1818
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 956.086
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3469.65
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6974.17
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 774.25
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2912.33
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6832.88
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4296.73
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7442.56
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11095.3
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15371.1
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 17997.6
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22551.7
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1424.07
+            }
+          ],
+          "process_seconds": 2.084699583996553
+        }
+      }
+    },
+    {
+      "pair": 3,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44384256,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.116
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.2239
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 991.643
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 948.162
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7131.71
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 870.773
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 822.826
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7090.17
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4349.33
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4415.94
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11164.2
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15757.8
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15441.7
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22461
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1434.14
+            }
+          ],
+          "process_seconds": 1.7760706249973737
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43974656,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.5508
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 93.9156
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 952.057
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3427.12
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6992.75
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 767.06
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2905
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6841.75
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4267.22
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7427.99
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11053.4
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15377.5
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18096.6
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22291.7
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1422.16
+            }
+          ],
+          "process_seconds": 2.0782047499960754
+        }
+      }
+    },
+    {
+      "pair": 4,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44089344,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.0194
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1789
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 995.914
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 956.354
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7198.04
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 807.794
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 752.904
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6823.58
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4437.84
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4466.86
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11182.8
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16002.4
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15737.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22394.7
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1437.24
+            }
+          ],
+          "process_seconds": 1.7898874579987023
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44335104,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.4154
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.3254
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 958.961
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3444.55
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6959.29
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 765.279
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2915.53
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6911.92
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4289.46
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7440.91
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11138.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15544.1
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18106.2
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22273.5
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1413.23
+            }
+          ],
+          "process_seconds": 2.084834834000503
+        }
+      }
+    },
+    {
+      "pair": 5,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44023808,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.0755
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 94.1298
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1002.32
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 916.06
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6999.75
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 784.01
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 756.435
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6945.5
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4334.51
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4418.6
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11696.4
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15510.8
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15584
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22297.6
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1427.78
+            }
+          ],
+          "process_seconds": 1.779076291997626
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44007424,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.3947
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 90.9941
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 954.617
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3442.24
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6954.83
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 770.008
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2897.54
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6836.29
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4257.86
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7847.41
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11142.7
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15372
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18315.5
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22355.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1416.71
+            }
+          ],
+          "process_seconds": 2.0880243749998044
+        }
+      }
+    },
+    {
+      "pair": 6,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44056576,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.4157
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1008
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 963.797
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3488.53
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6989.71
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 769.453
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2915.35
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6805.38
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4287.93
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7408.03
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11112.2
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16060.3
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18442.5
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22681.2
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1428.55
+            }
+          ],
+          "process_seconds": 2.1008937919978052
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43974656,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.0911
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 94.1825
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1054.91
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 911.646
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7020.25
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 786.685
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 750.346
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6802.79
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4360.64
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4403.24
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11132.6
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15287.8
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15269.3
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22190.3
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1421.71
+            }
+          ],
+          "process_seconds": 1.7616889580021962
+        }
+      }
+    },
+    {
+      "pair": 7,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44007424,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.3239
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.286
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1009.09
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 944.602
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6929.62
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 797.729
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 758.789
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6807.21
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4364.61
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4383
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11063.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15727.7
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15651.6
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22294.9
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1427.64
+            }
+          ],
+          "process_seconds": 1.7737471660002484
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44367872,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.438
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.3049
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 955.414
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3423.06
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7023.12
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 777.706
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2915.21
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6838.21
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4314.82
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7691.98
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11392.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 27505.6
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 20413.7
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 25574.2
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1505.8
+            }
+          ],
+          "process_seconds": 2.5299857080026413
+        }
+      }
+    },
+    {
+      "pair": 8,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44531712,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 53.2308
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 98.9267
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1023.49
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3690.34
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7130.79
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 810.031
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 7107.77
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7507.12
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 12548.6
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 8320.64
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 14136.7
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16695.5
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 19836
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22204.3
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1449.99
+            }
+          ],
+          "process_seconds": 2.6257594999988214
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43909120,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.2983
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 93.8436
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1031.01
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 929.255
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7092.33
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 825.445
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 770.133
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6805.25
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4323.49
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4401.4
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11073.8
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15389.3
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15406.7
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22258.1
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1433.93
+            }
+          ],
+          "process_seconds": 1.7709349169963389
+        }
+      }
+    },
+    {
+      "pair": 9,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44531712,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.0436
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.6514
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 998.352
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 917.279
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6974.42
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 788.185
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 757.742
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6724.88
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4337.27
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4545.42
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11196.4
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15684.1
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15757.1
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 23131.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1457.48
+            }
+          ],
+          "process_seconds": 1.7779704580025282
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43974656,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 53.3499
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 94.2819
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 961.203
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3421.33
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6990.29
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 771.594
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2948.69
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6875.96
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4246.68
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7415.07
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11158
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15697.4
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18083.7
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 23756
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1415.33
+            }
+          ],
+          "process_seconds": 2.0941549170020153
+        }
+      }
+    },
+    {
+      "pair": 10,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44466176,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.4142
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.7604
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 962.766
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3532.4
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7511.54
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 777.94
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2903.6
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7555.54
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4274.79
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7622.34
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11009
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16039
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18054.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22387
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1434.87
+            }
+          ],
+          "process_seconds": 2.1106107919986243
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44351488,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.0939
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.7498
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1034.69
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 984.667
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7027
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 792.917
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 764.227
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6907.5
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4381.03
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4413.91
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11150
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16514.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16169.1
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 23089.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1486.03
+            }
+          ],
+          "process_seconds": 1.8166691660007928
+        }
+      }
+    },
+    {
+      "pair": 11,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44843008,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 54.1624
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 96.6299
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1021.35
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 4434.73
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 8770.88
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1033.3
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 5453.94
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 8304.04
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4666.58
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 8014.29
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 12390.8
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16744.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18348.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22157.1
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1424.54
+            }
+          ],
+          "process_seconds": 2.439080500000273
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44318720,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.6394
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.3218
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 994.24
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 917.581
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6960.5
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 798.805
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 759.94
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7086.83
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4339.95
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4481.32
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11149.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15306
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15317.6
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22375.5
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1440.87
+            }
+          ],
+          "process_seconds": 1.7578158329997677
+        }
+      }
+    },
+    {
+      "pair": 12,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44023808,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.1094
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1704
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 993.391
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 924.833
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7054.75
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 783.557
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 765.263
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6867.62
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4373.71
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4433.31
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11724.6
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15513
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15497.2
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22460.4
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1427.78
+            }
+          ],
+          "process_seconds": 1.7695071659982204
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44318720,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.4382
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.0267
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 949.943
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3512.04
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6796.21
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 771.763
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2894.62
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6799.21
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4288.57
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7431.46
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 10942
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15403.3
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18221.3
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22629.2
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1419.96
+            }
+          ],
+          "process_seconds": 2.0825625420038705
+        }
+      }
+    },
+    {
+      "pair": 13,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44023808,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.1214
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.8637
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 998.13
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 917.167
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6973.25
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 787.099
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 789.039
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7150.58
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4499.33
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4400.26
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11127.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15754
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15668.6
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22353
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1432.21
+            }
+          ],
+          "process_seconds": 1.7867542500025593
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44236800,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.5044
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1639
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 955.294
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3440.24
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7019.21
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 767.635
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2885.28
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6843.25
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4242.52
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7400.61
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11026.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15447.1
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18143.5
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22656
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1419.21
+            }
+          ],
+          "process_seconds": 2.0762400000021444
+        }
+      }
+    },
+    {
+      "pair": 14,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44023808,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.3708
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 94.7641
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 959.141
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3420.49
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6750.46
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 773.482
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2944.21
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6739.29
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4275.28
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7421.76
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11101.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16246.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18108.8
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22491.9
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1433.53
+            }
+          ],
+          "process_seconds": 2.117450292003923
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44040192,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.9351
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 94.64
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1033.82
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 912.456
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6728.92
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 785.948
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 771.547
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7193.96
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4365.25
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4453.02
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11198.3
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15551.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16152.3
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22256.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1427.19
+            }
+          ],
+          "process_seconds": 1.791008583000803
+        }
+      }
+    },
+    {
+      "pair": 15,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44269568,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.4613
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.313
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 991.758
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3411.7
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6942.04
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 768.638
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2893.74
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6921.17
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4269.17
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7496.74
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11077.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 19707.5
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18139.8
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 23209.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1465.83
+            }
+          ],
+          "process_seconds": 2.189100874995347
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44335104,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.2904
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.2333
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1003.72
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 913.812
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6962.33
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 786.945
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 759.12
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6773.54
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4470.86
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4417.48
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11168.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15634.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15211.9
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22444.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1431.53
+            }
+          ],
+          "process_seconds": 1.7571900419934536
+        }
+      }
+    },
+    {
+      "pair": 16,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44007424,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.106
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 92.1622
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 995.865
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 916.456
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7231.38
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 783.648
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 750.901
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6816.83
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4349.74
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4501.47
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11133.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15787.8
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15660.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22414
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1451.24
+            }
+          ],
+          "process_seconds": 1.784658207994653
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43974656,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.439
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 94.5353
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 961.333
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3429.21
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6740.25
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 771.268
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2907.43
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7635.71
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4307.81
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7416.67
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 10946.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15838.7
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18050.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22333.9
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1418.62
+            }
+          ],
+          "process_seconds": 2.0885314159968402
+        }
+      }
+    },
+    {
+      "pair": 17,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44023808,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.3979
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1564
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 967.378
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3375.33
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6887.62
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 770.336
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2908.27
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6758.62
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4266.16
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7404.64
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11021.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16275.4
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18114
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22445.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1450.88
+            }
+          ],
+          "process_seconds": 2.099718249999569
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44007424,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 53.1153
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1021
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 995.43
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 920.734
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6913.17
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 781.458
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 759.753
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6752.62
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4331.01
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4499.27
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11196.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15383.4
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15428.7
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22510
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1429.14
+            }
+          ],
+          "process_seconds": 1.7532769579993328
+        }
+      }
+    },
+    {
+      "pair": 18,
+      "order": [
+        "after",
+        "before"
+      ],
+      "runs": {
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44335104,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 53.3161
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 95.9046
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1062.91
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 961.065
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7062.75
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 802.24
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 766.229
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6968.54
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4443.6
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4417.13
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11211.8
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15906.8
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15633.6
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22262.4
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1424.83
+            }
+          ],
+          "process_seconds": 1.786518041997624
+        },
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44023808,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.5318
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.1379
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 962.945
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3418.07
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7234.79
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 770.576
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2913.59
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6869.04
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4383.73
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7525.73
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11116.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15164.7
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18503.1
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22276.7
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1417.93
+            }
+          ],
+          "process_seconds": 2.0858030000017607
+        }
+      }
+    },
+    {
+      "pair": 19,
+      "order": [
+        "before",
+        "after"
+      ],
+      "runs": {
+        "before": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 44040192,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 51.3622
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.2206
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 956.206
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 3412.46
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 7085.54
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 778.359
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 2920.95
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6853.92
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4272.12
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 7372.05
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11084.5
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 16146.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 18189.4
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22436.9
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1430.69
+            }
+          ],
+          "process_seconds": 2.0974927919960464
+        },
+        "after": {
+          "sdl_major": 3,
+          "checksum": 518577718,
+          "event_bytes": 128,
+          "precision_events": 500,
+          "unique_timestamp_micros": 500,
+          "peak_rss_bytes": 43941888,
+          "metrics": [
+            {
+              "name": "event_queue_64",
+              "operations": 640000,
+              "ns_per_op": 52.1084
+            },
+            {
+              "name": "touch_watch_ingress",
+              "operations": 640000,
+              "ns_per_op": 91.2343
+            },
+            {
+              "name": "text_width_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 1015.54
+            },
+            {
+              "name": "text_update_latin_repeated4",
+              "operations": 16000,
+              "ns_per_op": 915.529
+            },
+            {
+              "name": "text_raster_latin_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6939.58
+            },
+            {
+              "name": "text_width_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 789.255
+            },
+            {
+              "name": "text_update_cjk_repeated4",
+              "operations": 16000,
+              "ns_per_op": 754.117
+            },
+            {
+              "name": "text_raster_cjk_repeated4",
+              "operations": 1000,
+              "ns_per_op": 6723.08
+            },
+            {
+              "name": "text_width_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4330.25
+            },
+            {
+              "name": "text_update_latin_diverse128",
+              "operations": 16000,
+              "ns_per_op": 4594.4
+            },
+            {
+              "name": "text_raster_latin_diverse128",
+              "operations": 1000,
+              "ns_per_op": 11146.9
+            },
+            {
+              "name": "text_width_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15325.9
+            },
+            {
+              "name": "text_update_cjk_diverse128",
+              "operations": 16000,
+              "ns_per_op": 15449.9
+            },
+            {
+              "name": "text_raster_cjk_diverse128",
+              "operations": 1000,
+              "ns_per_op": 22682.8
+            },
+            {
+              "name": "cached_text_view_create",
+              "operations": 10000,
+              "ns_per_op": 1443.07
+            }
+          ],
+          "process_seconds": 1.7506843750015832
+        }
+      }
+    }
+  ]
+}

@@ -5,15 +5,20 @@
 #include <SDL3/SDL_metal.h>
 #endif
 
-bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow) {
+bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow,
+                              SdlMetalViewOwner &metalView) {
   pd = {};
 #if BX_PLATFORM_IOS || BX_PLATFORM_OSX
-  SDL_MetalView metalView = SDL_Metal_CreateView(sdlWindow);
-  if (metalView == nullptr) return false;
-  pd.nwh = SDL_Metal_GetLayer(metalView);
+  SdlMetalViewOwner created(SDL_Metal_CreateView(sdlWindow));
+  if (!created) return false;
+  pd.nwh = SDL_Metal_GetLayer(created.get());
+  if (pd.nwh == nullptr) return false;
+  metalView = std::move(created);
 #elif BX_PLATFORM_EMSCRIPTEN
+  (void)metalView;
   pd.nwh = (void *)"#canvas";
 #else
+  (void)metalView;
   const SDL_PropertiesID properties = SDL_GetWindowProperties(sdlWindow);
 #if BX_PLATFORM_ANDROID
   pd.nwh = SDL_GetPointerProperty(properties,

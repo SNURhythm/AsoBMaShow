@@ -135,14 +135,10 @@ private:
       break;
     }
     case SDL_EVENT_MOUSE_WHEEL: {
-      // check mouse position
-      float x, y;
-      SDL_GetMouseState(&x, &y);
-      x = static_cast<int>(x * rendering::widthScale);
-      y = static_cast<int>(y * rendering::heightScale);
-      int uiX = 0;
-      int uiY = 0;
-      rendering::screenToUi(x, y, uiX, uiY);
+      float uiX = 0;
+      float uiY = 0;
+      rendering::screenToUi(event.wheel.mouse_x * rendering::widthScale,
+                            event.wheel.mouse_y * rendering::heightScale, uiX, uiY);
       if (uiX < this->getContentX() ||
           uiX > this->getContentX() + this->getContentWidth()) {
         return true;
@@ -179,13 +175,10 @@ private:
         return true;
       }
 
-      float x, y;
-      SDL_GetMouseState(&x, &y);
-      x = static_cast<int>(x * rendering::widthScale);
-      y = static_cast<int>(y * rendering::heightScale);
-      int uiX = 0;
-      int uiY = 0;
-      rendering::screenToUi(x, y, uiX, uiY);
+      float uiX = 0;
+      float uiY = 0;
+      rendering::screenToUi(event.button.x * rendering::widthScale,
+                            event.button.y * rendering::heightScale, uiX, uiY);
       if (!isInsideContent(uiX, uiY)) {
         return true;
       }

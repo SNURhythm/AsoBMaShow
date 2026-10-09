@@ -1122,42 +1122,41 @@ void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
     }
     return;
   }
-  ensureFontsForText(text);
   const int rasterWrapWidth = rasterLengthFor(effectiveWrapWidth);
-  const TextLineMetrics metrics = {
-      fontAscent, fontDescent, rasterTextLineHeight()};
-  if (metrics.height <= 0) {
-    rect.w = 0;
-    rect.h = 0;
-    return;
-  }
   // Compose explicit lines and aligned wrapping consistently across font sources.
   const bool usePrimaryFont =
       font != nullptr && text.find_first_of("\r\n") == std::string::npos &&
       (!wrapEnabled || align == TextAlign::LEFT) && primaryFontSupportsText(text);
-  const auto lines = rasterWrapWidth > 0 ? wrappedTextLines(rasterWrapWidth)
-                                         : wrappedTextLines(0);
   int rasterWidth = 0;
-  int lineHeight = metrics.height;
-  for (const auto &line : lines) {
-    int measuredHeight = 0;
-    rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line, &measuredHeight));
-    lineHeight = std::max(lineHeight, measuredHeight);
-  }
-  int rasterHeight =
-      lineHeight * static_cast<int>(std::max<std::size_t>(1, lines.size()));
+  int rasterHeight = 0;
   if (usePrimaryFont) {
+    // SDL3 can measure the same wrapping/shaping that its surface renderer uses.
+    // Avoid building fallback runs and repeatedly shaping growing prefixes.
     if (wrapEnabled && rasterWrapWidth > 0) {
-      if (lines.size() > 1) {
-        rasterWidth = rasterWrapWidth;
-      }
-      rasterHeight = std::max(fontLineSkip, metrics.height) *
-                     static_cast<int>(std::max<std::size_t>(1, lines.size()));
+      TTF_GetStringSizeWrapped(font, text.c_str(), 0, rasterWrapWidth,
+                               &rasterWidth, &rasterHeight);
     } else {
       const RasterTextSize size = sizeUtf8(font, text);
       rasterWidth = size.width;
       rasterHeight = size.height;
     }
+  } else {
+    ensureFontsForText(text);
+    const int lineHeightForFonts = rasterTextLineHeight();
+    if (lineHeightForFonts <= 0) {
+      rect.w = 0;
+      rect.h = 0;
+      return;
+    }
+    const auto lines = wrappedTextLines(rasterWrapWidth);
+    int lineHeight = lineHeightForFonts;
+    for (const auto &line : lines) {
+      int measuredHeight = 0;
+      rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line, &measuredHeight));
+      lineHeight = std::max(lineHeight, measuredHeight);
+    }
+    rasterHeight =
+        lineHeight * static_cast<int>(std::max<std::size_t>(1, lines.size()));
   }
   rect.w = logicalLengthFor(rasterWidth);
   rect.h = logicalLengthFor(rasterHeight);

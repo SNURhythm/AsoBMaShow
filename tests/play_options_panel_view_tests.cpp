@@ -424,6 +424,29 @@ void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
           "scroll view preserves the iPad natural-scroll direction");
 }
 
+void testScrollViewTargetsWheelEventPosition() {
+  ScrollView scroll(100, 100, 360, 200);
+  auto *content = new View();
+  content->setWidth(360)->setHeight(800);
+  scroll.setContentView(content);
+  scroll.applyYogaLayout();
+  scroll.setScrollOffset(100.0F);
+
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.y = -0.5F;
+  wheel.wheel.mouse_x = scroll.getContentX() + 10.5F;
+  wheel.wheel.mouse_y = scroll.getContentY() + 10.5F;
+  scroll.handleEvents(wheel);
+  require(std::abs(scroll.getScrollOffset() - 124.0F) < 0.001F,
+          "wheel targets its event position, not the later polled pointer");
+  wheel.wheel.mouse_x = 0;
+  wheel.wheel.mouse_y = 0;
+  scroll.handleEvents(wheel);
+  require(std::abs(scroll.getScrollOffset() - 124.0F) < 0.001F,
+          "a wheel event outside the view must not scroll it");
+}
+
 void testDropdownDefersOptionViewsUntilOpen() {
   DropdownView dropdown({}, nullptr);
   DropdownView::State state;
@@ -536,6 +559,7 @@ int main() {
   testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
+  testScrollViewTargetsWheelEventPosition();
   testDropdownDefersOptionViewsUntilOpen();
   testInputSelectorWidthsStayStableAcrossRefreshes();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();

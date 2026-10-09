@@ -188,14 +188,10 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
 
   switch (event.type) {
   case SDL_EVENT_MOUSE_WHEEL: {
-    float mouseX = 0;
-    float mouseY = 0;
-    SDL_GetMouseState(&mouseX, &mouseY);
-    mouseX = static_cast<int>(mouseX * rendering::widthScale);
-    mouseY = static_cast<int>(mouseY * rendering::heightScale);
-    int uiX = 0;
-    int uiY = 0;
-    rendering::screenToUi(mouseX, mouseY, uiX, uiY);
+    float uiX = 0;
+    float uiY = 0;
+    rendering::screenToUi(event.wheel.mouse_x * rendering::widthScale,
+                          event.wheel.mouse_y * rendering::heightScale, uiX, uiY);
     if (!isInside(static_cast<float>(uiX), static_cast<float>(uiY))) {
       return true;
     }
