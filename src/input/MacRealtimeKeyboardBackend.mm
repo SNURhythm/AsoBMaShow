@@ -9,7 +9,7 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <Carbon/Carbon.h>
 #include <IOKit/hidsystem/IOLLEvent.h>
-#include <SDL2/SDL_log.h>
+#include <SDL3/SDL_log.h>
 #include "../../SDL/src/events/scancodes_darwin.h"
 
 #include <atomic>
@@ -102,8 +102,8 @@ public:
   }
 
   void handleSdlEvent(const SDL_Event &event) override {
-    if (event.type == SDL_WINDOWEVENT &&
-        event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+    if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
+        event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
       const std::lock_guard lock(lifecycleMutex_);
       keys_.setFocused(false, input::apple::steadyNowMicros());
     }

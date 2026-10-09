@@ -1,6 +1,7 @@
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "Uuid.h"
+#include "targets.h"
 #include "audio/ChartAudioRenderer.h"
 #include "audio/ChartMusicCache.h"
 #include "audio/ClubBeat.h"
@@ -145,6 +146,29 @@ void testNormalDecodedRender(const std::filesystem::path &root) {
     expect(sf_readf_short(sound.get(), samples, 1) == 1 && samples[0] > 11000 &&
                samples[0] == samples[1],
            "actual decoded keysound reaches both output channels");
+  }
+}
+
+void testUnicodeKeysoundReference(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "unicode-keysound");
+  const std::u8string name = u8"\u97f3\u697d-\ud55c\uae00-\U0001f3b5.wav";
+  std::filesystem::rename(chart->Meta.Folder / "click.wav",
+                          chart->Meta.Folder / std::filesystem::path(name));
+  const std::string reference(name.begin(), name.end());
+  chart->WavTable[1] = reference;
+  chart->ReferencedWavTable[1] = reference;
+  const auto output = chart->Meta.Folder / "result.wav";
+  const auto result = guardedRender(*chart, output);
+  expect(result.success, "UTF-8 keysound reference renders successfully");
+  SF_INFO info{};
+  auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+  expect(sound && info.frames == 88200 && info.channels == 2,
+         "Unicode keysound render preserves the expected WAV format");
+  if (sound) {
+    short samples[2]{};
+    expect(sf_readf_short(sound.get(), samples, 1) == 1 && samples[0] > 11000 &&
+               samples[0] == samples[1],
+           "Unicode keysound contributes decoded PCM instead of silence");
   }
 }
 
@@ -603,7 +627,7 @@ void testAdjacentPreloadRejectsAndContinues(const std::filesystem::path &root) {
 #endif
 }
 
-int main() {
+int main(int argc, char **argv) {
   const auto root = std::filesystem::temp_directory_path() /
                     ("chart-audio-tests-" + uuid::generateV4());
   std::filesystem::create_directories(root);
@@ -618,7 +642,12 @@ int main() {
   });
 #endif
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--unicode-keysound-test") {
+      testUnicodeKeysoundReference(root);
+      return failures == 0 ? 0 : 1;
+    }
     testNormalDecodedRender(root);
+    testUnicodeKeysoundReference(root);
     testRateAndTailSemantics(root);
     testDurationAdmission(root);
     testSelectedLargeRender(root);

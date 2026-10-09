@@ -15,11 +15,11 @@ class AndroidLocaleTests(unittest.TestCase):
     def test_full_tags_take_priority_and_bridge_failure_uses_sdl(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            (output / "SDL2").mkdir()
-            (output / "SDL2/SDL.h").write_text("""
+            (output / "SDL3").mkdir()
+            (output / "SDL3/SDL.h").write_text("""
 #pragma once
 struct SDL_Locale { const char *language; const char *country; };
-SDL_Locale *SDL_GetPreferredLocales();
+SDL_Locale **SDL_GetPreferredLocales(int *count);
 void SDL_free(void *);
 """)
             source = output / "locale_test.cpp"
@@ -31,9 +31,11 @@ std::string androidTags;
 int androidCalls = 0;
 int sdlCalls = 0;
 std::string GetAndroidPreferredLanguageTags() { ++androidCalls; return androidTags; }
-SDL_Locale *SDL_GetPreferredLocales() {
+SDL_Locale **SDL_GetPreferredLocales(int *count) {
   ++sdlCalls;
-  static SDL_Locale locales[] = {{"zh", "TW"}, {nullptr, nullptr}};
+  static SDL_Locale locale = {"zh", "TW"};
+  static SDL_Locale *locales[] = {&locale, nullptr};
+  *count = 1;
   return locales;
 }
 void SDL_free(void *) {}

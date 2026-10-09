@@ -462,8 +462,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     @Override
     protected String[] getLibraries() {
         return new String[] {
-                "SDL2",
-                "SDL2_ttf",
+                "SDL3",
+                "SDL3_ttf",
                 "main"
         };
     }
@@ -547,20 +547,12 @@ public class AsoBMaShowActivity extends SDLActivity {
         return getResources().getConfiguration().getLocales().toLanguageTags();
     }
 
-    public String getInternalFilesDirPath() {
-        return getFilesDir().getAbsolutePath();
+    public String findReplayVideoEncoder(int width, int height, int fps, int bitrate) {
+        return AndroidReplayCodec.findEncoder(width, height, fps, bitrate);
     }
 
-    public String getCacheDirPath() {
-        try {
-            File cacheDirectory = getCacheDir();
-            return cacheDirectory == null
-                    ? ERROR_PREFIX + "Android private cache is unavailable."
-                    : cacheDirectory.getCanonicalPath();
-        } catch (IOException e) {
-            return ERROR_PREFIX + messageForException(
-                    e, "Android private cache is unavailable.");
-        }
+    public String getInternalFilesDirPath() {
+        return getFilesDir().getAbsolutePath();
     }
 
     public String hasManageExternalStorageBuildVariant() {

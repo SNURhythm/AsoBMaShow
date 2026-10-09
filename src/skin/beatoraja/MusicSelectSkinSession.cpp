@@ -22,6 +22,7 @@
 #include <ranges>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 #include <utf8proc.h>
 
@@ -955,6 +956,10 @@ void MusicSelectSkinSession::updateBuiltinImages(
       // this attempted selection so optional images do not retry every frame.
       patch.paths = std::move(pendingBuiltinImagePaths_);
     } catch (const std::length_error &) {
+      patch.paths = std::move(pendingBuiltinImagePaths_);
+    } catch (const std::system_error &) {
+      // Filesystem readers can throw instead of returning false. Treat the
+      // optional artwork as unavailable without taking down the render loop.
       patch.paths = std::move(pendingBuiltinImagePaths_);
     }
     pendingBuiltinImagePaths_.clear();

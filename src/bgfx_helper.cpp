@@ -1,103 +1,51 @@
 #include "bgfx_helper.h"
 #include <bx/platform.h>
-#include <cstdlib>
-#include <iostream>
+#include <SDL3/SDL.h>
 #if BX_PLATFORM_IOS || BX_PLATFORM_OSX
-#include "SDL2/SDL_metal.h"
-#include "iOSNatives.hpp"
+#include <SDL3/SDL_metal.h>
 #endif
-void setup_bgfx_platform_data(bgfx::PlatformData &pd, const SDL_SysWMinfo &wmi,
-                              SDL_Window *sdlWindow) {
+
+bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow,
+                              SdlMetalViewOwner &metalView) {
+  pd = {};
 #if BX_PLATFORM_IOS || BX_PLATFORM_OSX
-  SDL_MetalView metalView = SDL_Metal_CreateView(sdlWindow);
-  void *mtlLayer = SDL_Metal_GetLayer(metalView);
-  pd.ndt = nullptr;
-  pd.nwh = mtlLayer;
-  pd.context = nullptr;
-  pd.backBuffer = nullptr;
-  pd.backBufferDS = nullptr;
-#elif BX_PLATFORM_ANDROID
-  pd.ndt = nullptr;
-#if defined(SDL_VIDEO_DRIVER_ANDROID)
-  pd.nwh = wmi.info.android.window;
-#else
-  pd.nwh = nullptr;
-#endif
-  pd.context = nullptr;
-  pd.backBuffer = nullptr;
-  pd.backBufferDS = nullptr;
+  SdlMetalViewOwner created(SDL_Metal_CreateView(sdlWindow));
+  if (!created) return false;
+  pd.nwh = SDL_Metal_GetLayer(created.get());
+  if (pd.nwh == nullptr) return false;
+  metalView = std::move(created);
 #elif BX_PLATFORM_EMSCRIPTEN
-  pd.ndt = nullptr;
+  (void)metalView;
   pd.nwh = (void *)"#canvas";
-  pd.context = nullptr;
-  pd.backBuffer = nullptr;
-  pd.backBufferDS = nullptr;
 #else
-  switch (wmi.subsystem) {
-  case SDL_SYSWM_UNKNOWN:
-    std::abort();
-
-#if defined(SDL_VIDEO_DRIVER_X11)
-  case SDL_SYSWM_X11:
-    pd.ndt = wmi.info.x11.display;
-    pd.nwh = (void *)(uintptr_t)wmi.info.x11.window;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_WAYLAND)
-  case SDL_SYSWM_WAYLAND:
-    pd.ndt = wmi.info.wl.display;
-    pd.nwh = wmi.info.wl.surface;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_MIR)
-  case SDL_SYSWM_MIR:
-    pd.ndt = wmi.info.mir.connection;
-    pd.nwh = wmi.info.mir.surface;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_COCOA)
-  case SDL_SYSWM_COCOA:
-    pd.ndt = NULL;
-    pd.nwh = wmi.info.cocoa.window;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_UIKIT)
-  case SDL_SYSWM_UIKIT:
-    pd.ndt = NULL;
-    pd.nwh = wmi.info.uikit.window;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_WINDOWS)
-  case SDL_SYSWM_WINDOWS:
-    pd.ndt = NULL;
-    pd.nwh = wmi.info.win.window;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_WINRT)
-  case SDL_SYSWM_WINRT:
-    pd.ndt = NULL;
-    pd.nwh = wmi.info.winrt.window;
-    break;
-#endif
-
-#if defined(SDL_VIDEO_DRIVER_VIVANTE)
-  case SDL_SYSWM_VIVANTE:
-    pd.ndt = wmi.info.vivante.display;
-    pd.nwh = wmi.info.vivante.window;
-    break;
-#endif
-
-  default:
-    std::abort();
+  (void)metalView;
+  const SDL_PropertiesID properties = SDL_GetWindowProperties(sdlWindow);
+#if BX_PLATFORM_ANDROID
+  pd.nwh = SDL_GetPointerProperty(properties,
+      SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+#elif BX_PLATFORM_WINDOWS
+  pd.nwh = SDL_GetPointerProperty(properties,
+      SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+#else
+  const char *driver = SDL_GetCurrentVideoDriver();
+  if (driver != nullptr && SDL_strcmp(driver, "x11") == 0) {
+    pd.ndt = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+    pd.nwh = reinterpret_cast<void *>(static_cast<uintptr_t>(
+        SDL_GetNumberProperty(properties, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)));
+  } else if (driver != nullptr && SDL_strcmp(driver, "wayland") == 0) {
+    pd.ndt = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
+    pd.nwh = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
+    pd.type = bgfx::NativeWindowHandleType::Wayland;
+  } else if (driver != nullptr && SDL_strcmp(driver, "vivante") == 0) {
+    pd.ndt = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_VIVANTE_DISPLAY_POINTER, nullptr);
+    pd.nwh = SDL_GetPointerProperty(properties,
+        SDL_PROP_WINDOW_VIVANTE_WINDOW_POINTER, nullptr);
   }
-  pd.context = nullptr;
-  pd.backBuffer = nullptr;
-  pd.backBufferDS = nullptr;
 #endif
+#endif
+  return pd.nwh != nullptr;
 }

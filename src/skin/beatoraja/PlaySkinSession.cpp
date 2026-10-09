@@ -914,6 +914,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         context.safetyPolicy, pomyuMotionCyclesMillis);
     owned->renderer.setGeneratedTextureLiveCounters(
         context.liveResourceCounters);
+    owned->renderer.prepareModelIndex(context.sessionSerial, owned->model);
     result.session.reset(new PlaySkinSession(std::move(owned)));
     result.session->initialAudioVolumeWrites_ = std::move(initialAudioVolumeWrites);
     return finish();

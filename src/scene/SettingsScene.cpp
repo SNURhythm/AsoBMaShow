@@ -301,12 +301,12 @@ void SettingsScene::renderScene() {
 }
 
 EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
-  const bool losesFocus = event.type == SDL_APP_WILLENTERBACKGROUND ||
-                          event.type == SDL_APP_DIDENTERBACKGROUND ||
-                          (event.type == SDL_WINDOWEVENT &&
-                            (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
-                            event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
-                            event.window.event == SDL_WINDOWEVENT_HIDDEN));
+  const bool losesFocus = event.type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
+                          event.type == SDL_EVENT_DID_ENTER_BACKGROUND ||
+                          ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
+                            (event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+                            event.type == SDL_EVENT_WINDOW_MINIMIZED ||
+                            event.type == SDL_EVENT_WINDOW_HIDDEN));
   if (losesFocus && previewActive) destroyPreviewInputHandler();
   if (losesFocus && audioVideoSession != nullptr &&
       audioVideoSession->hasDisplayPreview()) {

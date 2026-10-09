@@ -108,10 +108,10 @@ void ColorPickerView::finish() {
 }
 
 void ColorPickerView::onPointerEventConsumed(const SDL_Event &event) {
-  if ((mouseDragging && event.type == SDL_MOUSEBUTTONUP &&
+  if ((mouseDragging && event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
        event.button.which != SDL_TOUCH_MOUSEID && event.button.button == SDL_BUTTON_LEFT) ||
-      (touch && event.type == SDL_FINGERUP && !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
-       event.tfinger.fingerId == *touch)) finish();
+      (touch && (event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) && !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+       event.tfinger.fingerID == *touch)) finish();
 }
 
 bool ColorPickerView::handleEventsImpl(SDL_Event &event) {
@@ -121,7 +121,7 @@ bool ColorPickerView::handleEventsImpl(SDL_Event &event) {
     rendering::screenToUi(rawX * rendering::widthScale, rawY * rendering::heightScale, x, y);
   };
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN:
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.which == SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT ||
         dragging != Area::None) return true;
     mouseToUi(event.button.x, event.button.y);
@@ -129,35 +129,36 @@ bool ColorPickerView::handleEventsImpl(SDL_Event &event) {
     if (dragging == Area::None) return true;
     mouseDragging = true;
     break;
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     if (event.motion.which == SDL_TOUCH_MOUSEID || !mouseDragging) return true;
     mouseToUi(event.motion.x, event.motion.y);
     break;
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (event.button.which == SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT ||
         !mouseDragging) return true;
     mouseToUi(event.button.x, event.button.y);
     released = true;
     break;
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     if (sdl_pointer_event::isMouseSynthesizedTouch(event) || dragging != Area::None) return true;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
     dragging = areaAt(x, y);
     if (dragging == Area::None) return true;
-    touch = event.tfinger.fingerId;
+    touch = event.tfinger.fingerID;
     break;
-  case SDL_FINGERMOTION:
-  case SDL_FINGERUP:
-    if (sdl_pointer_event::isMouseSynthesizedTouch(event) || !touch || *touch != event.tfinger.fingerId)
+  case SDL_EVENT_FINGER_MOTION:
+  case SDL_EVENT_FINGER_UP:
+    if (sdl_pointer_event::isMouseSynthesizedTouch(event) || !touch || *touch != event.tfinger.fingerID)
       return true;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
-    released = event.type == SDL_FINGERUP;
+    released = event.type == SDL_EVENT_FINGER_UP;
     break;
-  case SDL_WINDOWEVENT:
-    if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST || event.window.event == SDL_WINDOWEVENT_LEAVE)
+  case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+  case SDL_EVENT_WINDOW_FOCUS_LOST:
+    if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
       finish();
     return true;
-  case SDL_APP_WILLENTERBACKGROUND:
+  case SDL_EVENT_WILL_ENTER_BACKGROUND:
     finish();
     return true;
   default:

@@ -97,6 +97,53 @@ void testThreadStartupFailureAllowsRetryOfTheSameChart() {
   expect(calls == 1, "retry processes the chart exactly once");
 }
 
+void testUnicodeSelectionQueriesDuringSupersession() {
+  auto first = makeRecord("first");
+  first.meta.BmsPath = u8"/charts/\u307b\u3063\u3077\U0001f3b5/first.bms";
+  auto latest = makeRecord("latest");
+  latest.meta.BmsPath = u8"/charts/\u8868\U0001f3b5/latest.bms";
+  std::binary_semaphore entered{0};
+  std::binary_semaphore resume{0};
+  std::binary_semaphore checked{0};
+  bool superseded = false;
+  bool workerThrew = false;
+  ChartPreloadWorker worker(std::chrono::milliseconds(0));
+  worker.configure([&](const ChartMetaRecord &record, std::atomic_bool &) {
+    if (record.meta.BmsPath != first.meta.BmsPath) return;
+    entered.release();
+    resume.acquire();
+    try {
+      superseded = worker.superseded(fspath_to_utf8(record.meta.BmsPath));
+    } catch (const std::exception &) {
+      workerThrew = true;
+    }
+    checked.release();
+  });
+  worker.request(first);
+  const bool started = entered.try_acquire_for(std::chrono::seconds(3));
+  expect(started, "Unicode selection starts its preload");
+  try {
+    expect(worker.isRequesting(fspath_to_utf8(first.meta.BmsPath)),
+           "the in-flight Unicode selection is recognized");
+    worker.request(latest);
+    expect(worker.isRequesting(fspath_to_utf8(latest.meta.BmsPath)),
+           "the queued Unicode selection is recognized");
+    expect(!worker.superseded(fspath_to_utf8(latest.meta.BmsPath)),
+           "the latest Unicode selection is not superseded");
+  } catch (const std::exception &) {
+    expect(false, "Unicode preload status queries must not throw");
+    worker.request(latest);
+  }
+  resume.release();
+  if (started) {
+    expect(checked.try_acquire_for(std::chrono::seconds(3)),
+           "the superseded Unicode preload completes its checkpoint");
+  }
+  worker.stop();
+  expect(!workerThrew && superseded,
+         "Unicode supersession is detected on the worker without an exception");
+}
+
 // Processor records each started request and blocks until released so tests
 // can observe latest-wins and supersede behavior deterministically.
 struct RecordingProcessor {
@@ -432,6 +479,7 @@ void testActiveCancelDefersCleanupUntilProcessorReturns() {
 }  // namespace
 
 int main() {
+  testUnicodeSelectionQueriesDuringSupersession();
   testThreadStartupFailureAllowsRetryOfTheSameChart();
   testLatestWinsSupersedesQueued();
   testDedupSamePath();

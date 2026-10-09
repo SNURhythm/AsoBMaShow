@@ -253,8 +253,8 @@ void testAndroidTouchReachesWorkerWithoutRenderDrain() {
     });
     require(worker.start(), "SDL timing worker starts");
     SDL_Event event{};
-    event.type = SDL_FINGERDOWN;
-    event.tfinger.fingerId = 42;
+    event.type = SDL_EVENT_FINGER_DOWN;
+    event.tfinger.fingerID = 42;
     event.tfinger.x = .5F;
     event.tfinger.y = .5F;
     for (int gate = 0; gate < 3; ++gate) {
@@ -290,7 +290,7 @@ void testAndroidTouchReachesWorkerWithoutRenderDrain() {
     worker.stop();
   }
   SDL_Event mouse{};
-  mouse.type = SDL_MOUSEBUTTONDOWN;
+  mouse.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   mouse.button.x = 250;
   mouse.button.y = 125;
   const auto converted = gameplay::realtimeTouchSampleFromSdl(mouse, 123456,
@@ -371,29 +371,29 @@ void testAndroidSyntheticMouseDoesNotStealPointerZero() {
   require(worker.start(), "multitouch worker starts");
   // SDL sends a touch-synthesized mouse Down before its originating FingerDown.
   SDL_Event mouse{};
-  mouse.type = SDL_MOUSEBUTTONDOWN;
+  mouse.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   mouse.button.which = SDL_TOUCH_MOUSEID;
   mouse.button.x = 250;
   mouse.button.y = 250;
   SDLTouchInputSource::EventHandler(&source, &mouse);
   SDL_Event finger{};
-  finger.type = SDL_FINGERDOWN;
-  finger.tfinger.fingerId = 5;
+  finger.type = SDL_EVENT_FINGER_DOWN;
+  finger.tfinger.fingerID = 5;
   finger.tfinger.x = .25F;
   finger.tfinger.y = .5F;
   SDLTouchInputSource::EventHandler(&source, &finger);
-  finger.tfinger.fingerId = 0;
+  finger.tfinger.fingerID = 0;
   finger.tfinger.x = .75F;
   SDLTouchInputSource::EventHandler(&source, &finger);
   require(waitUntil([&] { return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 2; }),
           "synthetic mouse must not steal pointer zero or drop a simultaneous second note");
-  finger.type = SDL_FINGERUP;
+  finger.type = SDL_EVENT_FINGER_UP;
   SDLTouchInputSource::EventHandler(&source, &finger);
   require(waitUntil([&] {
     auto snapshot = worker.acquireLatestSnapshot();
     return snapshot->lanePressed[0] && !snapshot->lanePressed[1];
   }), "releasing pointer zero must preserve the other physical finger's hold");
-  finger.tfinger.fingerId = 5;
+  finger.tfinger.fingerID = 5;
   finger.tfinger.x = .25F;
   SDLTouchInputSource::EventHandler(&source, &finger);
   require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[0]; }),

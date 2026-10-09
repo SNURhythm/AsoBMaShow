@@ -6,7 +6,7 @@
 #include "../src/view/TextView.h"
 #include "../src/view/UiTheme.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <cstdlib>
 #include <cstdio>
@@ -63,14 +63,14 @@ Button *button(View *row, const char *name) {
 
 void click(IrUploadCandidateListView &list, const Button &target) {
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
-  down.button.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  down.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.which = 1;
   down.button.x = target.getX() + target.getWidth() / 2;
   down.button.y = target.getY() + target.getHeight() / 2;
   SDL_Event up = down;
-  up.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
   list.handleEvents(down);
   list.handleEvents(up);
 }

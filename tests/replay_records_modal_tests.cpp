@@ -8,7 +8,7 @@
 #include "scene/MusicSelectRecords.h"
 #include "scene/MusicSelectGhostBattle.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 
 #include <cstdlib>
@@ -154,12 +154,12 @@ void clickButton(Button *button) {
   expect(button != nullptr, "requested option button is visible");
   if (!button) return;
   SDL_Event event{};
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   event.button.button = SDL_BUTTON_LEFT;
   event.button.x = button->getX() + button->getWidth() / 2;
   event.button.y = button->getY() + button->getHeight() / 2;
   button->handleEvents(event);
-  event.type = SDL_MOUSEBUTTONUP;
+  event.type = SDL_EVENT_MOUSE_BUTTON_UP;
   button->handleEvents(event);
 }
 

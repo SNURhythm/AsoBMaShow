@@ -1,11 +1,11 @@
 #pragma once
 
-#include "SDL2/SDL_events.h"
+#include <SDL3/SDL_events.h>
 #include "../input/SDLPointerEvent.h"
 #include "ScrollMomentum.h"
 #include "View.h"
 #include <bgfx/bgfx.h>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -77,9 +77,9 @@ private:
     }
 
     switch (event.type) {
-    case SDL_KEYDOWN: {
+    case SDL_EVENT_KEY_DOWN: {
       bool changed = false;
-      if (event.key.keysym.sym == SDLK_UP) {
+      if (event.key.key == SDLK_UP) {
         changed = true;
         bool isInitialSelection = selectedIndex == -1;
         int prevIndex = selectedIndex;
@@ -97,7 +97,7 @@ private:
           }
         }
 
-      } else if (event.key.keysym.sym == SDLK_DOWN) {
+      } else if (event.key.key == SDLK_DOWN) {
         changed = true;
         bool isInitialSelection = selectedIndex == -1;
         int prevIndex = selectedIndex;
@@ -134,15 +134,11 @@ private:
       }
       break;
     }
-    case SDL_MOUSEWHEEL: {
-      // check mouse position
-      int x, y;
-      SDL_GetMouseState(&x, &y);
-      x = static_cast<int>(x * rendering::widthScale);
-      y = static_cast<int>(y * rendering::heightScale);
-      int uiX = 0;
-      int uiY = 0;
-      rendering::screenToUi(x, y, uiX, uiY);
+    case SDL_EVENT_MOUSE_WHEEL: {
+      float uiX = 0;
+      float uiY = 0;
+      rendering::screenToUi(event.wheel.mouse_x * rendering::widthScale,
+                            event.wheel.mouse_y * rendering::heightScale, uiX, uiY);
       if (uiX < this->getContentX() ||
           uiX > this->getContentX() + this->getContentWidth()) {
         return true;
@@ -157,12 +153,12 @@ private:
                                                            15.0F));
       break;
     }
-    case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEBUTTONDOWN: {
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
       if (touchDragging) {
         return true;
       }
-      if (event.type == SDL_MOUSEBUTTONDOWN &&
+      if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
           event.button.button != SDL_BUTTON_LEFT) {
         return true;
       }
@@ -173,19 +169,16 @@ private:
       }
 
       // ignore mouse up
-      if (event.type == SDL_MOUSEBUTTONUP &&
+      if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
           event.button.button == SDL_BUTTON_LEFT &&
           event.button.which != SDL_TOUCH_MOUSEID) {
         return true;
       }
 
-      int x, y;
-      SDL_GetMouseState(&x, &y);
-      x = static_cast<int>(x * rendering::widthScale);
-      y = static_cast<int>(y * rendering::heightScale);
-      int uiX = 0;
-      int uiY = 0;
-      rendering::screenToUi(x, y, uiX, uiY);
+      float uiX = 0;
+      float uiY = 0;
+      rendering::screenToUi(event.button.x * rendering::widthScale,
+                            event.button.y * rendering::heightScale, uiX, uiY);
       if (!isInsideContent(uiX, uiY)) {
         return true;
       }
@@ -193,7 +186,7 @@ private:
       selectIndex(indexAtUiY(uiY));
       break;
     }
-    case SDL_FINGERDOWN: {
+    case SDL_EVENT_FINGER_DOWN: {
       // Get the normalized touch coordinates
       float normX = event.tfinger.x;
       float normY = event.tfinger.y;
@@ -206,17 +199,17 @@ private:
       if (!isInsideContent(touchX, touchY)) {
         return true;
       }
-      touchMomentum.beginDrag(event.tfinger.timestamp);
+      touchMomentum.beginDrag(event.tfinger.timestamp / 1000000);
       touchPressX = touchX;
       touchPressY = touchY;
       touchLastY = touchY;
       touchDragging = false;
-      touchId = event.tfinger.fingerId;
+      touchId = event.tfinger.fingerID;
       touchPressIndex = indexAtUiY(touchY);
       break;
     }
-    case SDL_FINGERMOTION: {
-      if (event.tfinger.fingerId != touchId) {
+    case SDL_EVENT_FINGER_MOTION: {
+      if (event.tfinger.fingerID != touchId) {
         return true;
       }
       // Get the normalized touch coordinates
@@ -242,19 +235,19 @@ private:
       const float delta = touchLastY - touchY;
       revealScrollbar();
       scrollBy(delta);
-      touchMomentum.recordDragDelta(delta, event.tfinger.timestamp);
+      touchMomentum.recordDragDelta(delta, event.tfinger.timestamp / 1000000);
       touchLastY = touchY;
       touchDragging = true;
       break;
     }
-    case SDL_FINGERUP: {
-      if (event.tfinger.fingerId != touchId) {
+    case SDL_EVENT_FINGER_UP: {
+      if (event.tfinger.fingerID != touchId) {
         return true;
       }
       const bool hadDrag = touchDragging;
       touchDragging = false;
       if (hadDrag) {
-        touchMomentum.release(event.tfinger.timestamp);
+        touchMomentum.release(event.tfinger.timestamp / 1000000);
       } else {
         touchMomentum.stop();
         float touchX = 0.0f;
@@ -276,9 +269,9 @@ private:
   }
 
   void onPointerEventConsumed(const SDL_Event &event) override {
-    if (event.type == SDL_FINGERUP &&
+    if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
         !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
-        event.tfinger.fingerId == touchId) {
+        event.tfinger.fingerID == touchId) {
       touchId = -1;
       touchPressIndex = -1;
       touchDragging = false;
@@ -547,11 +540,11 @@ private:
 
   inline static bool shouldForwardEventToVisibleItems(const SDL_Event &event) {
     switch (event.type) {
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEMOTION:
-    case SDL_FINGERDOWN:
-    case SDL_FINGERUP:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
       return true;
     default:
       return false;
@@ -593,7 +586,7 @@ private:
     if (!canScroll()) {
       return;
     }
-    const Uint64 now = SDL_GetTicks64();
+    const Uint64 now = SDL_GetTicks();
     if (currentScrollbarAlpha(now) <= 0.01f) {
       scrollbarFadeInStartedAt = now;
     }
@@ -631,7 +624,7 @@ private:
   }
 
   inline void renderScrollbar(RenderContext &context) const {
-    const float alpha = currentScrollbarAlpha(SDL_GetTicks64());
+    const float alpha = currentScrollbarAlpha(SDL_GetTicks());
     if (alpha <= 0.0f) {
       return;
     }

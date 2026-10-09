@@ -259,7 +259,7 @@ void testOverlayPortalDispatchesPresentedViewsAboveContent() {
   assert(portal->isPresented(&overlay));
 
   SDL_Event event{};
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   assert(!root.handleEvents(event));
   assert(overlay.eventCount == 1);
   assert(background->eventCount == 0);
@@ -370,8 +370,8 @@ void testBlockingOverlayStopsAllInteractiveEvents() {
   root.addView(overlay);
 
   constexpr std::array eventTypes{
-      SDL_MOUSEBUTTONDOWN, SDL_MOUSEWHEEL, SDL_FINGERDOWN, SDL_KEYDOWN,
-      SDL_TEXTINPUT, SDL_TEXTEDITING, SDL_TEXTEDITING_EXT};
+      SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_FINGER_DOWN, SDL_EVENT_KEY_DOWN,
+      SDL_EVENT_TEXT_INPUT, SDL_EVENT_TEXT_EDITING};
   for (const Uint32 eventType : eventTypes) {
     SDL_Event event{};
     event.type = eventType;
@@ -381,7 +381,7 @@ void testBlockingOverlayStopsAllInteractiveEvents() {
 
   overlay->setVisible(false);
   SDL_Event event{};
-  event.type = SDL_TEXTINPUT;
+  event.type = SDL_EVENT_TEXT_INPUT;
   assert(root.handleEvents(event));
   assert(background->eventCount == 1);
 }
@@ -607,7 +607,7 @@ void testSiblingInsertionPreservesLayoutAndZOrders() {
   root.addView(actions);
 
   SDL_Event sortEvent{};
-  sortEvent.type = SDL_USEREVENT;
+  sortEvent.type = SDL_EVENT_USER;
   root.handleEvents(sortEvent);
   assert(root.getChildren()[0] == actions && root.getChildren()[1] == content);
   eventOrder.clear();

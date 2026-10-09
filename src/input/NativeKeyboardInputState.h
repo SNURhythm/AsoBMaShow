@@ -1,7 +1,7 @@
 #pragma once
 
 #include "InputTypes.h"
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_scancode.h>
 #include <array>
 #include <bitset>
 #include <functional>
@@ -35,7 +35,7 @@ public:
     const std::lock_guard lock(mutex_);
     if (!enabled_ || timestampMicros < enabledSinceMicros_ ||
         device >= devices_.size() ||
-        key <= SDL_SCANCODE_UNKNOWN || key >= SDL_NUM_SCANCODES) return;
+        key <= SDL_SCANCODE_UNKNOWN || key >= SDL_SCANCODE_COUNT) return;
     const bool previous = held(key);
     devices_[device].set(key, pressed);
     if (held(key) != previous) emit(key, !previous, timestampMicros);
@@ -46,7 +46,7 @@ public:
     if (device >= devices_.size()) return;
     const auto previous = devices_[device];
     devices_[device].reset();
-    for (int key = 1; key < SDL_NUM_SCANCODES; ++key) {
+    for (int key = 1; key < SDL_SCANCODE_COUNT; ++key) {
       if (previous[key] && !held(key)) emit(key, false, timestampMicros);
     }
   }
@@ -58,7 +58,7 @@ private:
     if (!enabled) enabledSinceMicros_ = timestampMicros;
     if (enabled_ == enabled) return;
     if (!enabled) {
-      for (int key = 1; key < SDL_NUM_SCANCODES; ++key) {
+      for (int key = 1; key < SDL_SCANCODE_COUNT; ++key) {
         if (held(key)) emit(key, false, timestampMicros);
       }
       for (auto &device : devices_) device.reset();
@@ -89,6 +89,6 @@ private:
   bool claimed_ = false;
   bool focused_ = true;
   std::uint64_t enabledSinceMicros_ = 0;
-  std::array<std::bitset<SDL_NUM_SCANCODES>, kMaxDevices> devices_{};
+  std::array<std::bitset<SDL_SCANCODE_COUNT>, kMaxDevices> devices_{};
   std::function<void(input::PhysicalInputEvent)> emit_;
 };

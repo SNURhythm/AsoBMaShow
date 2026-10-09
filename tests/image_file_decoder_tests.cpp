@@ -462,6 +462,48 @@ std::vector<std::byte> makeLargeCim(int size) {
   return encoded;
 }
 
+void testCimNativeRows() {
+  constexpr int width = 23, height = 19;
+  for (const int format : {3, 4}) {
+    std::vector<std::byte> raw;
+    appendBigEndian(raw, width);
+    appendBigEndian(raw, height);
+    appendBigEndian(raw, format);
+    std::vector<unsigned char> expected;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const std::array<unsigned char, 4> pixel{
+            static_cast<unsigned char>(x * 11),
+            static_cast<unsigned char>(y * 13),
+            static_cast<unsigned char>(x + y * 7),
+            static_cast<unsigned char>(format == 4 ? (x * 17 + y * 19) & 255 : 255)};
+        expected.insert(expected.end(), pixel.begin(), pixel.end());
+        for (int channel = 0; channel < format; ++channel) {
+          raw.push_back(static_cast<std::byte>(pixel[channel]));
+        }
+      }
+    }
+    mz_ulong compressedSize = mz_compressBound(raw.size());
+    std::vector<std::byte> encoded(compressedSize);
+    expect(mz_compress(reinterpret_cast<unsigned char *>(encoded.data()),
+                       &compressedSize,
+                       reinterpret_cast<const unsigned char *>(raw.data()),
+                       raw.size()) == MZ_OK,
+           "multi-row CIM fixture compresses");
+    encoded.resize(compressedSize);
+    for (const int target : {0, width, width * 2}) {
+      const auto decoded = image_decode::decodeImageMemory(
+          encoded, {.targetWidth = target, .targetHeight = target});
+      expect(decoded && decoded->width == width && decoded->height == height &&
+                 *decoded->rgba == expected,
+             "native-size CIM rows preserve every color, alpha and row boundary");
+    }
+    encoded.pop_back();
+    expect(!image_decode::decodeImageMemory(encoded, {}),
+           "native-size CIM rejects a truncated trailer after producing rows");
+  }
+}
+
 void testInterlacedReductionCancellation() {
   std::stop_source stop;
   image_decode::detail::ImageRowReducer reducer(1024, 1024,
@@ -742,6 +784,7 @@ int main() {
              decodedWbmp->height == 1,
          "standard JDK ImageIO WBMP fallback decodes BMS image resources");
   verifyOptionalCimTree();
+  testCimNativeRows();
   testWebpFfmpegFallback();
   testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread();
   return failures == 0 ? 0 : 1;

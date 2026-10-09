@@ -11,7 +11,7 @@
 #include <Unknwn.h>
 #include <rtworkq.h>
 
-#include <SDL2/SDL_log.h>
+#include <SDL3/SDL_log.h>
 
 #include <algorithm>
 #include <array>
@@ -603,7 +603,7 @@ private:
     }
     const SDL_Scancode scancode = windowsRealtimeSdlScancode(
         event.vkCode, event.scanCode, (event.flags & LLKHF_EXTENDED) != 0);
-    if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_NUM_SCANCODES) {
+    if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
       return;
     }
     const std::size_t index = static_cast<std::size_t>(scancode);
@@ -807,8 +807,8 @@ private:
 
   std::shared_ptr<RealtimeControllerDeviceMap> controllerMap_;
   QpcTimeline timeline_;
-  std::array<bool, SDL_NUM_SCANCODES> physicalKeys_{};
-  std::array<bool, SDL_NUM_SCANCODES> publishedKeys_{};
+  std::array<bool, SDL_SCANCODE_COUNT> physicalKeys_{};
+  std::array<bool, SDL_SCANCODE_COUNT> publishedKeys_{};
   std::array<ControllerSlot, RealtimeControllerDeviceMap::kMaxPlayers>
       controllers_{};
   std::atomic_bool keyboardClaimRequested_ = false;

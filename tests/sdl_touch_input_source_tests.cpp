@@ -16,8 +16,9 @@ float widthScale = 1, heightScale = 1;
 
 // Event registration belongs to SDL; invoke the real source callback from a
 // producer thread without starting a video subsystem in this unit test.
-extern "C" void SDLCALL SDL_AddEventWatch(SDL_EventFilter, void *) {}
-extern "C" void SDLCALL SDL_DelEventWatch(SDL_EventFilter, void *) {}
+extern "C" bool SDLCALL SDL_AddEventWatch(SDL_EventFilter, void *) { return true; }
+extern "C" Uint64 SDLCALL SDL_GetTicksNS() { return 9000000000ULL; }
+extern "C" void SDLCALL SDL_RemoveEventWatch(SDL_EventFilter, void *) {}
 
 struct RecordingHandler : IInputHandler {
   std::vector<int> phases;
@@ -41,6 +42,7 @@ struct RecordingHandler : IInputHandler {
   }
   void onFingerMove(SDL_FingerID finger, Vector3 point) override { record(1, point, finger); }
   void onFingerUp(SDL_FingerID finger, Vector3 point) override { record(2, point, finger); }
+  void onFingerCancel(SDL_FingerID finger, Vector3 point) override { record(3, point, finger); }
 };
 
 void testSyntheticPointerFiltering() {
@@ -50,14 +52,14 @@ void testSyntheticPointerFiltering() {
     source.setHandler(&handler);
     int rawCallbacks = 0;
     if (raw) source.setRawEventCallback([&](const SDL_Event &, std::uint64_t) { ++rawCallbacks; });
-    for (const auto type : {SDL_MOUSEBUTTONDOWN, SDL_MOUSEMOTION, SDL_MOUSEBUTTONUP,
-                            SDL_FINGERDOWN, SDL_FINGERMOTION, SDL_FINGERUP}) {
+    for (const auto type : {SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_UP,
+                            SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION, SDL_EVENT_FINGER_UP, SDL_EVENT_FINGER_CANCELED}) {
       SDL_Event event{};
       event.type = type;
-      if (type == SDL_MOUSEMOTION) event.motion.which = SDL_TOUCH_MOUSEID;
-      else if (type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP)
+      if (type == SDL_EVENT_MOUSE_MOTION) event.motion.which = SDL_TOUCH_MOUSEID;
+      else if (type == SDL_EVENT_MOUSE_BUTTON_DOWN || type == SDL_EVENT_MOUSE_BUTTON_UP)
         event.button.which = SDL_TOUCH_MOUSEID;
-      else event.tfinger.touchId = SDL_MOUSE_TOUCHID;
+      else event.tfinger.touchID = SDL_MOUSE_TOUCHID;
       SDLTouchInputSource::EventHandler(&source, &event);
     }
     source.pumpPendingEvents();
@@ -66,17 +68,41 @@ void testSyntheticPointerFiltering() {
     }
     source.setRawEventCallback({});
     SDL_Event finger{};
-    finger.type = SDL_FINGERDOWN;
-    finger.tfinger.fingerId = 0;
+    finger.type = SDL_EVENT_FINGER_DOWN;
+    finger.tfinger.fingerID = 0;
     SDLTouchInputSource::EventHandler(&source, &finger);
     SDL_Event mouse{};
-    mouse.type = SDL_MOUSEBUTTONDOWN;
+    mouse.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
     SDLTouchInputSource::EventHandler(&source, &mouse);
     source.pumpPendingEvents();
     if (handler.fingers.size() != 2 || handler.fingers[0] == handler.fingers[1]) {
       throw "real mouse and Android pointer zero must retain separate ownership";
     }
   }
+}
+
+void testCancelledTouchAndNativeTimestamp() {
+  SDLTouchInputSource source(true);
+  RecordingHandler handler;
+  source.setHandler(&handler);
+  SDL_Event event{};
+  event.type = SDL_EVENT_FINGER_DOWN;
+  event.tfinger.fingerID = 77;
+  event.tfinger.timestamp = 8999000123ULL;
+  const auto before = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  SDLTouchInputSource::EventHandler(&source, &event);
+  const auto after = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  event.type = SDL_EVENT_FINGER_CANCELED;
+  SDLTouchInputSource::EventHandler(&source, &event);
+  event.type = SDL_EVENT_FINGER_MOTION;
+  SDLTouchInputSource::EventHandler(&source, &event);
+  source.pumpPendingEvents();
+  if (handler.phases != std::vector<int>({0, 3}))
+    throw "cancel must be distinct from release and retire the active finger";
+  if (handler.timestamps.front() < before - 1000 || handler.timestamps.front() > after - 1000)
+    throw "SDL3 touch nanoseconds must retain their offset from receipt time";
 }
 
 void run() {
@@ -89,10 +115,10 @@ void run() {
   };
   std::vector<std::pair<std::uint64_t, std::uint64_t>> ingressWindows;
   std::thread producer([&] {
-    for (const auto type : {SDL_FINGERDOWN, SDL_FINGERMOTION, SDL_FINGERUP}) {
+    for (const auto type : {SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION, SDL_EVENT_FINGER_UP}) {
       SDL_Event event{};
       event.type = type;
-      event.tfinger.fingerId = 42;
+      event.tfinger.fingerID = 42;
       event.tfinger.x = .25F;
       event.tfinger.y = .5F;
       const auto before = nowMicros();
@@ -124,39 +150,39 @@ void run() {
   const auto enqueue = [&](Uint32 type) {
     SDL_Event event{};
     event.type = type;
-    event.tfinger.fingerId = 42;
+    event.tfinger.fingerID = 42;
     event.tfinger.x = .25F;
     event.tfinger.y = .5F;
     SDLTouchInputSource::EventHandler(&source, &event);
   };
   handler.phases.clear();
-  enqueue(SDL_FINGERDOWN);
+  enqueue(SDL_EVENT_FINGER_DOWN);
   source.discardPendingEvents();
-  enqueue(SDL_FINGERMOTION);
-  enqueue(SDL_FINGERUP);
+  enqueue(SDL_EVENT_FINGER_MOTION);
+  enqueue(SDL_EVENT_FINGER_UP);
   source.pumpPendingEvents();
   if (!handler.phases.empty()) {
     throw "discarded background touch must not reactivate on a stale move";
   }
   source.startListen();
-  enqueue(SDL_FINGERDOWN);
+  enqueue(SDL_EVENT_FINGER_DOWN);
   source.stopListen();
   source.pumpPendingEvents();
   if (!handler.phases.empty()) {
     throw "stopListen must discard queued Down before resuming gameplay";
   }
-  enqueue(SDL_FINGERDOWN);
+  enqueue(SDL_EVENT_FINGER_DOWN);
   source.pumpPendingEvents();
-  for (int index = 0; index < 5000; ++index) enqueue(SDL_FINGERMOTION);
+  for (int index = 0; index < 5000; ++index) enqueue(SDL_EVENT_FINGER_MOTION);
   source.pumpPendingEvents();
-  enqueue(SDL_FINGERMOTION);
-  enqueue(SDL_FINGERUP);
+  enqueue(SDL_EVENT_FINGER_MOTION);
+  enqueue(SDL_EVENT_FINGER_UP);
   source.pumpPendingEvents();
   if (handler.phases != std::vector<int>({0, 2})) {
     throw "overflow must release held input and suppress its orphan motion";
   }
-  enqueue(SDL_FINGERDOWN);
-  enqueue(SDL_FINGERUP);
+  enqueue(SDL_EVENT_FINGER_DOWN);
+  enqueue(SDL_EVENT_FINGER_UP);
   source.pumpPendingEvents();
   if (handler.phases != std::vector<int>({0, 2, 0, 2})) {
     throw "fresh touch must recover after overflow";
@@ -165,16 +191,16 @@ void run() {
   handler.phases.clear();
   immediate.setHandler(&handler);
   SDL_Event event{};
-  event.type = SDL_FINGERDOWN;
+  event.type = SDL_EVENT_FINGER_DOWN;
   SDLTouchInputSource::EventHandler(&immediate, &event);
   if (handler.phases != std::vector<int>{0}) {
     throw "desktop synchronous SDL input must retain its existing behavior";
   }
   handler.phases.clear();
   handler.afterDown = [&] { source.discardPendingEvents(); };
-  enqueue(SDL_FINGERDOWN);
-  enqueue(SDL_FINGERUP);
-  enqueue(SDL_FINGERDOWN);
+  enqueue(SDL_EVENT_FINGER_DOWN);
+  enqueue(SDL_EVENT_FINGER_UP);
+  enqueue(SDL_EVENT_FINGER_DOWN);
   source.pumpPendingEvents();
   if (handler.phases != std::vector<int>{0}) {
     throw "discard during a callback must invalidate the remaining drained batch";
@@ -182,7 +208,7 @@ void run() {
 }
 
 int main() {
-  try { testSyntheticPointerFiltering(); run(); }
+  try { testSyntheticPointerFiltering(); testCancelledTouchAndNativeTimestamp(); run(); }
   catch (const char *message) {
     std::cerr << "FAIL: " << message << '\n';
     return 1;

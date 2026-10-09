@@ -78,12 +78,12 @@ void click(ArchiveUnzipModal &modal, const std::string &label) {
   auto *button = findButton(modal.root(), label);
   assert(button);
   SDL_Event event{};
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   event.button.button = SDL_BUTTON_LEFT;
   event.button.x = button->getX() + button->getWidth() / 2;
   event.button.y = button->getY() + button->getHeight() / 2;
   modal.handleEvents(event);
-  event.type = SDL_MOUSEBUTTONUP;
+  event.type = SDL_EVENT_MOUSE_BUTTON_UP;
   modal.handleEvents(event);
 }
 
@@ -150,13 +150,13 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     assert(!modal->isVisible() && !modal->inProgress());
     assert(modal->startAll());
     SDL_Event escape{};
-    escape.type = SDL_KEYDOWN;
-    escape.key.keysym.sym = SDLK_ESCAPE;
+    escape.type = SDL_EVENT_KEY_DOWN;
+    escape.key.key = SDLK_ESCAPE;
     assert(!modal->handleEvents(escape));
     assert(!modal->isVisible() && !modal->inProgress());
     assert(modal->startAll());
     SDL_Event background{};
-    background.type = SDL_APP_WILLENTERBACKGROUND;
+    background.type = SDL_EVENT_WILL_ENTER_BACKGROUND;
     modal->handleEvents(background);
     assert(!modal->isVisible() && !modal->inProgress());
     assert(modal->startAll());
@@ -345,8 +345,8 @@ void singleDeleteDoesNotBlockInputWhileLibraryIsBusy() {
     assert(!modal->start(record) && !modal->startAll());
     click(*modal, "Deleting...");
     SDL_Event escape{};
-    escape.type = SDL_KEYDOWN;
-    escape.key.keysym.sym = SDLK_ESCAPE;
+    escape.type = SDL_EVENT_KEY_DOWN;
+    escape.key.key = SDLK_ESCAPE;
     assert(!modal->handleEvents(escape));
     modal->hide();
     assert(modal->inProgress() && modal->isVisible());

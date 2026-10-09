@@ -1,6 +1,6 @@
 #pragma once
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <yoga/Yoga.h>
 #include <algorithm>
 #include <array>
@@ -534,6 +534,7 @@ public:
       return true;
     }
     EventDispatchLifetime lifetime(*this);
+    if (event.type == SDL_EVENT_FINGER_CANCELED) notifyPointerEventConsumed(event);
     sortChildrenIfNeeded();
     if (!shouldHandleChildEvents()) {
       return handleEventsImpl(event);
@@ -563,8 +564,8 @@ public:
   }
 
   void notifyPointerEventConsumed(const SDL_Event &event) {
-    if (event.type != SDL_MOUSEMOTION && event.type != SDL_MOUSEBUTTONUP &&
-        event.type != SDL_FINGERUP) {
+    if (event.type != SDL_EVENT_MOUSE_MOTION && event.type != SDL_EVENT_MOUSE_BUTTON_UP &&
+        event.type != SDL_EVENT_FINGER_UP && event.type != SDL_EVENT_FINGER_CANCELED) {
       return;
     }
     for (auto *child : children) {

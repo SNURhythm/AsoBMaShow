@@ -78,18 +78,18 @@ int main() {
     menu.show({.x = 100, .y = 100, .width = 90, .height = 58},
               {{.id = "reveal", .label = "Reveal File"}}, 210);
     SDL_Event escape{};
-    escape.type = SDL_KEYDOWN;
+    escape.type = SDL_EVENT_KEY_DOWN;
     escape.key.repeat = 0;
-    escape.key.keysym.sym = SDLK_ESCAPE;
+    escape.key.key = SDLK_ESCAPE;
     assert(!menu.handleEventsImpl(escape));
     assert(!menu.isOpen());
 
     menu.show({.x = 100, .y = 100, .width = 90, .height = 58},
               {{.id = "reveal", .label = "Reveal File"}}, 210);
     SDL_Event back{};
-    back.type = SDL_KEYDOWN;
+    back.type = SDL_EVENT_KEY_DOWN;
     back.key.repeat = 0;
-    back.key.keysym.sym = SDLK_AC_BACK;
+    back.key.key = SDLK_AC_BACK;
     assert(!menu.handleEventsImpl(back));
     assert(!menu.isOpen());
 
@@ -124,18 +124,18 @@ int main() {
                                 float y) {
       SDL_Event event{};
       event.type = type;
-      event.tfinger.fingerId = fingerId;
+      event.tfinger.fingerID = fingerId;
       event.tfinger.x = x / static_cast<float>(rendering::window_width);
       event.tfinger.y = y / static_cast<float>(rendering::window_height);
       assert(!menu.handleEvents(event));
     };
     for (SDL_FingerID fingerId = 1; fingerId <= 5; ++fingerId) {
-      sendFinger(SDL_FINGERDOWN, fingerId, 100.0F, 160.0F);
-      sendFinger(SDL_FINGERMOTION, fingerId, 100.0F, 110.0F);
-      sendFinger(SDL_FINGERUP, fingerId, 100.0F, 110.0F);
+      sendFinger(SDL_EVENT_FINGER_DOWN, fingerId, 100.0F, 160.0F);
+      sendFinger(SDL_EVENT_FINGER_MOTION, fingerId, 100.0F, 110.0F);
+      sendFinger(SDL_EVENT_FINGER_UP, fingerId, 100.0F, 110.0F);
     }
-    sendFinger(SDL_FINGERDOWN, 6, 100.0F, 144.0F);
-    sendFinger(SDL_FINGERUP, 6, 100.0F, 144.0F);
+    sendFinger(SDL_EVENT_FINGER_DOWN, 6, 100.0F, 144.0F);
+    sendFinger(SDL_EVENT_FINGER_UP, 6, 100.0F, 144.0F);
     assert(selections == std::vector<std::string>{"action-5"});
     assert(!menu.isOpen());
   }

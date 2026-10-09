@@ -92,7 +92,7 @@
 #include <vector>
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-#include <SDL_uikit_rawtouch.h>
+#include <SDL3/SDL_uikit_rawtouch.h>
 #include <dispatch/dispatch.h>
 #endif
 
@@ -177,11 +177,6 @@ gameplaySkinSessionServices(ApplicationContext &context) {
               context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
-          .builtinImageCache = &ImageView::sharedDecodedImageCache(),
-          .builtinImageCacheKey =
-              [](const std::filesystem::path &path) {
-                return ImageView::chartImageCacheKey(path);
-              },
           .builtinImageBatchReader =
               [](const std::map<int, std::filesystem::path> &paths,
                  std::vector<skin::SkinBuiltinImageBatch> &out,
@@ -204,7 +199,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                 // offset-based pass (fast random access) instead of a
                 // per-image stream, which for an audio-heavy archived chart
                 // decompressed the whole archive once per image.
-                std::map<std::string,
+                std::map<std::filesystem::path,
                          std::vector<std::pair<int, std::filesystem::path>>>
                     byArchive;
                 std::vector<std::pair<int, std::filesystem::path>> plain;
@@ -212,7 +207,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   std::filesystem::path archivePath, innerPath;
                   if (archive_file::splitVirtualPath(path, archivePath,
                                                      innerPath)) {
-                    byArchive[archivePath.generic_string()].emplace_back(
+                    byArchive[archivePath].emplace_back(
                         reference, innerPath);
                   } else {
                     plain.emplace_back(reference, path);
@@ -236,7 +231,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   std::vector<archive_file::FileData> files;
                   std::string batchError;
                   if (archive_file::readArchiveEntries(
-                          std::filesystem::path(archive), innerPaths, files,
+                          archive, innerPaths, files,
                           &batchError,
                           [&stop] { return !stop.stop_requested(); })) {
                     for (auto &file : files) {
@@ -260,8 +255,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                     std::vector<unsigned char> bytes;
                     std::string readError;
                     if (archive_file::readFileBounded(
-                            archive_file::makeVirtualPath(
-                                std::filesystem::path(archive), inner),
+                            archive_file::makeVirtualPath(archive, inner),
                             bytes, maximumBytes, &readError, stop)) {
                       out.push_back({.reference = reference,
                                      .bytes = std::move(bytes)});
@@ -269,6 +263,11 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   }
                 }
                 return !stop.stop_requested();
+              },
+          .builtinImageCache = &ImageView::sharedDecodedImageCache(),
+          .builtinImageCacheKey =
+              [](const std::filesystem::path &path) {
+                return ImageView::chartImageCacheKey(path);
               },
           .liveResourceCounters = context.skinLiveResourceCounters,
           .createHttpTransport = [](std::stop_token stop) {
@@ -1422,7 +1421,7 @@ struct GamePlayScene::RealtimeGameplaySession {
     return accepted;
   }
 
-  static int SDLCALL sdlInputWatch(void *context, SDL_Event *event) {
+  static bool SDLCALL sdlInputWatch(void *context, SDL_Event *event) {
     if (context == nullptr || event == nullptr) {
       return 0;
     }
@@ -1437,7 +1436,7 @@ struct GamePlayScene::RealtimeGameplaySession {
         session.physicalInputRouter == nullptr) {
       return 0;
     }
-    if ((event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) &&
+    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
         session.scene != nullptr) {
       const auto *coordinator =
           dynamic_cast<const PlayfieldPresentationCoordinator *>(
@@ -1464,7 +1463,10 @@ struct GamePlayScene::RealtimeGameplaySession {
           physical.control.deviceClass != input::DeviceClass::Joystick) {
         continue;
       }
-      session.physicalInputRouter->consume(physical, timestamp);
+      const auto eventTime = physical.timestampMicros == 0 ? timestamp
+          : input::rebaseTimestampMicros(physical.timestampMicros,
+                                         SDL_GetTicksNS() / 1000, timestamp);
+      session.physicalInputRouter->consume(physical, eventTime);
     }
     return 0;
   }
@@ -1488,10 +1490,9 @@ struct GamePlayScene::RealtimeGameplaySession {
     std::int64_t timestamp = nowMicros();
     if (event.timestampMicros != 0) {
       if (event.timestampDomain ==
-          input::InputTimestampDomain::SdlMilliseconds) {
-        timestamp = input::rebaseWrappingTimestampMillis(
-            static_cast<std::uint32_t>(event.timestampMicros / 1000U),
-            SDL_GetTicks(), timestamp);
+          input::InputTimestampDomain::SdlTicks) {
+        timestamp = input::rebaseTimestampMicros(
+            event.timestampMicros, SDL_GetTicksNS() / 1000, timestamp);
       } else {
         timestamp = event.timestampMicros >
                             static_cast<std::uint64_t>(
@@ -2465,14 +2466,14 @@ void GamePlayScene::drainRealtimeTouchSamples(
       (void)coordinator->focusTextInput(*sample.presentationUiPoint,
                                         eventMicros);
       if (!coordinator->hasFocusedTextInput()) {
-        SDL_StopTextInput();
+        SDL_StopTextInput(SDL_GetKeyboardFocus());
       }
     }
     const auto presentationResult =
         session.presentationTouches.consume(sample, eventMicros);
     if (presentationResult.consumed && coordinator != nullptr &&
         coordinator->hasFocusedTextInput()) {
-      SDL_StartTextInput();
+      SDL_StartTextInput(SDL_GetKeyboardFocus());
     }
     if (!gameplayTime.has_value()) {
       return;
@@ -3055,7 +3056,7 @@ GamePlayScene::~GamePlayScene() {
           dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
       coordinator != nullptr && coordinator->hasFocusedTextInput()) {
     coordinator->cancelTextInput();
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
   }
   persistAutoAdjustedNotesDisplayTiming();
   persistSkinAudioSettings();
@@ -4173,7 +4174,7 @@ void GamePlayScene::showGuidedAccessReminder() {
   guidedAccessButtonMarker->setSize(cue.marker.width, cue.marker.height);
   guidedAccessButtonMarker->setPositionNoLayout(cue.marker.x, cue.marker.y);
   // Three gentle pulses suggest triple-clicking, followed by a pause.
-  const float pulseTime = static_cast<float>(SDL_GetTicks64() % 1800);
+  const float pulseTime = static_cast<float>(SDL_GetTicks() % 1800);
   const float pulse = pulseTime < 900 ? std::sin(3.14159265F * pulseTime / 300) : 0;
   guidedAccessButtonMarker->setBackgroundColor(
       ui_theme::withAlpha(ui_theme::lime(), confirming
@@ -6662,7 +6663,7 @@ void GamePlayScene::update(float dt) {
     discardGuidedAccessReminderTouches();
     const bool wasConfirming = guidedAccessReminder.confirming();
     if (guidedAccessReminder.update(isGuidedAccessEnabled(),
-                                   !guidedAccessReminderBackground, SDL_GetTicks64())) {
+                                   !guidedAccessReminderBackground, SDL_GetTicks())) {
       if (!options.guidedAccessReminderSkipped) playGuidedAccessChime();
     } else if (wasConfirming && !guidedAccessReminder.confirming()) {
       stopGuidedAccessChime();
@@ -7026,7 +7027,7 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
       skin_text_input_lifecycle::CommitResult::NotRequested) {
     if (lifecycleCommit ==
         skin_text_input_lifecycle::CommitResult::Committed) {
-      SDL_StopTextInput();
+      SDL_StopTextInput(SDL_GetKeyboardFocus());
     }
     // Lifecycle delivery must still reach Scene; a failed bounded queue keeps
     // both editor focus and SDL text mode active for a later commit.
@@ -7036,20 +7037,20 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
     const bool wasFocused = coordinator->hasFocusedTextInput();
     const bool focused = coordinator->focusTextInput(point, nowMicros());
     if (focused) {
-      SDL_StartTextInput();
+      SDL_StartTextInput(SDL_GetKeyboardFocus());
       return true;
     }
     if (wasFocused && coordinator->hasFocusedTextInput()) {
       return true;
     }
     if (wasFocused && !coordinator->hasFocusedTextInput()) {
-      SDL_StopTextInput();
+      SDL_StopTextInput(SDL_GetKeyboardFocus());
     }
     return false;
   };
 
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return false;
@@ -7059,30 +7060,29 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
     mouseEventToUi(event.button, uiX, uiY);
     return focusAt({.x = uiX, .y = uiY});
   }
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     float uiX = 0.0F;
     float uiY = 0.0F;
     fingerEventToUi(event.tfinger, uiX, uiY);
     return focusAt({.x = uiX, .y = uiY});
   }
-  case SDL_TEXTINPUT:
+  case SDL_EVENT_TEXT_INPUT:
     if (!coordinator->hasFocusedTextInput()) {
       return false;
     }
     (void)coordinator->appendTextInput(event.text.text);
     return true;
-  case SDL_TEXTEDITING:
-  case SDL_TEXTEDITING_EXT:
+  case SDL_EVENT_TEXT_EDITING:
     return coordinator->hasFocusedTextInput();
-  case SDL_KEYDOWN:
+  case SDL_EVENT_KEY_DOWN:
     if (!coordinator->hasFocusedTextInput()) {
       return false;
     }
-    switch (event.key.keysym.sym) {
+    switch (event.key.key) {
     case SDLK_RETURN:
     case SDLK_KP_ENTER:
       if (coordinator->commitTextInput(nowMicros())) {
-        SDL_StopTextInput();
+        SDL_StopTextInput(SDL_GetKeyboardFocus());
       }
       break;
     case SDLK_BACKSPACE:
@@ -7090,13 +7090,13 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
       break;
     case SDLK_ESCAPE:
       coordinator->cancelTextInput();
-      SDL_StopTextInput();
+      SDL_StopTextInput(SDL_GetKeyboardFocus());
       break;
     default:
       break;
     }
     return true;
-  case SDL_KEYUP:
+  case SDL_EVENT_KEY_UP:
     return coordinator->hasFocusedTextInput();
   default:
     return false;
@@ -7104,13 +7104,22 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
 }
 
 bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
+  if (event.type == SDL_EVENT_FINGER_CANCELED) {
+    if (!coursePauseHoldActive || !coursePauseHoldTouch ||
+        event.tfinger.fingerID != coursePauseHoldFinger) {
+      return false;
+    }
+    // The normal release helper updates progress and can finish the hold.
+    resetCoursePauseHold();
+    return true;
+  }
   if (!isCoursePlayback() || pauseButton == nullptr ||
       !pauseButton->getVisible()) {
     return false;
   }
 
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return false;
@@ -7124,7 +7133,7 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
     beginCoursePauseHold(false, -1);
     return true;
   }
-  case SDL_MOUSEBUTTONUP: {
+  case SDL_EVENT_MOUSE_BUTTON_UP: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID || !coursePauseHoldActive ||
         coursePauseHoldTouch) {
@@ -7133,7 +7142,7 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
     cancelCoursePauseHold();
     return true;
   }
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     if (!coursePauseHoldActive || coursePauseHoldTouch) {
       return false;
     }
@@ -7145,7 +7154,7 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
     }
     return true;
   }
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     float uiX = 0.0f;
     float uiY = 0.0f;
     fingerEventToUi(event.tfinger, uiX, uiY);
@@ -7153,21 +7162,21 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
       return false;
     }
     if (!coursePauseHoldActive) {
-      beginCoursePauseHold(true, event.tfinger.fingerId);
+      beginCoursePauseHold(true, event.tfinger.fingerID);
     }
     return true;
   }
-  case SDL_FINGERUP: {
+  case SDL_EVENT_FINGER_UP: {
     if (!coursePauseHoldActive || !coursePauseHoldTouch ||
-        event.tfinger.fingerId != coursePauseHoldFinger) {
+        event.tfinger.fingerID != coursePauseHoldFinger) {
       return false;
     }
     cancelCoursePauseHold();
     return true;
   }
-  case SDL_FINGERMOTION: {
+  case SDL_EVENT_FINGER_MOTION: {
     if (!coursePauseHoldActive || !coursePauseHoldTouch ||
-        event.tfinger.fingerId != coursePauseHoldFinger) {
+        event.tfinger.fingerID != coursePauseHoldFinger) {
       return false;
     }
     float uiX = 0.0f;
@@ -7178,8 +7187,8 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
     }
     return true;
   }
-  case SDL_WINDOWEVENT:
-    if (event.window.event == SDL_WINDOWEVENT_LEAVE && coursePauseHoldActive &&
+  case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE && coursePauseHoldActive &&
         !coursePauseHoldTouch) {
       cancelCoursePauseHold();
       return true;
@@ -8604,17 +8613,17 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   std::optional<UiLogicalPoint> observedPointer;
   UiLogicalPoint point;
-  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+  if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
     rendering::screenToUi(event.motion.x * rendering::widthScale,
                           event.motion.y * rendering::heightScale, point.x, point.y);
     observedPointer = point;
-  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+  } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
              event.button.which != SDL_TOUCH_MOUSEID) {
     rendering::screenToUi(event.button.x * rendering::widthScale,
                           event.button.y * rendering::heightScale, point.x, point.y);
     observedPointer = point;
-  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
-             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+  } else if ((event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION) &&
+             event.tfinger.touchID != SDL_MOUSE_TOUCHID) {
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
     observedPointer = point;
   }
@@ -8623,21 +8632,21 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   }
 
   if (guidedAccessReminderPending) {
-    if (event.type == SDL_WINDOWEVENT &&
-        event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+    if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
+        event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
       guidedAccessReminderBackground = true;
       guidedAccessReminder.interrupt();
       stopGuidedAccessChime();
       if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
     }
-    if (event.type == SDL_WINDOWEVENT &&
-        event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+    if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
+        event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
       guidedAccessReminderBackground = false;
       guidedAccessReminder.interrupt();
       if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
     }
     if (!guidedAccessReminderBackground) {
-      if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+      if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
         returnFromGuidedAccessReminder();
       }
       if (guidedAccessReminderLayout != nullptr) {
@@ -8658,14 +8667,14 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   }
 
   Scene::handleEvents(event);
-  if (event.type == SDL_MOUSEWHEEL && !context.jukebox.isPaused() &&
+  if (event.type == SDL_EVENT_MOUSE_WHEEL && !context.jukebox.isPaused() &&
       !practiceMenuActive && !(pauseLayout && pauseLayout->getVisible())) {
     adjustLaneCoverFromInput(sdl_pointer_event::verticalWheelScrollDelta(event.wheel, 0.5F));
   }
-  if (event.type == SDL_KEYDOWN) {
+  if (event.type == SDL_EVENT_KEY_DOWN) {
     if (event.key.repeat == 0 && !pauseHandledByInputPipeline &&
         hasActiveKeyboardActionBinding(context.inputProfile,
-            makeGameplayInputScopes(presentationKeyMode()), event.key.keysym.scancode,
+            makeGameplayInputScopes(presentationKeyMode()), event.key.scancode,
             input::LogicalActionKind::Pause)) {
       togglePauseMenuFromInput();
     }

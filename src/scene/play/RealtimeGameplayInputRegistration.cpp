@@ -1,6 +1,7 @@
 #include "RealtimeGameplayInputRegistration.h"
 
 #include <utility>
+#include <stdexcept>
 
 namespace gameplay {
 
@@ -36,7 +37,9 @@ RealtimeGameplayInputRegistration::RealtimeGameplayInputRegistration(
       }
     }
     if (configuration_.sdlWatch != nullptr) {
-      SDL_AddEventWatch(&watch, this);
+      if (!SDL_AddEventWatch(&watch, this)) {
+        throw std::runtime_error(SDL_GetError());
+      }
       watchingSdl_ = true;
     }
   } catch (...) {
@@ -49,7 +52,7 @@ RealtimeGameplayInputRegistration::~RealtimeGameplayInputRegistration() {
   close();
 }
 
-int SDLCALL RealtimeGameplayInputRegistration::watch(void *context, SDL_Event *event) {
+bool SDLCALL RealtimeGameplayInputRegistration::watch(void *context, SDL_Event *event) {
   auto &registration = *static_cast<RealtimeGameplayInputRegistration *>(context);
   if (!registration.acceptingNativeInput_.load(std::memory_order_acquire)) return 0;
   return registration.configuration_.sdlWatch(registration.configuration_.sdlWatchContext, event);
@@ -78,7 +81,7 @@ void RealtimeGameplayInputRegistration::close() {
   closed_ = true;
   acceptingNativeInput_.store(false, std::memory_order_release);
   if (watchingSdl_) {
-    SDL_DelEventWatch(&watch, this);
+    SDL_RemoveEventWatch(&watch, this);
     watchingSdl_ = false;
   }
   if (inputSubscription_ != 0) {

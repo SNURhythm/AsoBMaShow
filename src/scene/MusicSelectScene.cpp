@@ -437,9 +437,9 @@ std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
 }
 
 std::optional<MusicSelectCommandKey> commandKey(const SDL_KeyboardEvent &key) {
-  const bool control = (key.keysym.mod & KMOD_CTRL) != 0;
-  const bool shift = (key.keysym.mod & KMOD_SHIFT) != 0;
-  switch (key.keysym.sym) {
+  const bool control = (key.mod & SDL_KMOD_CTRL) != 0;
+  const bool shift = (key.mod & SDL_KMOD_SHIFT) != 0;
+  switch (key.key) {
   case SDLK_F2: return MusicSelectCommandKey::UpdateFolder;
   case SDLK_F3:
     if (control && shift) return MusicSelectCommandKey::CopySha256;
@@ -1329,7 +1329,7 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
   if (!skinSession_) return false;
   UiLogicalPoint point;
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.which == SDL_TOUCH_MOUSEID) return false;
     rendering::screenToUi(event.button.x * rendering::widthScale,
                           event.button.y * rendering::heightScale,
@@ -1339,7 +1339,7 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
     applySkinPointerResult(pointer, MusicSelectPointerOrigin::Mouse);
     return pointer.consumed;
   }
-  case SDL_MOUSEMOTION:
+  case SDL_EVENT_MOUSE_MOTION:
     if (event.motion.which == SDL_TOUCH_MOUSEID || event.motion.state == 0) {
       return false;
     }
@@ -1347,18 +1347,18 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
                           event.motion.y * rendering::heightScale,
                           point.x, point.y);
     return skinSession_->queuePointerDrag(point, steadyMicros());
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                               point.y);
     const auto target = skinSession_->pointerTargetAt(point);
     if (target.kind == skin::MusicSelectSkinPointerTargetKind::Bar) {
-      return skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,
+      return skinTouchGesture_.begin(event.tfinger.fingerID, event.tfinger.x,
                                      event.tfinger.y,
                                      MusicSelectTouchTarget::Bar);
     }
     if (target.kind == skin::MusicSelectSkinPointerTargetKind::None &&
-        skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,
+        skinTouchGesture_.begin(event.tfinger.fingerID, event.tfinger.x,
                                 event.tfinger.y,
                                 MusicSelectTouchTarget::Navigation)) {
       return true;
@@ -1374,16 +1374,16 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
     }
     if (target.kind == skin::MusicSelectSkinPointerTargetKind::Slider &&
         pointer.consumed) {
-      (void)skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,
+      (void)skinTouchGesture_.begin(event.tfinger.fingerID, event.tfinger.x,
                                     event.tfinger.y,
                                     MusicSelectTouchTarget::Slider);
     }
     return pointer.consumed;
   }
-  case SDL_FINGERMOTION: {
+  case SDL_EVENT_FINGER_MOTION: {
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
     const auto motion =
-        skinTouchGesture_.move(event.tfinger.fingerId, event.tfinger.x,
+        skinTouchGesture_.move(event.tfinger.fingerID, event.tfinger.x,
                                event.tfinger.y);
     if (!motion.accepted) return false;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
@@ -1404,9 +1404,13 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
     }
     return true;
   }
-  case SDL_FINGERUP: {
+  case SDL_EVENT_FINGER_CANCELED:
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
-    const auto release = skinTouchGesture_.end(event.tfinger.fingerId);
+    // Retire only this finger's capture without applying its tap/back result.
+    return skinTouchGesture_.end(event.tfinger.fingerID).accepted;
+  case SDL_EVENT_FINGER_UP: {
+    if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
+    const auto release = skinTouchGesture_.end(event.tfinger.fingerID);
     if (!release.accepted) return false;
     if (release.goBack) {
       closeDirectory();
@@ -1431,17 +1435,17 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<UiLogicalPoint> observedPointer;
   UiLogicalPoint point;
-  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+  if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
     rendering::screenToUi(event.motion.x * rendering::widthScale,
                           event.motion.y * rendering::heightScale, point.x, point.y);
     observedPointer = point;
-  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+  } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
              event.button.which != SDL_TOUCH_MOUSEID) {
     rendering::screenToUi(event.button.x * rendering::widthScale,
                           event.button.y * rendering::heightScale, point.x, point.y);
     observedPointer = point;
-  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
-             event.tfinger.touchId != SDL_MOUSE_TOUCHID) {
+  } else if ((event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION) &&
+             event.tfinger.touchID != SDL_MOUSE_TOUCHID) {
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
     observedPointer = point;
   }
@@ -1452,8 +1456,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
 #endif
 
   if (failed_) {
-    if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-      switch (event.key.keysym.sym) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0) {
+      switch (event.key.key) {
       case SDLK_RETURN:
       case SDLK_KP_ENTER:
       case SDLK_6:
@@ -1466,14 +1470,14 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
         break;
       }
     }
-    if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-      switch (event.cbutton.button) {
-      case SDL_CONTROLLER_BUTTON_A:
-      case SDL_CONTROLLER_BUTTON_START:
+    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+      switch (event.gbutton.button) {
+      case SDL_GAMEPAD_BUTTON_SOUTH:
+      case SDL_GAMEPAD_BUTTON_START:
         openSettings();
         return {};
-      case SDL_CONTROLLER_BUTTON_B:
-      case SDL_CONTROLLER_BUTTON_BACK:
+      case SDL_GAMEPAD_BUTTON_EAST:
+      case SDL_GAMEPAD_BUTTON_BACK:
         context.sceneManager->changeScene("Intro");
         return {};
       default:
@@ -1509,8 +1513,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   if (tasksModal_ != nullptr && tasksModal_->getVisible()) {
-    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-        event.key.keysym.sym == SDLK_ESCAPE) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+        event.key.key == SDLK_ESCAPE) {
       tasksModal_->setVisible(false);
       return {};
     }
@@ -1519,8 +1523,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   }
   if (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
       playOptionsModal_->root()->getVisible()) {
-    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-        event.key.keysym.sym == SDLK_ESCAPE) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+        event.key.key == SDLK_ESCAPE) {
       playOptionsModal_->hide();
       return {};
     }
@@ -1528,8 +1532,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   if (searchOverlay_ != nullptr && searchOverlay_->getVisible()) {
-    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-        event.key.keysym.sym == SDLK_ESCAPE) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+        event.key.key == SDLK_ESCAPE) {
       hideSearchPrompt();
       return {};
     }
@@ -1543,8 +1547,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (toolbar_ != nullptr && !toolbar_->handleEvents(event)) return {};
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr && skinTextInput_->getSelected() &&
-      event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-      event.key.keysym.sym == SDLK_ESCAPE) {
+      event.type == SDL_EVENT_KEY_DOWN && event.key.repeat == 0 &&
+      event.key.key == SDLK_ESCAPE) {
     skinTextInput_->endEditing();
   }
   if (skinTextInput_ != nullptr && skinTextInput_->getSelected() &&
@@ -1554,12 +1558,12 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (queueSkinPointerEvent(event)) return {};
 #endif
 
-  if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
+  if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
       event.key.repeat == 0) {
-    const bool down = event.type == SDL_KEYDOWN;
+    const bool down = event.type == SDL_EVENT_KEY_DOWN;
     if (inputBindingAdapter_) {
       auto &logicalInput = inputBindingAdapter_->state();
-      if (const auto key = controlKey(event.key.keysym.sym)) {
+      if (const auto key = controlKey(event.key.key)) {
         if (down) {
           logicalInput.controlPressed.insert(*key);
           logicalInput.controlHeld.insert(*key);
@@ -1575,7 +1579,7 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     }
     return {};
   }
-  if (event.type == SDL_MOUSEWHEEL) {
+  if (event.type == SDL_EVENT_MOUSE_WHEEL) {
     if (inputBindingAdapter_) {
       inputBindingAdapter_->state().wheel += event.wheel.y;
     }
@@ -2002,7 +2006,7 @@ void MusicSelectScene::copySelectedHash(bool sha256) {
           ? &snapshot.rowAt(snapshot.selectedIndex)
           : nullptr;
   const std::string hash = musicSelectSelectedHash(selected, sha256);
-  if (!hash.empty() && SDL_SetClipboardText(hash.c_str()) != 0) {
+  if (!hash.empty() && !SDL_SetClipboardText(hash.c_str())) {
     SDL_Log("Unable to copy selected chart hash: %s", SDL_GetError());
   }
 }
@@ -2655,14 +2659,14 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
                   .assistOption = session->assistOption,
                   .tableName = tableContext.name,
                   .tableLevel = tableContext.level,
-                  .playback = course_rules::kRequiredPlaybackRate,
-                  .clubMode = clubMode,
                   .courseSession = session,
                   .courseConstraints = session->constraints,
+                  .ownsChart = true,
+                  .playback = course_rules::kRequiredPlaybackRate,
+                  .clubMode = clubMode,
+                  .returnScene = this,
                   .ruleset = session->ruleset,
                   .requiredRulesetDescriptor = session->rulesetDescriptor,
-                  .ownsChart = true,
-                  .returnScene = this,
               };
               context.sceneManager->changeScene(
                   std::make_unique<GamePlayScene>(context, std::move(*preparedChart),
@@ -3191,7 +3195,7 @@ void MusicSelectScene::executeEvent(
           std::string error;
           if (!platform_open::openPath(path, error)) {
             SDL_Log("Failed to open chart document %s: %s",
-                    path.string().c_str(), error.c_str());
+                    fspath_to_utf8(path).c_str(), error.c_str());
           }
         }
       }

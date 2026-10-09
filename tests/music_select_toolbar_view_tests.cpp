@@ -219,13 +219,13 @@ void testActionsModesAndDragPersist() {
   const int startX = toolbar->getX() + 20;
   const int startY = toolbar->getY() + 20;
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.x = startX;
   down.button.y = startY;
   expect(!toolbar->handleEvents(down), "drag handle consumes pointer down");
   SDL_Event motion{};
-  motion.type = SDL_MOUSEMOTION;
+  motion.type = SDL_EVENT_MOUSE_MOTION;
   motion.motion.x = startX + 70;
   motion.motion.y = startY + 35;
   expect(!toolbar->handleEvents(motion), "active drag consumes pointer motion");
@@ -235,7 +235,7 @@ void testActionsModesAndDragPersist() {
   expect(toolbar->getX() == draggedX && toolbar->getY() == draggedY,
          "per-frame viewport updates preserve in-progress drag placement");
   SDL_Event up{};
-  up.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
   up.button.button = SDL_BUTTON_LEFT;
   up.button.x = startX + 70;
   up.button.y = startY + 35;
@@ -279,11 +279,11 @@ void testDisabledChildReleaseFinishesToolbarDrag() {
       SDL_Event event{};
       event.type = touch ? touchType : mouseType;
       if (touch) {
-        event.tfinger.touchId = 1;
-        event.tfinger.fingerId = finger;
+        event.tfinger.touchID = 1;
+        event.tfinger.fingerID = finger;
         event.tfinger.x = static_cast<float>(x) / rendering::render_width;
         event.tfinger.y = static_cast<float>(y) / rendering::render_height;
-      } else if (mouseType == SDL_MOUSEMOTION) {
+      } else if (mouseType == SDL_EVENT_MOUSE_MOTION) {
         event.motion.x = x;
         event.motion.y = y;
       } else {
@@ -293,51 +293,51 @@ void testDisabledChildReleaseFinishesToolbarDrag() {
       }
       return event;
     };
-    auto down = pointerEvent(SDL_MOUSEBUTTONDOWN, SDL_FINGERDOWN,
+    auto down = pointerEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_FINGER_DOWN,
                              toolbar->getX() + 20, toolbar->getY() + 20);
     expect(!toolbar->handleEvents(down), "toolbar begins the release regression drag");
-    auto motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, 800, 44);
+    auto motion = pointerEvent(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION, 800, 44);
     toolbar->handleEvents(motion);
     const int clampedX = toolbar->getX();
     const int clampedY = toolbar->getY();
     expect(clampedX + toolbar->getWidth() == 800,
            "dragging beyond the viewport clamps the toolbar at its right edge");
     const auto *chart = toolbar->controls()[1].button;
-    auto up = pointerEvent(SDL_MOUSEBUTTONUP, SDL_FINGERUP,
+    auto up = pointerEvent(SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_FINGER_UP,
                            chart->getX() + chart->getWidth() / 2,
                            chart->getY() + chart->getHeight() / 2);
     auto unrelatedUp = up;
-    if (touch) unrelatedUp.tfinger.fingerId = 92;
+    if (touch) unrelatedUp.tfinger.fingerID = 92;
     else unrelatedUp.button.button = SDL_BUTTON_RIGHT;
     expect(!toolbar->handleEvents(unrelatedUp),
            "disabled chart button consumes an unrelated pointer release");
     auto syntheticUp = up;
-    if (touch) syntheticUp.tfinger.touchId = SDL_MOUSE_TOUCHID;
+    if (touch) syntheticUp.tfinger.touchID = SDL_MOUSE_TOUCHID;
     else syntheticUp.button.which = SDL_TOUCH_MOUSEID;
     expect(!toolbar->handleEvents(syntheticUp),
            "disabled chart button consumes a synthesized pointer release");
     expect(saved.empty(), "unrelated and synthesized releases do not finish the drag");
-    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, clampedX - 20, 44);
+    motion = pointerEvent(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION, clampedX - 20, 44);
     toolbar->handleEvents(motion);
     expect(toolbar->getX() < clampedX,
            "the original drag remains active after unrelated releases");
-    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, 800, 44);
+    motion = pointerEvent(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION, 800, 44);
     toolbar->handleEvents(motion);
 
     expect(!toolbar->handleEvents(up), "disabled chart button consumes the drag release");
     expect(saved.size() == 1 && saved.back().hasPosition &&
                saved.back().x == clampedX && saved.back().y == clampedY,
            "a consumed drag release persists the current clamped toolbar position");
-    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION, 80, 100);
+    motion = pointerEvent(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION, 80, 100);
     toolbar->handleEvents(motion);
     expect(toolbar->getX() == clampedX && toolbar->getY() == clampedY,
            "motion after a consumed release cannot keep dragging the toolbar");
 
-    down = pointerEvent(SDL_MOUSEBUTTONDOWN, SDL_FINGERDOWN,
+    down = pointerEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_FINGER_DOWN,
                          toolbar->getX() + 20, toolbar->getY() + 20, 92);
     expect(!toolbar->handleEvents(down), "a new pointer can start the next toolbar drag");
     const int nextStartX = toolbar->getX();
-    motion = pointerEvent(SDL_MOUSEMOTION, SDL_FINGERMOTION,
+    motion = pointerEvent(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION,
                            nextStartX - 40, toolbar->getY() + 20, 92);
     toolbar->handleEvents(motion);
     expect(toolbar->getX() < nextStartX,

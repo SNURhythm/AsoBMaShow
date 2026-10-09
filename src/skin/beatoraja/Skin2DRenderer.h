@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -37,6 +38,7 @@ class PlaySkinSession;
 class ResultSkinSession;
 class MusicSelectSkinSession;
 class Skin2DRenderer;
+struct SkinRendererModelIndex;
 
 // Move-only proof that PlaySkinSession has already opened the matching Lua
 // callback frame. Only the session may mint it and only the renderer may
@@ -461,6 +463,12 @@ public:
 #endif
 
 private:
+  friend class PlaySkinSession;
+  // Only owning gameplay activations may retain pointers into their immutable
+  // model. Standalone evaluators and non-owning test sessions can mutate it.
+  void prepareModelIndex(std::uint64_t sessionSerial,
+                         const ValidatedBeatorajaSkinModel &);
+
   SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,
                                                bool beginRuntimeFrame);
 
@@ -476,6 +484,9 @@ private:
     std::uint64_t epoch = 0;
   };
 
+  std::shared_ptr<const SkinRendererModelIndex> preparedModelIndex_;
+  std::uint64_t preparedModelSessionSerial_ = 0;
+  const ValidatedBeatorajaSkinModel *preparedModelIdentity_ = nullptr;
   std::uint64_t gaugeAnimationSessionSerial_ = 0;
   std::map<SkinObjectId, GaugeAnimationState> gaugeAnimationStates_;
   std::uint64_t hitErrorVisualizerSessionSerial_ = 0;

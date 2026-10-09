@@ -322,15 +322,15 @@ void ArchiveUnzipModal::hide() {
 }
 
 bool ArchiveUnzipModal::handleEvents(SDL_Event &event) {
-  if (event.type == SDL_APP_WILLENTERBACKGROUND ||
-      event.type == SDL_APP_DIDENTERBACKGROUND) {
+  if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
+      event.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
     cancelAndWait();
     return true;
   }
   if (!isVisible()) {
     return true;
   }
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
     if (event.key.repeat == 0) {
       cancelOrClose();
     }

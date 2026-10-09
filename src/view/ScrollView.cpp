@@ -159,16 +159,16 @@ void ScrollView::renderImpl(RenderContext &context) {
 }
 
 void ScrollView::onPointerEventConsumed(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEBUTTONUP &&
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
       event.button.button == SDL_BUTTON_LEFT &&
       event.button.which != SDL_TOUCH_MOUSEID) {
     mousePressedInside = false;
     mouseDragging = false;
     mouseCapturedByContent = false;
     cancelMouseClick = false;
-  } else if (event.type == SDL_FINGERUP &&
+  } else if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
              !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
-             event.tfinger.fingerId == activeTouchId) {
+             event.tfinger.fingerID == activeTouchId) {
     activeTouchId = -1;
     touchPressedInside = false;
     touchDragging = false;
@@ -187,15 +187,11 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
   }
 
   switch (event.type) {
-  case SDL_MOUSEWHEEL: {
-    int mouseX = 0;
-    int mouseY = 0;
-    SDL_GetMouseState(&mouseX, &mouseY);
-    mouseX = static_cast<int>(mouseX * rendering::widthScale);
-    mouseY = static_cast<int>(mouseY * rendering::heightScale);
-    int uiX = 0;
-    int uiY = 0;
-    rendering::screenToUi(mouseX, mouseY, uiX, uiY);
+  case SDL_EVENT_MOUSE_WHEEL: {
+    float uiX = 0;
+    float uiY = 0;
+    rendering::screenToUi(event.wheel.mouse_x * rendering::widthScale,
+                          event.wheel.mouse_y * rendering::heightScale, uiX, uiY);
     if (!isInside(static_cast<float>(uiX), static_cast<float>(uiY))) {
       return true;
     }
@@ -204,7 +200,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
                                                          kWheelStepUi));
     return false;
   }
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT || mousePressedInside) {
       return true;
     }
@@ -228,7 +224,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     contentView->handleEvents(event);
     return false;
   }
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     int uiX = 0;
     int uiY = 0;
     if (!eventToUi(event.motion, uiX, uiY)) {
@@ -263,7 +259,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     return isInside(static_cast<float>(uiX), static_cast<float>(uiY)) ? false
                                                                       : true;
   }
-  case SDL_MOUSEBUTTONUP: {
+  case SDL_EVENT_MOUSE_BUTTON_UP: {
     if (event.button.button != SDL_BUTTON_LEFT) {
       return true;
     }
@@ -299,7 +295,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     }
     return inside ? false : true;
   }
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     if (activeTouchId != -1) {
       return true;
     }
@@ -309,8 +305,8 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (!isInside(uiX, uiY)) {
       return true;
     }
-    touchMomentum.beginDrag(event.tfinger.timestamp);
-    activeTouchId = event.tfinger.fingerId;
+    touchMomentum.beginDrag(event.tfinger.timestamp / 1000000);
+    activeTouchId = event.tfinger.fingerID;
     touchPressedInside = true;
     touchDragging = false;
     touchCapturedByContent = false;
@@ -321,8 +317,8 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     contentView->handleEvents(event);
     return false;
   }
-  case SDL_FINGERMOTION: {
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_MOTION: {
+    if (event.tfinger.fingerID != activeTouchId) {
       return true;
     }
     if (touchCapturedByContent) {
@@ -345,14 +341,14 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (touchDragging) {
       const float delta = lastTouchUiY - uiY;
       scrollBy(delta);
-      touchMomentum.recordDragDelta(delta, event.tfinger.timestamp);
+      touchMomentum.recordDragDelta(delta, event.tfinger.timestamp / 1000000);
       lastTouchUiY = uiY;
       return false;
     }
     return false;
   }
-  case SDL_FINGERUP: {
-    if (event.tfinger.fingerId != activeTouchId) {
+  case SDL_EVENT_FINGER_UP: {
+    if (event.tfinger.fingerID != activeTouchId) {
       return true;
     }
     const bool shouldCancelClick = cancelTouchClick;
@@ -369,7 +365,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       return false;
     }
     if (hadDrag) {
-      touchMomentum.release(event.tfinger.timestamp);
+      touchMomentum.release(event.tfinger.timestamp / 1000000);
     } else {
       touchMomentum.stop();
     }

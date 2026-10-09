@@ -12,7 +12,7 @@
 #include "WindowsRealtimeInputBackend.h"
 #endif
 
-#include <SDL2/SDL_log.h>
+#include <SDL3/SDL_log.h>
 
 #include <algorithm>
 #include <array>
@@ -366,15 +366,15 @@ InputDeviceRegistry::pointerPosition() const noexcept {
 
 void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
   std::optional<PointerPosition> pointer;
-  if (event.type == SDL_MOUSEMOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
+  if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
     pointer = PointerPosition{static_cast<float>(event.motion.x),
                               static_cast<float>(event.motion.y), false};
-  } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+  } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
              event.button.which != SDL_TOUCH_MOUSEID) {
     pointer = PointerPosition{static_cast<float>(event.button.x),
                               static_cast<float>(event.button.y), false};
-  } else if ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
-             event.tfinger.touchId != SDL_MOUSE_TOUCHID &&
+  } else if ((event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION) &&
+             event.tfinger.touchID != SDL_MOUSE_TOUCHID &&
              std::isfinite(event.tfinger.x) && std::isfinite(event.tfinger.y)) {
     pointer = PointerPosition{event.tfinger.x, event.tfinger.y, true};
   }
@@ -385,18 +385,18 @@ void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
   for (const auto &backend : backends_) {
     backend->handleSdlEvent(event);
   }
-  if (event.type == SDL_WINDOWEVENT &&
-      event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+  if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
+      event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
     const std::lock_guard lock(legacyInputMutex_);
     pressedSdlScancodes_.reset();
     pressedGdxKeys_.reset();
     pressedGdxKeyCounts_.fill(0);
     return;
   }
-  if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
-    const int scancode = static_cast<int>(event.key.keysym.scancode);
-    if (scancode >= 0 && scancode < SDL_NUM_SCANCODES) {
-      const bool pressed = event.type == SDL_KEYDOWN;
+  if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
+    const int scancode = static_cast<int>(event.key.scancode);
+    if (scancode >= 0 && scancode < SDL_SCANCODE_COUNT) {
+      const bool pressed = event.type == SDL_EVENT_KEY_DOWN;
       const std::lock_guard lock(legacyInputMutex_);
       const bool wasPressed =
           pressedSdlScancodes_.test(static_cast<std::size_t>(scancode));

@@ -319,12 +319,12 @@ int main() {
 #include <functional>
 #include <vector>
 constexpr bool ASOBMASHOW_ENABLE_PERF_TELEMETRY=true;
-constexpr int SDL_MOUSEMOTION=1, SDL_FINGERMOTION=2, SDL_WINDOWEVENT=3,
-              SDL_WINDOWEVENT_RESIZED=4, SDL_WINDOWEVENT_SIZE_CHANGED=5, SDL_KEYDOWN=6;
+constexpr int SDL_EVENT_MOUSE_MOTION=1, SDL_EVENT_FINGER_MOTION=2, SDL_EVENT_WINDOW_FIRST=4, SDL_EVENT_WINDOW_LAST=5,
+              SDL_EVENT_WINDOW_RESIZED=4, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED=5, SDL_EVENT_KEY_DOWN=6;
 struct SDL_Event {
   int type=0;
-  struct { int event=0, data1=0, data2=0; } window;
-  struct { int touchId=0, fingerId=0; } tfinger;
+  struct { int data1=0, data2=0; } window;
+  struct { int touchID=0, fingerID=0; } tfinger;
 };
 struct Registry {
   std::function<void(const SDL_Event&)> dispatch;
@@ -337,15 +337,15 @@ int main() {
   orientation.updateViewport(1920,1080);
   PresentationOrientation locked = PresentationOrientation::Landscape;
   Context context{{[&](const SDL_Event &event) {
-    if (event.type == SDL_KEYDOWN) {
+    if (event.type == SDL_EVENT_KEY_DOWN) {
       orientation.setGameplayLocked(true);
       locked=orientation.orientation();
     }
   }}};
   std::vector<SDL_Event> events{
-      {.type=SDL_WINDOWEVENT,.window={SDL_WINDOWEVENT_RESIZED,1920,1080}},
-      {.type=SDL_WINDOWEVENT,.window={SDL_WINDOWEVENT_SIZE_CHANGED,1080,1920}},
-      {.type=SDL_KEYDOWN}};
+      {.type=SDL_EVENT_WINDOW_RESIZED,.window={1920,1080}},
+      {.type=SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED,.window={1080,1920}},
+      {.type=SDL_EVENT_KEY_DOWN}};
   std::size_t eventIndex=0;
   auto SDL_PollEvent=[&](SDL_Event *event) {
     if(eventIndex==events.size())return false;
@@ -357,7 +357,7 @@ int main() {
   uint32_t pendingResizeCount=0, pendingMouseMotionCount=0, pendingFingerMotionCount=0;
   uint64_t rawEventsInWindow=0, coalescedResizeInWindow=0;
   auto processEvent=[&](const SDL_Event &event) {
-    if(event.type==SDL_WINDOWEVENT)orientation.updateViewport(event.window.data1,event.window.data2);
+    if(event.type>=SDL_EVENT_WINDOW_FIRST && event.type<=SDL_EVENT_WINDOW_LAST)orientation.updateViewport(event.window.data1,event.window.data2);
   };
 FLUSH
 LOOP

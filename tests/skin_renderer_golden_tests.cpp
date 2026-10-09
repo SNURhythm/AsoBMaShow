@@ -806,9 +806,7 @@ void verifyGolden(const GoldenCase &fixture) {
 } // namespace
 
 int main() {
-  // The fixture runs from the source root. Ignore stale executable-side shader
-  // copies that Cocoa otherwise searches before the working directory.
-  SDL_SetHint(SDL_HINT_APPLE_RWFROMFILE_USE_RESOURCES, "0");
+  // SDL3 resolves relative shader paths from this fixture's source-root working directory.
   expect(goldenCaseNames() ==
              std::vector<std::string>{"fit_16x9", "stretch_16x9", "custom_16x9",
                                       "fit_4x3", "stretch_4x3", "custom_4x3",

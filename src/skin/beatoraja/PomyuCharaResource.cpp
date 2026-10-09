@@ -74,8 +74,18 @@ struct FileCache {
   std::vector<PomyuCharaDecodedImage> images;
 };
 
+std::filesystem::path pathFromUtf8(std::string_view value) {
+  return std::filesystem::path(std::u8string(
+      reinterpret_cast<const char8_t *>(value.data()), value.size()));
+}
+
+std::string utf8Path(const std::filesystem::path &path) {
+  const auto value = path.generic_u8string();
+  return {reinterpret_cast<const char *>(value.data()), value.size()};
+}
+
 bool hasChpExtension(const std::filesystem::path &path) {
-  std::string extension = path.extension().string();
+  std::string extension = utf8Path(path.extension());
   std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
     return static_cast<char>(std::tolower(value));
   });
@@ -173,7 +183,7 @@ const std::vector<std::byte> *readChp(
     resolvedPath = *found->second;
     return readFile(files, resolvedPath, safetyPolicy, stop, cache);
   }
-  const std::filesystem::path path(configured);
+  const auto path = pathFromUtf8(configured);
   if (hasChpExtension(path)) {
     const auto candidate =
         files.resolveResourceCandidates(configured, configured);
@@ -201,7 +211,7 @@ const std::vector<std::byte> *readChp(
     }
   }
   const std::string directory = hasChpExtension(path)
-                                    ? path.parent_path().generic_string()
+                                    ? utf8Path(path.parent_path())
                                     : std::string(configured);
   const auto listed = files.listResourceDirectory(directory);
   if (stop.stop_requested()) {
@@ -213,7 +223,7 @@ const std::vector<std::byte> *readChp(
     return nullptr;
   }
   for (const std::string &entry : listed.entries) {
-    if (!hasChpExtension(std::filesystem::path(entry))) {
+    if (!hasChpExtension(pathFromUtf8(entry))) {
       continue;
     }
     resolvedPath = entry;
@@ -527,13 +537,12 @@ std::optional<ChpModel> parseChp(std::string_view contents,
 
 std::string joinedResourcePath(std::string_view chpPath,
                                std::string_view declaredPath) {
-  std::string joined =
-      std::filesystem::path(chpPath).parent_path().generic_string();
+  std::string joined = utf8Path(pathFromUtf8(chpPath).parent_path());
   if (!joined.empty() && !joined.ends_with('/')) {
     joined.push_back('/');
   }
   joined.append(declaredPath);
-  return std::filesystem::path(joined).lexically_normal().generic_string();
+  return utf8Path(pathFromUtf8(joined).lexically_normal());
 }
 
 void applyTransparentColor(image_decode::DecodedImageData &image) {

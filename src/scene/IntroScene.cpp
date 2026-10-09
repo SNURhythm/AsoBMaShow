@@ -141,11 +141,11 @@ void IntroScene::startTutorial() {
 }
 
 EventHandleResult IntroScene::handleEvents(SDL_Event &event) {
-  if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
+  if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
       event.key.repeat == 0 && inputBindingAdapter_) {
-    const bool down = event.type == SDL_KEYDOWN;
+    const bool down = event.type == SDL_EVENT_KEY_DOWN;
     std::optional<MusicSelectControlKey> key;
-    switch (event.key.keysym.sym) {
+    switch (event.key.key) {
     case SDLK_UP: key = MusicSelectControlKey::Up; break;
     case SDLK_DOWN: key = MusicSelectControlKey::Down; break;
     case SDLK_RETURN:
@@ -245,7 +245,7 @@ void IntroScene::syncNavigationSelection() {
 void IntroScene::processNavigationInput() {
   if (!inputBindingAdapter_) return;
   const auto result = navigation_.process(inputBindingAdapter_->state(),
-                                          SDL_GetTicks64());
+                                          SDL_GetTicks());
   inputBindingAdapter_->clearFrameEdges();
   if (result.selectionChanged) syncNavigationSelection();
   if (!result.activated) return;

@@ -20,6 +20,7 @@ class AndroidNativeStoragePathsTests(unittest.TestCase):
         skin = (ROOT / "src/skin/SkinStoragePaths.cpp").read_text()
         store = (ROOT / "src/skin/package/SkinPackageStore.cpp").read_text()
         methods = extract(native, "std::string GetAndroidExternalFilesDir()")
+        methods += "\n" + extract(native, "std::string GetAndroidCacheDir()")
         methods += "\n" + extract(utils, "std::filesystem::path\nUtils::GetDocumentsPath(")
         methods += "\n" + extract(skin, "SkinStorageRoots deriveSkinStorageRoots(")
         methods += "\n" + extract(skin, "SkinStorageRoots defaultSkinStorageRoots()")
@@ -44,9 +45,11 @@ class AndroidNativeStoragePathsTests(unittest.TestCase):
 #define TARGET_OS_SIMULATOR 0
 namespace fs = std::filesystem;
 using skin::skinAncestorDirectoryOpenFlag;
-std::string externalPath, internalPath;
-const char *SDL_AndroidGetExternalStoragePath() { return externalPath.c_str(); }
-const char *SDL_AndroidGetInternalStoragePath() { return internalPath.c_str(); }
+std::string externalPath, internalPath, cachePath;
+bool cacheUnavailable = false;
+const char *SDL_GetAndroidCachePath() { return cacheUnavailable ? nullptr : cachePath.c_str(); }
+const char *SDL_GetAndroidExternalStoragePath() { return externalPath.c_str(); }
+const char *SDL_GetAndroidInternalStoragePath() { return internalPath.c_str(); }
 std::string GetAndroidInternalFilesDir() { return internalPath; }
 struct Utils { static fs::path GetDocumentsPath(const fs::path &sub = {}); };
 struct SkinStorageRoots {
@@ -79,6 +82,17 @@ int main(int argc, char **argv) {
   require(!ensureDirectoryNoFollow(defaultSkinStorageRoots().visiblePackages),
           "canonicalization must not follow user-controlled Skins symlinks");
   require(fs::is_empty(base / "outside"), "rejected symlinks changed outside storage");
+  fs::create_directory(base / "real/cache");
+  cachePath = (base / "alias/cache").string();
+  require(GetAndroidCacheDir() == (base / "real/cache").string(),
+          "SDL cache path retains canonical private-container identity");
+  cacheUnavailable = true;
+  require(GetAndroidCacheDir().empty(), "null SDL cache path must fail closed");
+  cacheUnavailable = false;
+  cachePath.clear();
+  require(GetAndroidCacheDir().empty(), "empty SDL cache path must fail closed");
+  cachePath = (base / "missing/cache").string();
+  require(GetAndroidCacheDir().empty(), "unresolvable cache path must fail closed");
   externalPath.clear();
   require(GetAndroidExternalFilesDir() == internalPath, "internal fallback changed");
   internalPath.clear();

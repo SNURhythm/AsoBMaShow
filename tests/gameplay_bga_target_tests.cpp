@@ -1478,7 +1478,6 @@ void testPreviewBgaUsesNormalSubmissionAndLiveSettings() {
 
 int main(int argc, char **argv) {
   const bool metalSampling = argc == 2 && std::string_view(argv[1]) == "--metal-sampling";
-  SDL_SetHint(SDL_HINT_APPLE_RWFROMFILE_USE_RESOURCES, "0");
   bgfx::Init init;
   init.type = metalSampling ? bgfx::RendererType::Metal : bgfx::RendererType::Noop;
   init.fallback = false;

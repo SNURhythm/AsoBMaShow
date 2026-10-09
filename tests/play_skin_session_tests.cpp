@@ -50,6 +50,7 @@
 #include <span>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -937,7 +938,7 @@ public:
       } else if (options.pomyuCp932BackslashPath) {
         const fs::path japaneseDirectory =
             source / "skin/characters" /
-            fs::path("\xe2\x85\xb0\xe8\xa1\xa8~");
+            fs::path(u8"\u2170\u8868~");
         fs::create_directories(japaneseDirectory);
         fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                           "tests/fixtures/beatoraja_skin/resources/fixture.png",
@@ -1842,7 +1843,7 @@ private:
   SkinProfileId profile_;
   AcceptFiles aliases_;
   RhythmState state_;
-  bms_parser::ChartMeta meta_{.TotalNotes = 100, .Bpm = 120.0};
+  bms_parser::ChartMeta meta_{.Bpm = 120.0, .TotalNotes = 100};
   SkinResourcePreparationService resources_;
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
@@ -2151,6 +2152,13 @@ return skin
                      SkinValidationDisposition::UnavailableType;
     }
     std::ranges::sort(importedPaths);
+#if defined(_WIN32)
+    // Windows' CP932 converter substitutes malformed sequences. Keep this
+    // compatibility behavior rather than rejecting otherwise loadable skins.
+    constexpr std::size_t expectedUnavailable = 2;
+#else
+    constexpr std::size_t expectedUnavailable = 1;
+#endif
     expect(importedPaths ==
                std::vector<std::string>{"config/settings.json",
                                         "select/select.lr2skin",
@@ -2166,7 +2174,7 @@ return skin
                                         "skin/skipped.lr2skin",
                                         "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 11 && unavailable == 1,
+               selectable == 11 && unavailable == expectedUnavailable,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -2337,9 +2345,14 @@ void testLr2ProductionRecoveryAndFatalBoundaries() {
          "diagnostics");
   expect(!unsafe.session && hasCode(unsafe, "skin_lr2_include_read"),
          "an unsafe active include remains fatal at production load");
+#if defined(_WIN32)
+  expect(!hasCode(invalidEncoding, "skin_lr2_encoding_invalid"),
+         "Windows CP932 replacement does not report a fatal encoding error");
+#else
   expect(!invalidEncoding.session &&
              hasCode(invalidEncoding, "skin_lr2_encoding_invalid"),
          "invalid root encoding remains fatal at production load");
+#endif
 }
 
 void testLr2ProductionBuiltInGraphsOwnChartAndPlainImages() {
@@ -2464,6 +2477,11 @@ void testScriptedJsonUsesLivePropertiesAndGlobalUtilities() {
                  parityCommandOutput(*changed.evaluation.submitReady).quads,
                  [](const auto &quad) { return quad.object == 1; }),
          "JSON property callbacks observe updated frame state after configuration");
+  const auto restoredJson = json.session->prepareFrame(stateAt(4), projectionAt(4), {});
+  expect(restoredJson.ready() &&
+             parityCommandOutput(*restoredJson.evaluation.submitReady) ==
+                 parityCommandOutput(*jsonFrame.evaluation.submitReady),
+         "cached structural lookups never retain a prior frame's visibility");
 }
 
 void testScriptedJsonRejectsFatalRuntimeCompilationLimits() {
@@ -2736,8 +2754,8 @@ void testTimerFactoriesUseInitialStateThroughDecoding() {
         auto context = fixture.musicSelectContext();
         context.initialFrame.elapsedMillis = 123;
         auto result = MusicSelectSkinSession::create(
-            {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-             .sessionSerial = 109}, std::move(context));
+            {.sessionSerial = 109, .profileId = fixture.profile(),
+             .activation = fixture.takeActivation()}, std::move(context));
         created = result.session != nullptr;
         diagnostics = std::move(result.diagnostics);
         if (created) {
@@ -3275,12 +3293,12 @@ void testRequestedModernChicSessionPublishesChartListRows() {
   SessionQuadBackend quadBackend;
   quadBackend.captureVertices = true;
   auto created = MusicSelectSkinSession::create(
-      {.activation = {.revision = std::move(*lease),
+      {.sessionSerial = 97,
+       .profileId = *profile,
+       .activation = {.revision = std::move(*lease),
                       .entry = *entry,
                       .reconciledSettings = *validation.reconciledSettings,
-                      .configurationDigest = validation.configurationDigest},
-       .profileId = *profile,
-       .sessionSerial = 97},
+                      .configurationDigest = validation.configurationDigest}},
       {.storageRoots = roots,
        .resourcePreparation = resources,
        .initialFrame = frame,
@@ -3411,12 +3429,12 @@ void testRequestedLitoneMusicSelectSessionCreatesWithoutHostPolicyFailures() {
   auto audioState = std::make_shared<SessionAudioState>();
   auto audio = std::make_shared<SessionAudioBackend>(audioState, counters);
   auto created = MusicSelectSkinSession::create(
-      {.activation = {.revision = std::move(*lease),
+      {.sessionSerial = 98,
+       .profileId = *profile,
+       .activation = {.revision = std::move(*lease),
                       .entry = *entry,
                       .reconciledSettings = *validation.reconciledSettings,
-                      .configurationDigest = validation.configurationDigest},
-       .profileId = *profile,
-       .sessionSerial = 98},
+                      .configurationDigest = validation.configurationDigest}},
       {.storageRoots = roots,
        .resourcePreparation = resources,
        .initialFrame = frame,
@@ -3465,9 +3483,9 @@ void testMusicSelectActivationCreatesAConfiguredOwningSession() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 93,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto created = MusicSelectSkinSession::create(
       std::move(request), fixture.musicSelectContext());
@@ -3485,8 +3503,8 @@ void testMusicSelectDuplicateTimersUseWinningDefinition() {
   ActivationFixture fixture({.skinType = 5, .musicSelectDuplicateTimers = true});
   if (!fixture.ready()) return;
   auto created = MusicSelectSkinSession::create(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 105}, fixture.musicSelectContext());
+      {.sessionSerial = 105, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()}, fixture.musicSelectContext());
   expect(created.session != nullptr, "duplicate timer session creates");
   if (!created.session) return;
   RenderContext context;
@@ -3517,8 +3535,8 @@ void testMusicSelectDistributionGraphsUseProductionResources() {
     frame.songList.bars[0].folderLampCounts[5] = 3;
     context.initialFrame = frame;
     auto created = MusicSelectSkinSession::create(
-        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-         .sessionSerial = 106}, std::move(context));
+        {.sessionSerial = 106, .profileId = fixture.profile(),
+         .activation = fixture.takeActivation()}, std::move(context));
     expect(created.session != nullptr, "production graph resource session creates");
     if (!created.session) continue;
     RenderContext renderContext;
@@ -3539,9 +3557,9 @@ void testMusicSelectPreparationDefersRenderOwnedResources() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 95,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto context = fixture.musicSelectContext();
   auto prepared = MusicSelectSkinSession::prepare(
@@ -3592,9 +3610,9 @@ void testMusicSelectMainStateWritesVolumesAndReadsCurrentInput() {
       {.skinType = 5, .musicSelectMainStateBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 99,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto context = fixture.musicSelectContext();
   context.captureLegacyInputGeneration = [] {
@@ -3638,9 +3656,9 @@ void testMusicSelectPublishesPointerCapturesAndTextFocus() {
                              .musicSelectInteractionBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 96,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto sessionContext = fixture.musicSelectContext();
   SessionQuadBackend quadBackend;
@@ -3713,8 +3731,8 @@ void testMusicSelectDuplicateSongListDestinationsRenderBothConditions() {
   context.initialFrame.songList.bars = {{.title = "0123456789", .exists = true}};
   MusicSelectSkinFrame frame = context.initialFrame;
   auto prepared = MusicSelectSkinSession::prepare(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 101},
+      {.sessionSerial = 101, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()},
       {.storageRoots = context.storageRoots,
        .resourcePreparation = context.resourcePreparation,
        .initialFrame = frame});
@@ -3766,8 +3784,8 @@ void testMusicSelectTitlePreparationIsBoundedForLargeLists() {
         {.title = "Directory title " + std::to_string(index), .exists = true});
   }
   auto prepared = MusicSelectSkinSession::prepare(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 98},
+      {.sessionSerial = 98, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()},
       {.storageRoots = context.storageRoots,
        .resourcePreparation = context.resourcePreparation,
        .initialFrame = context.initialFrame});
@@ -3785,9 +3803,9 @@ void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 95,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto context = fixture.musicSelectContext();
   SessionQuadBackend quadBackend;
@@ -3875,8 +3893,8 @@ void testMusicSelectRuntimeGlyphPatchesPreserveKerning() {
     frame.properties.strings[10] = "VA";
     context.initialFrame = frame;
     auto created = MusicSelectSkinSession::create(
-        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-         .sessionSerial = 107}, std::move(context));
+        {.sessionSerial = 107, .profileId = fixture.profile(),
+         .activation = fixture.takeActivation()}, std::move(context));
     expect(created.session != nullptr, "fresh VA session creates");
     if (!created.session) return;
     RenderContext renderContext;
@@ -3895,8 +3913,8 @@ void testMusicSelectRuntimeGlyphPatchesPreserveKerning() {
   frame.properties.strings[10] = "AV";
   context.initialFrame = frame;
   auto created = MusicSelectSkinSession::create(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 108}, std::move(context));
+      {.sessionSerial = 108, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()}, std::move(context));
   expect(created.session != nullptr, "dynamic kerning session creates");
   if (!created.session) return;
   RenderContext renderContext;
@@ -3960,8 +3978,8 @@ void testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan() {
     if (newOverscanGlyph) frame.songList.bars[17].title = "AB";
     frame.properties.strings[10] = freshReversed ? "VA" : "AV";
     auto prepared = MusicSelectSkinSession::prepare(
-        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-         .sessionSerial = static_cast<std::uint64_t>(109 + scenario)},
+        {.sessionSerial = static_cast<std::uint64_t>(109 + scenario), .profileId = fixture.profile(),
+         .activation = fixture.takeActivation()},
         {.storageRoots = context.storageRoots,
          .resourcePreparation = context.resourcePreparation,
          .initialFrame = frame});
@@ -4045,8 +4063,8 @@ void testMusicSelectScrollingDoesNotStarveGlyphPatches() {
   }
   context.initialFrame = frame;
   auto created = MusicSelectSkinSession::create(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 99}, std::move(context));
+      {.sessionSerial = 99, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()}, std::move(context));
   expect(created.session != nullptr, "scrolling title fixture creates");
   if (!created.session) return;
   const auto uploads = fixture.device()->createCalls;
@@ -4088,13 +4106,13 @@ void testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize() {
   context.initialFrame.songList.bars = {{.title = "01234567890123456789",
                                         .exists = true}};
   auto created = MusicSelectSkinSession::create(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 100}, std::move(context));
+      {.sessionSerial = 100, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()}, std::move(context));
   expect(created.session != nullptr, "bounded render allocation fixture creates");
   if (!created.session) return;
-  MusicSelectSkinFrame small;
-  small.songList.bars = {{.title = "01234567890123456789", .exists = true}};
-  MusicSelectSkinFrame large = small;
+  MusicSelectSkinFrame smallFrame;
+  smallFrame.songList.bars = {{.title = "01234567890123456789", .exists = true}};
+  MusicSelectSkinFrame large = smallFrame;
   for (int index = 1; index < 10'000; ++index) {
     large.songList.bars.push_back(
         {.title = "01234567890123456789" + std::to_string(index), .exists = true});
@@ -4109,9 +4127,9 @@ void testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize() {
     expect(rendered, "steady virtualized frame renders");
     return bytes;
   };
-  (void)renderBytes(small);
+  (void)renderBytes(smallFrame);
   (void)renderBytes(large);
-  const auto smallBytes = renderBytes(small);
+  const auto smallBytes = renderBytes(smallFrame);
   const auto largeBytes = renderBytes(large);
   expect(largeBytes <= smallBytes + 4096,
          "steady rendering allocates by authored slots, not 10,000 title strings");
@@ -4136,8 +4154,8 @@ void testMusicSelectPrewarmsBoundedNearbyGlyphs() {
   frame.songList.bars[9999].title = "\u00c9";
   context.initialFrame = frame;
   auto created = MusicSelectSkinSession::create(
-      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-       .sessionSerial = 101}, std::move(context));
+      {.sessionSerial = 101, .profileId = fixture.profile(),
+       .activation = fixture.takeActivation()}, std::move(context));
   expect(created.session != nullptr, "nearby glyph fixture creates");
   if (!created.session) return;
   const auto uploads = fixture.device()->createCalls;
@@ -4160,9 +4178,9 @@ void testMusicSelectPreparesCallbackTextGlyphsIncrementally() {
        .musicSelectCallbackTextBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 96,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto context = fixture.musicSelectContext();
   SessionQuadBackend quadBackend;
@@ -4206,9 +4224,9 @@ void testMusicSelectStopsRetryingAnUnavailableCallbackFont() {
       {.skinType = 5, .musicSelectMissingCallbackFontBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 97,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto context = fixture.musicSelectContext();
   SessionQuadBackend quadBackend;
@@ -4258,9 +4276,9 @@ void testMusicSelectAcceptsOversizedSelectedArtwork() {
           return true;
         };
     auto preparation = MusicSelectSkinSession::prepare(
-        {.activation = fixture.takeActivation(),
+        {.sessionSerial = 102,
          .profileId = fixture.profile(),
-         .sessionSerial = 102},
+         .activation = fixture.takeActivation()},
         {.storageRoots = context.storageRoots,
          .resourcePreparation = context.resourcePreparation,
          .initialFrame = context.initialFrame,
@@ -4315,8 +4333,8 @@ void testMusicSelectAcceptsOversizedSelectedArtwork() {
   }
 }
 
-void testMusicSelectContainsArtworkAllocationFailures() {
-  for (const bool lengthFailure : {false, true}) {
+void testMusicSelectContainsArtworkFailures() {
+  for (const int failure : {0, 1, 2}) {
     for (const bool bannerFailure : {false, true}) {
       ActivationFixture fixture(
           {.skinType = 5, .musicSelectBuiltinImageBearing = true});
@@ -4331,15 +4349,17 @@ void testMusicSelectContainsArtworkAllocationFailures() {
               std::size_t, std::string *, std::stop_token) {
             if (path == "unallocatable.ppm") {
               ++failedReads;
-              if (lengthFailure) throw std::length_error("artwork size");
+              if (failure == 1) throw std::length_error("artwork size");
+              if (failure == 2) throw std::system_error(
+                  std::make_error_code(std::errc::io_error));
               throw std::bad_alloc();
             }
             bytes.assign(pixels.begin(), pixels.end());
             return true;
           };
       auto created = MusicSelectSkinSession::create(
-          {.activation = fixture.takeActivation(),
-           .profileId = fixture.profile(), .sessionSerial = 103},
+          {.sessionSerial = 103,
+           .profileId = fixture.profile(), .activation = fixture.takeActivation()},
           std::move(context));
       expect(created.session != nullptr, "allocation-failure selector creates");
       if (!created.session) continue;
@@ -4374,13 +4394,13 @@ void testMusicSelectContainsArtworkAllocationFailures() {
       expect(!exceptionEscaped && rendered && failedReads == 1 &&
                  fixture.device()->createCalls == uploads + 1 &&
                  fixture.device()->destroyCalls == destroys + 1,
-             "allocation failures clear stale artwork, render normally, and do not retry each frame");
+             "artwork failures clear stale artwork, render normally, and do not retry each frame");
       if (exceptionEscaped) continue;
       path = "available.ppm";
       renderUntilUploads(uploads + 2);
       expect(rendered && fixture.device()->createCalls == uploads + 2 &&
                  failedReads == 1,
-             "selector loads artwork after navigating away from a failed allocation");
+             "selector loads artwork after navigating away from a failed read or allocation");
     }
   }
 }
@@ -4390,9 +4410,9 @@ void testMusicSelectRetriesCancelledArtworkAfterReturningToChart(int allocationF
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 99,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   std::ifstream imageFile(
       fs::path(ASOBMASHOW_SOURCE_DIR) /
@@ -4419,6 +4439,8 @@ void testMusicSelectRetriesCancelledArtworkAfterReturningToChart(int allocationF
           cancellationObserved = stop.stop_requested();
           if (allocationFailure == 1) throw std::bad_alloc();
           if (allocationFailure == 2) throw std::length_error("artwork size");
+          if (allocationFailure == 3) throw std::system_error(
+              std::make_error_code(std::errc::io_error));
           return false;
         }
         if (path != "chart-a.png") return false;
@@ -4467,9 +4489,9 @@ void testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation() {
         {.skinType = 5, .musicSelectBuiltinImageBearing = true});
     if (!fixture.ready()) return;
     GameplaySkinActivationRequest request{
-        .activation = fixture.takeActivation(),
-        .profileId = fixture.profile(),
         .sessionSerial = 100,
+        .profileId = fixture.profile(),
+        .activation = fixture.takeActivation(),
     };
     std::ifstream imageFile(
         fs::path(ASOBMASHOW_SOURCE_DIR) /
@@ -4570,9 +4592,9 @@ void testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame() {
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 101,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   std::atomic_int reads = 0;
   auto context = fixture.musicSelectContext();
@@ -4617,9 +4639,9 @@ void testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed() {
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 98,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto context = fixture.musicSelectContext();
   auto readerStarted = std::make_shared<std::promise<void>>();
@@ -4663,9 +4685,9 @@ void testMusicSelectLuaSessionContainsRecursiveCustomEventFailure() {
       {.skinType = 5, .resultRecursiveEventExec = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
-      .activation = fixture.takeActivation(),
-      .profileId = fixture.profile(),
       .sessionSerial = 94,
+      .profileId = fixture.profile(),
+      .activation = fixture.takeActivation(),
   };
   auto created = MusicSelectSkinSession::create(
       std::move(request), fixture.musicSelectContext());
@@ -4692,9 +4714,9 @@ void testMusicSelectLuaCallbackDispatch(std::string_view mode,
   if (!fixture.ready()) return;
   auto context = fixture.musicSelectContext();
   auto preparation = MusicSelectSkinSession::prepare(
-      {.activation = fixture.takeActivation(),
+      {.sessionSerial = 99,
        .profileId = fixture.profile(),
-       .sessionSerial = 99},
+       .activation = fixture.takeActivation()},
       {.storageRoots = context.storageRoots,
        .resourcePreparation = context.resourcePreparation,
        .initialFrame = context.initialFrame});
@@ -8307,8 +8329,8 @@ bool renderCustomObjectFrames(ActivationFixture &fixture, int skinType,
   }
   if (skinType == 5) {
     auto result = MusicSelectSkinSession::create(
-        {.profileId = fixture.profile(), .activation = fixture.takeActivation(),
-         .sessionSerial = 109}, fixture.musicSelectContext());
+        {.sessionSerial = 109, .profileId = fixture.profile(),
+         .activation = fixture.takeActivation()}, fixture.musicSelectContext());
     expect(result.session != nullptr, "custom-object selection session creates");
     return result.session && runFrames([&](std::uint64_t serial) {
       return result.session->render(renderContext,
@@ -8408,8 +8430,8 @@ void testNamedMusicSelectVolumeWritersAreVisibleBeforePublishingActions() {
     context.initialFrame.properties.rates[id] = 0.125;
     context.initialFrame.properties.integers[id + 40] = 12;
     auto preparation = MusicSelectSkinSession::prepare(
-        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
-         .sessionSerial = 118},
+        {.sessionSerial = 118, .profileId = fixture.profile(),
+         .activation = fixture.takeActivation()},
         {.storageRoots = context.storageRoots,
          .resourcePreparation = context.resourcePreparation,
          .initialFrame = context.initialFrame});
@@ -8511,8 +8533,8 @@ customEvents = {{id = 1000, condition = function() return true end,
       }
     } else if (skinType == 5) {
       auto created = MusicSelectSkinSession::create(
-          {.profileId = fixture.profile(), .activation = fixture.takeActivation(),
-           .sessionSerial = 117}, fixture.musicSelectContext());
+          {.sessionSerial = 117, .profileId = fixture.profile(),
+           .activation = fixture.takeActivation()}, fixture.musicSelectContext());
       if (created.session) {
         rendered = created.session->render(renderContext, {.serial = 2});
         for (const auto &action : created.session->takePublishedActions()) {
@@ -9228,10 +9250,10 @@ void testResultSessionRefreshesForAllStringSelectors() {
   auto created = ResultSkinSession::create(fixture.takeActivation(),
                                            fixture.resultContext());
   const ResultSkinData stringSelectorData{
-      .pacemaker = ResultPacemakerData{.label = "MAX -"},
       .chartMd5 = "0123456789abcdef0123456789abcdef",
       .chartSha256 =
           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      .pacemaker = ResultPacemakerData{.label = "MAX -"},
   };
   expect(created.session != nullptr &&
              created.session->requiresRuntimeStringRefresh(stringSelectorData),
@@ -9373,8 +9395,8 @@ void testResultBridgeKeepsMainStateGaugeHelpersGameplayOnly() {
 
 void testResultBridgeUsesPreparedArtworkAvailability() {
   bms_parser::ChartMeta declared{
-      .StageFile = "missing-stage.png",
       .Banner = "missing-banner.png",
+      .StageFile = "missing-stage.png",
       .BackBmp = "missing-backbmp.png"};
   ResultSkinStateBridge unavailable({.meta = &declared}, 1, 0);
   ResultSkinStateBridge prepared({.meta = &declared,
@@ -9491,11 +9513,11 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   ResultSkinStateBridge bridge({
       .state = &state,
       .meta = &meta,
+      .songReviewFavorite = 10,
       .previousBest = ResultPreviousBestData{.score = 12,
                                               .maxCombo = 6,
                                               .badPoints = 9},
       .pacemaker = ResultPacemakerData{.targetScore = 18},
-      .songReviewFavorite = 10,
   }, 1, 0);
 
   const auto rank = bridge.booleanProperty({220});
@@ -9629,8 +9651,8 @@ void testResultBridgeExposesCourseModeForSkinLogs() {
 
 void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   bms_parser::ChartMeta meta{.Title = "Title", .SubTitle = "Subtitle",
-                             .PlayLevel = 12.0F,
-                             .PlayLength = 125'000'000};
+                             .PlayLength = 125'000'000,
+                             .PlayLevel = 12.0F};
   ResultSkinConfigurationData configuration{
       .modeFilterName = "ALL",
       .sortId = "TITLE",
@@ -9996,8 +10018,8 @@ void testResultBridgeDoesNotInventRemoteGaugeImageIndex() {
   ResultSkinStateBridge unknown({.presentation = &remote}, 1, 0);
   const auto unavailable = unknown.integerProperty(
       {40}, SkinIntegerPropertyDomain::ImageIndex);
-  ResultSkinStateBridge known({.presentation = &remote,
-                               .gaugeTypeOverride = GaugeType::Hard},
+  ResultSkinStateBridge known({.gaugeTypeOverride = GaugeType::Hard,
+                               .presentation = &remote},
                               1, 0);
   const auto explicitGauge = known.integerProperty(
       {40}, SkinIntegerPropertyDomain::ImageIndex);
@@ -10154,12 +10176,12 @@ void testCourseStageClearLampsPreserveComboAchievements() {
 }
 
 void testResultBridgeRetainsPreparedChartResultProperties() {
-  bms_parser::ChartMeta meta{.Rank = 2,
-                             .Bpm = 128.0,
-                             .MinBpm = 96.0,
-                             .MaxBpm = 196.0,
+  bms_parser::ChartMeta meta{.Bpm = 128.0,
+                             .Rank = 2,
                              .Total = 210.5,
-                             .HasTotal = true};
+                             .HasTotal = true,
+                             .MinBpm = 96.0,
+                             .MaxBpm = 196.0};
   auto graph = std::make_shared<SkinGameplayChartGraphState>();
   graph->mainBpm = 172.0;
   graph->normalKeyNotes = 12;
@@ -10269,7 +10291,6 @@ void testResultBridgeProjectsIrRankingRows() {
 void testResultBridgeMapsNamedResultAndRankingProperties() {
   ResultPresentationModel remote{.lampRank = kClearTypeHardClearRank};
   ResultSkinStateBridge bridge({
-      .presentation = &remote,
       .irRankingEntries = {{.rank = 1,
                             .playerName = "Top player",
                             .score = 1998,
@@ -10279,6 +10300,7 @@ void testResultBridgeMapsNamedResultAndRankingProperties() {
                             .score = 1888,
                             .clearType = kClearTypeHardClearRank,
                             .currentUser = true}},
+      .presentation = &remote,
   }, 1, 0);
   const auto clear = bridge.integerProperty(
       {.value = std::string{"cleartype"}},
@@ -10457,11 +10479,11 @@ void testResultBridgeMapsNamedIntegerScoreProperties() {
       .comboBreak = 3,
       .badPoints = 4};
   ResultSkinStateBridge bridge({
-      .presentation = &result,
       .previousBest = ResultPreviousBestData{.score = 125,
                                               .maxCombo = 60,
                                               .badPoints = 5},
       .pacemaker = ResultPacemakerData{.targetScore = 160},
+      .presentation = &result,
   }, 1, 0);
   const auto score = bridge.integerProperty({.value = std::string{"score"}}, {});
   const auto maximum = bridge.integerProperty(
@@ -10648,14 +10670,14 @@ void testResultBridgeUsesRemotePresentationValues() {
       .gaugeSeries = {{.points = {20.0F, 50.0F, 79.96F},
                        .maximum = 100.0F}},
   };
-  ResultSkinStateBridge bridge({.presentation = &remote,
-                                 .playLevelOverride = 12.7F,
-                                 .configuration = ResultSkinConfigurationData{
+  ResultSkinStateBridge bridge({.configuration = ResultSkinConfigurationData{
                                      .difficultyFilterName = "ALL"},
+                                 .playLevelOverride = 12.7F,
+                                 .keyModeOverride = 7,
+                                 .gaugeTypeOverride = GaugeType::Normal,
                                  .chartMd5 = "remote-md5",
                                  .chartSha256 = "remote-sha256",
-                                 .keyModeOverride = 7,
-                                 .gaugeTypeOverride = GaugeType::Normal},
+                                 .presentation = &remote},
                                 1, 0);
   const auto poor = bridge.integerProperty({114}, {});
   const auto finalGauge = bridge.integerProperty({107}, {});
@@ -10780,7 +10802,7 @@ void testResultBridgeUsesRawChartBpmForResultProperties() {
 
 void testLitoneCourseCallbacksUseEveryStage(const fs::path &source) {
   ExternalResultSkinFixture fixture(source, "Result/result.luaskin");
-  bms_parser::ChartMeta meta{.Title = "First chart", .TotalNotes = 100, .Bpm = 120.0};
+  bms_parser::ChartMeta meta{.Bpm = 120.0, .Title = "First chart", .TotalNotes = 100};
   RhythmState state(nullptr, false);
   ResultSkinData data{.state = &state, .meta = &meta,
                       .courseTitles = {"First chart", "Second chart"},
@@ -11114,6 +11136,12 @@ int main(int argc, char **argv) {
   // These tests verify session state and instruction limits, not host scheduling.
   // Real callback/frame deadlines remain covered by lua_skin_runtime_tests.
   LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
+  if (argc == 2 && std::string_view(argv[1]) == "--music-select-artwork") {
+    testMusicSelectContainsArtworkFailures();
+    for (const int failure : {0, 1, 2, 3})
+      testMusicSelectRetriesCancelledArtworkAfterReturningToChart(failure);
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--authored-result-ir") {
     testResultIrNumericFactoriesReachLiveLua();
     testAuthoredResultIrFactories(fs::path(argv[2]) / "ModernChic");
@@ -11193,8 +11221,8 @@ int main(int argc, char **argv) {
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
   testMusicSelectAcceptsOversizedSelectedArtwork();
-  testMusicSelectContainsArtworkAllocationFailures();
-  for (const int allocationFailure : {0, 1, 2})
+  testMusicSelectContainsArtworkFailures();
+  for (const int allocationFailure : {0, 1, 2, 3})
     testMusicSelectRetriesCancelledArtworkAfterReturningToChart(allocationFailure);
   testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
   testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();

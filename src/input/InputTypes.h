@@ -68,7 +68,8 @@ enum class ControlKind {
   MidiControl
 };
 enum class ControlDirection { Any, Negative, Positive, Up, Right, Down, Left };
-enum class InputTimestampDomain { SteadyClock, SdlMilliseconds };
+// Timestamp values use microseconds; SdlTicks uses the SDL_GetTicksNS epoch.
+enum class InputTimestampDomain { SteadyClock, SdlTicks };
 enum class LogicalActionKind {
   Lane,
   ScratchClockwise,

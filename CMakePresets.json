@@ -62,5 +62,17 @@
                 "rhs": "Windows"
             }
         }
+    ],
+    "buildPresets": [
+        {
+            "name": "debug-windows",
+            "configurePreset": "debug-windows",
+            "configuration": "Debug"
+        },
+        {
+            "name": "release-windows",
+            "configurePreset": "release-windows",
+            "configuration": "Release"
+        }
     ]
 }

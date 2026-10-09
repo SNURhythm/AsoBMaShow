@@ -1656,6 +1656,22 @@ void testDenseBindingLookupAndSparseObjectIds() {
   expect(!missing.submitReady &&
              hasDiagnostic(missing, "skin.renderer.model.destination_object"),
          "a hole in object IDs never resolves to the neighboring object");
+  model.model.destinations[0].object = maximum;
+  model.model.integerProperties.push_back(model.model.integerProperties.back());
+  const auto duplicateBinding = evaluate(renderer, runtime, model, resources, state, 4);
+  expect(!duplicateBinding.submitReady &&
+             hasDiagnostic(duplicateBinding, "skin.renderer.model.binding_id"),
+         "standalone model edits rebuild indexes and reject duplicate bindings");
+  model.model.integerProperties.pop_back();
+  model.model.objects.push_back(model.model.objects.back());
+  const auto duplicateObject = evaluate(renderer, runtime, model, resources, state, 5);
+  expect(!duplicateObject.submitReady &&
+             hasDiagnostic(duplicateObject, "skin.renderer.model.object_id"),
+         "standalone model reallocation retains duplicate-object validation");
+  model.model.objects.pop_back();
+  const auto recovered = evaluate(renderer, runtime, model, resources, state, 6);
+  expect(recovered.submitReady && recovered.submitReady->commands.size() == 3,
+         "standalone model corrections recover without stale validation state");
 }
 
 void testImageCommandsPreserveOrderAndBatchOnlyAdjacentCompatibility() {

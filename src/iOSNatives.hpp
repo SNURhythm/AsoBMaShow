@@ -2,7 +2,7 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "platform/IPadHardwareButton.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -97,7 +97,6 @@ std::string GetIOSDocumentsPath();
 // Returns an app-owned Application Support directory that exists and is
 // excluded from backup. Runtime skin revisions must never use Documents.
 std::string GetIOSApplicationSupportPath();
-void *GetIOSWindowHandle(void *uiwindow);
 void RegisterTouchEvent();
 void WaitIOSMainRunLoopForMicros(long long waitMicros);
 void RestoreIOSViewportAfterKeyboardFocus();

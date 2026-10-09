@@ -8,7 +8,7 @@
 #include "ChartStorageIdentity.h"
 #include "SqliteRAII.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <chrono>
@@ -897,9 +897,9 @@ bool ChartRepository::Session::ScanBatch::UpsertSolidArchive(
   if (!archiveFileStateForDatabase(update.path, archiveSize, mtimeNs)) {
     return false;
   }
-  const std::string name = update.path.filename().generic_string().empty()
-                               ? update.path.generic_string()
-                               : update.path.filename().generic_string();
+  const std::string name = fspath_to_utf8(update.path.filename().empty()
+                                            ? update.path
+                                            : update.path.filename());
   const char *query =
       "INSERT INTO solid_archives "
       "(path, name, archive_size, uncompressed_size, file_count, mtime_ns, "

@@ -5,8 +5,8 @@
 #include "GyroscopeInputBackendCore.h"
 #include "InputLifecycle.h"
 
-#include <SDL2/SDL_log.h>
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_system.h>
 #include <jni.h>
 
 #include <algorithm>
@@ -96,8 +96,8 @@ bool clearJavaException(JNIEnv *env, std::string &errorMessage,
 bool callActivityBoolean(const char *methodName, bool &result,
                          std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is unavailable for gyroscope input.";
     return false;
@@ -129,8 +129,8 @@ bool callActivityBoolean(const char *methodName, bool &result,
 
 bool callActivityVoid(const char *methodName, std::string &errorMessage) {
   errorMessage.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
     errorMessage = "Android activity is unavailable for gyroscope input.";
     return false;

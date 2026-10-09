@@ -4,7 +4,7 @@
 #include <bgfx/bgfx.h>
 #include <stdexcept>
 #include <string>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <unordered_map>
 #include <filesystem>
 #include <cstdint>
@@ -44,12 +44,12 @@ private:
     }
 
     std::string path = (shaderPath / FILENAME).string();
-    UniqueResource<SDL_RWops, SDL_RWclose> rw(
-        SDL_RWFromFile(path.c_str(), "rb"));
+    UniqueResource<SDL_IOStream, SDL_CloseIO> rw(
+        SDL_IOFromFile(path.c_str(), "rb"));
     if (rw == nullptr) {
       throw std::runtime_error("Failed to open shader file: " + path);
     }
-    const Sint64 fileSize = SDL_RWsize(rw.get());
+    const Sint64 fileSize = SDL_GetIOSize(rw.get());
     if (fileSize <= 0 ||
         fileSize > static_cast<Sint64>(std::numeric_limits<uint32_t>::max())) {
       throw std::runtime_error("Invalid shader file size: " + path);
@@ -59,7 +59,7 @@ private:
     if (data == nullptr) {
       throw std::runtime_error("Failed to allocate shader buffer: " + path);
     }
-    if (SDL_RWread(rw.get(), data.get(), 1, size) != size) {
+    if (SDL_ReadIO(rw.get(), data.get(), size) != size) {
       throw std::runtime_error("Failed to read shader file: " + path);
     }
     auto shader = bgfx::createShader(bgfx::copy(data.get(), size));

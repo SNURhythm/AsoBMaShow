@@ -10,8 +10,8 @@ thread_local jobject fixtureActivity = nullptr;
 std::atomic_bool fixtureCancelled{false};
 constexpr const char *kErrorPrefix = "__ERROR__:";
 
-void *SDL_AndroidGetJNIEnv() { return fixtureEnv; }
-void *SDL_AndroidGetActivity() {
+void *SDL_GetAndroidJNIEnv() { return fixtureEnv; }
+void *SDL_GetAndroidActivity() {
   return fixtureEnv->NewLocalRef(fixtureActivity);
 }
 

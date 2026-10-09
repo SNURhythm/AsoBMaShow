@@ -1,9 +1,10 @@
+#include <SDL3/SDL_init.h>
 #include "input/IInputBackend.h"
 #include "input/InputDeviceIdentity.h"
 #include "input/InputDeviceRegistry.h"
 #include "input/SDLInputBackend.h"
 
-#include <SDL2/SDL_events.h>
+#include <SDL3/SDL_events.h>
 
 #include <algorithm>
 #include <cmath>
@@ -63,14 +64,14 @@ public:
   void handleSdlEvent(const SDL_Event &event) override {
     ++handledEvents;
     if (publishHandledKeyboardEvents &&
-        (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)) {
+        (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP)) {
       publishInput(
           {.control = {.deviceId = "keyboard",
                        .deviceClass = input::DeviceClass::Keyboard,
                        .kind = input::ControlKind::Key,
-                       .index = static_cast<int>(event.key.keysym.scancode)},
-           .rawValue = event.type == SDL_KEYDOWN ? 1.0 : 0.0,
-           .normalizedValue = event.type == SDL_KEYDOWN ? 1.0F : 0.0F});
+                       .index = static_cast<int>(event.key.scancode)},
+           .rawValue = event.type == SDL_EVENT_KEY_DOWN ? 1.0 : 0.0,
+           .normalizedValue = event.type == SDL_EVENT_KEY_DOWN ? 1.0F : 0.0F});
     }
   }
 
@@ -164,27 +165,32 @@ private:
 
 class FakeSdlDeviceProvider final : public ISdlInputDeviceProvider {
 public:
-  int deviceCount() const override {
-    return deviceCountOverride.value_or(static_cast<int>(devices.size()));
+  std::optional<std::vector<SDL_JoystickID>> deviceIds() const override {
+    if (deviceCountOverride.value_or(0) < 0) return std::nullopt;
+    std::vector<SDL_JoystickID> result;
+    for (const auto &device : devices) result.push_back(device.instanceId);
+    return result;
   }
 
-  bool isGameController(int deviceIndex) const override {
-    return validIndex(deviceIndex) && devices[deviceIndex].gameController;
+  bool isGameController(SDL_JoystickID deviceId) const override {
+    const auto device = std::ranges::find(devices, deviceId, &SdlInputDeviceInfo::instanceId);
+    return device != devices.end() && device->gameController;
   }
 
   std::optional<SdlInputDeviceInfo>
-  openDevice(int deviceIndex, bool asGameController,
+  openDevice(SDL_JoystickID deviceId, bool asGameController,
              std::string &errorMessage) override {
-    if (!validIndex(deviceIndex)) {
-      errorMessage = "fake SDL device index is out of range";
+    const auto device = std::ranges::find(devices, deviceId, &SdlInputDeviceInfo::instanceId);
+    if (device == devices.end()) {
+      errorMessage = "fake SDL device ID is unavailable";
       return std::nullopt;
     }
-    if (std::ranges::find(failingOpenIndices, deviceIndex) !=
+    if (std::ranges::find(failingOpenIndices, static_cast<int>(device - devices.begin())) !=
         failingOpenIndices.end()) {
       errorMessage = "fake SDL device open failure";
       return std::nullopt;
     }
-    SdlInputDeviceInfo result = devices[deviceIndex];
+    SdlInputDeviceInfo result = *device;
     if (result.gameController != asGameController) {
       errorMessage = "fake SDL device class mismatch";
       return std::nullopt;
@@ -398,7 +404,7 @@ void testRegistryQueuesCallbacksAndKeepsKeyboard() {
          "disconnected snapshots remain queryable as disconnected");
 
   SDL_Event event{};
-  event.type = SDL_USEREVENT;
+  event.type = SDL_EVENT_USER;
   registry.handleSdlEvent(event);
   expect(backend->handledEvents == 1,
          "registry forwards every SDL event to each backend");
@@ -440,14 +446,14 @@ void testSdlDispatchCompletesBeforeSceneMutationWithoutPumpingBackends() {
   });
 
   SDL_Event lane{};
-  lane.type = SDL_KEYDOWN;
-  lane.key.keysym.scancode = SDL_SCANCODE_S;
+  lane.type = SDL_EVENT_KEY_DOWN;
+  lane.key.scancode = SDL_SCANCODE_S;
   registry.handleSdlEventAndDispatch(lane);
   order.emplace_back("scene-after-lane");
 
   SDL_Event escape{};
-  escape.type = SDL_KEYDOWN;
-  escape.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+  escape.type = SDL_EVENT_KEY_DOWN;
+  escape.key.scancode = SDL_SCANCODE_ESCAPE;
   registry.handleSdlEventAndDispatch(escape);
   order.emplace_back("scene-after-escape");
 
@@ -770,7 +776,7 @@ void testFailedBackendIsCleanedAndNeverDispatched() {
            "failed backend receives immediate cleanup exactly once");
 
     SDL_Event event{};
-    event.type = SDL_USEREVENT;
+    event.type = SDL_EVENT_USER;
     registry.handleSdlEvent(event);
     int inputCallbacks = 0;
     registry.subscribeInput(
@@ -835,8 +841,8 @@ void testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational() {
   registry.subscribeInput(
       [&](const auto &event) { inputEvents.push_back(event); });
   SDL_Event key{};
-  key.type = SDL_KEYDOWN;
-  key.key.keysym.scancode = SDL_SCANCODE_A;
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.scancode = SDL_SCANCODE_A;
   registry.handleSdlEvent(key);
   registry.pump();
   expect(inputEvents.size() == 1 &&
@@ -846,8 +852,8 @@ void testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational() {
   provider->deviceCountOverride.reset();
   provider->devices = {controllerInfo(88, "/dev/input/hotplug-after-fail")};
   SDL_Event added{};
-  added.type = SDL_JOYDEVICEADDED;
-  added.jdevice.which = 0;
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = provider->devices[0].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(std::ranges::any_of(registry.snapshot(),
@@ -867,16 +873,16 @@ void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
       [&](const auto &event) { inputEvents.push_back(event); });
 
   SDL_Event down{};
-  down.type = SDL_KEYDOWN;
-  down.key.keysym.scancode = SDL_SCANCODE_Q;
-  down.key.timestamp = 7;
+  down.type = SDL_EVENT_KEY_DOWN;
+  down.key.scancode = SDL_SCANCODE_Q;
+  down.key.timestamp = 7000123456ULL;
   registry.handleSdlEvent(down);
   SDL_Event repeat = down;
   repeat.key.repeat = 1;
   registry.handleSdlEvent(repeat);
   SDL_Event up = down;
-  up.type = SDL_KEYUP;
-  up.key.timestamp = 8;
+  up.type = SDL_EVENT_KEY_UP;
+  up.key.timestamp = 8000654321ULL;
   registry.handleSdlEvent(up);
   registry.pump();
 
@@ -886,10 +892,10 @@ void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
              inputEvents[0].control.deviceId == "keyboard" &&
              inputEvents[0].control.index == SDL_SCANCODE_Q &&
              inputEvents[0].normalizedValue == 1.0F &&
-             inputEvents[0].timestampMicros == 7000 &&
+             inputEvents[0].timestampMicros == 7000123 &&
              inputEvents[1].normalizedValue == 0.0F &&
-             inputEvents[1].timestampMicros == 8000,
-         "keyboard events publish physical scancode edges and microseconds");
+             inputEvents[1].timestampMicros == 8000654,
+         "keyboard events publish physical scancode edges and 64-bit nanoseconds converted to microseconds");
 }
 
 void testLegacyGenerationUsesMaintainedRawDevicesAndButtonIndices() {
@@ -906,7 +912,7 @@ void testLegacyGenerationUsesMaintainedRawDevicesAndButtonIndices() {
   auto registry = makeRegistryWithSdlProvider(provider);
 
   SDL_Event mappedButton{};
-  mappedButton.type = SDL_JOYBUTTONDOWN;
+  mappedButton.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
   mappedButton.jbutton.which = 301;
   mappedButton.jbutton.button = 9;
   registry.handleSdlEvent(mappedButton);
@@ -915,8 +921,8 @@ void testLegacyGenerationUsesMaintainedRawDevicesAndButtonIndices() {
   rawButton.jbutton.button = 3;
   registry.handleSdlEvent(rawButton);
   SDL_Event key{};
-  key.type = SDL_KEYDOWN;
-  key.key.keysym.scancode = SDL_SCANCODE_VOLUMEUP;
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.scancode = SDL_SCANCODE_VOLUMEUP;
   registry.handleSdlEvent(key);
 
   const std::size_t opensBeforeCapture = provider->openedInstances.size();
@@ -937,19 +943,19 @@ void testLegacyGenerationUsesMaintainedRawDevicesAndButtonIndices() {
 }
 
 void testSdlToGdxAliasTableIsExhaustiveAndUnambiguous() {
-  std::array<int, SDL_NUM_SCANCODES> expected{};
+  std::array<int, SDL_SCANCODE_COUNT> expected{};
   expected.fill(-1);
   bool valid = true;
   for (const auto alias : sdlGdxKeyAliases()) {
     const int scancode = static_cast<int>(alias.scancode);
-    valid = valid && scancode >= 0 && scancode < SDL_NUM_SCANCODES &&
+    valid = valid && scancode >= 0 && scancode < SDL_SCANCODE_COUNT &&
             alias.gdxKeyCode >= 0 && alias.gdxKeyCode <= 255 &&
             expected[static_cast<std::size_t>(scancode)] == -1;
-    if (scancode >= 0 && scancode < SDL_NUM_SCANCODES) {
+    if (scancode >= 0 && scancode < SDL_SCANCODE_COUNT) {
       expected[static_cast<std::size_t>(scancode)] = alias.gdxKeyCode;
     }
   }
-  for (int scancode = 0; scancode < SDL_NUM_SCANCODES; ++scancode) {
+  for (int scancode = 0; scancode < SDL_SCANCODE_COUNT; ++scancode) {
     valid = valid &&
             gdxKeyCodeForSdlScancode(static_cast<SDL_Scancode>(scancode)) ==
                 expected[static_cast<std::size_t>(scancode)];
@@ -962,27 +968,24 @@ void testSdlToGdxAliasTableIsExhaustiveAndUnambiguous() {
              gdxKeyCodeForSdlScancode(SDL_SCANCODE_VOLUMEUP) == 24 &&
              gdxKeyCodeForSdlScancode(SDL_SCANCODE_VOLUMEDOWN) == 25 &&
              gdxKeyCodeForSdlScancode(SDL_SCANCODE_NUMLOCKCLEAR) == 78 &&
-             gdxKeyCodeForSdlScancode(SDL_SCANCODE_WWW) == 64 &&
-             gdxKeyCodeForSdlScancode(SDL_SCANCODE_MAIL) == 65 &&
              gdxKeyCodeForSdlScancode(SDL_SCANCODE_AC_SEARCH) == 84,
-         "mobile, volume, Numlock, browser, mail, and search aliases match the pinned GDX codes");
+         "mobile, volume, Numlock, and search aliases match the pinned GDX codes");
 
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   auto registry = makeRegistryWithSdlProvider(provider);
   SDL_Event mainEnter{};
-  mainEnter.type = SDL_KEYDOWN;
-  mainEnter.key.keysym.scancode = SDL_SCANCODE_RETURN;
+  mainEnter.type = SDL_EVENT_KEY_DOWN;
+  mainEnter.key.scancode = SDL_SCANCODE_RETURN;
   registry.handleSdlEvent(mainEnter);
   SDL_Event keypadEnter = mainEnter;
-  keypadEnter.key.keysym.scancode = SDL_SCANCODE_KP_ENTER;
+  keypadEnter.key.scancode = SDL_SCANCODE_KP_ENTER;
   registry.handleSdlEvent(keypadEnter);
-  mainEnter.type = SDL_KEYUP;
+  mainEnter.type = SDL_EVENT_KEY_UP;
   registry.handleSdlEvent(mainEnter);
   expect(registry.legacyInputGeneration(1, 1).pressedGdxKeys.test(66),
          "releasing one SDL alias does not clear a still-held equivalent GDX key");
   SDL_Event focusLost{};
-  focusLost.type = SDL_WINDOWEVENT;
-  focusLost.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+  focusLost.type = SDL_EVENT_WINDOW_FOCUS_LOST;
   registry.handleSdlEvent(focusLost);
   expect(!registry.legacyInputGeneration(1, 1).anyKeyPressed,
          "focus loss clears maintained keys instead of publishing stale input");
@@ -1007,8 +1010,8 @@ void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   expect(backend.start(error), "SDL suppression fixture starts");
 
   SDL_Event event{};
-  event.type = SDL_KEYDOWN;
-  event.key.keysym.scancode = SDL_SCANCODE_A;
+  event.type = SDL_EVENT_KEY_DOWN;
+  event.key.scancode = SDL_SCANCODE_A;
   backend.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
   backend.handleSdlEvent(event);
   expect(events.empty(),
@@ -1017,13 +1020,13 @@ void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   realtimeMap->setControllerRealtimeAvailable(true);
   backend.setRealtimeInputClaimed(input::DeviceClass::GameController, true);
   SDL_Event controller{};
-  controller.type = SDL_CONTROLLERBUTTONDOWN;
-  controller.cbutton.which = 101;
-  controller.cbutton.button = SDL_CONTROLLER_BUTTON_A;
+  controller.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  controller.gbutton.which = 101;
+  controller.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
   backend.handleSdlEvent(controller);
   expect(events.empty(),
          "claimed XInput controller edges are not replayed through SDL");
-  controller.cbutton.which = 102;
+  controller.gbutton.which = 102;
   backend.handleSdlEvent(controller);
   expect(events.size() == 1 &&
              events.front().control.deviceClass ==
@@ -1044,25 +1047,25 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
   auto registry = makeRegistryWithSdlProvider(provider);
 
   SDL_Event key{};
-  key.type = SDL_KEYDOWN;
-  key.key.keysym.scancode = SDL_SCANCODE_D;
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.scancode = SDL_SCANCODE_D;
   const auto translatedKey = registry.translateRealtimeSdlInput(key);
 
   SDL_Event button{};
-  button.type = SDL_CONTROLLERBUTTONDOWN;
-  button.cbutton.which = 91;
-  button.cbutton.button = SDL_CONTROLLER_BUTTON_X;
+  button.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  button.gbutton.which = 91;
+  button.gbutton.button = SDL_GAMEPAD_BUTTON_WEST;
   const auto translatedButton = registry.translateRealtimeSdlInput(button);
 
   SDL_Event joystickButton{};
-  joystickButton.type = SDL_JOYBUTTONDOWN;
+  joystickButton.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
   joystickButton.jbutton.which = 92;
   joystickButton.jbutton.button = 3;
   const auto translatedJoystick =
       registry.translateRealtimeSdlInput(joystickButton);
 
   SDL_Event joystickHat{};
-  joystickHat.type = SDL_JOYHATMOTION;
+  joystickHat.type = SDL_EVENT_JOYSTICK_HAT_MOTION;
   joystickHat.jhat.which = 92;
   joystickHat.jhat.hat = 0;
   joystickHat.jhat.value = SDL_HAT_UP | SDL_HAT_RIGHT;
@@ -1075,7 +1078,7 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
       registry.translateRealtimeSdlInputs(joystickHat, translatedHatRelease);
 
   SDL_Event removed{};
-  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.type = SDL_EVENT_JOYSTICK_REMOVED;
   removed.jdevice.which = 91;
   const auto disconnected =
       registry.realtimeDisconnectedSdlDevice(removed);
@@ -1088,7 +1091,7 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
              translatedButton->control.deviceClass ==
                  input::DeviceClass::GameController &&
              translatedButton->control.kind == input::ControlKind::Button &&
-             translatedButton->control.index == SDL_CONTROLLER_BUTTON_X,
+             translatedButton->control.index == SDL_GAMEPAD_BUTTON_WEST,
          "realtime SDL translation resolves the connected controller's "
          "stable identity without pumping the registry");
   expect(translatedJoystick.has_value() &&
@@ -1105,7 +1108,7 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
              translatedHat[0].normalizedValue == 1.0F &&
              translatedHat[1].normalizedValue == 1.0F &&
              translatedHat[0].timestampDomain ==
-                 input::InputTimestampDomain::SdlMilliseconds &&
+                 input::InputTimestampDomain::SdlTicks &&
              translatedHatReleaseCount == 1 &&
              translatedHatRelease[0].control.direction ==
                  input::ControlDirection::Up &&
@@ -1128,18 +1131,18 @@ void testSdlRawJoystickButtonsAxesAndHatEdges() {
       [&](const auto &event) { inputEvents.push_back(event); });
 
   SDL_Event button{};
-  button.type = SDL_JOYBUTTONDOWN;
+  button.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
   button.jbutton.which = 55;
   button.jbutton.button = 4;
   registry.handleSdlEvent(button);
   SDL_Event axis{};
-  axis.type = SDL_JOYAXISMOTION;
+  axis.type = SDL_EVENT_JOYSTICK_AXIS_MOTION;
   axis.jaxis.which = 55;
   axis.jaxis.axis = 1;
   axis.jaxis.value = 32767;
   registry.handleSdlEvent(axis);
   SDL_Event diagonal{};
-  diagonal.type = SDL_JOYHATMOTION;
+  diagonal.type = SDL_EVENT_JOYSTICK_HAT_MOTION;
   diagonal.jhat.which = 55;
   diagonal.jhat.hat = 0;
   diagonal.jhat.value = SDL_HAT_UP | SDL_HAT_RIGHT;
@@ -1170,7 +1173,7 @@ void testSdlRawJoystickButtonsAxesAndHatEdges() {
       "diagonal hat press and centering publish directional edge pairs");
 }
 
-void testSdlIosAccelerometerMakesTiltAxesMoreSensitive() {
+void testSdlJoystickNamesDoNotChangeAxisSensitivity() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->devices = {iosAccelerometerInfo(58)};
   auto registry = makeRegistryWithSdlProvider(provider);
@@ -1182,7 +1185,7 @@ void testSdlIosAccelerometerMakesTiltAxesMoreSensitive() {
 
   for (Uint8 axisIndex = 0; axisIndex < 3; ++axisIndex) {
     SDL_Event axis{};
-    axis.type = SDL_JOYAXISMOTION;
+    axis.type = SDL_EVENT_JOYSTICK_AXIS_MOTION;
     axis.jaxis.which = 58;
     axis.jaxis.axis = axisIndex;
     axis.jaxis.value = 3277;
@@ -1191,16 +1194,80 @@ void testSdlIosAccelerometerMakesTiltAxesMoreSensitive() {
   registry.pump();
 
   const float original = 3277.0F / 32767.0F;
-  expect(inputEvents.size() == 3, "iOS accelerometer publishes all axes");
-  expect(inputEvents.size() == 3 &&
-             std::abs(inputEvents[0].normalizedValue - original * 2.5F) <
-                 0.0001F &&
-             std::abs(inputEvents[1].normalizedValue - original * 2.5F) <
-                 0.0001F,
-         "iOS accelerometer axes 0 and 1 use 2.5x gain");
-  expect(inputEvents.size() == 3 &&
-             std::abs(inputEvents[2].normalizedValue - original) < 0.0001F,
-         "iOS accelerometer axis 2 keeps its original sensitivity");
+  expect(inputEvents.size() == 3, "three-axis joystick publishes all axes");
+  for (Uint8 axisIndex = 0; axisIndex < 3; ++axisIndex) {
+    expect(inputEvents.size() == 3 &&
+               std::abs(inputEvents[axisIndex].normalizedValue - original) < 0.0001F,
+           "a joystick named like SDL2's removed accelerometer uses normal axis gain");
+    for (Sint16 value : {Sint16{-32768}, Sint16{-3277}, Sint16{0},
+                         Sint16{3277}, Sint16{32767}}) {
+      SDL_Event axis{};
+      axis.type = SDL_EVENT_JOYSTICK_AXIS_MOTION;
+      axis.jaxis.which = 58;
+      axis.jaxis.axis = axisIndex;
+      axis.jaxis.value = value;
+      const auto translated = registry.translateRealtimeSdlInput(axis);
+      const float expected = value < 0 ? value / 32768.0F : value / 32767.0F;
+      expect(translated && std::abs(translated->normalizedValue - expected) < 0.0001F,
+             "realtime joystick translation preserves normal signed axis range");
+    }
+  }
+}
+
+void testSdlControllerUpdateMarkersAreSuppressedWithoutLosingEdges() {
+  expect(SDL_Init(SDL_INIT_GAMEPAD), "real SDL gamepad subsystem initializes");
+  SDL_VirtualJoystickDesc descriptor{};
+  SDL_INIT_INTERFACE(&descriptor);
+  descriptor.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+  descriptor.naxes = 2;
+  descriptor.nbuttons = 2;
+  descriptor.nhats = 1;
+  descriptor.name = "SDL3 event coverage fixture";
+  const auto id = SDL_AttachVirtualJoystick(&descriptor);
+  expect(id != 0, "virtual SDL joystick attaches");
+  char guid[33]{};
+  SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), guid, sizeof(guid));
+  const auto mapping = std::string(guid) +
+      ",Coverage fixture,a:b0,leftx:a0,dpup:h0.1,";
+  expect(SDL_AddGamepadMapping(mapping.c_str()) >= 0, "virtual gamepad mapping loads");
+  SDLInputBackend backend({.enqueueInput = [](input::PhysicalInputEvent) {},
+                           .enqueueDevice = [](input::InputDeviceSnapshot) {}});
+  std::string error;
+  expect(backend.start(error), "real SDL provider starts");
+  auto *joystick = SDL_GetJoystickFromID(id);
+  expect(joystick != nullptr, "backend opens the virtual device");
+  SDL_UpdateJoysticks();
+  SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+  for (bool pressed : {true, false}) {
+    expect(SDL_SetJoystickVirtualButton(joystick, 0, pressed), "virtual button changes");
+    expect(SDL_SetJoystickVirtualAxis(joystick, 0, pressed ? 16000 : -16000),
+           "virtual axis changes");
+    expect(SDL_SetJoystickVirtualHat(joystick, 0, pressed ? SDL_HAT_UP : SDL_HAT_CENTERED),
+           "virtual hat changes");
+    SDL_UpdateJoysticks();
+    bool rawButton = false, mappedButton = false, rawAxis = false;
+    bool mappedAxis = false, rawHat = false;
+    SDL_Event event{};
+    while (SDL_PollEvent(&event)) {
+      expect(event.type != SDL_EVENT_JOYSTICK_UPDATE_COMPLETE &&
+                 event.type != SDL_EVENT_GAMEPAD_UPDATE_COMPLETE,
+             "unused completion markers never enter the app queue");
+      rawButton |= event.type == (pressed ? SDL_EVENT_JOYSTICK_BUTTON_DOWN : SDL_EVENT_JOYSTICK_BUTTON_UP);
+      mappedButton |= event.type == (pressed ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP);
+      rawAxis |= event.type == SDL_EVENT_JOYSTICK_AXIS_MOTION;
+      mappedAxis |= event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION;
+      rawHat |= event.type == SDL_EVENT_JOYSTICK_HAT_MOTION;
+    }
+    expect(rawButton && mappedButton && rawAxis && mappedAxis && rawHat,
+           "raw and mapped controller edges survive marker suppression");
+  }
+  expect(SDL_DetachVirtualJoystick(id), "virtual device detaches");
+  bool removed = false;
+  SDL_Event event{};
+  while (SDL_PollEvent(&event)) removed |= event.type == SDL_EVENT_JOYSTICK_REMOVED;
+  expect(removed, "controller removal still reaches the app");
+  backend.stop();
+  SDL_Quit();
 }
 
 void testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug() {
@@ -1218,8 +1285,8 @@ void testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug() {
 
   provider->failingOpenIndices.clear();
   SDL_Event added{};
-  added.type = SDL_JOYDEVICEADDED;
-  added.jdevice.which = 0;
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = provider->devices[0].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(std::ranges::any_of(registry.snapshot(),
@@ -1315,9 +1382,9 @@ collectDuplicateSerialStartup(std::vector<SdlInputDeviceInfo> devices) {
 
   for (const auto &device : provider->devices) {
     SDL_Event button{};
-    button.type = SDL_CONTROLLERBUTTONDOWN;
-    button.cbutton.which = device.instanceId;
-    button.cbutton.button = device.path.ends_with("twin-a") ? 0 : 1;
+    button.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    button.gbutton.which = device.instanceId;
+    button.gbutton.button = device.path.ends_with("twin-a") ? 0 : 1;
     registry.handleSdlEvent(button);
   }
   registry.pump();
@@ -1378,7 +1445,7 @@ void testSdlSoleSerializedDevicePathChurnKeepsBaseId() {
          "sole serialized device starts on its serial-priority base ID");
 
   SDL_Event removed{};
-  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.type = SDL_EVENT_JOYSTICK_REMOVED;
   removed.jdevice.which = 50;
   registry.handleSdlEvent(removed);
   registry.pump();
@@ -1387,8 +1454,8 @@ void testSdlSoleSerializedDevicePathChurnKeepsBaseId() {
   provider->devices[0] =
       controllerInfo(51, "/dev/input/serial-new-port", "SERIAL-CHURN");
   SDL_Event added{};
-  added.type = SDL_JOYDEVICEADDED;
-  added.jdevice.which = 0;
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = provider->devices[0].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(deviceEvents.size() == 1 && deviceEvents.front().connected &&
@@ -1422,8 +1489,8 @@ void testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger() {
 
   provider->devices.push_back(controllerInfo(61, "/dev/input/twin-b", "0"));
   SDL_Event added{};
-  added.type = SDL_JOYDEVICEADDED;
-  added.jdevice.which = 1;
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = provider->devices[1].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(
@@ -1440,9 +1507,9 @@ void testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger() {
        {std::pair<SDL_JoystickID, Uint8>{60, 0},
         std::pair<SDL_JoystickID, Uint8>{61, 1}}) {
     SDL_Event button{};
-    button.type = SDL_CONTROLLERBUTTONDOWN;
-    button.cbutton.which = instanceId;
-    button.cbutton.button = buttonIndex;
+    button.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    button.gbutton.which = instanceId;
+    button.gbutton.button = buttonIndex;
     registry.handleSdlEvent(button);
   }
   registry.pump();
@@ -1453,7 +1520,7 @@ void testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger() {
 
   deviceEvents.clear();
   SDL_Event removed{};
-  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.type = SDL_EVENT_JOYSTICK_REMOVED;
   removed.jdevice.which = 61;
   registry.handleSdlEvent(removed);
   registry.pump();
@@ -1462,7 +1529,7 @@ void testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger() {
          "duplicate removal leaves the other deterministic path owner live");
 
   provider->devices.push_back(controllerInfo(62, "/dev/input/twin-b", "0"));
-  added.jdevice.which = 2;
+  added.jdevice.which = provider->devices[2].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(deviceEvents.size() == 2 && deviceEvents.back().stableId == pathBId &&
@@ -1476,7 +1543,7 @@ void testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger() {
   registry.handleSdlEvent(removed);
   registry.pump();
   provider->devices.push_back(controllerInfo(63, "/dev/input/twin-a", "0"));
-  added.jdevice.which = 3;
+  added.jdevice.which = provider->devices[3].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(deviceEvents.size() == 3 && deviceEvents.back().stableId == pathAId &&
@@ -1510,9 +1577,9 @@ void testSdlDuplicateSerialsKeepIndependentEffectiveIds() {
       [&](const auto &event) { inputEvents.push_back(event); });
   for (const SDL_JoystickID instanceId : {30, 31}) {
     SDL_Event button{};
-    button.type = SDL_CONTROLLERBUTTONDOWN;
-    button.cbutton.which = instanceId;
-    button.cbutton.button = 2;
+    button.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    button.gbutton.which = instanceId;
+    button.gbutton.button = 2;
     registry.handleSdlEvent(button);
   }
   registry.pump();
@@ -1526,7 +1593,7 @@ void testSdlDuplicateSerialsKeepIndependentEffectiveIds() {
          "input records use each controller's effective stable ID");
 
   SDL_Event removed{};
-  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.type = SDL_EVENT_JOYSTICK_REMOVED;
   removed.jdevice.which = 30;
   registry.handleSdlEvent(removed);
   registry.pump();
@@ -1568,8 +1635,8 @@ void testSdlOverlappingReconnectWaitsForLastOwnerRemoval() {
 
   provider->devices.push_back(controllerInfo(77));
   SDL_Event added{};
-  added.type = SDL_JOYDEVICEADDED;
-  added.jdevice.which = 1;
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = provider->devices[1].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(deviceEvents.empty(),
@@ -1579,9 +1646,9 @@ void testSdlOverlappingReconnectWaitsForLastOwnerRemoval() {
   registry.subscribeInput(
       [&](const auto &event) { inputEvents.push_back(event); });
   SDL_Event button{};
-  button.type = SDL_CONTROLLERBUTTONDOWN;
-  button.cbutton.which = 77;
-  button.cbutton.button = 1;
+  button.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  button.gbutton.which = 77;
+  button.gbutton.button = 1;
   registry.handleSdlEvent(button);
   registry.pump();
   expect(inputEvents.size() == 1 &&
@@ -1589,7 +1656,7 @@ void testSdlOverlappingReconnectWaitsForLastOwnerRemoval() {
          "overlapping instance input uses the shared effective stable ID");
 
   SDL_Event removed{};
-  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.type = SDL_EVENT_JOYSTICK_REMOVED;
   removed.jdevice.which = 42;
   registry.handleSdlEvent(removed);
   registry.pump();
@@ -1627,8 +1694,8 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
   const std::string stableId = deviceEvents.front().stableId;
   expect(stableId.find("42") == std::string::npos,
          "volatile SDL instance ID is absent from stable persistence ID");
-  expect(deviceEvents.front().buttons == SDL_CONTROLLER_BUTTON_MAX &&
-             deviceEvents.front().axes == SDL_CONTROLLER_AXIS_MAX &&
+  expect(deviceEvents.front().buttons == SDL_GAMEPAD_BUTTON_COUNT &&
+             deviceEvents.front().axes == SDL_GAMEPAD_AXIS_COUNT &&
              deviceEvents.front().hats == 0,
          "controller snapshot advertises only standardized controller inputs");
 
@@ -1637,22 +1704,22 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
       [&](const auto &event) { inputEvents.push_back(event); });
 
   SDL_Event controllerButton{};
-  controllerButton.type = SDL_CONTROLLERBUTTONDOWN;
-  controllerButton.cbutton.which = 42;
-  controllerButton.cbutton.button = 3;
-  controllerButton.cbutton.state = SDL_PRESSED;
-  controllerButton.cbutton.timestamp = 9;
+  controllerButton.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  controllerButton.gbutton.which = 42;
+  controllerButton.gbutton.button = 3;
+  controllerButton.gbutton.down = true;
+  controllerButton.gbutton.timestamp = 9000000;
   registry.handleSdlEvent(controllerButton);
 
   SDL_Event duplicateRawButton{};
-  duplicateRawButton.type = SDL_JOYBUTTONDOWN;
+  duplicateRawButton.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
   duplicateRawButton.jbutton.which = 42;
   duplicateRawButton.jbutton.button = 3;
-  duplicateRawButton.jbutton.state = SDL_PRESSED;
-  duplicateRawButton.jbutton.timestamp = 9;
+  duplicateRawButton.jbutton.down = true;
+  duplicateRawButton.jbutton.timestamp = 9000000;
   registry.handleSdlEvent(duplicateRawButton);
   SDL_Event suppressedRawHat{};
-  suppressedRawHat.type = SDL_JOYHATMOTION;
+  suppressedRawHat.type = SDL_EVENT_JOYSTICK_HAT_MOTION;
   suppressedRawHat.jhat.which = 42;
   suppressedRawHat.jhat.hat = 0;
   suppressedRawHat.jhat.value = SDL_HAT_UP;
@@ -1667,10 +1734,10 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
 
   inputEvents.clear();
   SDL_Event axis{};
-  axis.type = SDL_CONTROLLERAXISMOTION;
-  axis.caxis.which = 42;
-  axis.caxis.axis = 1;
-  axis.caxis.value = -32768;
+  axis.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+  axis.gaxis.which = 42;
+  axis.gaxis.axis = 1;
+  axis.gaxis.value = -32768;
   registry.handleSdlEvent(axis);
   registry.pump();
   expect(inputEvents.size() == 1 &&
@@ -1679,7 +1746,7 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
 
   deviceEvents.clear();
   SDL_Event removed{};
-  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.type = SDL_EVENT_JOYSTICK_REMOVED;
   removed.jdevice.which = 42;
   registry.handleSdlEvent(removed);
   expect(deviceEvents.empty(), "removal remains queued before pump");
@@ -1691,8 +1758,8 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
 
   provider->devices[0] = controllerInfo(77);
   SDL_Event added{};
-  added.type = SDL_JOYDEVICEADDED;
-  added.jdevice.which = 0;
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = provider->devices[0].instanceId;
   registry.handleSdlEvent(added);
   registry.pump();
   expect(deviceEvents.size() == 2 && deviceEvents.back().connected,
@@ -1784,7 +1851,7 @@ void testPointerSnapshotSurvivesSceneSubscriptionChangesAndRelease() {
   InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
   expect(!registry.pointerPosition(), "pointer is absent before any real pointing event");
   SDL_Event event{};
-  event.type = SDL_MOUSEMOTION;
+  event.type = SDL_EVENT_MOUSE_MOTION;
   event.motion.which = 0;
   event.motion.x = 120;
   event.motion.y = 70;
@@ -1800,42 +1867,42 @@ void testPointerSnapshotSurvivesSceneSubscriptionChangesAndRelease() {
   check(120, 70, false,
         "new scene reads a stationary pointer without another SDL event");
   event = {};
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   event.button.which = 0;
   event.button.x = 130;
   event.button.y = 80;
   registry.handleSdlEvent(event);
   check(130, 80, false, "mouse down updates the retained pointer");
-  event.type = SDL_MOUSEBUTTONUP;
+  event.type = SDL_EVENT_MOUSE_BUTTON_UP;
   event.button.x = 150;
   event.button.y = 90;
   registry.handleSdlEvent(event);
   check(130, 80, false, "mouse release retains the last down or motion position");
-  event.type = SDL_MOUSEBUTTONDOWN;
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   event.button.which = SDL_TOUCH_MOUSEID;
   event.button.x = 999;
   registry.handleSdlEvent(event);
   check(130, 80, false, "synthesized touch-mouse duplicate does not replace the real pointer");
-  for (const auto type : {SDL_FINGERDOWN, SDL_FINGERMOTION}) {
+  for (const auto type : {SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION}) {
     event = {};
     event.type = type;
-    event.tfinger.touchId = 1;
-    event.tfinger.x = type == SDL_FINGERMOTION ? 0.75F : 0.25F;
+    event.tfinger.touchID = 1;
+    event.tfinger.x = type == SDL_EVENT_FINGER_MOTION ? 0.75F : 0.25F;
     event.tfinger.y = 0.5F;
     registry.handleSdlEvent(event);
     check(event.tfinger.x, 0.5F, true,
           "touch down and motion retain normalized coordinates for the next scene");
   }
-  event.type = SDL_FINGERUP;
+  event.type = SDL_EVENT_FINGER_UP;
   event.tfinger.x = 0.9F;
   registry.handleSdlEvent(event);
   check(0.75F, 0.5F, true, "touch release retains the last down or motion position");
-  event.type = SDL_FINGERMOTION;
-  event.tfinger.touchId = SDL_MOUSE_TOUCHID;
+  event.type = SDL_EVENT_FINGER_MOTION;
+  event.tfinger.touchID = SDL_MOUSE_TOUCHID;
   event.tfinger.x = 0.1F;
   registry.handleSdlEvent(event);
   check(0.75F, 0.5F, true, "synthesized mouse-touch duplicate is ignored");
-  event.tfinger.touchId = 1;
+  event.tfinger.touchID = 1;
   event.tfinger.x = std::numeric_limits<float>::quiet_NaN();
   registry.handleSdlEvent(event);
   check(0.75F, 0.5F, true, "nonfinite touch coordinates cannot corrupt the retained pointer");
@@ -1865,7 +1932,7 @@ int main() {
   testSdlInputYieldsClaimedClassesToNativeRealtimeSource();
   testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
   testSdlRawJoystickButtonsAxesAndHatEdges();
-  testSdlIosAccelerometerMakesTiltAxesMoreSensitive();
+  testSdlJoystickNamesDoNotChangeAxisSensitivity();
   testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();
   testSdlBackendStartStopIsIdempotentAndClosesHandles();
   testNullBackendFactoryIsDiagnosableAndHarmless();
@@ -1878,6 +1945,8 @@ int main() {
   testSdlReconnectRemovalDedupAndAxisNormalization();
   testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals();
   testGyroscopeControlFanoutDispatchesWithoutBackendPump();
+
+  testSdlControllerUpdateMarkersAreSuppressedWithoutLosingEdges();
 
   if (failures != 0) {
     std::cerr << failures << " input device registry assertion(s) failed\n";

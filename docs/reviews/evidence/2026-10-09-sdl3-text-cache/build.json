@@ -1,0 +1,36 @@
+{
+  "source_base": "3e09cbdc4557eed658c9c7ee35723b59ba40ab8c",
+  "sources": {
+    "src/view/TextView.cpp": {
+      "before_sha256": "4e17d894792c7603fcf6ffbb300944ea19755dbc89b5bc9198003a0038e2ed2a",
+      "after_sha256": "82bccc7f4c319adde165d3ddb5d3c290f2e5c34d562a24c14943369d4aa0cc55"
+    },
+    "src/view/TextView.h": {
+      "before_sha256": "ca817384f44f5fef5f3d39f862216175477db741a211c328b1aba1438bb7e145",
+      "after_sha256": "ca817384f44f5fef5f3d39f862216175477db741a211c328b1aba1438bb7e145"
+    },
+    "src/view/SdlTtfRuntime.cpp": {
+      "before_sha256": "3aea3a497c119423530c3c4237204cc9e3d6fe44fc9c3ceb13a998f5c3b97589",
+      "after_sha256": "3aea3a497c119423530c3c4237204cc9e3d6fe44fc9c3ceb13a998f5c3b97589"
+    },
+    "src/view/SdlTtfRuntime.h": {
+      "before_sha256": "2069b896960867d391d84470335879ff3bd75911d788de81158c8fead8b8a5a3",
+      "after_sha256": "2069b896960867d391d84470335879ff3bd75911d788de81158c8fead8b8a5a3"
+    }
+  },
+  "candidate_compile_commands": [
+    {
+      "directory": "/tmp/asobmashow-sdl3-performance/build",
+      "command": "/usr/bin/c++ -DBENCH_SDL=3 -DBX_CONFIG_DEBUG=0 -I/Users/xf/workspace/SNURhythm/AsoBMaShow/src -I/Users/xf/workspace/SNURhythm/AsoBMaShow/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bimg/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga/lib -I/tmp/asobmashow-sdl3-performance/build/SDL/include-revision -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL_ttf/include -O3 -DNDEBUG -std=gnu++2b -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -fPIE -o CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/SdlTtfRuntime.cpp.o -c /Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/SdlTtfRuntime.cpp",
+      "file": "/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/SdlTtfRuntime.cpp",
+      "output": "/tmp/asobmashow-sdl3-performance/build/CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/SdlTtfRuntime.cpp.o"
+    },
+    {
+      "directory": "/tmp/asobmashow-sdl3-performance/build",
+      "command": "/usr/bin/c++ -DBENCH_SDL=3 -DBX_CONFIG_DEBUG=0 -I/Users/xf/workspace/SNURhythm/AsoBMaShow/src -I/Users/xf/workspace/SNURhythm/AsoBMaShow/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bx/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/bgfx/bimg/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga -I/Users/xf/workspace/SNURhythm/AsoBMaShow/yoga/lib -I/tmp/asobmashow-sdl3-performance/build/SDL/include-revision -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL/include -I/Users/xf/workspace/SNURhythm/AsoBMaShow/SDL_ttf/include -O3 -DNDEBUG -std=gnu++2b -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -fPIE -o CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp.o -c /Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp",
+      "file": "/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp",
+      "output": "/tmp/asobmashow-sdl3-performance/build/CMakeFiles/probe3.dir/Users/xf/workspace/SNURhythm/AsoBMaShow/src/view/TextView.cpp.o"
+    }
+  ],
+  "note": "Both binaries built serially using the same retained Release CMake build. Before sources match base; candidate TextView diff is measured-change.patch.gz. Same dependency archives and unchanged probe.cpp."
+}

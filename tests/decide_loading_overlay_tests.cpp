@@ -74,13 +74,13 @@ void testOverlayBlocksInput() {
   overlay.setVisible(true);
 
   SDL_Event keyEvent{};
-  keyEvent.type = SDL_KEYDOWN;
-  keyEvent.key.keysym.sym = SDLK_RETURN;
+  keyEvent.type = SDL_EVENT_KEY_DOWN;
+  keyEvent.key.key = SDLK_RETURN;
 
   // BlockingOverlayView consumes input (handleEventsImpl returns false for
   // interaction events), so OverlayPortal should not pass it to content.
   SDL_Event clickEvent{};
-  clickEvent.type = SDL_MOUSEBUTTONDOWN;
+  clickEvent.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   clickEvent.button.button = SDL_BUTTON_LEFT;
 
   // If the overlay did not consume these, handleEvents would forward them.

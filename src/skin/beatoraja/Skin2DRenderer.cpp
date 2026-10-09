@@ -31,6 +31,20 @@
 #include <utf8proc.h>
 
 namespace skin {
+
+struct SkinRendererModelIndex {
+  std::vector<const SkinBooleanPropertyBinding *> booleans;
+  std::vector<const SkinIntegerPropertyBinding *> integers;
+  std::vector<const SkinFloatPropertyBinding *> floats;
+  std::vector<const SkinStringPropertyBinding *> strings;
+  std::vector<const SkinTimerPropertyBinding *> timers;
+  std::vector<SkinObjectId> disabledOptionalObjects;
+  std::vector<const SkinObjectDefinition *> objects;
+  bool uniqueBindingIds = true;
+  bool uniqueObjectIds = true;
+  bool hasPracticeObject = false;
+};
+
 namespace {
 
 #if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
@@ -359,13 +373,7 @@ findObject(std::span<const SkinObjectDefinition *const> objects,
 }
 
 struct FrameLookupIndex {
-  std::vector<const SkinBooleanPropertyBinding *> booleans;
-  std::vector<const SkinIntegerPropertyBinding *> integers;
-  std::vector<const SkinFloatPropertyBinding *> floats;
-  std::vector<const SkinStringPropertyBinding *> strings;
-  std::vector<const SkinTimerPropertyBinding *> timers;
-  std::vector<SkinObjectId> disabledOptionalObjects;
-  bool uniqueBindingIds = true;
+  const SkinRendererModelIndex &model;
   SkinTextDecodeCache &textDecodeCache;
 };
 
@@ -390,10 +398,9 @@ sortedBindingPointers(const std::vector<Binding> &bindings,
   return result;
 }
 
-FrameLookupIndex
-buildFrameLookupIndex(const ValidatedBeatorajaSkinModel &model,
-                      SkinTextDecodeCache &textDecodeCache) {
-  FrameLookupIndex index{.textDecodeCache = textDecodeCache};
+SkinRendererModelIndex
+buildModelIndex(const ValidatedBeatorajaSkinModel &model) {
+  SkinRendererModelIndex index;
   index.booleans = sortedBindingPointers(model.model.booleanProperties,
                                          index.uniqueBindingIds);
   index.integers = sortedBindingPointers(model.model.integerProperties,
@@ -410,6 +417,20 @@ buildFrameLookupIndex(const ValidatedBeatorajaSkinModel &model,
       std::unique(index.disabledOptionalObjects.begin(),
                   index.disabledOptionalObjects.end()),
       index.disabledOptionalObjects.end());
+  index.objects.reserve(model.model.objects.size());
+  for (const auto &object : model.model.objects) {
+    index.objects.push_back(&object);
+  }
+  std::ranges::sort(index.objects, {}, &SkinObjectDefinition::id);
+  index.hasPracticeObject = std::ranges::any_of(
+      index.objects, [](const SkinObjectDefinition *object) {
+        return std::holds_alternative<SkinPracticeObject>(object->payload);
+      });
+  index.uniqueObjectIds =
+      std::adjacent_find(index.objects.begin(), index.objects.end(),
+                         [](const auto *left, const auto *right) {
+                           return left->id == right->id;
+                         }) == index.objects.end();
   return index;
 }
 
@@ -436,7 +457,7 @@ const Binding *findBinding(const std::vector<const Binding *> &bindings,
 bool laneEffectTimer(const FrameLookupIndex &index,
                      const SkinDestinationBody &destination) {
   if (!destination.timer) return false;
-  const auto *binding = findBinding(index.timers, *destination.timer);
+  const auto *binding = findBinding(index.model.timers, *destination.timer);
   const auto *builtin = binding
                             ? std::get_if<SkinBuiltinPropertySelector>(&binding->source)
                             : nullptr;
@@ -452,13 +473,13 @@ bool laneEffectTimer(const FrameLookupIndex &index,
 bool disabledOptionalObject(const FrameLookupIndex &index,
                             SkinObjectId id) noexcept {
   const auto found =
-      std::lower_bound(index.disabledOptionalObjects.begin(),
-                       index.disabledOptionalObjects.end(), id,
+      std::lower_bound(index.model.disabledOptionalObjects.begin(),
+                       index.model.disabledOptionalObjects.end(), id,
                        [](SkinObjectId candidate, SkinObjectId value) {
                          recordLookupComparison();
                          return candidate < value;
                        });
-  return found != index.disabledOptionalObjects.end() && *found == id;
+  return found != index.model.disabledOptionalObjects.end() && *found == id;
 }
 
 LuaCallbackResult invokeCallback(const SkinFrameInputs &inputs,
@@ -475,7 +496,7 @@ LuaCallbackResult invokeCallback(const SkinFrameInputs &inputs,
 ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
                                    const FrameLookupIndex &index,
                                    SkinBooleanPropertyId id) {
-  const auto *binding = findBinding(index.booleans, id);
+  const auto *binding = findBinding(index.model.booleans, id);
   if (!binding) {
     return {.failure = diagnostic(
                 "skin.renderer.binding.missing",
@@ -527,7 +548,7 @@ ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
   if (!id) {
     return {.value = std::numeric_limits<std::int32_t>::min()};
   }
-  const auto *binding = findBinding(index.integers, id);
+  const auto *binding = findBinding(index.model.integers, id);
   if (!binding) {
     return {.failure = diagnostic(
         "skin.renderer.binding.missing",
@@ -576,7 +597,7 @@ ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
 ResolvedValue<double> resolveFloat(const SkinFrameInputs &inputs,
                                    const FrameLookupIndex &index,
                                    SkinFloatPropertyId id) {
-  const auto *binding = findBinding(index.floats, id);
+  const auto *binding = findBinding(index.model.floats, id);
   if (!binding) {
     return {.failure =
                 diagnostic("skin.renderer.binding.missing",
@@ -678,7 +699,7 @@ resolveRate(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
 ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
                                          const FrameLookupIndex &index,
                                          SkinStringPropertyId id) {
-  const auto *binding = findBinding(index.strings, id);
+  const auto *binding = findBinding(index.model.strings, id);
   if (!binding) {
     return {.failure = diagnostic(
                 "skin.renderer.binding.missing",
@@ -724,7 +745,7 @@ ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
 ResolvedValue<std::int64_t> resolveTimer(const SkinFrameInputs &inputs,
                                          const FrameLookupIndex &index,
                                          SkinTimerPropertyId id) {
-  const auto *binding = findBinding(index.timers, id);
+  const auto *binding = findBinding(index.model.timers, id);
   if (!binding) {
     return {.failure =
                 diagnostic("skin.renderer.binding.missing",
@@ -4275,6 +4296,14 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
   return evaluateFrameImpl(inputs, true);
 }
 
+void Skin2DRenderer::prepareModelIndex(
+    std::uint64_t sessionSerial, const ValidatedBeatorajaSkinModel &model) {
+  preparedModelIndex_ =
+      std::make_shared<const SkinRendererModelIndex>(buildModelIndex(model));
+  preparedModelSessionSerial_ = sessionSerial;
+  preparedModelIdentity_ = &model;
+}
+
 SkinFrameEvaluationResult Skin2DRenderer::evaluateFrame(
     const SkinFrameInputs &inputs, SkinExternalFrameOwnership &&ownership) {
   SkinFrameEvaluationResult result;
@@ -4358,28 +4387,24 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       textDecodeCache_.clear();
       textDecodeCacheSessionSerial_ = inputs.sessionSerial;
     }
-    const auto lookupIndex = buildFrameLookupIndex(inputs.model, textDecodeCache_);
-    if (!lookupIndex.uniqueBindingIds) {
+    std::optional<SkinRendererModelIndex> transientIndex;
+    const auto *modelIndex = preparedModelIndex_.get();
+    if (!modelIndex || preparedModelSessionSerial_ != inputs.sessionSerial ||
+        preparedModelIdentity_ != &inputs.model) {
+      transientIndex.emplace(buildModelIndex(inputs.model));
+      modelIndex = &*transientIndex;
+    }
+    const FrameLookupIndex lookupIndex{*modelIndex, textDecodeCache_};
+    if (!modelIndex->uniqueBindingIds) {
       result.diagnostics.push_back(diagnostic(
           "skin.renderer.model.binding_id",
           "Gameplay skin binding IDs must be unique within each registry."));
       return result;
     }
 
-    std::vector<const SkinObjectDefinition *> objects;
-    objects.reserve(inputs.model.model.objects.size());
-    for (const auto &object : inputs.model.model.objects) {
-      objects.push_back(&object);
-    }
-    std::ranges::sort(objects, {}, &SkinObjectDefinition::id);
-    const bool modelHasPracticeObject = std::ranges::any_of(
-        objects, [](const SkinObjectDefinition *object) {
-          return std::holds_alternative<SkinPracticeObject>(object->payload);
-        });
-    if (std::adjacent_find(objects.begin(), objects.end(),
-                           [](const auto *left, const auto *right) {
-                             return left->id == right->id;
-                           }) != objects.end()) {
+    const auto &objects = modelIndex->objects;
+    const bool modelHasPracticeObject = modelIndex->hasPracticeObject;
+    if (!modelIndex->uniqueObjectIds) {
       result.diagnostics.push_back(
           diagnostic("skin.renderer.model.object_id",
                      "Gameplay skin object IDs must be unique."));

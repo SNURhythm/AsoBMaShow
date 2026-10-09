@@ -213,6 +213,7 @@ void DropdownView::refresh(const State &state) {
 void DropdownView::applyRefresh(State state) {
   const bool rebuild = !optionsMatch(state.options);
   const bool wasOpen = current.open;
+  if (rebuild || current.label != state.label) cachedPreferredWidth.reset();
   current = std::move(state);
   if (current.open && (rebuild || optionButtons.empty())) {
     rebuildOptions();
@@ -416,6 +417,10 @@ float DropdownView::preferredWidth() const {
   if (triggerText == nullptr) {
     return kDefaultWidth;
   }
+  const auto languageRevision = i18n::revision();
+  if (cachedPreferredWidth && preferredWidthLanguageRevision == languageRevision) {
+    return *cachedPreferredWidth;
+  }
 
   int widestValue = 0;
   bool hasLeadingIndicator = false;
@@ -431,8 +436,10 @@ float DropdownView::preferredWidth() const {
   const float horizontalChrome =
       kTriggerHorizontalChrome +
       (hasLeadingIndicator ? kIndicatorHorizontalChrome : 0.0f);
-  return std::max(kDefaultWidth,
-                  static_cast<float>(widestValue) + horizontalChrome);
+  cachedPreferredWidth = std::max(kDefaultWidth,
+                                  static_cast<float>(widestValue) + horizontalChrome);
+  preferredWidthLanguageRevision = languageRevision;
+  return *cachedPreferredWidth;
 }
 
 void DropdownView::scheduleDeferredRefresh() {
@@ -555,7 +562,7 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
     return true;
   }
 
-  if (event.type == SDL_MOUSEBUTTONDOWN &&
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
       event.button.button == SDL_BUTTON_LEFT) {
     float uiX = 0.0f;
     float uiY = 0.0f;
@@ -569,7 +576,7 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
     return true;
   }
 
-  if (event.type == SDL_FINGERDOWN) {
+  if (event.type == SDL_EVENT_FINGER_DOWN) {
     float uiX = 0.0f;
     float uiY = 0.0f;
     fingerEventToUi(event.tfinger, uiX, uiY);

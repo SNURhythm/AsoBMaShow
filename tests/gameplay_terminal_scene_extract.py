@@ -70,7 +70,7 @@ def main():
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
     methods += "\n\n".join(
-        extract(source, signature).replace("SDL_GetTicks64()", "reminderTicks").replace("TARGET_OS_ANDROID", "fixtureAndroid")
+        extract(source, signature).replace("SDL_GetTicks()", "reminderTicks").replace("TARGET_OS_ANDROID", "fixtureAndroid")
         if signature == "void GamePlayScene::update(float dt)" else
         extract(source, signature).replace("#if TARGET_OS_ANDROID", "if (fixtureAndroid) {").replace("#endif", "}")
         if signature == "void GamePlayScene::onApplicationBackgroundChanged(" else extract(source, signature)

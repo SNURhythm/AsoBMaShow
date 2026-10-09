@@ -1,0 +1,30 @@
+{
+  "/Users/xf/workspace/SNURhythm/AsoBMaShow/cmake-build-release/vcpkg_installed/arm64-osx/lib/libSDL2.a": {
+    "bytes": 2651880,
+    "sha256": "f5c55423384c2cef4f4f667fe37f9e472a207fac8176870b45040a9bfa147d98"
+  },
+  "/Users/xf/workspace/SNURhythm/AsoBMaShow/cmake-build-release/vcpkg_installed/arm64-osx/lib/libSDL2_ttf.a": {
+    "bytes": 74248,
+    "sha256": "66ab74dda6ffaf5644b85d4a47329c42dc994d2d4fb3de26017aba415a0985d5"
+  },
+  "/Users/xf/workspace/SNURhythm/AsoBMaShow/cmake-build-release/vcpkg_installed/arm64-osx/lib/libfreetype.a": {
+    "bytes": 942560,
+    "sha256": "ea41dd960e5e7b14231970738aed323d4d800fed7f7abd672159de9c0851d685"
+  },
+  "/tmp/asobmashow-sdl3-performance/build/probe2": {
+    "bytes": 4965672,
+    "sha256": "e35ae6dfaab164786fbb39329e171a3206eafa4daa03ecfcbfa9b370ef4b4c44"
+  },
+  "/tmp/asobmashow-sdl3-performance/build/probe3": {
+    "bytes": 7347016,
+    "sha256": "9f319f2690270594280b5b7e6cec48802b1b4af03557d47ee0e6c4769246abea"
+  },
+  "/tmp/asobmashow-sdl3-performance/build/SDL/libSDL3.a": {
+    "bytes": 4682536,
+    "sha256": "7ba3098bab0c1d7a0b68eae9141bea766743b2b8e648ba31193049fa956e0320"
+  },
+  "/tmp/asobmashow-sdl3-performance/build/SDL_ttf/libSDL3_ttf.a": {
+    "bytes": 3031808,
+    "sha256": "11f456aa20a2c3353c9d7b254e385b204656aa99b6ac02e1ebffebc7cb8b0988"
+  }
+}

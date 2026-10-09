@@ -13,7 +13,7 @@
 #include <vector>
 
 struct InputProfile {
-  static constexpr int kSchemaVersion = 10;
+  static constexpr int kSchemaVersion = 11;
 
   int schemaVersion = kSchemaVersion;
   input::GyroscopeTurntableConfig gyroscopeTurntable;

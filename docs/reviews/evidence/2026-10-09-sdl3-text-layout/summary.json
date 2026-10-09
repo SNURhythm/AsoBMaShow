@@ -1,0 +1,272 @@
+[
+  {
+    "metric": "dropdown_resize_4",
+    "baseline_ns": 5422.445,
+    "candidate_ns": 2939.37,
+    "change_percent": -45.792534548529304,
+    "paired_bootstrap_95_percent": [
+      -46.00006821338992,
+      -45.26640555072634
+    ],
+    "baseline_min_max_ns": [
+      5404.95,
+      5698.41
+    ],
+    "candidate_min_max_ns": [
+      2921.55,
+      3127.28
+    ]
+  },
+  {
+    "metric": "dropdown_refresh_4",
+    "baseline_ns": 2818.765,
+    "candidate_ns": 334.145,
+    "change_percent": -88.14569501182255,
+    "paired_bootstrap_95_percent": [
+      -88.23281667595145,
+      -87.98698650780987
+    ],
+    "baseline_min_max_ns": [
+      2797.69,
+      2940.27
+    ],
+    "candidate_min_max_ns": [
+      331.219,
+      354.168
+    ]
+  },
+  {
+    "metric": "dropdown_changed_label_4",
+    "baseline_ns": 25077.65,
+    "candidate_ns": 25395.75,
+    "change_percent": 1.2684601627345415,
+    "paired_bootstrap_95_percent": [
+      -1.061669777357821,
+      3.1910435011039295
+    ],
+    "baseline_min_max_ns": [
+      24376.6,
+      26544.6
+    ],
+    "candidate_min_max_ns": [
+      24330.9,
+      27274.3
+    ]
+  },
+  {
+    "metric": "dropdown_resize_16",
+    "baseline_ns": 72804.6,
+    "candidate_ns": 2949.46,
+    "change_percent": -95.94879993846543,
+    "paired_bootstrap_95_percent": [
+      -95.99616766695974,
+      -95.83213499411475
+    ],
+    "baseline_min_max_ns": [
+      72321.1,
+      79734.1
+    ],
+    "candidate_min_max_ns": [
+      2922.85,
+      3182.94
+    ]
+  },
+  {
+    "metric": "dropdown_refresh_16",
+    "baseline_ns": 70439.70000000001,
+    "candidate_ns": 738.281,
+    "change_percent": -98.95189644476055,
+    "paired_bootstrap_95_percent": [
+      -98.9560513602578,
+      -98.93294453591457
+    ],
+    "baseline_min_max_ns": [
+      70085.4,
+      77762
+    ],
+    "candidate_min_max_ns": [
+      735.027,
+      783.855
+    ]
+  },
+  {
+    "metric": "dropdown_changed_label_16",
+    "baseline_ns": 101836.0,
+    "candidate_ns": 105983.5,
+    "change_percent": 4.072724773164693,
+    "paired_bootstrap_95_percent": [
+      2.0364301722760825,
+      5.479830903559724
+    ],
+    "baseline_min_max_ns": [
+      100879,
+      113665
+    ],
+    "candidate_min_max_ns": [
+      100291,
+      110733
+    ]
+  },
+  {
+    "metric": "dropdown_resize_128",
+    "baseline_ns": 566588.0,
+    "candidate_ns": 3011.96,
+    "change_percent": -99.46840384900491,
+    "paired_bootstrap_95_percent": [
+      -99.48414866464614,
+      -99.46257731484268
+    ],
+    "baseline_min_max_ns": [
+      560727,
+      625602
+    ],
+    "candidate_min_max_ns": [
+      2917.97,
+      3425.95
+    ]
+  },
+  {
+    "metric": "dropdown_refresh_128",
+    "baseline_ns": 583258.0,
+    "candidate_ns": 4647.13,
+    "change_percent": -99.20324624780115,
+    "paired_bootstrap_95_percent": [
+      -99.22969002334587,
+      -99.15820330251655
+    ],
+    "baseline_min_max_ns": [
+      563022,
+      630922
+    ],
+    "candidate_min_max_ns": [
+      4505.7,
+      7243.33
+    ]
+  },
+  {
+    "metric": "dropdown_changed_label_128",
+    "baseline_ns": 613362.0,
+    "candidate_ns": 600691.0,
+    "change_percent": -2.065827358069139,
+    "paired_bootstrap_95_percent": [
+      -3.748608438813139,
+      -1.0715258973360453
+    ],
+    "baseline_min_max_ns": [
+      599164,
+      668629
+    ],
+    "candidate_min_max_ns": [
+      592911,
+      620678
+    ]
+  },
+  {
+    "metric": "wrap_reused_primary",
+    "baseline_ns": 54204.35,
+    "candidate_ns": 4.166,
+    "change_percent": -99.99231426998017,
+    "paired_bootstrap_95_percent": [
+      -99.99242724547562,
+      -99.99226068300656
+    ],
+    "baseline_min_max_ns": [
+      53481.9,
+      56289.8
+    ],
+    "candidate_min_max_ns": [
+      4.125,
+      4.291
+    ]
+  },
+  {
+    "metric": "wrap_resized_primary",
+    "baseline_ns": 56553.25,
+    "candidate_ns": 55425.95,
+    "change_percent": -1.9933425576779462,
+    "paired_bootstrap_95_percent": [
+      -3.2858432828333672,
+      0.3361620803393084
+    ],
+    "baseline_min_max_ns": [
+      54936.3,
+      59447.1
+    ],
+    "candidate_min_max_ns": [
+      54792.6,
+      59475
+    ]
+  },
+  {
+    "metric": "composed_raster_reused_primary",
+    "baseline_ns": 95385.85,
+    "candidate_ns": 33506.0,
+    "change_percent": -64.87319660096335,
+    "paired_bootstrap_95_percent": [
+      -65.32589772729625,
+      -63.19566089672788
+    ],
+    "baseline_min_max_ns": [
+      90735.8,
+      100085
+    ],
+    "candidate_min_max_ns": [
+      32898.8,
+      35352.5
+    ]
+  },
+  {
+    "metric": "wrap_reused_mixed",
+    "baseline_ns": 7014.045,
+    "candidate_ns": 4.208,
+    "change_percent": -99.94000608778529,
+    "paired_bootstrap_95_percent": [
+      -99.9418840555208,
+      -99.93770777382595
+    ],
+    "baseline_min_max_ns": [
+      6870.79,
+      7268.83
+    ],
+    "candidate_min_max_ns": [
+      4.083,
+      6.875
+    ]
+  },
+  {
+    "metric": "wrap_resized_mixed",
+    "baseline_ns": 7559.0,
+    "candidate_ns": 7704.205,
+    "change_percent": 1.9209551527979984,
+    "paired_bootstrap_95_percent": [
+      0.7024952368196891,
+      5.040692901777488
+    ],
+    "baseline_min_max_ns": [
+      7426.62,
+      8306.04
+    ],
+    "candidate_min_max_ns": [
+      7657.46,
+      8059.21
+    ]
+  },
+  {
+    "metric": "composed_raster_reused_mixed",
+    "baseline_ns": 36671.05,
+    "candidate_ns": 29699.8,
+    "change_percent": -19.010227413722824,
+    "paired_bootstrap_95_percent": [
+      -21.368857626331327,
+      -16.485660545068537
+    ],
+    "baseline_min_max_ns": [
+      36212.5,
+      39364.6
+    ],
+    "candidate_min_max_ns": [
+      29197.1,
+      31577.5
+    ]
+  }
+]

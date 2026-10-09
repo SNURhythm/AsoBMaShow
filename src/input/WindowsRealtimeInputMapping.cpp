@@ -86,14 +86,11 @@ SDL_Scancode virtualKeyScancode(std::uint32_t virtualKey) noexcept {
   case 0xAD: return SDL_SCANCODE_MUTE;
   case 0xAE: return SDL_SCANCODE_VOLUMEDOWN;
   case 0xAF: return SDL_SCANCODE_VOLUMEUP;
-  case 0xB0: return SDL_SCANCODE_AUDIONEXT;
-  case 0xB1: return SDL_SCANCODE_AUDIOPREV;
-  case 0xB2: return SDL_SCANCODE_AUDIOSTOP;
-  case 0xB3: return SDL_SCANCODE_AUDIOPLAY;
-  case 0xB4: return SDL_SCANCODE_MAIL;
-  case 0xB5: return SDL_SCANCODE_MEDIASELECT;
-  case 0xB6: return SDL_SCANCODE_APP1;
-  case 0xB7: return SDL_SCANCODE_APP2;
+  case 0xB0: return SDL_SCANCODE_MEDIA_NEXT_TRACK;
+  case 0xB1: return SDL_SCANCODE_MEDIA_PREVIOUS_TRACK;
+  case 0xB2: return SDL_SCANCODE_MEDIA_STOP;
+  case 0xB3: return SDL_SCANCODE_MEDIA_PLAY;
+  case 0xB5: return SDL_SCANCODE_MEDIA_SELECT;
   case 0xE2: return SDL_SCANCODE_NONUSBACKSLASH;
   case 0xF6: return SDL_SCANCODE_SYSREQ;
   case 0xF7: return SDL_SCANCODE_CRSEL;
@@ -168,32 +165,32 @@ WindowsGameControllerState
 windowsRealtimeControllerState(const WindowsXInputSample &sample) noexcept {
   WindowsGameControllerState result;
   constexpr std::array buttonMasks{
-      std::pair{SDL_CONTROLLER_BUTTON_A, std::uint16_t{0x1000}},
-      std::pair{SDL_CONTROLLER_BUTTON_B, std::uint16_t{0x2000}},
-      std::pair{SDL_CONTROLLER_BUTTON_X, std::uint16_t{0x4000}},
-      std::pair{SDL_CONTROLLER_BUTTON_Y, std::uint16_t{0x8000}},
-      std::pair{SDL_CONTROLLER_BUTTON_BACK, std::uint16_t{0x0020}},
-      std::pair{SDL_CONTROLLER_BUTTON_GUIDE, std::uint16_t{0x0400}},
-      std::pair{SDL_CONTROLLER_BUTTON_START, std::uint16_t{0x0010}},
-      std::pair{SDL_CONTROLLER_BUTTON_LEFTSTICK, std::uint16_t{0x0040}},
-      std::pair{SDL_CONTROLLER_BUTTON_RIGHTSTICK, std::uint16_t{0x0080}},
-      std::pair{SDL_CONTROLLER_BUTTON_LEFTSHOULDER, std::uint16_t{0x0100}},
-      std::pair{SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, std::uint16_t{0x0200}},
-      std::pair{SDL_CONTROLLER_BUTTON_DPAD_UP, std::uint16_t{0x0001}},
-      std::pair{SDL_CONTROLLER_BUTTON_DPAD_DOWN, std::uint16_t{0x0002}},
-      std::pair{SDL_CONTROLLER_BUTTON_DPAD_LEFT, std::uint16_t{0x0004}},
-      std::pair{SDL_CONTROLLER_BUTTON_DPAD_RIGHT, std::uint16_t{0x0008}}};
+      std::pair{SDL_GAMEPAD_BUTTON_SOUTH, std::uint16_t{0x1000}},
+      std::pair{SDL_GAMEPAD_BUTTON_EAST, std::uint16_t{0x2000}},
+      std::pair{SDL_GAMEPAD_BUTTON_WEST, std::uint16_t{0x4000}},
+      std::pair{SDL_GAMEPAD_BUTTON_NORTH, std::uint16_t{0x8000}},
+      std::pair{SDL_GAMEPAD_BUTTON_BACK, std::uint16_t{0x0020}},
+      std::pair{SDL_GAMEPAD_BUTTON_GUIDE, std::uint16_t{0x0400}},
+      std::pair{SDL_GAMEPAD_BUTTON_START, std::uint16_t{0x0010}},
+      std::pair{SDL_GAMEPAD_BUTTON_LEFT_STICK, std::uint16_t{0x0040}},
+      std::pair{SDL_GAMEPAD_BUTTON_RIGHT_STICK, std::uint16_t{0x0080}},
+      std::pair{SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, std::uint16_t{0x0100}},
+      std::pair{SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, std::uint16_t{0x0200}},
+      std::pair{SDL_GAMEPAD_BUTTON_DPAD_UP, std::uint16_t{0x0001}},
+      std::pair{SDL_GAMEPAD_BUTTON_DPAD_DOWN, std::uint16_t{0x0002}},
+      std::pair{SDL_GAMEPAD_BUTTON_DPAD_LEFT, std::uint16_t{0x0004}},
+      std::pair{SDL_GAMEPAD_BUTTON_DPAD_RIGHT, std::uint16_t{0x0008}}};
   for (const auto &[button, mask] : buttonMasks) {
     result.buttons[static_cast<std::size_t>(button)] =
         (sample.buttons & mask) != 0;
   }
-  result.axes[SDL_CONTROLLER_AXIS_LEFTX] = sample.leftX;
-  result.axes[SDL_CONTROLLER_AXIS_LEFTY] = invertYAxis(sample.leftY);
-  result.axes[SDL_CONTROLLER_AXIS_RIGHTX] = sample.rightX;
-  result.axes[SDL_CONTROLLER_AXIS_RIGHTY] = invertYAxis(sample.rightY);
-  result.axes[SDL_CONTROLLER_AXIS_TRIGGERLEFT] =
+  result.axes[SDL_GAMEPAD_AXIS_LEFTX] = sample.leftX;
+  result.axes[SDL_GAMEPAD_AXIS_LEFTY] = invertYAxis(sample.leftY);
+  result.axes[SDL_GAMEPAD_AXIS_RIGHTX] = sample.rightX;
+  result.axes[SDL_GAMEPAD_AXIS_RIGHTY] = invertYAxis(sample.rightY);
+  result.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] =
       triggerAxis(sample.leftTrigger);
-  result.axes[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] =
+  result.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] =
       triggerAxis(sample.rightTrigger);
   return result;
 }

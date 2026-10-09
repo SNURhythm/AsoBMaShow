@@ -51,7 +51,7 @@ void require(bool condition, const char *expression, int line) {
   std::exit(1);
 }
 
-SDL_Event mouseEvent(Uint32 type, int x, int y) {
+SDL_Event mouseEvent(SDL_EventType type, int x, int y) {
   SDL_Event event{};
   event.type = type;
   event.button.type = type;
@@ -62,12 +62,12 @@ SDL_Event mouseEvent(Uint32 type, int x, int y) {
   return event;
 }
 
-SDL_Event mouseSynthesizedFingerEvent(Uint32 type, float x, float y) {
+SDL_Event mouseSynthesizedFingerEvent(SDL_EventType type, float x, float y) {
   SDL_Event event{};
   event.type = type;
   event.tfinger.type = type;
-  event.tfinger.touchId = SDL_MOUSE_TOUCHID;
-  event.tfinger.fingerId = 0;
+  event.tfinger.touchID = SDL_MOUSE_TOUCHID;
+  event.tfinger.fingerID = 0;
   event.tfinger.x = x;
   event.tfinger.y = y;
   return event;
@@ -75,7 +75,7 @@ SDL_Event mouseSynthesizedFingerEvent(Uint32 type, float x, float y) {
 
 SDL_Event mouseMotion(Uint32 which, int x, int y) {
   SDL_Event event{};
-  event.type = SDL_MOUSEMOTION;
+  event.type = SDL_EVENT_MOUSE_MOTION;
   event.motion.which = which;
   event.motion.x = x;
   event.motion.y = y;
@@ -85,8 +85,8 @@ SDL_Event mouseMotion(Uint32 which, int x, int y) {
 SDL_Event fingerEvent(Uint32 type, int x, int y) {
   SDL_Event event{};
   event.type = type;
-  event.tfinger.touchId = 1;
-  event.tfinger.fingerId = 7;
+  event.tfinger.touchID = 1;
+  event.tfinger.fingerID = 7;
   event.tfinger.x = static_cast<float>(x) / rendering::window_width;
   event.tfinger.y = static_cast<float>(y) / rendering::window_height;
   return event;
@@ -180,7 +180,7 @@ void testDisabledButtonDimsWholeContentAndRestoresFollowingViews() {
   sibling.setSize(100, 50);
   auto hover = mouseMotion(1, 10, 10);
   button.handleEvents(hover);
-  auto down = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+  auto down = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
   button.handleEvents(down);
   button.setEnabled(false);
   {
@@ -305,11 +305,11 @@ void testTouchReleaseClearsHoverBeforeClick() {
     auto mouse = mouseMotion(1, 10, 10);
     button.handleEvents(mouse);
     REQUIRE(button.isHovered);
-    auto down = fingerEvent(SDL_FINGERDOWN, 10, 10);
+    auto down = fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10);
     REQUIRE(!button.handleEvents(down));
     auto syntheticMotion = mouseMotion(SDL_TOUCH_MOUSEID, 10, 10);
     button.handleEvents(syntheticMotion);
-    auto up = fingerEvent(SDL_FINGERUP, releaseInside ? 10 : 150, 10);
+    auto up = fingerEvent(SDL_EVENT_FINGER_UP, releaseInside ? 10 : 150, 10);
     REQUIRE(!button.handleEvents(up));
     REQUIRE(!button.isHovered);
     REQUIRE(button.activeTouchId == -1);
@@ -327,8 +327,8 @@ void testTouchReleaseClearsHoverBeforeClick() {
 }
 
 void click(Button &button) {
-  auto down = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
-  auto up = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+  auto down = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
+  auto up = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
   button.handleEvents(down);
   button.handleEvents(up);
 }
@@ -346,16 +346,16 @@ void testDisabledButtonBlocksUnderlyingPointerActions() {
   disabled->setEnabled(false);
   stack.addView(disabled);
 
-  for (auto event : {mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10),
-                     mouseEvent(SDL_MOUSEBUTTONUP, 10, 10),
-                     fingerEvent(SDL_FINGERDOWN, 10, 10),
-                     fingerEvent(SDL_FINGERUP, 10, 10)}) {
+  for (auto event : {mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10),
+                     mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10),
+                     fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10),
+                     fingerEvent(SDL_EVENT_FINGER_UP, 10, 10)}) {
     REQUIRE(!stack.handleEvents(event));
   }
   REQUIRE(underlyingClicks == 0);
   REQUIRE(disabledClicks == 0);
   for (auto event : {mouseMotion(1, 10, 10),
-                     fingerEvent(SDL_FINGERMOTION, 10, 10)}) {
+                     fingerEvent(SDL_EVENT_FINGER_MOTION, 10, 10)}) {
     REQUIRE(disabled->handleEvents(event));
     stack.handleEvents(event);
   }
@@ -364,15 +364,15 @@ void testDisabledButtonBlocksUnderlyingPointerActions() {
   REQUIRE(!disabled->mousePressedInside);
   REQUIRE(disabled->activeTouchId == -1);
 
-  auto outsideDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 150, 10);
-  auto outsideUp = mouseEvent(SDL_MOUSEBUTTONUP, 150, 10);
+  auto outsideDown = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 150, 10);
+  auto outsideUp = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 150, 10);
   stack.handleEvents(outsideDown);
   stack.handleEvents(outsideUp);
   REQUIRE(underlyingClicks == 1);
 
   disabled->setEnabled(true);
-  auto insideDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
-  auto insideUp = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+  auto insideDown = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
+  auto insideUp = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
   stack.handleEvents(insideDown);
   stack.handleEvents(insideUp);
   REQUIRE(disabledClicks == 1);
@@ -385,21 +385,21 @@ void testDisablingCancelsHoverAndActivePointerGestures() {
   button.setOnClickListener([&]() { ++clicks; });
   auto motion = mouseMotion(1, 10, 10);
   button.handleEvents(motion);
-  auto mouseDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+  auto mouseDown = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
   button.handleEvents(mouseDown);
   button.setEnabled(false);
   button.setEnabled(true);
-  auto mouseUp = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+  auto mouseUp = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
   button.handleEvents(mouseUp);
   REQUIRE(clicks == 0);
   REQUIRE(!button.isHovered);
   REQUIRE(!button.mousePressedInside);
 
-  auto fingerDown = fingerEvent(SDL_FINGERDOWN, 10, 10);
+  auto fingerDown = fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10);
   button.handleEvents(fingerDown);
   button.setEnabled(false);
   button.setEnabled(true);
-  auto fingerUp = fingerEvent(SDL_FINGERUP, 10, 10);
+  auto fingerUp = fingerEvent(SDL_EVENT_FINGER_UP, 10, 10);
   button.handleEvents(fingerUp);
   REQUIRE(clicks == 0);
   REQUIRE(button.activeTouchId == -1);
@@ -431,7 +431,7 @@ void testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck() {
       auto hover = mouseMotion(1, 10, 10);
       stack.handleEvents(hover);
       REQUIRE(enabled->isHovered);
-      auto down = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+      auto down = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
       REQUIRE(!stack.handleEvents(down));
       REQUIRE(enabled->mousePressedInside);
       auto coveredMotion = mouseMotion(1, 110, 10);
@@ -440,26 +440,26 @@ void testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck() {
       // Retain the initiating press until release, as when dragging outside
       // an ordinary button; a covered release must clear it without a click.
       REQUIRE(enabled->mousePressedInside);
-      auto coveredUp = mouseEvent(SDL_MOUSEBUTTONUP, 110, 10);
+      auto coveredUp = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 110, 10);
       REQUIRE(!stack.handleEvents(coveredUp));
       REQUIRE(!enabled->mousePressedInside);
       REQUIRE(clicks == 0);
 
-      auto touchDown = fingerEvent(SDL_FINGERDOWN, 10, 10);
+      auto touchDown = fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10);
       REQUIRE(!stack.handleEvents(touchDown));
       REQUIRE(enabled->activeTouchId == 7);
-      auto otherTouchUp = fingerEvent(SDL_FINGERUP, 110, 10);
-      otherTouchUp.tfinger.fingerId = 8;
+      auto otherTouchUp = fingerEvent(SDL_EVENT_FINGER_UP, 110, 10);
+      otherTouchUp.tfinger.fingerID = 8;
       REQUIRE(!stack.handleEvents(otherTouchUp));
       REQUIRE(enabled->activeTouchId == 7);
-      auto coveredTouchUp = fingerEvent(SDL_FINGERUP, 110, 10);
+      auto coveredTouchUp = fingerEvent(SDL_EVENT_FINGER_UP, 110, 10);
       REQUIRE(!stack.handleEvents(coveredTouchUp));
       REQUIRE(enabled->activeTouchId == -1);
       REQUIRE(clicks == 0);
 
       stack.handleEvents(hover);
       stack.handleEvents(down);
-      auto up = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+      auto up = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
       stack.handleEvents(up);
       REQUIRE(clicks == 1);
     }
@@ -480,25 +480,25 @@ static void testDisabledSiblingEndsCoveredScrollGestures() {
     disabled->setEnabled(false);
     root.addView(disabled);
     root.applyYogaLayout();
-    const auto send = [&](Uint32 type, int y, SDL_FingerID id = 7) {
+    const auto send = [&](SDL_EventType type, int y, SDL_FingerID id = 7) {
       SDL_Event event = touch ? fingerEvent(type, 20, y)
-          : type == SDL_MOUSEMOTION ? mouseMotion(1, 20, y)
+          : type == SDL_EVENT_MOUSE_MOTION ? mouseMotion(1, 20, y)
                                     : mouseEvent(type, 20, y);
-      if (touch) event.tfinger.fingerId = id;
+      if (touch) event.tfinger.fingerID = id;
       root.handleEvents(event);
     };
-    send(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 180);
-    send(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 100);
+    send(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 180);
+    send(touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION, 100);
     REQUIRE(scroll->getScrollOffset() == 80.0F);
-    send(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 25);
+    send(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 25);
     if (!touch) {
-      send(SDL_MOUSEMOTION, 80);
+      send(SDL_EVENT_MOUSE_MOTION, 80);
       REQUIRE(scroll->getScrollOffset() == 80.0F);
     }
-    send(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 180, 8);
-    send(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 120, 8);
+    send(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 180, 8);
+    send(touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION, 120, 8);
     REQUIRE(scroll->getScrollOffset() == 140.0F);
-    send(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 120, 8);
+    send(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 120, 8);
   }
 }
 
@@ -526,9 +526,9 @@ static void testDisabledSiblingEndsCoveredRecyclerGesture() {
     disabled->setEnabled(false);
     root.addView(disabled);
     root.applyYogaLayout();
-    auto down = fingerEvent(SDL_FINGERDOWN, 20, 180);
-    auto move = fingerEvent(SDL_FINGERMOTION, 20, 100);
-    auto up = fingerEvent(SDL_FINGERUP, 20, disabledRow ? 175 : 275);
+    auto down = fingerEvent(SDL_EVENT_FINGER_DOWN, 20, 180);
+    auto move = fingerEvent(SDL_EVENT_FINGER_MOTION, 20, 100);
+    auto up = fingerEvent(SDL_EVENT_FINGER_UP, 20, disabledRow ? 175 : 275);
     root.handleEvents(down);
     root.handleEvents(move);
     REQUIRE(recycler->scrollOffset == 80.0F);
@@ -536,7 +536,7 @@ static void testDisabledSiblingEndsCoveredRecyclerGesture() {
     REQUIRE(selections == 0);
     // The headless mouse position is (0, 0), inside the recycler. Touch release
     // must stop suppressing genuine mouse selection even before another touch.
-    auto mouseDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 0, 0);
+    auto mouseDown = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 0, 0);
     root.handleEvents(mouseDown);
     REQUIRE(selections == 1);
   }
@@ -557,8 +557,8 @@ static void testRecyclerAllowsTapJitterAtDifferentScreenSizes() {
     const auto send = [](RecyclerView<int> &list, Uint32 type, float x, float y) {
       SDL_Event event{};
       event.type = type;
-      event.tfinger.touchId = 1;
-      event.tfinger.fingerId = 0; // Android's first pointer.
+      event.tfinger.touchID = 1;
+      event.tfinger.fingerID = 0; // Android's first pointer.
       event.tfinger.x = x * rendering::ui_scale_x / rendering::render_width;
       event.tfinger.y = y * rendering::ui_scale_y / rendering::render_height;
       list.handleEvents(event);
@@ -575,20 +575,20 @@ static void testRecyclerAllowsTapJitterAtDifferentScreenSizes() {
         REQUIRE(index == 1);
         ++selections;
       };
-      send(list, SDL_FINGERDOWN, 80, 90);
+      send(list, SDL_EVENT_FINGER_DOWN, 80, 90);
       // Android can report motion even when the coordinates are unchanged.
-      send(list, SDL_FINGERMOTION, 80 + jitter, 90 - jitter);
+      send(list, SDL_EVENT_FINGER_MOTION, 80 + jitter, 90 - jitter);
       REQUIRE(list.scrollOffset == 0.0F);
-      send(list, SDL_FINGERUP, 80 + jitter, 90 - jitter);
+      send(list, SDL_EVENT_FINGER_UP, 80 + jitter, 90 - jitter);
       REQUIRE(selections == 1);
 
-      send(list, SDL_FINGERDOWN, 80, 90);
-      send(list, SDL_FINGERMOTION, 80, 85);
-      send(list, SDL_FINGERMOTION, 80, 80);
+      send(list, SDL_EVENT_FINGER_DOWN, 80, 90);
+      send(list, SDL_EVENT_FINGER_MOTION, 80, 85);
+      send(list, SDL_EVENT_FINGER_MOTION, 80, 80);
       REQUIRE(list.scrollOffset == 0.0F);
-      send(list, SDL_FINGERMOTION, 80, 70);
+      send(list, SDL_EVENT_FINGER_MOTION, 80, 70);
       REQUIRE(std::abs(list.scrollOffset - 20.0F) < 0.001F);
-      send(list, SDL_FINGERUP, 80, 70);
+      send(list, SDL_EVENT_FINGER_UP, 80, 70);
       REQUIRE(selections == 1);
     }
   }
@@ -615,10 +615,10 @@ static void testNavigationMayDestroyDispatchingViews() {
         ++clicks;
         root.reset(); // Scene navigation synchronously destroys its views.
       });
-      auto down = touch ? fingerEvent(SDL_FINGERDOWN, 10, 10)
-                        : mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
-      auto up = touch ? fingerEvent(SDL_FINGERUP, 10, 10)
-                      : mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+      auto down = touch ? fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10)
+                        : mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
+      auto up = touch ? fingerEvent(SDL_EVENT_FINGER_UP, 10, 10)
+                      : mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
       REQUIRE(!root->handleEvents(down));
       REQUIRE(!root->handleEvents(up));
       REQUIRE(!root && clicks == 1);
@@ -627,10 +627,10 @@ static void testNavigationMayDestroyDispatchingViews() {
     auto root = std::make_unique<View>();
     auto *navigation = new Button(0, 0, 100, 50);
     root->addView(navigation);
-    auto down = touch ? fingerEvent(SDL_FINGERDOWN, 10, 10)
-                      : mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
-    auto up = touch ? fingerEvent(SDL_FINGERUP, 10, 10)
-                    : mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+    auto down = touch ? fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10)
+                      : mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
+    auto up = touch ? fingerEvent(SDL_EVENT_FINGER_UP, 10, 10)
+                    : mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
     int clicks = 0;
     navigation->setOnClickListener([&] {
       if (++clicks == 1) {
@@ -646,6 +646,22 @@ static void testNavigationMayDestroyDispatchingViews() {
   }
 }
 
+void testCancelledTouchDoesNotClick() {
+  Button button(0, 0, 100, 50);
+  int clicks = 0;
+  button.setOnClickListener([&] { ++clicks; });
+  auto down = fingerEvent(SDL_EVENT_FINGER_DOWN, 10, 10);
+  auto cancel = fingerEvent(SDL_EVENT_FINGER_CANCELED, 10, 10);
+  auto up = fingerEvent(SDL_EVENT_FINGER_UP, 10, 10);
+  button.handleEvents(down);
+  button.handleEvents(cancel);
+  button.handleEvents(up);
+  REQUIRE(clicks == 0 && button.activeTouchId == SDL_FingerID(-1));
+  button.handleEvents(down);
+  button.handleEvents(up);
+  REQUIRE(clicks == 1);
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--navigation-only") {
     testNavigationMayDestroyDispatchingViews();
@@ -655,6 +671,7 @@ int main(int argc, char **argv) {
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
     testNavigationMayDestroyDispatchingViews();
+    testCancelledTouchDoesNotClick();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
     testDisabledSiblingEndsCoveredScrollGestures();
     testDisabledSiblingEndsCoveredRecyclerGesture();
@@ -694,8 +711,8 @@ int main(int argc, char **argv) {
   click(button);
   REQUIRE(clicks == 1);
 
-  auto down = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
-  auto up = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+  auto down = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
+  auto up = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
   button.handleEvents(down);
   button.setEnabled(false);
   button.handleEvents(up);
@@ -705,11 +722,11 @@ int main(int argc, char **argv) {
   int trackpadClicks = 0;
   trackpadButton.setOnClickListener([&]() { ++trackpadClicks; });
   auto syntheticDown =
-      mouseSynthesizedFingerEvent(SDL_FINGERDOWN, 0.005F, 0.01F);
-  auto mouseDown = mouseEvent(SDL_MOUSEBUTTONDOWN, 10, 10);
+      mouseSynthesizedFingerEvent(SDL_EVENT_FINGER_DOWN, 0.005F, 0.01F);
+  auto mouseDown = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 10, 10);
   auto syntheticUp =
-      mouseSynthesizedFingerEvent(SDL_FINGERUP, 0.005F, 0.01F);
-  auto mouseUp = mouseEvent(SDL_MOUSEBUTTONUP, 10, 10);
+      mouseSynthesizedFingerEvent(SDL_EVENT_FINGER_UP, 0.005F, 0.01F);
+  auto mouseUp = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 10, 10);
   trackpadButton.handleEvents(syntheticDown);
   trackpadButton.handleEvents(mouseDown);
   trackpadButton.handleEvents(syntheticUp);

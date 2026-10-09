@@ -2,7 +2,7 @@
 #include "TextView.h"
 #include "View.h"
 #include "ImageView.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <functional>
 #include <string>
 #include "../repositories/ChartRepository.h"

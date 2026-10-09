@@ -3,7 +3,7 @@
 #include "LongNoteModeUtils.h"
 #include "replay/ReplayOption.h"
 #include "scene/play/GameplayRuleset.h"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>

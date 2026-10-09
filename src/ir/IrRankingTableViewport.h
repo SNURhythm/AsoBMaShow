@@ -55,7 +55,14 @@ protected:
   }
 
   void onPointerEventConsumed(const SDL_Event &event) override {
-    if (event.type == SDL_FINGERUP || event.type == SDL_MOUSEBUTTONUP) {
+    const bool touchEnd = (event.type == SDL_EVENT_FINGER_UP ||
+                           event.type == SDL_EVENT_FINGER_CANCELED) &&
+                          !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
+                          touchId_ == event.tfinger.fingerID;
+    const bool mouseEnd = event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                          event.button.button == SDL_BUTTON_LEFT &&
+                          event.button.which != SDL_TOUCH_MOUSEID && touchId_ == -1;
+    if (pointerActive_ && (touchEnd || mouseEnd)) {
       pointerActive_ = false;
       touchId_ = -1;
       axis_ = Axis::Undecided;
@@ -68,57 +75,59 @@ protected:
 
   bool handleEventsImpl(SDL_Event &event) override {
     if (!content_ || sdl_pointer_event::isMouseSynthesizedTouch(event)) return true;
-    if (event.type == SDL_MOUSEWHEEL) {
-      int mouseX, mouseY;
-      SDL_GetMouseState(&mouseX, &mouseY);
+    if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+      const float mouseX = event.wheel.mouse_x;
+      const float mouseY = event.wheel.mouse_y;
       float x, y;
       rendering::screenToUiNormalized(mouseX * rendering::widthScale,
                                       mouseY * rendering::heightScale, x, y);
       if (!inside(x * rendering::window_width, y * rendering::window_height)) return true;
-      const float dx = event.wheel.preciseX != 0 ? event.wheel.preciseX : event.wheel.x;
-      const float dy = event.wheel.preciseY != 0 ? event.wheel.preciseY : event.wheel.y;
-      if (std::abs(dx) > std::abs(dy) || (SDL_GetModState() & KMOD_SHIFT)) {
-        scrollBy(-((SDL_GetModState() & KMOD_SHIFT) ? dy : dx) * 32);
+      const float dx = event.wheel.x;
+      const float dy = event.wheel.y;
+      if (std::abs(dx) > std::abs(dy) || (SDL_GetModState() & SDL_KMOD_SHIFT)) {
+        scrollBy(-((SDL_GetModState() & SDL_KMOD_SHIFT) ? dy : dx) * 32);
         return false;
       }
       return content_->handleEvents(event);
     }
-    const bool touch = event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION ||
-                       event.type == SDL_FINGERUP;
-    const bool mouse = event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEMOTION ||
-                       event.type == SDL_MOUSEBUTTONUP;
+    const bool touch = event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION ||
+                       event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED;
+    const bool mouse = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION ||
+                       event.type == SDL_EVENT_MOUSE_BUTTON_UP;
     if (!touch && !mouse) return content_->handleEvents(event);
-    if (mouse && ((event.type == SDL_MOUSEMOTION && event.motion.which == SDL_TOUCH_MOUSEID) ||
-        (event.type != SDL_MOUSEMOTION &&
+    if (mouse && ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which == SDL_TOUCH_MOUSEID) ||
+        (event.type != SDL_EVENT_MOUSE_MOTION &&
          (event.button.which == SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT)))) return true;
     float x, y;
     if (touch) {
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
     } else {
-      const float px = event.type == SDL_MOUSEMOTION ? event.motion.x : event.button.x;
-      const float py = event.type == SDL_MOUSEMOTION ? event.motion.y : event.button.y;
+      const float px = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
+      const float py = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
       rendering::screenToUiNormalized(px * rendering::widthScale, py * rendering::heightScale, x, y);
       x *= rendering::window_width;
       y *= rendering::window_height;
     }
-    const bool down = event.type == SDL_FINGERDOWN || event.type == SDL_MOUSEBUTTONDOWN;
-    const bool up = event.type == SDL_FINGERUP || event.type == SDL_MOUSEBUTTONUP;
+    const bool down = event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+    const bool up = event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+    const bool cancelled = event.type == SDL_EVENT_FINGER_CANCELED;
     if (down) {
       if (pointerActive_ || !inside(x, y)) return true;
       pointerActive_ = true;
-      touchId_ = touch ? event.tfinger.fingerId : -1;
+      touchId_ = touch ? event.tfinger.fingerID : -1;
       axis_ = Axis::Undecided;
       startX_ = lastX_ = x;
       startY_ = y;
       forwardPointer(event);
       return false;
     }
-    if (!pointerActive_ || (touch && touchId_ != event.tfinger.fingerId) ||
+    if (!pointerActive_ || (touch && touchId_ != event.tfinger.fingerID) ||
         (!touch && touchId_ != -1)) return true;
-    if (up) {
+    if (up || cancelled) {
       pointerActive_ = false;
       touchId_ = -1;
-      if (axis_ != Axis::Horizontal) forwardPointer(event);
+      if (cancelled) content_->notifyPointerEventConsumed(event);
+      else if (axis_ != Axis::Horizontal) forwardPointer(event);
       axis_ = Axis::Undecided;
       return false;
     }
@@ -127,7 +136,7 @@ protected:
       axis_ = std::abs(x - startX_) > std::abs(y - startY_) ? Axis::Horizontal : Axis::Vertical;
       if (axis_ == Axis::Horizontal) {
         auto cancel = asTouchEvent(event);
-        cancel.type = SDL_FINGERUP;
+        cancel.type = SDL_EVENT_FINGER_UP;
         content_->notifyPointerEventConsumed(cancel);
       }
     }
@@ -148,15 +157,15 @@ private:
   Axis axis_ = Axis::Undecided;
 
   SDL_Event asTouchEvent(const SDL_Event &event) const {
-    if (event.type != SDL_MOUSEBUTTONDOWN && event.type != SDL_MOUSEBUTTONUP &&
-        event.type != SDL_MOUSEMOTION) return event;
+    if (event.type != SDL_EVENT_MOUSE_BUTTON_DOWN && event.type != SDL_EVENT_MOUSE_BUTTON_UP &&
+        event.type != SDL_EVENT_MOUSE_MOTION) return event;
     SDL_Event converted{};
-    converted.type = event.type == SDL_MOUSEBUTTONDOWN ? SDL_FINGERDOWN
-        : event.type == SDL_MOUSEBUTTONUP ? SDL_FINGERUP : SDL_FINGERMOTION;
-    converted.tfinger.touchId = 0;
-    converted.tfinger.fingerId = 0;
-    const float x = event.type == SDL_MOUSEMOTION ? event.motion.x : event.button.x;
-    const float y = event.type == SDL_MOUSEMOTION ? event.motion.y : event.button.y;
+    converted.type = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? SDL_EVENT_FINGER_DOWN
+        : event.type == SDL_EVENT_MOUSE_BUTTON_UP ? SDL_EVENT_FINGER_UP : SDL_EVENT_FINGER_MOTION;
+    converted.tfinger.touchID = 0;
+    converted.tfinger.fingerID = 0;
+    const float x = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
+    const float y = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
     converted.tfinger.x = x * rendering::widthScale / std::max(1, rendering::render_width);
     converted.tfinger.y = y * rendering::heightScale / std::max(1, rendering::render_height);
     return converted;

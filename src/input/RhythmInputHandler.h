@@ -21,7 +21,7 @@
 
 struct FlickState {
   float startX, startY;
-  Uint32 startTime;
+  Uint64 startTime;
   bool active;
   int lastFlickDirection; // 0: none, 1: up, -1: down
   bms_parser::LongNote *activeLongNote;
@@ -68,12 +68,12 @@ private:
   void handleScratchMove(SDL_FingerID fingerIndex,
                          Vector3 normalizedLocation);
   std::map<SDL_FingerID, FlickState> flickStates;
-  std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
+  std::map<SDL_FingerID, Uint64> cancelGraceExpiry;
   std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t)>
       touchEventCallback;
   bool notifyTouchEvent(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
-  void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
+  void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation) override;
   void releaseExpiredCancelledTouches();
 public:
   // Authored skin geometry routes into the same logical touch ownership as built-in lanes.

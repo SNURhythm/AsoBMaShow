@@ -552,15 +552,11 @@ protected:
 
   bool handleEventsImpl(SDL_Event &event) override {
     switch (event.type) {
-    case SDL_MOUSEWHEEL: {
-      int rawX = 0;
-      int rawY = 0;
-      SDL_GetMouseState(&rawX, &rawY);
-      const int screenX = static_cast<int>(rawX * rendering::widthScale);
-      const int screenY = static_cast<int>(rawY * rendering::heightScale);
-      int uiX = 0;
-      int uiY = 0;
-      rendering::screenToUi(screenX, screenY, uiX, uiY);
+    case SDL_EVENT_MOUSE_WHEEL: {
+      float uiX = 0;
+      float uiY = 0;
+      rendering::screenToUi(event.wheel.mouse_x * rendering::widthScale,
+                            event.wheel.mouse_y * rendering::heightScale, uiX, uiY);
       if (!containsPoint(static_cast<float>(uiX), static_cast<float>(uiY))) {
         return true;
       }
@@ -572,7 +568,7 @@ protected:
       clampScroll();
       return false;
     }
-    case SDL_MOUSEBUTTONDOWN: {
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
       if (event.button.button != SDL_BUTTON_LEFT ||
           event.button.which == SDL_TOUCH_MOUSEID) {
         return true;
@@ -591,7 +587,7 @@ protected:
       mouseDragDistance = 0.0f;
       return false;
     }
-    case SDL_MOUSEMOTION: {
+    case SDL_EVENT_MOUSE_MOTION: {
       if (!mouseDragging) {
         return true;
       }
@@ -611,7 +607,7 @@ protected:
       clampScroll();
       return false;
     }
-    case SDL_MOUSEBUTTONUP:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
       if (event.button.button == SDL_BUTTON_LEFT && mouseDragging) {
         int uiX = 0;
         int uiY = 0;
@@ -624,14 +620,14 @@ protected:
         return false;
       }
       return true;
-    case SDL_FINGERDOWN: {
+    case SDL_EVENT_FINGER_DOWN: {
       float uiX = 0.0f;
       float uiY = 0.0f;
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
       if (!containsPoint(uiX, uiY)) {
         return true;
       }
-      const SDL_FingerID fingerId = event.tfinger.fingerId;
+      const SDL_FingerID fingerId = event.tfinger.fingerID;
       activeTouches[fingerId] = {uiX, uiY};
       if (activeTouches.size() >= 2) {
         touchGestureWasPinch = true;
@@ -646,8 +642,8 @@ protected:
       }
       return false;
     }
-    case SDL_FINGERMOTION: {
-      auto touchIt = activeTouches.find(event.tfinger.fingerId);
+    case SDL_EVENT_FINGER_MOTION: {
+      auto touchIt = activeTouches.find(event.tfinger.fingerID);
       if (touchIt == activeTouches.end()) {
         return true;
       }
@@ -659,7 +655,7 @@ protected:
       if (activeTouches.size() >= 2) {
         touchGestureWasPinch = true;
         applyPinch();
-      } else if (!pinchActive && event.tfinger.fingerId == dragTouchId) {
+      } else if (!pinchActive && event.tfinger.fingerID == dragTouchId) {
         scrollX -= (uiX - previous.x) / screenZoom;
         scrollY -= (uiY - previous.y) / screenZoom;
         touchDragDistance =
@@ -669,12 +665,14 @@ protected:
       }
       return false;
     }
-    case SDL_FINGERUP:
-      if (activeTouches.erase(event.tfinger.fingerId) > 0) {
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED:
+      if (activeTouches.erase(event.tfinger.fingerID) > 0) {
         float uiX = 0.0f;
         float uiY = 0.0f;
         rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
-        if (!touchGestureWasPinch && event.tfinger.fingerId == dragTouchId &&
+        if (event.type == SDL_EVENT_FINGER_UP && !touchGestureWasPinch &&
+            event.tfinger.fingerID == dragTouchId &&
             touchDragDistance <= kCursorTapSlop && containsPoint(uiX, uiY)) {
           selectAtUiPoint(uiX, uiY);
         }
@@ -2357,14 +2355,14 @@ void ChartViewerScene::setPracticeLaunchRequest(
 }
 
 EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
     goBack();
     return {};
   }
   const bool editingPresetName =
       practicePanel != nullptr && practicePanel->isEditingPresetName();
-  if (event.type == SDL_KEYDOWN && !editingPresetName) {
-    switch (event.key.keysym.sym) {
+  if (event.type == SDL_EVENT_KEY_DOWN && !editingPresetName) {
+    switch (event.key.key) {
     case SDLK_1:
     case SDLK_KP_1:
       selectActivePracticeMarker(practice::Marker::Start);
@@ -2383,18 +2381,18 @@ EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
       break;
     }
   }
-  if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-    switch (event.cbutton.button) {
-    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+  if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+    switch (event.gbutton.button) {
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
       selectActivePracticeMarker(practice::Marker::Start);
       return {};
-    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
       selectActivePracticeMarker(practice::Marker::End);
       return {};
-    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
       moveActivePracticeMarker(practice::TimelineDirection::Previous);
       return {};
-    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
       moveActivePracticeMarker(practice::TimelineDirection::Next);
       return {};
     default:

@@ -1,0 +1,23 @@
+{
+  "fullBuild": {
+    "command": "cmake --build cmake-build-debug -j 6",
+    "exitCode": 0
+  },
+  "fullTests": {
+    "command": "ctest --test-dir cmake-build-debug --output-on-failure -j 6",
+    "exitCode": 0,
+    "passed": 454,
+    "failed": 0,
+    "seconds": 110.95
+  },
+  "scopedTests": {
+    "passed": 2,
+    "failed": 0
+  },
+  "review": "# Skin-loading optimization review\n\nReviewed the five-file working-tree diff against HEAD 1517a9237 and the shared decoder/resource-preparation and music-select session callers. No correctness findings requiring changes.\n\n- `ImageRowReducer::directRow` exposes only native-size output and rejects out-of-range rows. Reduced and Adam7 paths retain their existing accumulation behavior.\n- CIM RGBA bytes are already in the destination layout; direct inflation eliminates two row copies without changing row sizes, stream completion, trailing-output rejection, dimension/byte quotas, or cancellation checks. Other CIM formats retain their conversion and write to a disjoint destination.\n- The PNG fast path applies only to noninterlaced 8-bit RGBA after filter reconstruction. Its row copy and prior-row swap match the old per-pixel path. CRC/header validation, inflation completion, bounded padding, and cancellation remain in place.\n- Both custom gameplay and music-select preparation use the shared decoder with native-size images, so both can benefit. No cache budget or admission policy changes were found.\n- Type-5 benchmark entries now use the production music-select prepare/finalize path, including runtime title preparation and resource cleanup checks. Its measured interval still includes session destruction, matching the gameplay benchmark. Results describe this headless session workload; performance gains remain pending measurements.\n\nCoverage is adequate for the small production change: existing PNG tests compare every pixel against stb across all filters, color/depth modes and interlacing, including fragmented IDATs; native-size malformed-filter/short-output/padding-checksum tests reach the fast path. Existing CIM fixtures cover all six formats, and the added multi-row RGB/RGBA tests cover default/equal/larger targets, alpha, row boundaries and a truncated trailer. Optional future coverage: a synthetic type-5 entry in the benchmark's default self-test, since its current automatic fixture still covers only gameplay and selector coverage depends on explicit local-skin runs.\n\nRead-only source review only. No builds, tests, benchmarks, source edits, or worktrees were performed by this reviewer; the test-pass reports supplied by the parent were not independently rerun.\n",
+  "reproducer": {
+    "buildExitCode": 0,
+    "baselineSmokeExitCode": 0,
+    "candidateSmokeExitCode": 0
+  }
+}

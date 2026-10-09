@@ -1,9 +1,10 @@
 #include "SDLDisplayBackend.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <sstream>
 #include <string_view>
@@ -12,15 +13,26 @@
 
 namespace display {
 namespace {
-player_settings::DisplayMode modeFromFlags(std::uint32_t flags) {
-  if ((flags & SDL_WINDOW_FULLSCREEN_DESKTOP) ==
-      SDL_WINDOW_FULLSCREEN_DESKTOP) {
-    return player_settings::DisplayMode::BorderlessFullscreen;
-  }
-  if ((flags & SDL_WINDOW_FULLSCREEN) != 0) {
-    return player_settings::DisplayMode::ExclusiveFullscreen;
-  }
-  return player_settings::DisplayMode::Windowed;
+// Settings retain zero-based display indices; SDL3 uses nonzero runtime IDs.
+std::vector<SDL_DisplayID> displayIds() {
+  int count = 0;
+  SDL_DisplayID *ids = SDL_GetDisplays(&count);
+  std::vector<SDL_DisplayID> result;
+  if (ids) result.assign(ids, ids + count);
+  SDL_free(ids);
+  return result;
+}
+
+SDL_DisplayID displayId(int index) {
+  const auto ids = displayIds();
+  return index >= 0 && static_cast<std::size_t>(index) < ids.size()
+             ? ids[index] : 0;
+}
+
+SDLNativeDisplayMode nativeMode(const SDL_DisplayMode &mode) {
+  return {.width = mode.w, .height = mode.h,
+          .refreshRateHz = static_cast<int>(std::lround(mode.refresh_rate)),
+          .pixelFormat = static_cast<std::uint32_t>(mode.format)};
 }
 
 std::string sdlFailure(std::string_view operation) {
@@ -39,49 +51,35 @@ public:
       : window(windowValue) {}
 
   int displayCount() const override {
-    return std::max(0, SDL_GetNumVideoDisplays());
+    return static_cast<int>(displayIds().size());
   }
 
   std::string displayName(int displayIndex) const override {
-    if (const char *name = SDL_GetDisplayName(displayIndex)) {
-      return name;
-    }
+    if (const char *name = SDL_GetDisplayName(displayId(displayIndex))) return name;
     return {};
   }
 
   std::vector<SDLNativeDisplayMode>
   displayModes(int displayIndex) const override {
     std::vector<SDLNativeDisplayMode> result;
-    const int count = std::max(0, SDL_GetNumDisplayModes(displayIndex));
-    result.reserve(static_cast<std::size_t>(count));
-    for (int index = 0; index < count; ++index) {
-      SDL_DisplayMode mode{};
-      if (SDL_GetDisplayMode(displayIndex, index, &mode) == 0) {
-        result.push_back({.width = mode.w,
-                          .height = mode.h,
-                          .refreshRateHz = mode.refresh_rate,
-                          .pixelFormat = mode.format});
-      }
-    }
+    int count = 0;
+    SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(displayId(displayIndex), &count);
+    for (int index = 0; index < count; ++index) result.push_back(nativeMode(*modes[index]));
+    SDL_free(modes);
     return result;
   }
 
   std::optional<SDLNativeDisplayMode>
   desktopDisplayMode(int displayIndex) const override {
-    SDL_DisplayMode mode{};
-    if (SDL_GetDesktopDisplayMode(displayIndex, &mode) != 0) {
-      return std::nullopt;
-    }
-    return SDLNativeDisplayMode{.width = mode.w,
-                                .height = mode.h,
-                                .refreshRateHz = mode.refresh_rate,
-                                .pixelFormat = mode.format};
+    const auto *mode = SDL_GetDesktopDisplayMode(displayId(displayIndex));
+    if (!mode) return std::nullopt;
+    return nativeMode(*mode);
   }
 
   std::optional<SDLDisplayBounds>
   displayBounds(int displayIndex, std::string &errorMessage) const override {
     SDL_Rect bounds{};
-    if (SDL_GetDisplayBounds(displayIndex, &bounds) != 0) {
+    if (!SDL_GetDisplayBounds(displayId(displayIndex), &bounds)) {
       errorMessage = sdlFailure("Could not read display bounds");
       return std::nullopt;
     }
@@ -96,56 +94,41 @@ public:
       return result;
     }
     result.windowFlags = SDL_GetWindowFlags(window);
-    result.mode = modeFromFlags(result.windowFlags);
+    const auto *fullscreenMode = SDL_GetWindowFullscreenMode(window);
+    result.mode = (result.windowFlags & SDL_WINDOW_FULLSCREEN) == 0
+        ? player_settings::DisplayMode::Windowed
+        : fullscreenMode ? player_settings::DisplayMode::ExclusiveFullscreen
+                         : player_settings::DisplayMode::BorderlessFullscreen;
     result.maximized = (result.windowFlags & SDL_WINDOW_MAXIMIZED) != 0;
-    result.displayIndex = SDL_GetWindowDisplayIndex(window);
+    const auto ids = displayIds();
+    const auto found = std::ranges::find(ids, SDL_GetDisplayForWindow(window));
+    result.displayIndex = found == ids.end() ? -1 : static_cast<int>(found - ids.begin());
     SDL_GetWindowSize(window, &result.width, &result.height);
     SDL_GetWindowPosition(window, &result.x, &result.y);
-    if (result.mode == player_settings::DisplayMode::ExclusiveFullscreen) {
-      SDL_DisplayMode mode{};
-      if (SDL_GetWindowDisplayMode(window, &mode) == 0) {
-        result.requestedWindowMode =
-            SDLNativeDisplayMode{.width = mode.w,
-                                 .height = mode.h,
-                                 .refreshRateHz = mode.refresh_rate,
-                                 .pixelFormat = mode.format};
-      }
-    }
+    if (fullscreenMode) result.requestedWindowMode = nativeMode(*fullscreenMode);
     return result;
   }
 
   std::optional<SDLNativeDisplayMode>
   currentDisplayMode(int displayIndex) const override {
-    SDL_DisplayMode mode{};
-    if (SDL_GetCurrentDisplayMode(displayIndex, &mode) != 0) {
-      return std::nullopt;
-    }
-    return SDLNativeDisplayMode{.width = mode.w,
-                                .height = mode.h,
-                                .refreshRateHz = mode.refresh_rate,
-                                .pixelFormat = mode.format};
+    const auto *mode = SDL_GetCurrentDisplayMode(displayId(displayIndex));
+    if (!mode) return std::nullopt;
+    return nativeMode(*mode);
   }
 
   bool setFullscreenMode(player_settings::DisplayMode mode,
                          std::string &errorMessage) override {
-    std::uint32_t flags = 0;
-    std::string_view operation = "Could not leave the current fullscreen mode";
-    if (mode == player_settings::DisplayMode::BorderlessFullscreen) {
-      flags = SDL_WINDOW_FULLSCREEN_DESKTOP;
-      operation = "Could not enter borderless fullscreen";
-    } else if (mode == player_settings::DisplayMode::ExclusiveFullscreen) {
-      flags = SDL_WINDOW_FULLSCREEN;
-      operation = "Could not enter exclusive fullscreen";
-    }
-    if (window == nullptr || SDL_SetWindowFullscreen(window, flags) != 0) {
-      errorMessage = sdlFailure(operation);
+    if (window == nullptr ||
+        !SDL_SetWindowFullscreen(window, mode != player_settings::DisplayMode::Windowed) ||
+        !SDL_SyncWindow(window)) {
+      errorMessage = sdlFailure("Could not change fullscreen state");
       return false;
     }
     return true;
   }
 
   bool clearWindowDisplayMode(std::string &errorMessage) override {
-    if (window == nullptr || SDL_SetWindowDisplayMode(window, nullptr) != 0) {
+    if (window == nullptr || !SDL_SetWindowFullscreenMode(window, nullptr)) {
       errorMessage = sdlFailure("Could not clear the SDL display mode");
       return false;
     }
@@ -155,28 +138,35 @@ public:
   void setWindowSize(int width, int height) override {
     if (window != nullptr) {
       SDL_SetWindowSize(window, width, height);
+      SDL_SyncWindow(window);
     }
   }
 
   void setWindowPosition(int x, int y) override {
     if (window != nullptr) {
       SDL_SetWindowPosition(window, x, y);
+      SDL_SyncWindow(window);
     }
   }
 
   bool setWindowDisplayMode(const SDLNativeDisplayMode &mode,
                             std::string &errorMessage) override {
-    SDL_DisplayMode nativeMode{.format = mode.pixelFormat,
-                               .w = mode.width,
-                               .h = mode.height,
-                               .refresh_rate = mode.refreshRateHz,
-                               .driverdata = nullptr};
-    if (window == nullptr ||
-        SDL_SetWindowDisplayMode(window, &nativeMode) != 0) {
-      errorMessage = sdlFailure("Could not select the fullscreen display mode");
+    if (!window) {
+      errorMessage = "No SDL window is available.";
       return false;
     }
-    return true;
+    int count = 0;
+    SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(SDL_GetDisplayForWindow(window), &count);
+    bool selected = false;
+    for (int index = 0; index < count; ++index) {
+      if (nativeMode(*modes[index]) == mode) {
+        selected = SDL_SetWindowFullscreenMode(window, modes[index]);
+        break;
+      }
+    }
+    SDL_free(modes);
+    if (!selected) errorMessage = sdlFailure("Could not select the fullscreen display mode");
+    return selected;
   }
 
   void setWindowMaximized(bool maximized) override {
@@ -188,6 +178,7 @@ public:
     } else {
       SDL_RestoreWindow(window);
     }
+    SDL_SyncWindow(window);
   }
 
 private:
@@ -278,6 +269,9 @@ void SDLDisplayBackend::rememberRestoredWindowedGeometry(
 }
 
 void SDLDisplayBackend::observeRuntimeState() const {
+  // Mobile geometry is OS-owned, not immutable: resize events still update
+  // the renderer. Only desktop normal/maximized restore history is polled here.
+  if (fixedMobileDisplay) return;
   if (adapter) {
     rememberWindowedGeometry(adapter->windowState());
   }

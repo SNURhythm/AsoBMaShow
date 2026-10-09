@@ -5,15 +5,15 @@
 #include "NativeKeyboardInputState.h"
 #include "InputTimestamp.h"
 #include "../perf/LatencyTelemetry.h"
-#include <SDL2/SDL_log.h>
-#include <SDL2/SDL_syswm.h>
-#include <SDL2/SDL_video.h>
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_properties.h>
+#include <SDL3/SDL_video.h>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
 
-#if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
+#if defined(ASOBMASHOW_HAVE_X11)
 #include <X11/Xlib.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -44,7 +44,7 @@ public:
   ~LinuxRealtimeKeyboardBackend() override { stop(); }
 
   bool start(std::string &errorMessage) override {
-#if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
+#if defined(ASOBMASHOW_HAVE_X11)
     // SDL performs XInitThreads before opening its own X11 connection. Only
     // this worker uses our separate connection; never touch SDL's Display.
     const char *driver = SDL_GetCurrentVideoDriver();
@@ -101,7 +101,7 @@ public:
     available_.store(false, std::memory_order_release);
     keys_.setClaimed(false, steadyMicros());
     map_->setKeyboardRealtimeAvailable(false);
-#if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
+#if defined(ASOBMASHOW_HAVE_X11)
     closeDevices();
 #endif
   }
@@ -122,9 +122,9 @@ public:
   }
 
   void handleSdlEvent(const SDL_Event &event) override {
-#if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
-    if (event.type == SDL_WINDOWEVENT) {
-      if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) captureWindow();
+#if defined(ASOBMASHOW_HAVE_X11)
+    if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST)) {
+      if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) captureWindow();
       // X11 focus on the worker is authoritative. A delayed SDL focus-loss
       // notice must not clear keys pressed after the window regained focus.
     }
@@ -134,14 +134,15 @@ public:
   }
 
 private:
-#if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
+#if defined(ASOBMASHOW_HAVE_X11)
   bool captureWindow() {
     auto *window = SDL_GetKeyboardFocus(); // main-thread lifecycle only
-    SDL_SysWMinfo info{};
-    SDL_VERSION(&info.version);
-    if (window == nullptr || !SDL_GetWindowWMInfo(window, &info) ||
-        info.subsystem != SDL_SYSWM_X11) return false;
-    window_.store(info.info.x11.window, std::memory_order_release);
+    if (window == nullptr) return false;
+    const auto properties = SDL_GetWindowProperties(window);
+    const auto nativeWindow = SDL_GetNumberProperty(
+        properties, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+    if (nativeWindow == 0) return false;
+    window_.store(static_cast<Window>(nativeWindow), std::memory_order_release);
     return true;
   }
 

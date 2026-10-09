@@ -29,5 +29,17 @@
                 "VCPKG_ROOT": "${VCPKG_ROOT}"
             }
         }
+    ],
+    "buildPresets": [
+        {
+            "name": "user-debug-windows",
+            "inherits": "debug-windows",
+            "configurePreset": "user-debug-windows"
+        },
+        {
+            "name": "user-release-windows",
+            "inherits": "release-windows",
+            "configurePreset": "user-release-windows"
+        }
     ]
 }

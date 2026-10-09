@@ -1903,6 +1903,98 @@ void testAtomicFirstSaveCreatesNestedParents() {
          "atomic first save installs content under nested parents");
 }
 
+void testAtomicUnicodeBackupLifecycle() {
+  TempDirectory temp;
+  const auto directory = temp.path() / u8"\u97f3\u697d_\U0001F3B5";
+  const auto target = directory / u8"\u8a2d\u5b9a.json";
+  const auto backup = directory / u8"\u8a2d\u5b9a.json.bak";
+  const auto pending = directory / u8"\u8a2d\u5b9a.json.bak.pending";
+  const auto previous = directory / u8"\u8a2d\u5b9a.json.bak.previous";
+  const auto temporary = directory / u8"\u8a2d\u5b9a.json.tmp";
+  std::string error;
+  try {
+    for (const std::string contents : {"first", "second", "third"}) {
+      const bool saved = atomic_file::writeWithBackup(
+          target, std::as_bytes(std::span(contents)), error);
+      expect(saved, "atomic Unicode save succeeds: " + error);
+      expect(readFile(target) == contents,
+             "atomic Unicode save installs the requested contents");
+    }
+    expect(readFile(backup) == "second",
+           "atomic Unicode replacement rotates the previous generation");
+    expect(!std::filesystem::exists(temporary) &&
+               !std::filesystem::exists(pending) &&
+               !std::filesystem::exists(previous),
+           "atomic Unicode replacement removes staging files");
+    writeFile(pending, "pending");
+    writeFile(previous, "previous");
+    const bool cleaned = atomic_file::removeBackupArtifacts(target, error);
+    expect(cleaned, "atomic Unicode backup cleanup succeeds: " + error);
+    expect(!std::filesystem::exists(backup) &&
+               !std::filesystem::exists(pending) &&
+               !std::filesystem::exists(previous),
+           "atomic Unicode cleanup removes every backup artifact");
+    expect(readFile(target) == "third",
+           "atomic Unicode backup cleanup preserves the destination");
+  } catch (const std::system_error &error) {
+    expect(false, std::string("atomic Unicode backup lifecycle threw: ") +
+                      error.what());
+  }
+}
+
+void testAtomicUnicodeWriteWithoutBackup() {
+  TempDirectory temp;
+  const auto directory = temp.path() / u8"\u97f3\u697d_\U0001F3B5";
+  const auto target = directory / u8"\u8a2d\u5b9a.json";
+  const auto backup = directory / u8"\u8a2d\u5b9a.json.bak";
+  const auto pending = directory / u8"\u8a2d\u5b9a.json.bak.pending";
+  const auto previous = directory / u8"\u8a2d\u5b9a.json.bak.previous";
+  const auto temporary = directory / u8"\u8a2d\u5b9a.json.tmp";
+  writeFile(target, "current");
+  for (const auto &artifact : {backup, pending, previous, temporary}) {
+    writeFile(artifact, "stale");
+  }
+  const std::string contents = "replacement";
+  std::string error;
+  try {
+    const bool saved = atomic_file::writeWithoutBackup(
+        target, std::as_bytes(std::span(contents)), error);
+    expect(saved, "atomic Unicode write without backup succeeds: " + error);
+    expect(readFile(target) == contents,
+           "atomic Unicode write without backup replaces the destination");
+    for (const auto &artifact : {backup, pending, previous, temporary}) {
+      expect(!std::filesystem::exists(artifact),
+             "atomic Unicode write without backup removes stale artifacts");
+    }
+  } catch (const std::system_error &error) {
+    expect(false, std::string("atomic Unicode write without backup threw: ") +
+                      error.what());
+  }
+}
+
+void testAtomicUnicodeCleanupFailureReportsPath() {
+  TempDirectory temp;
+  const auto directory = temp.path() / u8"\u97f3\u697d_\U0001F3B5";
+  const auto target = directory / u8"\u8a2d\u5b9a.json";
+  const auto backup = directory / u8"\u8a2d\u5b9a.json.bak";
+  writeFile(target, "current");
+  writeFile(backup / "child", "cannot remove a nonempty directory");
+  std::string error;
+  try {
+    expect(!atomic_file::removeBackupArtifacts(target, error),
+           "atomic Unicode cleanup reports an unremovable artifact");
+    const auto expectedPath = backup.u8string();
+    expect(error.find(std::string(expectedPath.begin(), expectedPath.end())) !=
+               std::string::npos,
+           "atomic cleanup failure includes the artifact path as UTF-8");
+    expect(readFile(target) == "current",
+           "failed atomic Unicode cleanup preserves the destination");
+  } catch (const std::system_error &error) {
+    expect(false, std::string("atomic Unicode cleanup diagnostic threw: ") +
+                      error.what());
+  }
+}
+
 void testAtomicFirstSaveCreatesRelativeNestedParents() {
   TempDirectory temp;
   const auto previousDirectory = std::filesystem::current_path();
@@ -2672,6 +2764,9 @@ int main() {
   testAtomicFailureRestoresDestinationAndExistingBackup();
   testAtomicSuccessRotatesOneBackupGeneration();
   testAtomicFirstSaveCreatesNestedParents();
+  testAtomicUnicodeBackupLifecycle();
+  testAtomicUnicodeWriteWithoutBackup();
+  testAtomicUnicodeCleanupFailureReportsPath();
   testAtomicFirstSaveCreatesRelativeNestedParents();
   if (failures != 0) {
     std::cerr << failures << " app settings store assertion(s) failed\n";

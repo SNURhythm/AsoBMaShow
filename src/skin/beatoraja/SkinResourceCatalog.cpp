@@ -8,7 +8,7 @@
 #include "../../RAII.h"
 #include "../../view/ImageFileDecoder.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include <algorithm>
@@ -90,12 +90,12 @@ std::optional<std::vector<std::byte>>
 readPlatformAsset(std::string_view path, std::size_t maximumBytes) {
   recordPlatformAssetRead();
   const std::string ownedPath(path);
-  UniqueResource<SDL_RWops, SDL_RWclose> input(
-      SDL_RWFromFile(ownedPath.c_str(), "rb"));
+  UniqueResource<SDL_IOStream, SDL_CloseIO> input(
+      SDL_IOFromFile(ownedPath.c_str(), "rb"));
   if (!input) {
     return std::nullopt;
   }
-  const Sint64 reportedSize = SDL_RWsize(input.get());
+  const Sint64 reportedSize = SDL_GetIOSize(input.get());
   if (reportedSize >= 0) {
     const auto size = static_cast<std::uint64_t>(reportedSize);
     if (size > maximumBytes) {
@@ -103,7 +103,7 @@ readPlatformAsset(std::string_view path, std::size_t maximumBytes) {
     }
     std::vector<std::byte> result(static_cast<std::size_t>(size));
     if (!result.empty() &&
-        SDL_RWread(input.get(), result.data(), 1, result.size()) !=
+        SDL_ReadIO(input.get(), result.data(), result.size()) !=
             result.size()) {
       return std::nullopt;
     }
@@ -114,7 +114,7 @@ readPlatformAsset(std::string_view path, std::size_t maximumBytes) {
   std::array<std::byte, 64U * 1024U> buffer{};
   for (;;) {
     const std::size_t read =
-        SDL_RWread(input.get(), buffer.data(), 1, buffer.size());
+        SDL_ReadIO(input.get(), buffer.data(), buffer.size());
     if (read > maximumBytes - std::min(result.size(), maximumBytes)) {
       return std::nullopt;
     }
@@ -3228,8 +3228,9 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       digest.update(std::span<const std::byte>(
           reinterpret_cast<const std::byte *>(encoded.data()),
           encoded.size()));
+      const auto pathUtf8 = virtualPathByReference.at(reference).generic_u8string();
       const std::string cacheKey =
-          "builtin:" + virtualPathByReference.at(reference).generic_string() +
+          "builtin:" + std::string(pathUtf8.begin(), pathUtf8.end()) +
           ":" + digest.finalHex();
       std::optional<image_decode::DecodedImageData> decoded;
       // Reuse an image already decoded for selector/decide display (the same

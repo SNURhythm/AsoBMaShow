@@ -12,6 +12,13 @@
 #endif
 
 namespace file_checksum {
+namespace {
+std::string diagnosticPath(const std::filesystem::path &path) {
+  const auto utf8 = path.u8string();
+  return {utf8.begin(), utf8.end()};
+}
+} // namespace
+
 #if !defined(__APPLE__) && !defined(ASOBMASHOW_USE_OPENSSL_SHA256)
 namespace {
 constexpr std::array<std::uint32_t, 64> kRoundConstants = {
@@ -230,7 +237,7 @@ std::optional<std::string> sha256File(const std::filesystem::path &path,
                                       std::uint64_t maximumBytes) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
-    errorMessage = "unable to open file for checksum: " + path.string();
+    errorMessage = "unable to open file for checksum: " + diagnosticPath(path);
     return std::nullopt;
   }
   Sha256 hash;
@@ -242,7 +249,7 @@ std::optional<std::string> sha256File(const std::filesystem::path &path,
     if (count > 0) {
       const auto unsignedCount = static_cast<std::uint64_t>(count);
       if (unsignedCount > maximumBytes - totalBytes) {
-        errorMessage = "file exceeds checksum size limit: " + path.string();
+        errorMessage = "file exceeds checksum size limit: " + diagnosticPath(path);
         return std::nullopt;
       }
       hash.update(std::as_bytes(
@@ -251,7 +258,7 @@ std::optional<std::string> sha256File(const std::filesystem::path &path,
     }
   }
   if (!input.eof()) {
-    errorMessage = "unable to read file for checksum: " + path.string();
+    errorMessage = "unable to read file for checksum: " + diagnosticPath(path);
     return std::nullopt;
   }
   return hash.finalHex();

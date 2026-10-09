@@ -4,8 +4,8 @@
 #include "InputDeviceIdentity.h"
 #include "RealtimeControllerDeviceMap.h"
 
-#include <SDL2/SDL_joystick.h>
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_joystick.h>
+#include <SDL3/SDL_scancode.h>
 
 #include <array>
 #include <atomic>
@@ -20,7 +20,7 @@
 #include <vector>
 
 struct SdlInputDeviceInfo {
-  SDL_JoystickID instanceId = -1;
+  SDL_JoystickID instanceId = 0;
   bool gameController = false;
   std::string guid;
   std::string serial;
@@ -47,10 +47,10 @@ class ISdlInputDeviceProvider {
 public:
   virtual ~ISdlInputDeviceProvider() = default;
 
-  [[nodiscard]] virtual int deviceCount() const = 0;
-  [[nodiscard]] virtual bool isGameController(int deviceIndex) const = 0;
+  [[nodiscard]] virtual std::optional<std::vector<SDL_JoystickID>> deviceIds() const = 0;
+  [[nodiscard]] virtual bool isGameController(SDL_JoystickID deviceId) const = 0;
   virtual std::optional<SdlInputDeviceInfo>
-  openDevice(int deviceIndex, bool asGameController,
+  openDevice(SDL_JoystickID deviceId, bool asGameController,
              std::string &errorMessage) = 0;
   virtual void closeDevice(SDL_JoystickID instanceId) = 0;
 };
@@ -82,7 +82,6 @@ private:
   struct DeviceRecord {
     input::InputDeviceSnapshot snapshot;
     bool gameController = false;
-    bool iosAccelerometer = false;
     int playerIndex = -1;
     std::string legacyName;
     std::bitset<input::kLegacyInputMaximumButtons> pressedRawButtons;
@@ -90,19 +89,19 @@ private:
     std::vector<Uint8> hatValues;
   };
 
-  std::optional<SdlInputDeviceInfo> openDevice(int deviceIndex);
+  std::optional<SdlInputDeviceInfo> openDevice(SDL_JoystickID deviceId);
   void registerDevice(SdlInputDeviceInfo info, std::string stableId,
                       bool publishConnection);
   void
   applyIdentityRemaps(std::span<const InputDeviceIdentityRemap> remappings);
-  void addDevice(int deviceIndex);
+  void addDevice(SDL_JoystickID deviceId);
   void removeDevice(SDL_JoystickID instanceId);
   void publishButton(const DeviceRecord &device, int button, bool pressed,
-                     std::uint32_t timestamp);
+                     std::uint64_t timestamp);
   void publishAxis(const DeviceRecord &device, int axis, Sint16 value,
-                   std::uint32_t timestamp);
+                   std::uint64_t timestamp);
   void publishHat(DeviceRecord &device, int hat, Uint8 value,
-                  std::uint32_t timestamp);
+                  std::uint64_t timestamp);
   void rebuildLegacyControllerGenerationLocked() noexcept;
   [[nodiscard]] bool
   nativeRealtimeOwns(input::DeviceClass deviceClass) const noexcept;

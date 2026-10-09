@@ -450,6 +450,46 @@ void testArchivedVisualsPreloadInOneArchiveBatch() {
           "timed activation reuses the preloaded archived video");
 }
 
+void testUnicodeChartAssetReferences() {
+  TemporaryVideoFixture fixture;
+  const std::filesystem::path soundName = u8"\u97f3\u697d\U0001f3b5.wav";
+  const std::filesystem::path imageName = u8"\u753b\u50cf\U0001f3b5.bmp";
+  const std::filesystem::path videoName = u8"\u52d5\u753b\U0001f3b5.mp4";
+  const auto write = [&](const std::filesystem::path &name,
+                         const std::string &bytes) {
+    std::ofstream stream(fixture.directory / name, std::ios::binary);
+    stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    require(stream.good(), "Unicode chart asset fixture is written");
+  };
+  write(soundName, shortWave());
+  write(imageName, singlePixelPpm(0x22, 0x44, 0x66));
+  write(videoName, singleFrameY4m());
+  for (const bool video : {false, true}) {
+    Stopwatch stopwatch;
+    Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(
+                                   std::make_shared<BackendControl>()));
+    bms_parser::Chart chart;
+    populateVisualChart(chart, false, fixture.directory,
+                        fspath_to_utf8(video ? videoName : imageName));
+    chart.Meta.BmsPath = fixture.directory / "ascii-chart.bms";
+    chart.ReferencedWavTable = {{7, fspath_to_utf8(soundName)}};
+    std::atomic_bool cancelled = false;
+    require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+            "ASCII chart with UTF-8 asset references preloads");
+    const auto sound = jukebox.resolveRealtimeKeySound(7);
+    require(sound && sound->valid(), "Unicode sound reference decodes");
+    require(jukebox.reloadChartResources(chart, true, cancelled).success,
+            "Unicode assets reload and retain their sound");
+    require(sound->valid(), "Unicode sound is reused on reload");
+    require(jukebox.activeMaterializedVideoPaths().size() == (video ? 1 : 0),
+            "Unicode video reference resolves when selected");
+    require(jukebox.play(0).success, "Unicode chart assets start playback");
+    jukebox.seekVisualsToSongTime(0);
+    require(jukebox.hasActiveVisuals(), "Unicode chart visual is available");
+    require(jukebox.stop().success, "Unicode chart assets stop cleanly");
+  }
+}
+
 void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
                                                      bool singleAsset) {
   TemporaryArchivedVisualFixture fixture;
@@ -995,10 +1035,23 @@ void testPausedSchedulerSleepsAndWakesForResumeAndStop() {
   jukebox.pause();
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   const auto pausedTicks = ticks.load();
-  const auto cpuStart = std::clock();
+  const auto processCpuSeconds = [] {
+#ifdef _WIN32
+    FILETIME creation, exit, kernel, user;
+    require(GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user),
+            "process CPU time is available");
+    const auto ticks = [](const FILETIME &time) {
+      return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) |
+             time.dwLowDateTime;
+    };
+    return static_cast<double>(ticks(kernel) + ticks(user)) / 10'000'000.0;
+#else
+    return static_cast<double>(std::clock()) / CLOCKS_PER_SEC;
+#endif
+  };
+  const auto cpuStart = processCpuSeconds();
   std::this_thread::sleep_for(std::chrono::milliseconds(400));
-  const double cpuSeconds =
-      static_cast<double>(std::clock() - cpuStart) / CLOCKS_PER_SEC;
+  const double cpuSeconds = processCpuSeconds() - cpuStart;
   std::cout << "paused scheduler CPU seconds: " << cpuSeconds << '\n';
   require(ticks.load() == pausedTicks, "paused scheduler does not tick");
   require(cpuSeconds < 0.2, "paused scheduler uses bounded CPU, not a busy loop");
@@ -1020,7 +1073,7 @@ void testPausedSchedulerSleepsAndWakesForResumeAndStop() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;
@@ -1028,6 +1081,12 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    testUnicodeChartAssetReferences();
+    if (argc == 2 && std::string_view(argv[1]) == "--unicode-assets") {
+      rendering::UniformCache::getInstance().destroyAll();
+      bgfx::shutdown();
+      return 0;
+    }
     for (const bool sevenZip : {false, true}) {
       for (const bool singleAsset : {false, true}) {
         testArchivedChartLoadsAudioAboveSchedulingBudget(sevenZip, singleAsset);

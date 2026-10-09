@@ -132,7 +132,7 @@ protected:
     float x = 0.0f;
     float y = 0.0f;
     switch (event.type) {
-    case SDL_MOUSEBUTTONDOWN:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
       if (event.button.button != SDL_BUTTON_LEFT) {
         return true;
       }
@@ -148,7 +148,7 @@ protected:
       mouseDragFirst = sectionForX(x);
       publish(mouseDragFirst, mouseDragFirst);
       return false;
-    case SDL_MOUSEMOTION:
+    case SDL_EVENT_MOUSE_MOTION:
       if (pointerCapture.handleMouse(PointerPhase::Move,
                                      event.motion.which == SDL_TOUCH_MOUSEID) !=
           PointerTransition::Update) {
@@ -157,7 +157,7 @@ protected:
       mouseToUi(event.motion.x, event.motion.y, x, y);
       publish(mouseDragFirst, sectionForX(x));
       return false;
-    case SDL_MOUSEBUTTONUP:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
       if (event.button.button != SDL_BUTTON_LEFT ||
           pointerCapture.handleMouse(PointerPhase::Up,
                                      event.button.which == SDL_TOUCH_MOUSEID) !=
@@ -167,40 +167,45 @@ protected:
       mouseToUi(event.button.x, event.button.y, x, y);
       publish(mouseDragFirst, sectionForX(x));
       return false;
-    case SDL_FINGERDOWN:
+    case SDL_EVENT_FINGER_DOWN:
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
       if (!pointInside(*this, x, y)) {
         return true;
       }
       if (pointerCapture.handleTouch(PointerPhase::Down,
-                                     event.tfinger.fingerId) !=
+                                     event.tfinger.fingerID) !=
           PointerTransition::Begin) {
         return true;
       }
       touchDragFirst = sectionForX(x);
       publish(touchDragFirst, touchDragFirst);
       return false;
-    case SDL_FINGERMOTION:
+    case SDL_EVENT_FINGER_MOTION:
       if (pointerCapture.handleTouch(PointerPhase::Move,
-                                     event.tfinger.fingerId) !=
+                                     event.tfinger.fingerID) !=
           PointerTransition::Update) {
         return true;
       }
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
       publish(touchDragFirst, sectionForX(x));
       return false;
-    case SDL_FINGERUP:
+    case SDL_EVENT_FINGER_CANCELED:
+      return pointerCapture.handleTouch(PointerPhase::Cancel,
+                                        event.tfinger.fingerID) !=
+             PointerTransition::Cancelled;
+    case SDL_EVENT_FINGER_UP:
       if (pointerCapture.handleTouch(PointerPhase::Up,
-                                     event.tfinger.fingerId) !=
+                                     event.tfinger.fingerID) !=
           PointerTransition::End) {
         return true;
       }
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
       publish(touchDragFirst, sectionForX(x));
       return false;
-    case SDL_WINDOWEVENT:
-      if (event.window.event == SDL_WINDOWEVENT_LEAVE ||
-          event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+  case SDL_EVENT_WINDOW_FOCUS_LOST:
+      if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE ||
+          event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
         pointerCapture.cancelAll();
       }
       return true;

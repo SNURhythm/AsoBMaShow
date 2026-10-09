@@ -21,7 +21,7 @@
 #include "rendering/UniformCache.h"
 #include "scene/SettingsSceneInputLayout.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <cmath>
 #include <cstdlib>
@@ -55,14 +55,14 @@ void require(bool condition, const char *message) {
 
 void click(Button &button) {
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
-  down.button.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  down.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.x = button.getX() + button.getWidth() / 2;
   down.button.y = button.getY() + button.getHeight() / 2;
   SDL_Event up = down;
-  up.type = SDL_MOUSEBUTTONUP;
-  up.button.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   button.handleEvents(down);
   button.handleEvents(up);
 }
@@ -95,11 +95,11 @@ void testColorPickerDragAndRelease() {
       SDL_Event event{};
       event.type = type;
       if (touch) {
-        event.tfinger.touchId = 1;
-        event.tfinger.fingerId = id;
+        event.tfinger.touchID = 1;
+        event.tfinger.fingerID = id;
         event.tfinger.x = float(x) / rendering::window_width;
         event.tfinger.y = float(y) / rendering::window_height;
-      } else if (type == SDL_MOUSEMOTION) {
+      } else if (type == SDL_EVENT_MOUSE_MOTION) {
         event.motion.which = 1;
         event.motion.x = x;
         event.motion.y = y;
@@ -111,32 +111,31 @@ void testColorPickerDragAndRelease() {
       }
       return event;
     };
-    auto down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 110, 80);
+    auto down = pointer(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 110, 80);
     require(!picker.handleEvents(down) && changes == 1 && commits == 0,
             "picker previews the initial mouse or touch press without committing");
-    auto move = pointer(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 400, 0);
+    auto move = pointer(touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION, 400, 0);
     require(!picker.handleEvents(move) && color_picker::toRgb(picker.value()) == 0xFF0000,
             "dragging outside the square clamps to a saturated bright color");
-    auto unrelated = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 110, 80, 8);
+    auto unrelated = pointer(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 110, 80, 8);
     if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
     picker.notifyPointerEventConsumed(unrelated);
     require(commits == 0, "unrelated releases cannot end the picker gesture");
-    auto up = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 110, 80);
+    auto up = pointer(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 110, 80);
     picker.notifyPointerEventConsumed(up);
     require(commits == 1 && color_picker::toRgb(picker.value()) == 0xFF0000,
             "a release consumed by another view commits the last previewed color");
     require(picker.handleEvents(move) && commits == 1,
             "a consumed release cannot leave the picker dragging");
-    down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 110, 215);
+    down = pointer(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 110, 215);
     require(!picker.handleEvents(down) && std::abs(picker.value().hue - 0.5F) < 0.001F,
             "the hue strip selects cyan halfway across");
-    up = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 110, 215);
+    up = pointer(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 110, 215);
     require(!picker.handleEvents(up) && commits == 2,
             "ordinary pointer release commits exactly once");
     require(!picker.handleEvents(down), "a new picker gesture starts after release");
     SDL_Event lost{};
-    lost.type = SDL_WINDOWEVENT;
-    lost.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+    lost.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     picker.handleEvents(lost);
     require(commits == 3 && picker.handleEvents(move),
             "focus loss commits the last previewed value and clears dragging");
@@ -182,10 +181,10 @@ void testColorPickerPopup() {
       require(button->getY() >= picker->getY() + picker->getHeight(),
               "confirmation actions remain below the picker");
     SDL_Event wheel{};
-    wheel.type = SDL_MOUSEWHEEL;
+    wheel.type = SDL_EVENT_MOUSE_WHEEL;
     require(!popup.handleEvents(wheel), "modal consumes scrolling over the background");
     SDL_Event down{};
-    down.type = SDL_MOUSEBUTTONDOWN;
+    down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
     down.button.button = SDL_BUTTON_LEFT;
     down.button.x = picker->getX() + picker->getWidth() / 2;
     down.button.y = picker->getY() + 15;
@@ -194,7 +193,7 @@ void testColorPickerPopup() {
                 previewColor != 0xFF0000 && !popup.result(),
             "picker forwards live draft colors before release or confirmation");
     SDL_Event up = down;
-    up.type = SDL_MOUSEBUTTONUP;
+    up.type = SDL_EVENT_MOUSE_BUTTON_UP;
     popup.handleEvents(up);
     require(!popup.result() && color_picker::toRgb(picker->value()) != 0xFF0000,
             "dragging and releasing edits only the draft until confirmed");
@@ -208,8 +207,8 @@ void testColorPickerPopup() {
     popup.fitToViewport(800, 600);
     if (escape) {
       SDL_Event event{};
-      event.type = SDL_KEYDOWN;
-      event.key.keysym.sym = SDLK_ESCAPE;
+      event.type = SDL_EVENT_KEY_DOWN;
+      event.key.key = SDLK_ESCAPE;
       require(!popup.handleEvents(event), "Escape is consumed by the modal");
     } else {
       for (auto *child : popup.getChildren().front()->getChildren()) {
@@ -238,11 +237,11 @@ void testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture() {
       SDL_Event event{};
       event.type = type;
       if (touch) {
-        event.tfinger.touchId = 1;
-        event.tfinger.fingerId = id;
+        event.tfinger.touchID = 1;
+        event.tfinger.fingerID = id;
         event.tfinger.x = static_cast<float>(x) / rendering::window_width;
         event.tfinger.y = static_cast<float>(y) / rendering::window_height;
-      } else if (type == SDL_MOUSEMOTION) {
+      } else if (type == SDL_EVENT_MOUSE_MOTION) {
         event.motion.which = 1;
         event.motion.x = x;
         event.motion.y = y;
@@ -254,24 +253,24 @@ void testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture() {
       }
       return event;
     };
-    auto down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 60, 25);
+    auto down = pointer(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 60, 25);
     require(!root.handleEvents(down), "slider begins the gesture");
-    auto unrelated = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 220, 80, 8);
+    auto unrelated = pointer(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 220, 80, 8);
     if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
     require(!root.handleEvents(unrelated), "disabled sibling consumes unrelated release");
-    auto move = pointer(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 120, 25);
+    auto move = pointer(touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION, 120, 25);
     require(!root.handleEvents(move) && slider->value() == 50,
             "unrelated release preserves the active slider gesture");
     const int beforeRelease = changes;
-    auto up = pointer(touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP, 220, 80);
+    auto up = pointer(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 220, 80);
     require(!root.handleEvents(up), "disabled sibling consumes slider release");
     require(slider->value() == 50 && changes == beforeRelease,
             "covered release does not change the value or invoke its callback");
-    move = pointer(touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION, 220, 25);
+    move = pointer(touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION, 220, 25);
     require(root.handleEvents(move) && slider->value() == 50 &&
                 changes == beforeRelease,
             "released slider cannot keep changing on later pointer motion");
-    down = pointer(touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN, 220, 25, 9);
+    down = pointer(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 220, 25, 9);
     require(!root.handleEvents(down) && slider->value() > 50,
             "slider accepts a fresh pointer after the covered release");
   }
@@ -348,13 +347,13 @@ void testLaneCoverControlsAreAvailableInPlayOptions() {
   auto *slider = dynamic_cast<SnappedSlider *>(panel.findViewByName("lane-cover-hidden-amount"));
   require(slider != nullptr, "hidden cover exposes a fine amount slider");
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.x = slider->getX() + slider->getWidth() / 2;
   down.button.y = slider->getY() + slider->getHeight() / 2;
   slider->handleEvents(down);
   SDL_Event up = down;
-  up.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
   slider->handleEvents(up);
   require(changes > 3 && std::abs(selected.hiddenRatio - 0.5F) < 0.02F &&
               selected.liftRatio == 0.1F && selected.laneCoverPercent == 20.1F,
@@ -406,10 +405,10 @@ void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
   scroll.applyYogaLayout();
 
   SDL_Event normal{};
-  normal.type = SDL_MOUSEWHEEL;
-  normal.wheel.type = SDL_MOUSEWHEEL;
+  normal.type = SDL_EVENT_MOUSE_WHEEL;
+  normal.wheel.type = SDL_EVENT_MOUSE_WHEEL;
   normal.wheel.y = 0;
-  normal.wheel.preciseY = 0.25F;
+  normal.wheel.y = 0.25F;
   normal.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
   scroll.setScrollOffset(100.0F);
   scroll.handleEvents(normal);
@@ -417,12 +416,35 @@ void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
           "scroll view uses a fractional normal wheel delta");
 
   SDL_Event natural = normal;
-  natural.wheel.preciseY = -0.25F;
+  natural.wheel.y = -0.25F;
   natural.wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
   scroll.setScrollOffset(100.0F);
   scroll.handleEvents(natural);
   require(std::abs(scroll.getScrollOffset() - 112.0F) < 0.001F,
           "scroll view preserves the iPad natural-scroll direction");
+}
+
+void testScrollViewTargetsWheelEventPosition() {
+  ScrollView scroll(100, 100, 360, 200);
+  auto *content = new View();
+  content->setWidth(360)->setHeight(800);
+  scroll.setContentView(content);
+  scroll.applyYogaLayout();
+  scroll.setScrollOffset(100.0F);
+
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.y = -0.5F;
+  wheel.wheel.mouse_x = scroll.getContentX() + 10.5F;
+  wheel.wheel.mouse_y = scroll.getContentY() + 10.5F;
+  scroll.handleEvents(wheel);
+  require(std::abs(scroll.getScrollOffset() - 124.0F) < 0.001F,
+          "wheel targets its event position, not the later polled pointer");
+  wheel.wheel.mouse_x = 0;
+  wheel.wheel.mouse_y = 0;
+  scroll.handleEvents(wheel);
+  require(std::abs(scroll.getScrollOffset() - 124.0F) < 0.001F,
+          "a wheel event outside the view must not scroll it");
 }
 
 void testDropdownDefersOptionViewsUntilOpen() {
@@ -537,6 +559,7 @@ int main() {
   testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
+  testScrollViewTargetsWheelEventPosition();
   testDropdownDefersOptionViewsUntilOpen();
   testInputSelectorWidthsStayStableAcrossRefreshes();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();

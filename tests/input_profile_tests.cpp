@@ -1,7 +1,7 @@
 #include "input/InputProfile.h"
 #include "input/InputProfileStore.h"
 
-#include <SDL2/SDL_scancode.h>
+#include <SDL3/SDL_scancode.h>
 
 #include <algorithm>
 #include <cmath>
@@ -242,7 +242,7 @@ int main() {
     require(
         oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
             std::ranges::find(diagnostics,
-                              "Reset unsupported input schema version to 10.") !=
+                              "Reset unsupported input schema version to 11.") !=
                 diagnostics.end(),
         "schema repair diagnostics report the real current version");
 
@@ -652,7 +652,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 10") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 11") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -683,7 +683,7 @@ int main() {
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
     require(
-        gyroscopeRoundTripJson.find("\"schemaVersion\": 10") !=
+        gyroscopeRoundTripJson.find("\"schemaVersion\": 11") !=
                 std::string::npos &&
             gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                 std::string::npos &&
@@ -736,7 +736,7 @@ int main() {
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 10") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 11") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
                     std::string::npos &&
@@ -829,6 +829,25 @@ int main() {
                 invalidTouch.profile.playfieldTouchForKeyMode(5) == input::PlayfieldTouchConfig{} &&
                 invalidTouch.profile.playfieldTouchForKeyMode(14) == touchProfile.playfieldTouch.at(14),
             "invalid and ineligible touch options fall back without losing valid modes");
+
+    const auto mediaPath = testRoot / "sdl2-media.json";
+    writeFile(mediaPath, R"({"schemaVersion":10,"bindings":[
+      {"id":"next","scope":{"player":1,"keyMode":7},"action":{"kind":"lane","lane":0},
+       "control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":258}},
+      {"id":"mail","scope":{"player":1,"keyMode":7},"action":{"kind":"lane","lane":1},
+       "control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":265}}
+    ]})");
+    const auto media = InputProfileStore::load(mediaPath);
+    require(media.status == InputProfileLoadStatus::Loaded && media.profile.bindings.size() == 2 &&
+                media.profile.bindings[0].control.index == SDL_SCANCODE_MEDIA_NEXT_TRACK &&
+                media.profile.bindings[1].control.index < 0,
+            "SDL2 consumer keys migrate by meaning and removed keys remain inert");
+    require(InputProfileStore::saveAtomic(mediaPath, media.profile, errorMessage),
+            "migrated media bindings save successfully");
+    const auto mediaAgain = InputProfileStore::load(mediaPath);
+    require(mediaAgain.profile.bindings[0].control.index == SDL_SCANCODE_MEDIA_NEXT_TRACK &&
+                mediaAgain.profile.bindings[1].control.index == media.profile.bindings[1].control.index,
+            "SDL3 bindings are not migrated a second time");
 
     const auto malformedPath = testRoot / "malformed.json";
     writeFile(malformedPath, "{ not valid json");

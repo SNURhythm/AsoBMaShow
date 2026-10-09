@@ -9,9 +9,9 @@
 #include "../view/DropdownView.h"
 #include "VirtualControllerEditorView.h"
 
-#include <SDL2/SDL_mouse.h>
-#include <SDL2/SDL_scancode.h>
-#include <SDL2/SDL_touch.h>
+#include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_scancode.h>
+#include <SDL3/SDL_touch.h>
 
 #include <algorithm>
 #include <array>
@@ -170,13 +170,20 @@ bool inputPointerTransactionActive() {
   if ((SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0) {
     return true;
   }
-  const int touchDeviceCount = SDL_GetNumTouchDevices();
+  int touchDeviceCount = 0;
+  SDL_TouchID *devices = SDL_GetTouchDevices(&touchDeviceCount);
+  bool active = false;
   for (int index = 0; index < touchDeviceCount; ++index) {
-    if (SDL_GetNumTouchFingers(SDL_GetTouchDevice(index)) > 0) {
-      return true;
+    int fingerCount = 0;
+    SDL_Finger **fingers = SDL_GetTouchFingers(devices[index], &fingerCount);
+    SDL_free(fingers);
+    if (fingerCount > 0) {
+      active = true;
+      break;
     }
   }
-  return false;
+  SDL_free(devices);
+  return active;
 }
 
 } // namespace

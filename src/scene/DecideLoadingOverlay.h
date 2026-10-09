@@ -2,6 +2,7 @@
 
 #include "../view/BlockingOverlayView.h"
 #include "../repositories/ChartRepository.h"
+#include "../path.h"
 
 #include <string>
 
@@ -33,5 +34,5 @@ private:
   std::string titleText_;
   std::string artistText_;
   std::string difficultyText_;
-  std::string stageFileResourcePath_;
+  path_t stageFileResourcePath_;
 };

@@ -18,6 +18,17 @@
 
 namespace atomic_file {
 namespace {
+std::filesystem::path withAsciiSuffix(std::filesystem::path path,
+                                      std::string_view suffix) {
+  path += suffix;
+  return path;
+}
+
+std::string pathToUtf8(const std::filesystem::path &path) {
+  const auto encoded = path.u8string();
+  return {encoded.begin(), encoded.end()};
+}
+
 bool realWriteAndSyncWithMode(const std::filesystem::path &path,
                               std::span<const std::byte> contents,
                               std::string &errorMessage,
@@ -219,7 +230,7 @@ bool inspectEntryWithoutFollowingLinks(const std::filesystem::path &path,
     return true;
   }
   if (error) {
-    errorMessage = "unable to inspect atomic file artifact '" + path.string() +
+    errorMessage = "unable to inspect atomic file artifact '" + pathToUtf8(path) +
                    "': " + error.message();
     return false;
   }
@@ -242,7 +253,7 @@ bool removeAndVerify(const std::filesystem::path &path,
   removed = existed && !remains;
   if (remains) {
     errorMessage =
-        "atomic file artifact remains after removal: " + path.string();
+        "atomic file artifact remains after removal: " + pathToUtf8(path);
     return false;
   }
   return true;
@@ -415,7 +426,7 @@ bool removeBackupArtifacts(const std::filesystem::path &path,
        {".bak", ".bak.pending", ".bak.previous"}) {
     bool removed = false;
     std::string removalError;
-    if (!removeAndVerify(path.string() + std::string(suffix), ops, removed,
+    if (!removeAndVerify(withAsciiSuffix(path, suffix), ops, removed,
                          removalError)) {
       appendError(errorMessage, "backup artifact cleanup failed: ",
                   removalError);
@@ -474,10 +485,12 @@ bool writeWithBackup(const std::filesystem::path &path,
     }
   }
 
-  const std::filesystem::path temporary = path.string() + ".tmp";
-  const std::filesystem::path backup = path.string() + ".bak";
-  const std::filesystem::path backupCandidate = path.string() + ".bak.pending";
-  const std::filesystem::path savedBackup = path.string() + ".bak.previous";
+  const std::filesystem::path temporary = withAsciiSuffix(path, ".tmp");
+  const std::filesystem::path backup = withAsciiSuffix(path, ".bak");
+  const std::filesystem::path backupCandidate =
+      withAsciiSuffix(path, ".bak.pending");
+  const std::filesystem::path savedBackup =
+      withAsciiSuffix(path, ".bak.previous");
   ops.remove(temporary);
   ops.remove(backupCandidate);
   ops.remove(savedBackup);
@@ -637,7 +650,7 @@ bool writeWithoutBackup(const std::filesystem::path &path,
     }
   }
 
-  const std::filesystem::path temporary = path.string() + ".tmp";
+  const std::filesystem::path temporary = withAsciiSuffix(path, ".tmp");
   if (!removeBackupArtifacts(path, errorMessage, &ops)) {
     return false;
   }

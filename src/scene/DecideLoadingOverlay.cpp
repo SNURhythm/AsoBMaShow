@@ -5,7 +5,7 @@
 #include "../view/TextView.h"
 #include "../view/ImageView.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <chrono>
 #include <cstdio>
 #include <vector>
@@ -36,8 +36,7 @@ void DecideLoadingOverlay::setChart(const ChartMetaRecord &record) {
   }
   if (!record.meta.StageFile.empty()) {
     stageFileResourcePath_ =
-        (record.meta.BmsPath.parent_path() / record.meta.StageFile)
-            .generic_string();
+        fspath_to_path_t(record.meta.BmsPath.parent_path() / record.meta.StageFile);
   } else {
     stageFileResourcePath_.clear();
   }

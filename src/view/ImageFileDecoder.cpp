@@ -296,12 +296,17 @@ decodeLibGdxCim(std::span<const std::byte> encoded,
     return std::nullopt;
   }
   detail::ImageRowReducer reducer(width, height, options);
-  std::vector<unsigned char> nativeRow(static_cast<std::size_t>(width) * *bytesPerPixel);
-  std::vector<unsigned char> rgbaRow(static_cast<std::size_t>(width) * 4);
+  const bool direct = !reducer.directRow(0).empty();
+  std::vector<unsigned char> nativeRow(
+      direct && format == 4 ? 0 : static_cast<std::size_t>(width) * *bytesPerPixel);
+  std::vector<unsigned char> rgbaRow(direct ? 0 : static_cast<std::size_t>(width) * 4);
   for (int y = 0; y < height; ++y) {
+    auto output = direct ? reducer.directRow(y) : std::span(rgbaRow);
+    auto native = direct && format == 4 ? output : std::span(nativeRow);
     if (stopped(options) || finished ||
-        !inflateExact(stream, nativeRow, options, finished)) return std::nullopt;
-    expandCimPixels(format, nativeRow, rgbaRow);
+        !inflateExact(stream, native, options, finished)) return std::nullopt;
+    if (!direct || format != 4) expandCimPixels(format, native, output);
+    if (direct) continue;
     for (int x = 0; x < width; ++x) {
       const auto offset = static_cast<std::size_t>(x) * 4;
       reducer.add(x, y, {rgbaRow[offset], rgbaRow[offset + 1],

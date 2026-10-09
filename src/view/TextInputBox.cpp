@@ -5,7 +5,7 @@
 #include "Button.h"
 #include "IconText.h"
 #include "UiTheme.h"
-#include "SDL2/SDL_events.h"
+#include <SDL3/SDL_events.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -18,7 +18,7 @@ SDL_Cursor *s_arrowCursor = nullptr;
 
 SDL_Cursor *getCachedCursor(SDL_SystemCursor cursorType) {
   SDL_Cursor **slot =
-      cursorType == SDL_SYSTEM_CURSOR_IBEAM ? &s_ibeamCursor : &s_arrowCursor;
+      cursorType == SDL_SYSTEM_CURSOR_TEXT ? &s_ibeamCursor : &s_arrowCursor;
   if (*slot == nullptr) {
     *slot = SDL_CreateSystemCursor(cursorType);
   }
@@ -26,8 +26,8 @@ SDL_Cursor *getCachedCursor(SDL_SystemCursor cursorType) {
 }
 
 void updateHoverCursor(bool useIBeam) {
-  SDL_Cursor *target = getCachedCursor(useIBeam ? SDL_SYSTEM_CURSOR_IBEAM
-                                                : SDL_SYSTEM_CURSOR_ARROW);
+  SDL_Cursor *target = getCachedCursor(useIBeam ? SDL_SYSTEM_CURSOR_TEXT
+                                                : SDL_SYSTEM_CURSOR_DEFAULT);
   if (target != nullptr && SDL_GetCursor() != target) {
     SDL_SetCursor(target);
   }
@@ -50,10 +50,10 @@ bool isUtf8ContinuationByte(unsigned char value) {
 }
 
 bool hasShortcutModifier(SDL_Keymod mods) {
-  return (mods & (KMOD_CTRL | KMOD_GUI)) != 0;
+  return (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
 }
 
-bool hasShiftModifier(SDL_Keymod mods) { return (mods & KMOD_SHIFT) != 0; }
+bool hasShiftModifier(SDL_Keymod mods) { return (mods & SDL_KMOD_SHIFT) != 0; }
 
 uint32_t sdlColorToAbgr(SDL_Color color) {
   return (static_cast<uint32_t>(color.r) << 24) |
@@ -112,11 +112,11 @@ void submitRect(RenderContext &context, bgfx::ProgramHandle program, int x,
 
 void TextInputBox::releaseCachedCursors() {
   if (s_ibeamCursor != nullptr) {
-    SDL_FreeCursor(s_ibeamCursor);
+    SDL_DestroyCursor(s_ibeamCursor);
     s_ibeamCursor = nullptr;
   }
   if (s_arrowCursor != nullptr) {
-    SDL_FreeCursor(s_arrowCursor);
+    SDL_DestroyCursor(s_arrowCursor);
     s_arrowCursor = nullptr;
   }
 }
@@ -134,7 +134,7 @@ TextInputBox::~TextInputBox() {
 #endif
   unregisterPointerDownListener();
   if (isSelected) {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
   }
 }
 
@@ -148,7 +148,7 @@ void TextInputBox::beginEditing() {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showNativeTextEditor();
 #else
-  SDL_StartTextInput();
+  SDL_StartTextInput(SDL_GetKeyboardFocus());
 #endif
 }
 
@@ -184,7 +184,7 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
     viewRect.h = std::max(1, viewRect.h + GetIOSNativeTextEditorHeight());
   }
 #endif
-  SDL_SetTextInputRect(&viewRect);
+  SDL_SetTextInputArea(SDL_GetKeyboardFocus(), &viewRect, 0);
 }
 
 void TextInputBox::setEditingText(const std::string &newText) {
@@ -229,16 +229,16 @@ size_t TextInputBox::getPrevUnicodePos(size_t pos) {
   return pos;
 }
 void TextInputBox::onPointerEventConsumed(const SDL_Event &event) {
-  if (event.type == SDL_MOUSEBUTTONUP &&
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
       event.button.button == SDL_BUTTON_LEFT &&
       event.button.which != SDL_TOUCH_MOUSEID) {
     isDraggingSelection = false;
-  } else if (event.type == SDL_FINGERUP &&
+  } else if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
              !sdl_pointer_event::isMouseSynthesizedTouch(event)) {
-    if (event.tfinger.fingerId == pendingFocusTouchId) {
+    if (event.tfinger.fingerID == pendingFocusTouchId) {
       pendingFocusTouchId = -1;
     }
-    if (event.tfinger.fingerId == activeTouchId) {
+    if (event.tfinger.fingerID == activeTouchId) {
       activeTouchId = -1;
       isDraggingSelection = false;
     }
@@ -252,8 +252,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
   }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (nativeTextEditorVisible &&
-      (event.type == SDL_TEXTINPUT || event.type == SDL_TEXTEDITING ||
-       event.type == SDL_TEXTEDITING_EXT || event.type == SDL_KEYDOWN)) {
+      (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_TEXT_EDITING ||
+       event.type == SDL_EVENT_KEY_DOWN)) {
     return false;
   }
 #endif
@@ -262,21 +262,21 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
   bool textChanged = false;
   bool isSubmit = false;
   switch (event.type) {
-  case SDL_TEXTINPUT:
+  case SDL_EVENT_TEXT_INPUT:
     if (!isSelected) {
       return true;
     }
     clearComposition();
-    textChanged = insertTextAtCursor(event.text.text);
+    textChanged = insertTextAtCursor(event.text.text != nullptr ? event.text.text : "");
     displayChanged = true;
     break;
-  case SDL_KEYDOWN: {
+  case SDL_EVENT_KEY_DOWN: {
     if (!isSelected) {
       return true;
     }
 
-    const SDL_Keycode key = event.key.keysym.sym;
-    const SDL_Keymod mods = static_cast<SDL_Keymod>(event.key.keysym.mod);
+    const SDL_Keycode key = event.key.key;
+    const SDL_Keymod mods = static_cast<SDL_Keymod>(event.key.mod);
     const bool shortcutHeld = hasShortcutModifier(mods);
     const bool shiftHeld = hasShiftModifier(mods);
     const bool navigationKey = key == SDLK_RIGHT || key == SDLK_LEFT ||
@@ -297,22 +297,22 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       }
     }
 
-    if (shortcutHeld && key == SDLK_a) {
+    if (shortcutHeld && key == SDLK_A) {
       selectAll();
       displayChanged = true;
       break;
     }
-    if (shortcutHeld && key == SDLK_c) {
+    if (shortcutHeld && key == SDLK_C) {
       copySelectionToClipboard();
       return false;
     }
-    if (shortcutHeld && key == SDLK_x) {
+    if (shortcutHeld && key == SDLK_X) {
       copySelectionToClipboard();
       textChanged = deleteSelection();
       displayChanged = textChanged;
       break;
     }
-    if (shortcutHeld && key == SDLK_v) {
+    if (shortcutHeld && key == SDLK_V) {
       textChanged = pasteClipboardAtCursor();
       displayChanged = textChanged;
       break;
@@ -323,9 +323,9 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
         textChanged = deleteSelection();
       } else if (cursorPos > 0) {
         size_t prevPos = getPrevUnicodePos(cursorPos);
-        if (mods & KMOD_GUI) {
+        if (mods & SDL_KMOD_GUI) {
           prevPos = 0;
-        } else if (mods & (KMOD_CTRL | KMOD_ALT)) {
+        } else if (mods & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) {
           while (prevPos > 0 && std::isspace(static_cast<unsigned char>(
                                     editingText[getPrevUnicodePos(prevPos)]))) {
             prevPos = getPrevUnicodePos(prevPos);
@@ -345,9 +345,9 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
         textChanged = deleteSelection();
       } else if (cursorPos < editingText.size()) {
         size_t nextPos = getNextUnicodePos(cursorPos);
-        if (mods & KMOD_GUI) {
+        if (mods & SDL_KMOD_GUI) {
           nextPos = editingText.size();
-        } else if (mods & (KMOD_CTRL | KMOD_ALT)) {
+        } else if (mods & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) {
           while (
               nextPos < editingText.size() &&
               std::isspace(static_cast<unsigned char>(editingText[nextPos]))) {
@@ -389,33 +389,20 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
 
     break;
   }
-  case SDL_TEXTEDITING:
+  case SDL_EVENT_TEXT_EDITING:
     if (!isSelected) {
       return true;
     }
     {
       const std::string previousText = displayedText();
-      composition = event.edit.text;
+      composition = event.edit.text != nullptr ? event.edit.text : "";
       compositionCursor = event.edit.start;
       compositionSelectionLength = event.edit.length;
       textChanged = displayedText() != previousText;
     }
     displayChanged = true;
     break;
-  case SDL_TEXTEDITING_EXT:
-    if (!isSelected) {
-      return true;
-    }
-    {
-      const std::string previousText = displayedText();
-      composition = event.editExt.text != nullptr ? event.editExt.text : "";
-      compositionCursor = event.editExt.start;
-      compositionSelectionLength = event.editExt.length;
-      textChanged = displayedText() != previousText;
-    }
-    displayChanged = true;
-    break;
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       break;
@@ -436,7 +423,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       showNativeTextEditor();
       isDraggingSelection = false;
 #else
-      SDL_StartTextInput();
+      SDL_StartTextInput(SDL_GetKeyboardFocus());
       isDraggingSelection = true;
 #endif
       displayChanged = true;
@@ -446,14 +433,14 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     finishEditing();
     break;
   }
-  case SDL_MOUSEBUTTONUP:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
     if (event.button.button == SDL_BUTTON_LEFT &&
         event.button.which != SDL_TOUCH_MOUSEID && isDraggingSelection) {
       isDraggingSelection = false;
       return false;
     }
     break;
-  case SDL_MOUSEMOTION: {
+  case SDL_EVENT_MOUSE_MOTION: {
     if (event.motion.which == SDL_TOUCH_MOUSEID) {
       break;
     }
@@ -475,7 +462,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
                       y <= getY() + getHeight());
     break;
   }
-  case SDL_FINGERDOWN: {
+  case SDL_EVENT_FINGER_DOWN: {
     pendingFocusTouchId = -1;
     if (activeTouchId != -1) {
       return true;
@@ -486,7 +473,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     fingerEventToUi(event.tfinger, x, y);
     if (isInsideTextInput(*this, x, y)) {
       if (!isSelected) {
-        pendingFocusTouchId = event.tfinger.fingerId;
+        pendingFocusTouchId = event.tfinger.fingerID;
         pendingFocusUiX = x;
         pendingFocusUiY = y;
         return false;
@@ -498,11 +485,11 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
                 false);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
       showNativeTextEditor();
-      activeTouchId = event.tfinger.fingerId;
+      activeTouchId = event.tfinger.fingerID;
       isDraggingSelection = false;
 #else
-      SDL_StartTextInput();
-      activeTouchId = event.tfinger.fingerId;
+      SDL_StartTextInput(SDL_GetKeyboardFocus());
+      activeTouchId = event.tfinger.fingerID;
       isDraggingSelection = true;
 #endif
       displayChanged = true;
@@ -512,8 +499,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     finishEditing();
     break;
   }
-  case SDL_FINGERMOTION: {
-    if (event.tfinger.fingerId == pendingFocusTouchId) {
+  case SDL_EVENT_FINGER_MOTION: {
+    if (event.tfinger.fingerID == pendingFocusTouchId) {
       float x = 0.0f;
       float y = 0.0f;
       fingerEventToUi(event.tfinger, x, y);
@@ -523,7 +510,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       }
       return true;
     }
-    if (event.tfinger.fingerId != activeTouchId) {
+    if (event.tfinger.fingerID != activeTouchId) {
       return true;
     }
 
@@ -544,8 +531,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     }
     return false;
   }
-  case SDL_FINGERUP: {
-    if (event.tfinger.fingerId == pendingFocusTouchId) {
+  case SDL_EVENT_FINGER_UP: {
+    if (event.tfinger.fingerID == pendingFocusTouchId) {
       pendingFocusTouchId = -1;
       float x = 0.0f;
       float y = 0.0f;
@@ -561,12 +548,12 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
       showNativeTextEditor();
 #else
-      SDL_StartTextInput();
+      SDL_StartTextInput(SDL_GetKeyboardFocus());
 #endif
       refreshDisplay(false);
       return false;
     }
-    if (event.tfinger.fingerId == activeTouchId) {
+    if (event.tfinger.fingerID == activeTouchId) {
       activeTouchId = -1;
       isDraggingSelection = false;
       return false;
@@ -579,11 +566,11 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
   }
 
   if (isSelected &&
-      (event.type == SDL_TEXTINPUT || event.type == SDL_TEXTEDITING ||
-       event.type == SDL_TEXTEDITING_EXT || event.type == SDL_KEYDOWN ||
-       ((event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEMOTION) &&
+      (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_TEXT_EDITING ||
+       event.type == SDL_EVENT_KEY_DOWN ||
+       ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION) &&
         displayChanged) ||
-       ((event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION) &&
+       ((event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION) &&
         displayChanged))) {
     return false;
   }
@@ -803,7 +790,7 @@ bool TextInputBox::commitComposition() {
   cursorPos = start + composition.size();
   selectionAnchor = cursorPos;
   clearComposition();
-  SDL_ClearComposition();
+  SDL_ClearComposition(SDL_GetKeyboardFocus());
   return true;
 }
 
@@ -889,7 +876,7 @@ void TextInputBox::clearFromButton() {
   }
   editingText.clear();
   clearComposition();
-  SDL_ClearComposition();
+  SDL_ClearComposition(SDL_GetKeyboardFocus());
   cursorPos = 0;
   selectionAnchor = 0;
   isDraggingSelection = false;
@@ -1005,7 +992,7 @@ void TextInputBox::showNativeTextEditor() {
   if (!isSelected) {
     onSelected();
   }
-  SDL_StopTextInput();
+  SDL_StopTextInput(SDL_GetKeyboardFocus());
   nativeTextEditorVisible = true;
   isDraggingSelection = false;
   refreshDisplay(false);
@@ -1089,7 +1076,7 @@ void TextInputBox::handleNativeTextEditorEvent(
     nativeTextEditorVisible = false;
     refreshDisplay(textChanged, true);
     onUnselected();
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     return;
   case IOSNativeTextEditorEvent::Finished:
     nativeTextEditorVisible = false;
@@ -1098,7 +1085,7 @@ void TextInputBox::handleNativeTextEditorEvent(
     }
     notifyEditingFinished();
     onUnselected();
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     return;
   }
 }
@@ -1154,7 +1141,7 @@ void TextInputBox::handlePointerDownOutside(const SDL_Event &event) {
   float uiX = 0.0f;
   float uiY = 0.0f;
   switch (event.type) {
-  case SDL_MOUSEBUTTONDOWN: {
+  case SDL_EVENT_MOUSE_BUTTON_DOWN: {
     if (event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return;
@@ -1170,7 +1157,7 @@ void TextInputBox::handlePointerDownOutside(const SDL_Event &event) {
     uiY = static_cast<float>(y);
     break;
   }
-  case SDL_FINGERDOWN:
+  case SDL_EVENT_FINGER_DOWN:
     fingerEventToUi(event.tfinger, uiX, uiY);
     break;
   default:
@@ -1192,7 +1179,7 @@ void TextInputBox::finishEditing() {
   commitComposition();
   notifyEditingFinished();
   onUnselected();
-  SDL_StopTextInput();
+  SDL_StopTextInput(SDL_GetKeyboardFocus());
 }
 
 void TextInputBox::notifyEditingFinished() {

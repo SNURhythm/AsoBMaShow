@@ -54,6 +54,9 @@ Start with `beatoraja_replay_codec_tests`, `replay_*_tests`,
 Consult the
 [file-replay contract matrix](../replay/file-replay-contract-matrix.md) for
 format and lifecycle coverage.
+Platform performance checks are documented in
+[Apple Metal readback](../testing/apple-replay-readback.md) and
+[Android hardware export](../testing/android-replay-hardware.md).
 
 ## Related pages
 

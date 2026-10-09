@@ -26,7 +26,7 @@ FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
 IOS_INIT = ROOT / "scripts/ios_init.sh"
 IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
-SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
+SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL3"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 IOS_NATIVES_HEADER = ROOT / "src/iOSNatives.hpp"
@@ -621,7 +621,12 @@ int main() { return 0; }
                 "m_usesMTLBindings, macOS 13.0, iOS 17.0,",
             )
             self.assertNotEqual(original, expected, "upstream gate changed; review workaround")
-            self.assertEqual(expected, compiled.read_text())
+            patched = compiled.read_text()
+            self.assertIn("m_usesMTLBindings, macOS 13.0, iOS 17.0,", patched)
+            self.assertNotIn("m_usesMTLBindings, macOS 13.0, iOS 16.0,", patched)
+            self.assertIn("newTextureWithDescriptor:desc offset:0 bytesPerRow:pitch", patched)
+            self.assertIn("nativeTexture.bufferBytesPerRow", patched)
+            self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)
@@ -742,41 +747,53 @@ int main() { return 0; }
         source = MAIN_SOURCE.read_text(encoding="utf-8")
         start = source.index("  int windowCreateWidth = 1280;")
         create = source[start:source.index("  if (win == nullptr)", start)]
-        mobile_start = source.index("#if TARGET_OS_IPHONE || TARGET_OS_ANDROID", start)
-        transition = source[mobile_start:source.index("  SDL_GetWindowSize(win", mobile_start)] + "\n#endif\n"
+        transition_start = source.index("  s_window = win;", start)
+        transition = source[transition_start:source.index("  bgfx::PlatformData pd{};", transition_start)]
         compiler = shutil.which("clang++") or shutil.which("c++")
         self.assertIsNotNone(compiler)
         harness = r'''
 #define SDL_MAIN_HANDLED
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <cassert>
 #include <cstdint>
 enum TargetPlatform { Windows, MacOS, Linux, iOS, Android };
 constexpr TargetPlatform TARGET_PLATFORM = TEST_PLATFORM;
-struct SDL_Window { Uint32 flags; } testWindow;
+struct SDL_Window { SDL_WindowFlags flags; } testWindow;
 bool portrait = false;
 bool hiddenAtCreation = false;
 int exclusiveRequests = 0;
-SDL_Window *SDL_CreateWindow(const char *, int, int, int, int, Uint32 flags) {
+SDL_Window *s_window = nullptr;
+namespace rendering {
+float widthScale, heightScale;
+void updateUIScale(int, int) {}
+}
+#define APP_DEBUG_LOG(...) ((void)0)
+bool SDL_GetWindowSize(SDL_Window *, int *width, int *height) {
+  *width = portrait ? 720 : 1280;
+  *height = portrait ? 1280 : 720;
+  return true;
+}
+void getWindowDrawableSize(SDL_Window *, int width, int height, int &rw, int &rh) {
+  rw = width * 2;
+  rh = height * 2;
+}
+SDL_Window *SDL_CreateWindow(const char *, int, int, SDL_WindowFlags flags) {
   testWindow.flags = flags;
   hiddenAtCreation = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS)) != 0;
   return &testWindow;
 }
-int SDL_SetWindowFullscreen(SDL_Window *window, Uint32 flags) {
-  if (flags == SDL_WINDOW_FULLSCREEN) {
-    ++exclusiveRequests;
-    // UIKit rejects a landscape-sized exclusive mode while starting portrait.
-    if (portrait && TARGET_PLATFORM == iOS) return -1;
-  }
-  window->flags = flags;
-  return 0;
+bool SDL_SetWindowFullscreen(SDL_Window *window, bool fullscreen) {
+  ++exclusiveRequests;
+  if (fullscreen) window->flags |= SDL_WINDOW_FULLSCREEN;
+  else window->flags &= ~SDL_WINDOW_FULLSCREEN;
+  return true;
 }
 void startup() {
 CREATION
 TRANSITION
   if (TARGET_PLATFORM == iOS) {
     assert(hiddenAtCreation);
-    assert((win->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP);
+    assert((win->flags & SDL_WINDOW_FULLSCREEN) == SDL_WINDOW_FULLSCREEN);
     assert(exclusiveRequests == 0);
   } else if (TARGET_PLATFORM == Android) {
     assert(win->flags & SDL_WINDOW_FULLSCREEN);
@@ -851,7 +868,7 @@ int main() {
         source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
         self.assertIn("std::string GetIOSApplicationSupportPath();", header)
         implementation_start = source.index("GetIOSApplicationSupportPath()")
-        implementation_end = source.index("\n}\n\n// get nwh", implementation_start)
+        implementation_end = source.index("\n}", implementation_start)
         implementation = source[implementation_start:implementation_end]
         self.assertIn("NSApplicationSupportDirectory", implementation)
         self.assertIn("createDirectoryAtURL", implementation)
@@ -981,7 +998,31 @@ int main() {
     def test_ios_uses_portable_stable_sdl_header_alias(self):
         self.assertTrue(SDL_HEADER_ALIAS.is_symlink())
         self.assertFalse(os.path.isabs(os.readlink(SDL_HEADER_ALIAS)))
-        self.assertEqual((ROOT / "SDL/include").resolve(), SDL_HEADER_ALIAS.resolve())
+        self.assertEqual((ROOT / "SDL/include/SDL3").resolve(), SDL_HEADER_ALIAS.resolve())
+
+    def test_app_archive_installs_only_the_application_product(self):
+        xcodebuild = shutil.which("xcodebuild")
+        if xcodebuild is None:
+            self.skipTest("xcodebuild is only available with Xcode")
+        targets = (
+            (PROJECT.parent, "AsoBMaShow", "NO"),
+            (ROOT / "SDL/Xcode/SDL/SDL.xcodeproj", "SDL3", "YES"),
+            (ROOT / "SDL_ttf/Xcode/SDL_ttf.xcodeproj", "SDL3_ttf", "YES"),
+        )
+        for configuration in ("Debug", "Release"):
+            for project, target, expected in targets:
+                with self.subTest(configuration=configuration, target=target):
+                    result = subprocess.run(
+                        [xcodebuild, "-project", str(project), "-target", target,
+                         "-configuration", configuration, "-sdk", "iphoneos",
+                         "-showBuildSettings", "-json"],
+                        cwd=ROOT, check=True, text=True, capture_output=True,
+                    )
+                    settings = next(
+                        entry["buildSettings"] for entry in json.loads(result.stdout)
+                        if entry["target"] == target
+                    )
+                    self.assertEqual(expected, settings["SKIP_INSTALL"])
 
     def test_ios_links_7zip_archive_registration_for_device_and_simulator(self):
         xcodebuild = shutil.which("xcodebuild")

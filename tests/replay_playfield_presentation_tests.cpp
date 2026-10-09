@@ -2598,7 +2598,7 @@ void testParsedMineCountsSurvivePreparation() {
 
 int main() {
   testParsedMineCountsSurvivePreparation();
-  if (SDL_Init(SDL_INIT_TIMER) != 0) {
+  if (!SDL_Init(0)) {
     std::cerr << "FAIL: SDL timer initialization failed: " << SDL_GetError()
               << '\n';
     return 1;

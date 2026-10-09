@@ -285,6 +285,19 @@ void testIdleWithoutDefaultStaysSilent() {
          "no default BGM path and no preview request plays nothing");
 }
 
+void testUnicodePreviewPath() {
+  const std::filesystem::path preview =
+      u8"/songs/\u2170\u8868\U0001f3b5/preview.ogg";
+  RecordingPreviewPort port;
+  MusicSelectPreviewAudioService service(port.port());
+  expect(port.waitForStopCount(1), "Unicode preview fixture starts silent");
+  service.switchTo(preview);
+  expect(port.waitForPlayCount(1), "Unicode preview reaches the audio player");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 1 && calls[0].path == preview,
+         "Unicode preview path is preserved");
+}
+
 void testSilenceSuppressesReCueFromLaterDefaultSwitch() {
   const std::filesystem::path defaultBgm = "/assets/select.wav";
   RecordingPreviewPort port;
@@ -382,7 +395,8 @@ void testPreviewMatchingFailedDefaultIsNotRetried() {
 void testCancelledPreviewDoesNotRestoreDefault() {
   const std::filesystem::path defaultBgm = "/assets/select.wav";
   const std::filesystem::path preview = "/songs/a/preview.ogg";
-  const std::filesystem::path latest = "/songs/c/preview.ogg";
+  const std::filesystem::path latest =
+      u8"/songs/\u2170\u8868\U0001f3b5/preview.ogg";
   PreviewLoadGate gate;
   RecordingPreviewPort port(
       [&](const auto &path, bool, const auto &, std::stop_token) {
@@ -521,6 +535,7 @@ int main(int argc, char **argv) {
   testSilenceStopsWithoutStartingDefaultBgm();
   testResumeAfterSilenceRestartsDefaultBgm();
   testIdleWithoutDefaultStaysSilent();
+  testUnicodePreviewPath();
   testSilenceSuppressesReCueFromLaterDefaultSwitch();
   testFailedPreviewRestoresDefaultBgm();
   testFailedPreviewDoesNotRetryFailedDefault();

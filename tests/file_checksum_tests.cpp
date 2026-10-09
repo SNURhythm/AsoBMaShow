@@ -3,12 +3,35 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <span>
 #include <string>
 #include <vector>
 
 int main(int argc, char **argv) {
+  const auto path = std::filesystem::temp_directory_path() /
+      ("asobmashow-checksum-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count())) /
+      std::filesystem::path(u8"\u2170\u8868\U0001f3b5.bin");
+  const auto utf8 = path.u8string();
+  const std::string displayPath(utf8.begin(), utf8.end());
+  std::string error;
+  assert(!file_checksum::sha256File(path, error));
+  assert(error == "unable to open file for checksum: " + displayPath);
+  std::filesystem::create_directory(path.parent_path());
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << "abc";
+    assert(file.good());
+  }
+  assert(!file_checksum::sha256File(path, error, 2));
+  assert(error == "file exceeds checksum size limit: " + displayPath);
+  assert(file_checksum::sha256File(path, error, 3) ==
+         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  std::filesystem::remove(path);
+  std::filesystem::remove(path.parent_path());
+
   assert(file_checksum::sha256("") ==
          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   assert(file_checksum::sha256("abc") ==

@@ -28,7 +28,7 @@
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 

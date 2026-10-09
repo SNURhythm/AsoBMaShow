@@ -22,12 +22,25 @@ git submodule update --init --recursive
 ```
 
 ### Setup for Windows
-```bash
+```powershell
 git clone https://github.com/SNURhythm/AsoBMaShow.git
 cd AsoBMaShow
 git submodule update --init --recursive
-./scripts/windows_init.sh
+./scripts/windows_init.ps1 -BuildType release
+cmake --build --preset release-windows --target main --parallel 6
 ```
+
+The `release-windows` build preset selects `Release` in
+`cmake-build-release-visual-studio`; `debug-windows` selects `Debug` in
+`cmake-build-debug-visual-studio`. Use `-BuildType debug` to configure the latter.
+Plain `cmake --build <directory>` does not use these presets and still requires
+`--config Release` for an MSVC release build, regardless of the directory name.
+
+Generated user presets also provide `user-release-windows` and
+`user-debug-windows` build presets with the same configuration defaults.
+For a custom release directory, add a configure preset inheriting
+`release-windows` with its own `binaryDir`, then a build preset inheriting
+`release-windows` whose `configurePreset` points to that custom preset.
 
 ### Current Progress 
 - [x] BGA playback
@@ -48,7 +61,7 @@ ownership, and focused test locations.
 
 ## Dependency
 
-- SDL2 + bgfx
+- SDL3 + bgfx
 - FFmpeg (for BGA rendering)
 - SQLite3
 - PortAudio (for desktop) + miniaudio (for mobile)

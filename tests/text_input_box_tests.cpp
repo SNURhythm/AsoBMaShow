@@ -12,13 +12,18 @@
 #include "scene/play/GuidedAccessReminder.h"
 #include "scene/play/GuidedAccessButtonCue.h"
 
-#include <SDL2/SDL.h>
-#include <SDL_ttf.h>
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
+
+// Count real shaping requests without replacing SDL_ttf's measurements.
+#undef TTF_GetStringSize
+extern "C" bool SDLCALL TTF_GetStringSize(
+    TTF_Font *, const char *, size_t, int *, int *);
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -68,6 +73,7 @@ struct ReminderUIFixture {
 #include "guided_access_reminder_ui.inc"
 
 int clearCompositionCalls = 0;
+int stringSizeCalls = 0;
 SDL_Rect nativeInputRect{};
 
 void expect(bool condition, const char *message) {
@@ -86,15 +92,15 @@ public:
 
 void click(TextInputBox &input, int x, int y) {
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
-  down.button.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  down.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.which = 1;
   down.button.x = x;
   down.button.y = y;
   SDL_Event up = down;
-  up.type = SDL_MOUSEBUTTONUP;
-  up.button.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   input.handleEvents(down);
   input.handleEvents(up);
 }
@@ -107,6 +113,36 @@ void testDefaultHorizontalPadding() {
 
   expect(input.textRect().x == input.getX() + 12,
          "left-aligned text uses the default leading inset");
+}
+
+void testBorrowedSdl3TextIsCopied() {
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.beginEditing();
+  const std::string expected = std::string(96, 'a') + "한글";
+  {
+    std::string borrowed = expected;
+    SDL_Event event{};
+    event.type = SDL_EVENT_TEXT_EDITING;
+    event.edit.text = borrowed.c_str();
+    event.edit.start = 96;
+    event.edit.length = 2;
+    input.handleEvents(event);
+    borrowed.assign(borrowed.size(), 'x');
+  }
+  expect(input.getText() == expected,
+         "SDL3 composition copies borrowed text beyond the old fixed-size buffer");
+  {
+    std::string borrowed = expected;
+    SDL_Event event{};
+    event.type = SDL_EVENT_TEXT_INPUT;
+    event.text.text = borrowed.c_str();
+    input.handleEvents(event);
+    borrowed.clear();
+  }
+  expect(input.getText() == expected,
+         "committing SDL3 text replaces composition and owns the event text");
+  input.endEditing();
 }
 
 void testClearButtonVisibilityAndCallback() {
@@ -209,17 +245,17 @@ void testFocusedInputConsumesItsInitiatingTouch() {
   input.beginEditing();
 
   SDL_Event down{};
-  down.type = SDL_FINGERDOWN;
-  down.tfinger.type = SDL_FINGERDOWN;
-  down.tfinger.fingerId = 7;
+  down.type = SDL_EVENT_FINGER_DOWN;
+  down.tfinger.type = SDL_EVENT_FINGER_DOWN;
+  down.tfinger.fingerID = 7;
   down.tfinger.x = 570.0F / static_cast<float>(rendering::design_width);
   down.tfinger.y = 757.0F / static_cast<float>(rendering::design_height);
   expect(!input.handleEvents(down),
          "a focused native text input consumes its initiating touch");
 
   SDL_Event up = down;
-  up.type = SDL_FINGERUP;
-  up.tfinger.type = SDL_FINGERUP;
+  up.type = SDL_EVENT_FINGER_UP;
+  up.tfinger.type = SDL_EVENT_FINGER_UP;
   expect(!input.handleEvents(up),
          "the initiating text touch keeps its matching release");
   input.endEditing();
@@ -230,11 +266,11 @@ SDL_Event selectionPointer(bool touch, Uint32 type, int x, int y,
   SDL_Event event{};
   event.type = type;
   if (touch) {
-    event.tfinger.touchId = 1;
-    event.tfinger.fingerId = id;
+    event.tfinger.touchID = 1;
+    event.tfinger.fingerID = id;
     event.tfinger.x = static_cast<float>(x) / rendering::window_width;
     event.tfinger.y = static_cast<float>(y) / rendering::window_height;
-  } else if (type == SDL_MOUSEMOTION) {
+  } else if (type == SDL_EVENT_MOUSE_MOTION) {
     event.motion.which = 1;
     event.motion.state = SDL_BUTTON_LMASK;
     event.motion.x = x;
@@ -266,27 +302,27 @@ void testConsumedReleaseEndsTextSelectionWithoutEndingEditing() {
     int finished = 0;
     input->onTextChanged([&](const std::string &) { ++changes; });
     input->onEditingFinished([&](const std::string &) { ++finished; });
-    auto down = selectionPointer(touch, touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN,
+    auto down = selectionPointer(touch, touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN,
                                  120, 25);
     expect(!root.handleEvents(down), "focused field starts selection gesture");
-    auto unrelated = selectionPointer(touch, touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP,
+    auto unrelated = selectionPointer(touch, touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP,
                                       220, 80, 8);
     if (!touch) unrelated.button.button = SDL_BUTTON_RIGHT;
     expect(!root.handleEvents(unrelated), "disabled sibling consumes unrelated text release");
-    auto move = selectionPointer(touch, touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION,
+    auto move = selectionPointer(touch, touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION,
                                  60, 25);
     expect(!root.handleEvents(move), "unrelated release preserves text selection gesture");
-    auto up = selectionPointer(touch, touch ? SDL_FINGERUP : SDL_MOUSEBUTTONUP,
+    auto up = selectionPointer(touch, touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP,
                                220, 80);
     expect(!root.handleEvents(up), "disabled sibling consumes text selection release");
     expect(input->getSelected() && input->getText() == "needle" &&
                changes == 0 && finished == 0,
            "covered selection release preserves focus and text without callbacks");
-    move = selectionPointer(touch, touch ? SDL_FINGERMOTION : SDL_MOUSEMOTION,
+    move = selectionPointer(touch, touch ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_MOUSE_MOTION,
                             220, 25);
     expect(root.handleEvents(move),
            "released text selection does not capture subsequent pointer motion");
-    down = selectionPointer(touch, touch ? SDL_FINGERDOWN : SDL_MOUSEBUTTONDOWN,
+    down = selectionPointer(touch, touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN,
                             120, 25, 9);
     expect(!root.handleEvents(down), "focused input accepts the next selection gesture");
     input->endEditing();
@@ -304,17 +340,17 @@ void testConsumedReleaseCancelsPendingTextFocus() {
   disabled->setEnabled(false);
   root.addView(disabled);
   root.applyYogaLayout();
-  auto down = selectionPointer(true, SDL_FINGERDOWN, 120, 25);
+  auto down = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 120, 25);
   expect(!root.handleEvents(down) && !input->getSelected(),
          "unfocused input waits for its touch release before opening the editor");
-  auto up = selectionPointer(true, SDL_FINGERUP, 220, 80);
+  auto up = selectionPointer(true, SDL_EVENT_FINGER_UP, 220, 80);
   expect(!root.handleEvents(up) && !input->getSelected(),
          "covered pending-focus release does not focus the input");
-  up = selectionPointer(true, SDL_FINGERUP, 120, 25);
+  up = selectionPointer(true, SDL_EVENT_FINGER_UP, 120, 25);
   expect(root.handleEvents(up) && !input->getSelected(),
          "a later unmatched release cannot revive cancelled pending focus");
-  down = selectionPointer(true, SDL_FINGERDOWN, 120, 25, 9);
-  up = selectionPointer(true, SDL_FINGERUP, 120, 25, 9);
+  down = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 120, 25, 9);
+  up = selectionPointer(true, SDL_EVENT_FINGER_UP, 120, 25, 9);
   expect(!root.handleEvents(down) && !root.handleEvents(up) && input->getSelected(),
          "a fresh touch can still focus the input after cancellation");
   input->endEditing();
@@ -415,6 +451,70 @@ void testLanguageRefreshKeepsOpenDropdownScrollAndSelection() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testDropdownWidthReuseAndInvalidation() {
+  i18n::setLanguage(i18n::Language::English);
+  DropdownView dropdown({});
+  DropdownView::State state;
+  state.label = "Display";
+  state.selectedId = "one";
+  state.options = {{"one", "A long display option for width measurement"},
+                   {"two", "Another option"}};
+  dropdown.refresh(state);
+  const int initialWidth = dropdown.getWidth();
+  expect(initialWidth > 160, "fixture exceeds the minimum dropdown width");
+
+  stringSizeCalls = 0;
+  for (int width = 200; width < 210; ++width) dropdown.setTriggerWidth(width);
+  dropdown.setTriggerWidth(0);
+  dropdown.refresh(state);
+  expect(stringSizeCalls == 0,
+         "unchanged dropdown labels are not reshaped during resize or refresh");
+  expect(dropdown.getWidth() == initialWidth,
+         "releasing a fixed trigger width restores the cached natural width");
+
+  state.selectedId = "two";
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == initialWidth,
+         "selection does not change the widest option");
+  state.options[0].leadingColor = Color{255, 0, 0, 255};
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == initialWidth + 13,
+         "adding an indicator invalidates cached horizontal chrome");
+  state.options[0].leadingColor.reset();
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == initialWidth,
+         "removing an indicator restores the previous width");
+  state.label = "";
+  dropdown.refresh(state);
+  const int noPrefixWidth = dropdown.getWidth();
+  expect(noPrefixWidth < initialWidth,
+         "changing only the prefix invalidates the cached width");
+  state.options[0].label = "Short";
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() < noPrefixWidth,
+         "shortening only an option invalidates the cached width");
+  state.options.clear();
+  dropdown.refresh(state);
+  expect(dropdown.getWidth() == 160, "empty options restore the minimum width");
+
+  state.label = "A deliberately wide prefix";
+  state.options = {{"one", i18n::message("settings.options.reset.label")}};
+  dropdown.refresh(state);
+  const int englishWidth = dropdown.getWidth();
+  i18n::setLanguage(i18n::Language::Korean);
+  dropdown.setTriggerWidth(0);
+  const int koreanWidth = dropdown.getWidth();
+  expect(koreanWidth != englishWidth,
+         "language revision invalidates width even before view propagation");
+  dropdown.propagateLanguageChange();
+  expect(dropdown.getWidth() == koreanWidth,
+         "language propagation preserves the newly measured width");
+  i18n::setLanguage(i18n::Language::English);
+  dropdown.propagateLanguageChange();
+  expect(dropdown.getWidth() == englishWidth,
+         "switching back restores the original translated width");
+}
+
 void testLanguageRefreshReachesPortalOverlay() {
   i18n::setLanguage(i18n::Language::English);
   OverlayPortal portal;
@@ -443,6 +543,7 @@ public:
   using TextView::TextView;
   int lineHeight() const { return rasterTextLineHeight(); }
   int rasterWidth(const std::string &value) { return measureRasterTextWidth(value); }
+  std::vector<std::string> lines(int width) { return wrappedTextLines(width); }
   SDL_Surface *rasterizeRun(const std::string &value) {
     return renderFontSourceTextSurface(selectFont(static_cast<Uint32>(value.front())), value);
   }
@@ -453,6 +554,34 @@ public:
   }
 };
 
+void testFallbackLineBreakReuseAndInvalidation() {
+  MultilineTextProbe view("assets/fonts/fa-solid-900.ttf", 22);
+  view.setDeferredTextureMaterialization(true);
+  const std::string pair = "Mあ"; // Icon font plus a bundled CJK fallback.
+  const int pairWidth = view.rasterWidth(pair);
+  view.setText(pair + pair);
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, pair}),
+         "mixed-font wrapping keeps complete UTF-8 glyphs at the width boundary");
+  stringSizeCalls = 0;
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, pair}),
+         "reused line breaks preserve both lines");
+  expect(stringSizeCalls == 0, "unchanged line breaks do not reshape prefixes");
+
+  expect(view.lines(pairWidth * 2) == std::vector<std::string>({pair + pair}),
+         "a wider viewport invalidates line breaks");
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, pair}),
+         "returning to a narrower viewport recomputes line breaks");
+  view.setText(pair + "M");
+  expect(view.lines(pairWidth) == std::vector<std::string>({pair, "M"}),
+         "editing text invalidates line breaks at the same width");
+  view.setText("M\r\nあ");
+  expect(view.lines(pairWidth) == std::vector<std::string>({"M", "あ"}),
+         "explicit CRLF remains one line break after replacing text");
+  view.setText("");
+  expect(view.lines(pairWidth) == std::vector<std::string>({""}),
+         "clearing text discards cached lines");
+}
+
 std::uint64_t alphaCoverage(SDL_Surface *surface) {
   expect(surface != nullptr, "descender text rasterizes");
   std::uint64_t coverage = 0;
@@ -461,7 +590,7 @@ std::uint64_t alphaCoverage(SDL_Surface *surface) {
         static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
     for (int x = 0; x < surface->w; ++x) {
       Uint8 r, g, b, alpha;
-      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      SDL_GetRGBA(row[x], SDL_GetPixelFormatDetails(surface->format), nullptr, &r, &g, &b, &alpha);
       coverage += alpha;
     }
   }
@@ -491,14 +620,14 @@ void testComposedTextPreservesDescenders() {
         }
         expect(alphaCoverage(run) == alphaCoverage(composed),
                "line composition must preserve every descender pixel from the font renderer");
-        SDL_FreeSurface(composed);
+        SDL_DestroySurface(composed);
         view.setText(std::string(text) + "\n" + text);
         SDL_Surface *multiline = view.rasterizeLines();
         expect(alphaCoverage(multiline) == 2 * alphaCoverage(run),
                "every explicit line must retain its descenders without overlapping the next line");
         expect(view.textureHeight() == (multiline->h + 1) / 2,
                "deferred layout height must match the complete multiline raster");
-        SDL_FreeSurface(multiline);
+        SDL_DestroySurface(multiline);
 
         const int logicalWidth = (view.rasterWidth(text) + 1) / 2;
         view.setWidth(logicalWidth);
@@ -510,8 +639,8 @@ void testComposedTextPreservesDescenders() {
                "automatic wrapping must preserve all descender pixels");
         expect(view.textureHeight() == (wrapped->h + 1) / 2,
                "wrapped layout height must match the complete glyph raster");
-        SDL_FreeSurface(wrapped);
-        SDL_FreeSurface(run);
+        SDL_DestroySurface(wrapped);
+        SDL_DestroySurface(run);
       }
     }
   }
@@ -525,7 +654,7 @@ int firstInkX(SDL_Surface *surface, int top, int bottom) {
         static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
     for (int x = 0; x < surface->w; ++x) {
       Uint8 r, g, b, alpha;
-      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      SDL_GetRGBA(row[x], SDL_GetPixelFormatDetails(surface->format), nullptr, &r, &g, &b, &alpha);
       if (alpha != 0) first = std::min(first, x);
     }
   }
@@ -542,7 +671,7 @@ void testMultilineAlignmentAcrossFonts() {
     view.setText(longLine + "\n" + glyph);
     SDL_Surface *left = view.rasterizeLines();
     const int leftX = firstInkX(left, view.lineHeight(), view.lineHeight() * 2);
-    SDL_FreeSurface(left);
+    SDL_DestroySurface(left);
     const int spare = view.rasterWidth(longLine) - view.rasterWidth(glyph);
     view.setDeferredTextureMaterialization(false);
     expect(bgfx::isValid(view.textureHandle()), "left-aligned texture is materialized");
@@ -553,7 +682,7 @@ void testMultilineAlignmentAcrossFonts() {
              "changing multiline alignment invalidates the previously rasterized texture");
       SDL_Surface *aligned = view.rasterizeLines();
       const int alignedX = firstInkX(aligned, view.lineHeight(), view.lineHeight() * 2);
-      SDL_FreeSurface(aligned);
+      SDL_DestroySurface(aligned);
       expect(alignedX - leftX == (alignment == TextView::CENTER ? spare / 2 : spare),
              "alignment positions each primary or fallback text line independently");
     }
@@ -776,13 +905,55 @@ void testDeferredTextKeepsRasterizedLineHeight() {
   expect(font != nullptr, "test font opens for text geometry comparison");
   int rasterWidth = 0;
   int rasterHeight = 0;
-  expect(TTF_SizeUTF8(font, text, &rasterWidth, &rasterHeight) == 0,
+  expect(TTF_GetStringSize(font, text, 0, &rasterWidth, &rasterHeight),
          "SDL_ttf reports the unrendered text raster bounds");
   TTF_CloseFont(font);
 
   expect(view.textureHeight() ==
              (rasterHeight + rasterScale - 1) / rasterScale,
          "deferred text preserves the rasterized line height before rendering");
+}
+
+void testPrimaryTextMetricsMatchSdl3Raster() {
+  constexpr const char *path = "assets/fonts/notosanscjkjp.ttf";
+  constexpr int logicalSize = 24;
+  TextView view(path, logicalSize);
+  TTF_Font *reference = TTF_OpenFont(path, logicalSize * 2);
+  expect(reference != nullptr, "reference font opens for SDL3 layout comparison");
+  view.setDeferredTextureMaterialization(true);
+  for (const int width : {83, 160, 300}) {
+    view.setWidth(static_cast<float>(width));
+    for (const bool wrapped : {false, true}) {
+      view.setWrap(wrapped);
+      for (const char *text : {"AVATAR office gjpqy", "  trailing spaces   ",
+                               "Supercalifragilisticexpialidocious",
+                               "音楽選択　設定 リプレイ 0123456789",
+                               "음악 선택 설정 리플레이 최고 기록"}) {
+        view.setText(text);
+        view.applyYogaLayout();
+        SDL_Surface *raster = wrapped
+            ? TTF_RenderText_Blended_Wrapped(reference, text, 0,
+                                             {255, 255, 255, 255}, width * 2)
+            : TTF_RenderText_Blended(reference, text, 0, {255, 255, 255, 255});
+        expect(raster != nullptr, "reference text rasterizes");
+        if (view.textureWidth() != (raster->w + 1) / 2 ||
+            view.textureHeight() != (raster->h + 1) / 2) {
+          std::cerr << "SDL3 layout mismatch: " << text << " wrap=" << wrapped
+                    << " width=" << width << " measured=" << view.textureWidth()
+                    << 'x' << view.textureHeight() << " raster=" << raster->w
+                    << 'x' << raster->h << '\n';
+        }
+        expect(view.textureWidth() == (raster->w + 1) / 2 &&
+               view.textureHeight() == (raster->h + 1) / 2,
+               "primary-font layout must match SDL3's rendered surface bounds");
+        SDL_DestroySurface(raster);
+      }
+    }
+  }
+  view.setText("");
+  expect(view.textureWidth() == 0 && view.textureHeight() == 0,
+         "clearing text resets both dimensions after a wrapped layout");
+  TTF_CloseFont(reference);
 }
 
 void testDeferredWrappedTextKeepsRasterizedLineHeight() {
@@ -800,7 +971,7 @@ void testDeferredWrappedTextKeepsRasterizedLineHeight() {
                                 logicalSize * rasterScale);
   expect(font != nullptr,
          "test font opens for wrapped text geometry comparison");
-  const int rasterHeight = TTF_FontLineSkip(font);
+  const int rasterHeight = TTF_GetFontLineSkip(font);
   TTF_CloseFont(font);
 
   expect(view.textureHeight() ==
@@ -811,13 +982,21 @@ void testDeferredWrappedTextKeepsRasterizedLineHeight() {
 
 } // namespace
 
-extern "C" void SDLCALL TextInputBoxTest_ClearComposition() {
+extern "C" bool SDLCALL TextInputBoxTest_ClearComposition(SDL_Window *) {
   ++clearCompositionCalls;
+  return true;
 }
 
-extern "C" void SDLCALL TextInputBoxTest_SetTextInputRect(
-    const SDL_Rect *rect) {
+extern "C" bool SDLCALL TextInputBoxTest_SetTextInputArea(
+    SDL_Window *, const SDL_Rect *rect, int) {
   nativeInputRect = rect != nullptr ? *rect : SDL_Rect{};
+  return true;
+}
+
+extern "C" bool SDLCALL TextInputBoxTest_GetStringSize(
+    TTF_Font *font, const char *text, size_t length, int *width, int *height) {
+  ++stringSizeCalls;
+  return TTF_GetStringSize(font, text, length, width, height);
 }
 
 int main() {
@@ -837,13 +1016,17 @@ int main() {
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();
+  testDropdownWidthReuseAndInvalidation();
+  testFallbackLineBreakReuseAndInvalidation();
   testDefaultHorizontalPadding();
+  testBorrowedSdl3TextIsCopied();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
   testEmptyInputKeepsItsVisibleFrame();
   testFocusedInputConsumesItsInitiatingTouch();
   testBeginEditingUsesTheLatestDeclaredInputFrame();
   testDeferredTextKeepsRasterizedLineHeight();
+  testPrimaryTextMetricsMatchSdl3Raster();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 
   TextInputBox::releaseCachedCursors();

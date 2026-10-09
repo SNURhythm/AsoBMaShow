@@ -3,7 +3,7 @@
 #include "../src/view/IconText.h"
 #include "../src/view/ResultRecordListView.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -122,15 +122,15 @@ TextView *badgeText(Button &button, const std::string &name) {
 
 void clickThroughList(ResultRecordListView &list, const Button &button) {
   SDL_Event down{};
-  down.type = SDL_MOUSEBUTTONDOWN;
-  down.button.type = SDL_MOUSEBUTTONDOWN;
+  down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  down.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
   down.button.button = SDL_BUTTON_LEFT;
   down.button.which = 1;
   down.button.x = button.getX() + button.getWidth() / 2;
   down.button.y = button.getY() + button.getHeight() / 2;
   SDL_Event up = down;
-  up.type = SDL_MOUSEBUTTONUP;
-  up.button.type = SDL_MOUSEBUTTONUP;
+  up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   list.handleEvents(down);
   list.handleEvents(up);
 }

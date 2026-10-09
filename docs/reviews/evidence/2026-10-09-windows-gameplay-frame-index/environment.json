@@ -1,0 +1,14 @@
+{
+  "baselineCommit": "8e62f73be68e73d6df6ead0c0d7cc4143fc76d6e",
+  "compiler": "MSVC 14.44.35207 x64 Release /O2",
+  "cpu": "12th Gen Intel(R) Core(TM) i5-12600KF",
+  "sourceSnapshot": "97ccf917aa632fa9b658ca932c1dbf9a6a80fcb2baed133a51a9b1b3bc4636d8",
+  "sourceFiles": 4204,
+  "sourceBytes": 810781651,
+  "entry": "Play/play7.luaskin",
+  "safetyPolicy": "Standard",
+  "baselineExecutableSha256": "74D54D7A60AE73F7212E528421280B4BDC1A423E9281516697231877979D8A00",
+  "candidateExecutableSha256": "199AE1E7306EA3F00959805B4FEC150BAC2E12D9D4F4C5D267476A9BD171B117",
+  "measuredScope": "CPU prepareFrame only; synthetic chart state and default skin settings; no GPU submission",
+  "comparisonStatus": "Exploratory: candidate includes callback deadline violations; not identical command output or a verified FPS improvement"
+}

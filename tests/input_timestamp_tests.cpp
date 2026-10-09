@@ -68,31 +68,17 @@ void testAppleHostTimestampConversionIsScopedToInputSession() {
 }
 #endif
 
-void testRebasesWrappingSdlMillisecondTimestamps() {
-  require(input::rebaseWrappingTimestampMillis(9'997, 10'000, 1'000'000) ==
-              997'000,
-          "SDL event age is preserved in the steady-clock domain");
-  require(input::rebaseWrappingTimestampMillis(2, 1, 1'000'000) ==
-              1'001'000,
-          "a slightly future SDL timestamp preserves its signed offset");
-  require(input::rebaseWrappingTimestampMillis(
-              std::numeric_limits<std::uint32_t>::max() - 1, 1,
-              1'000'000) == 997'000,
-          "SDL's 32-bit millisecond wrap preserves a recent event's age");
-}
-
 void testForegroundLifecycleEventsShareOneInputPolicy() {
   SDL_Event event{};
-  event.type = SDL_APP_DIDENTERFOREGROUND;
+  event.type = SDL_EVENT_DID_ENTER_FOREGROUND;
   require(input::isForegroundLifecycleEvent(event),
           "app foreground reanchors native input clocks");
 
-  event.type = SDL_WINDOWEVENT;
-  event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
   require(input::isForegroundLifecycleEvent(event),
           "desktop focus recovery uses the same input lifecycle policy");
 
-  event.type = SDL_APP_DIDENTERBACKGROUND;
+  event.type = SDL_EVENT_DID_ENTER_BACKGROUND;
   require(!input::isForegroundLifecycleEvent(event) &&
               input::isBackgroundLifecycleEvent(event),
           "background lifecycle never masquerades as a timestamp reanchor");
@@ -108,7 +94,6 @@ int main() {
 #if defined(__APPLE__)
   testAppleHostTimestampConversionIsScopedToInputSession();
 #endif
-  testRebasesWrappingSdlMillisecondTimestamps();
   testForegroundLifecycleEventsShareOneInputPolicy();
   return 0;
 }

@@ -1,0 +1,562 @@
+[
+  {
+    "case": "litone-gameplay",
+    "mode": "warm",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Play/play7.luaskin"
+    ],
+    "wallSeconds": 16.660041041992372,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 427098,
+      "samplesMicros": [
+        489707,
+        276841,
+        437017,
+        272612,
+        428161,
+        274437,
+        427098,
+        278164,
+        446760
+      ]
+    }
+  },
+  {
+    "case": "litone-gameplay",
+    "mode": "warm",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Play/play7.luaskin"
+    ],
+    "wallSeconds": 15.468483333999757,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 320204,
+      "samplesMicros": [
+        385910,
+        226160,
+        326751,
+        220074,
+        320204,
+        219632,
+        328102,
+        222487,
+        323838
+      ]
+    }
+  },
+  {
+    "case": "litone-gameplay",
+    "mode": "cold",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Play/play7.luaskin"
+    ],
+    "wallSeconds": 16.217644332995405,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 446751,
+      "samplesMicros": [
+        493523,
+        452212,
+        448300,
+        445559,
+        441976,
+        444800,
+        444010,
+        446751,
+        448015
+      ]
+    }
+  },
+  {
+    "case": "litone-gameplay",
+    "mode": "cold",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Play/play7.luaskin"
+    ],
+    "wallSeconds": 15.112250583988498,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 336014,
+      "samplesMicros": [
+        395031,
+        339745,
+        333994,
+        333604,
+        338485,
+        338130,
+        335797,
+        335218,
+        336014
+      ]
+    }
+  },
+  {
+    "case": "litone-select",
+    "mode": "warm",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Select/select.luaskin"
+    ],
+    "wallSeconds": 13.463441750005586,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 203334,
+      "samplesMicros": [
+        254476,
+        203334,
+        212821,
+        200373,
+        201872,
+        199143,
+        200567,
+        215870,
+        211452
+      ]
+    }
+  },
+  {
+    "case": "litone-select",
+    "mode": "warm",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Select/select.luaskin"
+    ],
+    "wallSeconds": 14.361428874995909,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 240956,
+      "samplesMicros": [
+        369907,
+        240956,
+        271908,
+        240582,
+        238078,
+        241710,
+        253831,
+        236464,
+        236733
+      ]
+    }
+  },
+  {
+    "case": "litone-select",
+    "mode": "cold",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Select/select.luaskin"
+    ],
+    "wallSeconds": 15.226218999989214,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 253072,
+      "samplesMicros": [
+        322768,
+        250123,
+        250337,
+        265523,
+        293845,
+        253072,
+        249309,
+        278621,
+        245194
+      ]
+    }
+  },
+  {
+    "case": "litone-select",
+    "mode": "cold",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/LITONE12",
+      "--entry",
+      "Select/select.luaskin"
+    ],
+    "wallSeconds": 15.374903708012425,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 306870,
+      "samplesMicros": [
+        366460,
+        333852,
+        301269,
+        303195,
+        320102,
+        326367,
+        306870,
+        302132,
+        302600
+      ]
+    }
+  },
+  {
+    "case": "modern-gameplay",
+    "mode": "warm",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "play7_hw.luaskin"
+    ],
+    "wallSeconds": 5.758800249997876,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 121440,
+      "samplesMicros": [
+        613287,
+        77479,
+        58580,
+        50766,
+        408495,
+        121440,
+        303580,
+        52929,
+        286169
+      ]
+    }
+  },
+  {
+    "case": "modern-gameplay",
+    "mode": "warm",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "play7_hw.luaskin"
+    ],
+    "wallSeconds": 4.9984450839983765,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 94290,
+      "samplesMicros": [
+        478232,
+        62454,
+        45658,
+        57011,
+        354072,
+        94290,
+        203025,
+        49196,
+        200190
+      ]
+    }
+  },
+  {
+    "case": "modern-gameplay",
+    "mode": "cold",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "play7_hw.luaskin"
+    ],
+    "wallSeconds": 8.67503279200173,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 577477,
+      "samplesMicros": [
+        582478,
+        573492,
+        571237,
+        580773,
+        583063,
+        606790,
+        574412,
+        577477,
+        572136
+      ]
+    }
+  },
+  {
+    "case": "modern-gameplay",
+    "mode": "cold",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "play7_hw.luaskin"
+    ],
+    "wallSeconds": 7.476906333002262,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 439999,
+      "samplesMicros": [
+        463155,
+        439999,
+        438298,
+        472433,
+        437856,
+        437518,
+        441403,
+        438819,
+        441008
+      ]
+    }
+  },
+  {
+    "case": "modern-select",
+    "mode": "warm",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "musicselect.luaskin"
+    ],
+    "wallSeconds": 4.846577208998497,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 161685,
+      "samplesMicros": [
+        278576,
+        111636,
+        161685,
+        120376,
+        162099,
+        103445,
+        165459,
+        122237,
+        164493
+      ]
+    }
+  },
+  {
+    "case": "modern-select",
+    "mode": "warm",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "warm",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "musicselect.luaskin"
+    ],
+    "wallSeconds": 5.4286824589944445,
+    "result": {
+      "mode": "warm",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 218636,
+      "samplesMicros": [
+        412187,
+        151302,
+        218636,
+        187565,
+        219302,
+        141047,
+        220727,
+        192365,
+        221028
+      ]
+    }
+  },
+  {
+    "case": "modern-select",
+    "mode": "cold",
+    "variant": "after",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-after",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "musicselect.luaskin"
+    ],
+    "wallSeconds": 5.926112832996296,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 271912,
+      "samplesMicros": [
+        278303,
+        267885,
+        268741,
+        274930,
+        278683,
+        271912,
+        269644,
+        273601,
+        268599
+      ]
+    }
+  },
+  {
+    "case": "modern-select",
+    "mode": "cold",
+    "variant": "before",
+    "command": [
+      "/tmp/asobmashow-skin-loading-opt/probe-before",
+      "--benchmark",
+      "--mode",
+      "cold",
+      "--samples",
+      "9",
+      "--skin",
+      "/Users/xf/Downloads/Skins/ModernChic",
+      "--entry",
+      "musicselect.luaskin"
+    ],
+    "wallSeconds": 6.841285665999749,
+    "result": {
+      "mode": "cold",
+      "formats": 1,
+      "sampleCount": 9,
+      "medianMicros": 367984,
+      "samplesMicros": [
+        392485,
+        372129,
+        385250,
+        367116,
+        364899,
+        367337,
+        367984,
+        367055,
+        370150
+      ]
+    }
+  }
+]

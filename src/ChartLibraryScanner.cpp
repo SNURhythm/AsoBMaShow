@@ -16,7 +16,7 @@
 #include "AndroidNatives.h"
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <atomic>
@@ -354,9 +354,14 @@ std::int64_t fileTimeToSqlNs(std::filesystem::file_time_type time) {
 }
 
 std::int64_t fileTimeToUnixSeconds(std::filesystem::file_time_type time) {
+#if defined(_MSC_VER)
+  // MSVC's file clock converts through UTC rather than exposing to_sys.
+  const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(time);
+#else
+  const auto systemTime = std::chrono::file_clock::to_sys(time);
+#endif
   const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                           std::chrono::file_clock::to_sys(time)
-                               .time_since_epoch())
+                           systemTime.time_since_epoch())
                            .count();
   return static_cast<std::int64_t>(seconds);
 }
@@ -378,7 +383,8 @@ std::string checkpointPathTextForDb(const std::filesystem::path &path) {
 }
 
 std::string checkpointInnerPathText(const std::filesystem::path &path) {
-  return path.lexically_normal().generic_string();
+  const auto text = path.lexically_normal().generic_u8string();
+  return {text.begin(), text.end()};
 }
 
 std::optional<archive_file::SourcePreference>

@@ -277,7 +277,7 @@ void FindBmsModal::cancelAndWait() {
 
 bool FindBmsModal::handleEvents(SDL_Event &event) {
   if (!isVisible()) return true;
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
     if (event.key.repeat == 0) cancelOrClose();
     return false;
   }

@@ -15,7 +15,7 @@
 #include "../iOSNatives.hpp"
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <atomic>
@@ -107,7 +107,7 @@ void IrUploadsScene::init() {
 }
 
 EventHandleResult IrUploadsScene::handleEvents(SDL_Event &event) {
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
     goBack();
     return {};
   }

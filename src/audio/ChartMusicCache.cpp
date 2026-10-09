@@ -12,7 +12,7 @@
 #include "../iOSNatives.hpp"
 #endif
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <cstdint>
 #include <string_view>
