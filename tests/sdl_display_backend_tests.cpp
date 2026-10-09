@@ -86,7 +86,11 @@ public:
     }
     return bounds[static_cast<std::size_t>(index)];
   }
-  display::SDLWindowState windowState() const override { return state; }
+  mutable int windowStateCalls = 0;
+  display::SDLWindowState windowState() const override {
+    ++windowStateCalls;
+    return state;
+  }
   std::optional<display::SDLNativeDisplayMode>
   currentDisplayMode(int index) const override {
     if (index < 0 || index >= static_cast<int>(currentPhysicalModes.size())) {
@@ -880,6 +884,46 @@ void testMaximizedRollbackPreservesNormalWindowGeometry() {
           "unmaximizing after rollback returns to the original normal bounds");
 }
 
+void testIdleObservationOnlyQueriesDesktopGeometry() {
+  for (bool mobile : {false, true}) {
+    auto adapter = std::make_shared<FakeSDLAdapter>();
+    RendererSpy renderer;
+    std::uint32_t activeFlags = 0x40;
+    auto backend = makeBackend(adapter, renderer, activeFlags, mobile);
+    FramePacer pacer;
+    display::DisplaySettingsManager manager(backend, pacer, VideoSettings{});
+    const int before = adapter->windowStateCalls;
+    for (int frame = 0; frame < 120; ++frame) {
+      require(!manager.tick(std::chrono::steady_clock::time_point{}).has_value(),
+              "idle observation does not publish a settings change");
+    }
+    require(adapter->windowStateCalls - before == (mobile ? 0 : 120),
+            "only desktop idle ticks query restorable window geometry");
+  }
+}
+
+void testMobileCaptureTracksFoldAndUnfoldGeometry() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x40;
+  auto backend = makeBackend(adapter, renderer, activeFlags, true);
+  // Illustrative client sizes, not specifications of a particular device.
+  for (const auto [width, height] : {std::pair{420, 900}, std::pair{840, 900},
+                                    std::pair{900, 840}, std::pair{420, 900}}) {
+    adapter->state.width = width;
+    adapter->state.height = height;
+    const int before = adapter->windowStateCalls;
+    backend.observeRuntimeState();
+    require(adapter->windowStateCalls == before,
+            "mobile geometry does not need desktop restore-history polling");
+    const auto current = backend.capture();
+    require(current.settings.width == width && current.settings.height == height,
+            "mobile snapshots read current OS geometry after fold, unfold and rotation");
+    require(adapter->sizeCalls == 0 && adapter->positionCalls == 0,
+            "observing mobile geometry never resizes the OS-owned window");
+  }
+}
+
 void testNormalResizeRefreshesFutureMaximizedRestoreGeometry() {
   auto adapter = std::make_shared<FakeSDLAdapter>();
   RendererSpy renderer;
@@ -979,6 +1023,8 @@ int main() {
   testOverlappingExportUiFrameUnlocksRemainReferenceSafe();
   testBorderlessPreviewConfirmsAtDesktopDimensions();
   testMaximizedRollbackPreservesNormalWindowGeometry();
+  testIdleObservationOnlyQueriesDesktopGeometry();
+  testMobileCaptureTracksFoldAndUnfoldGeometry();
   testNormalResizeRefreshesFutureMaximizedRestoreGeometry();
   testMaximizedPreviewRollbackRestoresCachedNormalGeometry();
   testConcreteTransientRollbackRetriesForCancelFocusAndTimeout();

@@ -269,6 +269,9 @@ void SDLDisplayBackend::rememberRestoredWindowedGeometry(
 }
 
 void SDLDisplayBackend::observeRuntimeState() const {
+  // Mobile geometry is OS-owned, not immutable: resize events still update
+  // the renderer. Only desktop normal/maximized restore history is polled here.
+  if (fixedMobileDisplay) return;
   if (adapter) {
     rememberWindowedGeometry(adapter->windowState());
   }

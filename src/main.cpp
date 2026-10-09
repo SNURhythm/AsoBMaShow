@@ -265,15 +265,6 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
     return;
   }
 
-  int pixelW = 0;
-  int pixelH = 0;
-  getWindowDrawableSize(window, logicalW, logicalH, pixelW, pixelH);
-  if (pixelW > renderW && pixelH > renderH && logicalW == renderW &&
-      logicalH == renderH) {
-    renderW = pixelW;
-    renderH = pixelH;
-  }
-
   // iPad Display Zoom can expose a larger fullscreen display mode than SDL's
   // native-scale Metal drawable. Render at that mode to avoid compositor
   // upscaling during screenshots and app-focus transitions.
@@ -599,7 +590,7 @@ int main(int argv, char **args) {
   using std::cerr;
   using std::endl;
 
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_SENSOR)) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
@@ -650,11 +641,6 @@ int main(int argv, char **args) {
                 windowLogicalHeight);
 
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
-  if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
-    windowLogicalWidth = windowCreateWidth;
-    windowLogicalHeight = windowCreateHeight;
-  }
   int rw = 0, rh = 0;
   getWindowDrawableSize(win, windowLogicalWidth, windowLogicalHeight, rw, rh);
   rendering::widthScale =

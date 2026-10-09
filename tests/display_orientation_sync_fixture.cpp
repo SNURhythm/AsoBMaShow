@@ -7,6 +7,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <utility>
 
 using player_settings::PresentationOrientation;
 
@@ -53,6 +54,9 @@ void SDL_GetWindowSize(void *, int *width, int *height) {
 void getWindowDrawableSize(void *, int width, int height, int &rw, int &rh) {
   rw = width;
   rh = height;
+}
+void getIOSMetalDrawableSize(void *window, int width, int height, int &rw, int &rh) {
+  getWindowDrawableSize(window, width, height, rw, rh);
 }
 #define APP_DEBUG_LOG(...) ((void)0)
 
@@ -103,8 +107,20 @@ int main() {
   assert(applyWindowResize(2400, 1080));
   assert(sceneManager.changes == changesBeforeDuplicate);
 
+  // Fold/unfold may change size without changing portrait/landscape. Resize
+  // must still reset rendering and refresh presentation geometry in that case.
+  const int resetsBeforeFold = bgfx::resets;
+  for (const auto [width, height] : {std::pair{420, 900}, std::pair{840, 900},
+                                    std::pair{900, 840}, std::pair{420, 900}}) {
+    assert(applyWindowResize(width, height));
+    assert(rendering::render_width == width && rendering::render_height == height);
+    assert(sceneManager.orientation == (width > height
+        ? PresentationOrientation::Landscape : PresentationOrientation::Portrait));
+  }
+  assert(bgfx::resets == resetsBeforeFold + 4);
+  const int changesAfterFold = sceneManager.changes;
   windowWidth = 0;
   assert(!syncDisplay(0, error));
-  assert(sceneManager.changes == changesBeforeDuplicate);
+  assert(sceneManager.changes == changesAfterFold);
   std::cout << "display orientation synchronization tests passed\n";
 }

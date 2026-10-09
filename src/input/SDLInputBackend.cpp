@@ -12,8 +12,6 @@
 
 namespace {
 
-constexpr float kIosAccelerometerTiltAxisGain = 2.5F;
-
 constexpr auto kSdlGdxKeyAliases = std::to_array<SdlGdxKeyAlias>({
     {SDL_SCANCODE_SOFTLEFT, 1},       {SDL_SCANCODE_SOFTRIGHT, 2},
     {SDL_SCANCODE_HOME, 3},           {SDL_SCANCODE_AC_HOME, 3},
@@ -285,6 +283,10 @@ bool SDLInputBackend::start(std::string &errorMessage) {
 
   SDL_SetJoystickEventsEnabled(true);
   SDL_SetGamepadEventsEnabled(true);
+  // Gameplay consumes individual edges, not SDL3's end-of-update snapshots.
+  // Suppress both markers before they reach app event watches and the queue.
+  SDL_SetEventEnabled(SDL_EVENT_JOYSTICK_UPDATE_COMPLETE, false);
+  SDL_SetEventEnabled(SDL_EVENT_GAMEPAD_UPDATE_COMPLETE, false);
   const auto ids = provider_->deviceIds();
   if (!ids) {
     std::string enumerationError = copySdlString(SDL_GetError());
@@ -568,11 +570,7 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
     if (found == devices_.end() || found->second.gameController) {
       return std::nullopt;
     }
-    float value = normalizeAxis(event.jaxis.value);
-    if (found->second.iosAccelerometer &&
-        (event.jaxis.axis == 0 || event.jaxis.axis == 1)) {
-      value = std::clamp(value * kIosAccelerometerTiltAxisGain, -1.0F, 1.0F);
-    }
+    const float value = normalizeAxis(event.jaxis.value);
     return input::PhysicalInputEvent{
         .control = {.deviceId = found->second.snapshot.stableId,
                     .deviceClass = input::DeviceClass::Joystick,
@@ -672,9 +670,6 @@ std::optional<SdlInputDeviceInfo> SDLInputBackend::openDevice(SDL_JoystickID dev
 void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
                                      std::string stableId,
                                      bool publishConnection) {
-  const bool iosAccelerometer =
-      !info.gameController && info.name == "iOS Accelerometer" &&
-      info.buttons == 0 && info.axes == 3 && info.hats == 0;
   const input::DeviceClass deviceClass =
       info.gameController ? input::DeviceClass::GameController
                           : input::DeviceClass::Joystick;
@@ -697,7 +692,6 @@ void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
                    .axes = advertisedAxes,
                    .hats = advertisedHats},
       .gameController = info.gameController,
-      .iosAccelerometer = iosAccelerometer,
       .playerIndex = info.playerIndex,
       .legacyName = std::move(legacyName),
       .legacyOrder = nextLegacyOrder_++,
@@ -859,12 +853,7 @@ void SDLInputBackend::publishButton(const DeviceRecord &device, int button,
 
 void SDLInputBackend::publishAxis(const DeviceRecord &device, int axis,
                                   Sint16 value, std::uint64_t timestamp) {
-  float normalizedValue = normalizeAxis(value);
-  if (device.iosAccelerometer && (axis == 0 || axis == 1)) {
-    normalizedValue = std::clamp(normalizedValue *
-                                     kIosAccelerometerTiltAxisGain,
-                                 -1.0F, 1.0F);
-  }
+  const float normalizedValue = normalizeAxis(value);
   publishInput({.control = {.deviceId = device.snapshot.stableId,
                             .deviceClass = device.snapshot.deviceClass,
                             .kind = input::ControlKind::Axis,

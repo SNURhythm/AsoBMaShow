@@ -81,7 +81,9 @@ public:
       std::function<std::unique_ptr<IRendererDisplayTransaction>(
           std::uint32_t, std::string &errorMessage)>;
 
-  // Mobile platforms may keep native geometry while allowing renderer VSync.
+  // Mobile geometry is OS-owned and may change (rotation, folding, multitasking).
+  // fixedMobileDisplay disables user-selected desktop modes, not native resizing.
+  // Mobile platforms may still allow renderer VSync.
   SDLDisplayBackend(SDL_Window *window, bool fixedMobileDisplay,
                     ResetFlagsReader readResetFlags,
                     RendererTransactionFactory beginRendererTransaction,

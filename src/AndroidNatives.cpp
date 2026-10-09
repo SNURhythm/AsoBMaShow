@@ -1052,14 +1052,13 @@ std::string GetAndroidInternalFilesDir() {
 }
 
 std::string GetAndroidCacheDir() {
-  std::string callError;
-  const std::string result = callActivityStringMethod(
-      "getCacheDirPath", "()Ljava/lang/String;", nullptr, callError);
-  if (callError.empty() && !result.empty() &&
-      result.rfind(kErrorPrefix, 0) != 0) {
-    return result;
-  }
-  return {};
+  const char *cache = SDL_GetAndroidCachePath();
+  if (cache == nullptr || cache[0] == '\0') return {};
+  // Preserve the Java bridge's canonical private-container path and fail-closed
+  // behavior. SDL caches the Context.getCacheDir() lookup for this process.
+  std::error_code error;
+  const auto directory = std::filesystem::canonical(cache, error);
+  return error ? std::string{} : directory.string();
 }
 
 std::string GetAndroidPreferredLanguageTags() {

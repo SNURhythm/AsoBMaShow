@@ -4453,14 +4453,6 @@ void screen_orientation::apply(Mode mode, bool lockCurrent) {
   else dispatch_sync(dispatch_get_main_queue(), update);
 }
 
-// get nwh
-void *GetIOSWindowHandle(void *uiwindow) {
-  // get rootviewcontroller.view.layer;
-
-  return (__bridge void *)(((__bridge UIWindow *)uiwindow)
-                               .rootViewController.view.layer);
-}
-
 // list files recursively
 std::vector<std::string> ListDocumentFilesRecursively() {
   // get file manager

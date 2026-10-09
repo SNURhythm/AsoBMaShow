@@ -96,21 +96,4 @@ struct TimestampEpochMapping {
   }
 };
 
-// Legacy millisecond counters wrap after 32 bits. Treat differences
-// within half the counter range as signed offsets from the current SDL tick,
-// then move that offset into the process steady-clock epoch.
-constexpr std::int64_t rebaseWrappingTimestampMillis(
-    std::uint32_t sourceTimestampMillis, std::uint32_t sourceNowMillis,
-    std::int64_t steadyNowMicros) noexcept {
-  constexpr std::uint64_t kCounterRange = std::uint64_t{1} << 32U;
-  constexpr std::uint64_t kHalfCounterRange = kCounterRange / 2U;
-  const std::uint64_t forwardMillis = static_cast<std::uint32_t>(
-      sourceTimestampMillis - sourceNowMillis);
-  if (forwardMillis < kHalfCounterRange) {
-    return detail::saturatingAdd(steadyNowMicros, forwardMillis * 1000U);
-  }
-  return detail::saturatingSubtract(
-      steadyNowMicros, (kCounterRange - forwardMillis) * 1000U);
-}
-
 } // namespace input

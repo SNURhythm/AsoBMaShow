@@ -82,7 +82,6 @@ private:
   struct DeviceRecord {
     input::InputDeviceSnapshot snapshot;
     bool gameController = false;
-    bool iosAccelerometer = false;
     int playerIndex = -1;
     std::string legacyName;
     std::bitset<input::kLegacyInputMaximumButtons> pressedRawButtons;

@@ -1,3 +1,4 @@
+#include <SDL3/SDL_init.h>
 #include "input/IInputBackend.h"
 #include "input/InputDeviceIdentity.h"
 #include "input/InputDeviceRegistry.h"
@@ -1172,7 +1173,7 @@ void testSdlRawJoystickButtonsAxesAndHatEdges() {
       "diagonal hat press and centering publish directional edge pairs");
 }
 
-void testSdlIosAccelerometerMakesTiltAxesMoreSensitive() {
+void testSdlJoystickNamesDoNotChangeAxisSensitivity() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->devices = {iosAccelerometerInfo(58)};
   auto registry = makeRegistryWithSdlProvider(provider);
@@ -1193,16 +1194,80 @@ void testSdlIosAccelerometerMakesTiltAxesMoreSensitive() {
   registry.pump();
 
   const float original = 3277.0F / 32767.0F;
-  expect(inputEvents.size() == 3, "iOS accelerometer publishes all axes");
-  expect(inputEvents.size() == 3 &&
-             std::abs(inputEvents[0].normalizedValue - original * 2.5F) <
-                 0.0001F &&
-             std::abs(inputEvents[1].normalizedValue - original * 2.5F) <
-                 0.0001F,
-         "iOS accelerometer axes 0 and 1 use 2.5x gain");
-  expect(inputEvents.size() == 3 &&
-             std::abs(inputEvents[2].normalizedValue - original) < 0.0001F,
-         "iOS accelerometer axis 2 keeps its original sensitivity");
+  expect(inputEvents.size() == 3, "three-axis joystick publishes all axes");
+  for (Uint8 axisIndex = 0; axisIndex < 3; ++axisIndex) {
+    expect(inputEvents.size() == 3 &&
+               std::abs(inputEvents[axisIndex].normalizedValue - original) < 0.0001F,
+           "a joystick named like SDL2's removed accelerometer uses normal axis gain");
+    for (Sint16 value : {Sint16{-32768}, Sint16{-3277}, Sint16{0},
+                         Sint16{3277}, Sint16{32767}}) {
+      SDL_Event axis{};
+      axis.type = SDL_EVENT_JOYSTICK_AXIS_MOTION;
+      axis.jaxis.which = 58;
+      axis.jaxis.axis = axisIndex;
+      axis.jaxis.value = value;
+      const auto translated = registry.translateRealtimeSdlInput(axis);
+      const float expected = value < 0 ? value / 32768.0F : value / 32767.0F;
+      expect(translated && std::abs(translated->normalizedValue - expected) < 0.0001F,
+             "realtime joystick translation preserves normal signed axis range");
+    }
+  }
+}
+
+void testSdlControllerUpdateMarkersAreSuppressedWithoutLosingEdges() {
+  expect(SDL_Init(SDL_INIT_GAMEPAD), "real SDL gamepad subsystem initializes");
+  SDL_VirtualJoystickDesc descriptor{};
+  SDL_INIT_INTERFACE(&descriptor);
+  descriptor.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+  descriptor.naxes = 2;
+  descriptor.nbuttons = 2;
+  descriptor.nhats = 1;
+  descriptor.name = "SDL3 event coverage fixture";
+  const auto id = SDL_AttachVirtualJoystick(&descriptor);
+  expect(id != 0, "virtual SDL joystick attaches");
+  char guid[33]{};
+  SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), guid, sizeof(guid));
+  const auto mapping = std::string(guid) +
+      ",Coverage fixture,a:b0,leftx:a0,dpup:h0.1,";
+  expect(SDL_AddGamepadMapping(mapping.c_str()) >= 0, "virtual gamepad mapping loads");
+  SDLInputBackend backend({.enqueueInput = [](input::PhysicalInputEvent) {},
+                           .enqueueDevice = [](input::InputDeviceSnapshot) {}});
+  std::string error;
+  expect(backend.start(error), "real SDL provider starts");
+  auto *joystick = SDL_GetJoystickFromID(id);
+  expect(joystick != nullptr, "backend opens the virtual device");
+  SDL_UpdateJoysticks();
+  SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+  for (bool pressed : {true, false}) {
+    expect(SDL_SetJoystickVirtualButton(joystick, 0, pressed), "virtual button changes");
+    expect(SDL_SetJoystickVirtualAxis(joystick, 0, pressed ? 16000 : -16000),
+           "virtual axis changes");
+    expect(SDL_SetJoystickVirtualHat(joystick, 0, pressed ? SDL_HAT_UP : SDL_HAT_CENTERED),
+           "virtual hat changes");
+    SDL_UpdateJoysticks();
+    bool rawButton = false, mappedButton = false, rawAxis = false;
+    bool mappedAxis = false, rawHat = false;
+    SDL_Event event{};
+    while (SDL_PollEvent(&event)) {
+      expect(event.type != SDL_EVENT_JOYSTICK_UPDATE_COMPLETE &&
+                 event.type != SDL_EVENT_GAMEPAD_UPDATE_COMPLETE,
+             "unused completion markers never enter the app queue");
+      rawButton |= event.type == (pressed ? SDL_EVENT_JOYSTICK_BUTTON_DOWN : SDL_EVENT_JOYSTICK_BUTTON_UP);
+      mappedButton |= event.type == (pressed ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP);
+      rawAxis |= event.type == SDL_EVENT_JOYSTICK_AXIS_MOTION;
+      mappedAxis |= event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION;
+      rawHat |= event.type == SDL_EVENT_JOYSTICK_HAT_MOTION;
+    }
+    expect(rawButton && mappedButton && rawAxis && mappedAxis && rawHat,
+           "raw and mapped controller edges survive marker suppression");
+  }
+  expect(SDL_DetachVirtualJoystick(id), "virtual device detaches");
+  bool removed = false;
+  SDL_Event event{};
+  while (SDL_PollEvent(&event)) removed |= event.type == SDL_EVENT_JOYSTICK_REMOVED;
+  expect(removed, "controller removal still reaches the app");
+  backend.stop();
+  SDL_Quit();
 }
 
 void testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug() {
@@ -1867,7 +1932,7 @@ int main() {
   testSdlInputYieldsClaimedClassesToNativeRealtimeSource();
   testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
   testSdlRawJoystickButtonsAxesAndHatEdges();
-  testSdlIosAccelerometerMakesTiltAxesMoreSensitive();
+  testSdlJoystickNamesDoNotChangeAxisSensitivity();
   testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();
   testSdlBackendStartStopIsIdempotentAndClosesHandles();
   testNullBackendFactoryIsDiagnosableAndHarmless();
@@ -1880,6 +1945,8 @@ int main() {
   testSdlReconnectRemovalDedupAndAxisNormalization();
   testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals();
   testGyroscopeControlFanoutDispatchesWithoutBackendPump();
+
+  testSdlControllerUpdateMarkersAreSuppressedWithoutLosingEdges();
 
   if (failures != 0) {
     std::cerr << failures << " input device registry assertion(s) failed\n";

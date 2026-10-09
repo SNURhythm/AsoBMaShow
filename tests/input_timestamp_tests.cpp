@@ -68,19 +68,6 @@ void testAppleHostTimestampConversionIsScopedToInputSession() {
 }
 #endif
 
-void testRebasesWrappingSdlMillisecondTimestamps() {
-  require(input::rebaseWrappingTimestampMillis(9'997, 10'000, 1'000'000) ==
-              997'000,
-          "SDL event age is preserved in the steady-clock domain");
-  require(input::rebaseWrappingTimestampMillis(2, 1, 1'000'000) ==
-              1'001'000,
-          "a slightly future SDL timestamp preserves its signed offset");
-  require(input::rebaseWrappingTimestampMillis(
-              std::numeric_limits<std::uint32_t>::max() - 1, 1,
-              1'000'000) == 997'000,
-          "SDL's 32-bit millisecond wrap preserves a recent event's age");
-}
-
 void testForegroundLifecycleEventsShareOneInputPolicy() {
   SDL_Event event{};
   event.type = SDL_EVENT_DID_ENTER_FOREGROUND;
@@ -107,7 +94,6 @@ int main() {
 #if defined(__APPLE__)
   testAppleHostTimestampConversionIsScopedToInputSession();
 #endif
-  testRebasesWrappingSdlMillisecondTimestamps();
   testForegroundLifecycleEventsShareOneInputPolicy();
   return 0;
 }
