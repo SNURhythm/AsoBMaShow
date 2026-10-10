@@ -7294,6 +7294,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
+    add_executable(application_event_queue_tests
+        tests/application_event_queue_tests.cpp
+        src/platform/ApplicationEventQueue.cpp
+    )
+    target_include_directories(application_event_queue_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include
+    )
+    target_compile_features(application_event_queue_tests PRIVATE cxx_std_23)
+
     add_executable(realtime_gameplay_worker_tests
         src/input/NativeRawTouchInput.cpp
         ${android_realtime_touch_methods}
@@ -9358,6 +9367,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
+    asobmashow_register_test(application_event_queue_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(realtime_gameplay_authority_policy_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)

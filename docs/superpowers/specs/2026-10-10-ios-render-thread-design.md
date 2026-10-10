@@ -1,6 +1,6 @@
 # iOS rendering and input thread separation
 
-Status: proposed architecture for review; runtime implementation has not started.
+Status: architecture approved; implementation in progress.
 
 ## Goal
 
