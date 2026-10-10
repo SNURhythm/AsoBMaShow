@@ -1,0 +1,57 @@
+# Desktop and Android Event Thread Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Service desktop/Android SDL events independently of rendering stalls.
+**Architecture:** Reuse the bounded owned queue and cleanup-safe worker host; keep SDL ownership on its bootstrap thread and marshal platform requests there. Preserve iOS and existing native input and bgfx workers.
+**Tech Stack:** C++23, SDL3, bgfx, Objective-C++, Android JNI.
+**Spec:** docs/superpowers/specs/2026-10-11-desktop-android-event-thread-design.md
+
+## Global Constraints
+
+- Work on the current branch; no worktree or deployment.
+- One application owner, independent event pump; no scene access on event callbacks.
+- Preserve iOS behavior, Android surface retirement, native input routes and renderer selection.
+- One build at a time per build directory; no whole-file formatting.
+- Commit and push verified task changes; update PR 136.
+
+## Review Focus
+
+- Shutdown with a pending main-thread operation must finish without deadlock (Task 1).
+- Focus loss/queue pressure during a render stall must not leave held inputs (Tasks 1, 2).
+- Desktop text editing must not race scene destruction or judge typing (Task 2).
+- Android surface loss/rotation and external picker return must retain valid native windows (Task 3).
+- Resize and controller hotplug during export must survive until normal rendering resumes (Tasks 2, 3).
+
+### Task 1: Portable SDL owner and application worker
+
+**Files:** Create `src/platform/SDLApplicationRuntime.h`, `.cpp`, `tests/sdl_application_runtime_tests.cpp`; modify `src/platform/IOSApplicationRuntime.h`, `SDLMainThread.h`, `src/CMakeLists.txt`, `CMakeLists.txt`.
+**Interfaces:** Produce `platform::runSDLApplication(SDL_Window*, std::function<int()>) -> int`, `pollApplicationEvent(SDL_Event*) -> bool`, `waitApplicationEvent(SDL_Event*, int) -> bool`, `applicationActive() -> bool`, `takeApplicationOverflow() -> bool`, `getWindowSnapshot(SDL_Window*) -> std::optional<WindowSnapshot>`. Existing `platform::onMain` and `sdlMain` become functional on non-iOS.
+
+- [ ] Add a real SDL test that fails because worker `onMain` executes on the wrong thread; test return values, exceptions and caller-side SDL errors.
+- [ ] Run the test and record RED; implement SDL main dispatch with exception capture.
+- [ ] Add runtime tests for worker separation, main progress during a stall, text payload ownership, lifecycle/overflow state, and main requests during unwinding; record RED before implementing runtime.
+- [ ] Implement host and copied viewport state, bounded waits, queue recovery, and explicit main-thread lifetime.
+- [ ] Build and run `sdl_application_runtime_tests` and `application_event_queue_tests`; expected all pass. Commit.
+
+### Task 2: Integrate platform loops and concurrent input safely
+
+**Files:** Modify `src/main.cpp`, `src/scene/play/GamePlayScene.cpp`, `src/input/LinuxRealtimeKeyboardBackend.cpp`, `src/MacNatives.mm`, and platform calls found by the audit. Add regression coverage in the matching existing input/display fixtures and setup tests.
+**Interfaces:** Consume Task 1's host/event/snapshot functions and `platform::onMain`; preserve the existing iOS interface.
+
+- [ ] Add a regression for desktop event-watch text-focus snapshots without presentation access; run RED.
+- [ ] Start desktop/Android application work through the host, consume owned events, reconcile overflow/current viewport, retain native suspend handshakes and export coordination.
+- [ ] Publish text-focus snapshots on all platforms and marshal remaining main-thread-only operations. Add any discovered behavior regression before its fix.
+- [ ] Add a bounded opt-in Debug stall probe and quit option for real-app acceptance; keep release behavior unchanged.
+- [ ] Build desktop main and affected test targets. Run event, input, display, Android lifecycle and iOS setup checks; expected pass. Commit.
+
+### Task 3: Platform acceptance and final review
+
+**Files:** Update spec/plan with measured evidence; fix acceptance regressions in their owning files with failing tests first.
+**Interfaces:** Consume the complete host and platform integration from Tasks 1–2.
+
+- [ ] Run desktop stall probe and native UI acceptance for text input, resize/focus and shutdown. Inspect runtime thread stacks if needed.
+- [ ] Run Android build-only helper and emulator acceptance for gameplay input, lifecycle, surface recreation, native picker and export where available. Preserve settings and remove only owned fixtures.
+- [ ] Recheck unsigned iOS build and run full desktop CTest suite with -j 6; expected pass.
+- [ ] Dispatch one fresh strongest-model whole-branch reviewer; resolve important findings with RED/GREEN tests and green suite.
+- [ ] Commit/push verified changes and update/attach PR 136 with final scope and evidence.
