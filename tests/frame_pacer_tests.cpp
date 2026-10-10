@@ -1,6 +1,8 @@
 #include "video/FramePacer.h"
+#include "video/IOSPresentationPacing.h"
 
 #include <chrono>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -113,6 +115,25 @@ void testMultiDayCatchUpKeepsTheOriginalPhase() {
   require(pacer.remaining(afterThirtyDays) == 500us,
           "multi-day catch-up is phase aligned and bounded");
 }
+
+void testIOSDefaultPresentationPacingFollowsDisplay() {
+  require(video::iosPresentationPacingCap(60.0F, 0, false) == 60,
+          "default iOS presentation follows a 60 Hz display");
+  require(video::iosPresentationPacingCap(120.0F, 0, false) == 120,
+          "default iOS presentation preserves ProMotion refresh rate");
+  require(video::iosPresentationPacingCap(59.94F, 0, false) == 60,
+          "fractional refresh rate rounds to the frame pacer's integer rate");
+  for (const float invalid : {0.0F, -1.0F, 1000000.0F,
+                             std::numeric_limits<float>::quiet_NaN(),
+                             std::numeric_limits<float>::infinity()}) {
+    require(video::iosPresentationPacingCap(invalid, 0, false) == 60,
+            "missing display refresh uses the iOS 60 Hz fallback");
+  }
+  require(video::iosPresentationPacingCap(60.0F, 120, false) == 0,
+          "explicit frame caps retain their existing pacer behavior");
+  require(video::iosPresentationPacingCap(120.0F, 0, true) == 0,
+          "replay export does not wait for display presentation");
+}
 } // namespace
 
 int main() {
@@ -122,5 +143,6 @@ int main() {
   testDeadlinesAdvanceWithoutDrift();
   testDeadlinesSaturateAtClockMaximum();
   testMultiDayCatchUpKeepsTheOriginalPhase();
+  testIOSDefaultPresentationPacingFollowsDisplay();
   return 0;
 }

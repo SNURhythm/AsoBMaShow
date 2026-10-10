@@ -57,6 +57,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include "video/IOSPresentationPacing.h"
 #include "input/IOSTouchInput.h"
 #include "input/NativeRawTouchInput.h"
 #include <SDL3/SDL_uikit_rawtouch.h>
@@ -995,6 +996,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.framePacer.reset(lastFrameTime);
   bool pacingExportActive =
       context.replayVideoExportActive.load(std::memory_order_acquire);
+#if TARGET_OS_IPHONE
+  FramePacer iosPresentationPacer;
+#endif
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
     return input::isBackgroundLifecycleEvent(event);
@@ -1029,6 +1033,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (!background) {
       lastFrameTime = std::chrono::steady_clock::now();
       context.framePacer.reset(lastFrameTime);
+#if TARGET_OS_IPHONE
+      iosPresentationPacer.reset(lastFrameTime);
+#endif
       context.jukebox.seekVisualsToSongTime(context.jukebox.getTimeMicros());
     }
   };
@@ -1062,6 +1069,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (exportActiveForPacing != pacingExportActive) {
       pacingExportActive = exportActiveForPacing;
       context.framePacer.reset(currentFrameTime);
+#if TARGET_OS_IPHONE
+      iosPresentationPacer.reset(currentFrameTime);
+#endif
     }
     if (context.displaySettingsManager) {
       if (const auto previewResult =
@@ -1698,8 +1708,25 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (renderedFrame) {
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
+#if TARGET_OS_IPHONE
+      // iOS Metal renders on UIKit's main thread. Pace default VSync here so
+      // its idle interval services touches instead of blocking in nextDrawable.
+      // A CADisplayLink wait regressed measured UIKit delivery latency.
+      const SDL_DisplayMode *iosMode =
+          SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window));
+      iosPresentationPacer.setCap(video::iosPresentationPacingCap(
+          iosMode != nullptr ? iosMode->refresh_rate : 0.0F,
+          context.framePacer.currentFrameCap(),
+          context.replayVideoExportActive.load(std::memory_order_acquire) ||
+              context.rendererAccess.exportRequested()));
+      iosPresentationPacer.framePresented(presentedAt);
+#endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
-      const auto waitDuration = context.framePacer.remaining(waitStartedAt);
+      auto waitDuration = context.framePacer.remaining(waitStartedAt);
+#if TARGET_OS_IPHONE
+      waitDuration = std::max(
+          waitDuration, iosPresentationPacer.remaining(waitStartedAt));
+#endif
       if (waitDuration > std::chrono::steady_clock::duration::zero()) {
 #if TARGET_OS_IPHONE
         const auto waitMicros = std::max<long long>(

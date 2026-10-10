@@ -1,0 +1,890 @@
+{
+  "control-150": {
+    "taps": 150,
+    "host_input_loop_ms": 30558,
+    "pairing": {
+      "matched": 300,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    },
+    "metrics": {
+      "stage:audio-callback": {
+        "n": 5172,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 298
+      },
+      "stage:audio-interval": {
+        "n": 5170,
+        "p50_upper_us": 10700,
+        "p95_upper_us": 10800,
+        "p99_upper_us": 10800,
+        "max_us": 18368
+      },
+      "stage:native-output-lead": {
+        "n": 5172,
+        "p50_upper_us": 14100,
+        "p95_upper_us": 14100,
+        "p99_upper_us": 14100,
+        "max_us": 14116
+      },
+      "stage:frame-submit": {
+        "n": 8723,
+        "p50_upper_us": 4000,
+        "p95_upper_us": 12900,
+        "p99_upper_us": 24100,
+        "max_us": 128479
+      },
+      "stage:snapshot-age": {
+        "n": 579,
+        "p50_upper_us": 900,
+        "p95_upper_us": 5400,
+        "p99_upper_us": 7900,
+        "max_us": 13782
+      },
+      "stage:source-to-ingress": {
+        "n": 450,
+        "p50_upper_us": 4800,
+        "p95_upper_us": 13900,
+        "p99_upper_us": 16700,
+        "max_us": 19317
+      },
+      "stage:ingress-to-worker": {
+        "n": 300,
+        "p50_upper_us": 200,
+        "p95_upper_us": 2600,
+        "p99_upper_us": 4900,
+        "max_us": 9882
+      },
+      "stage:worker-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 200,
+        "max_us": 104
+      },
+      "stage:sound-command-to-callback": {
+        "n": 150,
+        "p50_upper_us": 5000,
+        "p95_upper_us": 10000,
+        "p99_upper_us": 10600,
+        "max_us": 10717
+      },
+      "stage:touch-to-worker": {
+        "n": 300,
+        "p50_upper_us": 5200,
+        "p95_upper_us": 14000,
+        "p99_upper_us": 16300,
+        "max_us": 19837
+      },
+      "stage:touch-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 5900,
+        "p95_upper_us": 14500,
+        "p99_upper_us": 16400,
+        "max_us": 18811
+      },
+      "segment:source-to-uikit": {
+        "n": 300,
+        "p50_upper_us": 4747,
+        "p95_upper_us": 13859,
+        "p99_upper_us": 15968,
+        "max_us": 19304,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-gameplay": {
+        "n": 300,
+        "p50_upper_us": 18,
+        "p95_upper_us": 38,
+        "p99_upper_us": 45,
+        "max_us": 75,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:gameplay-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 5,
+        "p95_upper_us": 25,
+        "p99_upper_us": 29,
+        "max_us": 226,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 23,
+        "p95_upper_us": 43,
+        "p99_upper_us": 51,
+        "max_us": 238,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:source-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 4775,
+        "p95_upper_us": 13882,
+        "p99_upper_us": 16206,
+        "max_us": 19329,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-handler": {
+        "n": 300,
+        "p50_upper_us": 41,
+        "p95_upper_us": 80,
+        "p99_upper_us": 147,
+        "max_us": 10974,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      }
+    }
+  },
+  "manual-120": {
+    "taps": 150,
+    "host_input_loop_ms": 29157,
+    "pairing": {
+      "matched": 300,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    },
+    "metrics": {
+      "stage:audio-callback": {
+        "n": 6652,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 578
+      },
+      "stage:audio-interval": {
+        "n": 6650,
+        "p50_upper_us": 10700,
+        "p95_upper_us": 10800,
+        "p99_upper_us": 10800,
+        "max_us": 100819
+      },
+      "stage:native-output-lead": {
+        "n": 6649,
+        "p50_upper_us": 14100,
+        "p95_upper_us": 14100,
+        "p99_upper_us": 14100,
+        "max_us": 14146
+      },
+      "stage:frame-submit": {
+        "n": 7327,
+        "p50_upper_us": 3500,
+        "p95_upper_us": 10300,
+        "p99_upper_us": 15400,
+        "max_us": 199936
+      },
+      "stage:snapshot-age": {
+        "n": 609,
+        "p50_upper_us": 4700,
+        "p95_upper_us": 5800,
+        "p99_upper_us": 8000,
+        "max_us": 13093
+      },
+      "stage:source-to-ingress": {
+        "n": 450,
+        "p50_upper_us": 2300,
+        "p95_upper_us": 6300,
+        "p99_upper_us": 323933,
+        "max_us": 323933
+      },
+      "stage:ingress-to-worker": {
+        "n": 300,
+        "p50_upper_us": 200,
+        "p95_upper_us": 1800,
+        "p99_upper_us": 6700,
+        "max_us": 8382
+      },
+      "stage:worker-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 200,
+        "max_us": 363
+      },
+      "stage:sound-command-to-callback": {
+        "n": 150,
+        "p50_upper_us": 6000,
+        "p95_upper_us": 10300,
+        "p99_upper_us": 10600,
+        "max_us": 10614
+      },
+      "stage:touch-to-worker": {
+        "n": 300,
+        "p50_upper_us": 3000,
+        "p95_upper_us": 8600,
+        "p99_upper_us": 323978,
+        "max_us": 323978
+      },
+      "stage:touch-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 4000,
+        "p95_upper_us": 8700,
+        "p99_upper_us": 192085,
+        "max_us": 192085
+      },
+      "segment:source-to-uikit": {
+        "n": 300,
+        "p50_upper_us": 2485,
+        "p95_upper_us": 6418,
+        "p99_upper_us": 323921,
+        "max_us": 323921,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-gameplay": {
+        "n": 300,
+        "p50_upper_us": 17,
+        "p95_upper_us": 41,
+        "p99_upper_us": 47,
+        "max_us": 55,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:gameplay-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 4,
+        "p95_upper_us": 23,
+        "p99_upper_us": 29,
+        "max_us": 68,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 23,
+        "p95_upper_us": 45,
+        "p99_upper_us": 57,
+        "max_us": 88,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:source-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 2506,
+        "p95_upper_us": 6437,
+        "p99_upper_us": 323949,
+        "max_us": 323949,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-handler": {
+        "n": 300,
+        "p50_upper_us": 40,
+        "p95_upper_us": 82,
+        "p99_upper_us": 596,
+        "max_us": 518271,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      }
+    }
+  },
+  "manual-60": {
+    "taps": 150,
+    "host_input_loop_ms": 23520,
+    "pairing": {
+      "matched": 300,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    },
+    "metrics": {
+      "stage:audio-callback": {
+        "n": 4835,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 426
+      },
+      "stage:audio-interval": {
+        "n": 4832,
+        "p50_upper_us": 10700,
+        "p95_upper_us": 10800,
+        "p99_upper_us": 10900,
+        "max_us": 13793
+      },
+      "stage:native-output-lead": {
+        "n": 4835,
+        "p50_upper_us": 14100,
+        "p95_upper_us": 14200,
+        "p99_upper_us": 14200,
+        "max_us": 14151
+      },
+      "stage:frame-submit": {
+        "n": 2947,
+        "p50_upper_us": 6200,
+        "p95_upper_us": 9200,
+        "p99_upper_us": 10800,
+        "max_us": 113475
+      },
+      "stage:snapshot-age": {
+        "n": 534,
+        "p50_upper_us": 9300,
+        "p95_upper_us": 10200,
+        "p99_upper_us": 10800,
+        "max_us": 70397
+      },
+      "stage:source-to-ingress": {
+        "n": 450,
+        "p50_upper_us": 1400,
+        "p95_upper_us": 7400,
+        "p99_upper_us": 190560,
+        "max_us": 190560
+      },
+      "stage:ingress-to-worker": {
+        "n": 300,
+        "p50_upper_us": 200,
+        "p95_upper_us": 600,
+        "p99_upper_us": 3600,
+        "max_us": 5340
+      },
+      "stage:worker-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 77
+      },
+      "stage:sound-command-to-callback": {
+        "n": 150,
+        "p50_upper_us": 4900,
+        "p95_upper_us": 10400,
+        "p99_upper_us": 10700,
+        "max_us": 10616
+      },
+      "stage:touch-to-worker": {
+        "n": 300,
+        "p50_upper_us": 1700,
+        "p95_upper_us": 7700,
+        "p99_upper_us": 10300,
+        "max_us": 190752
+      },
+      "stage:touch-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 1700,
+        "p95_upper_us": 8100,
+        "p99_upper_us": 10400,
+        "max_us": 107590
+      },
+      "segment:source-to-uikit": {
+        "n": 300,
+        "p50_upper_us": 1333,
+        "p95_upper_us": 7404,
+        "p99_upper_us": 10129,
+        "max_us": 190548,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-gameplay": {
+        "n": 300,
+        "p50_upper_us": 14,
+        "p95_upper_us": 23,
+        "p99_upper_us": 32,
+        "max_us": 52,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:gameplay-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 3,
+        "p95_upper_us": 16,
+        "p99_upper_us": 25,
+        "max_us": 28,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 21,
+        "p95_upper_us": 31,
+        "p99_upper_us": 39,
+        "max_us": 53,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:source-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 1353,
+        "p95_upper_us": 7425,
+        "p99_upper_us": 10152,
+        "max_us": 190572,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-handler": {
+        "n": 300,
+        "p50_upper_us": 37,
+        "p95_upper_us": 60,
+        "p99_upper_us": 85,
+        "max_us": 262741,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      }
+    }
+  },
+  "display-link": {
+    "taps": 150,
+    "host_input_loop_ms": 23488,
+    "pairing": {
+      "matched": 300,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    },
+    "metrics": {
+      "stage:audio-callback": {
+        "n": 14545,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 330
+      },
+      "stage:audio-interval": {
+        "n": 14542,
+        "p50_upper_us": 10700,
+        "p95_upper_us": 10800,
+        "p99_upper_us": 10800,
+        "max_us": 12737
+      },
+      "stage:native-output-lead": {
+        "n": 14545,
+        "p50_upper_us": 14100,
+        "p95_upper_us": 14200,
+        "p99_upper_us": 14200,
+        "max_us": 14155
+      },
+      "stage:frame-submit": {
+        "n": 9111,
+        "p50_upper_us": 5500,
+        "p95_upper_us": 8300,
+        "p99_upper_us": 9400,
+        "max_us": 667335
+      },
+      "stage:snapshot-age": {
+        "n": 839,
+        "p50_upper_us": 8000,
+        "p95_upper_us": 9200,
+        "p99_upper_us": 9500,
+        "max_us": 16482
+      },
+      "stage:source-to-ingress": {
+        "n": 450,
+        "p50_upper_us": 7000,
+        "p95_upper_us": 15400,
+        "p99_upper_us": 218874,
+        "max_us": 218874
+      },
+      "stage:ingress-to-worker": {
+        "n": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 500,
+        "p99_upper_us": 2000,
+        "max_us": 10042
+      },
+      "stage:worker-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 69
+      },
+      "stage:sound-command-to-callback": {
+        "n": 150,
+        "p50_upper_us": 6000,
+        "p95_upper_us": 10200,
+        "p99_upper_us": 10700,
+        "max_us": 10646
+      },
+      "stage:touch-to-worker": {
+        "n": 300,
+        "p50_upper_us": 7200,
+        "p95_upper_us": 15500,
+        "p99_upper_us": 16600,
+        "max_us": 219341
+      },
+      "stage:touch-to-sound-command": {
+        "n": 150,
+        "p50_upper_us": 5000,
+        "p95_upper_us": 12500,
+        "p99_upper_us": 15000,
+        "max_us": 118935
+      },
+      "segment:source-to-uikit": {
+        "n": 300,
+        "p50_upper_us": 6859,
+        "p95_upper_us": 15257,
+        "p99_upper_us": 15691,
+        "max_us": 218862,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-gameplay": {
+        "n": 300,
+        "p50_upper_us": 18,
+        "p95_upper_us": 44,
+        "p99_upper_us": 47,
+        "max_us": 50,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:gameplay-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 5,
+        "p95_upper_us": 19,
+        "p99_upper_us": 25,
+        "max_us": 26,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 22,
+        "p95_upper_us": 47,
+        "p99_upper_us": 51,
+        "max_us": 54,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:source-to-enqueue": {
+        "n": 300,
+        "p50_upper_us": 6900,
+        "p95_upper_us": 15280,
+        "p99_upper_us": 15722,
+        "max_us": 218885,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-handler": {
+        "n": 300,
+        "p50_upper_us": 40,
+        "p95_upper_us": 80,
+        "p99_upper_us": 1123,
+        "max_us": 295175,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      }
+    }
+  },
+  "timed-final": {
+    "taps": 300,
+    "host_input_loop_ms": 53690,
+    "pairing": {
+      "matched": 600,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    },
+    "metrics": {
+      "stage:audio-callback": {
+        "n": 7485,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 310
+      },
+      "stage:audio-interval": {
+        "n": 7482,
+        "p50_upper_us": 10700,
+        "p95_upper_us": 10800,
+        "p99_upper_us": 10800,
+        "max_us": 17823
+      },
+      "stage:native-output-lead": {
+        "n": 7485,
+        "p50_upper_us": 14100,
+        "p95_upper_us": 14200,
+        "p99_upper_us": 14200,
+        "max_us": 14170
+      },
+      "stage:frame-submit": {
+        "n": 4662,
+        "p50_upper_us": 6100,
+        "p95_upper_us": 9000,
+        "p99_upper_us": 10000,
+        "max_us": 136124
+      },
+      "stage:snapshot-age": {
+        "n": 1067,
+        "p50_upper_us": 9700,
+        "p95_upper_us": 15100,
+        "p99_upper_us": 15300,
+        "max_us": 16642
+      },
+      "stage:source-to-ingress": {
+        "n": 900,
+        "p50_upper_us": 1400,
+        "p95_upper_us": 5600,
+        "p99_upper_us": 8500,
+        "max_us": 19375
+      },
+      "stage:ingress-to-worker": {
+        "n": 600,
+        "p50_upper_us": 200,
+        "p95_upper_us": 600,
+        "p99_upper_us": 3000,
+        "max_us": 7641
+      },
+      "stage:worker-to-sound-command": {
+        "n": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 138
+      },
+      "stage:sound-command-to-callback": {
+        "n": 300,
+        "p50_upper_us": 4600,
+        "p95_upper_us": 10300,
+        "p99_upper_us": 10500,
+        "max_us": 10612
+      },
+      "stage:touch-to-worker": {
+        "n": 600,
+        "p50_upper_us": 1700,
+        "p95_upper_us": 6700,
+        "p99_upper_us": 9600,
+        "max_us": 19490
+      },
+      "stage:touch-to-sound-command": {
+        "n": 300,
+        "p50_upper_us": 1800,
+        "p95_upper_us": 7600,
+        "p99_upper_us": 10400,
+        "max_us": 19531
+      },
+      "segment:source-to-uikit": {
+        "n": 600,
+        "p50_upper_us": 1376,
+        "p95_upper_us": 5800,
+        "p99_upper_us": 8821,
+        "max_us": 19373,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-gameplay": {
+        "n": 600,
+        "p50_upper_us": 16,
+        "p95_upper_us": 27,
+        "p99_upper_us": 41,
+        "max_us": 44,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:gameplay-to-enqueue": {
+        "n": 600,
+        "p50_upper_us": 6,
+        "p95_upper_us": 15,
+        "p99_upper_us": 24,
+        "max_us": 26,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-enqueue": {
+        "n": 600,
+        "p50_upper_us": 21,
+        "p95_upper_us": 36,
+        "p99_upper_us": 44,
+        "max_us": 48,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:source-to-enqueue": {
+        "n": 600,
+        "p50_upper_us": 1395,
+        "p95_upper_us": 5828,
+        "p99_upper_us": 8842,
+        "max_us": 19390,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-handler": {
+        "n": 600,
+        "p50_upper_us": 36,
+        "p95_upper_us": 62,
+        "p99_upper_us": 89,
+        "max_us": 15720,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      }
+    }
+  },
+  "control-final": {
+    "taps": 300,
+    "host_input_loop_ms": 55858,
+    "pairing": {
+      "matched": 600,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    },
+    "metrics": {
+      "stage:audio-callback": {
+        "n": 7487,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 568
+      },
+      "stage:audio-interval": {
+        "n": 7485,
+        "p50_upper_us": 10700,
+        "p95_upper_us": 10800,
+        "p99_upper_us": 10800,
+        "max_us": 10883
+      },
+      "stage:native-output-lead": {
+        "n": 7488,
+        "p50_upper_us": 14100,
+        "p95_upper_us": 14100,
+        "p99_upper_us": 14200,
+        "max_us": 14136
+      },
+      "stage:frame-submit": {
+        "n": 14254,
+        "p50_upper_us": 3400,
+        "p95_upper_us": 18800,
+        "p99_upper_us": 19500,
+        "max_us": 300854
+      },
+      "stage:snapshot-age": {
+        "n": 1102,
+        "p50_upper_us": 800,
+        "p95_upper_us": 9400,
+        "p99_upper_us": 18100,
+        "max_us": 19624
+      },
+      "stage:source-to-ingress": {
+        "n": 900,
+        "p50_upper_us": 4500,
+        "p95_upper_us": 15200,
+        "p99_upper_us": 21600,
+        "max_us": 31967
+      },
+      "stage:ingress-to-worker": {
+        "n": 600,
+        "p50_upper_us": 200,
+        "p95_upper_us": 2000,
+        "p99_upper_us": 6300,
+        "max_us": 9811
+      },
+      "stage:worker-to-sound-command": {
+        "n": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 116
+      },
+      "stage:sound-command-to-callback": {
+        "n": 300,
+        "p50_upper_us": 5100,
+        "p95_upper_us": 10500,
+        "p99_upper_us": 10700,
+        "max_us": 10765
+      },
+      "stage:touch-to-worker": {
+        "n": 600,
+        "p50_upper_us": 4700,
+        "p95_upper_us": 16900,
+        "p99_upper_us": 21800,
+        "max_us": 31991
+      },
+      "stage:touch-to-sound-command": {
+        "n": 300,
+        "p50_upper_us": 4400,
+        "p95_upper_us": 18000,
+        "p99_upper_us": 19900,
+        "max_us": 21857
+      },
+      "segment:source-to-uikit": {
+        "n": 600,
+        "p50_upper_us": 4340,
+        "p95_upper_us": 31956,
+        "p99_upper_us": 31956,
+        "max_us": 31956,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-gameplay": {
+        "n": 600,
+        "p50_upper_us": 17,
+        "p95_upper_us": 41,
+        "p99_upper_us": 47,
+        "max_us": 80,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:gameplay-to-enqueue": {
+        "n": 600,
+        "p50_upper_us": 10,
+        "p95_upper_us": 15,
+        "p99_upper_us": 19,
+        "max_us": 32,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-to-enqueue": {
+        "n": 600,
+        "p50_upper_us": 21,
+        "p95_upper_us": 45,
+        "p99_upper_us": 51,
+        "max_us": 85,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:source-to-enqueue": {
+        "n": 600,
+        "p50_upper_us": 4362,
+        "p95_upper_us": 31978,
+        "p99_upper_us": 31978,
+        "max_us": 31978,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      },
+      "segment:uikit-handler": {
+        "n": 600,
+        "p50_upper_us": 37,
+        "p95_upper_us": 88,
+        "p99_upper_us": 133,
+        "max_us": 6483,
+        "histogram_bucket_width_us": 1,
+        "histogram_regular_max_us": 16383,
+        "overflow_percentile_uses_sample_max": true
+      }
+    }
+  }
+}
