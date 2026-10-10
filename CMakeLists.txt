@@ -785,6 +785,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_display_refresh_rate_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_display_refresh_rate_tests.py -v)
+    add_test(NAME android_touch_input_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_touch_input_tests.py -v)
     add_test(NAME android_replay_codec_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_replay_codec_tests.py -v)
@@ -792,6 +795,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_gameplay_orientation_tests.py -v)
     set_tests_properties(android_window_presentation_tests
+                         android_touch_input_tests
                          android_gameplay_orientation_tests
                          android_replay_codec_tests
                          android_display_refresh_rate_tests PROPERTIES
@@ -5787,6 +5791,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(input_timestamp_tests PRIVATE cxx_std_23)
 
+    add_executable(android_audio_latency_tests tests/android_audio_latency_tests.cpp)
+    target_include_directories(android_audio_latency_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_features(android_audio_latency_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_audio_latency_tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
+    add_executable(android_input_timestamp_ingress_tests
+        tests/android_input_timestamp_ingress_tests.cpp)
+    target_include_directories(android_input_timestamp_ingress_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(android_input_timestamp_ingress_tests PRIVATE cxx_std_23)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3)
+    endif()
+
     include(cmake/InputCaptureTests.cmake)
 
     add_executable(app_settings_store_tests
@@ -9338,6 +9360,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(beatoraja_hispeed_tests)
     asobmashow_register_test(settings_scene_preview_authority_tests)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
+    asobmashow_register_test(android_input_timestamp_ingress_tests)
+    asobmashow_register_test(android_audio_latency_tests)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_button_layout_tests)
     set_tests_properties(ir_ranking_modal_tests PROPERTIES

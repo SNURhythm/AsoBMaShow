@@ -17,10 +17,12 @@
 #include "library/DocumentsLibraryRefresh.h"
 #include "repositories/ChartRepository.h"
 #include "platform/ScreenOrientation.h"
+#include "input/AndroidInputTimestamp.h"
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_system.h>
+#include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -37,6 +39,21 @@
 #include <unordered_map>
 #include <vector>
 #include <unistd.h>
+#include <time.h>
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSetInputTimestamp(
+    JNIEnv *, jclass, jlong uptimeNanos) {
+  timespec now{};
+  if (uptimeNanos <= 0 || clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    input::android::setInputTimestamp(0, 0, 0);
+    return;
+  }
+  const Uint64 nativeNow = static_cast<Uint64>(now.tv_sec) * 1'000'000'000ULL +
+                           static_cast<Uint64>(now.tv_nsec);
+  input::android::setInputTimestamp(static_cast<Uint64>(uptimeNanos), nativeNow,
+                                    SDL_GetTicksNS());
+}
 
 namespace {
 

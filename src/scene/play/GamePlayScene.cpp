@@ -53,6 +53,8 @@
 #include "VirtualControllerLayout.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
+#include "../../input/AndroidRealtimeInputGate.h"
+#include "../../RAII.h"
 #include "../../input/InputTimestamp.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "../../input/AppleInputTimestamp.h"
@@ -1067,6 +1069,20 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
   std::mutex touchRouterMutex;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+#if TARGET_OS_ANDROID
+  std::unique_ptr<input::AndroidRealtimeInputGate> androidPhysicalInputGate;
+
+  // Called only on the presentation thread; callbacks consume the gate's copy.
+  void publishKeyboardTextFocus() {
+    const auto *coordinator = scene == nullptr ? nullptr :
+        dynamic_cast<const PlayfieldPresentationCoordinator *>(scene->presentation);
+    const bool focused = coordinator != nullptr && coordinator->hasFocusedTextInput();
+    const std::lock_guard lock(inputInterruptionMutex);
+    if (androidPhysicalInputGate != nullptr) {
+      androidPhysicalInputGate->setKeyboardTextFocused(focused, nowMicros());
+    }
+  }
+#endif
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
 #endif
@@ -1426,16 +1442,26 @@ struct GamePlayScene::RealtimeGameplaySession {
       return 0;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-#if TARGET_OS_ANDROID
-    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
-#endif
-    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
-         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
-        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
+    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.inputRegistry == nullptr ||
         session.physicalInputRouter == nullptr) {
       return 0;
     }
+#if TARGET_OS_ANDROID
+    if (session.androidPhysicalInputGate != nullptr) {
+      if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+          event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+        const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+        session.androidPhysicalInputGate->setFocused(false, nowMicros());
+        return 0;
+      }
+      if (event->type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+        session.androidPhysicalInputGate->setFocused(true, nowMicros());
+        return 0;
+      }
+    }
+#else
     if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
         session.scene != nullptr) {
       const auto *coordinator =
@@ -1445,17 +1471,36 @@ struct GamePlayScene::RealtimeGameplaySession {
         return 0;
       }
     }
+#endif
     if (const auto disconnected =
             session.inputRegistry->realtimeDisconnectedSdlDevice(*event);
         disconnected.has_value()) {
+#if TARGET_OS_ANDROID
+      const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+      session.androidPhysicalInputGate->disconnectDevice(*disconnected, nowMicros());
+#else
       session.physicalInputRouter->disconnectDevice(*disconnected, nowMicros());
+#endif
       return 0;
     }
+#if TARGET_OS_ANDROID
+    if (session.scene != nullptr &&
+        session.scene->context.appInBackground.load(std::memory_order_acquire)) return 0;
+#endif
     std::array<input::PhysicalInputEvent, 4> physicalInputs{};
     const std::size_t inputCount =
         session.inputRegistry->translateRealtimeSdlInputs(*event,
-                                                          physicalInputs);
+                                                          physicalInputs,
+                                                          TARGET_OS_ANDROID);
     const std::int64_t timestamp = nowMicros();
+#if TARGET_OS_ANDROID
+    // Translation locks the SDL device map. Do not hold the lifecycle mutex
+    // there: MIDI registry callbacks can run while holding the registry queue.
+    const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
+    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+        (session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire))) return 0;
+#endif
     for (std::size_t index = 0; index < inputCount; ++index) {
       const auto &physical = physicalInputs[index];
       if (physical.control.deviceClass != input::DeviceClass::Keyboard &&
@@ -1466,7 +1511,11 @@ struct GamePlayScene::RealtimeGameplaySession {
       const auto eventTime = physical.timestampMicros == 0 ? timestamp
           : input::rebaseTimestampMicros(physical.timestampMicros,
                                          SDL_GetTicksNS() / 1000, timestamp);
+#if TARGET_OS_ANDROID
+      session.androidPhysicalInputGate->consume(physical, eventTime);
+#else
       session.physicalInputRouter->consume(physical, eventTime);
+#endif
     }
     return 0;
   }
@@ -1501,7 +1550,11 @@ struct GamePlayScene::RealtimeGameplaySession {
                         : static_cast<std::int64_t>(event.timestampMicros);
       }
     }
+#if TARGET_OS_ANDROID
+    session.androidPhysicalInputGate->consume(event, timestamp);
+#else
     session.physicalInputRouter->consume(event, timestamp);
+#endif
   }
 
   static void registryRealtimeDevice(void *context,
@@ -1513,14 +1566,16 @@ struct GamePlayScene::RealtimeGameplaySession {
 #if TARGET_OS_ANDROID
     const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
 #endif
-    if ((TARGET_OS_ANDROID && session.scene != nullptr &&
-         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
-        !session.acceptingNativeInput.load(std::memory_order_acquire) ||
+    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
         session.physicalInputRouter == nullptr ||
         !session.registryRealtimeEnabled(device.deviceClass)) {
       return;
     }
+#if TARGET_OS_ANDROID
+    session.androidPhysicalInputGate->disconnectDevice(device.stableId, nowMicros());
+#else
     session.physicalInputRouter->disconnectDevice(device.stableId, nowMicros());
+#endif
   }
 
   // Both native producers use published geometry only. Keep routing, auxiliary
@@ -2203,6 +2258,12 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
                                                                 transition);
             });
   }
+#if TARGET_OS_ANDROID
+  if (session->physicalInputRouter != nullptr) {
+    session->androidPhysicalInputGate = std::make_unique<input::AndroidRealtimeInputGate>(
+        *session->physicalInputRouter);
+  }
+#endif
   session->visualMeasureIndex = state->passedMeasureCount;
   session->visualTimelineIndex = state->passedTimelineCount;
   session->layoutRefreshKey = makeRealtimeTouchLayoutRefreshKey(
@@ -2243,6 +2304,16 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       input::DeviceClass::Midi)] = true;
   activeSession.registryRealtimeClasses[static_cast<std::size_t>(
       input::DeviceClass::Gyroscope)] = true;
+#elif TARGET_OS_ANDROID
+  for (const auto deviceClass :
+       {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
+        input::DeviceClass::Joystick, input::DeviceClass::Midi}) {
+    claimedClasses[static_cast<std::size_t>(deviceClass)] = true;
+    // SDL's normal backend is a correctness fallback for hotplug events whose
+    // device mapping was not available to the producer watch. Event ownership
+    // in that backend suppresses only the edges already delivered natively.
+    activeSession.registryRealtimeClasses[static_cast<std::size_t>(deviceClass)] = true;
+  }
 #elif TARGET_OS_WINDOWS
   for (const auto deviceClass :
        {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
@@ -2280,7 +2351,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .onInterruption = [session = &activeSession](const auto &interruption) {
                 session->interruptInput(interruption);
               },
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
               .sdlWatch = &RealtimeGameplaySession::sdlInputWatch,
               .sdlWatchContext = &activeSession,
 #endif
@@ -2313,11 +2384,18 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   }
   auto &session = *realtimeGameplaySession;
   const auto timestampMicros = nowMicros();
+#if TARGET_OS_ANDROID
+  session.publishKeyboardTextFocus();
+#endif
   {
     const std::lock_guard lock(session.inputInterruptionMutex);
     if (enabled && session.inputInterrupted.load(std::memory_order_acquire)) return;
     if (session.physicalInputRouter != nullptr) {
+#if TARGET_OS_ANDROID
+      session.androidPhysicalInputGate->setEnabled(enabled, timestampMicros);
+#else
       session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
+#endif
     }
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
@@ -2448,6 +2526,11 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
 
 void GamePlayScene::drainRealtimeTouchSamples(
     std::optional<long long> cancelPresentationAtSteadyMicros) {
+#if TARGET_OS_ANDROID
+  const auto publishTextFocus = makeScopeExit([this] {
+    if (realtimeGameplaySession != nullptr) realtimeGameplaySession->publishKeyboardTextFocus();
+  });
+#endif
   if (!realtimeGameplayAuthorityActive()) {
     return;
   }
@@ -3978,15 +4061,19 @@ void GamePlayScene::updateWhileBackgrounded() {
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
 #if TARGET_OS_ANDROID
   if (inputHandler != nullptr) inputHandler->setApplicationBackground(background);
+  if (realtimeGameplayAuthorityActive() &&
+      realtimeGameplaySession->androidPhysicalInputGate != nullptr) {
+    const std::lock_guard lifecycleLock(realtimeGameplaySession->inputInterruptionMutex);
+    // App lifecycle is authoritative even when Android omits a separate window
+    // focus event, including background transitions while gameplay is paused.
+    realtimeGameplaySession->androidPhysicalInputGate->setFocused(!background, nowMicros());
+  }
   if (background) {
     if (realtimeGameplayAuthorityActive() &&
         realtimeGameplaySession->physicalInputRouter != nullptr) {
       const std::lock_guard lifecycleLock(realtimeGameplaySession->inputInterruptionMutex);
       const auto timestampMicros = nowMicros();
-      for (const auto &device : context.inputDeviceRegistry.snapshot()) {
-        realtimeGameplaySession->physicalInputRouter->disconnectDevice(
-            device.stableId, timestampMicros);
-      }
+      realtimeGameplaySession->androidPhysicalInputGate->setEnabled(false, timestampMicros);
       input::LogicalInputTransition command;
       while (realtimeGameplaySession->inputCommands.tryPop(command)) {}
       gameplay::StartSelectControlInput control;
@@ -7015,6 +7102,11 @@ bool GamePlayScene::renderViewBeforeScene(const View *view) const {
 }
 
 bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
+#if TARGET_OS_ANDROID
+  const auto publishTextFocus = makeScopeExit([this] {
+    if (realtimeGameplaySession != nullptr) realtimeGameplaySession->publishKeyboardTextFocus();
+  });
+#endif
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
   if (coordinator == nullptr) {

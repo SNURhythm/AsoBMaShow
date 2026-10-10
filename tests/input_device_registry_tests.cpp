@@ -1040,6 +1040,103 @@ void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   backend.stop();
 }
 
+void testRealtimeSdlOwnershipPreservesHotplugAndHatOrdering() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto registry = makeRegistryWithSdlProvider(provider);
+  std::vector<input::PhysicalInputEvent> fallback;
+  const auto subscription = registry.subscribeRealtimeInput(
+      [&](const auto &event) { fallback.push_back(event); });
+  registry.setRealtimeInputClaimed(input::DeviceClass::GameController, true);
+  registry.setRealtimeInputClaimed(input::DeviceClass::Joystick, true);
+  std::array<input::PhysicalInputEvent, 4> native{};
+  SDL_Event down{};
+  down.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  down.gbutton.which = 901;
+  down.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+  down.gbutton.timestamp = 1'000'000;
+  expect(registry.translateRealtimeSdlInputs(down, native, true) == 0,
+         "unknown hotplug controller defers its first edge");
+  provider->devices = {controllerInfo(901, "/hotplug"), joystickInfo(902)};
+  SDL_Event added{};
+  added.type = SDL_EVENT_JOYSTICK_ADDED;
+  added.jdevice.which = 901;
+  registry.handleSdlEvent(added);
+  SDL_Event up = down;
+  up.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+  up.gbutton.timestamp = 2'000'000;
+  expect(registry.translateRealtimeSdlInputs(up, native, true) == 0,
+         "newly mapped release stays ordered behind the deferred press");
+  registry.handleSdlEvent(down);
+  registry.handleSdlEvent(up);
+  expect(fallback.size() == 2 && fallback[0].normalizedValue == 1.0F &&
+             fallback[1].normalizedValue == 0.0F,
+         "hotplug press and release survive exactly once through realtime fallback");
+  down.gbutton.timestamp = 3'000'000;
+  expect(registry.translateRealtimeSdlInputs(down, native, true) == 1,
+         "hotplug source switches to native delivery once pending input drains");
+  registry.handleSdlEvent(down);
+  expect(fallback.size() == 2, "already delivered producer edge is not published again");
+
+  added.jdevice.which = 902;
+  registry.handleSdlEvent(added);
+  SDL_Event hat{};
+  hat.type = SDL_EVENT_JOYSTICK_HAT_MOTION;
+  hat.jhat.which = 902;
+  hat.jhat.hat = 0;
+  hat.jhat.timestamp = 4'000'000;
+  hat.jhat.value = SDL_HAT_UP;
+  expect(registry.translateRealtimeSdlInputs(hat, native, true) == 1,
+         "native hat press emits immediately");
+  SDL_Event center = hat;
+  center.jhat.timestamp = 5'000'000;
+  center.jhat.value = SDL_HAT_CENTERED;
+  expect(registry.translateRealtimeSdlInputs(center, native, true) == 1,
+         "native hat release emits immediately");
+  registry.handleSdlEvent(hat);
+  hat.jhat.timestamp = 6'000'000;
+  expect(registry.translateRealtimeSdlInputs(hat, native, true) == 1 &&
+             native[0].normalizedValue == 1.0F,
+         "queued older hat event cannot rewind newer realtime state");
+  registry.handleSdlEvent(center);
+  registry.handleSdlEvent(hat);
+  expect(fallback.size() == 2, "native hat events never duplicate through fallback");
+  down.gbutton.timestamp = 7'000'000;
+  expect(registry.translateRealtimeSdlInputs(down, native, true) == 1,
+         "native ownership can retain an edge across session teardown");
+  registry.setRealtimeInputClaimed(input::DeviceClass::GameController, false);
+  registry.setRealtimeInputClaimed(input::DeviceClass::Joystick, false);
+  registry.handleSdlEvent(down);
+  expect(fallback.size() == 2, "releasing classes cannot replay acknowledged edges into the next scene");
+  registry.unsubscribe(subscription);
+}
+
+void testRealtimeSdlOwnershipOverflowRetainsAlreadyDeliveredEdges() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {controllerInfo(903, "/overflow")};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  std::size_t publications = 0;
+  const auto subscription = registry.subscribeRealtimeInput(
+      [&](const auto &) { ++publications; });
+  registry.setRealtimeInputClaimed(input::DeviceClass::GameController, true);
+  std::array<input::PhysicalInputEvent, 4> native{};
+  std::vector<SDL_Event> backlog;
+  for (std::uint64_t index = 0; index < 5000; ++index) {
+    SDL_Event event{};
+    event.type = index % 2 == 0 ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+    event.gbutton.which = 903;
+    event.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+    event.gbutton.timestamp = (index + 1) * 1000;
+    publications += registry.translateRealtimeSdlInputs(event, native, true);
+    backlog.push_back(event);
+  }
+  expect(publications > 0 && publications < backlog.size(),
+         "bounded native ownership falls back when its retained event capacity fills");
+  for (const auto &event : backlog) registry.handleSdlEvent(event);
+  expect(publications == backlog.size(),
+         "overflow fallback neither loses new edges nor replays already delivered edges");
+  registry.unsubscribe(subscription);
+}
+
 void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->devices = {controllerInfo(91, "/dev/input/realtime-pad"),
@@ -1931,6 +2028,8 @@ int main() {
   testSdlToGdxAliasTableIsExhaustiveAndUnambiguous();
   testSdlInputYieldsClaimedClassesToNativeRealtimeSource();
   testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
+  testRealtimeSdlOwnershipPreservesHotplugAndHatOrdering();
+  testRealtimeSdlOwnershipOverflowRetainsAlreadyDeliveredEdges();
   testSdlRawJoystickButtonsAxesAndHatEdges();
   testSdlJoystickNamesDoNotChangeAxisSensitivity();
   testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();

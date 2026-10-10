@@ -11,6 +11,7 @@
 #include <atomic>
 #include <bitset>
 #include <compare>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -72,13 +73,22 @@ public:
   translateRealtimeInput(const SDL_Event &event) const;
   std::size_t translateRealtimeInputs(
       const SDL_Event &event,
-      std::span<input::PhysicalInputEvent> output);
+      std::span<input::PhysicalInputEvent> output, bool consumeOnce = false);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedDeviceId(const SDL_Event &event) const;
   [[nodiscard]] input::LegacyInputGeneration
   legacyControllerGeneration() const noexcept;
 
 private:
+  using RealtimeEventKey = std::array<std::uint64_t, 5>;
+  struct RealtimeDelivery {
+    RealtimeEventKey key;
+    bool delivered = false;
+  };
+  static std::optional<RealtimeEventKey> realtimeEventKey(const SDL_Event &);
+  std::size_t translateRealtimeInputsUnclaimed(
+      const SDL_Event &, std::span<input::PhysicalInputEvent>);
+
   struct DeviceRecord {
     input::InputDeviceSnapshot snapshot;
     bool gameController = false;
@@ -113,6 +123,12 @@ private:
   input::LegacyInputGeneration legacyControllerGeneration_;
   std::uint64_t nextLegacyOrder_ = 1;
   mutable std::mutex devicesMutex_;
+  // Held through queued publication so a newly mapped source cannot overtake
+  // its deferred hotplug edges. Never acquire this while holding devicesMutex_.
+  std::mutex realtimeDeliveryMutex_;
+  std::deque<RealtimeDelivery> realtimeDeliveries_;
+  std::unordered_map<SDL_JoystickID, std::size_t> pendingRealtimeInputs_;
+  bool realtimeDeliveryOverflow_ = false;
   std::array<std::atomic_bool, 6> realtimeInputClaimed_{};
   bool started_ = false;
 };

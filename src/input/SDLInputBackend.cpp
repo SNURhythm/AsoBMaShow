@@ -357,6 +357,46 @@ void SDLInputBackend::stop() {
   started_ = false;
 }
 
+std::optional<SDLInputBackend::RealtimeEventKey>
+SDLInputBackend::realtimeEventKey(const SDL_Event &event) {
+  RealtimeEventKey key{event.type, event.common.timestamp, 0, 0, 0};
+  switch (event.type) {
+  case SDL_EVENT_KEY_DOWN:
+  case SDL_EVENT_KEY_UP:
+    key[3] = event.key.scancode;
+    key[4] = event.key.repeat;
+    break;
+  case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+  case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    key[2] = event.gbutton.which;
+    key[3] = event.gbutton.button;
+    break;
+  case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+    key[2] = event.gaxis.which;
+    key[3] = event.gaxis.axis;
+    key[4] = static_cast<std::uint16_t>(event.gaxis.value);
+    break;
+  case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+  case SDL_EVENT_JOYSTICK_BUTTON_UP:
+    key[2] = event.jbutton.which;
+    key[3] = event.jbutton.button;
+    break;
+  case SDL_EVENT_JOYSTICK_AXIS_MOTION:
+    key[2] = event.jaxis.which;
+    key[3] = event.jaxis.axis;
+    key[4] = static_cast<std::uint16_t>(event.jaxis.value);
+    break;
+  case SDL_EVENT_JOYSTICK_HAT_MOTION:
+    key[2] = event.jhat.which;
+    key[3] = event.jhat.hat;
+    key[4] = event.jhat.value;
+    break;
+  default:
+    return std::nullopt;
+  }
+  return key;
+}
+
 void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   if (event.type == SDL_EVENT_JOYSTICK_ADDED) {
     addDevice(event.jdevice.which);
@@ -366,11 +406,28 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
     removeDevice(event.jdevice.which);
     return;
   }
+  std::unique_lock deliveryLock(realtimeDeliveryMutex_, std::defer_lock);
+  bool alreadyDelivered = false;
+  if (const auto key = realtimeEventKey(event)) {
+    deliveryLock.lock();
+    const auto found = std::ranges::find(realtimeDeliveries_, *key,
+                                         &RealtimeDelivery::key);
+    if (found != realtimeDeliveries_.end()) {
+      alreadyDelivered = found->delivered;
+      if (!alreadyDelivered) {
+        const auto pending = pendingRealtimeInputs_.find(static_cast<SDL_JoystickID>((*key)[2]));
+        if (pending != pendingRealtimeInputs_.end() && --pending->second == 0) {
+          pendingRealtimeInputs_.erase(pending);
+        }
+      }
+      realtimeDeliveries_.erase(found);
+    }
+  }
   const std::lock_guard lock(devicesMutex_);
   switch (event.type) {
   case SDL_EVENT_KEY_DOWN:
   case SDL_EVENT_KEY_UP:
-    if (nativeRealtimeOwns(input::DeviceClass::Keyboard)) {
+    if (alreadyDelivered || nativeRealtimeOwns(input::DeviceClass::Keyboard)) {
       return;
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat != 0) {
@@ -391,8 +448,8 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   case SDL_EVENT_GAMEPAD_BUTTON_UP: {
     const auto found = devices_.find(event.gbutton.which);
     if (found != devices_.end() && found->second.gameController) {
-      if (found->second.playerIndex >= 0 &&
-          nativeRealtimeOwns(input::DeviceClass::GameController)) {
+      if (alreadyDelivered || (found->second.playerIndex >= 0 &&
+          nativeRealtimeOwns(input::DeviceClass::GameController))) {
         return;
       }
       publishButton(found->second, event.gbutton.button,
@@ -404,8 +461,8 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
     const auto found = devices_.find(event.gaxis.which);
     if (found != devices_.end() && found->second.gameController) {
-      if (found->second.playerIndex >= 0 &&
-          nativeRealtimeOwns(input::DeviceClass::GameController)) {
+      if (alreadyDelivered || (found->second.playerIndex >= 0 &&
+          nativeRealtimeOwns(input::DeviceClass::GameController))) {
         return;
       }
       publishAxis(found->second, event.gaxis.axis, event.gaxis.value,
@@ -421,7 +478,7 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
       const bool pressed = event.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN;
       found->second.pressedRawButtons.set(event.jbutton.button, pressed);
       rebuildLegacyControllerGenerationLocked();
-      if (!found->second.gameController) {
+      if (!alreadyDelivered && !found->second.gameController) {
         publishButton(found->second, event.jbutton.button, pressed,
                       event.jbutton.timestamp);
       }
@@ -430,7 +487,7 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   }
   case SDL_EVENT_JOYSTICK_AXIS_MOTION: {
     const auto found = devices_.find(event.jaxis.which);
-    if (found != devices_.end() && !found->second.gameController) {
+    if (!alreadyDelivered && found != devices_.end() && !found->second.gameController) {
       publishAxis(found->second, event.jaxis.axis, event.jaxis.value,
                   event.jaxis.timestamp);
     }
@@ -438,7 +495,7 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   }
   case SDL_EVENT_JOYSTICK_HAT_MOTION: {
     const auto found = devices_.find(event.jhat.which);
-    if (found != devices_.end() && !found->second.gameController) {
+    if (!alreadyDelivered && found != devices_.end() && !found->second.gameController) {
       publishHat(found->second, event.jhat.hat, event.jhat.value,
                  event.jhat.timestamp);
     }
@@ -471,10 +528,18 @@ void SDLInputBackend::pump() {
 
 void SDLInputBackend::setRealtimeInputClaimed(
     input::DeviceClass deviceClass, bool claimed) {
+  const std::lock_guard lock(realtimeDeliveryMutex_);
+  if (claimed && std::ranges::none_of(realtimeInputClaimed_, [](const auto &value) {
+        return value.load(std::memory_order_acquire);
+      })) {
+    realtimeDeliveryOverflow_ = false;
+  }
   const auto index = static_cast<std::size_t>(deviceClass);
   if (index < realtimeInputClaimed_.size()) {
     realtimeInputClaimed_[index].store(claimed, std::memory_order_release);
   }
+  // Keep acknowledgements across class releases and session teardown. Pending
+  // SDL events still exist, and must not replay into the next scene/session.
 }
 
 bool SDLInputBackend::nativeRealtimeOwns(
@@ -587,6 +652,42 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
 }
 
 std::size_t SDLInputBackend::translateRealtimeInputs(
+    const SDL_Event &event, std::span<input::PhysicalInputEvent> output,
+    bool consumeOnce) {
+  if (!consumeOnce) return translateRealtimeInputsUnclaimed(event, output);
+  const auto key = realtimeEventKey(event);
+  if (!key || output.empty()) return 0;
+  const std::lock_guard deliveryLock(realtimeDeliveryMutex_);
+  // Keep all retained acknowledgements on overflow. Clearing them would replay
+  // edges already judged by the worker. The remaining session uses fallback.
+  if (realtimeDeliveryOverflow_) return 0;
+  constexpr std::size_t kMaximumRetainedEvents = 4096;
+  if (realtimeDeliveries_.size() == kMaximumRetainedEvents) {
+    realtimeDeliveryOverflow_ = true;
+    return 0;
+  }
+  const auto deviceId = static_cast<SDL_JoystickID>((*key)[2]);
+  bool known = event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP;
+  if (!known) {
+    const std::lock_guard lock(devicesMutex_);
+    const auto device = devices_.find(deviceId);
+    known = device != devices_.end();
+    if (known) {
+      const bool gamepadEvent = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+          event.type == SDL_EVENT_GAMEPAD_BUTTON_UP || event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION;
+      // Mapped gamepads also emit raw joystick events. Leave those available
+      // for legacy state snapshots without making them a gameplay fallback.
+      if (device->second.gameController != gamepadEvent) return 0;
+    }
+  }
+  const bool defer = !known || pendingRealtimeInputs_.contains(deviceId);
+  const auto count = defer ? 0 : translateRealtimeInputsUnclaimed(event, output);
+  realtimeDeliveries_.push_back({.key = *key, .delivered = !defer});
+  if (defer) ++pendingRealtimeInputs_[deviceId];
+  return count;
+}
+
+std::size_t SDLInputBackend::translateRealtimeInputsUnclaimed(
     const SDL_Event &event, std::span<input::PhysicalInputEvent> output) {
   if (output.empty()) {
     return 0;

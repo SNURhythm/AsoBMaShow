@@ -69,6 +69,7 @@
 #endif
 #elif defined(__ANDROID__)
 #include "AndroidNatives.h"
+#include "input/AndroidInputTimestamp.h"
 #include <dirent.h>
 #include <sys/system_properties.h>
 #include <sys/stat.h>
@@ -594,6 +595,9 @@ int main(int argv, char **args) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+#if TARGET_OS_ANDROID
+  SDL_SetEventFilter(&input::android::timestampFilter, nullptr);
+#endif
   s_renderScale = resolveRenderScale();
   s_bgfxResetFlags = resolveResetFlags();
 #if TARGET_OS_ANDROID
@@ -699,7 +703,8 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
-#if !TARGET_OS_IPHONE && !TARGET_OS_ANDROID
+#if !TARGET_OS_IPHONE
+  // Bound GPU work queued ahead of visible input feedback on Android as well.
   bgfx_init.resolution.maxFrameLatency = 2;
 #endif
   bgfx_init.platformData = pd;

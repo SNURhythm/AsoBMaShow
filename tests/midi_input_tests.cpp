@@ -21,8 +21,8 @@ namespace {
 
 class TestMidiBackend final : public QueuedMidiInputBackend {
 public:
-  explicit TestMidiBackend(input::InputBackendSink sink)
-      : QueuedMidiInputBackend(std::move(sink)) {}
+  explicit TestMidiBackend(input::InputBackendSink sink, bool immediate = false)
+      : QueuedMidiInputBackend(std::move(sink), immediate) {}
 
   bool start(std::string &errorMessage) override {
     errorMessage.clear();
@@ -368,6 +368,42 @@ void testBackendCanPublishNativePacketsImmediately() {
           "stopped MIDI backend rejects delayed immediate callbacks");
 }
 
+void testImmediateBackendOrdersDevicesAndPacketsWithoutPump() {
+  std::vector<std::string> publications;
+  TestMidiBackend backend({
+      .enqueueInput = [&](input::PhysicalInputEvent event) {
+        publications.push_back(event.normalizedValue > 0 ? "press" : "release");
+      },
+      .enqueueDevice = [&](input::InputDeviceSnapshot device) {
+        publications.push_back(device.connected ? "connect" : "disconnect");
+      },
+  }, true);
+  std::string error;
+  require(backend.start(error), "immediate backend starts");
+  backend.connect("midi:android", "Android");
+  backend.packet("midi:android", {0x90, 60, 127}, 1);
+  backend.packet("midi:android", {60, 0}, 2);
+  backend.disconnect("midi:android", "Android");
+  require(publications == std::vector<std::string>{"connect", "press", "release", "disconnect"},
+          "connect, input, and disconnect publish before any render pump");
+  backend.packet("midi:android", {0x90, 60, 127}, 3);
+  backend.pump();
+  require(publications.size() == 4, "disconnected packets and pump cannot duplicate edges");
+  backend.connect("midi:android", "Android");
+  backend.packet("midi:android", {61, 127}, 4);
+  require(publications.size() == 5, "reconnect clears running status");
+  backend.packet("midi:android", {0x90, 62}, 5);
+  backend.disconnect("midi:android", "Android");
+  backend.connect("midi:android", "Android");
+  backend.packet("midi:android", {127}, 6);
+  require(publications.size() == 7, "disconnect clears incomplete messages");
+  backend.stop();
+  backend.connect("midi:android", "Android");
+  backend.packet("midi:android", {0x90, 60, 127}, 7);
+  backend.pump();
+  require(publications.size() == 7, "stop rejects late devices and packets");
+}
+
 void testBackendIsolatesParsersAndDropsPacketsAfterDisconnect() {
   std::vector<input::PhysicalInputEvent> inputs;
   std::vector<input::InputDeviceSnapshot> devices;
@@ -457,36 +493,38 @@ void testBackendOverflowForcesAReleaseBoundary() {
 }
 
 void testBackendAcceptsConcurrentNativeProducers() {
-  std::vector<input::PhysicalInputEvent> inputs;
-  TestMidiBackend backend({
-      .enqueueInput =
-          [&](input::PhysicalInputEvent event) {
-            inputs.push_back(std::move(event));
-          },
-      .enqueueDevice = [](input::InputDeviceSnapshot) {},
-  });
-  std::string error;
-  require(backend.start(error), "concurrent MIDI backend starts");
-  for (int producer = 0; producer < 4; ++producer) {
-    backend.connect("midi:thread-" + std::to_string(producer), "Thread");
-  }
-  backend.pump();
+  for (const bool immediate : {false, true}) {
+    std::vector<input::PhysicalInputEvent> inputs;
+    TestMidiBackend backend({
+        .enqueueInput =
+            [&](input::PhysicalInputEvent event) {
+              inputs.push_back(std::move(event));
+            },
+        .enqueueDevice = [](input::InputDeviceSnapshot) {},
+    }, immediate);
+    std::string error;
+    require(backend.start(error), "concurrent MIDI backend starts");
+    for (int producer = 0; producer < 4; ++producer) {
+      backend.connect("midi:thread-" + std::to_string(producer), "Thread");
+    }
+    backend.pump();
 
-  std::vector<std::jthread> producers;
-  for (int producer = 0; producer < 4; ++producer) {
-    producers.emplace_back([&, producer] {
-      for (int message = 0; message < 100; ++message) {
-        backend.packet("midi:thread-" + std::to_string(producer),
-                       {0x90, static_cast<std::uint8_t>(message % 128), 127},
-                       static_cast<std::uint64_t>(150 + message));
-      }
-    });
+    std::vector<std::jthread> producers;
+    for (int producer = 0; producer < 4; ++producer) {
+      producers.emplace_back([&, producer] {
+        for (int message = 0; message < 100; ++message) {
+          backend.packet("midi:thread-" + std::to_string(producer),
+                         {0x90, static_cast<std::uint8_t>(message % 128), 127},
+                         static_cast<std::uint64_t>(150 + message));
+        }
+      });
+    }
+    producers.clear();
+    backend.pump();
+    require(inputs.size() == 400,
+            "concurrent native callbacks publish every bounded packet safely");
+    backend.stop();
   }
-  producers.clear();
-  backend.pump();
-  require(inputs.size() == 400,
-          "concurrent native callbacks enqueue every bounded packet safely");
-  backend.stop();
 }
 
 void testNativeCallbackLifetimeWaitsForActiveLease() {
@@ -707,6 +745,7 @@ int main() {
   testMalformedBytesRecoverAtNextValidStatus();
   testBackendQueuesNativePacketsUntilMainThreadPump();
   testBackendCanPublishNativePacketsImmediately();
+  testImmediateBackendOrdersDevicesAndPacketsWithoutPump();
   testBackendIsolatesParsersAndDropsPacketsAfterDisconnect();
   testBackendCloseRevokesQueuedNativeWork();
   testBackendOverflowForcesAReleaseBoundary();

@@ -1,5 +1,6 @@
 #include "input/LogicalGameplayInputAdapter.h"
 #include "input/RealtimePhysicalInputRouter.h"
+#include "input/AndroidRealtimeInputGate.h"
 #include "input/InputBindingResolver.h"
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
@@ -1243,6 +1244,125 @@ void testIndependentScratchlessGameplayBindings() {
   }
 }
 
+void testAndroidExternalInputLifecycleWithoutRenderPump() {
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      makeDefaultInputProfile(), makeGameplayInputScopes(7),
+      [&](const auto &edge) { output.push_back(edge); return true; });
+  input::AndroidRealtimeInputGate gate(router);
+  const auto down = keyEvent(SDL_SCANCODE_D, true);
+  const auto up = keyEvent(SDL_SCANCODE_D, false);
+  gate.consume(down, 1);
+  require(output.empty(), "stopped Android ingress drops input");
+  gate.setEnabled(true, 2);
+  require(output.empty(), "enabling does not replay stopped input");
+  gate.consume(down, 3);
+  gate.consume(down, 4);
+  require(output.size() == 1 && output[0].steadyTimestampMicros == 3,
+          "producer ingress delivers one edge with native time without a render pump");
+  gate.setFocused(false, 5);
+  require(output.size() == 2 && output.back().type == input::RealtimePhysicalInputTransitionType::Release,
+          "focus loss immediately cancels a held key");
+  gate.consume(down, 6);
+  gate.setFocused(true, 7);
+  require(output.size() == 2, "unfocused input does not replay on focus gain");
+  gate.consume(down, 8);
+  gate.setKeyboardTextFocused(true, 9);
+  require(output.size() == 4, "text focus releases held keyboard ownership");
+  gate.consume(down, 10);
+  gate.setKeyboardTextFocused(false, 11);
+  require(output.size() == 4, "text entry cannot become a gameplay press");
+  gate.consume(down, 12);
+  gate.disconnectDevice("keyboard", 13);
+  require(output.size() == 6, "device disconnect releases before rendering");
+  gate.consume(down, 14);
+  gate.setEnabled(false, 15);
+  require(output.size() == 8, "background or pause releases active devices");
+  gate.consume(down, 16);
+  gate.consume(up, 17);
+  gate.setEnabled(true, 18);
+  require(output.size() == 8, "background input never survives resume");
+  gate.consume(down, 19);
+  gate.consume(up, 20);
+  require(output.size() == 10, "fresh foreground input still works");
+}
+
+void testAndroidPausedCommandsRemainUsableWithoutResurrectingLanes() {
+  InputProfile profile;
+  for (const auto &[scancode, kind] : {
+      std::pair{SDL_SCANCODE_D, input::LogicalActionKind::Lane},
+      std::pair{SDL_SCANCODE_P, input::LogicalActionKind::Pause},
+      std::pair{SDL_SCANCODE_R, input::LogicalActionKind::Retry}}) {
+    profile.bindings.push_back({.id = std::to_string(scancode), .scope = {1, 7},
+        .action = {.kind = kind, .lane = 0},
+        .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                    .kind = input::ControlKind::Key, .index = scancode}});
+  }
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(profile, makeGameplayInputScopes(7),
+      [&](const auto &edge) { output.push_back(edge); return true; });
+  input::AndroidRealtimeInputGate gate(router);
+  gate.setEnabled(true, 1);
+  gate.setEnabled(false, 2);
+  gate.consume(keyEvent(SDL_SCANCODE_D, true), 3);
+  gate.consume(keyEvent(SDL_SCANCODE_P, true), 4);
+  gate.consume(keyEvent(SDL_SCANCODE_R, true), 5);
+  require(output.size() == 2 &&
+              output[0].type == input::RealtimePhysicalInputTransitionType::Command &&
+              output[0].command.action.kind == input::LogicalActionKind::Pause &&
+              output[1].command.action.kind == input::LogicalActionKind::Retry,
+          "paused Android input still emits Pause and Retry commands");
+  gate.setFocused(false, 6);
+  const auto afterBackground = output.size();
+  gate.consume(keyEvent(SDL_SCANCODE_P, true), 7);
+  gate.setFocused(true, 9);
+  gate.consume(keyEvent(SDL_SCANCODE_P, true), 8);
+  require(output.size() == afterBackground,
+          "background while paused clears commands and rejects delayed background input");
+  gate.consume(keyEvent(SDL_SCANCODE_P, true), 10);
+  require(output.size() == afterBackground + 1 && output.back().command.pressed,
+          "foreground while paused restores command input without a window-focus event");
+  gate.setEnabled(true, 11);
+  for (const auto &edge : output) {
+    require(edge.type == input::RealtimePhysicalInputTransitionType::Command,
+            "paused lane presses never resurrect on resume");
+  }
+  const auto before = output.size();
+  gate.setFocused(false, 12);
+  gate.consume(keyEvent(SDL_SCANCODE_P, true), 13);
+  gate.setFocused(true, 15);
+  gate.consume(keyEvent(SDL_SCANCODE_D, true), 14);
+  require(output.size() == before, "unfocused commands and delayed pre-resume edges are ignored");
+}
+
+void testAndroidExternalDevicesCancelWithoutDeviceSnapshot() {
+  for (const auto deviceClass : {input::DeviceClass::GameController,
+                                input::DeviceClass::Joystick, input::DeviceClass::Midi}) {
+    InputProfile profile;
+    const input::PhysicalControl control{
+        .deviceId = "newly-connected", .deviceClass = deviceClass,
+        .kind = deviceClass == input::DeviceClass::Midi
+                    ? input::ControlKind::MidiNote : input::ControlKind::Button,
+        .index = 60};
+    profile.bindings.push_back({.id = "external", .scope = {1, 7},
+        .action = {.kind = input::LogicalActionKind::Lane, .lane = 0}, .control = control});
+    std::vector<input::RealtimePhysicalInputTransition> output;
+    input::RealtimePhysicalInputRouter router(profile, makeGameplayInputScopes(7),
+        [&](const auto &edge) { output.push_back(edge); return true; });
+    input::AndroidRealtimeInputGate gate(router);
+    gate.setEnabled(true, 1);
+    gate.setKeyboardTextFocused(true, 2);
+    gate.consume({.control = control, .rawValue = 127, .normalizedValue = 1.0F}, 3);
+    require(output.size() == 1, "text focus does not block external non-keyboard devices");
+    gate.setFocused(false, 4);
+    require(output.size() == 2 && output.back().type == input::RealtimePhysicalInputTransitionType::Release,
+            "focus loss cancels each external source without a rendered device snapshot");
+    gate.consume({.control = control, .rawValue = 127, .normalizedValue = 1.0F}, 5);
+    gate.setFocused(true, 6);
+    require(output.size() == 2, "unfocused controller and MIDI input is discarded");
+  }
+}
+
 void testRealtimePhysicalInputPreservesNativeTimestamp() {
   InputProfile profile;
   profile.bindings.push_back(
@@ -1775,6 +1895,9 @@ int main() {
   testScratchlessStartSelectScratchCommands();
   testScratchlessScratchFallbackRespectsCustomBindings();
   testCommandScratchPreservesDenseKeysAndHeldDirection();
+  testAndroidExternalInputLifecycleWithoutRenderPump();
+  testAndroidExternalDevicesCancelWithoutDeviceSnapshot();
+  testAndroidPausedCommandsRemainUsableWithoutResurrectingLanes();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testNonStockKeyModesCaptureBmsChannelReplayControls();
   testArbitraryLaneInputDoesNotDependOnBrdControls();

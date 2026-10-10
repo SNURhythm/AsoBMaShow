@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
@@ -42,6 +43,7 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLSurface;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -69,6 +71,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
+    @Override
+    protected SDLSurface createSDLSurface(Context context) {
+        return new AsoBMaShowSurface(context);
+    }
+
     @Override
     protected void messageboxCreateAndShow(Bundle args) {
         int[] buttonIds = args.getIntArray("buttonIds");

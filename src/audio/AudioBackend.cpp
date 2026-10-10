@@ -186,6 +186,17 @@ public:
     // Preserve the AudioUnit callback's first-frame timestamp through conversion.
     config.noFixedSizedCallback = MA_TRUE;
 #endif
+#if TARGET_OS_ANDROID
+    config.performanceProfile = ma_performance_profile_low_latency;
+    config.noFixedSizedCallback = MA_TRUE;
+    config.periods = 2;
+    config.playback.shareMode = ma_share_mode_exclusive;
+    config.aaudio.usage = ma_aaudio_usage_game;
+    config.aaudio.enableCompatibilityWorkarounds = MA_TRUE;
+    // Let AAudio choose callback frames, then size the active queue from the
+    // opened route's hardware burst. The backend reapplies this on reroutes.
+    config.aaudio.bufferSizeInBursts = 2;
+#endif
     config.dataCallback = &MiniaudioStream::dataCallback;
     config.pUserData = this;
 
@@ -202,6 +213,16 @@ public:
         ma_ios_session_category_option_mix_with_others;
     const ma_result result =
         ma_device_init_ex(nullptr, 0, &contextConfig, &config, &device_);
+#elif TARGET_OS_ANDROID
+    const ma_backend aaudioBackend = ma_backend_aaudio;
+    ma_result result = ma_device_init_ex(&aaudioBackend, 1, nullptr, &config, &device_);
+    if (result != MA_SUCCESS) {
+      // AAudio retries shared internally. Use OpenSL ES if AAudio is unavailable;
+      // an unrestricted backend list could succeed with the silent null backend.
+      const ma_backend openslBackend = ma_backend_opensl;
+      config.playback.shareMode = ma_share_mode_shared;
+      result = ma_device_init_ex(&openslBackend, 1, nullptr, &config, &device_);
+    }
 #else
     const ma_result result = ma_device_init(nullptr, &config, &device_);
 #endif

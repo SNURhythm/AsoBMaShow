@@ -46,6 +46,7 @@ QueuedMidiInputBackend::beginDeviceActivation(
 }
 
 void QueuedMidiInputBackend::pump() {
+  if (immediateDelivery_) return;
   std::deque<QueuedEvent> pending;
   std::set<std::string> overflowedDevices;
   {
@@ -128,6 +129,14 @@ void QueuedMidiInputBackend::enqueuePacket(std::string stableId,
   if (!accepting_ || overflowedDevices_.contains(stableId)) {
     return;
   }
+  if (immediateDelivery_) {
+    if (bytes.size() > kMaximumPacketBytes ||
+        !connectedDevices_.contains(stableId)) return;
+    auto events = immediateParsers_[stableId].consume(
+        stableId, bytes, timestampMicros);
+    for (auto &event : events) publishInput(std::move(event));
+    return;
+  }
   if (bytes.size() > kMaximumPacketBytes ||
       bytes.size() > kMaximumQueuedPacketBytes - queuedPacketBytes_) {
     overflowedDevices_.insert(std::move(stableId));
@@ -166,9 +175,20 @@ void QueuedMidiInputBackend::enqueueDevice(input::InputDeviceSnapshot device) {
     return;
   }
   const std::lock_guard lock(queueMutex_);
-  if (accepting_) {
-    queuedEvents_.emplace_back(std::move(device));
+  if (!accepting_) return;
+  if (immediateDelivery_) {
+    if (device.connected) {
+      connectedDevices_.insert_or_assign(device.stableId, device);
+    } else {
+      connectedDevices_.erase(device.stableId);
+      immediateParsers_.erase(device.stableId);
+    }
+    // Serialize device boundaries with packet parsing. Realtime subscribers
+    // release held notes here even when the presentation thread is stalled.
+    publishDevice(std::move(device));
+    return;
   }
+  queuedEvents_.emplace_back(std::move(device));
 }
 
 void QueuedMidiInputBackend::enqueueDeviceDisconnect(
