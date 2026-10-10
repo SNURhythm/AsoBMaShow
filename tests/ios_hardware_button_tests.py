@@ -11,6 +11,7 @@ PREAMBLE = r'''
 #import <Foundation/Foundation.h>
 #include "platform/IPadHardwareButton.h"
 #include <cassert>
+#include "platform/IOSApplicationRuntime.h"
 #include <cmath>
 #include <cstdlib>
 #include <sys/utsname.h>

@@ -11,6 +11,10 @@
 #include <string>
 #include <vector>
 
+void ShowIOSReplayExportProgress(std::function<void()> cancel);
+void SetIOSReplayExportProgress(double fraction, const std::string &message);
+void HideIOSReplayExportProgress();
+
 struct IOSNormalizedSafeAreaInsets {
   float top = 0.0f;
   float left = 0.0f;

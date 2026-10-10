@@ -205,9 +205,54 @@ void exceptionsBecomeFailures() {
   require(!result.success && result.message == "Unexpected replay export failure",
           "unknown exceptions must report a failure instead of terminating");
 }
+void ownerExecutorDefersAndInvalidatesAbandonedWork() {
+  std::function<void()> pending;
+  const auto owner = std::this_thread::get_id();
+  bool ran = false;
+  {
+    replay::ReplayExportJob job([&](auto task) { pending = std::move(task); });
+    require(job.tryBegin(), "owner export reservation failed");
+    job.start({}, [&](const auto &options, auto &) {
+      require(std::this_thread::get_id() == owner, "export changed renderer owner");
+      options.progressCallback({0.5, "half"});
+      ran = true;
+      return ReplayVideoExportResult{true, {}, "owner complete"};
+    });
+    require(!ran && job.hasWorker(), "owner export must wait for a safe loop boundary");
+    pending();
+    require(ran && receive(job).success && job.takeProgress()->fraction == 0.5,
+            "owner export must publish completion and progress");
+    require(job.tryBegin(), "owner job should admit work after result delivery");
+    ran = false;
+    job.start({}, [&](const auto &, auto &) {
+      ran = true;
+      return ReplayVideoExportResult{};
+    });
+  }
+  pending();
+  require(!ran, "destroyed owner must invalidate queued export work");
+}
+
+void ownerCancellationBeforeStartAndSchedulingFailure() {
+  std::function<void()> pending;
+  replay::ReplayExportJob job([&](auto task) { pending = std::move(task); });
+  require(job.tryBegin(), "owner cancellation fixture must reserve");
+  bool ran = false;
+  job.start({}, [&](const auto &, auto &) { ran = true; return ReplayVideoExportResult{}; });
+  job.cancelAndWait();
+  pending();
+  require(!ran && !receive(job).success, "cancelled pending export must never start");
+  replay::ReplayExportJob failed([](auto) { throw std::runtime_error("Schedule failed"); });
+  require(failed.tryBegin(), "schedule failure fixture must reserve");
+  failed.start({}, [](const auto &, auto &) { return ReplayVideoExportResult{}; });
+  require(receive(failed).message == "Schedule failed" && !failed.hasWorker(),
+          "scheduling failure must release pending work and report failure");
+}
 } // namespace
 
 int main() {
+  ownerExecutorDefersAndInvalidatesAbandonedWork();
+  ownerCancellationBeforeStartAndSchedulingFailure();
   startupFailureIsDeliveredBeforeAdmissionReopens();
   completionOwnsAdmissionUntilDelivered();
   progressIsLatestAndNewWorkClearsIt();

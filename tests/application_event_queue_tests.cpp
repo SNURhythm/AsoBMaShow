@@ -1,5 +1,6 @@
 #include "platform/ApplicationEventQueue.h"
 #include "platform/GenerationMailbox.h"
+#include "platform/ApplicationThreadHost.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -14,6 +15,45 @@ void require(bool condition, const char *message) {
     std::cerr << message << '\n';
     std::exit(1);
   }
+}
+
+void testHostServicesCleanupBeforeJoinAndPropagatesStartupFailure() {
+  std::atomic_bool needsMain = false;
+  std::atomic_bool serviced = false;
+  bool reported = false;
+  const auto mainThread = std::this_thread::get_id();
+  auto application = [&]() -> int {
+    require(std::this_thread::get_id() != mainThread, "application stayed on main");
+    struct Cleanup {
+      std::atomic_bool &request, &done;
+      ~Cleanup() {
+        request = true;
+        while (!done.load()) std::this_thread::yield();
+      }
+    } cleanup{needsMain, serviced};
+    throw std::runtime_error("Startup failure");
+  };
+  auto service = [&] {
+    require(std::this_thread::get_id() == mainThread, "native work left main");
+    if (needsMain.load()) serviced = true;
+    std::this_thread::yield();
+  };
+  const int result = platform::runApplicationThread(application, service,
+      [&](std::exception_ptr failure) {
+        try { std::rethrow_exception(failure); }
+        catch (const std::runtime_error &) { reported = true; }
+      });
+  require(result == EXIT_FAILURE && reported && serviced,
+          "worker failure must still service pending main cleanup before join");
+  bool started = false, pumped = false;
+  bool launchReported = false;
+  const int launchResult = platform::runApplicationThread(
+      [&] { started = true; return 0; }, [&] { pumped = true; },
+      [&](auto) { launchReported = true; },
+      [](auto) -> std::thread { throw std::runtime_error("No thread"); });
+  require(launchResult == EXIT_FAILURE && launchReported,
+          "thread creation failure must return through normal native cleanup");
+  require(!started && !pumped, "failed startup must not run either loop");
 }
 
 void testPayloadSurvivesSourceAndQueueMoves() {
@@ -101,6 +141,13 @@ void testEdgesRemainOrderedAndOverflowCancelsBeforeRecovery() {
     quit |= owned.event().type == SDL_EVENT_QUIT;
   }
   require(foreground && quit, "pressure lost foreground or quit");
+  event.type = SDL_EVENT_WINDOW_HIDDEN;
+  queue.push(event);
+  event.type = SDL_EVENT_MOUSE_MOTION;
+  for (int i = 0; i < 5; ++i) queue.push(event);
+  bool hidden = false;
+  while (queue.poll(owned)) hidden |= owned.event().type == SDL_EVENT_WINDOW_HIDDEN;
+  require(hidden, "pressure lost native window lifecycle state");
 }
 
 void testStaleNativeOwnerCannotReceiveOrInvalidateReplacement() {
@@ -144,6 +191,7 @@ void testProducerCompletesWhileConsumerIsStalled() {
 }
 
 int main() {
+  testHostServicesCleanupBeforeJoinAndPropagatesStartupFailure();
   testPayloadSurvivesSourceAndQueueMoves();
   testEdgesRemainOrderedAndOverflowCancelsBeforeRecovery();
   testStaleNativeOwnerCannotReceiveOrInvalidateReplacement();

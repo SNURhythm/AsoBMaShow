@@ -9,6 +9,8 @@
 
 #if TARGET_OS_IPHONE
 #include <SDL3/SDL.h>
+#include "../ThreadCompat.h"
+#include <string>
 
 struct IOSWindowSnapshot {
   SDL_Window *window = nullptr;
@@ -29,6 +31,12 @@ bool WaitIOSApplicationEvent(SDL_Event *event, int timeoutMs);
 bool IOSApplicationActive();
 std::optional<IOSWindowSnapshot> GetIOSWindowSnapshot(SDL_Window *window);
 void ResumeIOSGameplayTouchInput();
+bool TakeIOSApplicationOverflow();
+void PostIOSApplicationWork(std::function<void()> work);
+void PollIOSApplicationWork();
+void BeginIOSReplayExport(std::stop_source stop);
+void UpdateIOSReplayExport(double fraction, const std::string &message);
+void EndIOSReplayExport();
 #endif
 
 namespace platform {

@@ -15,9 +15,15 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <limits>
 #include <vector>
+
+#ifndef NDEBUG
+namespace { std::atomic_ullong touchProbeCount{0}; }
+unsigned long long IOSGameplayTouchProbeCount() { return touchProbeCount.load(); }
+#endif
 
 @interface AsoGameplayTouchRecognizer : UIGestureRecognizer <UIGestureRecognizerDelegate>
 @end
@@ -101,6 +107,9 @@
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+#ifndef NDEBUG
+  const auto probeStart = input::apple::steadyNowMicros();
+#endif
   (void)event;
   if (!_mappingValid) {
     _mapping = input::apple::hostToSteadyEpochMapping();
@@ -113,6 +122,14 @@
                    phase:input::native_touch::TouchPhase::Down mapping:mapping];
   }
   _router.dispatchBatch(_samples);
+#ifndef NDEBUG
+  if (std::getenv("ASOBMASHOW_IOS_TOUCH_PROBE")) {
+    const auto elapsed = input::apple::steadyNowMicros() - probeStart;
+    const auto count = touchProbeCount.fetch_add(1) + 1;
+    NSLog(@"iOS touch probe %llu: callback-to-enqueue %llu us", count,
+          static_cast<unsigned long long>(elapsed));
+  }
+#endif
   self.state = self.state == UIGestureRecognizerStatePossible
       ? UIGestureRecognizerStateBegan : UIGestureRecognizerStateChanged;
 }

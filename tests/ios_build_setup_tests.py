@@ -625,6 +625,8 @@ int main() { return 0; }
             self.assertIn("m_usesMTLBindings, macOS 13.0, iOS 17.0,", patched)
             self.assertNotIn("m_usesMTLBindings, macOS 13.0, iOS 16.0,", patched)
             self.assertIn("newTextureWithDescriptor:desc offset:0 bytesPerRow:pitch", patched)
+            self.assertIn("#if TARGET_OS_SIMULATOR\n", patched)
+            self.assertIn("unifiedMemory = false;", patched)
             self.assertIn("nativeTexture.bufferBytesPerRow", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
@@ -860,18 +862,6 @@ int main() {
                 self.assertEqual(result.returncode, 0, result.stderr)
                 result = subprocess.run([str(binary)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_ios_forces_bgfx_metal_work_onto_the_main_thread(self):
-        source = MAIN_SOURCE.read_text(encoding="utf-8")
-        limits = source.index("rendering::applyBgfxTransientBufferLimits")
-        ios_guard = source.index("#if TARGET_OS_IPHONE", limits)
-        force_single_threaded = source.index("bgfx::renderFrame();", ios_guard)
-        non_ios_branch = source.index("#else", ios_guard)
-        initialize_bgfx = source.index("int appExitCode = runApplication(bgfx_init);")
-        self.assertLess(ios_guard, force_single_threaded)
-        self.assertLess(force_single_threaded, non_ios_branch)
-        self.assertLess(force_single_threaded, initialize_bgfx)
-        self.assertIn("Using bgfx single-threaded mode on iOS", source)
 
     def test_ios_active_window_lookup_uses_a_validated_weak_cache(self):
         source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")

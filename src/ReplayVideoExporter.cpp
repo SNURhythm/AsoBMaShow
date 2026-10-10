@@ -892,6 +892,11 @@ public:
   }
 
   void allowUiFrame(const std::function<void()> &restoreExportViews) {
+#if TARGET_OS_IPHONE
+    // UIKit displays export progress while this sole bgfx owner is occupied.
+    // Never reenter scene events here: they can destroy the exporting scene.
+    return;
+#else
     if (released || context.quitFlag.load(std::memory_order_acquire)) {
       return;
     }
@@ -916,6 +921,7 @@ public:
     context.replayVideoExportUiFrameRequested.store(false,
                                                     std::memory_order_release);
     restoreExportViews();
+#endif
   }
 
   ScopedReplayVideoBgfxAccess(const ScopedReplayVideoBgfxAccess &) = delete;
@@ -967,8 +973,11 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
                       long long audioOffsetMicros,
                       long long playbackEventDeadlineMicros,
                       const std::filesystem::path &path,
-                      ReplayVideoExportLog *log, bool autoKeySound) {
+                      ReplayVideoExportLog *log, bool autoKeySound, std::stop_token stop) {
   std::atomic_bool isCancelled = false;
+#if TARGET_OS_IPHONE
+  std::stop_callback cancelAudio(stop, [&] { isCancelled = true; });
+#endif
   const chart_audio::RenderOptions options{
       .keySoundMode = autoKeySound ? chart_audio::KeySoundMode::ChartTiming
                                    : chart_audio::KeySoundMode::ReplayTiming,
@@ -3311,6 +3320,15 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   auto renderAndQueueFrame = [&](size_t frameIndex, long long videoTimeMicros,
                                  auto &&renderFrame) -> bool {
+    if (options.stop.stop_requested()) {
+      // Drain already submitted readbacks before freeing the encoder buffers.
+      // These are offscreen views and do not acquire a window drawable.
+      while (!pendingReadbacks.empty()) {
+        if (!drainOldestReadback()) return false;
+      }
+      errorMessage = "Replay export cancelled";
+      return false;
+    }
     if (!drainReadyReadbacks()) {
       return false;
     }
@@ -4003,6 +4021,15 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 
   auto renderAndQueueFrame = [&](size_t frameIndex, long long videoTimeMicros,
                                  auto &&renderFrame) -> bool {
+    if (options.stop.stop_requested()) {
+      // Drain already submitted readbacks before freeing the encoder buffers.
+      // These are offscreen views and do not acquire a window drawable.
+      while (!pendingReadbacks.empty()) {
+        if (!drainOldestReadback()) return false;
+      }
+      errorMessage = "Replay export cancelled";
+      return false;
+    }
     if (!drainReadyReadbacks()) {
       return false;
     }
@@ -4743,7 +4770,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult = writeReplayAudioTrack(
       *chart, replay, preparationPlan, audioOffsetMicros,
-      playbackEventDeadlineMicros, wavPath, exportLog, resolvedOptions.autoKeySound);
+      playbackEventDeadlineMicros, wavPath, exportLog, resolvedOptions.autoKeySound, resolvedOptions.stop);
   if (!audioResult.success) {
     replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
@@ -5011,7 +5038,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
                 *stage.chart, stage.replay));
     const auto audioResult = writeReplayAudioTrack(
         *stage.chart, stage.replay, stage.preparationPlan, audioOffsetMicros,
-        playbackEventDeadlineMicros, stageWavPath, exportLog, resolvedOptions.autoKeySound);
+        playbackEventDeadlineMicros, stageWavPath, exportLog, resolvedOptions.autoKeySound, resolvedOptions.stop);
     if (!audioResult.success) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,

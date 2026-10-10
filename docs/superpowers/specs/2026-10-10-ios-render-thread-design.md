@@ -135,3 +135,36 @@ upstream patch anchors change.
 
 No judgement-policy change, touch prediction, deployment, new worktree, or
 unrelated formatting is included.
+
+## Implementation and verification evidence (2026-10-11)
+
+UIKit now pumps SDL and delivers native input while one application worker owns
+scene updates, bgfx initialization, rendering and shutdown. SDL payloads cross
+an owned, bounded queue; native editing callbacks cross a generation mailbox.
+Main-thread platform requests remain serviced until the worker has unwound.
+Replay export uses the same renderer owner and a native progress/cancel overlay.
+The overlay avoids reentrant scene callbacks during scene destruction.
+
+- Desktop build and all 472 CTest cases passed (205.18 seconds).
+- Release verification passed 68 native cases, 53 iOS setup cases, 20 workflow
+  cases and 18 artifact cases, plus the unsigned iOS build and artifact audit.
+- iPhone Duo Simulator / iOS 27.1 exercised gameplay, pause/resume, retry,
+  background/resume, native search editing and portrait/landscape resizing.
+  Main Thread Checker was loaded and reported no violations in these runs.
+- Export cancellation during encoding returned to Records. A short replay
+  encoded 750 frames and saved to Photos in 10.67 seconds. Simulator Metal
+  rejects shared-buffer linear textures, so its generated backend now uses the
+  ordinary texture/getBytes fallback; physical devices retain the fast path.
+  The generated-source regression and desktop Metal pixel readback test passed.
+- An opt-in Debug one-second render stall left UIKit servicing 670 iterations,
+  followed by normal quit. A sampled stack placed main in its native run loop
+  and the application worker in Metal drawable acquisition. This establishes
+  scheduling separation, not a physical-device latency improvement.
+
+The simulator checks used generated local chart/audio fixtures. Unicode IME
+composition and physical-device timing/background behavior were not verified.
+The application event queue remains capped at 256; its pressure, lifecycle,
+shutdown and stale-generation behavior are covered by portable tests. The
+existing single-owner bgfx mode is retained, so this change does not introduce
+an extra bgfx producer/render frame queue. Physical frame pacing still requires
+measurement on the user's iPad.

@@ -5884,4 +5884,61 @@ SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
 //   // add touch event
 //   [view addGestureRecognizer:tapGesture];
 // }
+namespace {
+UIView *replayExportOverlay = nil;
+UILabel *replayExportLabel = nil;
+UIProgressView *replayExportProgress = nil;
+}
+
+void ShowIOSReplayExportProgress(std::function<void()> cancel) {
+  HideIOSReplayExportProgress();
+  UIWindow *window = FindActiveWindow();
+  if (window == nil) return;
+  replayExportOverlay = [[UIView alloc] initWithFrame:window.bounds];
+  replayExportOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  replayExportOverlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
+  UIStackView *stack = [[UIStackView alloc] init];
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.spacing = 20;
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  replayExportLabel = [[UILabel alloc] init];
+  replayExportLabel.text = @"Exporting replay…";
+  replayExportLabel.textColor = UIColor.whiteColor;
+  replayExportLabel.numberOfLines = 0;
+  replayExportLabel.textAlignment = NSTextAlignmentCenter;
+  replayExportProgress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+  UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+  [button setTitle:@"Cancel" forState:UIControlStateNormal];
+  [button addAction:[UIAction actionWithHandler:^(UIAction *action) {
+    cancel();
+    UIButton *sender = (UIButton *)action.sender;
+    sender.enabled = NO;
+    [sender setTitle:@"Cancelling…" forState:UIControlStateNormal];
+  }] forControlEvents:UIControlEventTouchUpInside];
+  [stack addArrangedSubview:replayExportLabel];
+  [stack addArrangedSubview:replayExportProgress];
+  [stack addArrangedSubview:button];
+  [replayExportOverlay addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.centerXAnchor constraintEqualToAnchor:replayExportOverlay.centerXAnchor],
+    [stack.centerYAnchor constraintEqualToAnchor:replayExportOverlay.centerYAnchor],
+    [stack.widthAnchor constraintLessThanOrEqualToConstant:420],
+    [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:replayExportOverlay.leadingAnchor constant:24],
+    [stack.widthAnchor constraintEqualToConstant:280]
+  ]];
+  [window addSubview:replayExportOverlay];
+}
+
+void SetIOSReplayExportProgress(double fraction, const std::string &message) {
+  replayExportLabel.text = NSStringFromUtf8(message);
+  replayExportProgress.progress = static_cast<float>(std::clamp(fraction, 0.0, 1.0));
+}
+
+void HideIOSReplayExportProgress() {
+  [replayExportOverlay removeFromSuperview];
+  replayExportOverlay = nil;
+  replayExportLabel = nil;
+  replayExportProgress = nil;
+}
+
 #endif

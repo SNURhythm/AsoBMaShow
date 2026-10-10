@@ -89,6 +89,12 @@ ApplicationEventQueue::ApplicationEventQueue(std::size_t capacity)
 
 void ApplicationEventQueue::preserveLifecycle(const SDL_Event &event) {
   switch (event.type) {
+  case SDL_EVENT_WINDOW_MINIMIZED:
+  case SDL_EVENT_WINDOW_HIDDEN:
+  case SDL_EVENT_WINDOW_FOCUS_LOST:
+  case SDL_EVENT_WINDOW_RESTORED:
+  case SDL_EVENT_WINDOW_SHOWN:
+  case SDL_EVENT_WINDOW_FOCUS_GAINED:
   case SDL_EVENT_WILL_ENTER_BACKGROUND:
   case SDL_EVENT_DID_ENTER_BACKGROUND:
   case SDL_EVENT_WILL_ENTER_FOREGROUND:

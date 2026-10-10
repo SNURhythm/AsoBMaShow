@@ -1,6 +1,8 @@
 #include "IOSApplicationRuntime.h"
 #if TARGET_OS_IPHONE
 #include "ApplicationEventQueue.h"
+#include "ApplicationThreadHost.h"
+#include "../RAII.h"
 #include "../iOSNatives.hpp"
 #include "../input/IOSTouchInput.h"
 #include "../input/InputLifecycle.h"
@@ -14,17 +16,26 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <deque>
 
 namespace {
 struct Runtime {
   platform::ApplicationEventQueue events;
   std::atomic_bool active{true};
-  std::atomic_bool complete{false};
+  std::atomic_bool ingressPaused{false};
+#ifndef NDEBUG
+  std::atomic_uint64_t mainServiceCount{0};
+  unsigned ownerIterations = 0;
+  bool stallProbeRan = false;
+#endif
   std::mutex viewportMutex;
   IOSWindowSnapshot viewport;
   std::mutex wakeMutex;
   std::condition_variable wake;
-  int result = EXIT_FAILURE;
+  // Work is posted and consumed only by the application owner.
+  std::deque<std::function<void()>> work;
+  // Main-thread state: the native cancel button owns only a copied stop source.
+  std::optional<std::stop_source> exportStop;
 };
 std::mutex runtimeMutex;
 std::shared_ptr<Runtime> runtime;
@@ -77,50 +88,55 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
   auto state = std::make_shared<Runtime>();
   updateViewport(*state, window);
   publishRuntime(state);
-  std::thread worker;
-  try {
-    worker = std::thread([state, application = std::move(application)] {
-      @autoreleasepool {
-        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-        try {
-          state->result = application();
-        } catch (const std::exception &error) {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "iOS application worker failed: %s", error.what());
-        } catch (...) {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "iOS application worker failed");
-        }
-      }
-      state->complete.store(true, std::memory_order_release);
-    });
-  } catch (...) {
+  auto cleanup = makeScopeExit([] {
+    SetIOSGameplayTouchInputEnabled(false);
     publishRuntime(nullptr);
-    throw;
-  }
-  while (!state->complete.load(std::memory_order_acquire)) {
+  });
+  return platform::runApplicationThread([application = std::move(application)] {
+    @autoreleasepool {
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+      pthread_setname_np("AsoBMaShow application/render");
+      return application();
+    }
+  }, [&] {
     @autoreleasepool {
       SDL_Event event{};
       while (SDL_PollEvent(&event)) {
         if (input::isBackgroundLifecycleEvent(event) || event.type == SDL_EVENT_TERMINATING ||
             event.type == SDL_EVENT_QUIT) {
           state->active.store(false, std::memory_order_release);
+          state->ingressPaused.store(true, std::memory_order_release);
           SetIOSGameplayTouchInputEnabled(false);
+          if (state->exportStop) state->exportStop->request_stop();
         } else if (input::isForegroundLifecycleEvent(event)) {
           updateViewport(*state, window);
           state->active.store(true, std::memory_order_release);
           // The application acknowledges viewport restoration before ingress
           // reopens. Main never waits for that acknowledgement.
         }
-        if (!state->events.push(event)) SetIOSGameplayTouchInputEnabled(false);
+        const bool lifecycle = input::isBackgroundLifecycleEvent(event) ||
+            input::isForegroundLifecycleEvent(event) || event.type == SDL_EVENT_QUIT ||
+            event.type == SDL_EVENT_TERMINATING;
+        if ((!state->exportStop || lifecycle) && !state->events.push(event)) {
+          state->ingressPaused.store(true, std::memory_order_release);
+          SetIOSGameplayTouchInputEnabled(false);
+        }
         state->wake.notify_one();
       }
       updateViewport(*state, window);
+#ifndef NDEBUG
+      state->mainServiceCount.fetch_add(1, std::memory_order_relaxed);
+#endif
       WaitIOSMainRunLoopForMicros(1000);
     }
-  }
-  SetIOSGameplayTouchInputEnabled(false);
-  worker.join(); // Completion published only after all worker cleanup.
-  publishRuntime(nullptr);
-  return state->result;
+  }, [](std::exception_ptr failure) {
+    try { std::rethrow_exception(failure); }
+    catch (const std::exception &error) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "iOS application worker failed: %s", error.what());
+    } catch (...) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "iOS application worker failed");
+    }
+  });
 }
 
 bool PollIOSApplicationEvent(SDL_Event *event) {
@@ -156,8 +172,84 @@ std::optional<IOSWindowSnapshot> GetIOSWindowSnapshot(SDL_Window *window) {
 }
 
 void ResumeIOSGameplayTouchInput() {
+  const auto state = currentRuntime();
+  if (!state || !state->ingressPaused.load(std::memory_order_acquire)) return;
   RunIOSMainThread([] {
-    if (IOSApplicationActive()) SetIOSGameplayTouchInputEnabled(true);
+    const auto state = currentRuntime();
+    if (state && state->active.load() && !state->exportStop) {
+      SetIOSGameplayTouchInputEnabled(true);
+      state->ingressPaused.store(false, std::memory_order_release);
+    }
   });
+}
+bool TakeIOSApplicationOverflow() {
+  const auto state = currentRuntime();
+  return state && state->events.takeOverflow();
+}
+
+void PostIOSApplicationWork(std::function<void()> work) {
+  const auto state = currentRuntime();
+  if (!state || IsIOSMainThread()) throw std::logic_error("Missing iOS application owner");
+  state->work.push_back(std::move(work));
+}
+
+void PollIOSApplicationWork() {
+  const auto state = currentRuntime();
+  if (!state) return;
+#ifndef NDEBUG
+  // Opt-in acceptance probe, bounded and absent from release builds. Main's
+  // service count measures scheduling independence, not hardware input latency.
+  ++state->ownerIterations;
+  const char *afterTouches = std::getenv("ASOBMASHOW_IOS_RENDER_STALL_AFTER_TOUCHES");
+  const bool probeDue = afterTouches
+      ? IOSGameplayTouchProbeCount() >= static_cast<unsigned>(std::max(1, std::atoi(afterTouches)))
+      : state->ownerIterations >= 120;
+  if (!state->stallProbeRan && probeDue) {
+    state->stallProbeRan = true;
+    if (const char *value = std::getenv("ASOBMASHOW_IOS_RENDER_STALL_MS")) {
+      const int milliseconds = std::clamp(std::atoi(value), 0, 5000);
+      const auto before = state->mainServiceCount.load(std::memory_order_relaxed);
+      SDL_Log("iOS render stall probe begin: %d ms", milliseconds);
+      std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+      SDL_Log("iOS render stall probe end: main serviced %llu iterations",
+          static_cast<unsigned long long>(state->mainServiceCount.load(std::memory_order_relaxed) - before));
+      if (std::getenv("ASOBMASHOW_IOS_PROBE_QUIT")) {
+        SDL_Event quit{};
+        quit.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&quit);
+      }
+    }
+  }
+#endif
+  if (state->work.empty()) return;
+  // One job per safe scene-loop boundary. Destruction invalidates pending jobs.
+  auto work = std::move(state->work.front());
+  state->work.pop_front();
+  work();
+}
+
+void BeginIOSReplayExport(std::stop_source stop) {
+  RunIOSMainThread([stop] {
+    const auto state = currentRuntime();
+    if (!state) return;
+    state->exportStop = stop;
+    state->ingressPaused.store(true, std::memory_order_release);
+    SetIOSGameplayTouchInputEnabled(false);
+    if (!state->active.load()) state->exportStop->request_stop();
+    ShowIOSReplayExportProgress([stop]() mutable { stop.request_stop(); });
+  });
+}
+
+void UpdateIOSReplayExport(double fraction, const std::string &message) {
+  RunIOSMainThread([&] { SetIOSReplayExportProgress(fraction, message); });
+}
+
+void EndIOSReplayExport() {
+  RunIOSMainThread([] {
+    HideIOSReplayExportProgress();
+    const auto state = currentRuntime();
+    if (state) state->exportStop.reset();
+  });
+  // Reopen input only after the scene loop has consumed pending lifecycle state.
 }
 #endif

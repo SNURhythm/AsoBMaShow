@@ -308,7 +308,7 @@ int main() {
     def test_queued_rotation_precedes_start_input(self):
         root = Path(__file__).resolve().parents[1]
         production = (root / "src/main.cpp").read_text()
-        loop = extract(production, "while (SDL_PollEvent(&e))")
+        loop = extract(production, "while (pollApplicationEvent(&e))")
         signature = "auto flushPendingResize = [&]()"
         flush = extract(production, signature) + ";" if signature in production else ""
         source = r'''
@@ -347,7 +347,7 @@ int main() {
       {.type=SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED,.window={1080,1920}},
       {.type=SDL_EVENT_KEY_DOWN}};
   std::size_t eventIndex=0;
-  auto SDL_PollEvent=[&](SDL_Event *event) {
+  auto pollApplicationEvent=[&](SDL_Event *event) {
     if(eventIndex==events.size())return false;
     *event=events[eventIndex++];return true;
   };
