@@ -1,0 +1,537 @@
+{
+  "current1": {
+    "stages": {
+      "audio-callback": {
+        "n": 10789,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 1167
+      },
+      "audio-interval": {
+        "n": 10786,
+        "p50_us": 10700,
+        "p95_us": 10800,
+        "p99_us": 10800,
+        "max_us": 13555
+      },
+      "native-output-lead": {
+        "n": 10788,
+        "p50_us": 14100,
+        "p95_us": 14100,
+        "p99_us": 14100,
+        "max_us": 14156
+      },
+      "frame-submit": {
+        "n": 6641,
+        "p50_us": 5700,
+        "p95_us": 12300,
+        "p99_us": 16000,
+        "max_us": 708286
+      },
+      "snapshot-age": {
+        "n": 1108,
+        "p50_us": 1500,
+        "p95_us": 13200,
+        "p99_us": 17100,
+        "max_us": 36473
+      },
+      "source-to-ingress": {
+        "n": 900,
+        "p50_us": 1400,
+        "p95_us": 2400,
+        "p99_us": 4100,
+        "max_us": 18639
+      },
+      "ingress-to-worker": {
+        "n": 600,
+        "p50_us": 200,
+        "p95_us": 1900,
+        "p99_us": 5900,
+        "max_us": 8390
+      },
+      "worker-to-sound-command": {
+        "n": 300,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 200,
+        "max_us": 514
+      },
+      "sound-command-to-callback": {
+        "n": 300,
+        "p50_us": 4900,
+        "p95_us": 10300,
+        "p99_us": 10600,
+        "max_us": 10694
+      },
+      "touch-to-worker": {
+        "n": 600,
+        "p50_us": 1700,
+        "p95_us": 4400,
+        "p99_us": 8000,
+        "max_us": 19517
+      },
+      "touch-to-sound-command": {
+        "n": 300,
+        "p50_us": 1900,
+        "p95_us": 4400,
+        "p99_us": 6800,
+        "max_us": 11462
+      }
+    },
+    "segments": {
+      "source-to-uikit": {
+        "n": 600,
+        "p50_us": 1421,
+        "p95_us": 2422,
+        "p99_us": 4179,
+        "max_us": 18624
+      },
+      "uikit-to-gameplay": {
+        "n": 600,
+        "p50_us": 19,
+        "p95_us": 31,
+        "p99_us": 43,
+        "max_us": 54
+      },
+      "gameplay-to-enqueue": {
+        "n": 600,
+        "p50_us": 9,
+        "p95_us": 19,
+        "p99_us": 22,
+        "max_us": 169
+      },
+      "uikit-to-enqueue": {
+        "n": 600,
+        "p50_us": 24,
+        "p95_us": 37,
+        "p99_us": 53,
+        "max_us": 177
+      },
+      "source-to-enqueue": {
+        "n": 600,
+        "p50_us": 1447,
+        "p95_us": 2447,
+        "p99_us": 4194,
+        "max_us": 18683
+      },
+      "uikit-handler": {
+        "n": 600,
+        "p50_us": 40,
+        "p95_us": 66,
+        "p99_us": 116,
+        "max_us": 113059
+      }
+    },
+    "fps_line": "2026-10-11 07:07:43.947 AsoBMaShow[57513:10769943] FPS 57.7 | Avg 60.0 | 1% Low 56.6 | Scheduler 252225.95 us (3.96 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0",
+    "audio_line": "2026-10-11 07:07:43.947 AsoBMaShow[57513:10769943] Audio native callback 86 frames at 8000 Hz | output timestamp available | underflow reporting unknown (0) | physical display presentation unknown",
+    "pairing": {
+      "matched": 600,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    }
+  },
+  "baseline1": {
+    "stages": {
+      "audio-callback": {
+        "n": 9421,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 1043
+      },
+      "audio-interval": {
+        "n": 9418,
+        "p50_us": 10700,
+        "p95_us": 10800,
+        "p99_us": 10800,
+        "max_us": 84765
+      },
+      "native-output-lead": {
+        "n": 9420,
+        "p50_us": 14100,
+        "p95_us": 14100,
+        "p99_us": 14100,
+        "max_us": 14152
+      },
+      "frame-submit": {
+        "n": 5755,
+        "p50_us": 5800,
+        "p95_us": 11000,
+        "p99_us": 13700,
+        "max_us": 653299
+      },
+      "snapshot-age": {
+        "n": 1082,
+        "p50_us": 10200,
+        "p95_us": 16500,
+        "p99_us": 16600,
+        "max_us": 16749
+      },
+      "source-to-ingress": {
+        "n": 900,
+        "p50_us": 1800,
+        "p95_us": 7600,
+        "p99_us": 12300,
+        "max_us": 475893
+      },
+      "ingress-to-worker": {
+        "n": 600,
+        "p50_us": 200,
+        "p95_us": 2700,
+        "p99_us": 6000,
+        "max_us": 9253
+      },
+      "worker-to-sound-command": {
+        "n": 300,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 151
+      },
+      "sound-command-to-callback": {
+        "n": 300,
+        "p50_us": 5200,
+        "p95_us": 10300,
+        "p99_us": 10600,
+        "max_us": 10715
+      },
+      "touch-to-worker": {
+        "n": 600,
+        "p50_us": 2200,
+        "p95_us": 8600,
+        "p99_us": 17500,
+        "max_us": 476007
+      },
+      "touch-to-sound-command": {
+        "n": 300,
+        "p50_us": 2200,
+        "p95_us": 8400,
+        "p99_us": 12800,
+        "max_us": 358028
+      }
+    },
+    "segments": {
+      "source-to-uikit": {
+        "n": 600,
+        "p50_us": 1694,
+        "p95_us": 7528,
+        "p99_us": 12232,
+        "max_us": 475874
+      },
+      "uikit-to-gameplay": {
+        "n": 600,
+        "p50_us": 18,
+        "p95_us": 41,
+        "p99_us": 54,
+        "max_us": 76
+      },
+      "gameplay-to-enqueue": {
+        "n": 600,
+        "p50_us": 5,
+        "p95_us": 18,
+        "p99_us": 26,
+        "max_us": 80
+      },
+      "uikit-to-enqueue": {
+        "n": 600,
+        "p50_us": 23,
+        "p95_us": 45,
+        "p99_us": 58,
+        "max_us": 124
+      },
+      "source-to-enqueue": {
+        "n": 600,
+        "p50_us": 1720,
+        "p95_us": 7551,
+        "p99_us": 12253,
+        "max_us": 475908
+      },
+      "uikit-handler": {
+        "n": 600,
+        "p50_us": 40,
+        "p95_us": 85,
+        "p99_us": 182,
+        "max_us": 576156
+      }
+    },
+    "fps_line": "2026-10-11 07:09:35.064 AsoBMaShow[59498:10777687] FPS 60.0 | Avg 60.0 | 1% Low 59.5 | Scheduler 252462.04 us (3.96 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0",
+    "audio_line": "2026-10-11 07:09:35.064 AsoBMaShow[59498:10777687] Audio native callback 85 frames at 8000 Hz | output timestamp available | underflow reporting unknown (0) | physical display presentation unknown",
+    "pairing": {
+      "matched": 600,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    }
+  },
+  "baseline2": {
+    "stages": {
+      "audio-callback": {
+        "n": 8917,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 128
+      },
+      "audio-interval": {
+        "n": 8914,
+        "p50_us": 10700,
+        "p95_us": 10800,
+        "p99_us": 10800,
+        "max_us": 10937
+      },
+      "native-output-lead": {
+        "n": 8917,
+        "p50_us": 14100,
+        "p95_us": 14100,
+        "p99_us": 14100,
+        "max_us": 14139
+      },
+      "frame-submit": {
+        "n": 5567,
+        "p50_us": 5600,
+        "p95_us": 9000,
+        "p99_us": 11700,
+        "max_us": 139193
+      },
+      "snapshot-age": {
+        "n": 1135,
+        "p50_us": 7300,
+        "p95_us": 10400,
+        "p99_us": 12100,
+        "max_us": 15919
+      },
+      "source-to-ingress": {
+        "n": 900,
+        "p50_us": 2400,
+        "p95_us": 7800,
+        "p99_us": 10600,
+        "max_us": 14952
+      },
+      "ingress-to-worker": {
+        "n": 600,
+        "p50_us": 200,
+        "p95_us": 1100,
+        "p99_us": 6500,
+        "max_us": 9484
+      },
+      "worker-to-sound-command": {
+        "n": 300,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 141
+      },
+      "sound-command-to-callback": {
+        "n": 300,
+        "p50_us": 5400,
+        "p95_us": 10300,
+        "p99_us": 10600,
+        "max_us": 10667
+      },
+      "touch-to-worker": {
+        "n": 600,
+        "p50_us": 2600,
+        "p95_us": 8200,
+        "p99_us": 11400,
+        "max_us": 15161
+      },
+      "touch-to-sound-command": {
+        "n": 300,
+        "p50_us": 2500,
+        "p95_us": 6300,
+        "p99_us": 10100,
+        "max_us": 11580
+      }
+    },
+    "segments": {
+      "source-to-uikit": {
+        "n": 600,
+        "p50_us": 2261,
+        "p95_us": 7501,
+        "p99_us": 10486,
+        "max_us": 14941
+      },
+      "uikit-to-gameplay": {
+        "n": 600,
+        "p50_us": 16,
+        "p95_us": 44,
+        "p99_us": 51,
+        "max_us": 93
+      },
+      "gameplay-to-enqueue": {
+        "n": 600,
+        "p50_us": 10,
+        "p95_us": 19,
+        "p99_us": 25,
+        "max_us": 49
+      },
+      "uikit-to-enqueue": {
+        "n": 600,
+        "p50_us": 25,
+        "p95_us": 48,
+        "p99_us": 57,
+        "max_us": 104
+      },
+      "source-to-enqueue": {
+        "n": 600,
+        "p50_us": 2285,
+        "p95_us": 7532,
+        "p99_us": 10509,
+        "max_us": 14963
+      },
+      "uikit-handler": {
+        "n": 600,
+        "p50_us": 44,
+        "p95_us": 92,
+        "p99_us": 117,
+        "max_us": 43059
+      }
+    },
+    "fps_line": "2026-10-11 07:11:22.053 AsoBMaShow[61344:10784116] FPS 59.9 | Avg 60.0 | 1% Low 59.3 | Scheduler 252618.42 us (3.96 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0",
+    "audio_line": "2026-10-11 07:11:22.053 AsoBMaShow[61344:10784116] Audio native callback 85 frames at 8000 Hz | output timestamp available | underflow reporting unknown (0) | physical display presentation unknown",
+    "pairing": {
+      "matched": 600,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    }
+  },
+  "current2": {
+    "stages": {
+      "audio-callback": {
+        "n": 9441,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 527
+      },
+      "audio-interval": {
+        "n": 9438,
+        "p50_us": 10700,
+        "p95_us": 10800,
+        "p99_us": 10800,
+        "max_us": 65397
+      },
+      "native-output-lead": {
+        "n": 9439,
+        "p50_us": 14100,
+        "p95_us": 14100,
+        "p99_us": 14100,
+        "max_us": 14157
+      },
+      "frame-submit": {
+        "n": 5921,
+        "p50_us": 5400,
+        "p95_us": 8700,
+        "p99_us": 11300,
+        "max_us": 141142
+      },
+      "snapshot-age": {
+        "n": 1178,
+        "p50_us": 5100,
+        "p95_us": 15000,
+        "p99_us": 16300,
+        "max_us": 56072
+      },
+      "source-to-ingress": {
+        "n": 900,
+        "p50_us": 1400,
+        "p95_us": 3600,
+        "p99_us": 11100,
+        "max_us": 33307
+      },
+      "ingress-to-worker": {
+        "n": 600,
+        "p50_us": 300,
+        "p95_us": 3400,
+        "p99_us": 6400,
+        "max_us": 9192
+      },
+      "worker-to-sound-command": {
+        "n": 300,
+        "p50_us": 100,
+        "p95_us": 100,
+        "p99_us": 100,
+        "max_us": 169
+      },
+      "sound-command-to-callback": {
+        "n": 300,
+        "p50_us": 5000,
+        "p95_us": 10100,
+        "p99_us": 10600,
+        "max_us": 10706
+      },
+      "native-output-lateness": {
+        "n": 2,
+        "p50_us": 500,
+        "p95_us": 40705,
+        "p99_us": 40705,
+        "max_us": 40705
+      },
+      "touch-to-worker": {
+        "n": 600,
+        "p50_us": 2000,
+        "p95_us": 6500,
+        "p99_us": 11600,
+        "max_us": 39556
+      },
+      "touch-to-sound-command": {
+        "n": 300,
+        "p50_us": 2700,
+        "p95_us": 6700,
+        "p99_us": 11700,
+        "max_us": 29874
+      }
+    },
+    "segments": {
+      "source-to-uikit": {
+        "n": 600,
+        "p50_us": 1387,
+        "p95_us": 3669,
+        "p99_us": 10971,
+        "max_us": 33251
+      },
+      "uikit-to-gameplay": {
+        "n": 600,
+        "p50_us": 19,
+        "p95_us": 33,
+        "p99_us": 49,
+        "max_us": 156
+      },
+      "gameplay-to-enqueue": {
+        "n": 600,
+        "p50_us": 5,
+        "p95_us": 17,
+        "p99_us": 24,
+        "max_us": 32
+      },
+      "uikit-to-enqueue": {
+        "n": 600,
+        "p50_us": 23,
+        "p95_us": 41,
+        "p99_us": 56,
+        "max_us": 157
+      },
+      "source-to-enqueue": {
+        "n": 600,
+        "p50_us": 1409,
+        "p95_us": 3694,
+        "p99_us": 11027,
+        "max_us": 33324
+      },
+      "uikit-handler": {
+        "n": 600,
+        "p50_us": 41,
+        "p95_us": 68,
+        "p99_us": 335,
+        "max_us": 38298
+      }
+    },
+    "fps_line": "2026-10-11 07:13:12.223 AsoBMaShow[62991:10790101] FPS 57.0 | Avg 60.0 | 1% Low 56.8 | Scheduler 252208.91 us (3.96 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0",
+    "audio_line": "2026-10-11 07:13:12.223 AsoBMaShow[62991:10790101] Audio native callback 85 frames at 8000 Hz | output timestamp available | underflow reporting unknown (0) | physical display presentation unknown",
+    "pairing": {
+      "matched": 600,
+      "missing": 0,
+      "synchronous_sdl_fingers": 0
+    }
+  }
+}

@@ -134,3 +134,6 @@ simulator workload. A physical-device test is still needed to quantify
 digitizer delivery, ProMotion behavior, heavy-skin workloads, simultaneous
 fingers, and audible output. Replay export bypass is covered by policy tests
 and code review, not a new end-to-end video export benchmark.
+
+A later [PR #135 versus PR #136 simulator comparison](2026-10-11-ios-input-latency.md)
+measures the additional application-thread separation against this final paced baseline.
