@@ -1,0 +1,271 @@
+{
+  "platform": "iOS 27.1 iPhone Duo Simulator, arm64 Debug, Apple M1 Pro 16 GiB",
+  "unit": "microseconds",
+  "run_order": [
+    "baseline",
+    "updated"
+  ],
+  "baseline_commit": "fa37465bd81762f4ff5a82b1ec92b19332b1e6cd",
+  "updated_commit": "60ea959005ace76f1004b07a82855168708e7033",
+  "runs": {
+    "baseline": {
+      "segments": {
+        "source-to-uikit": {
+          "n": 600,
+          "p50_us": 4613,
+          "p95_us": 11588,
+          "p99_us": 14892,
+          "max_us": 15950
+        },
+        "uikit-to-gameplay": {
+          "n": 600,
+          "p50_us": 7,
+          "p95_us": 14,
+          "p99_us": 18,
+          "max_us": 43
+        },
+        "gameplay-to-enqueue": {
+          "n": 600,
+          "p50_us": 10,
+          "p95_us": 14,
+          "p99_us": 21,
+          "max_us": 44
+        },
+        "uikit-to-enqueue": {
+          "n": 600,
+          "p50_us": 16,
+          "p95_us": 27,
+          "p99_us": 34,
+          "max_us": 50
+        },
+        "source-to-enqueue": {
+          "n": 600,
+          "p50_us": 4631,
+          "p95_us": 11603,
+          "p99_us": 14926,
+          "max_us": 15969
+        },
+        "uikit-handler": {
+          "n": 600,
+          "p50_us": 32,
+          "p95_us": 63,
+          "p99_us": 83,
+          "max_us": 1184
+        }
+      },
+      "pairing": {
+        "matched": 600,
+        "missing": 0,
+        "synchronous_sdl_fingers": 600
+      },
+      "standard_latency": {
+        "audio-callback": {
+          "n": 8889,
+          "p50_us": 100,
+          "p95_us": 100,
+          "p99_us": 100,
+          "max_us": 1313
+        },
+        "audio-interval": {
+          "n": 8887,
+          "p50_us": 10700,
+          "p95_us": 10800,
+          "p99_us": 10800,
+          "max_us": 14869
+        },
+        "native-output-lead": {
+          "n": 8889,
+          "p50_us": 14100,
+          "p95_us": 14100,
+          "p99_us": 14100,
+          "max_us": 14107
+        },
+        "frame-submit": {
+          "n": 17194,
+          "p50_us": 3600,
+          "p95_us": 9800,
+          "p99_us": 21700,
+          "max_us": 632872
+        },
+        "snapshot-age": {
+          "n": 1154,
+          "p50_us": 1100,
+          "p95_us": 5800,
+          "p99_us": 9600,
+          "max_us": 19799
+        },
+        "ingress-to-worker": {
+          "n": 600,
+          "p50_us": 200,
+          "p95_us": 1600,
+          "p99_us": 4500,
+          "max_us": 8415
+        },
+        "worker-to-sound-command": {
+          "n": 300,
+          "p50_us": 100,
+          "p95_us": 100,
+          "p99_us": 100,
+          "max_us": 392
+        },
+        "sound-command-to-callback": {
+          "n": 300,
+          "p50_us": 5300,
+          "p95_us": 10400,
+          "p99_us": 10600,
+          "max_us": 10688
+        },
+        "touch-to-worker": {
+          "n": 600,
+          "p50_us": 4900,
+          "p95_us": 11900,
+          "p99_us": 15200,
+          "max_us": 18892
+        },
+        "touch-to-sound-command": {
+          "n": 300,
+          "p50_us": 4700,
+          "p95_us": 12500,
+          "p99_us": 15800,
+          "max_us": 16129
+        }
+      },
+      "taps": 300,
+      "host_tap_loop_elapsed_ms": 58195,
+      "executable_sha256": "829cc9cc7329c7912d66128efa5a3e072dbe76ba7b39774619581efb8e833345"
+    },
+    "updated": {
+      "segments": {
+        "source-to-uikit": {
+          "n": 600,
+          "p50_us": 4599,
+          "p95_us": 11685,
+          "p99_us": 14093,
+          "max_us": 22529
+        },
+        "uikit-to-gameplay": {
+          "n": 600,
+          "p50_us": 15,
+          "p95_us": 41,
+          "p99_us": 47,
+          "max_us": 68
+        },
+        "gameplay-to-enqueue": {
+          "n": 600,
+          "p50_us": 10,
+          "p95_us": 19,
+          "p99_us": 26,
+          "max_us": 44
+        },
+        "uikit-to-enqueue": {
+          "n": 600,
+          "p50_us": 22,
+          "p95_us": 45,
+          "p99_us": 53,
+          "max_us": 89
+        },
+        "source-to-enqueue": {
+          "n": 600,
+          "p50_us": 4623,
+          "p95_us": 11708,
+          "p99_us": 14111,
+          "max_us": 22552
+        },
+        "uikit-handler": {
+          "n": 600,
+          "p50_us": 38,
+          "p95_us": 84,
+          "p99_us": 121,
+          "max_us": 59308
+        }
+      },
+      "pairing": {
+        "matched": 600,
+        "missing": 0,
+        "synchronous_sdl_fingers": 0
+      },
+      "standard_latency": {
+        "audio-callback": {
+          "n": 11712,
+          "p50_us": 100,
+          "p95_us": 100,
+          "p99_us": 100,
+          "max_us": 392
+        },
+        "audio-interval": {
+          "n": 11710,
+          "p50_us": 10700,
+          "p95_us": 10800,
+          "p99_us": 10800,
+          "max_us": 10918
+        },
+        "native-output-lead": {
+          "n": 11712,
+          "p50_us": 14100,
+          "p95_us": 14100,
+          "p99_us": 14100,
+          "max_us": 14114
+        },
+        "frame-submit": {
+          "n": 19632,
+          "p50_us": 3700,
+          "p95_us": 19100,
+          "p99_us": 24500,
+          "max_us": 733622
+        },
+        "snapshot-age": {
+          "n": 1133,
+          "p50_us": 800,
+          "p95_us": 4500,
+          "p99_us": 9500,
+          "max_us": 71160
+        },
+        "source-to-ingress": {
+          "n": 900,
+          "p50_us": 4500,
+          "p95_us": 11900,
+          "p99_us": 13800,
+          "max_us": 22539
+        },
+        "ingress-to-worker": {
+          "n": 600,
+          "p50_us": 200,
+          "p95_us": 1800,
+          "p99_us": 4700,
+          "max_us": 9678
+        },
+        "worker-to-sound-command": {
+          "n": 300,
+          "p50_us": 100,
+          "p95_us": 100,
+          "p99_us": 100,
+          "max_us": 122
+        },
+        "sound-command-to-callback": {
+          "n": 300,
+          "p50_us": 4700,
+          "p95_us": 10300,
+          "p99_us": 10600,
+          "max_us": 10692
+        },
+        "touch-to-worker": {
+          "n": 600,
+          "p50_us": 5000,
+          "p95_us": 12200,
+          "p99_us": 15400,
+          "max_us": 32230
+        },
+        "touch-to-sound-command": {
+          "n": 300,
+          "p50_us": 5300,
+          "p95_us": 11400,
+          "p99_us": 16100,
+          "max_us": 18615
+        }
+      },
+      "taps": 300,
+      "host_tap_loop_elapsed_ms": 57874,
+      "executable_sha256": "f72ba8f658cbcc1cb6f185b1be4c414c27ef55c483562d474d7468083549b671"
+    }
+  }
+}

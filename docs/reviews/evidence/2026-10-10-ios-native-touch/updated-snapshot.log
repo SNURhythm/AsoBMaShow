@@ -1,0 +1,27 @@
+2026-10-10 20:54:39.622 AsoBMaShow[APP] SDL link version: 3.4.19
+2026-10-10 20:54:39.828 AsoBMaShow[APP] Window size (logical): 951 x 669
+2026-10-10 20:54:39.828 AsoBMaShow[APP] Drawable size: 2853 x 2007
+2026-10-10 20:54:39.828 AsoBMaShow[APP] Drawable scale: 3.000000 x 3.000000
+2026-10-10 20:54:39.858 AsoBMaShow[APP] iOS touch probe observing SDL_uikitview
+2026-10-10 20:54:39.858 AsoBMaShow[APP] iOS touch probe observing AsoGameplayTouchRecognizer
+2026-10-10 20:54:39.859 AsoBMaShow[APP] Using bgfx single-threaded mode on iOS
+2026-10-10 20:56:47.338 AsoBMaShow[APP] FPS 242.6 | Avg 222.3 | 1% Low 82.1 | Scheduler 252421.82 us (3.96 Hz) | Events raw 0 proc 20 coalesced M/F/R 0/0/0
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Audio native callback 86 frames at 8000 Hz | output timestamp available | underflow reporting unknown (0) | physical display presentation unknown
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage audio-callback | n 11712 | p50/p95/p99 <= 100/100/100 us | max 392 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage audio-interval | n 11710 | p50/p95/p99 <= 10700/10800/10800 us | max 10918 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage native-output-lead | n 11712 | p50/p95/p99 <= 14100/14100/14100 us | max 14114 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage frame-submit | n 19632 | p50/p95/p99 <= 3700/19100/24500 us | max 733622 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage snapshot-age | n 1133 | p50/p95/p99 <= 800/4500/9500 us | max 71160 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage source-to-ingress | n 900 | p50/p95/p99 <= 4500/11900/13800 us | max 22539 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage ingress-to-worker | n 600 | p50/p95/p99 <= 200/1800/4700 us | max 9678 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage worker-to-sound-command | n 300 | p50/p95/p99 <= 100/100/100 us | max 122 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage sound-command-to-callback | n 300 | p50/p95/p99 <= 4700/10300/10600 us | max 10692 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage touch-to-worker | n 600 | p50/p95/p99 <= 5000/12200/15400 us | max 32230 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] Latency stage touch-to-sound-command | n 300 | p50/p95/p99 <= 5300/11400/16100 us | max 18615 us
+2026-10-10 20:56:47.338 AsoBMaShow[APP] iOS touch probe matched 600 missing 0 synchronous SDL fingers 0
+2026-10-10 20:56:47.339 AsoBMaShow[APP] iOS touch segment source-to-uikit | n 600 | p50/p95/p99 <= 4599/11685/14093 us | max 22529 us
+2026-10-10 20:56:47.341 AsoBMaShow[APP] iOS touch segment uikit-to-gameplay | n 600 | p50/p95/p99 <= 15/41/47 us | max 68 us
+2026-10-10 20:56:47.341 AsoBMaShow[APP] iOS touch segment gameplay-to-enqueue | n 600 | p50/p95/p99 <= 10/19/26 us | max 44 us
+2026-10-10 20:56:47.342 AsoBMaShow[APP] iOS touch segment uikit-to-enqueue | n 600 | p50/p95/p99 <= 22/45/53 us | max 89 us
+2026-10-10 20:56:47.342 AsoBMaShow[APP] iOS touch segment source-to-enqueue | n 600 | p50/p95/p99 <= 4623/11708/14111 us | max 22552 us
+2026-10-10 20:56:47.343 AsoBMaShow[APP] iOS touch segment uikit-handler | n 600 | p50/p95/p99 <= 38/84/121 us | max 59308 us
