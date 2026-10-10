@@ -1,0 +1,8 @@
+10-10 19:27:31.327 I/SDL/APP (app): Realtime gameplay native input authority active (epoch 1)
+10-10 19:29:09.638 I/SDL/APP (app): Android rendering suspended
+10-10 19:29:14.886 I/SDL/APP (app): Android rendering resumed
+10-10 19:29:32.277 I/SDL/APP (app): Android rendering suspended
+10-10 19:29:35.477 I/SDL/APP (app): Android rendering resumed
+10-10 19:29:40.835 I/SDL/APP (app): Android rendering suspended
+10-10 19:29:44.019 I/SDL/APP (app): Android rendering resumed
+10-10 19:30:07.037 I/SDL/APP (app): Realtime gameplay native input authority active (epoch 2)

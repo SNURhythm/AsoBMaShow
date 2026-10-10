@@ -1116,6 +1116,22 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
 #if TARGET_OS_ANDROID
   std::unique_ptr<input::android::RawTouchRegistration> androidTouchRegistration;
+
+  void cancelAndroidUiTouches() {
+    if (androidTouchRegistration == nullptr || scene == nullptr) return;
+    const auto cancelled = androidTouchRegistration->cancelUiTouches();
+    for (std::size_t index = 0; index < cancelled.size; ++index) {
+      SDL_Event event{};
+      event.type = SDL_EVENT_FINGER_CANCELED;
+      event.tfinger.touchID = 1;
+      event.tfinger.fingerID =
+          static_cast<SDL_FingerID>(cancelled.events[index].pointerId) + 1;
+      event.tfinger.x = cancelled.events[index].x;
+      event.tfinger.y = cancelled.events[index].y;
+      for (auto *view : scene->views) view->notifyPointerEventConsumed(event);
+    }
+    scene->resetCoursePauseHold();
+  }
 #endif
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
@@ -2447,6 +2463,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   auto &session = *realtimeGameplaySession;
   const auto timestampMicros = nowMicros();
 #if TARGET_OS_ANDROID
+  if (!enabled) session.cancelAndroidUiTouches();
   session.publishKeyboardTextFocus();
 #endif
   {
@@ -4148,6 +4165,9 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
     cancelCoursePauseHold();
   }
   if (realtimeGameplayAuthorityActive()) {
+    // Retire samples that raced background entry before the resumed UI can
+    // see them. Gesture ownership stays native until each physical lift.
+    if (!background) realtimeGameplaySession->cancelAndroidUiTouches();
     setRealtimeGameplayIngressEnabled(!background && state != nullptr &&
         state->isPlaying && !state->isEnding && !context.jukebox.isPaused());
   }
@@ -8752,6 +8772,10 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 }
 
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
+  if (event.type == SDL_EVENT_FINGER_CANCELED) {
+    // Overflow recovery also retires captures in overlays hidden since Down.
+    for (auto *view : views) view->notifyPointerEventConsumed(event);
+  }
   std::optional<UiLogicalPoint> observedPointer;
   UiLogicalPoint point;
   if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {

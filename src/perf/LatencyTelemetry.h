@@ -15,12 +15,13 @@ namespace perf::latency {
 enum class Stage : unsigned {
   InputDelivery, IngressToWorker, WorkerToSoundCommit, SoundCommandToCallback,
   CallbackDuration, CallbackInterval, NativeOutputLead, NativeOutputLateness,
-  SnapshotAge, FrameSubmit, Count
+  SnapshotAge, FrameSubmit, TouchToWorker, TouchToSoundCommit, Count
 };
 inline constexpr std::array names{
     "source-to-ingress", "ingress-to-worker", "worker-to-sound-command",
     "sound-command-to-callback", "audio-callback", "audio-interval",
-    "native-output-lead", "native-output-lateness", "snapshot-age", "frame-submit"};
+    "native-output-lead", "native-output-lateness", "snapshot-age", "frame-submit",
+    "touch-to-worker", "touch-to-sound-command"};
 
 inline std::int64_t nowMicros() noexcept {
   return std::chrono::duration_cast<std::chrono::microseconds>(

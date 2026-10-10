@@ -5,6 +5,19 @@
 #include <SDL3/SDL_metal.h>
 #endif
 
+#if defined(__ANDROID__)
+AndroidNativeWindowOwner acquireAndroidNativeWindow(SDL_Window *window) {
+  if (window == nullptr) return {};
+  const SDL_PropertiesID properties = SDL_GetWindowProperties(window);
+  if (properties == 0 || !SDL_LockProperties(properties)) return {};
+  auto *nativeWindow = static_cast<ANativeWindow *>(SDL_GetPointerProperty(
+      properties, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+  if (nativeWindow != nullptr) ANativeWindow_acquire(nativeWindow);
+  SDL_UnlockProperties(properties);
+  return AndroidNativeWindowOwner(nativeWindow);
+}
+#endif
+
 bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow,
                               SdlMetalViewOwner &metalView) {
   pd = {};

@@ -71,6 +71,7 @@
 #include "AndroidNatives.h"
 #include "input/AndroidInputHints.h"
 #include "input/AndroidInputTimestamp.h"
+#include "input/AndroidRawTouchInput.h"
 #include <dirent.h>
 #include <sys/system_properties.h>
 #include <sys/stat.h>
@@ -115,6 +116,10 @@ bgfx::VertexLayout rendering::PosTexVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
 
 static SDL_Window *s_window = nullptr;
+#if TARGET_OS_ANDROID
+static AndroidNativeWindowOwner s_androidNativeWindow;
+static AndroidNativeWindowOwner s_androidPreviousWindow;
+#endif
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
 static float s_renderScale = 1.0f;
@@ -469,10 +474,16 @@ static int runApplication(const bgfx::Init &bgfxInit) {
       // frame pacing and post-process output.
       // bgfx::setDebug(BGFX_DEBUG_TEXT);
 
+#if TARGET_OS_ANDROID
+      SetAndroidRendererActive(true);
+#endif
       const int runExitCode = run();
       rendering::ShaderManager::getInstance().release();
       rendering::UniformCache::getInstance().destroyAll();
       bgfx::shutdown();
+#if TARGET_OS_ANDROID
+      SetAndroidRendererActive(false);
+#endif
       return runExitCode;
     }
     SDL_Log("bgfx::init failed for renderer: %s",
@@ -673,7 +684,13 @@ int main(int argv, char **args) {
 #endif
   bgfx::PlatformData pd{};
   SdlMetalViewOwner metalView;
+#if TARGET_OS_ANDROID
+  s_androidNativeWindow = acquireAndroidNativeWindow(win);
+  pd.nwh = s_androidNativeWindow.get();
+  if (pd.nwh == nullptr) {
+#else
   if (!setup_bgfx_platform_data(pd, win, metalView)) {
+#endif
     SDL_Log("Could not obtain native rendering window: %s", SDL_GetError());
     SDL_DestroyWindow(win);
     s_window = nullptr;
@@ -723,6 +740,10 @@ int main(int argv, char **args) {
 
   int appExitCode = runApplication(bgfx_init);
 
+#if TARGET_OS_ANDROID
+  s_androidPreviousWindow.reset();
+  s_androidNativeWindow.reset();
+#endif
   metalView.reset();
   SDL_DestroyWindow(win);
   s_window = nullptr;
@@ -1128,23 +1149,32 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         return false;
       }
       bgfx::PlatformData pd{};
-      SdlMetalViewOwner metalView;
-      if (!setup_bgfx_platform_data(pd, s_window, metalView)) {
-        SDL_Log("Failed to refresh Android window handle: %s", SDL_GetError());
-        return false;
-      }
+      auto window = acquireAndroidNativeWindow(s_window);
+      pd.nwh = window.get();
       if (pd.nwh == nullptr) {
         SDL_Log("Android window handle is not ready yet");
         return false;
       }
       bgfx::setPlatformData(pd);
+      s_androidPreviousWindow = std::move(s_androidNativeWindow);
+      s_androidNativeWindow = std::move(window);
       return true;
+    };
+
+    auto retireAndroidPreviousWindow = [&]() {
+      if (s_androidPreviousWindow) {
+        // The first resumed submission installs the new native window. Wait
+        // until it has been consumed before releasing our old window owner.
+        bgfx::frame();
+        s_androidPreviousWindow.reset();
+      }
     };
 
     auto applyAndroidRenderSuspend = [&](bool suspend) {
       if (androidRenderSuspended == suspend) {
         if (suspend) {
           NotifyAndroidExternalActivityRenderPaused();
+          NotifyAndroidSurfaceRenderPaused();
         }
         return true;
       }
@@ -1167,10 +1197,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       // stays unchanged, so the next frame must restore the BGA input targets.
       context.restoreGameplayRenderViews();
       bgfx::frame();
+      if (suspend) {
+        // frame() returns before the previous frame's final present. Passing
+        // a second suspended frame retires that present before Java releases
+        // the native window in SDLSurface.surfaceDestroyed().
+        bgfx::frame();
+      } else {
+        retireAndroidPreviousWindow();
+      }
       androidRenderSuspended = suspend;
       SDL_Log("Android rendering %s", suspend ? "suspended" : "resumed");
       if (suspend) {
         NotifyAndroidExternalActivityRenderPaused();
+        NotifyAndroidSurfaceRenderPaused();
       } else {
         androidResumeResizePending = true;
       }
@@ -1180,6 +1219,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     auto syncAndroidRenderSuspend = [&]() {
       const bool shouldSuspend =
           androidSystemSuspended ||
+          IsAndroidSurfaceRenderPauseRequested() ||
           IsAndroidExternalActivityRenderPauseRequested();
       if (!applyAndroidRenderSuspend(shouldSuspend)) {
         return androidRenderSuspended || shouldSuspend;
@@ -1365,6 +1405,42 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
     }
+#if TARGET_OS_ANDROID
+    // Gameplay-owned gestures never enter SDL on Android's UI thread. Their
+    // presentation events still traverse the ordinary registry and scene UI
+    // here, without SDL event watches or a second gameplay delivery.
+    input::android::UiTouchEvent uiTouch;
+    for (std::size_t count = 0;
+         count < input::android::kUiTouchQueueCapacity &&
+         input::android::RawTouchRegistration::pollUiEvent(uiTouch); ++count) {
+      if (!input::android::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
+        continue;
+      }
+      using input::android::TouchPhase;
+      SDL_Event touchEvent{};
+      touchEvent.type = uiTouch.touch.phase == TouchPhase::Down ? SDL_EVENT_FINGER_DOWN
+          : uiTouch.touch.phase == TouchPhase::Up ? SDL_EVENT_FINGER_UP
+          : uiTouch.touch.phase == TouchPhase::Cancel ? SDL_EVENT_FINGER_CANCELED
+                                                    : SDL_EVENT_FINGER_MOTION;
+      const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      const auto ageNanos = static_cast<Uint64>(std::max<std::int64_t>(
+          0, nowMicros - uiTouch.touch.steadyTimestampMicros)) * 1000;
+      const auto nowNanos = SDL_GetTicksNS();
+      touchEvent.tfinger.timestamp = ageNanos < nowNanos ? nowNanos - ageNanos : 1;
+      touchEvent.tfinger.touchID = 1;
+      touchEvent.tfinger.fingerID = static_cast<SDL_FingerID>(uiTouch.touch.pointerId) + 1;
+      touchEvent.tfinger.x = uiTouch.touch.x;
+      touchEvent.tfinger.y = uiTouch.touch.y;
+      touchEvent.tfinger.pressure = uiTouch.touch.phase == TouchPhase::Up ||
+          uiTouch.touch.phase == TouchPhase::Cancel ? 0.0f : 1.0f;
+      touchEvent.tfinger.windowID = SDL_GetWindowID(s_window);
+      context.inputDeviceRegistry.handleSdlEventAndDispatch(touchEvent);
+      if (input::android::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
+        processEvent(touchEvent);
+      }
+    }
+#endif
     if (hasDeferredRenderResize &&
         applyWindowResize(deferredRenderResizeW, deferredRenderResizeH)) {
       hasDeferredRenderResize = false;

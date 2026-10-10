@@ -125,6 +125,14 @@ struct FixtureWorker {
 };
 
 struct FixtureRealtimeSession {
+  bool uiTouchCaptured = false;
+  int pendingUiTouches = 0;
+  int uiTouchCancellations = 0;
+  void cancelAndroidUiTouches() {
+    uiTouchCaptured = false;
+    pendingUiTouches = 0;
+    ++uiTouchCancellations;
+  }
   std::mutex inputInterruptionMutex;
   FixtureJukebox *audio = nullptr;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
@@ -2031,6 +2039,7 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
   scene.inputHandler = &input;
   scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
   scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  scene.realtimeGameplaySession->uiTouchCaptured = true;
   const input::PhysicalControl key{.deviceId = "keyboard",
       .deviceClass = input::DeviceClass::Keyboard,
       .kind = input::ControlKind::Key, .index = 4};
@@ -2050,6 +2059,9 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
   gate->consume({.control = key, .rawValue = 1, .normalizedValue = 1}, 200);
   scene.clock = 300;
   scene.onApplicationBackgroundChanged(true);
+  require(!scene.realtimeGameplaySession->uiTouchCaptured &&
+              scene.realtimeGameplaySession->uiTouchCancellations == 1,
+          "Android backgrounding cancels native UI captures before background events are dropped");
   require(transitions.size() == 2 && transitions.back().type ==
               input::RealtimePhysicalInputTransitionType::Release &&
               transitions.back().hasReplayControl &&
@@ -2058,7 +2070,11 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
   require(!scene.context.jukebox.isPaused() && input.background &&
               !scene.realtimeGameplaySession->inputInterrupted,
           "Android lifecycle cancellation never invokes native failure auto-pause");
+  scene.realtimeGameplaySession->pendingUiTouches = 1;
   scene.onApplicationBackgroundChanged(false);
+  require(scene.realtimeGameplaySession->pendingUiTouches == 0 &&
+              scene.realtimeGameplaySession->uiTouchCancellations >= 2,
+          "foregrounding discards a new UI Down that arrived while backgrounded");
   require(!input.background && transitions.size() == 2,
           "foregrounding does not re-press cancelled physical inputs");
   fixtureAndroid = false;
@@ -2182,9 +2198,13 @@ void testAndroidRealtimePauseResumeDiscardsDeferredTouches() {
   scene.inputHandler = &input;
   scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
   scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  scene.realtimeGameplaySession->uiTouchCaptured = true;
   input.pendingTouches = 2;
   input.dragOwned = true;
   scene.showPauseMenu(true);
+  require(!scene.realtimeGameplaySession->uiTouchCaptured &&
+              scene.realtimeGameplaySession->uiTouchCancellations == 1,
+          "pausing cancels existing native UI captures before showing the pause menu");
   require(input.touchDiscards == 1 && input.pendingTouches == 0 && !input.dragOwned,
           "pausing active realtime gameplay discards queued touches and owned drags");
   input.pendingTouches = 2; // Resume-button Down/Up queued by the Java watcher.

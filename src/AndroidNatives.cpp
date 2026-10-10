@@ -19,6 +19,7 @@
 #include "platform/ScreenOrientation.h"
 #include "input/AndroidInputTimestamp.h"
 #include "input/AndroidRawTouchInput.h"
+#include "perf/LatencyTelemetry.h"
 #include "input/InputTimestamp.h"
 
 #include <SDL3/SDL_events.h>
@@ -59,7 +60,7 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSetInputTimestamp(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeOnRawTouch(
-    JNIEnv *, jclass, jint pointer, jint action, jfloat x, jfloat y,
+    JNIEnv *, jclass, jlong epoch, jint pointer, jint action, jfloat x, jfloat y,
     jlong uptimeNanos) {
   using namespace input::android;
   TouchPhase phase;
@@ -70,7 +71,7 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeOnRawTouch(
   case 3: phase = TouchPhase::Cancel; break;
   default: return;
   }
-  if (pointer < 0 || uptimeNanos <= 0) return;
+  if (epoch <= 0 || pointer < 0 || uptimeNanos <= 0) return;
   // MotionEvent and CLOCK_MONOTONIC both exclude deep sleep. Anchor once so
   // simultaneous/historical samples retain a single clock epoch and order.
   static const input::TimestampEpochMapping mapping = [] {
@@ -82,8 +83,23 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeOnRawTouch(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count()};
   }();
-  RawTouchRegistration::dispatch({pointer, phase, x, y,
-      mapping.toSteadyMicros(static_cast<std::uint64_t>(uptimeNanos) / 1000)});
+  const auto timestampMicros =
+      mapping.toSteadyMicros(static_cast<std::uint64_t>(uptimeNanos) / 1000);
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  const auto receivedMicros = perf::latency::nowMicros();
+  if (receivedMicros >= timestampMicros) {
+    perf::latency::record(perf::latency::Stage::InputDelivery,
+                         receivedMicros - timestampMicros);
+  }
+#endif
+  RawTouchRegistration::dispatch(static_cast<TouchEpoch>(epoch),
+      {pointer, phase, x, y, timestampMicros});
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeAcquireRawTouchGesture(
+    JNIEnv *, jclass) {
+  return static_cast<jlong>(input::android::RawTouchRegistration::activeEpoch());
 }
 
 namespace {
@@ -99,6 +115,9 @@ std::mutex gExternalActivityPauseMutex;
 std::condition_variable gExternalActivityPauseCv;
 bool gExternalActivityPauseRequested = false;
 bool gExternalActivityPauseAcknowledged = false;
+bool gAndroidRendererActive = false;
+bool gAndroidSurfacePauseRequested = false;
+bool gAndroidSurfacePauseAcknowledged = false;
 constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
 std::mutex gAndroidDocumentCommitMutex;
 std::unordered_map<std::string, std::function<bool()>>
@@ -2079,6 +2098,63 @@ void NotifyAndroidExternalActivityRenderPaused() {
     gExternalActivityPauseAcknowledged = true;
   }
   gExternalActivityPauseCv.notify_all();
+}
+
+void SetAndroidRendererActive(bool active) {
+  {
+    std::lock_guard<std::mutex> lock(gExternalActivityPauseMutex);
+    gAndroidRendererActive = active;
+  }
+  gExternalActivityPauseCv.notify_all();
+}
+
+bool IsAndroidSurfaceRenderPauseRequested() {
+  std::lock_guard<std::mutex> lock(gExternalActivityPauseMutex);
+  return gAndroidSurfacePauseRequested;
+}
+
+void NotifyAndroidSurfaceRenderPaused() {
+  {
+    std::lock_guard<std::mutex> lock(gExternalActivityPauseMutex);
+    if (!gAndroidSurfacePauseRequested) return;
+    gAndroidSurfacePauseAcknowledged = true;
+  }
+  gExternalActivityPauseCv.notify_all();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativePauseBeforeSurfaceDestroyed(
+    JNIEnv *, jclass) {
+  {
+    std::lock_guard<std::mutex> lock(gExternalActivityPauseMutex);
+    gAndroidSurfacePauseRequested = true;
+    gAndroidSurfacePauseAcknowledged = false;
+    if (!gAndroidRendererActive) return;
+  }
+  SDL_Event event{};
+  event.type = SDL_EVENT_USER;
+  event.user.code = kExternalActivityPauseWakeCode;
+  SDL_PushEvent(&event);
+  std::unique_lock<std::mutex> lock(gExternalActivityPauseMutex);
+  if (!gExternalActivityPauseCv.wait_for(lock, std::chrono::seconds(2), [] {
+        return gAndroidSurfacePauseAcknowledged || !gAndroidRendererActive;
+      })) {
+    SDL_Log("Timed out waiting for Android rendering before surface destruction");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSurfaceReady(
+    JNIEnv *, jclass) {
+  {
+    std::lock_guard<std::mutex> lock(gExternalActivityPauseMutex);
+    gAndroidSurfacePauseRequested = false;
+    gAndroidSurfacePauseAcknowledged = false;
+  }
+  SDL_Event event{};
+  event.type = SDL_EVENT_USER;
+  event.user.code = kExternalActivityPauseWakeCode;
+  SDL_PushEvent(&event);
 }
 
 #endif

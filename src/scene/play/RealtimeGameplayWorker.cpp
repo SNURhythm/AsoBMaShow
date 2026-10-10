@@ -194,6 +194,9 @@ bool RealtimeGameplayWorker::enqueueInput(
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   auto capturedInput = input;
   capturedInput.ingressTimestampMicros = perf::latency::nowMicros();
+  capturedInput.touchSourceTimestampMicros =
+      input.source == RealtimeGameplayInputSource::Touch
+          ? input.steadyTimestampMicros : 0;
   const auto &queuedInput = capturedInput;
 #else
   const auto &queuedInput = input;
@@ -520,6 +523,12 @@ void RealtimeGameplayWorker::observeInputLatency(
     const RealtimeGameplayInput &input) noexcept {
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   processingStartedMicros_ = perf::latency::nowMicros();
+  if (input.source == RealtimeGameplayInputSource::Touch &&
+      input.steadyTimestampMicros > 0 &&
+      processingStartedMicros_ >= input.steadyTimestampMicros) {
+    perf::latency::record(perf::latency::Stage::TouchToWorker,
+                         processingStartedMicros_ - input.steadyTimestampMicros);
+  }
   if (input.ingressTimestampMicros > 0 &&
       processingStartedMicros_ >= input.ingressTimestampMicros) {
     perf::latency::record(perf::latency::Stage::IngressToWorker,
@@ -822,6 +831,11 @@ bool RealtimeGameplayWorker::processGameplayInput(
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   else {
     const auto committedMicros = perf::latency::nowMicros();
+    if (input.touchSourceTimestampMicros > 0 &&
+        committedMicros >= input.touchSourceTimestampMicros) {
+      perf::latency::record(perf::latency::Stage::TouchToSoundCommit,
+                           committedMicros - input.touchSourceTimestampMicros);
+    }
     if (committedMicros >= processingStartedMicros_) {
       perf::latency::record(perf::latency::Stage::WorkerToSoundCommit,
                            committedMicros - processingStartedMicros_);

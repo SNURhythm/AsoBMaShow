@@ -3,15 +3,20 @@ package com.snurhythm.asobmashow;
 import android.content.Context;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.SurfaceHolder;
 import android.view.View;
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 
-/** Delivers raw gameplay touch first and retains timing for SDL UI/device input. */
+/** Routes gameplay touch directly and retains timing for SDL UI/device input. */
 final class AsoBMaShowSurface extends SDLSurface {
+    private final AndroidTouchInput touchInput = new AndroidTouchInput();
     private final AndroidTouchInput.Sink touchSink = new AndroidTouchInput.Sink() {
-        @Override public void rawTouch(int pointer, int phase, float x, float y, long uptimeNanos) {
-            nativeOnRawTouch(pointer, phase, x, y, uptimeNanos);
+        @Override public long acquireRawTouchGesture() {
+            return nativeAcquireRawTouchGesture();
+        }
+        @Override public void rawTouch(long epoch, int pointer, int phase, float x, float y, long uptimeNanos) {
+            nativeOnRawTouch(epoch, pointer, phase, x, y, uptimeNanos);
         }
         @Override public void setTimestamp(long uptimeNanos) {
             nativeSetInputTimestamp(uptimeNanos);
@@ -45,8 +50,18 @@ final class AsoBMaShowSurface extends SDLSurface {
         return AndroidTouchInput.dispatchMotion(this, event, motionSink);
     }
 
+    @Override public void surfaceDestroyed(SurfaceHolder holder) {
+        nativePauseBeforeSurfaceDestroyed();
+        super.surfaceDestroyed(holder);
+    }
+
+    @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        super.surfaceChanged(holder, format, width, height);
+        if (mIsSurfaceReady) nativeSurfaceReady();
+    }
+
     @Override public boolean onTouch(View view, MotionEvent event) {
-        return AndroidTouchInput.dispatch(view, event, mWidth, mHeight, touchSink);
+        return touchInput.dispatch(view, event, mWidth, mHeight, touchSink);
     }
 
     @Override public boolean onKey(View view, int keyCode, KeyEvent event) {
@@ -59,5 +74,8 @@ final class AsoBMaShowSurface extends SDLSurface {
     }
 
     private static native void nativeSetInputTimestamp(long uptimeNanos);
-    private static native void nativeOnRawTouch(int pointer, int phase, float x, float y, long uptimeNanos);
+    private static native void nativePauseBeforeSurfaceDestroyed();
+    private static native void nativeSurfaceReady();
+    private static native long nativeAcquireRawTouchGesture();
+    private static native void nativeOnRawTouch(long epoch, int pointer, int phase, float x, float y, long uptimeNanos);
 }

@@ -49,6 +49,9 @@ struct RealtimeGameplayInput {
   bool replayOnly = false;
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   std::int64_t ingressTimestampMicros = 0;
+  // Lane ownership normalizes source to Independent; retain the original
+  // touch sample for paired input-to-sound timing after that transformation.
+  std::int64_t touchSourceTimestampMicros = 0;
 #endif
 };
 

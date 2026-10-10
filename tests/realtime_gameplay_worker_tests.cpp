@@ -939,6 +939,72 @@ void testNoteJournalBoundaryAndNewReader() {
 }
 
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+void testTouchLatencyPairsOnlySuccessfulTouchSoundCommits() {
+  using namespace perf::latency;
+  using Source = gameplay::RealtimeGameplayInputSource;
+  using Type = gameplay::RealtimeGameplayInputType;
+  struct Case {
+    Source source;
+    Type type;
+    bool allowCommit;
+    bool lr2 = false;
+    bool scratch = false;
+  };
+  for (const auto test : {Case{Source::Touch, Type::Press, true},
+                          Case{Source::Touch, Type::Release, true},
+                          Case{Source::Touch, Type::Press, false},
+                          Case{Source::Physical, Type::Press, true},
+                          Case{Source::Touch, Type::Press, true, true},
+                          Case{Source::Touch, Type::Press, true, true, true},
+                          Case{Source::Physical, Type::Press, true, true, true}}) {
+    const auto ingressBefore = snapshot(Stage::IngressToWorker).count;
+    const auto touchWorkerBefore = snapshot(Stage::TouchToWorker).count;
+    const auto touchSoundBefore = snapshot(Stage::TouchToSoundCommit).count;
+    FakeClock clock;
+    FakeAudio audio;
+    clock.nowMicros.store(1'000'000);
+    audio.allowCommit.store(test.allowCommit);
+    auto config = makeConfig(clock, audio);
+    if (test.lr2) {
+      config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+    }
+    config.clock.mapSteadyToSong = [](void *, std::int64_t) -> std::optional<std::int64_t> {
+      return 1'000'000;
+    };
+    gameplay::RealtimeGameplayWorker worker(
+        test.scratch ? makeScratchLongDefinition() : makeRapidDefinition(), config);
+    constexpr std::int64_t minimumSourceAgeMicros = 50'000;
+    const auto sourceMicros = nowMicros() - minimumSourceAgeMicros;
+    require(sourceMicros > 0, "touch measurement fixture has a known past steady timestamp");
+    require(worker.start(), "paired touch measurement worker starts");
+    require(worker.enqueueInput({.epoch = 7, .type = test.type, .source = test.source,
+        .lane = test.scratch ? 7 : 1, .steadyTimestampMicros = sourceMicros,
+        .hasReplayControl = test.scratch,
+        .replayControl = {.kind = replay::LogicalControlKind::ScratchClockwise, .player = 1}}),
+        "paired touch measurement input queues");
+    require(waitUntil([&] {
+      return snapshot(Stage::IngressToWorker).count == ingressBefore + 1;
+    }), "paired touch measurement input reaches the worker");
+    worker.stop();
+    const bool touch = test.source == Source::Touch;
+    const bool audible = test.type == Type::Press && test.allowCommit;
+    require(snapshot(Stage::TouchToWorker).count == touchWorkerBefore + (touch ? 1 : 0),
+            "touch-to-worker measurement counts touch inputs without counting physical inputs");
+    require(snapshot(Stage::TouchToSoundCommit).count == touchSoundBefore + (touch && audible ? 1 : 0),
+            "paired touch-to-sound measurement excludes releases, failed commits and non-touch sounds");
+    require(audio.commitCount.load() == (audible ? 1 : 0) &&
+                worker.fault() == (test.allowCommit ? gameplay::RealtimeGameplayFault::None
+                    : gameplay::RealtimeGameplayFault::AudioCommitFailed),
+            "measurement eligibility follows the actual sound commit result");
+    if (touch && audible) {
+      require(snapshot(Stage::TouchToWorker).maximum >= minimumSourceAgeMicros &&
+                  snapshot(Stage::TouchToSoundCommit).maximum >= minimumSourceAgeMicros,
+              "paired measurements include time before ingress from the original touch timestamp");
+    }
+  }
+}
+
 void testWorkerRecordsMeasuredIngressAndSoundStages() {
   using namespace perf::latency;
   const auto queueBefore = snapshot(Stage::IngressToWorker).count;
@@ -2568,6 +2634,10 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 
 int main() {
   testWakeTimeoutPreservesConcurrentSignal();
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  // Run the source-age check before synthetic timestamps in other fixtures.
+  testTouchLatencyPairsOnlySuccessfulTouchSoundCommits();
+#endif
   testAndroidDedicatedTouchBypassesBlockedSdlWatch();
   testAndroidSpinScratchExpiresWithoutRenderDrain();
   testCommandOnlyTouchScratchBypassesGameplayAndReplay();

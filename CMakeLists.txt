@@ -5429,6 +5429,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(bgfx_unix_platform_data_tests PRIVATE cxx_std_23)
     target_link_libraries(bgfx_unix_platform_data_tests PRIVATE SDL3::Headers bgfx)
 
+    add_executable(android_native_window_owner_tests tests/android_native_window_owner_tests.cpp)
+    target_include_directories(android_native_window_owner_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/android_native_window_stubs
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
+        ${CMAKE_SOURCE_DIR}/bgfx/bx/include
+    )
+    target_compile_features(android_native_window_owner_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_native_window_owner_tests PRIVATE SDL3::Headers bgfx)
+
     if(APPLE)
         add_executable(bgfx_platform_data_tests
             tests/bgfx_platform_data_tests.cpp
@@ -9288,6 +9298,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         asobmashow_register_test(bgfx_platform_data_tests)
     endif()
     asobmashow_register_test(bgfx_unix_platform_data_tests)
+    asobmashow_register_test(android_native_window_owner_tests foundation_av_android_native_window_owner)
     asobmashow_register_test(text_view_font_lifetime_tests)
     asobmashow_register_test(play_option_summary_tests)
     asobmashow_register_test(play_options_panel_view_tests)
