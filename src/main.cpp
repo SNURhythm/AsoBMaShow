@@ -69,6 +69,7 @@
 #endif
 #elif defined(__ANDROID__)
 #include "AndroidNatives.h"
+#include "input/AndroidInputHints.h"
 #include "input/AndroidInputTimestamp.h"
 #include <dirent.h>
 #include <sys/system_properties.h>
@@ -572,6 +573,7 @@ int main(int argv, char **args) {
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #if TARGET_OS_ANDROID
+  input::android::configurePointerHints();
   // Keep the CPU gameplay tick alive; the main loop suspends bgfx explicitly.
   SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
   SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");

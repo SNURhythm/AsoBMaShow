@@ -1,5 +1,7 @@
 #include "scene/play/RealtimeGameplayWorker.h"
+#include "scene/play/RealtimeGameplayWake.h"
 #include "input/SDLTouchInputSource.h"
+#include "input/AndroidRawTouchInput.h"
 #include "scene/play/RealtimeSdlTouchInput.h"
 
 #include "bms_parser.hpp"
@@ -35,6 +37,42 @@ void require(bool condition, const char *message) {
     std::cerr << message << '\n';
     std::exit(1);
   }
+}
+
+void testWakeTimeoutPreservesConcurrentSignal() {
+  struct ScriptedSemaphore {
+    std::atomic_bool &pending;
+    int tokens = 0;
+    bool signalDuringTimeout = true;
+
+    void signal() {
+      if (!pending.exchange(true)) ++tokens;
+    }
+    bool try_acquire_for(std::chrono::milliseconds) {
+      if (signalDuringTimeout) {
+        signalDuringTimeout = false;
+        // The wait has timed out, but a producer signals before it returns.
+        signal();
+        return false;
+      }
+      if (tokens == 0) return false;
+      --tokens;
+      return true;
+    }
+  };
+  std::atomic_bool pending{false};
+  ScriptedSemaphore wake{pending};
+  gameplay::detail::waitForGameplayWake(wake, pending, 1ms);
+  wake.signal();
+  require(wake.tokens == 1 && pending.load(),
+          "a timeout must preserve a concurrent wake and coalesce the next producer");
+  gameplay::detail::waitForGameplayWake(wake, pending, 1ms);
+  require(wake.tokens == 0 && !pending.load(),
+          "acquiring the token acknowledges its pending signal");
+  wake.signal();
+  gameplay::detail::waitForGameplayWake(wake, pending, 1ms);
+  require(wake.tokens == 0 && !pending.load(),
+          "a later signal remains available after acknowledgement");
 }
 
 bool sameAttemptSnapshot(const gameplay::GameplayAttemptSnapshot &left,
@@ -301,6 +339,214 @@ void testAndroidTouchReachesWorkerWithoutRenderDrain() {
               converted->phase == gameplay::RealtimeTouchPhase::Down &&
               converted->steadyTimestampMicros == 123456,
           "mouse ingress uses published drawable scaling and preserves time");
+}
+
+void testAndroidDedicatedTouchBypassesBlockedSdlWatch() {
+  require(SDL_Init(SDL_INIT_EVENTS), "dedicated touch fixture initializes SDL events");
+  FakeClock clock;
+  FakeAudio audio;
+  clock.nowMicros.store(1'000'000);
+  auto config = makeConfig(clock, audio);
+  config.clock.mapSteadyToSong = [](void *, std::int64_t) -> std::optional<std::int64_t> {
+    return 1'000'000;
+  };
+  gameplay::RealtimeGameplayWorker worker(makeScratchlessDefinition(4), config);
+  RealtimeGameplaySession session;
+  session.worker = &worker;
+  gameplay::RealtimeTouchLayout layout{
+      .revision = 1, .bottomLeft = {0, 1}, .bottomRight = {1, 1},
+      .topLeft = {0, 0}, .topRight = {1, 0},
+      .lanes = {0}, .scratch = {false}, .laneCount = 1, .keyMode = 4};
+  session.touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(7, layout,
+      gameplay::RealtimeTouchInputSink{.context = &session,
+                                       .emit = &RealtimeGameplaySession::emitTouchInput});
+  require(session.touchHitSnapshots.publish({.layoutRevision = 1,
+      .uiTransform = {.renderWidth = 1000, .renderHeight = 500,
+                      .uiScaleX = 1, .uiScaleY = 1, .uiWidth = 1000, .uiHeight = 500}}),
+          "dedicated touch geometry publishes");
+  require(worker.start(), "dedicated touch worker starts");
+  input::android::RawTouchRegistration registration(
+      &RealtimeGameplaySession::androidRawTouchSink, &session);
+  input::android::RawTouchEvent raw{
+      .pointerId = 42, .phase = input::android::TouchPhase::Down,
+      .x = .5F, .y = .5F, .steadyTimestampMicros = 1'000'000};
+  for (int gate = 0; gate < 3; ++gate) {
+    session.acceptingTouch.store(gate != 0);
+    session.owner.context.appInBackground.store(gate == 1);
+    session.inputInterrupted.store(gate == 2);
+    input::android::RawTouchRegistration::dispatch(raw);
+    gameplay::RealtimeTouchSample ignored;
+    require(!session.auxiliaryTouches.tryPop(ignored),
+            "dedicated ingress respects closed, background and interrupted gates");
+  }
+  session.acceptingTouch.store(true);
+  session.owner.context.appInBackground.store(false);
+  session.inputInterrupted.store(false);
+
+  struct Blocker {
+    std::atomic_bool entered{false};
+    std::binary_semaphore release{0};
+  } blocker;
+  const auto blockWatch = +[](void *context, SDL_Event *event) {
+    if (event->type == SDL_EVENT_USER && event->user.code == 9137) {
+      auto &state = *static_cast<Blocker *>(context);
+      state.entered.store(true, std::memory_order_release);
+      state.release.acquire();
+    }
+    return true;
+  };
+  require(SDL_AddEventWatch(blockWatch, &blocker), "unrelated SDL watch registers");
+  std::thread stalledSdl([&] {
+    SDL_Event event{};
+    event.type = SDL_EVENT_USER;
+    event.user.code = 9137;
+    (void)SDL_PushEvent(&event);
+  });
+  require(waitUntil([&] { return blocker.entered.load(std::memory_order_acquire); }),
+          "unrelated SDL eventwatch enters its blocking callback");
+  std::thread nativeProducer([&] { input::android::RawTouchRegistration::dispatch(raw); });
+  const bool judgedWhileSdlBlocked = waitUntil([&] {
+    return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1 &&
+           audio.commitCount.load(std::memory_order_acquire) == 1;
+  });
+  // Release and join even when testing a broken implementation that waits on SDL.
+  blocker.release.release();
+  stalledSdl.join();
+  nativeProducer.join();
+  SDL_RemoveEventWatch(blockWatch, &blocker);
+  require(judgedWhileSdlBlocked,
+          "dedicated touch judges and commits its keysound while SDL eventwatch is blocked");
+  gameplay::RealtimeTouchSample metadata;
+  require(session.auxiliaryTouches.tryPop(metadata) && metadata.fingerId == raw.pointerId + 1 &&
+              metadata.phase == gameplay::RealtimeTouchPhase::Down &&
+              metadata.steadyTimestampMicros == raw.steadyTimestampMicros &&
+              !session.auxiliaryTouches.tryPop(metadata),
+          "dedicated touch publishes its SDL-compatible identity and original timestamp once");
+
+  SDLTouchInputSource source(true);
+  source.setRawEventCallback([&](const SDL_Event &event, std::uint64_t timestamp) {
+    if (input::android::isSdlFingerEvent(event.type)) return;
+    RealtimeGameplaySession::sdlTouchSink(session, event, timestamp);
+  });
+  SDL_Event copied{};
+  copied.tfinger.fingerID = raw.pointerId + 1;
+  copied.tfinger.x = .5F;
+  copied.tfinger.y = .5F;
+  for (const auto type : {SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION,
+                          SDL_EVENT_FINGER_UP, SDL_EVENT_FINGER_CANCELED}) {
+    copied.type = type;
+    SDLTouchInputSource::EventHandler(&source, &copied);
+  }
+  require(!session.auxiliaryTouches.tryPop(metadata) &&
+              worker.acquireLatestSnapshot()->lanePressed[0],
+          "copied SDL fingers neither duplicate native input nor release its ownership");
+  raw.phase = input::android::TouchPhase::Cancel;
+  input::android::RawTouchRegistration::dispatch(raw);
+  require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[0]; }),
+          "dedicated cancellation releases the lane without an SDL event");
+  require(session.auxiliaryTouches.tryPop(metadata) &&
+              metadata.phase == gameplay::RealtimeTouchPhase::Cancel &&
+              !session.auxiliaryTouches.tryPop(metadata),
+          "dedicated cancellation publishes one terminal metadata sample");
+  SDL_Event mouse{};
+  mouse.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  mouse.button.x = 500;
+  mouse.button.y = 250;
+  SDLTouchInputSource::EventHandler(&source, &mouse);
+  require(waitUntil([&] { return worker.acquireLatestSnapshot()->lanePressed[0]; }),
+          "real mouse input still reaches gameplay through the SDL fallback");
+  mouse.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  SDLTouchInputSource::EventHandler(&source, &mouse);
+  require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[0]; }),
+          "real mouse release still reaches gameplay through the SDL fallback");
+  source.setRawEventCallback({});
+  worker.stop();
+  SDL_QuitSubSystem(SDL_INIT_EVENTS);
+}
+
+void testAndroidSpinScratchExpiresWithoutRenderDrain() {
+  for (const bool deferred : {false, true}) {
+    FakeClock clock;
+    FakeAudio audio;
+    clock.nowMicros.store(1'000'000);
+    RealtimeGameplaySession session;
+    struct Maintenance {
+      RealtimeGameplaySession &session;
+      std::atomic<std::int64_t> steadyMicros{1'000'000};
+      std::atomic<int> calls{0};
+    } maintenance{session};
+    auto config = makeConfig(clock, audio);
+    config.inputMaintenance = {.context = &maintenance,
+        .run = [](void *context, std::int64_t) {
+          auto &state = *static_cast<Maintenance *>(context);
+          RealtimeGameplaySession::maintainTouchInput(
+              &state.session, state.steadyMicros.load());
+          state.calls.fetch_add(1);
+        }};
+    gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(), config);
+    session.worker = &worker;
+    gameplay::RealtimeTouchLayout layout;
+    layout.revision = 1;
+    layout.keyMode = 7;
+    layout.laneRegions = {{
+        .bottomLeft = {.20F, .80F}, .bottomRight = {.80F, .80F},
+        .topLeft = {.20F, .20F}, .topRight = {.80F, .20F},
+        .lane = 7, .scratch = true, .spinScratch = true,
+        .requiresInside = true,
+        .circle = gameplay::RealtimeTouchCircle{
+            .center = {.50F, .50F}, .radiusX = .30F, .radiusY = .30F}}};
+    session.touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(7, layout,
+        gameplay::RealtimeTouchInputSink{.context = &session,
+                                         .emit = &RealtimeGameplaySession::emitTouchInput});
+    require(session.touchHitSnapshots.publish({.layoutRevision = 1,
+        .uiTransform = {.renderWidth = 1000, .renderHeight = 500,
+                        .uiScaleX = 1, .uiScaleY = 1, .uiWidth = 1000, .uiHeight = 500}}),
+            "spin input geometry publishes");
+    SDLTouchInputSource source(deferred);
+    source.setRawEventCallback([&](const SDL_Event &event, std::uint64_t) {
+      RealtimeGameplaySession::sdlTouchSink(session, event,
+                                            maintenance.steadyMicros.load());
+    });
+    require(worker.start(), "spin expiry worker starts");
+    SDL_Event event{};
+    event.type = SDL_EVENT_FINGER_DOWN;
+    event.tfinger.fingerID = 302;
+    event.tfinger.x = .80F;
+    event.tfinger.y = .50F;
+    SDLTouchInputSource::EventHandler(&source, &event);
+    event.type = SDL_EVENT_FINGER_MOTION;
+    event.tfinger.x = .799F;
+    event.tfinger.y = .521F;
+    SDLTouchInputSource::EventHandler(&source, &event);
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->lanePressed[7]; }),
+            "a completed spin tick holds the scratch before rendering");
+    if (deferred) {
+      require(worker.suspend(), "spin maintenance suspends with gameplay");
+      const int calls = maintenance.calls.load();
+      maintenance.steadyMicros.store(1'150'000);
+      std::this_thread::sleep_for(5ms);
+      require(maintenance.calls.load() == calls &&
+                  worker.acquireLatestSnapshot()->lanePressed[7],
+              "suspended gameplay never runs touch maintenance");
+      require(worker.resume(), "spin maintenance resumes with gameplay");
+    } else {
+      maintenance.steadyMicros.store(1'150'000);
+    }
+    require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[7]; }),
+            "spin grace expires on the worker without rendering or another touch");
+    maintenance.steadyMicros.store(1'150'010);
+    event.tfinger.x = .797F;
+    event.tfinger.y = .542F;
+    SDLTouchInputSource::EventHandler(&source, &event);
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->lanePressed[7]; }),
+            "the same captured finger can turn again after worker expiry");
+    source.setRawEventCallback({});
+    worker.stop();
+    const auto replay = worker.copyAcceptedReplayInputAfterStop();
+    require(replay && replay->size() == 3 && (*replay)[0].pressed &&
+                !(*replay)[1].pressed && (*replay)[2].pressed,
+            "worker expiry records the matching release and renewed press");
+  }
 }
 
 void testCommandOnlyTouchScratchBypassesGameplayAndReplay() {
@@ -2321,6 +2567,9 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+  testWakeTimeoutPreservesConcurrentSignal();
+  testAndroidDedicatedTouchBypassesBlockedSdlWatch();
+  testAndroidSpinScratchExpiresWithoutRenderDrain();
   testCommandOnlyTouchScratchBypassesGameplayAndReplay();
   testAndroidTouchReachesWorkerWithoutRenderDrain();
   testAndroidCancellationReleasesBeforeRenderAndAllowsFingerReuse();

@@ -86,6 +86,11 @@ struct RealtimeGameplayWorkerConfig {
   GameplaySimulationConfig simulation;
   RealtimeGameplayClock clock;
   RealtimeGameplayAudioSink audio;
+  // Runs on the worker before input draining, never while suspended.
+  struct InputMaintenance {
+    void *context = nullptr;
+    void (*run)(void *, std::int64_t steadyTimestampMicros) = nullptr;
+  } inputMaintenance;
   bool inputTriggeredKeysounds = true;
   std::size_t maximumReplayInputTransitions =
       replay::kReplayLimits.maxInputTransitions;

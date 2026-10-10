@@ -7,9 +7,12 @@ import android.view.View;
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 
-/** Retains Android sample timing while SDL owns touch and device lifecycles. */
+/** Delivers raw gameplay touch first and retains timing for SDL UI/device input. */
 final class AsoBMaShowSurface extends SDLSurface {
     private final AndroidTouchInput.Sink touchSink = new AndroidTouchInput.Sink() {
+        @Override public void rawTouch(int pointer, int phase, float x, float y, long uptimeNanos) {
+            nativeOnRawTouch(pointer, phase, x, y, uptimeNanos);
+        }
         @Override public void setTimestamp(long uptimeNanos) {
             nativeSetInputTimestamp(uptimeNanos);
         }
@@ -56,4 +59,5 @@ final class AsoBMaShowSurface extends SDLSurface {
     }
 
     private static native void nativeSetInputTimestamp(long uptimeNanos);
+    private static native void nativeOnRawTouch(int pointer, int phase, float x, float y, long uptimeNanos);
 }

@@ -12,15 +12,25 @@ public final class AndroidTouchInputTests {
         int currentCalls;
         boolean fail;
         float firstX, firstY;
+        float firstRawX, firstRawY;
+        boolean sdlStarted;
         final List<String> samples = new ArrayList<>();
+        final List<String> rawSamples = new ArrayList<>();
+        public void rawTouch(int pointer, int phase, float x, float y, long uptimeNanos) {
+            check(!sdlStarted, "Every raw sample in a MotionEvent arrives before any SDL forwarding");
+            if (rawSamples.isEmpty()) { firstRawX = x; firstRawY = y; }
+            rawSamples.add(pointer + "/" + phase + "@" + uptimeNanos);
+        }
         public void setTimestamp(long nanos) { timestamp = nanos; }
         public void motionTouch(int device, int pointer, float x, float y, float pressure) {
+            sdlStarted = true;
             check(device == 7, "History keeps the source device");
             if (samples.isEmpty()) { firstX = x; firstY = y; }
             check(pressure == (pointer == 4 ? 0.5f : 1.0f), "Pressure follows SDL clamping");
             samples.add(pointer + "@" + timestamp);
         }
         public boolean currentTouch(View view, MotionEvent event) {
+            sdlStarted = true;
             ++currentCalls;
             samples.add("current@" + timestamp);
             if (fail) throw new IllegalStateException("dispatch failed");
@@ -147,12 +157,82 @@ public final class AndroidTouchInputTests {
         }
     }
 
+    static void testRawSamplesPrecedeSdlForTheWholeEvent(int sdk) {
+        final long current = sdk >= 34 ? 100_000_456L : 100_000_000L;
+        final long first = sdk >= 34 ? 90_000_123L : 90_000_000L;
+        final long second = sdk >= 34 ? 95_000_123L : 95_000_000L;
+        MotionEvent event = new MotionEvent();
+        Sink sink = new Sink();
+        AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+        check(sink.rawSamples.equals(List.of("4/2@" + first, "9/2@" + first,
+                        "4/2@" + second, "9/2@" + second, "4/2@" + current, "9/2@" + current)),
+                "Raw history and current chord samples retain sample-major order before SDL: " + sink.rawSamples);
+        check(Math.abs(sink.firstRawX - .2f) < .0001f && Math.abs(sink.firstRawY - .2f) < .0001f,
+                "Raw samples use the same normalized historical coordinates");
+
+        for (int edge : new int[] {0, 1}) {
+            event.actionIndex = edge;
+            String indexed = edge == 0 ? "4" : "9";
+            String companion = edge == 0 ? "9" : "4";
+            event.action = MotionEvent.ACTION_POINTER_DOWN;
+            sink = new Sink();
+            AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+            check(sink.rawSamples.equals(List.of(companion + "/2@" + current, indexed + "/0@" + current)),
+                    "Raw companion movement precedes the indexed Down without inventing a prior indexed Move");
+            event.action = MotionEvent.ACTION_POINTER_UP;
+            sink = new Sink();
+            AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+            check(sink.rawSamples.equals(List.of("4/2@" + current, "9/2@" + current, indexed + "/1@" + current)),
+                    "Raw final positions for all fingers precede the indexed Up");
+            event.flags = MotionEvent.FLAG_CANCELED;
+            sink = new Sink();
+            AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+            check(sink.rawSamples.equals(sdk >= 33
+                            ? List.of(companion + "/2@" + current, indexed + "/3@" + current)
+                            : List.of("4/2@" + current, "9/2@" + current, indexed + "/1@" + current)),
+                    "Palm rejection emits raw Cancel for only the indexed contact, with no final rejected movement");
+            event.flags = 0;
+        }
+        event.pointerCount = 1;
+        event.action = MotionEvent.ACTION_DOWN;
+        sink = new Sink();
+        AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+        check(sink.rawSamples.equals(List.of("4/0@" + current)), "Initial Down is forwarded raw once");
+        event.action = MotionEvent.ACTION_UP;
+        sink = new Sink();
+        AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+        check(sink.rawSamples.equals(List.of("4/2@" + current, "4/1@" + current)),
+                "Final raw motion precedes the last Up");
+        event.pointerCount = 2;
+        for (int tool : new int[] {MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_UNKNOWN,
+                MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_ERASER}) {
+            event.tools[1] = tool;
+            boolean touch = tool == MotionEvent.TOOL_TYPE_FINGER || tool == MotionEvent.TOOL_TYPE_UNKNOWN;
+            event.action = MotionEvent.ACTION_MOVE;
+            sink = new Sink();
+            AndroidTouchInput.dispatch(new View(), event, 1, 0, sink);
+            check(sink.rawSamples.equals(touch
+                            ? List.of("4/2@" + first, "9/2@" + first, "4/2@" + second, "9/2@" + second,
+                                    "4/2@" + current, "9/2@" + current)
+                            : List.of("4/2@" + first, "4/2@" + second, "4/2@" + current)),
+                    "Raw history and current movement exclude mouse, stylus, and eraser sources");
+            check(sink.firstRawX == .5f && sink.firstRawY == .5f, "Raw normalization tolerates zero-size surfaces");
+            event.action = MotionEvent.ACTION_CANCEL;
+            sink = new Sink();
+            AndroidTouchInput.dispatch(new View(), event, 101, 201, sink);
+            check(sink.rawSamples.equals(touch
+                            ? List.of("4/3@" + current, "9/3@" + current) : List.of("4/3@" + current)),
+                    "Whole-gesture raw Cancel terminates every touch contact without movement or history");
+        }
+    }
+
     public static void main(String[] args) {
         for (int sdk : new int[] {28, 33, 34, 36}) {
             Build.VERSION.SDK_INT = sdk;
             testGenericMotionTimestampScope(sdk);
             testCompanionPointerCoordinatesBeforeEdges(sdk);
             testFinalCoordinatesBeforeRelease(sdk);
+            testRawSamplesPrecedeSdlForTheWholeEvent(sdk);
             View view = new View();
             MotionEvent event = new MotionEvent();
             Sink sink = new Sink();

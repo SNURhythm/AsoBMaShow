@@ -2,6 +2,7 @@ target_sources(main PRIVATE
     RhythmInputHandler.cpp
     InputNormalizer.cpp
     SDLTouchInputSource.cpp
+    AndroidRawTouchInput.cpp
     InputProfile.cpp
     VirtualControllerConfig.cpp
     InputDefaults.cpp

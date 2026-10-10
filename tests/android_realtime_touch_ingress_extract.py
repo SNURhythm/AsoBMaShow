@@ -9,6 +9,8 @@ parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
 source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
 methods = ("  void populateImmutableHit(", "  static bool emitTouchInput(",
-           "  static void consumeTouchSampleLocked(", "  static void sdlTouchSink(")
+           "  static void maintainTouchInput(",
+           "  static void consumeTouchSampleLocked(", "  static void sdlTouchSink(",
+           "  static void androidRawTouchSink(")
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text("\n\n".join(extract(source, signature) for signature in methods))

@@ -1,4 +1,5 @@
 #include "RealtimeGameplayWorker.h"
+#include "RealtimeGameplayWake.h"
 
 #include "../../bms_parser.hpp"
 #include "../../ChartTiming.h"
@@ -268,8 +269,7 @@ void RealtimeGameplayWorker::run() {
 #endif
   using namespace std::chrono_literals;
   while (!stopRequested_.load(std::memory_order_acquire)) {
-    (void)wake_.try_acquire_for(1ms);
-    wakePending_.store(false, std::memory_order_release);
+    detail::waitForGameplayWake(wake_, wakePending_, 1ms);
 
     bool changed = processQueuedInputs();
     if (suspendRequested_.load(std::memory_order_acquire)) {
@@ -281,8 +281,7 @@ void RealtimeGameplayWorker::run() {
       }
       while (suspendRequested_.load(std::memory_order_acquire) &&
              !stopRequested_.load(std::memory_order_acquire)) {
-        (void)wake_.try_acquire_for(1ms);
-        wakePending_.store(false, std::memory_order_release);
+        detail::waitForGameplayWake(wake_, wakePending_, 1ms);
       }
       if (suspended_.exchange(false, std::memory_order_acq_rel)) {
         resumeAcknowledged_.release();
@@ -319,6 +318,13 @@ void RealtimeGameplayWorker::signal() noexcept {
 }
 
 bool RealtimeGameplayWorker::processQueuedInputs() {
+  if (config_.inputMaintenance.run != nullptr &&
+      !suspendRequested_.load(std::memory_order_acquire) &&
+      !stopRequested_.load(std::memory_order_acquire)) {
+    const auto steadyMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    config_.inputMaintenance.run(config_.inputMaintenance.context, steadyMicros);
+  }
   queuedInputs_.clear();
   RealtimeGameplayInput input;
   while (queuedInputs_.size() < kRealtimeGameplayIngressSize && ingress_.tryPop(input)) {

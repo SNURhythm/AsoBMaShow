@@ -54,6 +54,7 @@
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
 #include "../../input/AndroidRealtimeInputGate.h"
+#include "../../input/AndroidRawTouchInput.h"
 #include "../../RAII.h"
 #include "../../input/InputTimestamp.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -1064,7 +1065,6 @@ struct GamePlayScene::RealtimeGameplaySession {
   InputDeviceRegistry *inputRegistry = nullptr;
   std::vector<std::optional<audio::RealtimeSoundHandle>> soundHandles;
   std::vector<bms_parser::Note *> notes;
-  std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
   std::unique_ptr<gameplay::RealtimeGameplayInputBridge> legacyInputBridge;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
   std::mutex touchRouterMutex;
@@ -1082,9 +1082,6 @@ struct GamePlayScene::RealtimeGameplaySession {
       androidPhysicalInputGate->setKeyboardTextFocused(focused, nowMicros());
     }
   }
-#endif
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
 #endif
   gameplay::BoundedMpscQueue<input::LogicalInputTransition,
                              kInputCommandCapacity>
@@ -1115,6 +1112,14 @@ struct GamePlayScene::RealtimeGameplaySession {
   gameplay::RealtimeTouchLayoutRefreshKey layoutRefreshKey;
   bool touchHitSnapshotDirty = true;
   bool touchIngressDesired = false;
+  // Join the worker before its router, queues and mutex are destroyed.
+  std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
+#if TARGET_OS_ANDROID
+  std::unique_ptr<input::android::RawTouchRegistration> androidTouchRegistration;
+#endif
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
+#endif
   // Detach native callbacks before any of their session dependencies die.
   std::unique_ptr<gameplay::RealtimeGameplayInputRegistration> inputRegistration;
 
@@ -1297,6 +1302,25 @@ struct GamePlayScene::RealtimeGameplaySession {
       session.enqueueStartSelectInput(owned);
     }
     return accepted;
+  }
+
+  static void maintainTouchInput(void *context,
+                                 std::int64_t steadyTimestampMicros) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (!session.acceptingTouch.load(std::memory_order_acquire)) return;
+    std::lock_guard lock(session.touchRouterMutex);
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.inputInterrupted.load(std::memory_order_acquire) ||
+        (session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire)) ||
+        session.touchRouter == nullptr) {
+      return;
+    }
+    if (!session.touchRouter->advanceSpinScratch(steadyTimestampMicros)) {
+      session.acceptingTouch.store(false, std::memory_order_release);
+      session.touchRoutingRecoveryRequested.store(true,
+                                                  std::memory_order_release);
+    }
   }
 
   static void emitTouchAnalogScratchTicks(void *context,
@@ -1492,6 +1516,7 @@ struct GamePlayScene::RealtimeGameplaySession {
         session.inputRegistry->translateRealtimeSdlInputs(*event,
                                                           physicalInputs,
                                                           TARGET_OS_ANDROID);
+    if (inputCount == 0) return 0;
     const std::int64_t timestamp = nowMicros();
 #if TARGET_OS_ANDROID
     // Translation locks the SDL device map. Do not hold the lifecycle mutex
@@ -1666,6 +1691,26 @@ struct GamePlayScene::RealtimeGameplaySession {
     auto sample = gameplay::realtimeTouchSampleFromSdl(
         event, timestampMicros, snapshot->uiTransform);
     if (sample) consumeTouchSampleLocked(session, *sample, /*terminalCancellation=*/true);
+  }
+
+  static void androidRawTouchSink(const input::android::RawTouchEvent &event,
+                                  void *context) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    std::lock_guard lock(session.touchRouterMutex);
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.inputInterrupted.load(std::memory_order_acquire) ||
+        (session.scene != nullptr &&
+         session.scene->context.appInBackground.load(std::memory_order_acquire))) return;
+    using input::android::TouchPhase;
+    gameplay::RealtimeTouchSample sample{
+        .fingerId = static_cast<std::int64_t>(event.pointerId) + 1,
+        .phase = event.phase == TouchPhase::Down ? gameplay::RealtimeTouchPhase::Down
+            : event.phase == TouchPhase::Up ? gameplay::RealtimeTouchPhase::Up
+            : event.phase == TouchPhase::Cancel ? gameplay::RealtimeTouchPhase::Cancel
+                                               : gameplay::RealtimeTouchPhase::Move,
+        .normalizedX = event.x, .normalizedY = event.y,
+        .steadyTimestampMicros = event.steadyTimestampMicros};
+    consumeTouchSampleLocked(session, sample, /*terminalCancellation=*/true);
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -2226,6 +2271,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
                 .reserve = &RealtimeGameplaySession::reserveAudio,
                 .commit = &RealtimeGameplaySession::commitAudio,
                 .cancel = &RealtimeGameplaySession::cancelAudio},
+      .inputMaintenance = {.context = session.get(),
+                            .run = &RealtimeGameplaySession::maintainTouchInput},
       .inputTriggeredKeysounds = !options.autoKeySound,
       .activationSongTimeMicros = policy.activationSongTimeMicros,
       .practiceCompletionSongTimeMicros =
@@ -2366,9 +2413,15 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 #endif
           });
 #if TARGET_OS_ANDROID
+  activeSession.androidTouchRegistration =
+      std::make_unique<input::android::RawTouchRegistration>(
+          &RealtimeGameplaySession::androidRawTouchSink, &activeSession);
   if (inputHandler != nullptr) {
     inputHandler->setTouchIngressCallback(
         [session = &activeSession](const SDL_Event &event, std::uint64_t time) {
+          // Every physical finger sample already arrived directly from Java.
+          // Keep the SDL path only for independent real mouse input.
+          if (input::android::isSdlFingerEvent(event.type)) return;
           RealtimeGameplaySession::sdlTouchSink(*session, event, time);
         });
   }
@@ -2997,6 +3050,7 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   auto &session = *realtimeGameplaySession;
   setRealtimeGameplayIngressEnabled(false);
 #if TARGET_OS_ANDROID
+  session.androidTouchRegistration.reset();
   if (inputHandler != nullptr) inputHandler->setTouchIngressCallback({});
 #endif
   if (session.inputRegistration != nullptr) {
@@ -6794,20 +6848,6 @@ void GamePlayScene::update(float dt) {
       return;
     }
     if (realtimeGameplaySession->inputInterrupted.load(std::memory_order_acquire)) return;
-    bool spinScratchAdvanced = true;
-    {
-      std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
-      if (realtimeGameplaySession->touchRouter != nullptr) {
-        spinScratchAdvanced = realtimeGameplaySession->touchRouter
-                                  ->advanceSpinScratch(nowMicros());
-      }
-    }
-    if (!spinScratchAdvanced) {
-      realtimeGameplaySession->acceptingTouch.store(false,
-                                                     std::memory_order_release);
-      realtimeGameplaySession->touchRoutingRecoveryRequested.store(
-          true, std::memory_order_release);
-    }
   }
   if (practiceMenuActive) {
     if (practiceMenuStartPressedMicros != 0 &&

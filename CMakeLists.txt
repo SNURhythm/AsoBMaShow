@@ -5826,6 +5826,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3)
     endif()
 
+    add_executable(android_raw_touch_input_tests
+        tests/android_raw_touch_input_tests.cpp src/input/AndroidRawTouchInput.cpp)
+    target_include_directories(android_raw_touch_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include)
+    target_compile_features(android_raw_touch_input_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_raw_touch_input_tests PRIVATE Threads::Threads)
+
+    if(TARGET SDL3::SDL3-static)
+        add_executable(android_pointer_ingress_tests tests/android_pointer_ingress_tests.cpp)
+        target_include_directories(android_pointer_ingress_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(android_pointer_ingress_tests PRIVATE cxx_std_23)
+        target_link_libraries(android_pointer_ingress_tests PRIVATE SDL3::SDL3-static Threads::Threads)
+    endif()
+
     include(cmake/InputCaptureTests.cmake)
 
     add_executable(app_settings_store_tests
@@ -7263,6 +7277,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         VERBATIM
     )
     add_executable(realtime_gameplay_worker_tests
+        src/input/AndroidRawTouchInput.cpp
         ${android_realtime_touch_methods}
         src/input/SDLTouchInputSource.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp
@@ -9379,6 +9394,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_scene_preview_authority_tests)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(android_input_timestamp_ingress_tests)
+    asobmashow_register_test(android_raw_touch_input_tests)
+    set_tests_properties(android_raw_touch_input_tests PROPERTIES TIMEOUT 15)
+    if(TARGET android_pointer_ingress_tests)
+        asobmashow_register_test(android_pointer_ingress_tests)
+        set_tests_properties(android_pointer_ingress_tests PROPERTIES TIMEOUT 30)
+    endif()
     asobmashow_register_test(android_audio_latency_tests)
     asobmashow_register_test(android_gyroscope_input_backend_tests)
     set_tests_properties(android_gyroscope_input_backend_tests PROPERTIES TIMEOUT 15)

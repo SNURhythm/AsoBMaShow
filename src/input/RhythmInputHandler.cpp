@@ -327,8 +327,9 @@ bool RhythmInputHandler::startListenTouch() {
   if (touchInputSource != nullptr) {
     return false;
   }
-  // Android's SDL watcher runs on the Java touch thread. Only legacy delivery
-  // is deferred; realtime gameplay uses the producer callback below.
+  // Android's SDL watcher runs on the Java input thread. Legacy delivery is
+  // deferred; gameplay fingers arrive through the native raw registration,
+  // while the producer callback below retains real mouse input.
   touchInputSource = std::make_unique<SDLTouchInputSource>(TARGET_OS_ANDROID);
   touchInputSource->setHandler(this);
   touchInputSource->setRawEventCallback(touchIngressCallback);

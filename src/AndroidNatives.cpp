@@ -18,6 +18,8 @@
 #include "repositories/ChartRepository.h"
 #include "platform/ScreenOrientation.h"
 #include "input/AndroidInputTimestamp.h"
+#include "input/AndroidRawTouchInput.h"
+#include "input/InputTimestamp.h"
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_log.h>
@@ -53,6 +55,35 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSetInputTimestamp(
                            static_cast<Uint64>(now.tv_nsec);
   input::android::setInputTimestamp(static_cast<Uint64>(uptimeNanos), nativeNow,
                                     SDL_GetTicksNS());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeOnRawTouch(
+    JNIEnv *, jclass, jint pointer, jint action, jfloat x, jfloat y,
+    jlong uptimeNanos) {
+  using namespace input::android;
+  TouchPhase phase;
+  switch (action) {
+  case 0: phase = TouchPhase::Down; break;
+  case 1: phase = TouchPhase::Up; break;
+  case 2: phase = TouchPhase::Move; break;
+  case 3: phase = TouchPhase::Cancel; break;
+  default: return;
+  }
+  if (pointer < 0 || uptimeNanos <= 0) return;
+  // MotionEvent and CLOCK_MONOTONIC both exclude deep sleep. Anchor once so
+  // simultaneous/historical samples retain a single clock epoch and order.
+  static const input::TimestampEpochMapping mapping = [] {
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return input::TimestampEpochMapping{
+        static_cast<std::uint64_t>(now.tv_sec) * 1'000'000ULL +
+            static_cast<std::uint64_t>(now.tv_nsec) / 1000,
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count()};
+  }();
+  RawTouchRegistration::dispatch({pointer, phase, x, y,
+      mapping.toSteadyMicros(static_cast<std::uint64_t>(uptimeNanos) / 1000)});
 }
 
 namespace {
