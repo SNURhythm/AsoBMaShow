@@ -89,8 +89,9 @@ runs both use `GITHUB_RUN_NUMBER` in CI and default to `1` locally.
 `restricted_file_accessRelease` and
 `all_file_accessRelease` builds also require release signing env values:
 `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
-`ANDROID_KEY_PASSWORD`. The same signing config is used for Firebase and Google
-Play release builds. In GitHub Actions, these values are supplied by secrets on
+`ANDROID_KEY_PASSWORD`. These identify the app-signing key for Firebase APKs.
+Play AABs use a separate upload-key configuration described below.
+In GitHub Actions, these values are supplied by secrets on
 the manual **Build & Deploy Android Release (Firebase + Play Draft)** workflow in
 `.github/workflows/android-play-deploy.yml`. Start it from GitHub Actions using
 **Run workflow** and select the branch to build; pushes do not deploy Android.
@@ -102,7 +103,9 @@ The script builds first, then uploads the APK with
 The manual **Build & Deploy Android Release (Firebase + Play Draft)** workflow in
 `.github/workflows/android-play-deploy.yml` builds the signed
 `restricted_file_accessRelease` APK and AAB together in one Gradle invocation,
-sharing compilation and one `versionCode` from `GITHUB_RUN_NUMBER`. It uploads
+sharing compilation and one `versionCode` from `GITHUB_RUN_NUMBER`. Gradle signs
+the APK with the app-signing key; the helper then replaces only the AAB's JAR
+signature with the upload key and verifies it before either upload. It uploads
 the APK to Firebase and uses the Android Fastlane `upload_beta` lane to upload
 the existing AAB to the `beta` track (public beta/open testing) with
 `release_status: draft`. Neither upload rebuilds the app. Each upload is attempted
@@ -122,15 +125,32 @@ to this app and permission to release to testing tracks; see
 [Google's API setup guide](https://developers.google.com/android-publisher/getting_started).
 Add its JSON key contents as the GitHub Actions secret
 `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`. This is separate from the runner's Firebase
-CLI login. The workflow reuses the four `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*`
-signing secrets listed above. For this shared-key setup, their certificate must
-match both the registered Play upload certificate and the Play app signing
-certificate. Matching only the upload certificate does not make Firebase APKs
-compatible with Play installations. Keep the new app signing key locally and
-update the runner's private environment and signing secrets together.
+CLI login. Configure these two independent sets of environment variables and
+GitHub Actions secrets:
 
-The self-hosted macOS runner needs Ruby from `android/.ruby-version` in addition
-to the existing Android SDK, NDK, Ninja, Java and vcpkg setup. The wrapper selects
+| Purpose | Keystore path | Keystore password | Alias | Key password |
+| --- | --- | --- | --- | --- |
+| Firebase APK / app-signing key | `ANDROID_KEYSTORE_PATH` | `ANDROID_KEYSTORE_PASSWORD` | `ANDROID_KEY_ALIAS` | `ANDROID_KEY_PASSWORD` |
+| Play AAB / upload key | `ANDROID_UPLOAD_KEYSTORE_PATH` | `ANDROID_UPLOAD_KEYSTORE_PASSWORD` | `ANDROID_UPLOAD_KEY_ALIAS` | `ANDROID_UPLOAD_KEY_PASSWORD` |
+
+The first certificate must match Play's **App signing key certificate** for
+Firebase APKs to update Play installations. The second must match Play's
+**Upload key certificate**. Keep both keystores on the self-hosted runner and
+set their paths in the corresponding secrets; keep passwords in private env
+files or secrets only. Copy `scripts/android_firebase_deploy.env.example` as a
+template. Paths can be absolute, start with `~/`, or be relative to the repo root.
+Register and activate a new upload certificate in Play before switching CI to it.
+
+APK-only builds require only the app-signing set. Bundle-only builds require
+only the upload set and pass it to Gradle's signing configuration. Combined
+builds require both complete sets; missing upload values never fall back to the
+app key. Debug builds retain debug signing. The helpers are the release entry
+points: a raw Gradle bundle uses whatever `ANDROID_KEYSTORE_*` configuration is
+provided and does not perform the combined helper's upload-key replacement.
+
+The self-hosted macOS runner needs Python 3 and Ruby from `android/.ruby-version`
+in addition to the existing Android SDK, NDK, Ninja, JDK (including `jarsigner`)
+and vcpkg setup. The wrapper selects
 that Ruby from the current environment, asdf or rbenv and installs the locked
 Android-only bundle into `~/Library/Caches/AsoBMaShow/android-play/`.
 `ANDROID_PLAY_BUNDLE_PATH` can override the gem cache directory.
@@ -165,14 +185,20 @@ Direct Fastlane commands, after selecting the project Ruby and installing its
 bundle, are `bundle exec fastlane android build_bundle` and
 `bundle exec fastlane android play_beta` from `android/`; prefer the wrapper for
 environment and Ruby setup. Run `python3 tests/android_play_workflow_tests.py`
-to exercise build/upload boundaries without contacting Play.
+to exercise build/upload boundaries without contacting Play. Run
+`python3 tests/android_bundle_signing_tests.py` to verify signature replacement,
+payload preservation, and rejection of incorrect or unsigned bundles using
+temporary test keys and the real JDK tools.
 
 To retry only a failed upload, use the retained artifact from that release.
 For Firebase, pass `--skip-build --apk /path/to/release.apk --version-code N`
 to `scripts/android_firebase_deploy.sh`. For Play, restore the AAB to the output
 path above, set `ANDROID_VERSION_CODE` to its actual code, and run
-`scripts/android_play_deploy.sh --skip-build`. Do not repeat a successful Play
-upload with the same code.
+`scripts/android_play_deploy.sh --skip-build`. Play uploads, including retries,
+verify the existing AAB against the configured upload key before contacting
+Play, so the upload-key env set and JDK are required even with `--skip-build`.
+Verification does not modify or re-sign retained artifacts. Do not repeat a
+successful Play upload with the same code.
 
 ### Version-code transition
 

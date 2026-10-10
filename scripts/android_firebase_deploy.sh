@@ -58,9 +58,14 @@ Options:
 Required env for deployment:
   FIREBASE_ANDROID_APP_ID
 
-Required env for release builds unless --skip-build is used:
+Required env for release APK builds unless --skip-build is used:
   ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
   ANDROID_KEY_PASSWORD
+
+Required env for release AAB builds (--bundle or --apk-and-bundle):
+  ANDROID_UPLOAD_KEYSTORE_PATH, ANDROID_UPLOAD_KEYSTORE_PASSWORD,
+  ANDROID_UPLOAD_KEY_ALIAS, ANDROID_UPLOAD_KEY_PASSWORD
+  Combined builds require both sets. There is no fallback between keys.
 
 Firebase auth for deployment must be available through one of:
   FIREBASE_SERVICE_CREDENTIALS_JSON, FIREBASE_CLI_TOKEN, FIREBASE_TOKEN,
@@ -254,23 +259,19 @@ is_release_variant() {
   esac
 }
 
-setup_android_signing_env() {
-  local resolved_path
-
-  if [ "${SKIP_BUILD}" -eq 1 ] || ! is_release_variant; then
-    return 0
-  fi
-
+resolve_signing_env() {
+  local prefix="$1" path_name resolved_path
   require_env \
-    ANDROID_KEYSTORE_PATH \
-    ANDROID_KEYSTORE_PASSWORD \
-    ANDROID_KEY_ALIAS \
-    ANDROID_KEY_PASSWORD
+    "${prefix}KEYSTORE_PATH" \
+    "${prefix}KEYSTORE_PASSWORD" \
+    "${prefix}KEY_ALIAS" \
+    "${prefix}KEY_PASSWORD"
 
-  resolved_path="${ANDROID_KEYSTORE_PATH}"
+  path_name="${prefix}KEYSTORE_PATH"
+  resolved_path="${!path_name}"
   case "${resolved_path}" in
     [~]/*)
-      resolved_path="${HOME}/${resolved_path#~/}"
+      resolved_path="${HOME}/${resolved_path:2}"
       ;;
     /*)
       ;;
@@ -278,11 +279,24 @@ setup_android_signing_env() {
       resolved_path="${ROOT_DIR}/${resolved_path}"
       ;;
   esac
-  export ANDROID_KEYSTORE_PATH="${resolved_path}"
+  printf -v "${path_name}" '%s' "${resolved_path}"
+  export "${path_name?}"
 
-  if [ ! -f "${ANDROID_KEYSTORE_PATH}" ]; then
-    echo "ANDROID_KEYSTORE_PATH does not point to a file: ${ANDROID_KEYSTORE_PATH}" >&2
+  if [ ! -f "${resolved_path}" ]; then
+    echo "${path_name} does not point to a file: ${resolved_path}" >&2
     exit 1
+  fi
+}
+
+setup_android_signing_env() {
+  if [ "${SKIP_BUILD}" -eq 1 ] || ! is_release_variant; then
+    return 0
+  fi
+  if [ "${BUILD_BUNDLE}" -eq 0 ] || [ "${BUILD_APK_AND_BUNDLE}" -eq 1 ]; then
+    resolve_signing_env ANDROID_
+  fi
+  if [ "${BUILD_BUNDLE}" -eq 1 ]; then
+    resolve_signing_env ANDROID_UPLOAD_
   fi
 }
 
@@ -534,7 +548,7 @@ artifact_path_for_variant() {
 }
 
 run_gradle_build() {
-  local task format="APK"
+  local task bundle_path="" format="APK"
   local tasks=()
   if [ "${BUILD_BUNDLE}" -eq 1 ]; then
     format="AAB"
@@ -545,8 +559,29 @@ run_gradle_build() {
     tasks+=(":app:assemble${task#bundle}")
   fi
   tasks+=(":app:${task}")
+  if [ "${BUILD_BUNDLE}" -eq 1 ] && is_release_variant; then
+    bundle_path="${ANDROID_DIR}/app/build/outputs/bundle/${VARIANT}/app-${VARIANT%Release}-release.aab"
+    rm -f "${bundle_path}"
+  fi
   echo "Building Android ${VARIANT} ${format} with versionCode=${ANDROID_VERSION_CODE}, versionName=${ANDROID_VERSION_NAME}"
-  "${GRADLEW}" -p "${ANDROID_DIR}" "${tasks[@]}" --no-daemon
+  (
+    # A bundle-only build needs only the upload key. Combined builds retain the
+    # app key for Gradle's APK and replace only the AAB signature afterwards.
+    if [ -n "${bundle_path}" ] && [ "${BUILD_APK_AND_BUNDLE}" -eq 0 ]; then
+      export ANDROID_KEYSTORE_PATH="${ANDROID_UPLOAD_KEYSTORE_PATH}"
+      export ANDROID_KEYSTORE_PASSWORD="${ANDROID_UPLOAD_KEYSTORE_PASSWORD}"
+      export ANDROID_KEY_ALIAS="${ANDROID_UPLOAD_KEY_ALIAS}"
+      export ANDROID_KEY_PASSWORD="${ANDROID_UPLOAD_KEY_PASSWORD}"
+    fi
+    "${GRADLEW}" -p "${ANDROID_DIR}" "${tasks[@]}" --no-daemon
+  )
+  if [ -n "${bundle_path}" ]; then
+    local signing_args=("${ROOT_DIR}/scripts/android_sign_bundle.py")
+    if [ "${BUILD_APK_AND_BUNDLE}" -eq 0 ]; then
+      signing_args+=(--verify-only)
+    fi
+    python3 "${signing_args[@]}" "${bundle_path}"
+  fi
 }
 
 has_firebase_auth() {

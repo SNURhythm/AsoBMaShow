@@ -36,6 +36,8 @@ platform :android do
   lane :upload_beta do
     credentials = play_credentials
     UI.user_error!("AAB not found or empty: #{bundle_path}") unless File.file?(bundle_path) && File.size?(bundle_path)
+    sh("python3", File.join(repository_root, "scripts/android_sign_bundle.py"),
+       "--verify-only", bundle_path)
     upload_to_play_store(
       package_name: "com.snurhythm.asobmashow",
       json_key_data: credentials,

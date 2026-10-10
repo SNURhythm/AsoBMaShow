@@ -26,6 +26,10 @@ jobs:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      ANDROID_UPLOAD_KEYSTORE_PATH: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PATH }}
+      ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+      ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+      ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +42,7 @@ jobs:
         run: |
           python3 tests/android_release_workflow_tests.py
           python3 tests/android_play_workflow_tests.py
+          python3 tests/android_bundle_signing_tests.py
       - name: Run fatal Android lint
         run: android/gradlew -p android lintRestricted_file_accessDebug
       - name: Build restricted-file APK and AAB

@@ -58,9 +58,16 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
             ("exit 1\n" if fail_build else "" if omit_bundle else
              f'mkdir -p "{artifact.parent}"\nprintf bundle > "{artifact}"\n'))
         helper.chmod(0o755)
+        self.prepare_signing_stub()
         return subprocess.run(
             ["ruby", "-e", HARNESS, str(self.root / "android/fastlane/Fastfile"), lane],
             cwd=self.root, env=self.env, text=True, capture_output=True)
+
+    def prepare_signing_stub(self):
+        (self.root / "scripts/android_sign_bundle.py").write_text(
+            'import os, pathlib, sys\n'
+            'pathlib.Path("signing-args.txt").write_text("\\n".join(sys.argv[1:]))\n'
+            'sys.exit(int(os.environ.get("FIXTURE_SIGNING_EXIT", "0")))\n')
 
     def test_build_only_needs_no_play_credentials_and_cannot_upload(self):
         result = self.run_lane("build_bundle")
@@ -113,6 +120,15 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertEqual(upload["aab"], str(self.root / AAB))
         self.assertEqual(upload["release_status"], "draft")
         self.assertEqual((self.root / AAB).read_bytes(), b"old bundle")
+        self.assertEqual((self.root / "signing-args.txt").read_text().splitlines(),
+                         ["--verify-only", str(self.root / AAB)])
+
+    def test_play_rejects_bundle_with_wrong_signature_before_upload(self):
+        self.env["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"] = "{}"
+        self.env["FIXTURE_SIGNING_EXIT"] = "23"
+        result = self.run_lane("upload_beta", stale_bundle=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "upload.json").exists())
 
     def test_upload_existing_bundle_rejects_missing_or_empty_artifact(self):
         self.env["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"] = "{}"
@@ -135,6 +151,7 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertIn("--bundle requires --build-only", result.stderr)
 
     def prepare_build_fixture(self):
+        self.prepare_signing_stub()
         shutil.copyfile(ROOT / "scripts/android_firebase_deploy.sh",
                         self.root / "scripts/android_firebase_deploy.sh")
         (self.root / "scripts/android_firebase_deploy.sh").chmod(0o755)
@@ -147,6 +164,7 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         java.write_text('#!/bin/sh\necho \'openjdk version "17.0.1"\' >&2\n')
         java.chmod(0o755)
         (self.root / "release.jks").touch()
+        (self.root / "upload.jks").touch()
         self.env.update({
             "ANDROID_HOME": str(self.root / "sdk"),
             "ANDROID_SDK_ROOT": str(self.root / "sdk"),
@@ -155,6 +173,9 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
             "ANDROID_KEYSTORE_PATH": "release.jks",
             "ANDROID_KEYSTORE_PASSWORD": "fixture-password",
             "ANDROID_KEY_ALIAS": "release", "ANDROID_KEY_PASSWORD": "fixture-password",
+            "ANDROID_UPLOAD_KEYSTORE_PATH": "upload.jks",
+            "ANDROID_UPLOAD_KEYSTORE_PASSWORD": "upload-password",
+            "ANDROID_UPLOAD_KEY_ALIAS": "upload", "ANDROID_UPLOAD_KEY_PASSWORD": "upload-password",
             "GITHUB_SHA": "fixture", "GITHUB_HEAD_REF": "fixture",
         })
         gradle = self.root / "android/gradlew"
@@ -177,6 +198,8 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
                           ":app:bundleRestricted_file_accessRelease", "--no-daemon"])
         self.assertEqual((self.root / "version-code.txt").read_text(), "42")
         self.assertEqual((self.root / "gradle-calls.txt").read_text(), "call\n")
+        self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "release.jks"))
+        self.assertEqual((self.root / "signing-args.txt").read_text(), str(self.root / AAB))
         self.env["FIXTURE_GRADLE_EXIT"] = "19"
         result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 19)
@@ -229,7 +252,9 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / "gradle-args.txt").read_text().splitlines(),
                          ["-p", str(self.root / "android"), ":app:bundleRestricted_file_accessRelease", "--no-daemon"])
-        self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "release.jks"))
+        self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "upload.jks"))
+        self.assertEqual((self.root / "signing-args.txt").read_text().splitlines(),
+                         ["--verify-only", str(self.root / AAB)])
         self.assertEqual((self.root / "version-code.txt").read_text(), "1")
         self.env["GITHUB_RUN_NUMBER"] = "12"
         (self.root / ".env.local").write_text("GITHUB_RUN_NUMBER=''\n")
@@ -245,6 +270,74 @@ class AndroidPlayWorkflowTests(unittest.TestCase):
         self.env["FIXTURE_GRADLE_EXIT"] = "19"
         result = subprocess.run(command, cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 19)
+
+    def test_bundle_only_does_not_need_app_signing_credentials(self):
+        self.prepare_build_fixture()
+        for name in ("ANDROID_KEYSTORE_PATH", "ANDROID_KEYSTORE_PASSWORD",
+                     "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"):
+            self.env.pop(name)
+        result = subprocess.run([str(self.root / "scripts/android_firebase_deploy.sh"),
+                                 "--build-only", "--bundle"], cwd=self.root,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "upload.jks"))
+
+    def test_missing_upload_credentials_fail_before_gradle_without_fallback(self):
+        self.prepare_build_fixture()
+        for name in ("ANDROID_UPLOAD_KEYSTORE_PATH", "ANDROID_UPLOAD_KEYSTORE_PASSWORD",
+                     "ANDROID_UPLOAD_KEY_ALIAS", "ANDROID_UPLOAD_KEY_PASSWORD"):
+            value = self.env.pop(name)
+            for flag in ("--bundle", "--apk-and-bundle"):
+                with self.subTest(name=name, flag=flag):
+                    result = subprocess.run([str(self.root / "scripts/android_firebase_deploy.sh"),
+                                             "--build-only", flag], cwd=self.root,
+                                            env=self.env, text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(name, result.stderr)
+                    self.assertFalse((self.root / "gradle-calls.txt").exists())
+            self.env[name] = value
+
+    def test_apk_only_does_not_need_upload_credentials(self):
+        self.prepare_build_fixture()
+        self.env = {k: v for k, v in self.env.items() if not k.startswith("ANDROID_UPLOAD_")}
+        result = subprocess.run([str(self.root / "scripts/android_firebase_deploy.sh"),
+                                 "--build-only"], cwd=self.root, env=self.env,
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "release.jks"))
+        self.assertFalse((self.root / "signing-args.txt").exists())
+
+    def test_upload_keystore_paths_resolve_before_gradle(self):
+        self.prepare_build_fixture()
+        self.env["HOME"] = str(self.root)
+        for path in ("upload.jks", "~/upload.jks", str(self.root / "upload.jks")):
+            with self.subTest(path=path):
+                self.env["ANDROID_UPLOAD_KEYSTORE_PATH"] = path
+                result = subprocess.run([str(self.root / "scripts/android_firebase_deploy.sh"),
+                                         "--build-only", "--bundle"], cwd=self.root,
+                                        env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((self.root / "signing-path.txt").read_text(), str(self.root / "upload.jks"))
+
+    def test_debug_bundle_does_not_require_or_use_release_keys(self):
+        self.prepare_build_fixture()
+        self.env = {k: v for k, v in self.env.items()
+                    if not k.startswith(("ANDROID_UPLOAD_", "ANDROID_KEY"))}
+        result = subprocess.run([str(self.root / "scripts/android_firebase_deploy.sh"),
+                                 "--build-only", "--apk-and-bundle",
+                                 "--variant", "restricted_file_accessDebug"], cwd=self.root,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "signing-path.txt").read_text(), "")
+        self.assertFalse((self.root / "signing-args.txt").exists())
+
+    def test_combined_build_propagates_signing_failure(self):
+        self.prepare_build_fixture()
+        self.env["FIXTURE_SIGNING_EXIT"] = "23"
+        result = subprocess.run([str(self.root / "scripts/android_firebase_deploy.sh"),
+                                 "--build-only", "--apk-and-bundle"], cwd=self.root,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 23)
 
     def test_play_helper_preserves_ci_run_number_across_private_env_files(self):
         helper = self.root / "scripts/android_play_deploy.sh"
