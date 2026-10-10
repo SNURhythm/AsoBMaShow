@@ -46,6 +46,9 @@ struct SoundData {
   int channels = 0;
   int sourceSampleRate = 0;
   bool playing = false;
+  // Callback-owned (or accessed with the backend stopped). Monotonic for this
+  // owner's lifetime: false proves no scheduled entry can refer to this owner.
+  bool hasBeenScheduled = false;
   std::vector<short> sourceData;
   std::vector<short> outputData;
   size_t sourceFrameCount = 0;

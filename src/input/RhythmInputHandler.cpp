@@ -327,8 +327,8 @@ bool RhythmInputHandler::startListenTouch() {
   if (touchInputSource != nullptr) {
     return false;
   }
-  // Android's SDL watcher runs on the Java touch thread. Drain its raw events
-  // on the gameplay thread before simulation, alongside layout publication.
+  // Android's SDL watcher runs on the Java touch thread. Only legacy delivery
+  // is deferred; realtime gameplay uses the producer callback below.
   touchInputSource = std::make_unique<SDLTouchInputSource>(TARGET_OS_ANDROID);
   touchInputSource->setHandler(this);
   touchInputSource->setRawEventCallback(touchIngressCallback);

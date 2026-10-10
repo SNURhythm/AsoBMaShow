@@ -274,6 +274,8 @@ void testAndroidTouchReachesWorkerWithoutRenderDrain() {
     const bool admitted = waitUntil([&] {
       return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1;
     });
+    require(admitted && audio.commitCount.load(std::memory_order_acquire) == 1,
+            "Android touch commits its keysound before any render or touch-queue drain");
     clock.nowMicros.store(3'000'000, std::memory_order_release);
     require(waitUntil([&] {
       return worker.acquireLatestSnapshot()->noteStates[0].played;
@@ -331,6 +333,100 @@ void testCommandOnlyTouchScratchBypassesGameplayAndReplay() {
                 recorded->front().control.kind == replay::LogicalControlKind::Lane &&
                 session.startSelectInputs.size() == 3,
             "command-only scratch reaches controls but never the note replay stream");
+  }
+}
+
+void testAndroidCancellationReleasesBeforeRenderAndAllowsFingerReuse() {
+  for (const bool deferred : {false, true}) {
+    FakeClock clock;
+    FakeAudio audio;
+    clock.nowMicros.store(1'000'000);
+    auto config = makeConfig(clock, audio);
+    config.clock.mapSteadyToSong = [](void *, std::int64_t) -> std::optional<std::int64_t> {
+      return 1'000'000;
+    };
+    gameplay::RealtimeGameplayWorker worker(makeScratchlessDefinition(4), config);
+    RealtimeGameplaySession session;
+    session.worker = &worker;
+    gameplay::RealtimeTouchLayout layout{
+        .revision = 1, .bottomLeft = {0, 1}, .bottomRight = {1, 1},
+        .topLeft = {0, 0}, .topRight = {1, 0},
+        .lanes = {0, 1}, .scratch = {false, false}, .laneCount = 2, .keyMode = 4};
+    session.touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(7, layout,
+        gameplay::RealtimeTouchInputSink{.context = &session,
+                                         .emit = &RealtimeGameplaySession::emitTouchInput});
+    require(session.touchHitSnapshots.publish({.layoutRevision = 1,
+        .uiTransform = {.renderWidth = 1000, .renderHeight = 500,
+                        .uiScaleX = 1, .uiScaleY = 1, .uiWidth = 1000, .uiHeight = 500}}),
+            "cancellation input geometry publishes");
+    SDLTouchInputSource source(deferred);
+    source.setRawEventCallback([&](const SDL_Event &event, std::uint64_t time) {
+      RealtimeGameplaySession::sdlTouchSink(session, event, time);
+    });
+    require(worker.start(), "cancellation worker starts");
+    SDL_Event finger{};
+    finger.type = SDL_EVENT_FINGER_DOWN;
+    finger.tfinger.fingerID = 42;
+    finger.tfinger.x = .25F;
+    finger.tfinger.y = .5F;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->lanePressed[0]; }),
+            "finger owns its gameplay lane before cancellation");
+    finger.tfinger.fingerID = 43;
+    finger.tfinger.x = .75F;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->lanePressed[1]; }),
+            "a second finger independently owns another lane");
+    finger.tfinger.fingerID = 42;
+    finger.tfinger.x = .25F;
+    finger.type = SDL_EVENT_FINGER_CANCELED;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(waitUntil([&] {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      return !snapshot->lanePressed[0] && snapshot->lanePressed[1];
+    }),
+            "Android terminal cancellation releases before any render or touch-queue drain");
+    require(session.acceptingTouch.load() && !session.touchRoutingRecoveryRequested.load(),
+            "terminal cancellation acknowledges ownership without entering recovery");
+    gameplay::RealtimeTouchSample metadata;
+    require(session.auxiliaryTouches.tryPop(metadata) &&
+                metadata.phase == gameplay::RealtimeTouchPhase::Down && metadata.fingerId == 42 &&
+                session.auxiliaryTouches.tryPop(metadata) &&
+                metadata.phase == gameplay::RealtimeTouchPhase::Down && metadata.fingerId == 43 &&
+                session.auxiliaryTouches.tryPop(metadata) &&
+                metadata.phase == gameplay::RealtimeTouchPhase::Cancel && metadata.fingerId == 42 &&
+                !session.auxiliaryTouches.tryPop(metadata),
+            "terminal gameplay release preserves one Cancel for presentation and replay");
+    finger.type = SDL_EVENT_FINGER_MOTION;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(!session.auxiliaryTouches.tryPop(metadata),
+            "a stale Move cannot continue an Android cancelled contact");
+    finger.type = SDL_EVENT_FINGER_DOWN;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->lanePressed[0]; }),
+            "reusing the cancelled finger ID creates a fresh gameplay press");
+    require(session.auxiliaryTouches.tryPop(metadata) &&
+                metadata.phase == gameplay::RealtimeTouchPhase::Down,
+            "reused finger publishes a new presentation contact");
+    finger.type = SDL_EVENT_FINGER_UP;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[0]; }),
+            "reused finger releases normally");
+    require(worker.acquireLatestSnapshot()->lanePressed[1],
+            "cancellation and finger reuse preserve the other contact");
+    finger.tfinger.fingerID = 43;
+    finger.tfinger.x = .75F;
+    SDLTouchInputSource::EventHandler(&source, &finger);
+    require(waitUntil([&] { return !worker.acquireLatestSnapshot()->lanePressed[1]; }),
+            "the uncancelled finger releases normally");
+    source.setRawEventCallback({});
+    worker.stop();
+    const auto replay = worker.copyAcceptedReplayInputAfterStop();
+    require(replay && replay->size() == 6 &&
+                (*replay)[0].pressed && (*replay)[1].pressed &&
+                !(*replay)[2].pressed && (*replay)[3].pressed &&
+                !(*replay)[4].pressed && !(*replay)[5].pressed,
+            "cancelled and reused contacts retain balanced replay ownership");
   }
 }
 
@@ -2227,6 +2323,7 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 int main() {
   testCommandOnlyTouchScratchBypassesGameplayAndReplay();
   testAndroidTouchReachesWorkerWithoutRenderDrain();
+  testAndroidCancellationReleasesBeforeRenderAndAllowsFingerReuse();
   testAndroidSyntheticMouseDoesNotStealPointerZero();
   testLr2SameKeyBatchUsesLatestEdgeAndRetainsReplayHistory();
   testLr2ScratchBatchKeepsLatestKeyAndProcessingDirection();

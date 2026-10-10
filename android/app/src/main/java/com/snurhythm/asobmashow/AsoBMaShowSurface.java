@@ -13,7 +13,7 @@ final class AsoBMaShowSurface extends SDLSurface {
         @Override public void setTimestamp(long uptimeNanos) {
             nativeSetInputTimestamp(uptimeNanos);
         }
-        @Override public void historicalTouch(int device, int pointer,
+        @Override public void motionTouch(int device, int pointer,
                                                float x, float y, float pressure) {
             SDLActivity.onNativeTouch(device, pointer, MotionEvent.ACTION_MOVE, x, y, pressure);
         }
@@ -22,8 +22,24 @@ final class AsoBMaShowSurface extends SDLSurface {
         }
     };
 
+    private final AndroidTouchInput.MotionSink motionSink = new AndroidTouchInput.MotionSink() {
+        @Override public void setTimestamp(long uptimeNanos) {
+            nativeSetInputTimestamp(uptimeNanos);
+        }
+        @Override public boolean currentMotion(View view, MotionEvent event) {
+            View.OnGenericMotionListener listener = SDLActivity.getMotionListener();
+            return listener.onGenericMotion(view, event);
+        }
+    };
+
     AsoBMaShowSurface(Context context) {
         super(context);
+        setOnGenericMotionListener((view, event) ->
+                AndroidTouchInput.dispatchMotion(view, event, motionSink));
+    }
+
+    @Override public boolean onCapturedPointerEvent(MotionEvent event) {
+        return AndroidTouchInput.dispatchMotion(this, event, motionSink);
     }
 
     @Override public boolean onTouch(View view, MotionEvent event) {

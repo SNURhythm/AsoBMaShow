@@ -4781,6 +4781,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(audio_resampling_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(audio_resampling_tests PRIVATE cxx_std_23)
 
+    add_executable(audio_owner_removal_tests
+        tests/audio_owner_removal_tests.cpp
+        src/audio/AudioMix.cpp)
+    target_include_directories(audio_owner_removal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_owner_removal_tests PRIVATE cxx_std_23)
+
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
@@ -5795,6 +5801,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(android_audio_latency_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
     target_compile_features(android_audio_latency_tests PRIVATE cxx_std_23)
     target_link_libraries(android_audio_latency_tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
+    add_executable(android_gyroscope_input_backend_tests
+        tests/android_gyroscope_input_backend_tests.cpp
+        src/input/GyroscopeInputBackendCore.cpp
+        src/input/GyroscopeTurntable.cpp)
+    target_include_directories(android_gyroscope_input_backend_tests BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/android_gyroscope_stubs
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/SDL/include)
+    target_compile_features(android_gyroscope_input_backend_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_gyroscope_input_backend_tests PRIVATE Threads::Threads)
 
     add_executable(android_input_timestamp_ingress_tests
         tests/android_input_timestamp_ingress_tests.cpp)
@@ -8660,6 +8677,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(audio_video_settings_tests foundation_av_settings)
     asobmashow_register_test(audio_resampling_tests foundation_av_audio_resampling)
     asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
+    asobmashow_register_test(audio_owner_removal_tests)
     asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
     asobmashow_register_test(skin_sound_bundle_decode_tests foundation_av_skin_sound_bundle_decode)
@@ -9362,6 +9380,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(android_input_timestamp_ingress_tests)
     asobmashow_register_test(android_audio_latency_tests)
+    asobmashow_register_test(android_gyroscope_input_backend_tests)
+    set_tests_properties(android_gyroscope_input_backend_tests PROPERTIES TIMEOUT 15)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_button_layout_tests)
     set_tests_properties(ir_ranking_modal_tests PROPERTIES

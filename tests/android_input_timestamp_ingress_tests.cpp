@@ -7,9 +7,16 @@
 #include <thread>
 
 namespace {
+constexpr std::array controllerTypes{
+    SDL_EVENT_JOYSTICK_BUTTON_DOWN, SDL_EVENT_JOYSTICK_BUTTON_UP,
+    SDL_EVENT_JOYSTICK_AXIS_MOTION, SDL_EVENT_JOYSTICK_HAT_MOTION,
+    SDL_EVENT_GAMEPAD_BUTTON_DOWN, SDL_EVENT_GAMEPAD_BUTTON_UP,
+    SDL_EVENT_GAMEPAD_AXIS_MOTION};
 struct Observed {
   std::array<Uint64, 3> timestamps{};
   std::array<std::thread::id, 3> threads{};
+  std::array<Uint64, controllerTypes.size()> controllerTimestamps{};
+  std::array<std::thread::id, controllerTypes.size()> controllerThreads{};
 };
 
 void require(bool value, const char *message) {
@@ -23,6 +30,13 @@ bool SDLCALL watch(void *context, SDL_Event *event) {
     const auto index = static_cast<std::size_t>(event->tfinger.fingerID - 1);
     observed.timestamps[index] = event->common.timestamp;
     observed.threads[index] = std::this_thread::get_id();
+  }
+  for (std::size_t index = 0; index < controllerTypes.size(); ++index) {
+    if (event->type == controllerTypes[index]) {
+      auto &observed = *static_cast<Observed *>(context);
+      observed.controllerTimestamps[index] = event->common.timestamp;
+      observed.controllerThreads[index] = std::this_thread::get_id();
+    }
   }
   return true;
 }
@@ -47,6 +61,12 @@ int main() {
       nativeThread = std::this_thread::get_id();
       input::android::setInputTimestamp(92'000'123, 100'000'000, 50'000'000);
       push(1, 50'000'000);
+      for (const auto type : controllerTypes) {
+        SDL_Event event{};
+        event.type = type;
+        event.common.timestamp = 50'000'000;
+        require(SDL_PushEvent(&event), "SDL accepts raw and mapped controller samples");
+      }
       // A concurrent producer must not inherit the Java thread's timestamp.
       std::thread otherProducer([] { push(2, 51'000'000); });
       otherProducer.join();
@@ -58,13 +78,26 @@ int main() {
             "watchers see corrected native time before any render-thread pump, scoped per producer");
     require(observed.threads[0] == nativeThread && observed.threads[2] == nativeThread,
             "input watches execute synchronously on the native producer");
+    for (std::size_t index = 0; index < controllerTypes.size(); ++index) {
+      require(observed.controllerTimestamps[index] == 42'000'123 &&
+                  observed.controllerThreads[index] == nativeThread,
+              "controller watches retain Android sample time on the producer before a render pump");
+    }
     std::array<Uint64, 3> queued{};
+    std::array<Uint64, controllerTypes.size()> queuedControllers{};
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_EVENT_FINGER_DOWN) {
         queued[static_cast<std::size_t>(event.tfinger.fingerID - 1)] = event.common.timestamp;
       }
+      for (std::size_t index = 0; index < controllerTypes.size(); ++index) {
+        if (event.type == controllerTypes[index]) {
+          queuedControllers[index] = event.common.timestamp;
+        }
+      }
     }
+    require(queuedControllers == observed.controllerTimestamps,
+            "queued controller fallback keeps the same sample timestamp as native ingress");
     require(queued == observed.timestamps, "ordinary scene delivery retains the same native timestamps");
     SDL_RemoveEventWatch(watch, &observed);
     SDL_SetEventFilter(nullptr, nullptr);

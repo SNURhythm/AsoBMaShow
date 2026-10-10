@@ -26,12 +26,18 @@ public class MotionEvent {
     public static final int ACTION_DOWN=0, ACTION_UP=1, ACTION_MOVE=2,
         ACTION_CANCEL=3, ACTION_POINTER_DOWN=5, ACTION_POINTER_UP=6;
     public static final int TOOL_TYPE_UNKNOWN=0, TOOL_TYPE_FINGER=1,
-        TOOL_TYPE_STYLUS=2, TOOL_TYPE_MOUSE=3;
+        TOOL_TYPE_STYLUS=2, TOOL_TYPE_MOUSE=3, TOOL_TYPE_ERASER=4;
+    public static final int FLAG_CANCELED = 32;
     public int action = ACTION_MOVE;
+    public int actionIndex = 1;
+    public int pointerCount = 2;
+    public int flags;
     public int[] tools = {TOOL_TYPE_FINGER, TOOL_TYPE_FINGER};
     public int getDeviceId() { return 7; }
     public int getActionMasked() { return action; }
-    public int getPointerCount() { return 2; }
+    public int getActionIndex() { return actionIndex; }
+    public int getPointerCount() { return pointerCount; }
+    public int getFlags() { return flags; }
     public int getPointerId(int pointer) { return pointer == 0 ? 4 : 9; }
     public int getToolType(int pointer) { return tools[pointer]; }
     public int getHistorySize() { return 2; }
@@ -48,6 +54,9 @@ public class MotionEvent {
     public float getHistoricalX(int pointer, int sample) { return 20 + pointer * 50 + sample * 10; }
     public float getHistoricalY(int pointer, int sample) { return 40 + pointer * 100 + sample * 20; }
     public float getHistoricalPressure(int pointer, int sample) { return pointer == 0 ? 0.5f : 1.5f; }
+    public float getX(int pointer) { return 30 + pointer * 50; }
+    public float getY(int pointer) { return 60 + pointer * 100; }
+    public float getPressure(int pointer) { return pointer == 0 ? 0.5f : 1.5f; }
 }
 """,
 }

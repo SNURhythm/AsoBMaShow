@@ -9,6 +9,7 @@
 #include "scene/play/RealtimeGameplayWorker.h"
 #include "scene/play/RealtimeGameplayInputRegistration.h"
 #include "input/RealtimePhysicalInputRouter.h"
+#include "input/AndroidRealtimeInputGate.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
@@ -127,6 +128,10 @@ struct FixtureRealtimeSession {
   std::mutex inputInterruptionMutex;
   FixtureJukebox *audio = nullptr;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+  std::unique_ptr<input::AndroidRealtimeInputGate> androidPhysicalInputGate;
+  void publishKeyboardTextFocus() {
+    if (androidPhysicalInputGate) androidPhysicalInputGate->setKeyboardTextFocused(false, 0);
+  }
   std::atomic_bool inputInterrupted{false};
   std::atomic_bool inputFallbackReady{false};
   std::atomic_bool inputInterruptionAcknowledged{false};
@@ -2039,8 +2044,10 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
         transitions.push_back(transition);
         return true;
       });
-  router->setGameplayEnabled(true, 100);
-  router->consume({.control = key, .rawValue = 1, .normalizedValue = 1}, 200);
+  auto &gate = scene.realtimeGameplaySession->androidPhysicalInputGate;
+  gate = std::make_unique<input::AndroidRealtimeInputGate>(*router);
+  gate->setEnabled(true, 100);
+  gate->consume({.control = key, .rawValue = 1, .normalizedValue = 1}, 200);
   scene.clock = 300;
   scene.onApplicationBackgroundChanged(true);
   require(transitions.size() == 2 && transitions.back().type ==

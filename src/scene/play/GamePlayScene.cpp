@@ -1581,10 +1581,13 @@ struct GamePlayScene::RealtimeGameplaySession {
   // Both native producers use published geometry only. Keep routing, auxiliary
   // publication, and release acknowledgement atomic with lifecycle cancellation.
   static void consumeTouchSampleLocked(RealtimeGameplaySession &session,
-                                       gameplay::RealtimeTouchSample sample) {
+                                       gameplay::RealtimeTouchSample sample,
+                                       bool terminalCancellation = false) {
     if (!session.acceptingTouch.load(std::memory_order_acquire) ||
         session.touchRouter == nullptr) return;
     const auto phase = sample.phase;
+    const bool terminalRelease = phase == gameplay::RealtimeTouchPhase::Up ||
+        (terminalCancellation && phase == gameplay::RealtimeTouchPhase::Cancel);
     session.populateImmutableHit(sample);
     sample.excludedFromGameplay =
         sample.presentationHit.kind != PresentationUiControlKind::None &&
@@ -1594,7 +1597,12 @@ struct GamePlayScene::RealtimeGameplaySession {
         gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
     {
       if (session.touchRouter != nullptr) {
-        disposition = session.touchRouter->consumeForPublication(sample);
+        // Android cancellation ends a contact permanently. Reuse the router's
+        // transactional Up release while retaining Cancel metadata for replay
+        // and presentation. UIKit retains its separate continuation grace.
+        auto routingSample = sample;
+        if (terminalRelease) routingSample.phase = gameplay::RealtimeTouchPhase::Up;
+        disposition = session.touchRouter->consumeForPublication(routingSample);
       }
     }
     bool auxiliaryPublished = false;
@@ -1616,7 +1624,7 @@ struct GamePlayScene::RealtimeGameplaySession {
       session.touchRoutingRecoveryRequested.store(true,
                                                   std::memory_order_release);
     }
-    if (phase == gameplay::RealtimeTouchPhase::Up && auxiliaryPublished) {
+    if (terminalRelease && auxiliaryPublished) {
       if (session.touchRouter == nullptr ||
           !session.touchRouter->acknowledgePublishedRelease(sample.fingerId)) {
         session.acceptingTouch.store(false, std::memory_order_release);
@@ -1626,7 +1634,7 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     bool cancellationAcknowledged = false;
     if (phase == gameplay::RealtimeTouchPhase::Cancel &&
-        auxiliaryPublished) {
+        !terminalRelease && auxiliaryPublished) {
       cancellationAcknowledged =
           session.touchRouter != nullptr &&
           session.touchRouter->acknowledgePublishedCancellation(
@@ -1657,7 +1665,7 @@ struct GamePlayScene::RealtimeGameplaySession {
     if (!snapshot) return;
     auto sample = gameplay::realtimeTouchSampleFromSdl(
         event, timestampMicros, snapshot->uiTransform);
-    if (sample) consumeTouchSampleLocked(session, *sample);
+    if (sample) consumeTouchSampleLocked(session, *sample, /*terminalCancellation=*/true);
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -2307,7 +2315,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 #elif TARGET_OS_ANDROID
   for (const auto deviceClass :
        {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
-        input::DeviceClass::Joystick, input::DeviceClass::Midi}) {
+        input::DeviceClass::Joystick, input::DeviceClass::Midi,
+        input::DeviceClass::Gyroscope}) {
     claimedClasses[static_cast<std::size_t>(deviceClass)] = true;
     // SDL's normal backend is a correctness fallback for hotplug events whose
     // device mapping was not available to the producer watch. Event ownership

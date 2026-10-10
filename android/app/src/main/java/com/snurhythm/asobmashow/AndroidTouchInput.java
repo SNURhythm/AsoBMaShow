@@ -8,18 +8,34 @@ import android.view.View;
 final class AndroidTouchInput {
     interface Sink {
         void setTimestamp(long uptimeNanos);
-        void historicalTouch(int device, int pointer, float x, float y, float pressure);
+        void motionTouch(int device, int pointer, float x, float y, float pressure);
         boolean currentTouch(View view, MotionEvent event);
+    }
+
+    interface MotionSink {
+        void setTimestamp(long uptimeNanos);
+        boolean currentMotion(View view, MotionEvent event);
+    }
+
+    static boolean dispatchMotion(View view, MotionEvent event, MotionSink sink) {
+        try {
+            sink.setTimestamp(Build.VERSION.SDK_INT >= 34
+                    ? event.getEventTimeNanos() : event.getEventTime() * 1_000_000L);
+            return sink.currentMotion(view, event);
+        } finally {
+            sink.setTimestamp(0);
+        }
     }
 
     private AndroidTouchInput() {}
 
     static boolean dispatch(View view, MotionEvent event, float width, float height, Sink sink) {
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+        final int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
             view.requestUnbufferedDispatch(event);
         }
         try {
-            if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+            if (action == MotionEvent.ACTION_MOVE) {
                 // MotionEvent batches all pointers by sample time. Replaying
                 // each pointer's entire history first would reorder chords.
                 for (int sample = 0; sample < event.getHistorySize(); ++sample) {
@@ -30,7 +46,7 @@ final class AndroidTouchInput {
                         int tool = event.getToolType(pointer);
                         if (tool != MotionEvent.TOOL_TYPE_FINGER
                                 && tool != MotionEvent.TOOL_TYPE_UNKNOWN) continue;
-                        sink.historicalTouch(event.getDeviceId(), event.getPointerId(pointer),
+                        sink.motionTouch(event.getDeviceId(), event.getPointerId(pointer),
                                 normalize(event.getHistoricalX(pointer, sample), width),
                                 normalize(event.getHistoricalY(pointer, sample), height),
                                 Math.min(1.0f, event.getHistoricalPressure(pointer, sample)));
@@ -39,6 +55,25 @@ final class AndroidTouchInput {
             }
             sink.setTimestamp(Build.VERSION.SDK_INT >= 34
                     ? event.getEventTimeNanos() : event.getEventTime() * 1_000_000L);
+            if (action == MotionEvent.ACTION_POINTER_DOWN
+                    || action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
+                // SDL forwards only the indexed edge. Other fingers can move
+                // in the same sample, and SDL up uses the last motion position.
+                // Preserve final motion except for new or rejected contacts.
+                int edgePointer = action == MotionEvent.ACTION_UP ? 0 : event.getActionIndex();
+                boolean skipEdge = action == MotionEvent.ACTION_POINTER_DOWN
+                        || (Build.VERSION.SDK_INT >= 33 && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0);
+                for (int pointer = 0; pointer < event.getPointerCount(); ++pointer) {
+                    if (pointer == edgePointer && skipEdge) continue;
+                    int tool = event.getToolType(pointer);
+                    if (tool != MotionEvent.TOOL_TYPE_FINGER
+                            && tool != MotionEvent.TOOL_TYPE_UNKNOWN) continue;
+                    sink.motionTouch(event.getDeviceId(), event.getPointerId(pointer),
+                            normalize(event.getX(pointer), width),
+                            normalize(event.getY(pointer), height),
+                            Math.min(1.0f, event.getPressure(pointer)));
+                }
+            }
             return sink.currentTouch(view, event);
         } finally {
             sink.setTimestamp(0);

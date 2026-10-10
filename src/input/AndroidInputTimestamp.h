@@ -32,6 +32,10 @@ inline bool SDLCALL timestampFilter(void *, SDL_Event *event) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
     case SDL_EVENT_MOUSE_MOTION: case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: case SDL_EVENT_MOUSE_WHEEL:
+    case SDL_EVENT_JOYSTICK_BUTTON_DOWN: case SDL_EVENT_JOYSTICK_BUTTON_UP:
+    case SDL_EVENT_JOYSTICK_AXIS_MOTION: case SDL_EVENT_JOYSTICK_HAT_MOTION:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
       event->common.timestamp = scopedInputTimestamp;
       break;
     default:
