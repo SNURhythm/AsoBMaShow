@@ -7300,18 +7300,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/desktop_realtime_ingress_extract.py
             --root ${CMAKE_SOURCE_DIR} --output ${desktop_realtime_ingress_methods}
         DEPENDS tests/desktop_realtime_ingress_extract.py tests/gameplay_terminal_scene_extract.py
-            src/scene/play/GamePlayScene.cpp
+            src/scene/play/GamePlayScene.cpp src/input/RhythmInputHandler.cpp
         VERBATIM)
     add_executable(desktop_realtime_ingress_tests tests/desktop_realtime_ingress_tests.cpp
-        ${desktop_realtime_ingress_methods})
+        src/input/SDLTouchInputSource.cpp ${desktop_realtime_ingress_methods})
     target_include_directories(desktop_realtime_ingress_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
     target_compile_features(desktop_realtime_ingress_tests PRIVATE cxx_std_23)
     target_link_libraries(desktop_realtime_ingress_tests PRIVATE SDL3::SDL3)
 
     add_executable(sdl_application_runtime_tests
         tests/sdl_application_runtime_tests.cpp
-        src/platform/SDLApplicationRuntime.cpp
+        tests/sdl_application_runtime_fixture.cpp
         src/platform/ApplicationEventQueue.cpp
     )
     target_include_directories(sdl_application_runtime_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

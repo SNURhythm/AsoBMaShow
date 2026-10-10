@@ -12,7 +12,13 @@ PREAMBLE = r'''
 #import <Foundation/Foundation.h>
 #include <atomic>
 #include <cassert>
-#include "platform/IOSApplicationRuntime.h"
+#include <utility>
+namespace platform {
+inline bool isMainThread() { return true; }
+template <typename F> decltype(auto) onMain(F &&operation) {
+  return std::forward<F>(operation)();
+}
+}
 static bool simulatedEnabled = false;
 static int logCount = 0;
 bool UIAccessibilityIsGuidedAccessEnabled() { return simulatedEnabled; }

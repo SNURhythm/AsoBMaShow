@@ -45,6 +45,7 @@ void dispatchApplicationBackgroundChange(TestScene *scene, bool background) {
 }
 }
 struct Context {
+  struct Registry { void reconcileSdlDevices() {} } inputDeviceRegistry;
   struct Display {
     struct Message { bool empty() const { return true; } std::string resolve() const { return {}; } };
     struct Result { Message message; };
@@ -83,6 +84,14 @@ void NotifyAndroidSurfaceRenderPaused() {
   ++surfacePauseAcknowledgements;
 }
 
+bool surfacePauseRequested = false, externalPauseRequested = false;
+bool IsAndroidSurfaceRenderPauseRequested() { return surfacePauseRequested; }
+bool IsAndroidExternalActivityRenderPauseRequested() { return externalPauseRequested; }
+namespace platform {
+bool active = true;
+bool applicationActive() { return active; }
+void windowSize(void *, int *width, int *height) { *width = 2400; *height = 1080; }
+}
 int main() {
   Context context;
   bool androidRenderSuspended = false, androidResumeResizePending = false;
@@ -91,6 +100,8 @@ int main() {
   auto refreshAndroidBgfxPlatformData = [&]() { return nativeWindowReady; };
   auto retireAndroidPreviousWindow = []() {};
   PRODUCTION_SUSPEND;
+  bool androidSystemSuspended = false;
+  PRODUCTION_SYNC;
   TestScene scene;
   struct { TestScene *currentScene; } sceneManager{&scene};
   auto lastFrameTime = std::chrono::steady_clock::now();
@@ -143,5 +154,30 @@ int main() {
   assert(pauseAcknowledgements == 3 && surfacePauseAcknowledgements == 3 &&
          !bgfx::pendingPresent);
   assert(bgfx::resets == 3 && bgfx::frames == 5);
+  // Overflow supplies a synthetic focus loss without a real OS lifecycle change.
+  const bool pressureRecovery = true;
+  void *s_window = nullptr;
+  int resizedWidth = 0, resizedHeight = 0;
+  auto deferWindowResize = [&](int width, int height) { resizedWidth = width; resizedHeight = height; };
+  auto recoverOverflow = [&] {
+    PRODUCTION_RECOVERY
+  };
+  androidSystemSuspended = true;
+  setAppBackground(true);
+  recoverOverflow();
+  assert(!syncAndroidRenderSuspend() && !androidRenderSuspended &&
+         "foreground event overflow must not leave Android rendering suspended");
+  assert(!context.appInBackground && resizedWidth == 2400 && resizedHeight == 1080);
+  for (bool surface : {false, true}) {
+    surfacePauseRequested = surface;
+    externalPauseRequested = !surface;
+    androidSystemSuspended = true;
+    recoverOverflow();
+    assert(syncAndroidRenderSuspend() && "overflow must preserve explicit native pause requests");
+  }
+  surfacePauseRequested = externalPauseRequested = false;
+  platform::active = false;
+  recoverOverflow();
+  assert(syncAndroidRenderSuspend() && context.appInBackground);
   std::cout << "Android renderer suspend drain and resume target restoration passed\n";
 }

@@ -27,7 +27,13 @@ class SettingsRotationEditTests(unittest.TestCase):
             "inline void stopFocusedTextInput()") + "\n}\n" + methods)
         fixture = r'''
 #include <array>
-#include "platform/IOSApplicationRuntime.h"
+#include <utility>
+namespace platform {
+inline bool isMainThread() { return true; }
+template <typename F> decltype(auto) onMain(F &&operation) {
+  return std::forward<F>(operation)();
+}
+}
 #include <functional>
 #include <iostream>
 #include <memory>

@@ -114,6 +114,10 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
           // The application acknowledges viewport restoration before ingress
           // reopens. Main never waits for that acknowledgement.
         }
+        // Publish geometry before the application can consume its resize event.
+        if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
+            (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST))
+          updateViewport(*state, window);
         if (!state->events.push(event, state->exportStop.has_value())) {
           state->ingressPaused.store(true, std::memory_order_release);
           SetIOSGameplayTouchInputEnabled(false);

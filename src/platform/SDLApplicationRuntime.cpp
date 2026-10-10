@@ -89,6 +89,10 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
                           event.type == SDL_EVENT_TEXT_INPUT))
         SDL_Log("SDL keyboard event %u", event.type);
 #endif
+      // A resize consumer must never observe the preceding viewport.
+      if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
+          (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST))
+        updateViewport(*state, window);
       state->events.push(event);
       state->wake.notify_one();
     }

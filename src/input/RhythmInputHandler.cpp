@@ -327,10 +327,10 @@ bool RhythmInputHandler::startListenTouch() {
   if (touchInputSource != nullptr) {
     return false;
   }
-  // Mobile SDL watchers run separately from scene state. Legacy delivery is
-  // deferred; gameplay fingers arrive through the native raw registration,
-  // while the producer callback below retains real mouse input.
-  touchInputSource = std::make_unique<SDLTouchInputSource>(TARGET_OS_ANDROID || TARGET_OS_IPHONE);
+  // SDL watchers run separately from scene state on every platform. Legacy
+  // pointers are drained by the application owner; native gameplay adapters
+  // may install a raw callback that uses copied geometry instead.
+  touchInputSource = std::make_unique<SDLTouchInputSource>(true);
   touchInputSource->setHandler(this);
   touchInputSource->setRawEventCallback(touchIngressCallback);
   return touchInputSource->startListen();

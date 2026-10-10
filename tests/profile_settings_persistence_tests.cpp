@@ -75,6 +75,7 @@ struct BlockingStore {
   std::mutex mutex;
   std::condition_variable cv;
   bool entered = false;
+  std::thread::id saveThread;
   bool release = false;
   bool failFirst = false;
   std::size_t failCall = 0;
@@ -85,6 +86,7 @@ struct BlockingStore {
             std::string &error) {
     std::unique_lock lock(mutex);
     entered = true;
+    saveThread = std::this_thread::get_id();
     paths.push_back(path);
     candidates.push_back(candidate);
     const std::size_t call = candidates.size();
@@ -378,8 +380,8 @@ void testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly() {
   const auto pending =
       coordinator.beginCommit(*profile, base.generation, selectedSettings(7));
   expect(pending.status == skin::SkinProfileCommitResult::Status::Pending &&
-             pending.ticket != 0 && !store.entered,
-         "beginCommit reserves a nonzero ticket without performing I/O");
+             pending.ticket != 0,
+         "beginCommit reserves a nonzero ticket while storage is blocked");
   const auto stale =
       coordinator.beginCommit(*profile, base.generation, selectedSettings(8));
   expect(stale.status ==
@@ -391,6 +393,11 @@ void testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly() {
              skin::SkinProfileCommitResult::Status::RetryableFailure,
          "a second unresolved commit for one profile is rejected");
   store.waitUntilEntered();
+  {
+    const std::lock_guard lock(store.mutex);
+    expect(store.saveThread != std::this_thread::get_id(),
+           "beginCommit performs storage I/O on its worker");
+  }
   store.unblock();
   const auto persisted = waitForCommit(coordinator, pending.ticket);
   expect(persisted.status == skin::SkinProfileCommitResult::Status::Persisted &&

@@ -78,3 +78,40 @@ Recheck iOS compilation/shared input tests. Use a fresh whole-branch review.
 Hardware-only timing, unavailable Windows/Linux execution, and physical Android
 GPU behavior must be reported as unverified when only local macOS/emulator
 verification is possible. No Firebase, Play, or TestFlight upload is authorized.
+
+## Recorded acceptance
+
+Final full CTest run: 474/474 passed in 118.61 seconds with `-j 6`.
+
+- Desktop and Android now run application/scene work off the SDL bootstrap
+  thread, retaining bgfx's internal render worker. Desktop main and all native
+  test targets build; Android restricted-file release APK and unsigned iOS app
+  build successfully. The iOS artifact audit passes.
+- Final macOS Metal Debug run with Main Thread Checker: a 1,000 ms forced
+  application stall left SDL main servicing 780 iterations; automatic quit
+  completed with exit code 0 and no Main Thread Checker violation. Earlier
+  native checks covered keyboard navigation, fullscreen resize and Cmd-Q.
+- Android 10 arm64 emulator with the final release APK selected Vulkan. A local
+  20-note fixture imported, launched, paused, resumed and reached results.
+  Home/foreground destroyed and recreated the surface, and the paused scene
+  returned correctly. The native folder picker rotated to portrait, canceled
+  back to landscape, and library text input displayed the typed search with
+  the Android keyboard. No app fatal signal, exception or ANR was observed.
+- The existing android10 installation had a different signing key. It was
+  preserved; these checks used a temporary owned Android 10 AVD, removed after
+  acceptance. Existing user files and the connected physical device were not
+  changed.
+- One fresh whole-branch review identified four Important issues: desktop touch
+  callbacks on the pump, missing desktop ingress/lifecycle protection, Android
+  overflow retaining a synthetic suspend, and resize publication preceding the
+  copied viewport. Each has an observed failing regression followed by a passing
+  fix. The final suite also corrected an obsolete desktop-drain expectation and
+  an existing unsynchronized worker-state assertion in a persistence fixture.
+
+Remaining manual coverage: desktop pointer/text input (automation delivered
+stale SDL pointer coordinates), desktop/Android replay export, Android forced
+render-stall measurement, Windows/Linux execution, and physical-device GPU,
+latency and pacing behavior. The Android release smoke does not contain the
+Debug stall hook; portable SDL runtime tests cover stalled-owner main dispatch.
+These checks demonstrate event scheduling independence, not hardware latency.
+No deployment was performed.

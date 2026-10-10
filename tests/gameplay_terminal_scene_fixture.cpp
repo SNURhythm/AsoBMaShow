@@ -2026,9 +2026,8 @@ void testDeferredTouchPumpWithRealtimeAuthority() {
     // A paused state returns after the real input-drain boundary.
     scene.state->isPlaying = false;
     scene.update(0.0F);
-    require(input.touchPumps == (android ? 1 : 0) &&
-                scene.touchPumpsAtCommandDrain == (android ? 1 : 0),
-            "Android deferred touches must be delivered before realtime commands drain");
+    require(input.touchPumps == 1 && scene.touchPumpsAtCommandDrain == 1,
+            "Desktop and Android deferred touches must be delivered before realtime commands drain");
   }
   fixtureAndroid = false;
 }

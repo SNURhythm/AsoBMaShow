@@ -1086,8 +1086,13 @@ struct GamePlayScene::RealtimeGameplaySession {
     if (androidPhysicalInputGate != nullptr) {
       androidPhysicalInputGate->setKeyboardTextFocused(focused, nowMicros());
     }
-#else
+#elif TARGET_OS_IPHONE
     keyboardTextFocused.store(focused, std::memory_order_release);
+#else
+    const std::lock_guard lock(inputInterruptionMutex);
+    const bool previouslyFocused = keyboardTextFocused.exchange(focused, std::memory_order_acq_rel);
+    if (focused && !previouslyFocused && physicalInputRouter != nullptr)
+      physicalInputRouter->disconnectDevice("keyboard", nowMicros());
 #endif
   }
   gameplay::BoundedMpscQueue<input::LogicalInputTransition,
@@ -1522,8 +1527,9 @@ struct GamePlayScene::RealtimeGameplaySession {
       session.interruptInput({input::DeviceClass::Keyboard, timestamp, true});
       return 0;
     }
-    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
-        session.keyboardTextFocused.load(std::memory_order_acquire)) return 0;
+    // Desktop physical input is already delivered by the registry's native
+    // sources or SDL fallback. This watcher owns lifecycle interruption only.
+    return 0;
 #endif
     if (const auto disconnected =
             session.inputRegistry->realtimeDisconnectedSdlDevice(*event);
@@ -1580,7 +1586,7 @@ struct GamePlayScene::RealtimeGameplaySession {
       return;
     }
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || !TARGET_OS_IPHONE
     const std::lock_guard lifecycleLock(session.inputInterruptionMutex);
 #endif
     if ((TARGET_OS_ANDROID && session.scene != nullptr &&
@@ -1590,6 +1596,10 @@ struct GamePlayScene::RealtimeGameplaySession {
         !session.registryRealtimeEnabled(event.control.deviceClass)) {
       return;
     }
+#if !TARGET_OS_ANDROID
+    if (event.control.deviceClass == input::DeviceClass::Keyboard &&
+        session.keyboardTextFocused.load(std::memory_order_acquire)) return;
+#endif
     std::int64_t timestamp = nowMicros();
     if (event.timestampMicros != 0) {
       if (event.timestampDomain ==
@@ -2436,10 +2446,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .onInterruption = [session = &activeSession](const auto &interruption) {
                 session->interruptInput(interruption);
               },
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
               .sdlWatch = &RealtimeGameplaySession::sdlInputWatch,
               .sdlWatchContext = &activeSession,
-#endif
           });
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -2469,10 +2477,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 }
 
 void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
-  // Close legacy fallback ownership and queued overlay touches at every boundary.
+  // Close legacy fallback ownership and queued pointers at every boundary.
   if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
-#endif
   if (!realtimeGameplayAuthorityActive()) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     IOSSetRawTouchEventSink(nullptr, nullptr);
@@ -6882,9 +6888,9 @@ void GamePlayScene::update(float dt) {
   (void)dt;
   applyPendingBestReplay();
   const bool realtimeAtFrameStart = realtimeGameplayAuthorityActive();
-  // The legacy fallback drains before simulation. Android realtime touch
-  // admission bypasses this queue and uses immutable geometry on the producer.
-  if (inputHandler != nullptr && (TARGET_OS_ANDROID || !realtimeAtFrameStart)) {
+  // Desktop legacy pointers drain on the application owner even when native
+  // keyboard/controller authority is active. Mobile raw ingress bypasses it.
+  if (inputHandler != nullptr && (!TARGET_OS_IPHONE || !realtimeAtFrameStart)) {
     inputHandler->pumpPendingTouchEvents();
   }
   if (realtimeAtFrameStart) {

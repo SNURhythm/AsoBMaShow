@@ -10,6 +10,16 @@
 #include <string>
 #include <thread>
 
+std::atomic_bool interceptViewportRead{false}, viewportReadEntered{false}, releaseViewportRead{false};
+constexpr int orderedViewportWidth = 853;
+bool runtimeTestGetWindowSize(SDL_Window *window, int *width, int *height) {
+  const bool result = SDL_GetWindowSize(window, width, height);
+  if (result && *width == orderedViewportWidth && interceptViewportRead.exchange(false)) {
+    viewportReadEntered = true;
+    while (!releaseViewportRead.load()) SDL_Delay(1);
+  }
+  return result;
+}
 namespace {
 void require(bool value, const char *message) {
   if (!value) { std::cerr << message << '\n'; std::exit(1); }
@@ -86,6 +96,9 @@ void testRuntimeKeepsMainAliveAndOwnsPayloads(SDL_Window *window) {
       if (!overflow) SDL_Delay(1);
     }
     require(overflow, "queue pressure did not invalidate buffered input");
+    // Wait for the pump's next cycle so it has forwarded the entire flood,
+    // including quit, before the owner completes recovery.
+    platform::onMain([] {});
     bool cancelled = false, quit = false;
     while (platform::pollApplicationEvent(&event)) {
       cancelled |= event.type == SDL_EVENT_WINDOW_FOCUS_LOST;
@@ -97,6 +110,37 @@ void testRuntimeKeepsMainAliveAndOwnsPayloads(SDL_Window *window) {
   });
   require(result == 29, "runtime lost application result");
   require(!platform::getWindowSnapshot(window), "runtime published dead window state");
+}
+void testResizePublishesViewportBeforeEvent(SDL_Window *window) {
+  const int result = platform::runSDLApplication(window, [&] {
+    SDL_Event event{};
+    while (platform::pollApplicationEvent(&event)) {}
+    viewportReadEntered = releaseViewportRead = false;
+    interceptViewportRead = true;
+    require(SDL_RunOnMainThread([](void *opaque) {
+      SDL_SetWindowSize(static_cast<SDL_Window *>(opaque), orderedViewportWidth, 431);
+    }, window, false), "could not request resize");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!viewportReadEntered.load() && std::chrono::steady_clock::now() < deadline) SDL_Delay(1);
+    require(viewportReadEntered.load(), "viewport publication barrier was not reached");
+    bool sawResize = false;
+    const auto checkEvent = [&] {
+      if (event.type != SDL_EVENT_WINDOW_RESIZED || event.window.data1 != orderedViewportWidth) return;
+      int width = 0, height = 0;
+      platform::windowSize(window, &width, &height);
+      require(width == orderedViewportWidth && height == 431,
+              "resize event became visible before matching viewport snapshot");
+      sawResize = true;
+    };
+    while (platform::pollApplicationEvent(&event)) checkEvent();
+    releaseViewportRead = true;
+    while (!sawResize && std::chrono::steady_clock::now() < deadline) {
+      if (platform::waitApplicationEvent(&event, 10)) checkEvent();
+    }
+    require(sawResize, "resize notification was lost");
+    return 0;
+  });
+  require(result == 0, "resize publication worker failed");
 }
 void testRuntimeServicesUnwinding(SDL_Window *window) {
   bool cleanupRan = false;
@@ -118,6 +162,7 @@ int main() {
   auto *window = SDL_CreateWindow("runtime test", 320, 200, SDL_WINDOW_HIDDEN);
   require(window, SDL_GetError());
   testRuntimeKeepsMainAliveAndOwnsPayloads(window);
+  testResizePublishesViewportBeforeEvent(window);
   testRuntimeServicesUnwinding(window);
   SDL_DestroyWindow(window);
   SDL_Quit();

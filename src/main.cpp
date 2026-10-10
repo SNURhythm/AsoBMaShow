@@ -1452,7 +1452,13 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       int width = 0, height = 0;
       platform::windowSize(s_window, &width, &height);
       deferWindowResize(width, height);
-      setAppBackground(!platform::applicationActive());
+      const bool active = platform::applicationActive();
+      setAppBackground(!active);
+#if TARGET_OS_ANDROID
+      // Recovery's synthetic focus loss is not an OS suspend request. Keep
+      // real surface/picker requests in syncAndroidRenderSuspend's own gates.
+      androidSystemSuspended = !active;
+#endif
     }
     if (!platform::applicationActive()) setAppBackground(true);
 #endif
