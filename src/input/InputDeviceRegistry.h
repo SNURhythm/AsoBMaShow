@@ -60,7 +60,8 @@ public:
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
   translateRealtimeSdlInput(const SDL_Event &) const;
   std::size_t translateRealtimeSdlInputs(
-      const SDL_Event &, std::span<input::PhysicalInputEvent> output);
+      const SDL_Event &, std::span<input::PhysicalInputEvent> output,
+      bool consumeOnce = false);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedSdlDevice(const SDL_Event &) const;
 

@@ -1,0 +1,7 @@
+Completed 50 gestures
+Completed 100 gestures
+Completed 150 gestures
+Completed 200 gestures
+Completed 250 gestures
+Completed 300 gestures
+PASS gestures=300 contacts=1 elapsedMs=47619

@@ -2,6 +2,7 @@ target_sources(main PRIVATE
     RhythmInputHandler.cpp
     InputNormalizer.cpp
     SDLTouchInputSource.cpp
+    NativeRawTouchInput.cpp
     InputProfile.cpp
     VirtualControllerConfig.cpp
     InputDefaults.cpp
@@ -97,6 +98,7 @@ if(APPLE)
 endif()
 
 if(IOS)
+    target_sources(main PRIVATE IOSTouchInput.mm)
     find_library(CORE_MOTION_FRAMEWORK CoreMotion REQUIRED)
 endif()
 

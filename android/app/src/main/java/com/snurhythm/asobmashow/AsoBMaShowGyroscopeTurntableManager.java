@@ -11,6 +11,9 @@ import android.os.Handler;
 import android.os.HandlerThread;
 
 final class AsoBMaShowGyroscopeTurntableManager {
+    // Match the iOS turntable's 120 Hz request; SENSOR_DELAY_GAME requests
+    // 20 ms between samples. The sensor may deliver at a different cadence.
+    private static final int SAMPLING_PERIOD_US = 8_333;
     private final Object lifecycleLock = new Object();
     private final Object stateLock = new Object();
     private final SensorManager sensorManager;
@@ -133,11 +136,11 @@ final class AsoBMaShowGyroscopeTurntableManager {
         boolean gyroscopeRegistered = false;
         try {
             rotationRegistered = sensorManager.registerListener(
-                    listener, rotationVectorSensor, SensorManager.SENSOR_DELAY_GAME,
+                    listener, rotationVectorSensor, SAMPLING_PERIOD_US,
                     candidate.handler);
             if (rotationRegistered) {
                 gyroscopeRegistered = sensorManager.registerListener(
-                        listener, gyroscopeSensor, SensorManager.SENSOR_DELAY_GAME,
+                        listener, gyroscopeSensor, SAMPLING_PERIOD_US,
                         candidate.handler);
             }
         } catch (RuntimeException ignored) {

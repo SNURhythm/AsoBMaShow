@@ -57,6 +57,9 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include "video/IOSPresentationPacing.h"
+#include "input/IOSTouchInput.h"
+#include "input/NativeRawTouchInput.h"
 #include <SDL3/SDL_uikit_rawtouch.h>
 // define something for iphone
 #include <dirent.h>
@@ -69,6 +72,9 @@
 #endif
 #elif defined(__ANDROID__)
 #include "AndroidNatives.h"
+#include "input/AndroidInputHints.h"
+#include "input/AndroidInputTimestamp.h"
+#include "input/NativeRawTouchInput.h"
 #include <dirent.h>
 #include <sys/system_properties.h>
 #include <sys/stat.h>
@@ -113,6 +119,10 @@ bgfx::VertexLayout rendering::PosTexVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
 
 static SDL_Window *s_window = nullptr;
+#if TARGET_OS_ANDROID
+static AndroidNativeWindowOwner s_androidNativeWindow;
+static AndroidNativeWindowOwner s_androidPreviousWindow;
+#endif
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
 static float s_renderScale = 1.0f;
@@ -467,10 +477,16 @@ static int runApplication(const bgfx::Init &bgfxInit) {
       // frame pacing and post-process output.
       // bgfx::setDebug(BGFX_DEBUG_TEXT);
 
+#if TARGET_OS_ANDROID
+      SetAndroidRendererActive(true);
+#endif
       const int runExitCode = run();
       rendering::ShaderManager::getInstance().release();
       rendering::UniformCache::getInstance().destroyAll();
       bgfx::shutdown();
+#if TARGET_OS_ANDROID
+      SetAndroidRendererActive(false);
+#endif
       return runExitCode;
     }
     SDL_Log("bgfx::init failed for renderer: %s",
@@ -571,6 +587,7 @@ int main(int argv, char **args) {
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
 #endif
 #if TARGET_OS_ANDROID
+  input::android::configurePointerHints();
   // Keep the CPU gameplay tick alive; the main loop suspends bgfx explicitly.
   SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
   SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
@@ -594,6 +611,9 @@ int main(int argv, char **args) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+#if TARGET_OS_ANDROID
+  SDL_SetEventFilter(&input::android::timestampFilter, nullptr);
+#endif
   s_renderScale = resolveRenderScale();
   s_bgfxResetFlags = resolveResetFlags();
 #if TARGET_OS_ANDROID
@@ -667,7 +687,13 @@ int main(int argv, char **args) {
 #endif
   bgfx::PlatformData pd{};
   SdlMetalViewOwner metalView;
+#if TARGET_OS_ANDROID
+  s_androidNativeWindow = acquireAndroidNativeWindow(win);
+  pd.nwh = s_androidNativeWindow.get();
+  if (pd.nwh == nullptr) {
+#else
   if (!setup_bgfx_platform_data(pd, win, metalView)) {
+#endif
     SDL_Log("Could not obtain native rendering window: %s", SDL_GetError());
     SDL_DestroyWindow(win);
     s_window = nullptr;
@@ -676,6 +702,10 @@ int main(int argv, char **args) {
     return EXIT_FAILURE;
   }
 #if TARGET_OS_IPHONE
+  if (!InstallIOSGameplayTouchInput(metalView.get())) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                "Could not install direct UIKit gameplay touch input; retaining SDL raw input");
+  }
   s_iosMetalLayer = pd.nwh;
   int metalDrawableW = 0;
   int metalDrawableH = 0;
@@ -699,7 +729,8 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
-#if !TARGET_OS_IPHONE && !TARGET_OS_ANDROID
+#if !TARGET_OS_IPHONE
+  // Bound GPU work queued ahead of visible input feedback on Android as well.
   bgfx_init.resolution.maxFrameLatency = 2;
 #endif
   bgfx_init.platformData = pd;
@@ -716,6 +747,13 @@ int main(int argv, char **args) {
 
   int appExitCode = runApplication(bgfx_init);
 
+#if TARGET_OS_ANDROID
+  s_androidPreviousWindow.reset();
+  s_androidNativeWindow.reset();
+#endif
+#if TARGET_OS_IPHONE
+  UninstallIOSGameplayTouchInput();
+#endif
   metalView.reset();
   SDL_DestroyWindow(win);
   s_window = nullptr;
@@ -958,6 +996,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.framePacer.reset(lastFrameTime);
   bool pacingExportActive =
       context.replayVideoExportActive.load(std::memory_order_acquire);
+#if TARGET_OS_IPHONE
+  FramePacer iosPresentationPacer;
+#endif
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
     return input::isBackgroundLifecycleEvent(event);
@@ -992,6 +1033,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (!background) {
       lastFrameTime = std::chrono::steady_clock::now();
       context.framePacer.reset(lastFrameTime);
+#if TARGET_OS_IPHONE
+      iosPresentationPacer.reset(lastFrameTime);
+#endif
       context.jukebox.seekVisualsToSongTime(context.jukebox.getTimeMicros());
     }
   };
@@ -1025,6 +1069,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (exportActiveForPacing != pacingExportActive) {
       pacingExportActive = exportActiveForPacing;
       context.framePacer.reset(currentFrameTime);
+#if TARGET_OS_IPHONE
+      iosPresentationPacer.reset(currentFrameTime);
+#endif
     }
     if (context.displaySettingsManager) {
       if (const auto previewResult =
@@ -1121,23 +1168,32 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         return false;
       }
       bgfx::PlatformData pd{};
-      SdlMetalViewOwner metalView;
-      if (!setup_bgfx_platform_data(pd, s_window, metalView)) {
-        SDL_Log("Failed to refresh Android window handle: %s", SDL_GetError());
-        return false;
-      }
+      auto window = acquireAndroidNativeWindow(s_window);
+      pd.nwh = window.get();
       if (pd.nwh == nullptr) {
         SDL_Log("Android window handle is not ready yet");
         return false;
       }
       bgfx::setPlatformData(pd);
+      s_androidPreviousWindow = std::move(s_androidNativeWindow);
+      s_androidNativeWindow = std::move(window);
       return true;
+    };
+
+    auto retireAndroidPreviousWindow = [&]() {
+      if (s_androidPreviousWindow) {
+        // The first resumed submission installs the new native window. Wait
+        // until it has been consumed before releasing our old window owner.
+        bgfx::frame();
+        s_androidPreviousWindow.reset();
+      }
     };
 
     auto applyAndroidRenderSuspend = [&](bool suspend) {
       if (androidRenderSuspended == suspend) {
         if (suspend) {
           NotifyAndroidExternalActivityRenderPaused();
+          NotifyAndroidSurfaceRenderPaused();
         }
         return true;
       }
@@ -1160,10 +1216,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       // stays unchanged, so the next frame must restore the BGA input targets.
       context.restoreGameplayRenderViews();
       bgfx::frame();
+      if (suspend) {
+        // frame() returns before the previous frame's final present. Passing
+        // a second suspended frame retires that present before Java releases
+        // the native window in SDLSurface.surfaceDestroyed().
+        bgfx::frame();
+      } else {
+        retireAndroidPreviousWindow();
+      }
       androidRenderSuspended = suspend;
       SDL_Log("Android rendering %s", suspend ? "suspended" : "resumed");
       if (suspend) {
         NotifyAndroidExternalActivityRenderPaused();
+        NotifyAndroidSurfaceRenderPaused();
       } else {
         androidResumeResizePending = true;
       }
@@ -1173,6 +1238,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     auto syncAndroidRenderSuspend = [&]() {
       const bool shouldSuspend =
           androidSystemSuspended ||
+          IsAndroidSurfaceRenderPauseRequested() ||
           IsAndroidExternalActivityRenderPauseRequested();
       if (!applyAndroidRenderSuspend(shouldSuspend)) {
         return androidRenderSuspended || shouldSuspend;
@@ -1358,6 +1424,42 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
     }
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+    // Gameplay-owned gestures bypass SDL on the native input thread. Their
+    // presentation events still traverse the ordinary registry and scene UI
+    // here, without SDL event watches or a second gameplay delivery.
+    input::native_touch::UiTouchEvent uiTouch;
+    for (std::size_t count = 0;
+         count < input::native_touch::kUiTouchQueueCapacity &&
+         input::native_touch::RawTouchRegistration::pollUiEvent(uiTouch); ++count) {
+      if (!input::native_touch::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
+        continue;
+      }
+      using input::native_touch::TouchPhase;
+      SDL_Event touchEvent{};
+      touchEvent.type = uiTouch.touch.phase == TouchPhase::Down ? SDL_EVENT_FINGER_DOWN
+          : uiTouch.touch.phase == TouchPhase::Up ? SDL_EVENT_FINGER_UP
+          : uiTouch.touch.phase == TouchPhase::Cancel ? SDL_EVENT_FINGER_CANCELED
+                                                    : SDL_EVENT_FINGER_MOTION;
+      const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      const auto ageNanos = static_cast<Uint64>(std::max<std::int64_t>(
+          0, nowMicros - uiTouch.touch.steadyTimestampMicros)) * 1000;
+      const auto nowNanos = SDL_GetTicksNS();
+      touchEvent.tfinger.timestamp = ageNanos < nowNanos ? nowNanos - ageNanos : 1;
+      touchEvent.tfinger.touchID = 1;
+      touchEvent.tfinger.fingerID = static_cast<SDL_FingerID>(uiTouch.touch.pointerId) + 1;
+      touchEvent.tfinger.x = uiTouch.touch.x;
+      touchEvent.tfinger.y = uiTouch.touch.y;
+      touchEvent.tfinger.pressure = uiTouch.touch.phase == TouchPhase::Up ||
+          uiTouch.touch.phase == TouchPhase::Cancel ? 0.0f : 1.0f;
+      touchEvent.tfinger.windowID = SDL_GetWindowID(s_window);
+      context.inputDeviceRegistry.handleSdlEventAndDispatch(touchEvent);
+      if (input::native_touch::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
+        processEvent(touchEvent);
+      }
+    }
+#endif
     if (hasDeferredRenderResize &&
         applyWindowResize(deferredRenderResizeW, deferredRenderResizeH)) {
       hasDeferredRenderResize = false;
@@ -1606,8 +1708,25 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (renderedFrame) {
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
+#if TARGET_OS_IPHONE
+      // iOS Metal renders on UIKit's main thread. Pace default VSync here so
+      // its idle interval services touches instead of blocking in nextDrawable.
+      // A CADisplayLink wait regressed measured UIKit delivery latency.
+      const SDL_DisplayMode *iosMode =
+          SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window));
+      iosPresentationPacer.setCap(video::iosPresentationPacingCap(
+          iosMode != nullptr ? iosMode->refresh_rate : 0.0F,
+          context.framePacer.currentFrameCap(),
+          context.replayVideoExportActive.load(std::memory_order_acquire) ||
+              context.rendererAccess.exportRequested()));
+      iosPresentationPacer.framePresented(presentedAt);
+#endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
-      const auto waitDuration = context.framePacer.remaining(waitStartedAt);
+      auto waitDuration = context.framePacer.remaining(waitStartedAt);
+#if TARGET_OS_IPHONE
+      waitDuration = std::max(
+          waitDuration, iosPresentationPacer.remaining(waitStartedAt));
+#endif
       if (waitDuration > std::chrono::steady_clock::duration::zero()) {
 #if TARGET_OS_IPHONE
         const auto waitMicros = std::max<long long>(

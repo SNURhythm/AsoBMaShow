@@ -41,8 +41,11 @@ protected:
     input::InputDeviceSnapshot device_;
   };
 
-  explicit QueuedMidiInputBackend(input::InputBackendSink sink)
-      : IInputBackend(std::move(sink)) {}
+  // Immediate mode serializes connection boundaries and packet parsing on the
+  // producer; ordinary device/UI dispatch remains queued by InputDeviceRegistry.
+  explicit QueuedMidiInputBackend(input::InputBackendSink sink,
+                                  bool immediateDelivery = false)
+      : IInputBackend(std::move(sink)), immediateDelivery_(immediateDelivery) {}
 
   DeviceActivation
   beginDeviceActivation(input::InputDeviceSnapshot connectedDevice);
@@ -68,6 +71,7 @@ private:
   };
   using QueuedEvent = std::variant<Packet, input::InputDeviceSnapshot>;
 
+  const bool immediateDelivery_;
   std::mutex queueMutex_;
   std::deque<QueuedEvent> queuedEvents_;
   std::set<std::string> overflowedDevices_;

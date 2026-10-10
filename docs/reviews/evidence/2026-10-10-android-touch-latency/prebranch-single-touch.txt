@@ -1,0 +1,17 @@
+10-10 19:38:28.474 I/SDL/APP (app): Trying bgfx renderer: Vulkan
+10-10 19:38:28.657 I/SDL/APP (app): bgfx renderer: Vulkan
+10-10 19:38:28.721 D/AudioStreamInternal_Client(app): configureDataInformation() original HW burst = 96, minMicros = 2000 => SW burst = 96
+10-10 19:38:28.722 I/AAudioFlowGraph(app): configure() source format = 0x00000001, channels = 2, sink format = 0x00000005, channels = 2, useMonoBlend = 0, audioBalance = 0.000000, isExclusive 0
+10-10 19:39:14.911 I/SDL/APP (app): Realtime gameplay native input authority active (epoch 1)
+10-10 19:40:19.066 I/SDL/APP (app): FPS 120.1 | Avg 118.2 | 1% Low 99.8 | Scheduler 250171.08 us (4.00 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0
+10-10 19:40:19.066 I/SDL/APP (app): Audio native callback 480 frames at 48000 Hz | output timestamp unknown | underflow reporting unknown (0) | physical display presentation unknown
+10-10 19:40:19.066 I/SDL/APP (app): Baseline touch probe matched 600 missing 0
+10-10 19:40:19.066 I/SDL/APP (app): Latency stage ingress-to-worker | n 600 | p50/p95/p99 <= 800/2400/3300 us | max 5821 us
+10-10 19:40:19.066 I/SDL/APP (app): Latency stage worker-to-sound-command | n 300 | p50/p95/p99 <= 100/100/900 us | max 1214 us
+10-10 19:40:19.066 I/SDL/APP (app): Latency stage sound-command-to-callback | n 300 | p50/p95/p99 <= 5400/9700/9900 us | max 9941 us
+10-10 19:40:19.066 I/SDL/APP (app): Latency stage audio-callback | n 10999 | p50/p95/p99 <= 100/100/100 us | max 481 us
+10-10 19:40:19.066 I/SDL/APP (app): Latency stage audio-interval | n 10996 | p50/p95/p99 <= 10000/10100/10200 us | max 10678 us
+10-10 19:40:19.067 I/SDL/APP (app): Latency stage snapshot-age | n 819 | p50/p95/p99 <= 4100/8000/9300 us | max 10745 us
+10-10 19:40:19.067 I/SDL/APP (app): Latency stage frame-submit | n 12865 | p50/p95/p99 <= 7900/9400/10200 us | max 249439 us
+10-10 19:40:19.067 I/SDL/APP (app): Latency stage touch-to-worker | n 600 | p50/p95/p99 <= 3500/5700/6800 us | max 9291 us
+10-10 19:40:19.067 I/SDL/APP (app): Latency stage touch-to-sound-command | n 300 | p50/p95/p99 <= 3900/6100/7300 us | max 9323 us

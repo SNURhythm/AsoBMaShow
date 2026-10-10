@@ -49,6 +49,9 @@ struct RealtimeGameplayInput {
   bool replayOnly = false;
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   std::int64_t ingressTimestampMicros = 0;
+  // Lane ownership normalizes source to Independent; retain the original
+  // touch sample for paired input-to-sound timing after that transformation.
+  std::int64_t touchSourceTimestampMicros = 0;
 #endif
 };
 
@@ -86,6 +89,11 @@ struct RealtimeGameplayWorkerConfig {
   GameplaySimulationConfig simulation;
   RealtimeGameplayClock clock;
   RealtimeGameplayAudioSink audio;
+  // Runs on the worker before input draining, never while suspended.
+  struct InputMaintenance {
+    void *context = nullptr;
+    void (*run)(void *, std::int64_t steadyTimestampMicros) = nullptr;
+  } inputMaintenance;
   bool inputTriggeredKeysounds = true;
   std::size_t maximumReplayInputTransitions =
       replay::kReplayLimits.maxInputTransitions;

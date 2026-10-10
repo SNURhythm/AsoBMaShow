@@ -1,0 +1,293 @@
+diff --git a/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowActivity.java b/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowActivity.java
+index 50c7745f..98f4a292 100644
+--- a/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowActivity.java
++++ b/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowActivity.java
+@@ -5,6 +5,7 @@ import android.app.Activity;
+ import android.app.AlertDialog;
+ import android.app.NotificationManager;
+ import android.content.ContentResolver;
++import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.ActivityInfo;
+ import android.content.pm.PackageManager;
+@@ -42,6 +43,7 @@ import android.view.WindowInsetsController;
+ import android.view.WindowManager;
+ 
+ import org.libsdl.app.SDLActivity;
++import org.libsdl.app.SDLSurface;
+ 
+ import java.io.ByteArrayOutputStream;
+ import java.io.File;
+@@ -69,6 +71,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ public class AsoBMaShowActivity extends SDLActivity {
++    @Override
++    protected SDLSurface createSDLSurface(Context context) {
++        return new AsoBMaShowSurface(context);
++    }
++
+     @Override
+     protected void messageboxCreateAndShow(Bundle args) {
+         int[] buttonIds = args.getIntArray("buttonIds");
+diff --git a/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java b/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java
+new file mode 100644
+index 00000000..90db3fda
+--- /dev/null
++++ b/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java
+@@ -0,0 +1,19 @@
++package com.snurhythm.asobmashow;
++
++import android.content.Context;
++import android.view.MotionEvent;
++import android.view.View;
++import org.libsdl.app.SDLSurface;
++
++// Measurement-only wrapper: retain the original pre-branch SDL touch path.
++final class AsoBMaShowSurface extends SDLSurface {
++    AsoBMaShowSurface(Context context) { super(context); }
++    private static native void nativeBeginTouchProbe(long uptimeNanos);
++    private static native void nativeEndTouchProbe();
++    @Override
++    public boolean onTouch(View view, MotionEvent event) {
++        nativeBeginTouchProbe(event.getEventTime() * 1000000L);
++        try { return super.onTouch(view, event); }
++        finally { nativeEndTouchProbe(); }
++    }
++}
+diff --git a/src/AndroidNatives.cpp b/src/AndroidNatives.cpp
+index 6686ef36..55720ebd 100644
+--- a/src/AndroidNatives.cpp
++++ b/src/AndroidNatives.cpp
+@@ -17,6 +17,8 @@
+ #include "library/DocumentsLibraryRefresh.h"
+ #include "repositories/ChartRepository.h"
+ #include "platform/ScreenOrientation.h"
++#include "perf/AndroidBaselineTouchProbe.h"
++#include <time.h>
+ 
+ #include <SDL3/SDL_events.h>
+ #include <SDL3/SDL_log.h>
+@@ -38,6 +40,26 @@
+ #include <vector>
+ #include <unistd.h>
+ 
++extern "C" JNIEXPORT void JNICALL
++Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeBeginTouchProbe(
++    JNIEnv *, jclass, jlong uptimeNanos) {
++  static const bool installed = SDL_AddEventWatch(
++      &perf::android_baseline::recordSdlEvent, nullptr);
++  (void)installed;
++  static const std::int64_t offset = [] {
++    timespec monotonic{};
++    clock_gettime(CLOCK_MONOTONIC, &monotonic);
++    return perf::latency::nowMicros() -
++        (static_cast<std::int64_t>(monotonic.tv_sec) * 1000000 + monotonic.tv_nsec / 1000);
++  }();
++  perf::android_baseline::javaSourceMicros = uptimeNanos / 1000 + offset;
++}
++
++extern "C" JNIEXPORT void JNICALL
++Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeEndTouchProbe(JNIEnv *, jclass) {
++  perf::android_baseline::javaSourceMicros = 0;
++}
++
+ namespace {
+ 
+ constexpr const char *kAndroidTreeSentinel = "@androidtree@";
+diff --git a/src/main.cpp b/src/main.cpp
+index f45ca415..d6b487b8 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -2,6 +2,9 @@
+ #include "rendering/UiSafeArea.h"
+ #include "settings/PresentationOrientationState.h"
+ #include "perf/LatencyTelemetry.h"
++#if defined(__ANDROID__) && ASOBMASHOW_ENABLE_PERF_TELEMETRY
++#include "perf/AndroidBaselineTouchProbe.h"
++#endif
+ #include "targets.h"
+ #include "AppDatabaseInitializer.h"
+ #include "ApplicationResultRecovery.h"
+@@ -1554,6 +1557,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+                 audioState.outputTimestampKnown ? "available" : "unknown",
+                 audioState.outputUnderflowKnown ? "available" : "unknown",
+                 static_cast<unsigned long long>(audioState.outputUnderflowCount));
++#if TARGET_OS_ANDROID
++        SDL_Log("Baseline touch probe matched %llu missing %llu",
++                static_cast<unsigned long long>(perf::android_baseline::matched.load()),
++                static_cast<unsigned long long>(perf::android_baseline::missing.load()));
++#endif
+         for (unsigned stage = 0; stage < static_cast<unsigned>(perf::latency::Stage::Count); ++stage) {
+           const auto summary = perf::latency::snapshot(static_cast<perf::latency::Stage>(stage));
+           if (summary.count == 0) continue;
+diff --git a/src/perf/AndroidBaselineTouchProbe.h b/src/perf/AndroidBaselineTouchProbe.h
+new file mode 100644
+index 00000000..3e586cfa
+--- /dev/null
++++ b/src/perf/AndroidBaselineTouchProbe.h
+@@ -0,0 +1,58 @@
++#pragma once
++
++// Measurement-only bridge for the pre-branch Android build. Original SDL
++// timestamps and gameplay behavior remain untouched; this table carries a
++// separate Android source timestamp through the existing SDL event queue.
++#include "LatencyTelemetry.h"
++#include <SDL3/SDL_events.h>
++#include <array>
++#include <atomic>
++#include <mutex>
++
++namespace perf::android_baseline {
++inline thread_local std::int64_t javaSourceMicros = 0;
++inline thread_local std::int64_t routedSourceMicros = 0;
++struct Entry {
++  Uint64 timestamp = 0;
++  SDL_TouchID touch = 0;
++  SDL_FingerID finger = 0;
++  Uint32 type = 0;
++  std::int64_t sourceMicros = 0;
++};
++inline std::array<Entry, 4096> entries{};
++inline std::size_t cursor = 0;
++inline std::mutex mutex;
++inline std::atomic_uint64_t matched{0}, missing{0};
++inline bool SDLCALL recordSdlEvent(void *, SDL_Event *event) {
++  if (javaSourceMicros <= 0 || event == nullptr ||
++      (event->type != SDL_EVENT_FINGER_DOWN &&
++       event->type != SDL_EVENT_FINGER_UP &&
++       event->type != SDL_EVENT_FINGER_MOTION &&
++       event->type != SDL_EVENT_FINGER_CANCELED)) return true;
++  std::lock_guard lock(mutex);
++  entries[cursor++ % entries.size()] = {
++      event->tfinger.timestamp, event->tfinger.touchID,
++      event->tfinger.fingerID, event->type, javaSourceMicros};
++  return true;
++}
++inline std::int64_t takeSource(const SDL_Event &event) {
++  std::lock_guard lock(mutex);
++  for (std::size_t n = 0; n < entries.size() && n < cursor; ++n) {
++    auto &entry = entries[(cursor - n - 1) % entries.size()];
++    if (entry.sourceMicros > 0 && entry.timestamp == event.tfinger.timestamp &&
++        entry.touch == event.tfinger.touchID && entry.finger == event.tfinger.fingerID &&
++        entry.type == event.type) {
++      const auto source = entry.sourceMicros;
++      entry.sourceMicros = 0;
++      matched.fetch_add(1, std::memory_order_relaxed);
++      return source;
++    }
++  }
++  missing.fetch_add(1, std::memory_order_relaxed);
++  return 0;
++}
++struct RoutingScope {
++  explicit RoutingScope(const SDL_Event &event) { routedSourceMicros = takeSource(event); }
++  ~RoutingScope() { routedSourceMicros = 0; }
++};
++} // namespace perf::android_baseline
+diff --git a/src/perf/LatencyTelemetry.h b/src/perf/LatencyTelemetry.h
+index bde8bd77..6878f4af 100644
+--- a/src/perf/LatencyTelemetry.h
++++ b/src/perf/LatencyTelemetry.h
+@@ -15,12 +15,13 @@ namespace perf::latency {
+ enum class Stage : unsigned {
+   InputDelivery, IngressToWorker, WorkerToSoundCommit, SoundCommandToCallback,
+   CallbackDuration, CallbackInterval, NativeOutputLead, NativeOutputLateness,
+-  SnapshotAge, FrameSubmit, Count
++  SnapshotAge, FrameSubmit, TouchToWorker, TouchToSoundCommit, Count
+ };
+ inline constexpr std::array names{
+     "source-to-ingress", "ingress-to-worker", "worker-to-sound-command",
+     "sound-command-to-callback", "audio-callback", "audio-interval",
+-    "native-output-lead", "native-output-lateness", "snapshot-age", "frame-submit"};
++    "native-output-lead", "native-output-lateness", "snapshot-age", "frame-submit",
++    "touch-to-worker", "touch-to-sound-command"};
+ 
+ inline std::int64_t nowMicros() noexcept {
+   return std::chrono::duration_cast<std::chrono::microseconds>(
+diff --git a/src/scene/play/GamePlayScene.cpp b/src/scene/play/GamePlayScene.cpp
+index 10e67426..cdad892e 100644
+--- a/src/scene/play/GamePlayScene.cpp
++++ b/src/scene/play/GamePlayScene.cpp
+@@ -48,6 +48,9 @@
+ #include "RealtimeGameplayInputRegistration.h"
+ #include "ReplayKeysoundSchedule.h"
+ #include "RealtimeTouchInputRouter.h"
++#if TARGET_OS_ANDROID && ASOBMASHOW_ENABLE_PERF_TELEMETRY
++#include "../../perf/AndroidBaselineTouchProbe.h"
++#endif
+ #include "RealtimeTouchPresentation.h"
+ #include "SkinTextInputLifecycle.h"
+ #include "VirtualControllerLayout.h"
+@@ -1593,6 +1596,9 @@ struct GamePlayScene::RealtimeGameplaySession {
+ 
+   static void sdlTouchSink(RealtimeGameplaySession &session, const SDL_Event &event,
+                            std::uint64_t timestampMicros) {
++#if TARGET_OS_ANDROID && ASOBMASHOW_ENABLE_PERF_TELEMETRY
++    perf::android_baseline::RoutingScope probe(event);
++#endif
+     std::lock_guard lock(session.touchRouterMutex);
+     if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+         session.inputInterrupted.load(std::memory_order_acquire) ||
+diff --git a/src/scene/play/RealtimeGameplayWorker.cpp b/src/scene/play/RealtimeGameplayWorker.cpp
+index 9ae8b0b7..681af249 100644
+--- a/src/scene/play/RealtimeGameplayWorker.cpp
++++ b/src/scene/play/RealtimeGameplayWorker.cpp
+@@ -1,3 +1,6 @@
++#if defined(__ANDROID__) && ASOBMASHOW_ENABLE_PERF_TELEMETRY
++#include "../../perf/AndroidBaselineTouchProbe.h"
++#endif
+ #include "RealtimeGameplayWorker.h"
+ 
+ #include "../../bms_parser.hpp"
+@@ -193,6 +196,11 @@ bool RealtimeGameplayWorker::enqueueInput(
+ #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+   auto capturedInput = input;
+   capturedInput.ingressTimestampMicros = perf::latency::nowMicros();
++  capturedInput.touchSourceTimestampMicros = 0;
++#if defined(__ANDROID__)
++  if (input.source == RealtimeGameplayInputSource::Touch)
++    capturedInput.touchSourceTimestampMicros = perf::android_baseline::routedSourceMicros;
++#endif
+   const auto &queuedInput = capturedInput;
+ #else
+   const auto &queuedInput = input;
+@@ -514,6 +522,12 @@ void RealtimeGameplayWorker::observeInputLatency(
+     const RealtimeGameplayInput &input) noexcept {
+ #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+   processingStartedMicros_ = perf::latency::nowMicros();
++  if (input.source == RealtimeGameplayInputSource::Touch &&
++      input.touchSourceTimestampMicros > 0 &&
++      processingStartedMicros_ >= input.touchSourceTimestampMicros) {
++    perf::latency::record(perf::latency::Stage::TouchToWorker,
++                         processingStartedMicros_ - input.touchSourceTimestampMicros);
++  }
+   if (input.ingressTimestampMicros > 0 &&
+       processingStartedMicros_ >= input.ingressTimestampMicros) {
+     perf::latency::record(perf::latency::Stage::IngressToWorker,
+@@ -816,6 +830,11 @@ bool RealtimeGameplayWorker::processGameplayInput(
+ #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+   else {
+     const auto committedMicros = perf::latency::nowMicros();
++    if (input.touchSourceTimestampMicros > 0 &&
++        committedMicros >= input.touchSourceTimestampMicros) {
++      perf::latency::record(perf::latency::Stage::TouchToSoundCommit,
++                           committedMicros - input.touchSourceTimestampMicros);
++    }
+     if (committedMicros >= processingStartedMicros_) {
+       perf::latency::record(perf::latency::Stage::WorkerToSoundCommit,
+                            committedMicros - processingStartedMicros_);
+diff --git a/src/scene/play/RealtimeGameplayWorker.h b/src/scene/play/RealtimeGameplayWorker.h
+index 3c1350b5..aaf17458 100644
+--- a/src/scene/play/RealtimeGameplayWorker.h
++++ b/src/scene/play/RealtimeGameplayWorker.h
+@@ -49,6 +49,9 @@ struct RealtimeGameplayInput {
+   bool replayOnly = false;
+ #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+   std::int64_t ingressTimestampMicros = 0;
++  // Lane ownership normalizes source to Independent; retain the original
++  // touch sample for paired input-to-sound timing after that transformation.
++  std::int64_t touchSourceTimestampMicros = 0;
+ #endif
+ };
+ 

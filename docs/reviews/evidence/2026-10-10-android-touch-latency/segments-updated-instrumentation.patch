@@ -1,0 +1,209 @@
+diff --git a/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java b/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java
+index f39e0592..b614c11f 100644
+--- a/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java
++++ b/android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowSurface.java
+@@ -61,7 +61,10 @@ final class AsoBMaShowSurface extends SDLSurface {
+     }
+ 
+     @Override public boolean onTouch(View view, MotionEvent event) {
+-        return touchInput.dispatch(view, event, mWidth, mHeight, touchSink);
++        long entryNanos = System.nanoTime();
++        nativeBeginTouchSegments(event.getEventTime() * 1000000L, entryNanos);
++        try { return touchInput.dispatch(view, event, mWidth, mHeight, touchSink); }
++        finally { nativeEndTouchSegments(System.nanoTime()); }
+     }
+ 
+     @Override public boolean onKey(View view, int keyCode, KeyEvent event) {
+@@ -73,6 +76,8 @@ final class AsoBMaShowSurface extends SDLSurface {
+         }
+     }
+ 
++    private static native void nativeBeginTouchSegments(long sourceNanos, long javaNanos);
++    private static native void nativeEndTouchSegments(long javaNanos);
+     private static native void nativeSetInputTimestamp(long uptimeNanos);
+     private static native void nativePauseBeforeSurfaceDestroyed();
+     private static native void nativeSurfaceReady();
+diff --git a/src/AndroidNatives.cpp b/src/AndroidNatives.cpp
+index 84d048ea..db9c1342 100644
+--- a/src/AndroidNatives.cpp
++++ b/src/AndroidNatives.cpp
+@@ -1,3 +1,4 @@
++#include "perf/AndroidTouchSegments.h"
+ #include "targets.h"
+ #include "AndroidNatives.h"
+ 
+@@ -62,6 +63,7 @@ extern "C" JNIEXPORT void JNICALL
+ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeOnRawTouch(
+     JNIEnv *, jclass, jlong epoch, jint pointer, jint action, jfloat x, jfloat y,
+     jlong uptimeNanos) {
++  perf::touch_segments::route();
+   using namespace input::android;
+   TouchPhase phase;
+   switch (action) {
+@@ -102,6 +104,14 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeAcquireRawTouchGesture(
+   return static_cast<jlong>(input::android::RawTouchRegistration::activeEpoch());
+ }
+ 
++extern "C" JNIEXPORT void JNICALL
++Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeBeginTouchSegments(JNIEnv *, jclass, jlong source, jlong java) {
++  perf::touch_segments::begin(source, java);
++}
++extern "C" JNIEXPORT void JNICALL
++Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeEndTouchSegments(JNIEnv *, jclass, jlong java) {
++  perf::touch_segments::end(java);
++}
+ namespace {
+ 
+ constexpr const char *kAndroidTreeSentinel = "@androidtree@";
+diff --git a/src/input/SDLTouchInputSource.cpp b/src/input/SDLTouchInputSource.cpp
+index 7c11c9a4..25f1eb28 100644
+--- a/src/input/SDLTouchInputSource.cpp
++++ b/src/input/SDLTouchInputSource.cpp
+@@ -1,3 +1,6 @@
++#if defined(__ANDROID__)
++#include "../perf/AndroidTouchSegments.h"
++#endif
+ #include "SDLTouchInputSource.h"
+ #include "SDLPointerEvent.h"
+ #include "InputTimestamp.h"
+@@ -15,6 +18,9 @@ bool SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
+   default:
+     return 0;
+   }
++#if defined(__ANDROID__)
++  perf::touch_segments::route();
++#endif
+   const auto receipt = std::chrono::duration_cast<std::chrono::microseconds>(
+       std::chrono::steady_clock::now().time_since_epoch()).count();
+   const auto timestampMicros = event->common.timestamp == 0 ? receipt
+diff --git a/src/main.cpp b/src/main.cpp
+index db730ddc..0842ca38 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1,3 +1,6 @@
++#if defined(__ANDROID__)
++#include "perf/AndroidTouchSegments.h"
++#endif
+ #include "rendering/PortraitPlayfieldFraming.h"
+ #include "rendering/UiSafeArea.h"
+ #include "settings/PresentationOrientationState.h"
+@@ -1637,6 +1640,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+                 audioState.outputTimestampKnown ? "available" : "unknown",
+                 audioState.outputUnderflowKnown ? "available" : "unknown",
+                 static_cast<unsigned long long>(audioState.outputUnderflowCount));
++#if defined(__ANDROID__)
++        perf::touch_segments::log();
++#endif
+         for (unsigned stage = 0; stage < static_cast<unsigned>(perf::latency::Stage::Count); ++stage) {
+           const auto summary = perf::latency::snapshot(static_cast<perf::latency::Stage>(stage));
+           if (summary.count == 0) continue;
+diff --git a/src/perf/AndroidTouchSegments.h b/src/perf/AndroidTouchSegments.h
+new file mode 100644
+index 00000000..4a74966e
+--- /dev/null
++++ b/src/perf/AndroidTouchSegments.h
+@@ -0,0 +1,52 @@
++#pragma once
++// Measurement-only synchronous Android touch boundaries. Does not change routing.
++#include "LatencyTelemetry.h"
++#include <SDL3/SDL_log.h>
++#include <time.h>
++namespace perf::touch_segments {
++enum Stage { SourceJava, SourceRoute, JavaBegin, JavaRoute, RouteGameplay, GameplayEnqueue, JavaEnqueue, JavaReturn, Count };
++inline constexpr const char *names[] = {"event-to-java", "event-to-route", "java-to-probe-jni", "java-to-route", "route-to-gameplay", "gameplay-to-enqueue", "java-to-enqueue", "java-handler"};
++class FineHistogram {
++  std::array<std::atomic_uint64_t, 16386> buckets{};
++  std::atomic_uint64_t maximum{0};
++public:
++  void record(std::uint64_t us) {
++    auto max=maximum.load(std::memory_order_relaxed);
++    while(us>max && !maximum.compare_exchange_weak(max,us,std::memory_order_relaxed)) {}
++    buckets[std::min<std::uint64_t>(us,16385)].fetch_add(1,std::memory_order_relaxed);
++  }
++  void log(const char *name) {
++    std::array<std::uint64_t,16386> counts{};
++    std::uint64_t n=0;
++    for(std::size_t i=0;i<counts.size();++i) { counts[i]=buckets[i].load(std::memory_order_relaxed);n+=counts[i]; }
++    if(!n)return;
++    const auto max=maximum.load(std::memory_order_relaxed);
++    auto percentile=[&](unsigned p) { std::uint64_t total=0; for(std::size_t i=0;i<counts.size();++i) { total+=counts[i]; if(total>=(n*p+99)/100)return i==16385?max:static_cast<std::uint64_t>(i); }return max;};
++    SDL_Log("TouchSegments %s n=%llu p50=%llu p95=%llu p99=%llu max=%llu us",name,
++      (unsigned long long)n,(unsigned long long)percentile(50),(unsigned long long)percentile(95),(unsigned long long)percentile(99),(unsigned long long)max);
++  }
++};
++inline std::array<FineHistogram,Count> histograms;
++inline std::atomic_uint64_t missing{0};
++struct Sample { std::int64_t source=0,java=0,begin=0,route=0,gameplay=0; bool enqueued=false; };
++inline thread_local Sample sample;
++inline std::int64_t clockOffset() {
++ static const auto offset=[] {timespec t{};clock_gettime(CLOCK_MONOTONIC,&t);return latency::nowMicros()-(static_cast<std::int64_t>(t.tv_sec)*1000000+t.tv_nsec/1000);}();return offset;
++}
++inline void begin(std::int64_t sourceNanos,std::int64_t javaNanos) {
++ const auto now=latency::nowMicros(); const auto offset=clockOffset();
++ sample={sourceNanos/1000+offset,javaNanos/1000+offset,now,0,0,false};
++}
++inline void route() {if(sample.java>0) {sample.route=latency::nowMicros();sample.gameplay=0;}}
++inline void gameplay() {if(sample.java>0)sample.gameplay=latency::nowMicros();}
++inline void record(Stage stage,std::int64_t start,std::int64_t end) {if(start>0 && end>=start)histograms[stage].record(end-start);}
++inline void enqueue() {
++ const auto now=latency::nowMicros();
++ if(sample.java<=0 || sample.route<=0 || sample.gameplay<=0) {missing.fetch_add(1,std::memory_order_relaxed);return;}
++ record(SourceJava,sample.source,sample.java);record(SourceRoute,sample.source,sample.route);record(JavaBegin,sample.java,sample.begin);
++ record(JavaRoute,sample.java,sample.route);record(RouteGameplay,sample.route,sample.gameplay);
++ record(GameplayEnqueue,sample.gameplay,now);record(JavaEnqueue,sample.java,now);sample.enqueued=true;
++}
++inline void end(std::int64_t javaNanos) {if(sample.enqueued)record(JavaReturn,sample.java,javaNanos/1000+clockOffset());sample={};}
++inline void log() {for(unsigned i=0;i<Count;++i)histograms[i].log(names[i]);SDL_Log("TouchSegments missing=%llu",(unsigned long long)missing.load());}
++}
+diff --git a/src/scene/play/GamePlayScene.cpp b/src/scene/play/GamePlayScene.cpp
+index abfbfca3..d807d726 100644
+--- a/src/scene/play/GamePlayScene.cpp
++++ b/src/scene/play/GamePlayScene.cpp
+@@ -1,3 +1,6 @@
++#if defined(__ANDROID__)
++#include "../../perf/AndroidTouchSegments.h"
++#endif
+ #include "../../ScratchlessGameplayPolicy.h"
+ #include "RealtimeSdlTouchInput.h"
+ #include "../../GameplayKeyMode.h"
+@@ -1697,6 +1700,9 @@ struct GamePlayScene::RealtimeGameplaySession {
+ 
+   static void sdlTouchSink(RealtimeGameplaySession &session, const SDL_Event &event,
+                            std::uint64_t timestampMicros) {
++#if defined(__ANDROID__)
++    perf::touch_segments::gameplay();
++#endif
+     std::lock_guard lock(session.touchRouterMutex);
+     if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+         session.inputInterrupted.load(std::memory_order_acquire) ||
+@@ -1711,6 +1717,9 @@ struct GamePlayScene::RealtimeGameplaySession {
+ 
+   static void androidRawTouchSink(const input::android::RawTouchEvent &event,
+                                   void *context) {
++#if defined(__ANDROID__)
++    perf::touch_segments::gameplay();
++#endif
+     auto &session = *static_cast<RealtimeGameplaySession *>(context);
+     std::lock_guard lock(session.touchRouterMutex);
+     if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+diff --git a/src/scene/play/RealtimeGameplayWorker.cpp b/src/scene/play/RealtimeGameplayWorker.cpp
+index 85dc1452..f1c0c371 100644
+--- a/src/scene/play/RealtimeGameplayWorker.cpp
++++ b/src/scene/play/RealtimeGameplayWorker.cpp
+@@ -1,3 +1,6 @@
++#if defined(__ANDROID__)
++#include "../../perf/AndroidTouchSegments.h"
++#endif
+ #include "RealtimeGameplayWorker.h"
+ #include "RealtimeGameplayWake.h"
+ 
+@@ -187,6 +190,9 @@ bool RealtimeGameplayWorker::resume() {
+ 
+ bool RealtimeGameplayWorker::enqueueInput(
+     const RealtimeGameplayInput &input) noexcept {
++#if defined(__ANDROID__)
++  if(input.source == RealtimeGameplayInputSource::Touch) perf::touch_segments::enqueue();
++#endif
+   if (input.epoch != config_.epoch ||
+       fault() != RealtimeGameplayFault::None) {
+     return false;

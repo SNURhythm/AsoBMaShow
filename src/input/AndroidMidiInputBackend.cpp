@@ -174,7 +174,7 @@ void callStopMidiInput() {
 class AndroidMidiInputBackend final : public QueuedMidiInputBackend {
 public:
   explicit AndroidMidiInputBackend(input::InputBackendSink sink)
-      : QueuedMidiInputBackend(std::move(sink)) {}
+      : QueuedMidiInputBackend(std::move(sink), /*immediateDelivery=*/true) {}
 
   ~AndroidMidiInputBackend() override { stop(); }
 

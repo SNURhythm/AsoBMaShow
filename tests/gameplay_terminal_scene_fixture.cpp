@@ -9,6 +9,7 @@
 #include "scene/play/RealtimeGameplayWorker.h"
 #include "scene/play/RealtimeGameplayInputRegistration.h"
 #include "input/RealtimePhysicalInputRouter.h"
+#include "input/AndroidRealtimeInputGate.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
@@ -74,6 +75,7 @@ extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity
 }
 
 bool fixtureAndroid = false;
+bool fixtureIos = false;
 
 struct FixtureInput {
   int touchPumps = 0;
@@ -124,9 +126,21 @@ struct FixtureWorker {
 };
 
 struct FixtureRealtimeSession {
+  bool uiTouchCaptured = false;
+  int pendingUiTouches = 0;
+  int uiTouchCancellations = 0;
+  void cancelNativeUiTouches() {
+    uiTouchCaptured = false;
+    pendingUiTouches = 0;
+    ++uiTouchCancellations;
+  }
   std::mutex inputInterruptionMutex;
   FixtureJukebox *audio = nullptr;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+  std::unique_ptr<input::AndroidRealtimeInputGate> androidPhysicalInputGate;
+  void publishKeyboardTextFocus() {
+    if (androidPhysicalInputGate) androidPhysicalInputGate->setKeyboardTextFocused(false, 0);
+  }
   std::atomic_bool inputInterrupted{false};
   std::atomic_bool inputFallbackReady{false};
   std::atomic_bool inputInterruptionAcknowledged{false};
@@ -2026,6 +2040,7 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
   scene.inputHandler = &input;
   scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
   scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  scene.realtimeGameplaySession->uiTouchCaptured = true;
   const input::PhysicalControl key{.deviceId = "keyboard",
       .deviceClass = input::DeviceClass::Keyboard,
       .kind = input::ControlKind::Key, .index = 4};
@@ -2039,10 +2054,15 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
         transitions.push_back(transition);
         return true;
       });
-  router->setGameplayEnabled(true, 100);
-  router->consume({.control = key, .rawValue = 1, .normalizedValue = 1}, 200);
+  auto &gate = scene.realtimeGameplaySession->androidPhysicalInputGate;
+  gate = std::make_unique<input::AndroidRealtimeInputGate>(*router);
+  gate->setEnabled(true, 100);
+  gate->consume({.control = key, .rawValue = 1, .normalizedValue = 1}, 200);
   scene.clock = 300;
   scene.onApplicationBackgroundChanged(true);
+  require(!scene.realtimeGameplaySession->uiTouchCaptured &&
+              scene.realtimeGameplaySession->uiTouchCancellations == 1,
+          "Android backgrounding cancels native UI captures before background events are dropped");
   require(transitions.size() == 2 && transitions.back().type ==
               input::RealtimePhysicalInputTransitionType::Release &&
               transitions.back().hasReplayControl &&
@@ -2051,7 +2071,11 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
   require(!scene.context.jukebox.isPaused() && input.background &&
               !scene.realtimeGameplaySession->inputInterrupted,
           "Android lifecycle cancellation never invokes native failure auto-pause");
+  scene.realtimeGameplaySession->pendingUiTouches = 1;
   scene.onApplicationBackgroundChanged(false);
+  require(scene.realtimeGameplaySession->pendingUiTouches == 0 &&
+              scene.realtimeGameplaySession->uiTouchCancellations >= 2,
+          "foregrounding discards a new UI Down that arrived while backgrounded");
   require(!input.background && transitions.size() == 2,
           "foregrounding does not re-press cancelled physical inputs");
   fixtureAndroid = false;
@@ -2168,16 +2192,21 @@ void testBackgroundFinalTimelineFailureWinsOverPracticeLoop() {
           "foreground gives a failed final timeline priority over practice loop completion");
 }
 
-void testAndroidRealtimePauseResumeDiscardsDeferredTouches() {
-  fixtureAndroid = true;
+void testMobileRealtimePauseResumeDiscardsDeferredTouches(bool ios) {
+  fixtureIos = ios;
+  fixtureAndroid = !ios;
   GamePlayScene scene;
   FixtureInput input;
   scene.inputHandler = &input;
   scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
   scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  scene.realtimeGameplaySession->uiTouchCaptured = true;
   input.pendingTouches = 2;
   input.dragOwned = true;
   scene.showPauseMenu(true);
+  require(!scene.realtimeGameplaySession->uiTouchCaptured &&
+              scene.realtimeGameplaySession->uiTouchCancellations == 1,
+          "pausing cancels existing native UI captures before showing the pause menu");
   require(input.touchDiscards == 1 && input.pendingTouches == 0 && !input.dragOwned,
           "pausing active realtime gameplay discards queued touches and owned drags");
   input.pendingTouches = 2; // Resume-button Down/Up queued by the Java watcher.
@@ -2187,6 +2216,7 @@ void testAndroidRealtimePauseResumeDiscardsDeferredTouches() {
   require(input.touchDiscards == 2 && input.pumpedTouches == 0 && !input.dragOwned,
           "Resume touch cannot enter the lane beneath the dismissed pause overlay");
   fixtureAndroid = false;
+  fixtureIos = false;
 }
 
 void testBackgroundGameplayProgress() {
@@ -2272,11 +2302,13 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc > 1 && std::string_view(argv[1]) == "android-resume-touch") {
-    testAndroidRealtimePauseResumeDiscardsDeferredTouches();
+    testMobileRealtimePauseResumeDiscardsDeferredTouches(false);
+  testMobileRealtimePauseResumeDiscardsDeferredTouches(true);
     return 0;
   }
   testBackgroundFinalTimelineFailureWinsOverPracticeLoop();
-  testAndroidRealtimePauseResumeDiscardsDeferredTouches();
+  testMobileRealtimePauseResumeDiscardsDeferredTouches(false);
+  testMobileRealtimePauseResumeDiscardsDeferredTouches(true);
   testBackgroundGameplayProgress();
   testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause();
   testDeferredTouchPumpWithRealtimeAuthority();

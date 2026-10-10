@@ -1,0 +1,17 @@
+10-10 19:25:38.755 I/SDL/APP (app): Trying bgfx renderer: Vulkan
+10-10 19:25:38.849 I/SDL/APP (app): bgfx renderer: Vulkan
+10-10 19:25:38.957 D/AudioStreamInternal_Client(app): configureDataInformation() original HW burst = 48, minMicros = 2000 => SW burst = 96
+10-10 19:25:38.958 I/AAudioFlowGraph(app): configure() source format = 0x00000001, channels = 2, sink format = 0x00000001, channels = 2, useMonoBlend = 0, audioBalance = 0.000000, isExclusive 1
+10-10 19:27:31.327 I/SDL/APP (app): Realtime gameplay native input authority active (epoch 1)
+10-10 19:28:34.505 I/SDL/APP (app): FPS 102.4 | Avg 118.2 | 1% Low 89.1 | Scheduler 250170.65 us (4.00 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0
+10-10 19:28:34.505 I/SDL/APP (app): Audio native callback 96 frames at 48000 Hz | output timestamp unknown | underflow reporting unknown (0) | physical display presentation unknown
+10-10 19:28:34.505 I/SDL/APP (app): Latency stage source-to-ingress | n 900 | p50/p95/p99 <= 2600/4000/5000 us | max 5618 us
+10-10 19:28:34.505 I/SDL/APP (app): Latency stage ingress-to-worker | n 600 | p50/p95/p99 <= 300/2000/3200 us | max 3819 us
+10-10 19:28:34.505 I/SDL/APP (app): Latency stage worker-to-sound-command | n 300 | p50/p95/p99 <= 100/200/1500 us | max 5907 us
+10-10 19:28:34.505 I/SDL/APP (app): Latency stage sound-command-to-callback | n 300 | p50/p95/p99 <= 900/1900/2000 us | max 2039 us
+10-10 19:28:34.505 I/SDL/APP (app): Latency stage audio-callback | n 87642 | p50/p95/p99 <= 100/100/100 us | max 464 us
+10-10 19:28:34.506 I/SDL/APP (app): Latency stage audio-interval | n 87640 | p50/p95/p99 <= 2000/2100/2200 us | max 3580 us
+10-10 19:28:34.506 I/SDL/APP (app): Latency stage snapshot-age | n 819 | p50/p95/p99 <= 4700/8200/9000 us | max 10159 us
+10-10 19:28:34.506 I/SDL/APP (app): Latency stage frame-submit | n 20590 | p50/p95/p99 <= 8000/9400/10100 us | max 138690 us
+10-10 19:28:34.506 I/SDL/APP (app): Latency stage touch-to-worker | n 600 | p50/p95/p99 <= 3100/5500/6400 us | max 7485 us
+10-10 19:28:34.506 I/SDL/APP (app): Latency stage touch-to-sound-command | n 300 | p50/p95/p99 <= 3200/6100/6700 us | max 10783 us

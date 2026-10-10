@@ -1,0 +1,233 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index db730ddc0..7cc00e426 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -57,6 +57,7 @@
+ #include "TargetConditionals.h"
+ #if TARGET_OS_IPHONE
+ #include "iOSNatives.hpp"
++#include "perf/IOSTouchProbe.h"
+ #include <SDL3/SDL_uikit_rawtouch.h>
+ // define something for iphone
+ #include <dirent.h>
+@@ -699,6 +700,7 @@ int main(int argv, char **args) {
+     return EXIT_FAILURE;
+   }
+ #if TARGET_OS_IPHONE
++  InstallIOSTouchProbe();
+   s_iosMetalLayer = pd.nwh;
+   int metalDrawableW = 0;
+   int metalDrawableH = 0;
+@@ -1645,6 +1647,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+                   static_cast<unsigned long long>(summary.p50), static_cast<unsigned long long>(summary.p95),
+                   static_cast<unsigned long long>(summary.p99), static_cast<unsigned long long>(summary.maximum));
+         }
++#if TARGET_OS_IPHONE
++        ios_touch_probe::dump();
++#endif
+         rawEventsInWindow = 0;
+         processedEventsInWindow = 0;
+         coalescedMouseMotionInWindow = 0;
+diff --git a/src/perf/IOSTouchProbe.h b/src/perf/IOSTouchProbe.h
+new file mode 100644
+index 000000000..1ca5640b1
+--- /dev/null
++++ b/src/perf/IOSTouchProbe.h
+@@ -0,0 +1,99 @@
++#pragma once
++#include "LatencyTelemetry.h"
++#include <SDL3/SDL_log.h>
++#include <array>
++#include <atomic>
++
++namespace ios_touch_probe {
++enum class Stage : unsigned { SourceUIKit, UIKitGameplay, GameplayEnqueue,
++    UIKitEnqueue, SourceEnqueue, HandlerDuration, Count };
++inline constexpr std::array names{"source-to-uikit", "uikit-to-gameplay",
++    "gameplay-to-enqueue", "uikit-to-enqueue", "source-to-enqueue", "uikit-handler"};
++class Histogram {
++  std::array<std::atomic<std::uint64_t>, 16385> buckets_{};
++  std::atomic<std::uint64_t> maximum_{0};
++public:
++  void record(std::uint64_t us) {
++    auto max = maximum_.load(std::memory_order_relaxed);
++    while (us > max && !maximum_.compare_exchange_weak(max, us, std::memory_order_relaxed)) {}
++    buckets_[std::min<std::uint64_t>(us, 16384)].fetch_add(1, std::memory_order_relaxed);
++  }
++  perf::latency::Summary snapshot() const {
++    std::array<std::uint64_t, 16385> counts{};
++    perf::latency::Summary result;
++    for (unsigned i = 0; i < counts.size(); ++i) {
++      counts[i] = buckets_[i].load(std::memory_order_relaxed);
++      result.count += counts[i];
++    }
++    result.maximum = maximum_.load(std::memory_order_relaxed);
++    const auto percentile = [&](std::uint64_t p) -> std::uint64_t {
++      if (result.count == 0) return 0;
++      const auto target = (result.count * p + 99) / 100;
++      std::uint64_t count = 0;
++      for (unsigned i = 0; i < counts.size(); ++i) {
++        count += counts[i];
++        if (count >= target) return i == 16384 ? result.maximum : i;
++      }
++      return result.maximum;
++    };
++    result.p50 = percentile(50); result.p95 = percentile(95); result.p99 = percentile(99);
++    return result;
++  }
++};
++inline std::array<Histogram, static_cast<unsigned>(Stage::Count)> histograms;
++inline std::atomic<std::uint64_t> matched{0}, missing{0}, sdlFingers{0};
++inline std::atomic<std::int64_t> lastEnqueue{0};
++struct Handler;
++inline thread_local Handler *activeHandler = nullptr;
++struct Handler {
++  Handler *previous = activeHandler;
++  std::int64_t entered = perf::latency::nowMicros();
++  std::int64_t gameplay = 0, source = 0;
++  bool enqueued = false;
++  Handler() { activeHandler = this; }
++  ~Handler() {
++    const auto finished = perf::latency::nowMicros();
++    if (enqueued) histograms[static_cast<unsigned>(Stage::HandlerDuration)].record(finished - entered);
++    activeHandler = previous;
++  }
++};
++inline void markGameplay(std::int64_t source) {
++  if (!activeHandler) return;
++  activeHandler->gameplay = perf::latency::nowMicros();
++  activeHandler->source = source;
++}
++inline void markEnqueue(std::int64_t source, std::int64_t now) {
++  auto *handler = activeHandler;
++  if (!handler || handler->source != source || !handler->gameplay) {
++    missing.fetch_add(1, std::memory_order_relaxed);
++    return;
++  }
++  lastEnqueue.store(now, std::memory_order_relaxed);
++  handler->enqueued = true;
++  matched.fetch_add(1, std::memory_order_relaxed);
++  const auto record = [](Stage stage, std::int64_t value) {
++    if (value >= 0) histograms[static_cast<unsigned>(stage)].record(value);
++  };
++  record(Stage::SourceUIKit, handler->entered - source);
++  record(Stage::UIKitGameplay, handler->gameplay - handler->entered);
++  record(Stage::GameplayEnqueue, now - handler->gameplay);
++  record(Stage::UIKitEnqueue, now - handler->entered);
++  record(Stage::SourceEnqueue, now - source);
++}
++inline void dump() {
++  // Snapshot only while input is idle; scanning fine histograms must not delay a tap.
++  const auto last = lastEnqueue.load(std::memory_order_relaxed);
++  if (!last || perf::latency::nowMicros() - last < 1000000) return;
++  SDL_Log("iOS touch probe matched %llu missing %llu synchronous SDL fingers %llu",
++      (unsigned long long)matched.load(), (unsigned long long)missing.load(),
++      (unsigned long long)sdlFingers.load());
++  for (unsigned i = 0; i < static_cast<unsigned>(Stage::Count); ++i) {
++    const auto s = histograms[i].snapshot();
++    if (!s.count) continue;
++    SDL_Log("iOS touch segment %s | n %llu | p50/p95/p99 <= %llu/%llu/%llu us | max %llu us",
++        names[i], (unsigned long long)s.count, (unsigned long long)s.p50,
++        (unsigned long long)s.p95, (unsigned long long)s.p99, (unsigned long long)s.maximum);
++  }
++}
++} // namespace ios_touch_probe
++void InstallIOSTouchProbe();
+diff --git a/src/perf/IOSTouchProbe.mm b/src/perf/IOSTouchProbe.mm
+new file mode 100644
+index 000000000..ae455539b
+--- /dev/null
++++ b/src/perf/IOSTouchProbe.mm
+@@ -0,0 +1,32 @@
++#include "IOSTouchProbe.h"
++#import <UIKit/UIKit.h>
++#import <objc/runtime.h>
++#include <SDL3/SDL_events.h>
++
++void InstallIOSTouchProbe() {
++  for (NSString *name in @[@"SDL_uikitview", @"AsoGameplayTouchRecognizer"]) {
++    Class cls = NSClassFromString(name);
++    if (!cls) continue;
++    for (NSString *methodName in @[@"touchesBegan:withEvent:", @"touchesMoved:withEvent:",
++                                  @"touchesEnded:withEvent:", @"touchesCancelled:withEvent:"]) {
++      SEL selector = NSSelectorFromString(methodName);
++      Method method = class_getInstanceMethod(cls, selector);
++      if (!method) continue;
++      auto original = reinterpret_cast<void (*)(id, SEL, NSSet *, UIEvent *)>(method_getImplementation(method));
++      IMP replacement = imp_implementationWithBlock(^(id receiver, NSSet *touches, UIEvent *event) {
++        ios_touch_probe::Handler handler;
++        original(receiver, selector, touches, event);
++      });
++      method_setImplementation(method, replacement);
++    }
++    SDL_Log("iOS touch probe observing %s", name.UTF8String);
++  }
++  SDL_AddEventWatch(+[](void *, SDL_Event *event) -> bool {
++    if (ios_touch_probe::activeHandler && ios_touch_probe::activeHandler->enqueued &&
++        (event->type == SDL_EVENT_FINGER_DOWN || event->type == SDL_EVENT_FINGER_UP ||
++         event->type == SDL_EVENT_FINGER_MOTION || event->type == SDL_EVENT_FINGER_CANCELED)) {
++      ios_touch_probe::sdlFingers.fetch_add(1, std::memory_order_relaxed);
++    }
++    return true;
++  }, nullptr);
++}
+diff --git a/src/perf/LatencyTelemetry.h b/src/perf/LatencyTelemetry.h
+index 6878f4afa..aef32a0c8 100644
+--- a/src/perf/LatencyTelemetry.h
++++ b/src/perf/LatencyTelemetry.h
+@@ -7,7 +7,7 @@
+ #include <cstdint>
+ 
+ #ifndef ASOBMASHOW_ENABLE_PERF_TELEMETRY
+-#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0
++#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 1
+ #endif
+ 
+ namespace perf::latency {
+diff --git a/src/scene/play/GamePlayScene.cpp b/src/scene/play/GamePlayScene.cpp
+index abfbfca37..6159b974a 100644
+--- a/src/scene/play/GamePlayScene.cpp
++++ b/src/scene/play/GamePlayScene.cpp
+@@ -59,6 +59,7 @@
+ #include "../../input/InputTimestamp.h"
+ #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+ #include "../../input/AppleInputTimestamp.h"
++#include "../../perf/IOSTouchProbe.h"
+ #include "../../input/NativeCallbackLifetime.h"
+ #endif
+ #include "../../targets.h"
+@@ -1825,6 +1826,7 @@ struct GamePlayScene::RealtimeGameplaySession {
+             session.touchTimestampSession.toSteadyMicros(
+                 event->timestampMicros),
+     };
++    ios_touch_probe::markGameplay(sample.steadyTimestampMicros);
+     std::lock_guard lock(session.touchRouterMutex);
+     consumeTouchSampleLocked(session, sample);
+   }
+diff --git a/src/scene/play/RealtimeGameplayWorker.cpp b/src/scene/play/RealtimeGameplayWorker.cpp
+index 85dc1452f..08fe44064 100644
+--- a/src/scene/play/RealtimeGameplayWorker.cpp
++++ b/src/scene/play/RealtimeGameplayWorker.cpp
+@@ -1,3 +1,4 @@
++#include "../../perf/IOSTouchProbe.h"
+ #include "RealtimeGameplayWorker.h"
+ #include "RealtimeGameplayWake.h"
+ 
+@@ -187,6 +188,7 @@ bool RealtimeGameplayWorker::resume() {
+ 
+ bool RealtimeGameplayWorker::enqueueInput(
+     const RealtimeGameplayInput &input) noexcept {
++  const auto probeEnqueueEntered = perf::latency::nowMicros();
+   if (input.epoch != config_.epoch ||
+       fault() != RealtimeGameplayFault::None) {
+     return false;
+@@ -206,6 +208,9 @@ bool RealtimeGameplayWorker::enqueueInput(
+     return false;
+   }
+   signal();
++  if (input.source == RealtimeGameplayInputSource::Touch) {
++    ios_touch_probe::markEnqueue(input.steadyTimestampMicros, probeEnqueueEntered);
++  }
+   return true;
+ }
+ 

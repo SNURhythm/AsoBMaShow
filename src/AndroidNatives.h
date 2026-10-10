@@ -158,5 +158,8 @@ void RequestAndroidExternalActivityRenderPause();
 void FinishAndroidExternalActivityRenderPause();
 bool IsAndroidExternalActivityRenderPauseRequested();
 void NotifyAndroidExternalActivityRenderPaused();
+void SetAndroidRendererActive(bool active);
+bool IsAndroidSurfaceRenderPauseRequested();
+void NotifyAndroidSurfaceRenderPaused();
 
 #endif

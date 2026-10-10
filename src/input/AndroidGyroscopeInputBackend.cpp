@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <time.h>
 
 namespace {
 
@@ -67,11 +69,6 @@ struct PendingRegistrationResult {
   bool success = false;
 };
 
-struct PendingMotionSample {
-  std::uint64_t registrationGeneration = 0;
-  input::GyroscopeMotionSample sample;
-};
-
 std::mutex gBackendMutex;
 std::shared_ptr<AndroidGyroscopeCallbackGate> gBackendGate;
 
@@ -80,6 +77,23 @@ std::uint64_t monotonicMicros() {
       std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
           .count());
+}
+
+std::uint64_t sensorSampleMicros(double sensorSeconds,
+                                std::uint64_t receiptMicros) {
+  // SensorEvent.timestamp uses elapsed realtime (CLOCK_BOOTTIME, including
+  // suspend); gameplay uses CLOCK_MONOTONIC. Rebase age on every delivery so
+  // a device sleep cannot become a permanent judgement offset.
+  timespec bootNow{};
+  if (!std::isfinite(sensorSeconds) || sensorSeconds < 0.0 ||
+      clock_gettime(CLOCK_BOOTTIME, &bootNow) != 0) return receiptMicros;
+  const long double ageMicros =
+      static_cast<long double>(bootNow.tv_sec) * 1'000'000.0L +
+      static_cast<long double>(bootNow.tv_nsec) / 1000.0L -
+      static_cast<long double>(sensorSeconds) * 1'000'000.0L;
+  if (ageMicros <= 0.0L) return receiptMicros;
+  if (ageMicros >= receiptMicros) return 1;
+  return receiptMicros - static_cast<std::uint64_t>(ageMicros);
 }
 
 bool clearJavaException(JNIEnv *env, std::string &errorMessage,
@@ -206,13 +220,13 @@ public:
       const std::lock_guard lock(coreMutex_);
       started_ = true;
       core_.start(supported, nowMicros);
-      processCommandsLocked(nowMicros);
-      consumeInboundLocked(nowMicros);
     }
+    processCommands(nowMicros);
     return true;
   }
 
   void stop() override {
+    std::unique_lock commandLock(commandMutex_);
     std::shared_ptr<AndroidGyroscopeCallbackGate> gate;
     {
       const std::lock_guard lock(coreMutex_);
@@ -226,6 +240,9 @@ public:
     revokeCallbacks();
     std::string ignoredError;
     (void)callActivityVoid("stopGyroscopeTurntableSensors", ignoredError);
+    // An already-acquired activity lifecycle callback can still need the
+    // command mutex. Let it observe started_=false before joining gate leases.
+    commandLock.unlock();
     if (gate) {
       gate->waitForCallbacks();
     }
@@ -248,14 +265,13 @@ public:
 
   void pump() override {
     const std::uint64_t nowMicros = monotonicMicros();
-    const std::lock_guard lock(coreMutex_);
-    if (!started_) {
-      return;
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (!started_) return;
+      consumeRegistrationLocked(nowMicros);
+      core_.pump(nowMicros);
     }
-    consumeInboundLocked(nowMicros);
-    core_.pump(nowMicros);
-    processCommandsLocked(nowMicros);
-    consumeInboundLocked(nowMicros);
+    processCommands(nowMicros);
   }
 
   void configureGyroscopeTurntable(
@@ -278,7 +294,7 @@ public:
       return;
     }
     const std::lock_guard lock(inboundMutex_);
-    if (generation <= invalidatedGeneration_) {
+    if (generation <= invalidatedGeneration_ || generation < lastSeenGeneration_) {
       return;
     }
     lastSeenGeneration_ = std::max(lastSeenGeneration_, generation);
@@ -291,98 +307,86 @@ public:
       acceptingGeneration_ = generation;
     } else if (acceptingGeneration_ == generation) {
       acceptingGeneration_ = 0;
-      latestSample_.reset();
     }
   }
 
   void acceptSample(std::uint64_t registrationGeneration,
                     input::GyroscopeMotionSample sample) {
-    const std::lock_guard lock(inboundMutex_);
-    if (registrationGeneration == 0 ||
-        registrationGeneration != acceptingGeneration_ ||
-        registrationGeneration <= invalidatedGeneration_) {
-      return;
+    const std::uint64_t nowMicros = monotonicMicros();
+    const auto sampleMicros = sensorSampleMicros(sample.sensorTimestampSeconds, nowMicros);
+    const std::lock_guard lock(coreMutex_);
+    if (!started_) return;
+    {
+      const std::lock_guard inboundLock(inboundMutex_);
+      if (registrationGeneration == 0 ||
+          registrationGeneration != acceptingGeneration_ ||
+          registrationGeneration <= invalidatedGeneration_) return;
     }
-    latestSample_ = PendingMotionSample{
-        .registrationGeneration = registrationGeneration,
-        .sample = std::move(sample)};
+    consumeRegistrationLocked(nowMicros);
+    // The dedicated Android sensor thread owns delivery cadence. Preserve
+    // every accepted direction change instead of replacing it until a frame.
+    core_.observe(sample, sampleMicros);
+    core_.pump(monotonicMicros());
   }
 
   void activityPaused() { setForeground(false); }
   void activityResumed() { setForeground(true); }
 
   void activityDestroyed() {
-    invalidateInbound();
     const std::uint64_t nowMicros = monotonicMicros();
-    const std::lock_guard lock(coreMutex_);
-    if (!started_) {
-      return;
+    {
+      const std::lock_guard lock(coreMutex_);
+      invalidateInbound();
+      if (!started_) return;
+      core_.setForeground(false, nowMicros);
+      core_.stop(nowMicros);
     }
-    core_.setForeground(false, nowMicros);
-    processCommandsLocked(nowMicros);
-    core_.stop(nowMicros);
-    while (core_.takeCommand() != input::GyroscopeSensorCommand::None) {
-    }
+    processCommands(nowMicros);
   }
 
 private:
   void setForeground(bool foreground) {
-    if (!foreground) {
-      invalidateInbound();
-    }
     const std::uint64_t nowMicros = monotonicMicros();
-    const std::lock_guard lock(coreMutex_);
-    if (!started_) {
-      return;
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (!foreground) invalidateInbound();
+      if (!started_) return;
+      core_.setForeground(foreground, nowMicros);
     }
-    core_.setForeground(foreground, nowMicros);
-    processCommandsLocked(nowMicros);
-    consumeInboundLocked(nowMicros);
+    processCommands(nowMicros);
   }
 
-  void processCommandsLocked(std::uint64_t nowMicros) {
+  void processCommands(std::uint64_t nowMicros) {
+    // Java unregister joins its sensor HandlerThread. Never hold coreMutex_
+    // across JNI: an in-flight sample needs that mutex before it can finish.
+    const std::lock_guard commandLock(commandMutex_);
     while (true) {
-      const input::GyroscopeSensorCommand command = core_.takeCommand();
-      if (command == input::GyroscopeSensorCommand::None) {
-        return;
+      input::GyroscopeSensorCommand command;
+      {
+        const std::lock_guard lock(coreMutex_);
+        if (!started_) return;
+        command = core_.takeCommand();
+        if (command == input::GyroscopeSensorCommand::Stop) invalidateInbound();
       }
+      if (command == input::GyroscopeSensorCommand::None) return;
+
+      std::string errorMessage;
       if (command == input::GyroscopeSensorCommand::Stop) {
-        invalidateInbound();
-        std::string errorMessage;
         if (!callActivityVoid("stopGyroscopeTurntableSensors", errorMessage)) {
           SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "%s", errorMessage.c_str());
         }
+        const std::lock_guard lock(coreMutex_);
         invalidateInbound();
         continue;
       }
 
-      std::string errorMessage;
-      if (!callActivityVoid("startGyroscopeTurntableSensors", errorMessage)) {
+      const bool started = callActivityVoid("startGyroscopeTurntableSensors", errorMessage);
+      const std::lock_guard lock(coreMutex_);
+      if (!started) {
         SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "%s", errorMessage.c_str());
         core_.sensorStartFailed(nowMicros);
-        continue;
       }
       consumeRegistrationLocked(nowMicros);
-    }
-  }
-
-  void consumeInboundLocked(std::uint64_t nowMicros) {
-    std::optional<PendingRegistrationResult> registration;
-    std::optional<PendingMotionSample> sample;
-    {
-      const std::lock_guard lock(inboundMutex_);
-      registration = std::exchange(pendingRegistration_, std::nullopt);
-      sample = std::exchange(latestSample_, std::nullopt);
-    }
-    if (registration.has_value()) {
-      if (registration->success) {
-        core_.sensorStartSucceeded(nowMicros);
-      } else {
-        core_.sensorStartFailed(nowMicros);
-      }
-    }
-    if (sample.has_value()) {
-      core_.observe(sample->sample, nowMicros);
     }
   }
 
@@ -408,7 +412,6 @@ private:
         std::max(invalidatedGeneration_, lastSeenGeneration_);
     acceptingGeneration_ = 0;
     pendingRegistration_.reset();
-    latestSample_.reset();
   }
 
   void revokeCallbacks() {
@@ -423,9 +426,9 @@ private:
 
   input::GyroscopeInputBackendCore core_;
   std::mutex coreMutex_;
+  std::mutex commandMutex_;
   std::mutex inboundMutex_;
   std::optional<PendingRegistrationResult> pendingRegistration_;
-  std::optional<PendingMotionSample> latestSample_;
   std::shared_ptr<AndroidGyroscopeCallbackGate> callbackGate_;
   std::uint64_t acceptingGeneration_ = 0;
   std::uint64_t invalidatedGeneration_ = 0;

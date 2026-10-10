@@ -1,4 +1,5 @@
 #include "input/InputTimestamp.h"
+#include "input/AndroidInputTimestamp.h"
 #include "input/InputLifecycle.h"
 #if defined(__APPLE__)
 #include "input/AppleInputTimestamp.h"
@@ -84,6 +85,73 @@ void testForegroundLifecycleEventsShareOneInputPolicy() {
           "background lifecycle never masquerades as a timestamp reanchor");
 }
 
+void testAndroidTimestampPreservesDeliveryAgeAndScope() {
+  input::android::setInputTimestamp(92'000'123, 100'000'000, 50'000'000);
+  SDL_Event event{};
+  event.type = SDL_EVENT_FINGER_DOWN;
+  event.common.timestamp = 50'000'000;
+  require(input::android::timestampFilter(nullptr, &event) &&
+              event.common.timestamp == 42'000'123,
+          "Android event retains its 8 ms delivery age before SDL watchers");
+  event.type = SDL_EVENT_FINGER_MOTION;
+  input::android::timestampFilter(nullptr, &event);
+  require(event.common.timestamp == 42'000'123,
+          "every pointer in one native sample shares its original timestamp");
+  event.type = SDL_EVENT_WINDOW_RESIZED;
+  event.common.timestamp = 51'000'000;
+  input::android::timestampFilter(nullptr, &event);
+  require(event.common.timestamp == 51'000'000,
+          "input dispatch cannot retimestamp unrelated lifecycle events");
+  input::android::setInputTimestamp(0, 0, 0);
+  event.type = SDL_EVENT_KEY_DOWN;
+  input::android::timestampFilter(nullptr, &event);
+  require(event.common.timestamp == 51'000'000,
+          "clearing native scope restores SDL receipt timestamps");
+}
+
+void testAndroidControllerSamplesPreserveNativeDeliveryAge() {
+  input::android::setInputTimestamp(92'000'123, 100'000'000, 50'000'000);
+  for (const auto type : {
+      SDL_EVENT_JOYSTICK_BUTTON_DOWN, SDL_EVENT_JOYSTICK_BUTTON_UP,
+      SDL_EVENT_JOYSTICK_AXIS_MOTION, SDL_EVENT_JOYSTICK_HAT_MOTION,
+      SDL_EVENT_GAMEPAD_BUTTON_DOWN, SDL_EVENT_GAMEPAD_BUTTON_UP,
+      SDL_EVENT_GAMEPAD_AXIS_MOTION}) {
+    SDL_Event event{};
+    event.type = type;
+    event.common.timestamp = 50'000'000;
+    input::android::timestampFilter(nullptr, &event);
+    require(event.common.timestamp == 42'000'123,
+            "raw and mapped controller samples retain original Android sample time");
+  }
+  for (const auto type : {SDL_EVENT_JOYSTICK_ADDED, SDL_EVENT_JOYSTICK_REMOVED,
+                          SDL_EVENT_GAMEPAD_ADDED, SDL_EVENT_GAMEPAD_REMOVED,
+                          SDL_EVENT_GAMEPAD_SENSOR_UPDATE}) {
+    SDL_Event event{};
+    event.type = type;
+    event.common.timestamp = 51'000'000;
+    input::android::timestampFilter(nullptr, &event);
+    require(event.common.timestamp == 51'000'000,
+            "controller sample scope cannot retimestamp lifecycle or sensor events");
+  }
+  input::android::setInputTimestamp(0, 0, 0);
+  SDL_Event event{};
+  event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+  event.common.timestamp = 52'000'000;
+  input::android::timestampFilter(nullptr, &event);
+  require(event.common.timestamp == 52'000'000,
+          "cleared scope cannot leak native time into later controller events");
+}
+
+void testAndroidTimestampClampsSamplesBeforeSdlStartup() {
+  input::android::setInputTimestamp(1, 100'000'000, 100);
+  SDL_Event event{};
+  event.type = SDL_EVENT_FINGER_UP;
+  input::android::timestampFilter(nullptr, &event);
+  require(event.common.timestamp == 1,
+          "pre-startup native samples clamp without unsigned timestamp wrap");
+  input::android::setInputTimestamp(0, 0, 0);
+}
+
 } // namespace
 
 int main() {
@@ -95,5 +163,8 @@ int main() {
   testAppleHostTimestampConversionIsScopedToInputSession();
 #endif
   testForegroundLifecycleEventsShareOneInputPolicy();
+  testAndroidTimestampPreservesDeliveryAgeAndScope();
+  testAndroidTimestampClampsSamplesBeforeSdlStartup();
+  testAndroidControllerSamplesPreserveNativeDeliveryAge();
   return 0;
 }

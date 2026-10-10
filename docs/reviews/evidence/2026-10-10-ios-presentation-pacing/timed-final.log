@@ -1,0 +1,19 @@
+FPS 59.8 | Avg 60.0 | 1% Low 59.4 | Scheduler 252052.41 us (3.97 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0
+Latency stage audio-callback | n 7485 | p50/p95/p99 <= 100/100/100 us | max 310 us
+Latency stage audio-interval | n 7482 | p50/p95/p99 <= 10700/10800/10800 us | max 17823 us
+Latency stage native-output-lead | n 7485 | p50/p95/p99 <= 14100/14200/14200 us | max 14170 us
+Latency stage frame-submit | n 4662 | p50/p95/p99 <= 6100/9000/10000 us | max 136124 us
+Latency stage snapshot-age | n 1067 | p50/p95/p99 <= 9700/15100/15300 us | max 16642 us
+Latency stage source-to-ingress | n 900 | p50/p95/p99 <= 1400/5600/8500 us | max 19375 us
+Latency stage ingress-to-worker | n 600 | p50/p95/p99 <= 200/600/3000 us | max 7641 us
+Latency stage worker-to-sound-command | n 300 | p50/p95/p99 <= 100/100/100 us | max 138 us
+Latency stage sound-command-to-callback | n 300 | p50/p95/p99 <= 4600/10300/10500 us | max 10612 us
+Latency stage touch-to-worker | n 600 | p50/p95/p99 <= 1700/6700/9600 us | max 19490 us
+Latency stage touch-to-sound-command | n 300 | p50/p95/p99 <= 1800/7600/10400 us | max 19531 us
+iOS touch probe matched 600 missing 0 synchronous SDL fingers 0
+iOS touch segment source-to-uikit | n 600 | p50/p95/p99 <= 1376/5800/8821 us | max 19373 us
+iOS touch segment uikit-to-gameplay | n 600 | p50/p95/p99 <= 16/27/41 us | max 44 us
+iOS touch segment gameplay-to-enqueue | n 600 | p50/p95/p99 <= 6/15/24 us | max 26 us
+iOS touch segment uikit-to-enqueue | n 600 | p50/p95/p99 <= 21/36/44 us | max 48 us
+iOS touch segment source-to-enqueue | n 600 | p50/p95/p99 <= 1395/5828/8842 us | max 19390 us
+iOS touch segment uikit-handler | n 600 | p50/p95/p99 <= 36/62/89 us | max 15720 us

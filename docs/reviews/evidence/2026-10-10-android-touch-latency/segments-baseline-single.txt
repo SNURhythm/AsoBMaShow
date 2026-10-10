@@ -1,0 +1,18 @@
+10-10 20:00:04.592 I/SDL/APP (APP): FPS 119.7 | Avg 118.3 | 1% Low 62.4 | Scheduler 250156.66 us (4.00 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0
+10-10 20:00:04.592 I/SDL/APP (APP): Audio native callback 480 frames at 48000 Hz | output timestamp unknown | underflow reporting unknown (0) | physical display presentation unknown
+10-10 20:00:04.592 I/SDL/APP (APP): TouchSegments event-to-java n=600 p50=2583 p95=3683 p99=4953 max=5624 us
+10-10 20:00:04.592 I/SDL/APP (APP): TouchSegments event-to-route n=600 p50=2654 p95=3897 p99=5135 max=5736 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments java-to-probe-jni n=600 p50=8 p95=12 p99=34 max=1013 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments java-to-route n=600 p50=45 p95=252 p99=944 max=1521 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments route-to-gameplay n=600 p50=3 p95=5 p99=9 max=2046 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments gameplay-to-enqueue n=600 p50=10 p95=15 p99=25 max=1724 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments java-to-enqueue n=600 p50=58 p95=314 p99=1288 max=2102 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments java-handler n=600 p50=477 p95=2157 p99=3253 max=4525 us
+10-10 20:00:04.593 I/SDL/APP (APP): TouchSegments missing=0
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage ingress-to-worker | n 600 | p50/p95/p99 <= 700/2400/3400 us | max 4491 us
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage worker-to-sound-command | n 300 | p50/p95/p99 <= 100/100/900 us | max 2806 us
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage sound-command-to-callback | n 300 | p50/p95/p99 <= 5000/9200/9700 us | max 9778 us
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage audio-callback | n 9498 | p50/p95/p99 <= 100/100/100 us | max 370 us
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage audio-interval | n 9495 | p50/p95/p99 <= 10000/10100/10200 us | max 10511 us
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage snapshot-age | n 839 | p50/p95/p99 <= 4000/8200/9100 us | max 17789 us
+10-10 20:00:04.593 I/SDL/APP (APP): Latency stage frame-submit | n 11126 | p50/p95/p99 <= 7900/9400/10200 us | max 124390 us

@@ -1,0 +1,16 @@
+10-10 19:56:30.911 I/SDL/APP (APP): Latency stage touch-to-sound-command | n 300 | p50/p95/p99 <= 3500/5700/6900 us | max 7319 us
+10-10 19:56:35.914 I/SDL/APP (APP): FPS 113.9 | Avg 118.1 | 1% Low 96.2 | Scheduler 250149.46 us (4.00 Hz) | Events raw 0 proc 0 coalesced M/F/R 0/0/0
+10-10 19:56:35.914 I/SDL/APP (APP): Audio native callback 96 frames at 48000 Hz | output timestamp unknown | underflow reporting unknown (0) | physical display presentation unknown
+10-10 19:56:35.914 I/SDL/APP (APP): TouchSegments event-to-java n=600 p50=2544 p95=3666 p99=4625 max=5628 us
+10-10 19:56:35.914 I/SDL/APP (APP): TouchSegments event-to-route n=600 p50=2604 p95=3794 p99=4666 max=5670 us
+10-10 19:56:35.914 I/SDL/APP (APP): TouchSegments java-to-probe-jni n=600 p50=8 p95=12 p99=132 max=701 us
+10-10 19:56:35.914 I/SDL/APP (APP): TouchSegments java-to-route n=600 p50=40 p95=91 p99=710 max=1505 us
+10-10 19:56:35.915 I/SDL/APP (APP): TouchSegments route-to-gameplay n=600 p50=3 p95=5 p99=14 max=541 us
+10-10 19:56:35.915 I/SDL/APP (APP): TouchSegments gameplay-to-enqueue n=600 p50=6 p95=13 p99=27 max=2330 us
+10-10 19:56:35.915 I/SDL/APP (APP): TouchSegments java-to-enqueue n=600 p50=49 p95=163 p99=754 max=2374 us
+10-10 19:56:35.915 I/SDL/APP (APP): TouchSegments java-handler n=600 p50=57 p95=261 p99=763 max=2422 us
+10-10 19:56:35.915 I/SDL/APP (APP): TouchSegments missing=0
+10-10 19:56:35.915 I/SDL/APP (APP): Latency stage ingress-to-worker | n 600 | p50/p95/p99 <= 400/2200/3000 us | max 5498 us
+10-10 19:56:35.915 I/SDL/APP (APP): Latency stage sound-command-to-callback | n 300 | p50/p95/p99 <= 1000/1900/2000 us | max 2115 us
+10-10 19:56:35.915 I/SDL/APP (APP): Latency stage touch-to-worker | n 600 | p50/p95/p99 <= 3200/5600/6200 us | max 8188 us
+10-10 19:56:35.915 I/SDL/APP (APP): Latency stage touch-to-sound-command | n 300 | p50/p95/p99 <= 3500/5700/6900 us | max 7319 us

@@ -12,6 +12,8 @@ namespace rendering { int render_width = 2400, render_height = 1080; }
 namespace bgfx {
 bool suspended = false;
 bool bgaTargetsBound = true;
+bool submittedFrameSuspended = false;
+bool pendingPresent = true;
 int resets = 0, frames = 0;
 void reset(int width, int height, uint32_t flags) {
   assert(width == 2400 && height == 1080);
@@ -23,6 +25,12 @@ void reset(int width, int height, uint32_t flags) {
 void frame() {
   assert((suspended || bgaTargetsBound) &&
          "first resumed frame must render BGA into its restored offscreen target");
+  // frame() waits for the prior submit, then hands off the next one. The
+  // prior active frame's present can still be pending when the first suspend
+  // frame is handed off; only waiting for that suspended submit retires it.
+  if (submittedFrameSuspended) pendingPresent = false;
+  if (!suspended) pendingPresent = true;
+  submittedFrameSuspended = suspended;
   ++frames;
 }
 }
@@ -63,7 +71,17 @@ struct Context {
 };
 void SDL_Log(const char *, ...) {}
 int pauseAcknowledgements = 0;
-void NotifyAndroidExternalActivityRenderPaused() { ++pauseAcknowledgements; }
+int surfacePauseAcknowledgements = 0;
+void NotifyAndroidExternalActivityRenderPaused() {
+  assert(!bgfx::pendingPresent &&
+         "external activity must not destroy the surface before the last present");
+  ++pauseAcknowledgements;
+}
+void NotifyAndroidSurfaceRenderPaused() {
+  assert(!bgfx::pendingPresent &&
+         "surface destruction must wait for the last present");
+  ++surfacePauseAcknowledgements;
+}
 
 int main() {
   Context context;
@@ -71,6 +89,7 @@ int main() {
   uint32_t s_bgfxResetFlags = 128, activeBgfxResetFlags = 128;
   bool nativeWindowReady = true;
   auto refreshAndroidBgfxPlatformData = [&]() { return nativeWindowReady; };
+  auto retireAndroidPreviousWindow = []() {};
   PRODUCTION_SUSPEND;
   TestScene scene;
   struct { TestScene *currentScene; } sceneManager{&scene};
@@ -94,10 +113,11 @@ int main() {
 
 
   assert(applyAndroidRenderSuspend(true));
-  assert(androidRenderSuspended && bgfx::suspended);
-  assert(pauseAcknowledgements == 1);
+  assert(androidRenderSuspended && bgfx::suspended && !bgfx::pendingPresent);
+  assert(pauseAcknowledgements == 1 && surfacePauseAcknowledgements == 1);
   assert(applyAndroidRenderSuspend(true));
-  assert(bgfx::resets == 1 && bgfx::frames == 1);
+  assert(pauseAcknowledgements == 2 && surfacePauseAcknowledgements == 2);
+  assert(bgfx::resets == 1 && bgfx::frames == 2);
   nativeWindowReady = false;
   assert(!applyAndroidRenderSuspend(false));
   assert(androidRenderSuspended && bgfx::resets == 1);
@@ -112,6 +132,16 @@ int main() {
   assert(androidResumeResizePending && bgfx::bgaTargetsBound);
   assert(context.bgfxResetFlags == 128 && bgfx::resets == 2);
   assert(applyAndroidRenderSuspend(false));
-  assert(bgfx::resets == 2 && bgfx::frames == 2);
-  std::cout << "Android renderer resume target restoration passed\n";
+  assert(bgfx::resets == 2 && bgfx::frames == 3 && bgfx::pendingPresent);
+
+  context.replayVideoExportActive = true;
+  assert(!applyAndroidRenderSuspend(true));
+  assert(pauseAcknowledgements == 2 && surfacePauseAcknowledgements == 2 &&
+         bgfx::pendingPresent);
+  context.replayVideoExportActive = false;
+  assert(applyAndroidRenderSuspend(true));
+  assert(pauseAcknowledgements == 3 && surfacePauseAcknowledgements == 3 &&
+         !bgfx::pendingPresent);
+  assert(bgfx::resets == 3 && bgfx::frames == 5);
+  std::cout << "Android renderer suspend drain and resume target restoration passed\n";
 }

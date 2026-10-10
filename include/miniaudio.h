@@ -7112,6 +7112,7 @@ struct ma_device_config
         ma_aaudio_allowed_capture_policy allowedCapturePolicy;
         ma_bool32 noAutoStartAfterReroute;
         ma_bool32 enableCompatibilityWorkarounds;
+        ma_uint32 bufferSizeInBursts; /* App extension: 0 uses defaults; otherwise use native callbacks and size playback after opening. */
     } aaudio;
 };
 
@@ -7634,6 +7635,7 @@ struct ma_context
             ma_proc AAudioStream_getChannelCount;
             ma_proc AAudioStream_getSampleRate;
             ma_proc AAudioStream_getBufferCapacityInFrames;
+            ma_proc AAudioStream_setBufferSizeInFrames;
             ma_proc AAudioStream_getFramesPerDataCallback;
             ma_proc AAudioStream_getFramesPerBurst;
             ma_proc AAudioStream_requestStart;
@@ -7952,6 +7954,9 @@ struct ma_device
             ma_aaudio_input_preset inputPreset;
             ma_aaudio_allowed_capture_policy allowedCapturePolicy;
             ma_bool32 noAutoStartAfterReroute;
+            ma_bool32 enableCompatibilityWorkarounds;
+            ma_uint32 bufferSizeInBursts;
+            ma_uint32 originalSampleRate;
         } aaudio;
 #endif
 #ifdef MA_SUPPORT_OPENSL
@@ -37508,6 +37513,7 @@ typedef ma_aaudio_format_t       (* MA_PFN_AAudioStream_getFormat)              
 typedef int32_t                  (* MA_PFN_AAudioStream_getChannelCount)                 (ma_AAudioStream* pStream);
 typedef int32_t                  (* MA_PFN_AAudioStream_getSampleRate)                   (ma_AAudioStream* pStream);
 typedef int32_t                  (* MA_PFN_AAudioStream_getBufferCapacityInFrames)       (ma_AAudioStream* pStream);
+typedef int32_t                  (* MA_PFN_AAudioStream_setBufferSizeInFrames)           (ma_AAudioStream* pStream, int32_t numFrames);
 typedef int32_t                  (* MA_PFN_AAudioStream_getFramesPerDataCallback)        (ma_AAudioStream* pStream);
 typedef int32_t                  (* MA_PFN_AAudioStream_getFramesPerBurst)               (ma_AAudioStream* pStream);
 typedef ma_aaudio_result_t       (* MA_PFN_AAudioStream_requestStart)                    (ma_AAudioStream* pStream);
@@ -37696,7 +37702,8 @@ static ma_result ma_create_and_configure_AAudioStreamBuilder__aaudio(ma_context*
         anything from Android 11 and earlier. Suggestions welcome on how we might be able to make
         this more targetted.
         */
-        if (!pConfig->aaudio.enableCompatibilityWorkarounds || ma_android_sdk_version() > 30) {
+        if (!(deviceType == ma_device_type_playback && pConfig->aaudio.bufferSizeInBursts > 0) &&
+            (!pConfig->aaudio.enableCompatibilityWorkarounds || ma_android_sdk_version() > 30)) {
             /*
             AAudio is annoying when it comes to it's buffer calculation stuff because it doesn't let you
             retrieve the actual sample rate until after you've opened the stream. But you need to configure
@@ -37787,7 +37794,18 @@ static ma_result ma_open_stream__aaudio(ma_device* pDevice, const ma_device_conf
         return result;
     }
 
-    return ma_open_stream_and_close_builder__aaudio(pDevice->pContext, pBuilder, ppStream);
+    result = ma_open_stream_and_close_builder__aaudio(pDevice->pContext, pBuilder, ppStream);
+    if (result != MA_SUCCESS && deviceType == ma_device_type_playback &&
+        pConfig->aaudio.bufferSizeInBursts > 0 && pDescriptor->shareMode == ma_share_mode_exclusive) {
+        /* Exclusive low-latency endpoints are optional. Retain this fallback on reroutes too. */
+        *ppStream = NULL;
+        result = ma_create_and_configure_AAudioStreamBuilder__aaudio(pDevice->pContext, pDescriptor->pDeviceID, deviceType, ma_share_mode_shared, pDescriptor, pConfig, pDevice, &pBuilder);
+        if (result == MA_SUCCESS) {
+            result = ma_open_stream_and_close_builder__aaudio(pDevice->pContext, pBuilder, ppStream);
+        }
+    }
+
+    return result;
 }
 
 static ma_result ma_close_stream__aaudio(ma_context* pContext, ma_AAudioStream* pStream)
@@ -37970,9 +37988,30 @@ static ma_result ma_device_init_by_type__aaudio(ma_device* pDevice, const ma_dev
     bufferCapacityInFrames = ((MA_PFN_AAudioStream_getBufferCapacityInFrames)pDevice->pContext->aaudio.AAudioStream_getBufferCapacityInFrames)(pStream);
     framesPerDataCallback = ((MA_PFN_AAudioStream_getFramesPerDataCallback)pDevice->pContext->aaudio.AAudioStream_getFramesPerDataCallback)(pStream);
 
+    /* App extension: negotiate the queue from the opened route's actual hardware burst.
+       Do not constrain capacity in the builder: Android may need a larger capacity than
+       the active buffer size. Failure to resize leaves the usable native default intact. */
+    if (deviceType == ma_device_type_playback && pConfig->aaudio.bufferSizeInBursts > 0 &&
+        pDevice->pContext->aaudio.AAudioStream_getFramesPerBurst != NULL) {
+        int32_t framesPerBurst = ((MA_PFN_AAudioStream_getFramesPerBurst)pDevice->pContext->aaudio.AAudioStream_getFramesPerBurst)(pStream);
+        if (framesPerBurst > 0 && bufferCapacityInFrames > 0) {
+            ma_uint64 requestedSize = (ma_uint64)framesPerBurst * pConfig->aaudio.bufferSizeInBursts;
+            if (requestedSize > (ma_uint64)bufferCapacityInFrames) {
+                requestedSize = (ma_uint64)bufferCapacityInFrames;
+            }
+            if (pDevice->pContext->aaudio.AAudioStream_setBufferSizeInFrames != NULL) {
+                int32_t actualSize = ((MA_PFN_AAudioStream_setBufferSizeInFrames)pDevice->pContext->aaudio.AAudioStream_setBufferSizeInFrames)(pStream, (int32_t)requestedSize);
+                if (actualSize > 0 && actualSize <= bufferCapacityInFrames) {
+                    bufferCapacityInFrames = actualSize;
+                }
+            }
+            framesPerDataCallback = framesPerBurst;
+        }
+    }
+
     if (framesPerDataCallback > 0) {
         pDescriptor->periodSizeInFrames = framesPerDataCallback;
-        pDescriptor->periodCount        = bufferCapacityInFrames / framesPerDataCallback;
+        pDescriptor->periodCount        = (ma_uint32)(((ma_uint64)bufferCapacityInFrames + framesPerDataCallback - 1) / framesPerDataCallback);
     } else {
         pDescriptor->periodSizeInFrames = bufferCapacityInFrames;
         pDescriptor->periodCount        = 1;
@@ -37998,6 +38037,9 @@ static ma_result ma_device_init__aaudio(ma_device* pDevice, const ma_device_conf
     pDevice->aaudio.inputPreset             = pConfig->aaudio.inputPreset;
     pDevice->aaudio.allowedCapturePolicy    = pConfig->aaudio.allowedCapturePolicy;
     pDevice->aaudio.noAutoStartAfterReroute = pConfig->aaudio.noAutoStartAfterReroute;
+    pDevice->aaudio.enableCompatibilityWorkarounds = pConfig->aaudio.enableCompatibilityWorkarounds;
+    pDevice->aaudio.bufferSizeInBursts       = pConfig->aaudio.bufferSizeInBursts;
+    pDevice->aaudio.originalSampleRate       = pConfig->sampleRate;
 
     if (pConfig->deviceType == ma_device_type_capture || pConfig->deviceType == ma_device_type_duplex) {
         result = ma_device_init_by_type__aaudio(pDevice, pConfig, ma_device_type_capture, pDescriptorCapture, (ma_AAudioStream**)&pDevice->aaudio.pStreamCapture);
@@ -38169,12 +38211,15 @@ static ma_result ma_device_reinit__aaudio(ma_device* pDevice, ma_device_type dev
         deviceConfig.capture.shareMode              = pDevice->capture.shareMode;
         deviceConfig.capture.format                 = pDevice->capture.format;
         deviceConfig.capture.channels               = pDevice->capture.channels;
-        deviceConfig.sampleRate                     = pDevice->sampleRate;
+        deviceConfig.sampleRate                     = pDevice->aaudio.bufferSizeInBursts > 0 ? pDevice->aaudio.originalSampleRate : pDevice->sampleRate;
+        deviceConfig.noFixedSizedCallback           = pDevice->noFixedSizedCallback;
         deviceConfig.aaudio.usage                   = pDevice->aaudio.usage;
         deviceConfig.aaudio.contentType             = pDevice->aaudio.contentType;
         deviceConfig.aaudio.inputPreset             = pDevice->aaudio.inputPreset;
         deviceConfig.aaudio.allowedCapturePolicy    = pDevice->aaudio.allowedCapturePolicy;
         deviceConfig.aaudio.noAutoStartAfterReroute = pDevice->aaudio.noAutoStartAfterReroute;
+        deviceConfig.aaudio.enableCompatibilityWorkarounds = pDevice->aaudio.enableCompatibilityWorkarounds;
+        deviceConfig.aaudio.bufferSizeInBursts       = pDevice->aaudio.bufferSizeInBursts;
         deviceConfig.periods                        = 1;
 
         /* Try to get an accurate period size. */
@@ -38318,6 +38363,7 @@ static ma_result ma_context_init__aaudio(ma_context* pContext, const ma_context_
     pContext->aaudio.AAudioStream_getChannelCount                  = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_getChannelCount");
     pContext->aaudio.AAudioStream_getSampleRate                    = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_getSampleRate");
     pContext->aaudio.AAudioStream_getBufferCapacityInFrames        = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_getBufferCapacityInFrames");
+    pContext->aaudio.AAudioStream_setBufferSizeInFrames           = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_setBufferSizeInFrames");
     pContext->aaudio.AAudioStream_getFramesPerDataCallback         = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_getFramesPerDataCallback");
     pContext->aaudio.AAudioStream_getFramesPerBurst                = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_getFramesPerBurst");
     pContext->aaudio.AAudioStream_requestStart                     = (ma_proc)ma_dlsym(ma_context_get_log(pContext), pContext->aaudio.hAAudio, "AAudioStream_requestStart");

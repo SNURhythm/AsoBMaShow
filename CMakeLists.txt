@@ -785,6 +785,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_display_refresh_rate_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_display_refresh_rate_tests.py -v)
+    add_test(NAME android_touch_input_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_touch_input_tests.py -v)
     add_test(NAME android_replay_codec_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_replay_codec_tests.py -v)
@@ -792,6 +795,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_gameplay_orientation_tests.py -v)
     set_tests_properties(android_window_presentation_tests
+                         android_touch_input_tests
                          android_gameplay_orientation_tests
                          android_replay_codec_tests
                          android_display_refresh_rate_tests PROPERTIES
@@ -4777,6 +4781,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(audio_resampling_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(audio_resampling_tests PRIVATE cxx_std_23)
 
+    add_executable(audio_owner_removal_tests
+        tests/audio_owner_removal_tests.cpp
+        src/audio/AudioMix.cpp)
+    target_include_directories(audio_owner_removal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_owner_removal_tests PRIVATE cxx_std_23)
+
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
@@ -5419,6 +5429,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(bgfx_unix_platform_data_tests PRIVATE cxx_std_23)
     target_link_libraries(bgfx_unix_platform_data_tests PRIVATE SDL3::Headers bgfx)
 
+    add_executable(android_native_window_owner_tests tests/android_native_window_owner_tests.cpp)
+    target_include_directories(android_native_window_owner_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/android_native_window_stubs
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include
+        ${CMAKE_SOURCE_DIR}/bgfx/bx/include
+    )
+    target_compile_features(android_native_window_owner_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_native_window_owner_tests PRIVATE SDL3::Headers bgfx)
+
     if(APPLE)
         add_executable(bgfx_platform_data_tests
             tests/bgfx_platform_data_tests.cpp
@@ -5786,6 +5806,57 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(input_timestamp_tests PRIVATE cxx_std_23)
+
+    add_executable(android_audio_latency_tests tests/android_audio_latency_tests.cpp)
+    target_include_directories(android_audio_latency_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_features(android_audio_latency_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_audio_latency_tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
+    add_executable(android_gyroscope_input_backend_tests
+        tests/android_gyroscope_input_backend_tests.cpp
+        src/input/GyroscopeInputBackendCore.cpp
+        src/input/GyroscopeTurntable.cpp)
+    target_include_directories(android_gyroscope_input_backend_tests BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/android_gyroscope_stubs
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/SDL/include)
+    target_compile_features(android_gyroscope_input_backend_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_gyroscope_input_backend_tests PRIVATE Threads::Threads)
+
+    add_executable(android_input_timestamp_ingress_tests
+        tests/android_input_timestamp_ingress_tests.cpp)
+    target_include_directories(android_input_timestamp_ingress_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(android_input_timestamp_ingress_tests PRIVATE cxx_std_23)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3)
+    endif()
+
+    add_executable(ios_touch_gesture_router_tests
+        tests/ios_touch_gesture_router_tests.cpp src/input/NativeRawTouchInput.cpp)
+    target_include_directories(ios_touch_gesture_router_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/SDL/include)
+    target_compile_features(ios_touch_gesture_router_tests PRIVATE cxx_std_23)
+    target_link_libraries(ios_touch_gesture_router_tests PRIVATE Threads::Threads)
+    add_test(NAME ios_touch_gesture_router_tests COMMAND ios_touch_gesture_router_tests)
+
+    add_executable(android_raw_touch_input_tests
+        tests/android_raw_touch_input_tests.cpp src/input/NativeRawTouchInput.cpp)
+    target_include_directories(android_raw_touch_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include)
+    target_compile_features(android_raw_touch_input_tests PRIVATE cxx_std_23)
+    target_link_libraries(android_raw_touch_input_tests PRIVATE Threads::Threads)
+
+    if(TARGET SDL3::SDL3-static)
+        add_executable(android_pointer_ingress_tests tests/android_pointer_ingress_tests.cpp)
+        target_include_directories(android_pointer_ingress_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(android_pointer_ingress_tests PRIVATE cxx_std_23)
+        target_link_libraries(android_pointer_ingress_tests PRIVATE SDL3::SDL3-static Threads::Threads)
+    endif()
 
     include(cmake/InputCaptureTests.cmake)
 
@@ -7224,6 +7295,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         VERBATIM
     )
     add_executable(realtime_gameplay_worker_tests
+        src/input/NativeRawTouchInput.cpp
         ${android_realtime_touch_methods}
         src/input/SDLTouchInputSource.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp
@@ -8638,6 +8710,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(audio_video_settings_tests foundation_av_settings)
     asobmashow_register_test(audio_resampling_tests foundation_av_audio_resampling)
     asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
+    asobmashow_register_test(audio_owner_removal_tests)
     asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
     asobmashow_register_test(skin_sound_bundle_decode_tests foundation_av_skin_sound_bundle_decode)
@@ -9233,6 +9306,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         asobmashow_register_test(bgfx_platform_data_tests)
     endif()
     asobmashow_register_test(bgfx_unix_platform_data_tests)
+    asobmashow_register_test(android_native_window_owner_tests foundation_av_android_native_window_owner)
     asobmashow_register_test(text_view_font_lifetime_tests)
     asobmashow_register_test(play_option_summary_tests)
     asobmashow_register_test(play_options_panel_view_tests)
@@ -9338,6 +9412,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(beatoraja_hispeed_tests)
     asobmashow_register_test(settings_scene_preview_authority_tests)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
+    asobmashow_register_test(android_input_timestamp_ingress_tests)
+    asobmashow_register_test(android_raw_touch_input_tests)
+    set_tests_properties(android_raw_touch_input_tests PROPERTIES TIMEOUT 15)
+    if(TARGET android_pointer_ingress_tests)
+        asobmashow_register_test(android_pointer_ingress_tests)
+        set_tests_properties(android_pointer_ingress_tests PROPERTIES TIMEOUT 30)
+    endif()
+    asobmashow_register_test(android_audio_latency_tests)
+    asobmashow_register_test(android_gyroscope_input_backend_tests)
+    set_tests_properties(android_gyroscope_input_backend_tests PROPERTIES TIMEOUT 15)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_button_layout_tests)
     set_tests_properties(ir_ranking_modal_tests PROPERTIES

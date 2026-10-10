@@ -582,6 +582,7 @@ bool InsertScheduledSound(AudioCallbackState &state,
     return false;
   }
 
+  scheduledSound.soundData->hasBeenScheduled = true;
   if (state.scheduledSoundCount == 0 ||
       !scheduledSoundLess(
           scheduledSound,
@@ -642,6 +643,11 @@ void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
     } else {
       ++active;
     }
+  }
+  // Private skin voices usually only play immediately. Their stop/retirement
+  // must not walk an unrelated chart's entire preloaded schedule on the callback.
+  if (soundData != nullptr && !soundData->hasBeenScheduled) {
+    return;
   }
   std::size_t retained = 0;
   std::uint32_t removedScheduledNonSystem = 0;

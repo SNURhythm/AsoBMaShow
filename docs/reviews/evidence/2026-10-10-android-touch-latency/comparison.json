@@ -1,0 +1,211 @@
+{
+  "combined-touch": {
+    "source-to-ingress": {
+      "count": 2400,
+      "p50_upper_us": 2300,
+      "p95_upper_us": 3600,
+      "p99_upper_us": 4700,
+      "max_us": 5618
+    },
+    "ingress-to-worker": {
+      "count": 1200,
+      "p50_upper_us": 300,
+      "p95_upper_us": 1700,
+      "p99_upper_us": 2800,
+      "max_us": 3819
+    },
+    "worker-to-sound-command": {
+      "count": 600,
+      "p50_upper_us": 100,
+      "p95_upper_us": 100,
+      "p99_upper_us": 1400,
+      "max_us": 5907
+    },
+    "sound-command-to-callback": {
+      "count": 600,
+      "p50_upper_us": 1000,
+      "p95_upper_us": 2000,
+      "p99_upper_us": 2000,
+      "max_us": 2055
+    },
+    "audio-callback": {
+      "count": 102657,
+      "p50_upper_us": 100,
+      "p95_upper_us": 100,
+      "p99_upper_us": 100,
+      "max_us": 464
+    },
+    "audio-interval": {
+      "count": 102655,
+      "p50_upper_us": 2000,
+      "p95_upper_us": 2100,
+      "p99_upper_us": 2200,
+      "max_us": 3580
+    },
+    "snapshot-age": {
+      "count": 1242,
+      "p50_upper_us": 4300,
+      "p95_upper_us": 8100,
+      "p99_upper_us": 8900,
+      "max_us": 10159
+    },
+    "frame-submit": {
+      "count": 24139,
+      "p50_upper_us": 8000,
+      "p95_upper_us": 9400,
+      "p99_upper_us": 10100,
+      "max_us": 138690
+    },
+    "touch-to-worker": {
+      "count": 1200,
+      "p50_upper_us": 2800,
+      "p95_upper_us": 5200,
+      "p99_upper_us": 6100,
+      "max_us": 7485
+    },
+    "touch-to-sound-command": {
+      "count": 600,
+      "p50_upper_us": 3100,
+      "p95_upper_us": 5700,
+      "p99_upper_us": 6500,
+      "max_us": 10783
+    }
+  },
+  "prebranch-combined-touch": {
+    "ingress-to-worker": {
+      "count": 1200,
+      "p50_upper_us": 400,
+      "p95_upper_us": 2200,
+      "p99_upper_us": 3200,
+      "max_us": 5821
+    },
+    "worker-to-sound-command": {
+      "count": 600,
+      "p50_upper_us": 100,
+      "p95_upper_us": 100,
+      "p99_upper_us": 800,
+      "max_us": 1817
+    },
+    "sound-command-to-callback": {
+      "count": 600,
+      "p50_upper_us": 5100,
+      "p95_upper_us": 9700,
+      "p99_upper_us": 10000,
+      "max_us": 10016
+    },
+    "audio-callback": {
+      "count": 15502,
+      "p50_upper_us": 100,
+      "p95_upper_us": 100,
+      "p99_upper_us": 200,
+      "max_us": 481
+    },
+    "audio-interval": {
+      "count": 15499,
+      "p50_upper_us": 10000,
+      "p95_upper_us": 10100,
+      "p99_upper_us": 10200,
+      "max_us": 10678
+    },
+    "snapshot-age": {
+      "count": 1300,
+      "p50_upper_us": 3600,
+      "p95_upper_us": 8100,
+      "p99_upper_us": 9200,
+      "max_us": 15214
+    },
+    "frame-submit": {
+      "count": 18183,
+      "p50_upper_us": 7900,
+      "p95_upper_us": 9400,
+      "p99_upper_us": 10100,
+      "max_us": 249439
+    },
+    "touch-to-worker": {
+      "count": 1200,
+      "p50_upper_us": 3000,
+      "p95_upper_us": 5500,
+      "p99_upper_us": 6500,
+      "max_us": 9291
+    },
+    "touch-to-sound-command": {
+      "count": 600,
+      "p50_upper_us": 3400,
+      "p95_upper_us": 5900,
+      "p99_upper_us": 6800,
+      "max_us": 9323
+    }
+  },
+  "updated-repeat-combined-touch": {
+    "source-to-ingress": {
+      "count": 2400,
+      "p50_upper_us": 2200,
+      "p95_upper_us": 3400,
+      "p99_upper_us": 4300,
+      "max_us": 5191
+    },
+    "ingress-to-worker": {
+      "count": 1200,
+      "p50_upper_us": 300,
+      "p95_upper_us": 2000,
+      "p99_upper_us": 2900,
+      "max_us": 5283
+    },
+    "worker-to-sound-command": {
+      "count": 600,
+      "p50_upper_us": 100,
+      "p95_upper_us": 100,
+      "p99_upper_us": 1400,
+      "max_us": 2944
+    },
+    "sound-command-to-callback": {
+      "count": 600,
+      "p50_upper_us": 1100,
+      "p95_upper_us": 1900,
+      "p99_upper_us": 2000,
+      "max_us": 2713
+    },
+    "audio-callback": {
+      "count": 77483,
+      "p50_upper_us": 100,
+      "p95_upper_us": 100,
+      "p99_upper_us": 100,
+      "max_us": 336
+    },
+    "audio-interval": {
+      "count": 77480,
+      "p50_upper_us": 2000,
+      "p95_upper_us": 2100,
+      "p99_upper_us": 2200,
+      "max_us": 2767
+    },
+    "snapshot-age": {
+      "count": 1367,
+      "p50_upper_us": 3600,
+      "p95_upper_us": 8000,
+      "p99_upper_us": 8800,
+      "max_us": 10558
+    },
+    "frame-submit": {
+      "count": 18219,
+      "p50_upper_us": 7900,
+      "p95_upper_us": 9200,
+      "p99_upper_us": 9900,
+      "max_us": 102148
+    },
+    "touch-to-worker": {
+      "count": 1200,
+      "p50_upper_us": 2800,
+      "p95_upper_us": 5100,
+      "p99_upper_us": 5900,
+      "max_us": 8484
+    },
+    "touch-to-sound-command": {
+      "count": 600,
+      "p50_upper_us": 3100,
+      "p95_upper_us": 5400,
+      "p99_upper_us": 6400,
+      "max_us": 8517
+    }
+  }
+}

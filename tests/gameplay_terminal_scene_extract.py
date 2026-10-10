@@ -16,6 +16,26 @@ def extract(source, signature):
     raise ValueError(f"Unterminated production method: {signature}")
 
 
+def runtime_android_branches(source):
+    lines = []
+    branches = []
+    for line in source.splitlines():
+        directive = line.strip()
+        if directive.startswith(("#if ", "#ifdef ", "#ifndef ")):
+            android = directive == "#if TARGET_OS_ANDROID"
+            mobile = directive == "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID"
+            branches.append(android or mobile)
+            lines.append("if (fixtureAndroid) {" if android else
+                         "if (fixtureAndroid || fixtureIos) {" if mobile else line)
+        elif directive == "#else" and branches and branches[-1]:
+            lines.append("} else {")
+        elif directive == "#endif":
+            lines.append("}" if branches.pop() else line)
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
@@ -72,7 +92,7 @@ def main():
     methods += "\n\n".join(
         extract(source, signature).replace("SDL_GetTicks()", "reminderTicks").replace("TARGET_OS_ANDROID", "fixtureAndroid")
         if signature == "void GamePlayScene::update(float dt)" else
-        extract(source, signature).replace("#if TARGET_OS_ANDROID", "if (fixtureAndroid) {").replace("#endif", "}")
+        runtime_android_branches(extract(source, signature))
         if signature == "void GamePlayScene::onApplicationBackgroundChanged(" else extract(source, signature)
         for signature in signatures)
     methods += "\n" + extract(source, "int GamePlayScene::presentationKeyMode() const")
@@ -91,7 +111,13 @@ def main():
     ingress = extract(source, "void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled)")
     ingress = ingress.replace("setRealtimeGameplayIngressEnabled(",
                               "setRealtimeGameplayIngressEnabledFromProduction(", 1)
-    ingress = ingress.replace("#if TARGET_OS_ANDROID", "if (fixtureAndroid) {", 1).replace("#endif", "}", 1)
+    # This scene fixture covers lifecycle/UI cancellation and physical input.
+    # Native touch layout publication remains covered by router/worker fixtures.
+    ingress = ingress.replace(
+        "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID\n"
+        "  session.touchIngressDesired = enabled;",
+        "#if 0\n  session.touchIngressDesired = enabled;", 1)
+    ingress = runtime_android_branches(ingress)
     methods += "\n" + ingress
     interruption = extract(source, "  void interruptInput(const input::InputInterruption &interruption)")
     methods += "\n" + interruption.replace("  void interruptInput(", "void FixtureRealtimeSession::interruptInput(", 1)
