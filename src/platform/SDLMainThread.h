@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IOSApplicationRuntime.h"
+#include "SDLApplicationRuntime.h"
 #include <SDL3/SDL.h>
 #include <string>
 
@@ -8,7 +9,6 @@ namespace platform {
 // SDL errors are thread-local. Preserve a failed operation's diagnostic on its
 // caller, rather than reporting an unrelated error from the worker's TLS.
 template <auto Function, typename... Args> auto sdlMain(Args &&...args) {
-#if TARGET_OS_IPHONE
   using Result = std::invoke_result_t<decltype(Function), Args...>;
   std::string error;
   if constexpr (std::is_void_v<Result>) {
@@ -24,37 +24,43 @@ template <auto Function, typename... Args> auto sdlMain(Args &&...args) {
     if (!error.empty()) SDL_SetError("%s", error.c_str());
     return result;
   }
-#else
-  return Function(std::forward<Args>(args)...);
-#endif
 }
 
 inline bool windowSize(SDL_Window *window, int *width, int *height) {
 #if TARGET_OS_IPHONE
-  if (const auto state = GetIOSWindowSnapshot(window)) {
+  const auto state = GetIOSWindowSnapshot(window);
+#else
+  const auto state = getWindowSnapshot(window);
+#endif
+  if (state) {
     if (width) *width = state->width;
     if (height) *height = state->height;
     return true;
   }
-#endif
   return sdlMain<SDL_GetWindowSize>(window, width, height);
 }
 
 inline bool windowSizeInPixels(SDL_Window *window, int *width, int *height) {
 #if TARGET_OS_IPHONE
-  if (const auto state = GetIOSWindowSnapshot(window)) {
+  const auto state = GetIOSWindowSnapshot(window);
+#else
+  const auto state = getWindowSnapshot(window);
+#endif
+  if (state) {
     if (width) *width = state->pixelWidth;
     if (height) *height = state->pixelHeight;
     return true;
   }
-#endif
   return sdlMain<SDL_GetWindowSizeInPixels>(window, width, height);
 }
 
 inline SDL_WindowID windowID(SDL_Window *window) {
 #if TARGET_OS_IPHONE
-  if (const auto state = GetIOSWindowSnapshot(window)) return state->id;
+  const auto state = GetIOSWindowSnapshot(window);
+#else
+  const auto state = getWindowSnapshot(window);
 #endif
+  if (state) return state->id;
   return sdlMain<SDL_GetWindowID>(window);
 }
 

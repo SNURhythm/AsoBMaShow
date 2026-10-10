@@ -6,6 +6,10 @@
 #include <optional>
 #include <type_traits>
 #include <utility>
+#include <SDL3/SDL_init.h>
+#include <SDL3/SDL_error.h>
+#include <exception>
+#include <stdexcept>
 
 #if TARGET_OS_IPHONE
 #include <SDL3/SDL.h>
@@ -44,24 +48,39 @@ inline bool isMainThread() {
 #if TARGET_OS_IPHONE
   return IsIOSMainThread();
 #else
-  return true;
+  return SDL_IsMainThread();
 #endif
 }
 // Operations must not capture scene pointers into asynchronous work. This
 // synchronous direction is worker -> main only; main never waits for worker.
-template <typename F> auto onMain(F &&operation) -> std::invoke_result_t<F> {
+inline void runOnMain(std::function<void()> operation) {
 #if TARGET_OS_IPHONE
+  RunIOSMainThread(std::move(operation));
+#else
+  if (SDL_IsMainThread()) { operation(); return; }
+  struct Invocation {
+    std::function<void()> &operation;
+    std::exception_ptr failure;
+  } invocation{operation, {}};
+  const auto invoke = [](void *opaque) {
+    auto &call = *static_cast<Invocation *>(opaque);
+    try { call.operation(); } catch (...) { call.failure = std::current_exception(); }
+  };
+  if (!SDL_RunOnMainThread(invoke, &invocation, true))
+    throw std::runtime_error(SDL_GetError());
+  if (invocation.failure) std::rethrow_exception(invocation.failure);
+#endif
+}
+
+template <typename F> auto onMain(F &&operation) -> std::invoke_result_t<F> {
   using Result = std::invoke_result_t<F>;
   if constexpr (std::is_void_v<Result>) {
-    RunIOSMainThread([&] { operation(); });
+    runOnMain([&] { operation(); });
   } else {
     static_assert(!std::is_reference_v<Result>, "Return owned state across the main-thread boundary");
     std::optional<Result> result;
-    RunIOSMainThread([&] { result.emplace(operation()); });
+    runOnMain([&] { result.emplace(operation()); });
     return std::move(*result);
   }
-#else
-  return operation();
-#endif
 }
 }

@@ -7294,6 +7294,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
+    add_executable(sdl_application_runtime_tests
+        tests/sdl_application_runtime_tests.cpp
+        src/platform/SDLApplicationRuntime.cpp
+        src/platform/ApplicationEventQueue.cpp
+    )
+    target_include_directories(sdl_application_runtime_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(sdl_application_runtime_tests PRIVATE cxx_std_23)
+    target_link_libraries(sdl_application_runtime_tests PRIVATE SDL3::SDL3)
+
     add_executable(application_event_queue_tests
         tests/application_event_queue_tests.cpp
         src/platform/ApplicationEventQueue.cpp
@@ -9367,6 +9376,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
+    asobmashow_register_test(sdl_application_runtime_tests)
     asobmashow_register_test(application_event_queue_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(realtime_gameplay_authority_policy_tests)
