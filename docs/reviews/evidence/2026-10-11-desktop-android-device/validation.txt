@@ -1,0 +1,7 @@
+Desktop full suite: 475/475 passed; 199.41 seconds; -j 6.
+After final surface-state correction: replay_export_job_tests, sdl_application_runtime_tests, replay_export_cancellation_boundary: 3/3 passed (0.96 seconds).
+Desktop complete incremental build: exit 0.
+Android restricted_file_accessRelease build: successful; versionCode 6; clean production APK installed with adb install -r.
+Unsigned iOS build: BUILD SUCCEEDED. iOS artifact audit passed (unsigned signature check skipped).
+Android final MP4: full ffmpeg decode exited 0 without error output; gameplay frame visually inspected.
+Desktop MP4: full ffmpeg decode exited 0 without error output; gameplay frame visually inspected.

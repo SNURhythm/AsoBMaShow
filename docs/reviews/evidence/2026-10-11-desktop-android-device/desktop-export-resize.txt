@@ -1,0 +1,6 @@
+2026-10-11 02:19:01.185 main[42785:10227839] Acceptance export started cancel=0
+2026-10-11 02:19:01.319 main[42785:10227839] Replay export audio finished in 0.07s
+2026-10-11 02:20:39.591 main[42785:10227839] Replay export MP4 finished in 98.27s
+2026-10-11 02:20:39.620 main[42785:10227839] Replay export finished in 98.37s: MP4 exported
+2026-10-11 02:20:39.655 main[42785:10227839] Acceptance export result success=1 path=<home>/AsoBMaShow/video_exports/Event_Thread_Device_Test_20261011_021901.mp4 message=MP4 exported
+2026-10-11 02:20:39.754 main[42785:10227839] <home>/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/src/bgfx.cpp (3839): BGFX Shutdown complete.

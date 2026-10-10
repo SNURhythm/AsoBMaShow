@@ -210,7 +210,7 @@ void ownerExecutorDefersAndInvalidatesAbandonedWork() {
   const auto owner = std::this_thread::get_id();
   bool ran = false;
   {
-    replay::ReplayExportJob job([&](auto task) { pending = std::move(task); });
+    replay::ReplayExportJob job([&](auto task, auto) { pending = std::move(task); });
     require(job.tryBegin(), "owner export reservation failed");
     job.start({}, [&](const auto &options, auto &) {
       require(std::this_thread::get_id() == owner, "export changed renderer owner");
@@ -233,16 +233,36 @@ void ownerExecutorDefersAndInvalidatesAbandonedWork() {
   require(!ran, "destroyed owner must invalidate queued export work");
 }
 
+void ownerLifecycleCancellationReachesWork() {
+  std::function<void()> pending;
+  std::stop_source lifecycleStop;
+  replay::ReplayExportJob job([&](auto task, auto stop) {
+    pending = std::move(task);
+    lifecycleStop = stop;
+  });
+  require(job.tryBegin(), "owner lifecycle fixture must reserve");
+  job.start({}, [&](const auto &options, auto &cancelled) {
+    require(!options.stop.stop_requested() && !cancelled, "fresh owner work was cancelled");
+    std::thread nativeLifecycle([&] { lifecycleStop.request_stop(); });
+    nativeLifecycle.join();
+    require(options.stop.stop_requested() && cancelled,
+            "native lifecycle must cancel owner work without scene-loop dispatch");
+    return ReplayVideoExportResult{false, {}, "cancelled by lifecycle"};
+  });
+  pending();
+  require(receive(job).message == "cancelled by lifecycle", "owner cancellation result lost");
+}
+
 void ownerCancellationBeforeStartAndSchedulingFailure() {
   std::function<void()> pending;
-  replay::ReplayExportJob job([&](auto task) { pending = std::move(task); });
+  replay::ReplayExportJob job([&](auto task, auto) { pending = std::move(task); });
   require(job.tryBegin(), "owner cancellation fixture must reserve");
   bool ran = false;
   job.start({}, [&](const auto &, auto &) { ran = true; return ReplayVideoExportResult{}; });
   job.cancelAndWait();
   pending();
   require(!ran && !receive(job).success, "cancelled pending export must never start");
-  replay::ReplayExportJob failed([](auto) { throw std::runtime_error("Schedule failed"); });
+  replay::ReplayExportJob failed([](auto, auto) { throw std::runtime_error("Schedule failed"); });
   require(failed.tryBegin(), "schedule failure fixture must reserve");
   failed.start({}, [](const auto &, auto &) { return ReplayVideoExportResult{}; });
   require(receive(failed).message == "Schedule failed" && !failed.hasWorker(),
@@ -251,6 +271,7 @@ void ownerCancellationBeforeStartAndSchedulingFailure() {
 } // namespace
 
 int main() {
+  ownerLifecycleCancellationReachesWork();
   ownerExecutorDefersAndInvalidatesAbandonedWork();
   ownerCancellationBeforeStartAndSchedulingFailure();
   startupFailureIsDeliveredBeforeAdmissionReopens();

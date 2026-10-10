@@ -1,4 +1,5 @@
 #include "../platform/SDLMainThread.h"
+#include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
@@ -461,7 +462,11 @@ MusicSelectScene::MusicSelectScene(
     skin::GameplaySkinActivationRequest activationRequest)
     : Scene(context), activationRequest_(std::move(activationRequest)),
       selectedSkinPath_(
-          musicSelectSkinEntryPath(activationRequest_.activation.entry)) {}
+          musicSelectSkinEntryPath(activationRequest_.activation.entry))
+#if !TARGET_OS_IPHONE
+      , recordsExportJob_(platform::postApplicationWork)
+#endif
+{}
 
 MusicSelectScene::~MusicSelectScene() {
   // Join scene callbacks while their members are still alive. cleanup() also

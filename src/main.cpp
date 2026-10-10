@@ -1060,6 +1060,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (IOSApplicationActive()) PollIOSApplicationWork();
 #else
     platform::pollApplicationDiagnostics();
+    platform::pollApplicationWork();
 #endif
     if (!orientationLocked &&
         appliedOrientation != context.settings.screenOrientation) {

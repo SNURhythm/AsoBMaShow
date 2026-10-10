@@ -26,6 +26,7 @@
 #include "../PlatformDocumentHandoff.h"
 #include "../PlatformOpen.h"
 #include "../RAII.h"
+#include "../platform/SDLApplicationRuntime.h"
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
@@ -654,7 +655,11 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
 }
 
 MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
-    : Scene(context), showTutorial_(showTutorial) {}
+    : Scene(context), showTutorial_(showTutorial)
+#if !TARGET_OS_IPHONE
+      , replayExportJob_(platform::postApplicationWork)
+#endif
+{}
 
 MainMenuScene::~MainMenuScene() {
   stopReplayAndPreviewWork();

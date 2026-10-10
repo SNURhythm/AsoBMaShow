@@ -183,6 +183,7 @@ private:
   void launchAutoPlayExport(const ChartMetaRecord &,
                             ReplayVideoExportOptions);
   void applyRecordsExportProgress();
+  void updateReplayExportProgress() override { applyRecordsExportProgress(); }
   void applyRecordsExportResult();
   void showTasksModal();
   void refreshTasksModal(bool force = false);

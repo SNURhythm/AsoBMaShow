@@ -58,8 +58,13 @@ Java must not destroy a surface still referenced by the renderer. That safety
 handshake can await GPU retirement; event separation cannot remove it. SDL
 lifecycle pumping remains independent, and render suspension/resumption consumes
 the resulting state on the application owner. Never move Java blocking pickers
-onto the Java UI thread. Export keeps its current exclusive renderer coordinator
-and background export worker on desktop/Android; main must not need that lock.
+onto the Java UI thread. Export keeps its exclusive renderer coordinator and
+runs queued work on the application/bgfx owner on desktop/Android; SDL main must
+not need that lock. The owner presents progress without dispatching scene events.
+Quit, application suspension and surface loss cancel export; desktop focus loss
+only hides progress. Surface availability must not invent lifecycle background
+state: `applicationCanPresent` combines both for presentation, while
+`applicationActive` remains lifecycle-only.
 
 ## Verification
 
@@ -81,7 +86,7 @@ verification is possible. No Firebase, Play, or TestFlight upload is authorized.
 
 ## Recorded acceptance
 
-Final full CTest run: 474/474 passed in 118.61 seconds with `-j 6`.
+Initial full CTest run: 474/474 passed in 118.61 seconds with `-j 6`.
 
 - Desktop and Android now run application/scene work off the SDL bootstrap
   thread, retaining bgfx's internal render worker. Desktop main and all native
@@ -108,10 +113,18 @@ Final full CTest run: 474/474 passed in 118.61 seconds with `-j 6`.
   fix. The final suite also corrected an obsolete desktop-drain expectation and
   an existing unsynchronized worker-state assertion in a persistence fixture.
 
-Remaining manual coverage: desktop pointer/text input (automation delivered
-stale SDL pointer coordinates), desktop/Android replay export, Android forced
-render-stall measurement, Windows/Linux execution, and physical-device GPU,
-latency and pacing behavior. The Android release smoke does not contain the
-Debug stall hook; portable SDL runtime tests cover stalled-owner main dispatch.
-These checks demonstrate event scheduling independence, not hardware latency.
-No deployment was performed.
+Follow-up physical-device acceptance updated the Samsung Galaxy S20 FE in place
+with the user's requested version code 6. Desktop pointer/text interaction was
+confirmed by the user. Desktop and Android export, native quit cancellation,
+Android Home/surface recreation, injected-touch delivery during a five-second
+owner stall, and physical-device pacing were exercised. This uncovered and fixed
+export bgfx ownership and cancellation/resume defects. The follow-up full suite
+passed 475/475; the final surface-state correction passed its focused regressions.
+
+See [the device acceptance report](../../reviews/2026-10-11-desktop-android-device-acceptance.md)
+for measurements, evidence and remaining limits. Windows/Linux execution and
+physical end-to-end latency remain unverified. A forced stall exceeded Android's
+existing surface-retirement timeout; survival does not certify arbitrary GPU
+stalls. A separate external-storage replay installation failure blocks saved-
+replay round-trip verification. The final installed release has no temporary
+probe instrumentation. No deployment was performed.

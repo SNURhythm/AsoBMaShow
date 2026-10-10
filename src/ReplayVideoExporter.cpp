@@ -22,6 +22,9 @@
 #include "audio/GameplayBgaMissStateTracker.h"
 #include "audio/SoundFileIO.h"
 #include "main.h"
+#include "platform/SDLApplicationRuntime.h"
+#include "scene/SceneManager.h"
+#include "scene/Scene.h"
 #include "path.h"
 #include "rendering/BlurPass.h"
 #include "rendering/Color.h"
@@ -897,29 +900,19 @@ public:
     // Never reenter scene events here: they can destroy the exporting scene.
     return;
 #else
-    if (released || context.quitFlag.load(std::memory_order_acquire)) {
-      return;
-    }
-
+    if (released || context.quitFlag.load(std::memory_order_acquire) ||
+        !platform::applicationCanPresent()) return;
+    // Export and normal rendering share the bgfx API owner. Present only the
+    // progress UI here; consuming events could destroy the exporting scene.
     restorePrimaryRenderViews(&context);
-    const auto previousFrame =
-        context.replayVideoExportUiFrameSerial.load(std::memory_order_acquire);
-    context.replayVideoExportUiFrameRequested.store(true,
-                                                    std::memory_order_release);
-    access.unlockForUiFrame();
-
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(16);
-    while (!context.quitFlag.load(std::memory_order_acquire) &&
-           context.replayVideoExportUiFrameSerial.load(
-               std::memory_order_acquire) == previousFrame &&
-           std::chrono::steady_clock::now() < deadline) {
-      SDL_Delay(1);
+    if (context.sceneManager && context.sceneManager->currentScene) {
+      context.sceneManager->currentScene->updateReplayExportProgress();
+      bgfx::touch(rendering::clear_view);
+      bgfx::touch(rendering::ui_view);
+      context.uiBatchRenderer.beginFrame();
+      context.sceneManager->render();
+      bgfx::frame();
     }
-
-    access.relockAfterUiFrame();
-    context.replayVideoExportUiFrameRequested.store(false,
-                                                    std::memory_order_release);
     restoreExportViews();
 #endif
   }
@@ -975,9 +968,7 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
                       const std::filesystem::path &path,
                       ReplayVideoExportLog *log, bool autoKeySound, std::stop_token stop) {
   std::atomic_bool isCancelled = false;
-#if TARGET_OS_IPHONE
   std::stop_callback cancelAudio(stop, [&] { isCancelled = true; });
-#endif
   const chart_audio::RenderOptions options{
       .keySoundMode = autoKeySound ? chart_audio::KeySoundMode::ChartTiming
                                    : chart_audio::KeySoundMode::ReplayTiming,
@@ -2938,6 +2929,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   context.jukebox.setEmbeddedBgaBrightnessPercent(
       settings.bgaBrightnessPercent);
   std::atomic_bool visualLoadCancelled = false;
+  std::stop_callback cancelVisuals(options.stop, [&] { visualLoadCancelled = true; });
   context.jukebox.loadVisuals(chart, visualLoadCancelled);
   if (visualLoadCancelled) {
     context.jukebox.stop();
@@ -4137,6 +4129,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     context.jukebox.setEmbeddedBgaBrightnessPercent(
         settings.bgaBrightnessPercent);
     std::atomic_bool visualLoadCancelled = false;
+    std::stop_callback cancelVisuals(options.stop, [&] { visualLoadCancelled = true; });
     context.jukebox.loadVisuals(chart, visualLoadCancelled);
     if (visualLoadCancelled) {
       bgfxCleanup.runNow();
@@ -4894,6 +4887,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
                        static_cast<double>(replay.stages.size())),
         "Preparing course stage " + std::to_string(i + 1));
     std::atomic_bool parseCancelled = false;
+    std::stop_callback cancelParse(resolvedOptions.stop, [&] { parseCancelled = true; });
     std::unique_ptr<bms_parser::Chart> chart;
     if (preparedCharts != nullptr) {
       chart = std::move((*preparedCharts)[i]);

@@ -17,6 +17,7 @@
 #include "library/DocumentsLibraryRefresh.h"
 #include "repositories/ChartRepository.h"
 #include "platform/ScreenOrientation.h"
+#include "platform/SDLApplicationRuntime.h"
 #include "input/AndroidInputTimestamp.h"
 #include "input/AndroidRawTouchInput.h"
 #include "perf/LatencyTelemetry.h"
@@ -2125,6 +2126,7 @@ void NotifyAndroidSurfaceRenderPaused() {
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativePauseBeforeSurfaceDestroyed(
     JNIEnv *, jclass) {
+  platform::setApplicationSurfaceAvailable(false);
   {
     std::lock_guard<std::mutex> lock(gExternalActivityPauseMutex);
     gAndroidSurfacePauseRequested = true;
@@ -2151,6 +2153,7 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSurfaceReady(
     gAndroidSurfacePauseRequested = false;
     gAndroidSurfacePauseAcknowledged = false;
   }
+  platform::setApplicationSurfaceAvailable(true);
   SDL_Event event{};
   event.type = SDL_EVENT_USER;
   event.user.code = kExternalActivityPauseWakeCode;

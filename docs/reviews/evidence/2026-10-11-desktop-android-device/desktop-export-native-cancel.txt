@@ -1,0 +1,3 @@
+2026-10-11 02:26:03.143 main[48023:10250504] Acceptance export started cancel=0
+2026-10-11 02:26:22.419 main[48023:10250504] Replay export MP4 failed: Replay export cancelled
+2026-10-11 02:26:22.482 main[48023:10250504] <home>/workspace/SNURhythm/AsoBMaShow/bgfx/bgfx/src/bgfx.cpp (3839): BGFX Shutdown complete.

@@ -20,8 +20,9 @@ public:
       std::function<ReplayVideoExportResult(const ReplayVideoExportOptions &, std::atomic_bool &)>;
 
   // Executor must enqueue onto the lifecycle owner and never invoke inline.
+  // Its stop source lets native lifecycle events cancel occupied owner work.
   // Only that owner may run callbacks, cancel, or destroy this job.
-  using OwnerExecutor = std::function<void(std::function<void()>)>;
+  using OwnerExecutor = std::function<void(std::function<void()>, std::stop_source)>;
   ReplayExportJob();
   explicit ReplayExportJob(OwnerExecutor executor) : ownerExecutor_(std::move(executor)) {}
   ~ReplayExportJob() { cancelAndWait(); }

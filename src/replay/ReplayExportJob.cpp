@@ -12,16 +12,14 @@ namespace replay {
 
 ReplayExportJob::ReplayExportJob() {
 #if TARGET_OS_IPHONE
-  ownerExecutor_ = PostIOSApplicationWork;
+  ownerExecutor_ = [](auto work, auto) { PostIOSApplicationWork(std::move(work)); };
 #endif
 }
 
 void ReplayExportJob::execute(ReplayVideoExportOptions options, Work work,
                               std::stop_token stop) {
   ReplayVideoExportResult result;
-#if TARGET_OS_IPHONE
   std::stop_callback cancel(stop, [this] { cancelled_ = true; });
-#endif
   try {
 #if TARGET_OS_IPHONE
     auto overlay = makeScopeExit([] { EndIOSReplayExport(); });
@@ -63,7 +61,7 @@ void ReplayExportJob::start(ReplayVideoExportOptions options, Work work) {
         if (lifetime.expired()) return;
         execute(std::move(options), std::move(work), ownerStop_.get_token());
         pending_.reset();
-      });
+      }, ownerStop_);
     } else {
       worker_ = std::jthread(
           [this, options = std::move(options), work = std::move(work)](

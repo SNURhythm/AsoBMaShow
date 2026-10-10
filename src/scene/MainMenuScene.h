@@ -596,6 +596,7 @@ private:
   void stopReplayLoadWorker();
   void stopReplayAndPreviewWork();
   void applyReplayExportProgress();
+  void updateReplayExportProgress() override { applyReplayExportProgress(); }
   void applyReplayExportResult();
   enum DiffType { Deleted, Added };
   struct Diff {

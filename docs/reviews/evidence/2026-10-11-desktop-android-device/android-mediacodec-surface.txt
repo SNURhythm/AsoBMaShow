@@ -1,0 +1,6 @@
+Encoded 120 320x180 frames in 0.783s
+Encoded 120 2400x1080 frames in 1.205s
+Encoded 240 2400x1080 frames in 2.330s
+PASS: 320x180/60fps; colors, orientation, every frame, thin lines, duration
+PASS: 2400x1080/60fps; colors, orientation, every frame, thin lines, duration
+PASS: 2400x1080/120fps; colors, orientation, every frame, thin lines, duration

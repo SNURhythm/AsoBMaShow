@@ -58,7 +58,7 @@
 
 ## Completion evidence
 
-Desktop build and all 474 CTest cases passed (118.61 seconds). Android restricted
+Initial desktop build and all 474 CTest cases passed (118.61 seconds). Android restricted
 release build, unsigned iOS build and iOS artifact audit passed. The fresh
 whole-branch review's four Important findings were fixed with RED/GREEN
 regressions. Platform acceptance and explicit manual coverage limitations are
@@ -67,7 +67,19 @@ mean those bounded checks were performed, not that every platform was tested.
 
 Execution decisions: continued on the authorized existing branch; overlapped
 the fresh read-only review with final builds; preserved the existing signed
-Android installation by using and removing an owned fresh AVD; left unavailable
-physical hardware, Windows/Linux, native desktop pointer/text, Android forced
-stall and desktop/Android replay export checks explicitly unverified. The
-remaining risk is platform or integration behavior beyond that coverage.
+Android emulator installation by using and removing an owned fresh AVD.
+
+### Follow-up: physical-device and remaining local acceptance
+
+- [x] Verify user-operated desktop pointer/text interaction and real desktop exports, resize and quit cancellation.
+- [x] Update the connected Android phone in place using the explicitly requested version code 6.
+- [x] Measure independent pumping and raw touch ingress during a temporary five-second owner stall; restore the normal release APK afterward.
+- [x] Exercise Android export, Home/surface loss cancellation, foreground recovery, gameplay and frame pacing.
+- [x] Fix discovered export owner/cancellation and lifecycle state defects with failing-then-passing regressions; obtain a focused follow-up review.
+- [x] Build desktop/Android/iOS, audit the iOS app, run 475 CTest cases and rerun the three affected tests after the final surface-state fix.
+
+The [device acceptance report](../../reviews/2026-10-11-desktop-android-device-acceptance.md)
+records measurements and explicit limits. Windows/Linux hosts were unavailable.
+Physical end-to-end latency and arbitrary GPU stalls are not certified. The
+phone also exposed a separate hard-link-based replay installation failure on
+emulated external storage; saved-replay round-trip acceptance remains blocked.

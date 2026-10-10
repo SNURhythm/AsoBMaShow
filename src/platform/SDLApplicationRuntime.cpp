@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -16,7 +17,15 @@ namespace platform {
 namespace {
 struct Runtime {
   ApplicationEventQueue events;
+  struct Work {
+    std::function<void()> run;
+    std::stop_source stop;
+  };
+  std::deque<Work> work; // Application owner only.
+  std::mutex cancellationMutex;
+  std::optional<std::stop_source> workStop;
   std::atomic_bool active{true};
+  std::atomic_bool applicationSuspended{false}, terminating{false}, surfaceAvailable{true};
 #ifndef NDEBUG
   std::atomic_uint64_t mainServiceCount{0};
   unsigned ownerIterations = 0;
@@ -30,6 +39,7 @@ struct Runtime {
 std::mutex runtimeMutex;
 std::shared_ptr<Runtime> runtime;
 thread_local OwnedApplicationEvent currentEvent;
+thread_local bool applicationOwner = false;
 
 std::shared_ptr<Runtime> currentRuntime() {
   const std::lock_guard lock(runtimeMutex);
@@ -51,13 +61,32 @@ void updateViewport(Runtime &state, SDL_Window *window) {
   next.generation = state.viewport.generation + 1;
   state.viewport = next;
 }
+void cancelOwnerWork(Runtime &state) {
+  std::optional<std::stop_source> stop;
+  {
+    const std::lock_guard lock(state.cancellationMutex);
+    stop = state.workStop;
+  }
+  // Stop callbacks may run arbitrary code; never invoke them under our lock.
+  if (stop) stop->request_stop();
+}
+
 bool SDLCALL lifecycleWatch(void *opaque, SDL_Event *event) {
   auto &state = *static_cast<Runtime *>(opaque);
-  if (input::isBackgroundLifecycleEvent(*event) || event->type == SDL_EVENT_QUIT ||
-      event->type == SDL_EVENT_TERMINATING)
+  const bool quitting = event->type == SDL_EVENT_QUIT || event->type == SDL_EVENT_TERMINATING;
+  const bool suspended = event->type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
+                         event->type == SDL_EVENT_DID_ENTER_BACKGROUND;
+  if (quitting) state.terminating.store(true, std::memory_order_release);
+  if (suspended) state.applicationSuspended.store(true, std::memory_order_release);
+  else if (event->type == SDL_EVENT_WILL_ENTER_FOREGROUND ||
+           event->type == SDL_EVENT_DID_ENTER_FOREGROUND)
+    state.applicationSuspended.store(false, std::memory_order_release);
+  if (input::isBackgroundLifecycleEvent(*event) || quitting)
     state.active.store(false, std::memory_order_release);
   else if (input::isForegroundLifecycleEvent(*event))
     state.active.store(true, std::memory_order_release);
+  // Desktop focus/minimize only hides progress. Offscreen export may continue.
+  if (quitting || suspended) cancelOwnerWork(state);
   return true;
 }
 }
@@ -78,7 +107,11 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
       publishRuntime(nullptr);
     }
   } cleanup{state.get()};
-  return runApplicationThread(std::move(application), [&] {
+  return runApplicationThread([&] {
+    applicationOwner = true;
+    struct OwnerCleanup { ~OwnerCleanup() { applicationOwner = false; } } ownerCleanup;
+    return application();
+  }, [&] {
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
 #ifndef NDEBUG
@@ -113,6 +146,43 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
   });
 }
 
+bool isApplicationThread() { return applicationOwner; }
+
+void postApplicationWork(std::function<void()> work, std::stop_source stop) {
+  const auto state = currentRuntime();
+  if (!state || !applicationOwner) throw std::logic_error("Missing application owner");
+  state->work.push_back({std::move(work), std::move(stop)});
+}
+
+void pollApplicationWork() {
+  const auto state = currentRuntime();
+  if (!state || !applicationOwner || state->work.empty()) return;
+  auto work = std::move(state->work.front());
+  state->work.pop_front();
+  {
+    const std::lock_guard lock(state->cancellationMutex);
+    state->workStop = work.stop;
+  }
+  struct CancellationCleanup {
+    Runtime &state;
+    ~CancellationCleanup() {
+      const std::lock_guard lock(state.cancellationMutex);
+      state.workStop.reset();
+    }
+  } cleanup{*state};
+  if (state->terminating.load(std::memory_order_acquire) ||
+      state->applicationSuspended.load(std::memory_order_acquire) ||
+      !state->surfaceAvailable.load(std::memory_order_acquire)) work.stop.request_stop();
+  work.run();
+}
+
+void setApplicationSurfaceAvailable(bool available) {
+  const auto state = currentRuntime();
+  if (!state) return;
+  state->surfaceAvailable.store(available, std::memory_order_release);
+  if (!available) cancelOwnerWork(*state);
+}
+
 bool pollApplicationEvent(SDL_Event *event) {
   const auto state = currentRuntime();
   if (!state) return SDL_PollEvent(event);
@@ -134,6 +204,12 @@ bool waitApplicationEvent(SDL_Event *event, int timeoutMs) {
 bool applicationActive() {
   const auto state = currentRuntime();
   return !state || state->active.load(std::memory_order_acquire);
+}
+
+bool applicationCanPresent() {
+  const auto state = currentRuntime();
+  return !state || (state->active.load(std::memory_order_acquire) &&
+                    state->surfaceAvailable.load(std::memory_order_acquire));
 }
 
 bool takeApplicationOverflow() {

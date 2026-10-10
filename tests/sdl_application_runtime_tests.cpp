@@ -142,6 +142,59 @@ void testResizePublishesViewportBeforeEvent(SDL_Window *window) {
   });
   require(result == 0, "resize publication worker failed");
 }
+void testOwnerWorkKeepsNativeCancellationAlive(SDL_Window *window) {
+  const auto result = platform::runSDLApplication(window, [&] {
+    require(platform::isApplicationThread(), "application owner identity missing");
+    bool ran = false;
+    std::stop_source stop;
+    platform::postApplicationWork([&] {
+      require(platform::isApplicationThread() && !SDL_IsMainThread(),
+              "renderer work must stay on the application owner");
+      platform::onMain([] {
+        SDL_Event focus{}; focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        SDL_PushEvent(&focus);
+      });
+      require(!platform::applicationActive() && !stop.stop_requested(),
+              "desktop focus loss must hide progress without cancelling export");
+      platform::onMain([&] {
+        require(!platform::isApplicationThread(), "SDL main must not claim renderer ownership");
+        SDL_Event background{}; background.type = SDL_EVENT_WILL_ENTER_BACKGROUND;
+        SDL_PushEvent(&background);
+      });
+      require(stop.stop_requested(), "native background did not cancel occupied owner");
+      ran = true;
+    }, stop);
+    require(!ran, "renderer work must defer to a safe scene boundary");
+    platform::pollApplicationWork();
+    require(ran, "queued renderer work was not dispatched");
+    platform::onMain([] {
+      SDL_Event foreground{}; foreground.type = SDL_EVENT_DID_ENTER_FOREGROUND;
+      SDL_PushEvent(&foreground);
+    });
+    std::stop_source surfaceStop;
+    platform::postApplicationWork([&] {
+      platform::onMain([] { platform::setApplicationSurfaceAvailable(false); });
+      require(surfaceStop.stop_requested() && platform::applicationActive() &&
+              !platform::applicationCanPresent(),
+              "surface loss must cancel export without inventing application background");
+      platform::onMain([] { platform::setApplicationSurfaceAvailable(true); });
+      require(platform::applicationActive(), "surface recreation did not restore presentation");
+    }, surfaceStop);
+    platform::pollApplicationWork();
+    std::stop_source next;
+    platform::postApplicationWork([&] {
+      require(!next.stop_requested(), "old lifecycle cancellation leaked into next export");
+      platform::onMain([] {
+        SDL_Event quit{}; quit.type = SDL_EVENT_QUIT; SDL_PushEvent(&quit);
+      });
+      require(next.stop_requested(), "quit did not cancel occupied renderer owner");
+    }, next);
+    platform::pollApplicationWork();
+    return 0;
+  });
+  require(result == 0 && !platform::isApplicationThread(), "owner work runtime cleanup failed");
+}
+
 void testRuntimeServicesUnwinding(SDL_Window *window) {
   bool cleanupRan = false;
   const auto result = platform::runSDLApplication(window, [&]() -> int {
@@ -163,6 +216,7 @@ int main() {
   require(window, SDL_GetError());
   testRuntimeKeepsMainAliveAndOwnsPayloads(window);
   testResizePublishesViewportBeforeEvent(window);
+  testOwnerWorkKeepsNativeCancellationAlive(window);
   testRuntimeServicesUnwinding(window);
   SDL_DestroyWindow(window);
   SDL_Quit();

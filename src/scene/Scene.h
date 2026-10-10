@@ -43,6 +43,8 @@ public:
   virtual bool continuesAudioInBackground() const { return false; }
   // CPU-only work: no rendering, resource preparation, or scene transitions.
   virtual void updateWhileBackgrounded() {}
+  // Progress only: no scene transitions or event dispatch during owner export.
+  virtual void updateReplayExportProgress() {}
   virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual bool locksOrientation() const { return false; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {
