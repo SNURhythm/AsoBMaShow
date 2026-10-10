@@ -2,6 +2,8 @@
 
 Measured 2026-10-10 on a physical Samsung Galaxy S20 FE (SM-G781N, SM8250, Android 13, arm64). This verifies the changes following `c323ee2d` on `fix/android-input-latency`. The signed release APK was installed in place as version code **6**, preserving app data. APK SHA-256: `834de9bd8226b65a6e4ad5ac27fb4cc6d24a97fde0c1791de44d0aa870af664e`.
 
+A subsequent [segmented Android → SDL measurement](2026-10-10-android-sdl-touch-segments.md) isolates Java delivery, the SDL gameplay event watch, worker enqueue and full touch-handler duration. It found little difference before gameplay delivery under this workload, but substantially shorter full-handler duration on the updated path.
+
 ## Pre-branch comparison
 
 The baseline is **`beb3cd192`**, the commit from which `fix/android-input-latency` was created (confirmed by the branch reflog), rather than the preceding fix commit. Its input routing, worker scheduling, SDL configuration, miniaudio implementation and audio settings were retained. Only timing instrumentation was added. The baseline was built and installed as version code 6, then the updated APK was reinstalled and measured again. App data was preserved throughout.

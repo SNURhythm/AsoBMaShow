@@ -1,0 +1,251 @@
+{
+  "units": "microseconds",
+  "histogram_resolution_us": 1,
+  "source_timestamp_resolution_us": 1000,
+  "runs": {
+    "baseline": {
+      "revision": "beb3cd192",
+      "apk_sha256": "eaae44a0a6c0227fcfa026a26bac183f94b9caecb0e0b13ea672d37a79a0af94",
+      "samples": {
+        "single": {
+          "event-to-java": {
+            "n": 600,
+            "p50": 2583,
+            "p95": 3683,
+            "p99": 4953,
+            "max": 5624
+          },
+          "event-to-route": {
+            "n": 600,
+            "p50": 2654,
+            "p95": 3897,
+            "p99": 5135,
+            "max": 5736
+          },
+          "java-to-probe-jni": {
+            "n": 600,
+            "p50": 8,
+            "p95": 12,
+            "p99": 34,
+            "max": 1013
+          },
+          "java-to-route": {
+            "n": 600,
+            "p50": 45,
+            "p95": 252,
+            "p99": 944,
+            "max": 1521
+          },
+          "route-to-gameplay": {
+            "n": 600,
+            "p50": 3,
+            "p95": 5,
+            "p99": 9,
+            "max": 2046
+          },
+          "gameplay-to-enqueue": {
+            "n": 600,
+            "p50": 10,
+            "p95": 15,
+            "p99": 25,
+            "max": 1724
+          },
+          "java-to-enqueue": {
+            "n": 600,
+            "p50": 58,
+            "p95": 314,
+            "p99": 1288,
+            "max": 2102
+          },
+          "java-handler": {
+            "n": 600,
+            "p50": 477,
+            "p95": 2157,
+            "p99": 3253,
+            "max": 4525
+          }
+        },
+        "combined": {
+          "event-to-java": {
+            "n": 1200,
+            "p50": 2336,
+            "p95": 3594,
+            "p99": 4473,
+            "max": 5624
+          },
+          "event-to-route": {
+            "n": 1200,
+            "p50": 2388,
+            "p95": 3700,
+            "p99": 4901,
+            "max": 6075
+          },
+          "java-to-probe-jni": {
+            "n": 1200,
+            "p50": 8,
+            "p95": 12,
+            "p99": 34,
+            "max": 1424
+          },
+          "java-to-route": {
+            "n": 1200,
+            "p50": 39,
+            "p95": 113,
+            "p99": 737,
+            "max": 3601
+          },
+          "route-to-gameplay": {
+            "n": 1200,
+            "p50": 3,
+            "p95": 5,
+            "p99": 10,
+            "max": 2046
+          },
+          "gameplay-to-enqueue": {
+            "n": 1200,
+            "p50": 9,
+            "p95": 15,
+            "p99": 42,
+            "max": 1724
+          },
+          "java-to-enqueue": {
+            "n": 1200,
+            "p50": 52,
+            "p95": 198,
+            "p99": 872,
+            "max": 3617
+          },
+          "java-handler": {
+            "n": 1200,
+            "p50": 312,
+            "p95": 1817,
+            "p99": 3072,
+            "max": 4525
+          }
+        }
+      }
+    },
+    "updated": {
+      "revision": "32683fe18",
+      "apk_sha256": "4cef0270710cbdf31faf21adbfe48c30992e151ab5ae22b7d5e86194347b1e46",
+      "samples": {
+        "single": {
+          "event-to-java": {
+            "n": 600,
+            "p50": 2544,
+            "p95": 3666,
+            "p99": 4625,
+            "max": 5628
+          },
+          "event-to-route": {
+            "n": 600,
+            "p50": 2604,
+            "p95": 3794,
+            "p99": 4666,
+            "max": 5670
+          },
+          "java-to-probe-jni": {
+            "n": 600,
+            "p50": 8,
+            "p95": 12,
+            "p99": 132,
+            "max": 701
+          },
+          "java-to-route": {
+            "n": 600,
+            "p50": 40,
+            "p95": 91,
+            "p99": 710,
+            "max": 1505
+          },
+          "route-to-gameplay": {
+            "n": 600,
+            "p50": 3,
+            "p95": 5,
+            "p99": 14,
+            "max": 541
+          },
+          "gameplay-to-enqueue": {
+            "n": 600,
+            "p50": 6,
+            "p95": 13,
+            "p99": 27,
+            "max": 2330
+          },
+          "java-to-enqueue": {
+            "n": 600,
+            "p50": 49,
+            "p95": 163,
+            "p99": 754,
+            "max": 2374
+          },
+          "java-handler": {
+            "n": 600,
+            "p50": 57,
+            "p95": 261,
+            "p99": 763,
+            "max": 2422
+          }
+        },
+        "combined": {
+          "event-to-java": {
+            "n": 1200,
+            "p50": 2303,
+            "p95": 3548,
+            "p99": 4444,
+            "max": 5628
+          },
+          "event-to-route": {
+            "n": 1200,
+            "p50": 2355,
+            "p95": 3625,
+            "p99": 4542,
+            "max": 5670
+          },
+          "java-to-probe-jni": {
+            "n": 1200,
+            "p50": 7,
+            "p95": 11,
+            "p99": 81,
+            "max": 701
+          },
+          "java-to-route": {
+            "n": 1200,
+            "p50": 39,
+            "p95": 107,
+            "p99": 763,
+            "max": 1505
+          },
+          "route-to-gameplay": {
+            "n": 1200,
+            "p50": 2,
+            "p95": 5,
+            "p99": 7,
+            "max": 541
+          },
+          "gameplay-to-enqueue": {
+            "n": 1200,
+            "p50": 5,
+            "p95": 13,
+            "p99": 25,
+            "max": 2330
+          },
+          "java-to-enqueue": {
+            "n": 1200,
+            "p50": 48,
+            "p95": 179,
+            "p99": 787,
+            "max": 2374
+          },
+          "java-handler": {
+            "n": 1200,
+            "p50": 55,
+            "p95": 217,
+            "p99": 799,
+            "max": 2422
+          }
+        }
+      }
+    }
+  }
+}
