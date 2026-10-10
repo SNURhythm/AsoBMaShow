@@ -5,6 +5,8 @@
 #include "ir/IrHttpClientIOS.h"
 #include "platform/PhotoAuthorizationPolicy.h"
 #include "platform/ScreenOrientation.h"
+#include "platform/IOSApplicationRuntime.h"
+#include "platform/GenerationMailbox.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -123,6 +125,8 @@ NSInteger Utf16OffsetFromUtf8ByteOffset(NSString *value,
 }
 
 CTFontRef CreateIOSSystemFont(int fontSize) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return CreateIOSSystemFont(fontSize); });
   const CGFloat pointSize = std::max(1, fontSize);
   UIFont *font = [UIFont systemFontOfSize:pointSize];
   return CTFontCreateWithName((__bridge CFStringRef)font.fontName, pointSize,
@@ -1255,6 +1259,29 @@ bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
   return RequestPhotoAddAuthorization(errorMessage);
 }
 
+namespace {
+struct NativeTextDelivery {
+  IOSNativeTextEditorEvent event;
+  IOSNativeTextEditorState state;
+};
+platform::GenerationMailbox<NativeTextDelivery> nativeTextMailbox;
+// These owner fields are only read/written on the application thread. UIKit
+// holds an opaque identity and posts copied state tagged with its generation.
+std::uint64_t nativeTextGeneration = 0;
+void *nativeTextContext = nullptr;
+IOSNativeTextEditorCallback nativeTextCallback = nullptr;
+}
+
+void PollIOSNativeTextEditorCallbacks() {
+  const auto generation = nativeTextGeneration;
+  const auto callback = nativeTextCallback;
+  void *context = nativeTextContext;
+  for (const auto &delivery : nativeTextMailbox.take(generation)) {
+    if (nativeTextGeneration != generation || callback == nullptr) break;
+    callback(context, delivery.event, delivery.state);
+  }
+}
+
 @interface AsoNativeTextEditorView : UIView <UITextFieldDelegate> {
 @private
   UITextField *_textField;
@@ -1262,14 +1289,14 @@ bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
   std::size_t _initialSelectionStart;
   std::size_t _initialSelectionEnd;
   void *_context;
-  IOSNativeTextEditorCallback _callback;
+  std::uint64_t _generation;
   CGRect _lastKeyboardFrame;
   BOOL _keyboardVisible;
   BOOL _hiding;
 }
 - (instancetype)initWithConfig:(const IOSNativeTextEditorConfig &)config
                        context:(void *)context
-                      callback:(IOSNativeTextEditorCallback)callback;
+                    generation:(std::uint64_t)generation;
 - (void *)context;
 - (void)showInView:(UIView *)containerView;
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished;
@@ -1296,14 +1323,14 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 @implementation AsoNativeTextEditorView
 - (instancetype)initWithConfig:(const IOSNativeTextEditorConfig &)config
                        context:(void *)context
-                      callback:(IOSNativeTextEditorCallback)callback {
+                    generation:(std::uint64_t)generation {
   self = [super initWithFrame:CGRectZero];
   if (self == nil) {
     return nil;
   }
 
   _context = context;
-  _callback = callback;
+  _generation = generation;
   _initialSelectionStart = config.selectionStart;
   _initialSelectionEnd = config.selectionEnd;
   _lastKeyboardFrame = CGRectZero;
@@ -1534,7 +1561,7 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 }
 
 - (void)emitEvent:(IOSNativeTextEditorEvent)event {
-  if (_callback == nullptr) {
+  if (_hiding && event != IOSNativeTextEditorEvent::Finished) {
     return;
   }
   NSString *nativeText = _textField.text != nil ? _textField.text : @"";
@@ -1555,7 +1582,7 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
     state.selectionEnd = Utf8ByteOffsetFromUtf16Offset(nativeText, selectionEnd);
   }
 
-  _callback(_context, event, state);
+  nativeTextMailbox.post(_generation, NativeTextDelivery{event, std::move(state)});
 }
 
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished {
@@ -1578,59 +1605,42 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                              void *context,
                              IOSNativeTextEditorCallback callback) {
-  const IOSNativeTextEditorConfig editorConfig = config;
-  void *editorContext = context;
-  auto editorCallback = callback;
-  auto showBlock = ^{
-    @autoreleasepool {
-      if (editorCallback == nullptr) {
-        return;
-      }
-      UIWindow *window = FindActiveWindow();
-      if (window == nil) {
-        return;
-      }
-      if (gNativeTextEditor != nil) {
-        if ([gNativeTextEditor context] == editorContext) {
-          return;
-        }
-        [gNativeTextEditor hideWithNotifyFinished:YES];
-      }
-      gNativeTextEditor =
-          [[AsoNativeTextEditorView alloc] initWithConfig:editorConfig
-                                                  context:editorContext
-                                                 callback:editorCallback];
-      [gNativeTextEditor showInView:window];
-    }
-  };
-
-  if ([NSThread isMainThread]) {
-    showBlock();
-  } else {
-    dispatch_async(dispatch_get_main_queue(), showBlock);
-  }
+  if (callback == nullptr) return;
+  if (nativeTextContext == context && nativeTextGeneration != 0) return;
+  if (nativeTextContext != nullptr) HideIOSNativeTextEditor(nativeTextContext, true);
+  nativeTextGeneration = nativeTextMailbox.open();
+  nativeTextContext = context;
+  nativeTextCallback = callback;
+  const auto generation = nativeTextGeneration;
+  platform::onMain([&] {
+    UIWindow *window = FindActiveWindow();
+    if (window == nil) return;
+    if (gNativeTextEditor != nil) [gNativeTextEditor hideWithNotifyFinished:NO];
+    gNativeTextEditor = [[AsoNativeTextEditorView alloc] initWithConfig:config
+                                                              context:context
+                                                           generation:generation];
+    [gNativeTextEditor showInView:window];
+  });
 }
 
 void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
-  void *editorContext = context;
-  auto hideBlock = ^{
-    @autoreleasepool {
-      if (gNativeTextEditor == nil) {
-        return;
-      }
-      if (editorContext != nullptr &&
-          [gNativeTextEditor context] != editorContext) {
-        return;
-      }
+  if (context != nullptr && context != nativeTextContext) return;
+  const auto generation = nativeTextGeneration;
+  // Closing first prevents callbacks captured during native teardown from
+  // reaching a destroyed TextInputBox, including reused addresses.
+  if (!notifyFinished) nativeTextMailbox.close(generation);
+  platform::onMain([&] {
+    if (gNativeTextEditor != nil &&
+        (context == nullptr || [gNativeTextEditor context] == context)) {
       [gNativeTextEditor hideWithNotifyFinished:notifyFinished ? YES : NO];
     }
-  };
-
-  if ([NSThread isMainThread]) {
-    hideBlock();
-  } else {
-    dispatch_async(dispatch_get_main_queue(), hideBlock);
-  }
+  });
+  if (notifyFinished) PollIOSNativeTextEditorCallbacks();
+  if (nativeTextGeneration != generation) return;
+  nativeTextMailbox.close(generation);
+  nativeTextGeneration = 0;
+  nativeTextContext = nullptr;
+  nativeTextCallback = nullptr;
 }
 
 void SetIOSNativeTextEditorSelection(void *context,
@@ -1653,7 +1663,7 @@ void SetIOSNativeTextEditorSelection(void *context,
   if ([NSThread isMainThread]) {
     selectionBlock();
   } else {
-    dispatch_async(dispatch_get_main_queue(), selectionBlock);
+    dispatch_sync(dispatch_get_main_queue(), selectionBlock);
   }
 }
 
@@ -1677,7 +1687,7 @@ void SetIOSNativeTextEditorState(
   if ([NSThread isMainThread]) {
     stateBlock();
   } else {
-    dispatch_async(dispatch_get_main_queue(), stateBlock);
+    dispatch_sync(dispatch_get_main_queue(), stateBlock);
   }
 }
 
@@ -5508,6 +5518,8 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int logicalWidth, int logicalHeight,
                                            int &preferredWidth,
                                            int &preferredHeight) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return GetIOSPreferredFullscreenDrawableSize(currentWidth, currentHeight, logicalWidth, logicalHeight, preferredWidth, preferredHeight); });
   @autoreleasepool {
     preferredWidth = 0;
     preferredHeight = 0;
@@ -5584,6 +5596,8 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
 }
 
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return SetIOSMetalLayerDrawableSize(metalLayer, width, height); });
   @autoreleasepool {
     if (metalLayer == nullptr || width <= 0 || height <= 0) {
       return false;
@@ -5641,10 +5655,14 @@ void WaitIOSMainRunLoopForMicros(long long waitMicros) {
 }
 
 bool IsIOSPad() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return IsIOSPad(); });
   return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
 }
 
 bool IsIOSGuidedAccessEnabled() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return IsIOSGuidedAccessEnabled(); });
   static std::atomic_bool enabled{false};
   static dispatch_once_t once;
   dispatch_once(&once, ^{
@@ -5673,6 +5691,8 @@ bool IsIOSGuidedAccessEnabled() {
 }
 
 ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return GetIOSHardwareButtonLocation(); });
   using namespace ipad_hardware;
   static const Model model = [] {
 #if TARGET_OS_SIMULATOR
@@ -5715,6 +5735,8 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return GetIOSSafeAreaInsetsNormalized(); });
   IOSNormalizedSafeAreaInsets insets;
   UIWindow *window = FindActiveWindow();
   if (window == nil) {

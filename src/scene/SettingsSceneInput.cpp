@@ -1,3 +1,4 @@
+#include "../platform/SDLMainThread.h"
 #include "../GameplayKeyMode.h"
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
@@ -167,6 +168,9 @@ bool matchesDeviceFilter(const input::InputBinding &binding,
 }
 
 bool inputPointerTransactionActive() {
+  if (!platform::isMainThread()) {
+    return platform::onMain([] { return inputPointerTransactionActive(); });
+  }
   if ((SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0) {
     return true;
   }

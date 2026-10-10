@@ -1,3 +1,4 @@
+#include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
@@ -2006,7 +2007,7 @@ void MusicSelectScene::copySelectedHash(bool sha256) {
           ? &snapshot.rowAt(snapshot.selectedIndex)
           : nullptr;
   const std::string hash = musicSelectSelectedHash(selected, sha256);
-  if (!hash.empty() && !SDL_SetClipboardText(hash.c_str())) {
+  if (!hash.empty() && !platform::sdlMain<SDL_SetClipboardText>(hash.c_str())) {
     SDL_Log("Unable to copy selected chart hash: %s", SDL_GetError());
   }
 }

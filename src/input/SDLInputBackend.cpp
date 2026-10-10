@@ -1,3 +1,4 @@
+#include "../platform/SDLMainThread.h"
 #include "SDLInputBackend.h"
 
 #include <SDL3/SDL.h>
@@ -276,6 +277,10 @@ SDLInputBackend::SDLInputBackend(
 }
 
 bool SDLInputBackend::start(std::string &errorMessage) {
+  // Do not hold devicesMutex_ while a separate SDL pump can own the joystick
+  // lock and enter the realtime watcher. Start/stop run on the pump owner.
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return start(errorMessage); });
   const std::lock_guard lock(devicesMutex_);
   if (started_) {
     return true;
@@ -340,6 +345,8 @@ bool SDLInputBackend::start(std::string &errorMessage) {
 }
 
 void SDLInputBackend::stop() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { stop(); });
   const std::lock_guard lock(devicesMutex_);
   if (!started_ && devices_.empty()) {
     return;
@@ -520,8 +527,10 @@ void SDLInputBackend::pump() {
       // Native ingress may already have judged keys still in the OS/SDL queue.
       // Main-thread-only handover drains that backlog while native ownership
       // still suppresses it; subsequent SDL events are fresh fallback input.
-      SDL_PumpEvents();
-      SDL_FlushEvents(SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+      platform::onMain([] {
+        SDL_PumpEvents();
+        SDL_FlushEvents(SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+      });
     });
   }
 }

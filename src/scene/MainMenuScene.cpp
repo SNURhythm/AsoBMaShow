@@ -1,3 +1,4 @@
+#include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
 #include "NewcomerTutorialView.h"
@@ -4887,7 +4888,7 @@ void MainMenuScene::buildFileActionsModal() {
               std::string error;
               if (!OpenAndroidDocumentsFolder(error)) {
                 SDL_Log("Open Documents: %s", error.c_str());
-                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow",
+                platform::sdlMain<SDL_ShowSimpleMessageBox>(SDL_MESSAGEBOX_ERROR, "AsoBMaShow",
                                          i18n::tr("menu.open_files.failed"), nullptr);
               }
             });
@@ -4943,7 +4944,7 @@ void MainMenuScene::buildFileActionsModal() {
     messageBox.numbuttons = 2;
     messageBox.buttons = buttons;
     int selectedButton = -1;
-    if (SDL_ShowMessageBox(&messageBox, &selectedButton) && selectedButton == 1) {
+    if (platform::sdlMain<SDL_ShowMessageBox>(&messageBox, &selectedButton) && selectedButton == 1) {
       fileActionsModalRoot_->setVisible(false);
       startLibraryRefresh();
       showTasksModal();

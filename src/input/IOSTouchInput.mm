@@ -193,6 +193,12 @@ void UninstallIOSGameplayTouchInput() {
   gameplayTouchRecognizer = nil;
 }
 
+void SetIOSGameplayTouchInputEnabled(bool enabled) {
+  if (![NSThread isMainThread]) return;
+  if (!enabled) [gameplayTouchRecognizer reset];
+  gameplayTouchRecognizer.enabled = enabled ? YES : NO;
+}
+
 bool IOSGameplayTouchInputInstalled() {
   return gameplayTouchInstalled.load(std::memory_order_acquire);
 }

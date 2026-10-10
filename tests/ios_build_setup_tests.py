@@ -639,6 +639,41 @@ int main() { return 0; }
                                 "an upstream gate change must require review")
             self.assertIn("reflection gate changed", result.stderr)
 
+    def test_metal_layer_patch_rejects_changed_anchors_and_leaves_gpu_work_outside_main(self):
+        original = (ROOT / "bgfx/bgfx/src/renderer_mtl.mm").read_text()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "renderer.mm"
+            output = root / "patched.mm"
+            script = root / "patch.cmake"
+            script.write_text(
+                f'include("{ROOT / "cmake/IOSBgfxMainThreadLayer.cmake"}")\n'
+                f'file(READ "{source}" content)\n'
+                'asobmashow_patch_ios_bgfx_main_thread_layer(content)\n'
+                f'file(WRITE "{output}" "${{content}}")\n'
+            )
+            source.write_text(original)
+            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            patched = output.read_text()
+            # Examine the transformed configuration blocks, not the patch script.
+            blocks = re.findall(r"asobmashowConfigureMetalLayer\(\^\{([\s\S]*?)\n\s*}\);", patched)
+            self.assertEqual(len(blocks), 2)
+            self.assertIn("m_metalLayer.device", blocks[0])
+            self.assertIn("m_metalLayer.magnificationFilter", blocks[0])
+            self.assertIn("m_metalLayer.pixelFormat", blocks[0])
+            self.assertIn("m_metalLayer.drawableSize", blocks[1])
+            self.assertIn("m_metalLayer.pixelFormat", blocks[1])
+            for block in blocks:
+                self.assertNotIn("nextDrawable", block)
+                self.assertNotIn("waitUntilCompleted", block)
+            self.assertIn("m_drawable = m_metalLayer.nextDrawable;", patched)
+            self.assertEqual(source.read_text(), original)
+            source.write_text(original.replace("m_metalLayer.drawableSize = CGSizeMake(_width, _height);", "changed upstream resize;"))
+            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Metal layer resize changed", result.stderr)
+
     def test_bgfx_configuration_recovers_after_xcode_is_replaced(self):
         script = IOS_INIT.read_text(encoding="utf-8")
         configure = script[

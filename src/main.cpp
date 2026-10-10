@@ -1045,6 +1045,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+#if TARGET_OS_IPHONE
+    PollIOSNativeTextEditorCallbacks();
+#endif
     if (!orientationLocked &&
         appliedOrientation != context.settings.screenOrientation) {
       appliedOrientation = context.settings.screenOrientation;

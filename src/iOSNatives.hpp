@@ -221,6 +221,8 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                              void *context,
                              IOSNativeTextEditorCallback callback);
 void HideIOSNativeTextEditor(void *context, bool notifyFinished);
+// Deliver copied UIKit state on the application owner, before scene events.
+void PollIOSNativeTextEditorCallbacks();
 void SetIOSNativeTextEditorSelection(void *context,
                                      std::size_t selectionStart,
                                      std::size_t selectionEnd);

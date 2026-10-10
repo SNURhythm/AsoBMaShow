@@ -1,3 +1,4 @@
+#include "../../platform/SDLMainThread.h"
 #include "../../ScratchlessGameplayPolicy.h"
 #include "RealtimeSdlTouchInput.h"
 #include "../../GameplayKeyMode.h"
@@ -1056,6 +1057,9 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool acceptingNativeInput{false};
+#if TARGET_OS_IPHONE
+  std::atomic_bool keyboardTextFocused{false};
+#endif
   std::mutex inputInterruptionMutex;
   std::atomic_bool inputInterrupted{false};
   std::atomic_bool inputFallbackReady{false};
@@ -1073,15 +1077,21 @@ struct GamePlayScene::RealtimeGameplaySession {
 #if TARGET_OS_ANDROID
   std::unique_ptr<input::AndroidRealtimeInputGate> androidPhysicalInputGate;
 
-  // Called only on the presentation thread; callbacks consume the gate's copy.
+#endif
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
+  // Presentation owns the coordinator; native callbacks read only a copy.
   void publishKeyboardTextFocus() {
     const auto *coordinator = scene == nullptr ? nullptr :
         dynamic_cast<const PlayfieldPresentationCoordinator *>(scene->presentation);
     const bool focused = coordinator != nullptr && coordinator->hasFocusedTextInput();
+#if TARGET_OS_ANDROID
     const std::lock_guard lock(inputInterruptionMutex);
     if (androidPhysicalInputGate != nullptr) {
       androidPhysicalInputGate->setKeyboardTextFocused(focused, nowMicros());
     }
+#else
+    keyboardTextFocused.store(focused, std::memory_order_release);
+#endif
   }
 #endif
   gameplay::BoundedMpscQueue<input::LogicalInputTransition,
@@ -1502,6 +1512,10 @@ struct GamePlayScene::RealtimeGameplaySession {
         return 0;
       }
     }
+#elif TARGET_OS_IPHONE
+    if (!IOSApplicationActive()) return 0;
+    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
+        session.keyboardTextFocused.load(std::memory_order_acquire)) return 0;
 #else
     if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
         session.scene != nullptr) {
@@ -2472,7 +2486,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   if (!enabled) session.cancelNativeUiTouches();
 #endif
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   session.publishKeyboardTextFocus();
 #endif
   {
@@ -2616,7 +2630,7 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
 
 void GamePlayScene::drainRealtimeTouchSamples(
     std::optional<long long> cancelPresentationAtSteadyMicros) {
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   const auto publishTextFocus = makeScopeExit([this] {
     if (realtimeGameplaySession != nullptr) realtimeGameplaySession->publishKeyboardTextFocus();
   });
@@ -2639,14 +2653,14 @@ void GamePlayScene::drainRealtimeTouchSamples(
       (void)coordinator->focusTextInput(*sample.presentationUiPoint,
                                         eventMicros);
       if (!coordinator->hasFocusedTextInput()) {
-        SDL_StopTextInput(SDL_GetKeyboardFocus());
+        platform::stopFocusedTextInput();
       }
     }
     const auto presentationResult =
         session.presentationTouches.consume(sample, eventMicros);
     if (presentationResult.consumed && coordinator != nullptr &&
         coordinator->hasFocusedTextInput()) {
-      SDL_StartTextInput(SDL_GetKeyboardFocus());
+      platform::startFocusedTextInput();
     }
     if (!gameplayTime.has_value()) {
       return;
@@ -3230,7 +3244,7 @@ GamePlayScene::~GamePlayScene() {
           dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
       coordinator != nullptr && coordinator->hasFocusedTextInput()) {
     coordinator->cancelTextInput();
-    SDL_StopTextInput(SDL_GetKeyboardFocus());
+    platform::stopFocusedTextInput();
   }
   persistAutoAdjustedNotesDisplayTiming();
   persistSkinAudioSettings();
@@ -7184,7 +7198,7 @@ bool GamePlayScene::renderViewBeforeScene(const View *view) const {
 }
 
 bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   const auto publishTextFocus = makeScopeExit([this] {
     if (realtimeGameplaySession != nullptr) realtimeGameplaySession->publishKeyboardTextFocus();
   });
@@ -7201,7 +7215,7 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
       skin_text_input_lifecycle::CommitResult::NotRequested) {
     if (lifecycleCommit ==
         skin_text_input_lifecycle::CommitResult::Committed) {
-      SDL_StopTextInput(SDL_GetKeyboardFocus());
+      platform::stopFocusedTextInput();
     }
     // Lifecycle delivery must still reach Scene; a failed bounded queue keeps
     // both editor focus and SDL text mode active for a later commit.
@@ -7211,14 +7225,14 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
     const bool wasFocused = coordinator->hasFocusedTextInput();
     const bool focused = coordinator->focusTextInput(point, nowMicros());
     if (focused) {
-      SDL_StartTextInput(SDL_GetKeyboardFocus());
+      platform::startFocusedTextInput();
       return true;
     }
     if (wasFocused && coordinator->hasFocusedTextInput()) {
       return true;
     }
     if (wasFocused && !coordinator->hasFocusedTextInput()) {
-      SDL_StopTextInput(SDL_GetKeyboardFocus());
+      platform::stopFocusedTextInput();
     }
     return false;
   };
@@ -7256,7 +7270,7 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
     case SDLK_RETURN:
     case SDLK_KP_ENTER:
       if (coordinator->commitTextInput(nowMicros())) {
-        SDL_StopTextInput(SDL_GetKeyboardFocus());
+        platform::stopFocusedTextInput();
       }
       break;
     case SDLK_BACKSPACE:
@@ -7264,7 +7278,7 @@ bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
       break;
     case SDLK_ESCAPE:
       coordinator->cancelTextInput();
-      SDL_StopTextInput(SDL_GetKeyboardFocus());
+      platform::stopFocusedTextInput();
       break;
     default:
       break;
