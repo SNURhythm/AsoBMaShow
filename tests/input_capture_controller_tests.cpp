@@ -435,6 +435,42 @@ void testMonitoringNoiseActivationRepeatsAndDuplicateIgnore() {
   controller.cancel();
 }
 
+void testLostReleaseRecoveryPreservesBindingEditing() {
+  RegistryHarness harness;
+  InputProfile profile;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+  const auto key = keyControl(22);
+  // The press happens before listening; its release is lost in the handoff.
+  harness.input(event(key, 1.0F, 10));
+  controller.begin({1, 7}, lane(0));
+  controller.resetInputState();
+  require(controller.state() == InputCaptureController::State::Listening &&
+              !controller.monitorSample() && profile.bindings.empty() && saves == 0,
+          "lost-release recovery preserves the edit without creating a binding");
+  harness.input(event(key, 1.0F, 20));
+  require(profile.bindings.size() == 1 && saves == 1,
+          "a fresh press can bind the control after its release was lost");
+
+  controller.begin({1, 7}, lane(1));
+  controller.resetInputState();
+  harness.input(event(key, 1.0F, 30));
+  require(controller.state() == InputCaptureController::State::AwaitingConflictConfirmation,
+          "the reused control stages a conflict for the new action");
+  const auto conflicts = controller.pendingConflicts().size();
+  controller.resetInputState();
+  require(controller.state() == InputCaptureController::State::AwaitingConflictConfirmation &&
+              controller.pendingConflicts().size() == conflicts && conflicts != 0 && saves == 1,
+          "recovery preserves the pending conflict and does not save it");
+  controller.confirmReplace();
+  require(profile.bindings.size() == 1 && profile.bindings.front().action == lane(1) && saves == 2,
+          "the user can still confirm the staged binding after recovery");
+}
+
 void testAxisCaptureUsesSensitiveHysteresis() {
   RegistryHarness harness;
   InputProfile profile;
@@ -1016,6 +1052,7 @@ int main() {
     testPlayfieldTouchConfigIsIsolatedAndTransactional();
     testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess();
     testAxisCaptureUsesSensitiveHysteresis();
+    testLostReleaseRecoveryPreservesBindingEditing();
     testConflictConfirmationIsTransactionalAndScopeLimited();
     testSaveFailureNeverCommitsProfileMutation();
     testMissingStableIdsRemainVisibleAcrossHotplug();

@@ -33,6 +33,8 @@ public:
 
   void begin(input::InputScope, input::LogicalAction);
   void cancel();
+  // Retire lost input history without changing an in-progress binding edit.
+  void resetInputState();
   void confirmReplace();
   void rejectReplace();
   void updateBinding(std::string_view bindingId, const BindingEdit &edit);

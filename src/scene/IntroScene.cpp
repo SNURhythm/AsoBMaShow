@@ -257,3 +257,10 @@ void IntroScene::processNavigationInput() {
     start();
   }
 }
+
+void IntroScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+  if (inputBindingAdapter_) inputBindingAdapter_->reset();
+  navigation_.cancelInput(musicSelectKeyLayoutForConfig(
+      context.settings.skinMusicSelectInput));
+}

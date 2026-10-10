@@ -1623,6 +1623,41 @@ void testRealtimeStartProducesCommandAndReplayEdge() {
           "Start remains a UI command and also enters the raw replay stream");
 }
 
+void testRealtimePhysicalInputCancellationRetiresHeldLane() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "cancelled-keyboard-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 5},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_D}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(keyEvent(SDL_SCANCODE_D, true), 200);
+  router.cancelInputs(300);
+  router.cancelInputs(350);
+  router.consume(keyEvent(SDL_SCANCODE_D, false), 400);
+  require(output.size() == 2 &&
+              output[0].type == input::RealtimePhysicalInputTransitionType::Press &&
+              output[1].type == input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 5 && output[1].steadyTimestampMicros == 300 &&
+              output[1].hasReplayControl,
+          "input cancellation releases held ownership once with its own replay timestamp");
+  router.consume(keyEvent(SDL_SCANCODE_D, true), 500);
+  require(output.size() == 3 &&
+              output.back().type == input::RealtimePhysicalInputTransitionType::Press &&
+              output.back().steadyTimestampMicros == 500,
+          "input cancellation permits a fresh press without pausing gameplay");
+}
+
 void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
   InputProfile profile;
   profile.bindings.push_back(
@@ -1904,6 +1939,7 @@ int main() {
   testPhysicalTouchLaneDoesNotDependOnBrdControls();
   testRealtimeScratchReversalCarriesCanonicalDirections();
   testRealtimeStartProducesCommandAndReplayEdge();
+  testRealtimePhysicalInputCancellationRetiresHeldLane();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
   testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume();
   testExtremeImportedLaneUsesSparsePauseState();

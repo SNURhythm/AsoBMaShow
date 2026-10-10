@@ -229,6 +229,13 @@ size_t TextInputBox::getPrevUnicodePos(size_t pos) {
   }
   return pos;
 }
+void TextInputBox::onPointerInputCancelled() {
+  pendingFocusTouchId = -1;
+  activeTouchId = -1;
+  isDraggingSelection = false;
+  if (clearButton) clearButton->cancelPointerInput();
+}
+
 void TextInputBox::onPointerEventConsumed(const SDL_Event &event) {
   if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
       event.button.button == SDL_BUTTON_LEFT &&

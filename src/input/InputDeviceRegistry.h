@@ -52,6 +52,8 @@ public:
   void pump();
   // Recover device topology after application event queue pressure.
   void reconcileSdlDevices();
+  // Cancel maintained held state without changing lifecycle or realtime ownership.
+  void clearSdlInputState();
   // Main thread only, after a ready interruption has gated gameplay input.
   void completeRealtimeInputFallback();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
@@ -64,6 +66,8 @@ public:
   std::size_t translateRealtimeSdlInputs(
       const SDL_Event &, std::span<input::PhysicalInputEvent> output,
       bool consumeOnce = false);
+  // Thread-safe exact acknowledgement cleanup after application queue discard.
+  void discardRealtimeSdlInput(const SDL_Event &event);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedSdlDevice(const SDL_Event &) const;
 

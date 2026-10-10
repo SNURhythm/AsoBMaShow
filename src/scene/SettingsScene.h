@@ -85,6 +85,7 @@ public:
           SceneReturnTarget::Registered("MainMenu"));
   ~SettingsScene() override;
 
+  void onInputQueueOverflow() override;
   void init() override;
   void update(float dt) override;
   void onLanguageChanged() override;

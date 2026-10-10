@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -184,9 +185,10 @@ bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           const IOSNormalizedRect &sourceAnchor,
                           std::string &errorMessage);
-bool RequestIOSPhotoAddAuthorization(std::string &errorMessage);
+bool RequestIOSPhotoAddAuthorization(std::string &errorMessage,
+                                     std::stop_token stop = {});
 bool SaveVideoToIOSPhotos(const std::string &filePath,
-                          std::string &errorMessage);
+                          std::string &errorMessage, std::stop_token stop = {});
 bool SaveImageToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
 bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,

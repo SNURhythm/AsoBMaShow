@@ -11,6 +11,22 @@
 #include <thread>
 
 std::atomic_bool interceptViewportRead{false}, viewportReadEntered{false}, releaseViewportRead{false};
+std::atomic_bool interceptExportTail{false}, releaseExportTail{false};
+bool runtimeTestPollEvent(SDL_Event *event) {
+  const bool result = SDL_PollEvent(event);
+  if (result && event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_F13 &&
+      interceptExportTail.exchange(false)) {
+    // Hold a native event while SDL services the owner's work-completion
+    // request. It still belongs to the export's producer batch afterward.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!releaseExportTail.load() && std::chrono::steady_clock::now() < deadline) {
+      SDL_PumpEvents();
+      SDL_Delay(1);
+    }
+    if (!releaseExportTail.load()) std::abort();
+  }
+  return result;
+}
 constexpr int orderedViewportWidth = 853;
 bool runtimeTestGetWindowSize(SDL_Window *window, int *width, int *height) {
   const bool result = SDL_GetWindowSize(window, width, height);
@@ -85,6 +101,11 @@ void testRuntimeKeepsMainAliveAndOwnsPayloads(SDL_Window *window) {
     for (int i = 0; i < 100 && !platform::applicationActive(); ++i) SDL_Delay(1);
     require(platform::applicationActive(), "foreground state not restored");
     while (platform::pollApplicationEvent(&event)) {}
+    std::atomic_int discardedKeys{0};
+    platform::setApplicationEventDiscardHandler([&](const SDL_Event &discarded) {
+      require(SDL_IsMainThread(), "discard callback escaped the pump thread");
+      if (discarded.type == SDL_EVENT_KEY_DOWN) ++discardedKeys;
+    });
     platform::onMain([] {
       SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN;
       for (int i = 0; i < 400; ++i) SDL_PushEvent(&key);
@@ -105,7 +126,15 @@ void testRuntimeKeepsMainAliveAndOwnsPayloads(SDL_Window *window) {
       quit |= event.type == SDL_EVENT_QUIT;
       require(event.type != SDL_EVENT_KEY_DOWN, "pressure replayed stale key");
     }
-    require(cancelled && quit, "pressure lost cancellation or quit");
+    require(!cancelled && quit, "pressure invented focus loss or lost quit");
+    require(discardedKeys == 400, "discarded input was not acknowledged exactly once");
+    platform::setApplicationEventDiscardHandler({});
+    platform::onMain([] {
+      SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN;
+      for (int i = 0; i < 400; ++i) SDL_PushEvent(&key);
+    });
+    platform::onMain([] {});
+    require(discardedKeys == 400, "unregistered discard callback was invoked");
     return 29;
   });
   require(result == 29, "runtime lost application result");
@@ -165,8 +194,9 @@ void testOwnerWorkKeepsNativeCancellationAlive(SDL_Window *window) {
       ran = true;
     }, stop);
     require(!ran, "renderer work must defer to a safe scene boundary");
-    platform::pollApplicationWork();
+    require(platform::pollApplicationWork(), "owner did not report suppressed input history");
     require(ran, "queued renderer work was not dispatched");
+    require(!platform::pollApplicationWork(), "empty owner work spuriously reset scene input");
     platform::onMain([] {
       SDL_Event foreground{}; foreground.type = SDL_EVENT_DID_ENTER_FOREGROUND;
       SDL_PushEvent(&foreground);
@@ -207,6 +237,70 @@ void testRuntimeServicesUnwinding(SDL_Window *window) {
   require(result == EXIT_FAILURE && cleanupRan, "runtime joined before main-thread cleanup");
 }
 
+void testOwnerWorkDiscardsInputAtBothBoundaries(SDL_Window *window, bool throws) {
+  const auto result = platform::runSDLApplication(window, [&] {
+    SDL_Event event{};
+    while (platform::pollApplicationEvent(&event)) {}
+    std::atomic_int discarded{0};
+    platform::setApplicationEventDiscardHandler([&](const SDL_Event &event) {
+      require(SDL_IsMainThread(), "export discard acknowledgement escaped SDL main");
+      if (event.type == SDL_EVENT_KEY_DOWN) ++discarded;
+    });
+    platform::onMain([] {
+      SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_A;
+      SDL_PushEvent(&key);
+      SDL_Event device{}; device.type = SDL_EVENT_GAMEPAD_REMOVED; device.gdevice.which = 42;
+      SDL_PushEvent(&device);
+    });
+    platform::onMain([] {});
+    std::stop_source stop;
+    platform::postApplicationWork([&] {
+      require(discarded == 1, "export start did not retire already-buffered input");
+      platform::onMain([] {
+        SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_B;
+        SDL_PushEvent(&key);
+        SDL_Event lowMemory{}; lowMemory.type = SDL_EVENT_LOW_MEMORY; SDL_PushEvent(&lowMemory);
+      });
+      platform::onMain([] {});
+      require(discarded == 2, "input was admitted while export occupied the owner");
+      releaseExportTail = false;
+      interceptExportTail = true;
+      platform::onMain([] {
+        SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_F13;
+        SDL_PushEvent(&key);
+      });
+      if (throws) throw std::runtime_error("export failure");
+      stop.request_stop();
+    }, stop);
+    bool caught = false;
+    try { platform::pollApplicationWork(); }
+    catch (const std::runtime_error &) { caught = true; }
+    releaseExportTail = true;
+    require(caught == throws, "export exception changed while suppressing input");
+    platform::onMain([] {});
+    require(discarded == 3, "export completion admitted its pending SDL input tail");
+    bool device = false, lowMemory = false;
+    while (platform::pollApplicationEvent(&event)) {
+      require(event.type != SDL_EVENT_KEY_DOWN, "export replayed suppressed input");
+      device |= event.type == SDL_EVENT_GAMEPAD_REMOVED && event.gdevice.which == 42;
+      lowMemory |= event.type == SDL_EVENT_LOW_MEMORY;
+    }
+    require(device && lowMemory, "export suppression lost system/device state");
+    platform::onMain([] {
+      SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN; key.key.scancode = SDL_SCANCODE_C;
+      SDL_PushEvent(&key);
+    });
+    platform::onMain([] {});
+    bool freshInput = false;
+    while (platform::pollApplicationEvent(&event))
+      freshInput |= event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_C;
+    require(freshInput && discarded == 3, "input admission did not resume after the export batch");
+    platform::setApplicationEventDiscardHandler({});
+    return 0;
+  });
+  require(result == 0, "export input suppression worker failed");
+}
+
 }
 int main() {
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
@@ -217,6 +311,8 @@ int main() {
   testRuntimeKeepsMainAliveAndOwnsPayloads(window);
   testResizePublishesViewportBeforeEvent(window);
   testOwnerWorkKeepsNativeCancellationAlive(window);
+  testOwnerWorkDiscardsInputAtBothBoundaries(window, false);
+  testOwnerWorkDiscardsInputAtBothBoundaries(window, true);
   testRuntimeServicesUnwinding(window);
   SDL_DestroyWindow(window);
   SDL_Quit();

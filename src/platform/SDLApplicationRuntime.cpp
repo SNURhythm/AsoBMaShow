@@ -1,6 +1,7 @@
 #include "SDLApplicationRuntime.h"
 #if !TARGET_OS_IPHONE
 #include "ApplicationEventQueue.h"
+#include "IOSApplicationRuntime.h"
 #include "ApplicationThreadHost.h"
 #include "../input/InputLifecycle.h"
 
@@ -17,6 +18,8 @@ namespace platform {
 namespace {
 struct Runtime {
   ApplicationEventQueue events;
+  std::function<void(const SDL_Event &)> discardEvent; // SDL main only.
+  bool inputSuppressed = false, finishInputSuppression = false; // SDL main only.
   struct Work {
     std::function<void()> run;
     std::stop_source stop;
@@ -112,6 +115,7 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
     struct OwnerCleanup { ~OwnerCleanup() { applicationOwner = false; } } ownerCleanup;
     return application();
   }, [&] {
+    state->events.beginProducerBatch();
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
 #ifndef NDEBUG
@@ -126,10 +130,15 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
       if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
           (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST))
         updateViewport(*state, window);
-      state->events.push(event);
+      state->events.push(event, state->inputSuppressed, state->discardEvent);
       state->wake.notify_one();
     }
     updateViewport(*state, window);
+    state->events.endProducerBatch();
+    if (state->finishInputSuppression) {
+      state->inputSuppressed = false;
+      state->finishInputSuppression = false;
+    }
 #ifndef NDEBUG
     state->mainServiceCount.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -146,6 +155,12 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
   });
 }
 
+void setApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler) {
+  runOnMain([handler = std::move(handler)]() mutable {
+    if (const auto state = currentRuntime()) state->discardEvent = std::move(handler);
+  });
+}
+
 bool isApplicationThread() { return applicationOwner; }
 
 void postApplicationWork(std::function<void()> work, std::stop_source stop) {
@@ -154,9 +169,9 @@ void postApplicationWork(std::function<void()> work, std::stop_source stop) {
   state->work.push_back({std::move(work), std::move(stop)});
 }
 
-void pollApplicationWork() {
+bool pollApplicationWork() {
   const auto state = currentRuntime();
-  if (!state || !applicationOwner || state->work.empty()) return;
+  if (!state || !applicationOwner || state->work.empty()) return false;
   auto work = std::move(state->work.front());
   state->work.pop_front();
   {
@@ -170,10 +185,26 @@ void pollApplicationWork() {
       state.workStop.reset();
     }
   } cleanup{*state};
+  struct InputSuppressionCleanup {
+    std::shared_ptr<Runtime> state;
+    ~InputSuppressionCleanup() {
+      runOnMain([&] {
+        // SDL may service this request halfway through a pump. Keep suppressing
+        // its queued tail until the producer has completed the entire batch.
+        state->finishInputSuppression = true;
+      });
+    }
+  } inputCleanup{state};
+  runOnMain([&] {
+    state->inputSuppressed = true;
+    state->finishInputSuppression = false;
+    state->events.discardUserInput(state->discardEvent);
+  });
   if (state->terminating.load(std::memory_order_acquire) ||
       state->applicationSuspended.load(std::memory_order_acquire) ||
       !state->surfaceAvailable.load(std::memory_order_acquire)) work.stop.request_stop();
   work.run();
+  return true;
 }
 
 void setApplicationSurfaceAvailable(bool available) {

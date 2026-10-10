@@ -7,6 +7,7 @@
 #include "platform/ScreenOrientation.h"
 #include "platform/IOSApplicationRuntime.h"
 #include "platform/GenerationMailbox.h"
+#include "replay/ReplayNativeExportOperation.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -325,7 +326,8 @@ void OpenApplicationSettings() {
 
 bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
                                                NSString **preparedPath,
-                                               std::string &errorMessage) {
+                                               std::string &errorMessage,
+                                               std::stop_token stop) {
   *preparedPath = nil;
 
 #if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) &&                                \
@@ -375,12 +377,18 @@ bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
       exportError = session.error;
       dispatch_semaphore_signal(semaphore);
     }];
+    std::stop_callback cancelPreparation(stop, [session] { [session cancelExport]; });
 
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
     if (waitResult != 0) {
       [session cancelExport];
-      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      // cancelExport is asynchronous. Retain the path until AVFoundation has
+      // finished touching it, even if the application owner has cancelled.
+      dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+        [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      });
       errorMessage = "Timed out preparing replay video for Photos";
       return false;
     }
@@ -402,11 +410,16 @@ bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
   return true;
 }
 
-bool RequestPhotoAddAuthorization(std::string &errorMessage) {
+bool RequestPhotoAddAuthorization(std::string &errorMessage,
+                                   std::stop_token stop = {}) {
   __block PHAuthorizationStatus status = PHAuthorizationStatusNotDetermined;
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
 
   void (^requestBlock)(void) = ^{
+    if (stop.stop_requested()) {
+      dispatch_semaphore_signal(semaphore);
+      return;
+    }
     if (@available(iOS 14.0, *)) {
       status = [PHPhotoLibrary authorizationStatusForAccessLevel:
                                    PHAccessLevelAddOnly];
@@ -443,6 +456,10 @@ bool RequestPhotoAddAuthorization(std::string &errorMessage) {
 
   const long waitResult = dispatch_semaphore_wait(
       semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+  if (stop.stop_requested()) {
+    errorMessage = "Replay export cancelled";
+    return false;
+  }
   if (waitResult != 0) {
     errorMessage = "Timed out waiting for Photos permission";
     return false;
@@ -1255,8 +1272,14 @@ private:
 };
 } // namespace
 
-bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
-  return RequestPhotoAddAuthorization(errorMessage);
+bool RequestIOSPhotoAddAuthorization(std::string &errorMessage,
+                                     std::stop_token stop) {
+  return replay_video_export::runNativeExportOperation(
+      stop, [stop](std::string &error) {
+        @autoreleasepool {
+          return RequestPhotoAddAuthorization(error, stop);
+        }
+      }, errorMessage);
 }
 
 namespace {
@@ -5024,9 +5047,15 @@ bool RevealIOSFileInFiles(const std::string &filePath,
 }
 
 bool SaveVideoToIOSPhotos(const std::string &filePath,
-                          std::string &errorMessage) {
+                          std::string &errorMessage, std::stop_token stop) {
+  return replay_video_export::runNativeExportOperation(
+      stop, [filePath, stop](std::string &errorMessage) {
   @autoreleasepool {
-    if (!RequestIOSPhotoAddAuthorization(errorMessage)) {
+    if (!RequestPhotoAddAuthorization(errorMessage, stop)) {
+      return false;
+    }
+    if (stop.stop_requested()) {
+      errorMessage = "Replay export cancelled";
       return false;
     }
 
@@ -5042,7 +5071,14 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
 
     NSString *preparedPath = nil;
     if (!CreateFullFrameRatePlaybackVideoForPhotos(path, &preparedPath,
-                                                   errorMessage)) {
+                                                   errorMessage, stop)) {
+      return false;
+    }
+    if (stop.stop_requested()) {
+      if (preparedPath != nil) {
+        [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
+      }
+      errorMessage = "Replay export cancelled";
       return false;
     }
 
@@ -5068,14 +5104,19 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
         completionHandler:^(BOOL success, NSError *error) {
           saveSucceeded = success;
           saveError = error;
+          // PhotoKit may still be consuming the file after the owner cancels
+          // or its wait times out. Only its completion owns this cleanup.
+          if (preparedPath != nil) {
+            [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
+          }
+          if (success && requestCreated) {
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+          }
           dispatch_semaphore_signal(semaphore);
         }];
 
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
-    if (preparedPath != nil) {
-      [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
-    }
     if (waitResult != 0) {
       errorMessage = "Timed out saving video to Photos";
       return false;
@@ -5091,14 +5132,10 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       return false;
     }
 
-    if (preparedPath != nil && ![preparedPath isEqualToString:path]) {
-      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    } else if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    }
     return true;
   }
   return false;
+      }, errorMessage);
 }
 
 bool SaveImageToIOSPhotos(const std::string &filePath,

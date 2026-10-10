@@ -136,6 +136,12 @@ public:
   }
 
 protected:
+  void onPointerInputCancelled() override {
+    for (auto *overlay : presented) {
+      if (overlay != nullptr) overlay->cancelPointerInput();
+    }
+  }
+
   void renderImpl(RenderContext &context) override {
     for (auto *overlay : presented) {
       if (overlay != nullptr) {

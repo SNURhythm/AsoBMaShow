@@ -3,12 +3,14 @@
 #include "input/InputDeviceIdentity.h"
 #include "input/InputDeviceRegistry.h"
 #include "input/SDLInputBackend.h"
+#include "platform/ApplicationEventQueue.h"
 
 #include <SDL3/SDL_events.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1013,6 +1015,9 @@ void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   event.type = SDL_EVENT_KEY_DOWN;
   event.key.scancode = SDL_SCANCODE_A;
   backend.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  std::array<input::PhysicalInputEvent, 4> native{};
+  expect(backend.translateRealtimeInputs(event, native, true) == 0,
+         "SDL watcher yields keyboard edges to native ownership");
   backend.handleSdlEvent(event);
   expect(events.empty(),
          "claimed native keyboard input is not replayed through SDL");
@@ -1023,6 +1028,8 @@ void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   controller.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
   controller.gbutton.which = 101;
   controller.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+  expect(backend.translateRealtimeInputs(controller, native, true) == 0,
+         "SDL watcher yields XInput edges to native ownership");
   backend.handleSdlEvent(controller);
   expect(events.empty(),
          "claimed XInput controller edges are not replayed through SDL");
@@ -1037,6 +1044,21 @@ void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
   backend.handleSdlEvent(event);
   expect(events.size() == 2,
          "SDL keyboard delivery resumes after native ownership ends");
+  backend.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  expect(backend.translateRealtimeInputs(event, native, true) == 0,
+         "native-owned keyboard edge is acknowledged without duplicate ingress");
+  realtimeMap->setKeyboardRealtimeAvailable(false);
+  backend.handleSdlEvent(event);
+  expect(events.size() == 2,
+         "native ownership loss cannot replay an already acknowledged SDL copy");
+  expect(backend.translateRealtimeInputs(event, native, true) == 1,
+         "unavailable native keyboard falls back immediately on SDL producer");
+  backend.handleSdlEvent(event);
+  expect(events.size() == 2, "keyboard fallback is not delivered twice");
+  expect(backend.translateRealtimeInputs(controller, native, true) == 1,
+         "non-XInput controller falls back immediately on SDL producer");
+  backend.handleSdlEvent(controller);
+  expect(events.size() == 2, "controller fallback is not delivered twice");
   backend.stop();
 }
 
@@ -1135,6 +1157,212 @@ void testRealtimeSdlOwnershipOverflowRetainsAlreadyDeliveredEdges() {
   expect(publications == backlog.size(),
          "overflow fallback neither loses new edges nor replays already delivered edges");
   registry.unsubscribe(subscription);
+}
+
+void testApplicationOverflowDiscardsOnlyLostRealtimeAcknowledgements() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto registry = makeRegistryWithSdlProvider(provider);
+  platform::ApplicationEventQueue queue(2);
+  std::size_t fallback = 0;
+  const auto subscription = registry.subscribeRealtimeInput(
+      [&](const auto &) { ++fallback; });
+  registry.setRealtimeInputClaimed(input::DeviceClass::GameController, true);
+  registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  std::array<input::PhysicalInputEvent, 4> native{};
+  SDL_Event unknown{};
+  unknown.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  unknown.gbutton.which = 904;
+  unknown.gbutton.timestamp = 1000;
+  expect(registry.translateRealtimeSdlInputs(unknown, native, true) == 0,
+         "unknown controller initially defers producer input");
+  queue.push(unknown);
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.scancode = SDL_SCANCODE_A;
+  key.key.timestamp = 2000;
+  expect(registry.translateRealtimeSdlInputs(key, native, true) == 1,
+         "retained keyboard input publishes on producer");
+  queue.push(key);
+  SDL_Event future = key;
+  future.key.timestamp = 4000;
+  bool injectedFutureInput = false;
+  const auto discard = [&](const SDL_Event &event) {
+    registry.discardRealtimeSdlInput(event);
+    if (!injectedFutureInput) {
+      injectedFutureInput = true;
+      // An SDL watcher can observe a new event while old queue entries are
+      // being discarded, before that new event reaches the application queue.
+      auto producer = std::async(std::launch::async, [&] {
+        std::array<input::PhysicalInputEvent, 4> output{};
+        return registry.translateRealtimeSdlInputs(future, output, true);
+      });
+      expect(producer.get() == 1, "concurrent producer remains live during discard");
+    }
+  };
+  key.key.timestamp = 3000;
+  expect(registry.translateRealtimeSdlInputs(key, native, true) == 1,
+         "overflow-triggering input publishes on producer");
+  expect(!queue.push(key, false, discard), "fixture overflows application queue");
+  platform::OwnedApplicationEvent owned;
+  while (queue.poll(owned)) registry.handleSdlEvent(owned.event());
+  expect(injectedFutureInput, "application overflow reports discarded events");
+  expect(queue.takeOverflow(), "owner acknowledges recovery before admitting fresh input");
+  expect(queue.push(future, false, discard), "new SDL input survives recovery");
+  while (queue.poll(owned)) registry.handleSdlEvent(owned.event());
+  expect(fallback == 0, "discard cannot erase a concurrent valid input acknowledgement");
+
+  provider->devices = {controllerInfo(904, "/discarded-hotplug")};
+  registry.reconcileSdlDevices();
+  SDL_Event release = unknown;
+  release.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+  release.gbutton.timestamp = 5000;
+  expect(registry.translateRealtimeSdlInputs(release, native, true) == 1,
+         "discarded unknown-device input cannot permanently defer a mapped controller");
+  registry.handleSdlEvent(release);
+  expect(fallback == 0, "recovered hotplug input is delivered exactly once");
+  registry.unsubscribe(subscription);
+}
+
+void testRepeatedApplicationOverflowDoesNotExhaustRealtimeAcknowledgements() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto registry = makeRegistryWithSdlProvider(provider);
+  platform::ApplicationEventQueue queue(2);
+  registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  const auto discard = [&](const SDL_Event &event) {
+    registry.discardRealtimeSdlInput(event);
+  };
+  std::array<input::PhysicalInputEvent, 4> native{};
+  platform::OwnedApplicationEvent owned;
+  std::size_t immediate = 0;
+  for (std::uint64_t i = 0; i < 6000; ++i) {
+    SDL_Event event{};
+    event.type = i % 2 == 0 ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    event.key.scancode = SDL_SCANCODE_A;
+    event.key.timestamp = i + 1;
+    immediate += registry.translateRealtimeSdlInputs(event, native, true);
+    queue.push(event, false, discard);
+    if (i % 6 == 5) {
+      while (queue.poll(owned)) registry.handleSdlEvent(owned.event());
+      expect(queue.takeOverflow(), "fixture exercises repeated queue recovery");
+    }
+  }
+  expect(immediate == 6000,
+         "discarded application events must not exhaust realtime acknowledgement capacity");
+}
+
+void testQueueRecoveryClearsHeldSnapshotsWithoutChangingRealtimeOwnership() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto joystick = joystickInfo(905);
+  joystick.pressedRawButtons = {2};
+  provider->devices = {joystick};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.scancode = SDL_SCANCODE_RETURN;
+  registry.handleSdlEventAndDispatch(key);
+  key.key.scancode = SDL_SCANCODE_KP_ENTER;
+  registry.handleSdlEventAndDispatch(key);
+  std::size_t fallback = 0, interruptions = 0;
+  registry.subscribeRealtimeInput([&](const auto &) { ++fallback; });
+  registry.subscribeRealtimeInterruptions([&](const auto &) { ++interruptions; });
+  registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  registry.setRealtimeInputClaimed(input::DeviceClass::Joystick, true);
+  std::array<input::PhysicalInputEvent, 4> native{};
+  SDL_Event hat{};
+  hat.type = SDL_EVENT_JOYSTICK_HAT_MOTION;
+  hat.jhat.which = 905;
+  hat.jhat.value = SDL_HAT_UP;
+  hat.jhat.timestamp = 1000;
+  expect(registry.translateRealtimeSdlInputs(hat, native, true) == 1,
+         "fixture holds a realtime hat before cancellation");
+  key.key.timestamp = 2000;
+  expect(registry.translateRealtimeSdlInputs(key, native, true) == 1,
+         "fixture retains a valid realtime acknowledgement across cancellation");
+  registry.clearSdlInputState();
+  const auto cleared = registry.legacyInputGeneration(1, 1);
+  expect(!cleared.anyKeyPressed && cleared.pressedGdxKeys.none() &&
+             cleared.controllerCount == 1 && cleared.controllers[0].pressedButtons.none(),
+         "queue recovery clears held keys, aliases, and raw controller snapshots");
+  registry.handleSdlEvent(key);
+  registry.handleSdlEvent(hat);
+  expect(fallback == 0 && interruptions == 0,
+         "held-state cancellation preserves acknowledgements and never interrupts ownership");
+  hat.jhat.timestamp = 3000;
+  expect(registry.translateRealtimeSdlInputs(hat, native, true) == 1 &&
+             native[0].normalizedValue == 1.0F,
+         "fresh hat input can press again after held-state cancellation");
+  registry.handleSdlEvent(hat);
+  key.type = SDL_EVENT_KEY_UP;
+  registry.handleSdlEvent(key);
+  expect(!registry.legacyInputGeneration(1, 1).pressedGdxKeys.test(66),
+         "cancellation resets alias reference counts before fresh key edges");
+}
+
+void testNativeKeyboardFallbackRetiresOnlyKeysRemovedFromSdlQueue() {
+  expect(SDL_Init(SDL_INIT_EVENTS), "fallback fixture initializes real SDL events");
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto realtimeMap = std::make_shared<RealtimeControllerDeviceMap>();
+  std::size_t fallback = 0;
+  SDLInputBackend backend(
+      {.enqueueInput = [&](const auto &) { ++fallback; },
+       .enqueueDevice = [](const auto &) {}}, provider, realtimeMap);
+  std::string error;
+  expect(backend.start(error), "native fallback fixture starts");
+  backend.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  realtimeMap->setKeyboardRealtimeAvailable(true);
+  struct WatchState {
+    SDLInputBackend *backend;
+    std::size_t keyEvents = 0;
+  } watched{&backend};
+  const auto watch = [](void *opaque, SDL_Event *event) -> bool {
+    auto &state = *static_cast<WatchState *>(opaque);
+    std::array<input::PhysicalInputEvent, 4> output{};
+    state.backend->translateRealtimeInputs(*event, output, true);
+    if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
+      ++state.keyEvents;
+    }
+    return true;
+  };
+  expect(SDL_AddEventWatch(watch, &watched), "fallback fixture installs real SDL watcher");
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.scancode = SDL_SCANCODE_A;
+  key.key.timestamp = 1;
+  expect(SDL_PushEvent(&key), "retained input reaches SDL watcher");
+  SDL_Event retained{};
+  expect(SDL_PeepEvents(&retained, 1, SDL_GETEVENT, SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP) == 1,
+         "fixture moves one valid SDL copy to the application owner before flush");
+  SDL_Event other{};
+  other.type = SDL_EVENT_USER;
+  expect(SDL_PushEvent(&other), "unrelated event enters SDL queue");
+  bool pushed = true;
+  for (std::uint64_t cycle = 0; cycle < 24; ++cycle) {
+    realtimeMap->setKeyboardRealtimeAvailable(true);
+    for (std::uint64_t index = 0; index < 256; ++index) {
+      key.type = index % 2 == 0 ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+      key.key.timestamp = 2 + cycle * 256 + index;
+      pushed &= SDL_PushEvent(&key);
+    }
+    realtimeMap->requestKeyboardRealtimeFallback();
+    backend.pump();
+  }
+  SDL_RemoveEventWatch(watch, &watched);
+  expect(pushed && watched.keyEvents == 6145, "real SDL watcher observed every backlog key");
+  expect(!SDL_HasEvents(SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP),
+         "native fallback drains stale queued keys");
+  expect(SDL_PeepEvents(&other, 1, SDL_GETEVENT, SDL_EVENT_USER, SDL_EVENT_USER) == 1,
+         "native fallback retains unrelated SDL events");
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.timestamp = 7000;
+  std::array<input::PhysicalInputEvent, 4> native{};
+  expect(backend.translateRealtimeInputs(key, native, true) == 1,
+         "flushed SDL keys must not exhaust later realtime fallback acknowledgements");
+  backend.handleSdlEvent(key);
+  backend.handleSdlEvent(retained);
+  expect(fallback == 0,
+         "fallback flush preserves acknowledgements for valid copies already owned by the application");
+  backend.stop();
+  SDL_Quit();
 }
 
 void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
@@ -2064,6 +2292,10 @@ int main() {
   testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
   testRealtimeSdlOwnershipPreservesHotplugAndHatOrdering();
   testRealtimeSdlOwnershipOverflowRetainsAlreadyDeliveredEdges();
+  testApplicationOverflowDiscardsOnlyLostRealtimeAcknowledgements();
+  testRepeatedApplicationOverflowDoesNotExhaustRealtimeAcknowledgements();
+  testQueueRecoveryClearsHeldSnapshotsWithoutChangingRealtimeOwnership();
+  testNativeKeyboardFallbackRetiresOnlyKeysRemovedFromSdlQueue();
   testSdlRawJoystickButtonsAxesAndHatEdges();
   testSdlJoystickNamesDoNotChangeAxisSensitivity();
   testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();

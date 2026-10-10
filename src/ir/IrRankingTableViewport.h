@@ -55,6 +55,13 @@ protected:
     }
   }
 
+  void onPointerInputCancelled() override {
+    pointerActive_ = false;
+    touchId_ = -1;
+    axis_ = Axis::Undecided;
+    if (content_) content_->cancelPointerInput();
+  }
+
   void onPointerEventConsumed(const SDL_Event &event) override {
     const bool touchEnd = (event.type == SDL_EVENT_FINGER_UP ||
                            event.type == SDL_EVENT_FINGER_CANCELED) &&

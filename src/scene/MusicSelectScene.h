@@ -65,6 +65,7 @@ public:
                    skin::GameplaySkinActivationRequest);
   ~MusicSelectScene() override;
 
+  void onInputQueueOverflow() override;
   void init() override;
   void onPause() override;
   void onResume() override;

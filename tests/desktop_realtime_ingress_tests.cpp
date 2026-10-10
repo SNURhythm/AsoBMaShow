@@ -15,6 +15,14 @@
 #include <string>
 #include <thread>
 
+#ifndef FIXTURE_IOS
+#define FIXTURE_IOS 0
+#endif
+#if FIXTURE_IOS
+#undef TARGET_OS_IPHONE
+#define TARGET_OS_IPHONE 1
+#endif
+
 namespace rendering {
 int render_width = 1000, render_height = 500;
 int window_width = 1000, window_height = 500;
@@ -33,16 +41,27 @@ struct PlayfieldPresentationCoordinator : Presentation {
 };
 struct Scene { Presentation *presentation = nullptr; struct { std::atomic_bool appInBackground{false}; } context; };
 // Record delivery at the router boundary using the production registration.
+bool iosActive = true;
+bool IOSApplicationActive() { return iosActive; }
 struct Registry {
   std::optional<std::string> realtimeDisconnectedSdlDevice(const SDL_Event &) { return {}; }
-  std::size_t translateRealtimeSdlInputs(const SDL_Event &, std::array<input::PhysicalInputEvent, 4> &out, bool) {
-    out[0].control.deviceClass = input::DeviceClass::Keyboard;
+  bool consumedOnce = false;
+  bool deviceKnown = true;
+  std::size_t translateRealtimeSdlInputs(const SDL_Event &event, std::array<input::PhysicalInputEvent, 4> &out, bool consumeOnce) {
+    consumedOnce = consumeOnce;
+    if (!deviceKnown) return 0;
+    out[0].control.deviceClass = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
+        ? input::DeviceClass::GameController : event.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN
+        ? input::DeviceClass::Joystick : input::DeviceClass::Keyboard;
     return 1;
   }
 };
 struct Router {
-  int delivered = 0, disconnects = 0;
-  void consume(const input::PhysicalInputEvent &, std::int64_t) { ++delivered; }
+  int delivered = 0, disconnects = 0, releases = 0;
+  bool held = false, enabled = true;
+  void consume(const input::PhysicalInputEvent &, std::int64_t) { ++delivered; held = true; }
+  void cancelInputs(std::int64_t) { if (held && enabled) ++releases; held = false; }
+  void setGameplayEnabled(bool value, std::int64_t) { enabled = value; }
   void disconnectDevice(const std::string &, std::int64_t) { ++disconnects; }
 };
 std::int64_t nowMicros() { return 123; }
@@ -53,13 +72,11 @@ struct RealtimeGameplaySession {
   Registry *inputRegistry;
   Router *physicalInputRouter;
   std::mutex inputInterruptionMutex;
-  bool registryRealtimeEnabled(input::DeviceClass) const { return true; }
-  int interruptions = 0;
-  bool fallbackReady = false;
-  void interruptInput(const input::InputInterruption &event) {
-    if (event.fallbackReady) fallbackReady = true;
-    else ++interruptions;
-  }
+  std::array<bool, 6> registryRealtimeClasses{};
+  bool registryRealtimeEnabled(input::DeviceClass value) const { return registryRealtimeClasses[static_cast<std::size_t>(value)]; }
+  std::uint64_t inputInterruptionGeneration = 0;
+  std::atomic_bool inputInterrupted{false};
+  std::atomic_bool inputFallbackReady{false};
 #define INGRESS_METHODS
 #include "desktop_realtime_ingress_methods.h"
 #undef INGRESS_METHODS
@@ -71,7 +88,6 @@ struct RegistrationFixture {
   RealtimeGameplaySession &activeSession;
   InputHandlerStub *inputHandler = nullptr;
   gameplay::RealtimeGameplayInputRegistration::Configuration configuration() {
-    gameplay::RealtimeGameplayInputRegistration::DeviceClasses claimedClasses{};
 #define INGRESS_CONFIGURATION
 #include "desktop_realtime_ingress_methods.h"
 #undef INGRESS_CONFIGURATION
@@ -109,6 +125,9 @@ int main() {
   // has since changed on the scene owner. It must never dereference scene here.
   scene.presentation = nullptr;
   auto configuration = RegistrationFixture{session}.configuration();
+  for (const auto deviceClass : {input::DeviceClass::Keyboard, input::DeviceClass::GameController, input::DeviceClass::Joystick})
+    require(session.registryRealtimeEnabled(deviceClass) && configuration.claimedClasses[static_cast<std::size_t>(deviceClass)],
+            "claimed SDL physical input must retain deferred registry fallback");
   input::PhysicalInputEvent key{};
   key.control.deviceClass = input::DeviceClass::Keyboard;
   std::thread callback([&] { configuration.onInput(key); });
@@ -128,12 +147,61 @@ int main() {
   require(configuration.sdlWatch != nullptr, "desktop lifecycle watcher was not registered");
   SDL_Event event{}; event.type = SDL_EVENT_KEY_DOWN;
   configuration.sdlWatch(configuration.sdlWatchContext, &event);
-  require(router.delivered == 1, "desktop watcher duplicated registry keyboard delivery");
+  require(router.delivered == 2 && registry.consumedOnce,
+          "desktop SDL keyboard fallback did not deliver immediately with acknowledgement");
+  for (const auto type : {SDL_EVENT_GAMEPAD_BUTTON_DOWN, SDL_EVENT_JOYSTICK_BUTTON_DOWN}) {
+    event.type = type;
+    std::thread producer([&] { configuration.sdlWatch(configuration.sdlWatchContext, &event); });
+    producer.join();
+  }
+  require(router.delivered == 4, "desktop SDL controller fallback waited for the owner");
+  session.keyboardTextFocused.store(true);
+  event.type = SDL_EVENT_KEY_DOWN;
+  configuration.sdlWatch(configuration.sdlWatchContext, &event);
+  require(router.delivered == 4, "desktop SDL keyboard ignored published text focus");
   event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
   std::thread focusLoss([&] { configuration.sdlWatch(configuration.sdlWatchContext, &event); });
   focusLoss.join();
-  require(session.interruptions == 1 && session.fallbackReady,
+  require(session.inputInterruptionGeneration == 1 && session.inputFallbackReady && !router.held && router.releases == 1 && !router.enabled,
           "registered focus loss did not interrupt gameplay during owner stall");
+#if FIXTURE_IOS
+  require(registry.consumedOnce, "iOS producer input must be acknowledged before owner delivery");
+  iosActive = false;
+  router.setGameplayEnabled(true, 0);
+  router.consume(key, 0);
+  const int releasesBeforeBackground = router.releases;
+  const auto interruptedBeforeBackground = session.inputInterruptionGeneration;
+  event.type = SDL_EVENT_WILL_ENTER_BACKGROUND;
+  configuration.sdlWatch(configuration.sdlWatchContext, &event);
+  require(session.inputInterruptionGeneration == interruptedBeforeBackground + 1 &&
+              router.releases == releasesBeforeBackground + 1 && !router.held && !router.enabled,
+          "iOS background lifecycle must cancel physical ownership even after native inactivity");
+  const int inactiveDelivered = router.delivered;
+  session.keyboardTextFocused.store(false);
+  for (const auto deviceClass : {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
+                                input::DeviceClass::Joystick, input::DeviceClass::Midi,
+                                input::DeviceClass::Gyroscope}) {
+    input::PhysicalInputEvent inactive{};
+    inactive.control.deviceClass = deviceClass;
+    configuration.onInput(inactive);
+  }
+  require(router.delivered == inactiveDelivered, "inactive iOS registry ingress must gate every claimed class");
+  iosActive = true;
+#endif
+  session.keyboardTextFocused.store(false);
+  session.inputInterrupted.store(false);
+  router.setGameplayEnabled(true, 0);
+  registry.deviceKnown = false;
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  const int beforeHotplug = router.delivered;
+  configuration.sdlWatch(configuration.sdlWatchContext, &event);
+  require(router.delivered == beforeHotplug, "unknown controller cannot route before owner opens it");
+  registry.deviceKnown = true;
+  input::PhysicalInputEvent pad{};
+  pad.control.deviceClass = input::DeviceClass::GameController;
+  configuration.onInput(pad);
+  require(router.delivered == beforeHotplug + 1, "deferred registry delivery lost hotplug input");
+#if !FIXTURE_IOS
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
   require(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
   {
@@ -155,5 +223,6 @@ int main() {
             "desktop realtime gameplay failed to drain pointer events on application owner");
   }
   SDL_Quit();
-  std::cout << "Desktop realtime ingress tests passed\n";
+#endif
+  std::cout << (FIXTURE_IOS ? "iOS" : "Desktop") << " realtime ingress tests passed\n";
 }

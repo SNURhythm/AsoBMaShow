@@ -7,6 +7,29 @@
 namespace platform {
 namespace {
 constexpr std::size_t maximumPayloadBytes = 64 * 1024;
+bool retainedDuringExport(const SDL_Event &event) {
+  if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
+      (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST)) return true;
+  switch (event.type) {
+  case SDL_EVENT_LOW_MEMORY:
+  case SDL_EVENT_QUIT:
+  case SDL_EVENT_TERMINATING:
+  case SDL_EVENT_WILL_ENTER_BACKGROUND:
+  case SDL_EVENT_DID_ENTER_BACKGROUND:
+  case SDL_EVENT_WILL_ENTER_FOREGROUND:
+  case SDL_EVENT_DID_ENTER_FOREGROUND:
+  case SDL_EVENT_JOYSTICK_ADDED:
+  case SDL_EVENT_JOYSTICK_REMOVED:
+  case SDL_EVENT_GAMEPAD_ADDED:
+  case SDL_EVENT_GAMEPAD_REMOVED:
+  case SDL_EVENT_GAMEPAD_REMAPPED:
+  case SDL_EVENT_AUDIO_DEVICE_ADDED:
+  case SDL_EVENT_AUDIO_DEVICE_REMOVED:
+  case SDL_EVENT_AUDIO_DEVICE_FORMAT_CHANGED:
+    return true;
+  default: return false;
+  }
+}
 std::optional<std::string> copyText(const char *text, std::size_t &remaining) {
   if (text == nullptr) return std::nullopt;
   std::size_t length = 0;
@@ -87,8 +110,47 @@ const SDL_Event &OwnedApplicationEvent::event() const {
 ApplicationEventQueue::ApplicationEventQueue(std::size_t capacity)
     : capacity_(std::max<std::size_t>(1, capacity)) {}
 
+bool ApplicationEventQueue::coalesceMotion(const SDL_Event &event) {
+  if (event.type != SDL_EVENT_MOUSE_MOTION && event.type != SDL_EVENT_FINGER_MOTION) {
+    return false;
+  }
+  // Search only the uninterrupted motion suffix: key/button/contact edges and
+  // lifecycle events are ordering barriers. Distinct contacts may interleave.
+  auto position = events_.end();
+  while (position != events_.begin()) {
+    --position;
+    const auto &previous = position->event();
+    if (previous.type != SDL_EVENT_MOUSE_MOTION && previous.type != SDL_EVENT_FINGER_MOTION) {
+      break;
+    }
+    if (previous.type != event.type) continue;
+    SDL_Event merged = event;
+    if (event.type == SDL_EVENT_MOUSE_MOTION) {
+      if (previous.motion.windowID != event.motion.windowID ||
+          previous.motion.which != event.motion.which) continue;
+      if (previous.motion.state != event.motion.state) return false;
+      merged.motion.xrel += previous.motion.xrel;
+      merged.motion.yrel += previous.motion.yrel;
+    } else {
+      if (previous.tfinger.windowID != event.tfinger.windowID ||
+          previous.tfinger.touchID != event.tfinger.touchID ||
+          previous.tfinger.fingerID != event.tfinger.fingerID) continue;
+      merged.tfinger.dx += previous.tfinger.dx;
+      merged.tfinger.dy += previous.tfinger.dy;
+    }
+    // Keep the latest position, pressure, and timestamp, at its arrival position.
+    events_.erase(position);
+    events_.emplace_back(merged);
+    return true;
+  }
+  return false;
+}
+
 void ApplicationEventQueue::preserveLifecycle(const SDL_Event &event) {
   switch (event.type) {
+  case SDL_EVENT_LOW_MEMORY:
+    lowMemory_ = event;
+    break;
   case SDL_EVENT_WINDOW_MINIMIZED:
   case SDL_EVENT_WINDOW_HIDDEN:
   case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -109,60 +171,54 @@ void ApplicationEventQueue::preserveLifecycle(const SDL_Event &event) {
   }
 }
 
-void ApplicationEventQueue::recover(const SDL_Event &incoming) {
+void ApplicationEventQueue::recover(
+    const SDL_Event &incoming,
+    std::optional<std::deque<OwnedApplicationEvent>> &discarded) {
   for (const auto &queued : events_) preserveLifecycle(queued.event());
   preserveLifecycle(incoming);
+  discarded.emplace(std::move(events_));
   events_.clear();
   overflow_ = true;
   recovering_ = true;
-  cancellationPending_ = true;
+  recoveryDrained_ = false;
 }
 
-bool ApplicationEventQueue::push(const SDL_Event &event, bool stateOnly) {
-  if (stateOnly) {
-    const bool windowOrDisplay =
-        (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
-        (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST);
-    switch (event.type) {
-    case SDL_EVENT_QUIT:
-    case SDL_EVENT_TERMINATING:
-    case SDL_EVENT_WILL_ENTER_BACKGROUND:
-    case SDL_EVENT_DID_ENTER_BACKGROUND:
-    case SDL_EVENT_WILL_ENTER_FOREGROUND:
-    case SDL_EVENT_DID_ENTER_FOREGROUND:
-    case SDL_EVENT_JOYSTICK_ADDED:
-    case SDL_EVENT_JOYSTICK_REMOVED:
-    case SDL_EVENT_GAMEPAD_ADDED:
-    case SDL_EVENT_GAMEPAD_REMOVED:
-    case SDL_EVENT_GAMEPAD_REMAPPED:
-    case SDL_EVENT_AUDIO_DEVICE_ADDED:
-    case SDL_EVENT_AUDIO_DEVICE_REMOVED:
-    case SDL_EVENT_AUDIO_DEVICE_FORMAT_CHANGED:
-      break;
-    default:
-      if (!windowOrDisplay) return true;
-    }
+bool ApplicationEventQueue::push(const SDL_Event &event, bool stateOnly,
+                                 const DiscardCallback &onDiscard) {
+  if (stateOnly && !retainedDuringExport(event)) {
+    if (onDiscard) onDiscard(event);
+    return true;
   }
   // Own SDL's temporary bytes before they expire, outside the shared lock.
   std::optional<OwnedApplicationEvent> owned;
   try {
     owned.emplace(event);
   } catch (const std::length_error &) {
+    // Invalid/oversized payloads use the same bounded recovery as queue pressure.
+  }
+  std::optional<std::deque<OwnedApplicationEvent>> discarded;
+  {
     const std::lock_guard lock(mutex_);
-    recover(event);
-    return false;
+    if (!owned) {
+      recover(event, discarded);
+    } else if (recovering_) {
+      preserveLifecycle(event);
+    } else if (coalesceMotion(event)) {
+      return true;
+    } else if (events_.size() == capacity_) {
+      recover(event, discarded);
+    } else {
+      events_.push_back(std::move(*owned));
+      return true;
+    }
   }
-  const std::lock_guard lock(mutex_);
-  if (recovering_) {
-    preserveLifecycle(event);
-    return false;
+  if (onDiscard) {
+    if (discarded) {
+      for (const auto &queued : *discarded) onDiscard(queued.event());
+    }
+    onDiscard(event);
   }
-  if (events_.size() == capacity_) {
-    recover(event);
-    return false;
-  }
-  events_.push_back(std::move(*owned));
-  return true;
+  return false;
 }
 
 bool ApplicationEventQueue::poll(OwnedApplicationEvent &event) {
@@ -171,15 +227,15 @@ bool ApplicationEventQueue::poll(OwnedApplicationEvent &event) {
     const std::lock_guard lock(mutex_);
     if (recovering_) {
       SDL_Event recovery{};
-      if (cancellationPending_) {
-        recovery.type = SDL_EVENT_WINDOW_FOCUS_LOST;
-        cancellationPending_ = false;
+      if (lowMemory_) {
+        recovery = *std::exchange(lowMemory_, std::nullopt);
       } else if (lifecycle_) {
         recovery = *std::exchange(lifecycle_, std::nullopt);
       } else if (quit_) {
         recovery = *std::exchange(quit_, std::nullopt);
       } else {
-        recovering_ = false;
+        recoveryDrained_ = true;
+        finishRecovery();
         return false;
       }
       next = OwnedApplicationEvent(recovery);
@@ -195,6 +251,44 @@ bool ApplicationEventQueue::poll(OwnedApplicationEvent &event) {
 
 bool ApplicationEventQueue::takeOverflow() {
   const std::lock_guard lock(mutex_);
-  return std::exchange(overflow_, false);
+  const bool overflow = std::exchange(overflow_, false);
+  finishRecovery();
+  return overflow;
+}
+
+void ApplicationEventQueue::finishRecovery() {
+  // Both sides must cross the invalidated batch. Owner polling alone cannot
+  // reopen admission while main is still forwarding its stale SDL backlog.
+  if (recoveryDrained_ && !producerBatchActive_ && !overflow_ &&
+      !lowMemory_ && !lifecycle_ && !quit_) recovering_ = false;
+}
+
+void ApplicationEventQueue::beginProducerBatch() {
+  const std::lock_guard lock(mutex_);
+  producerBatchActive_ = true;
+}
+
+void ApplicationEventQueue::endProducerBatch() {
+  const std::lock_guard lock(mutex_);
+  producerBatchActive_ = false;
+  finishRecovery();
+}
+
+void ApplicationEventQueue::discardUserInput(const DiscardCallback &onDiscard) {
+  std::deque<OwnedApplicationEvent> discarded;
+  {
+    const std::lock_guard lock(mutex_);
+    for (auto position = events_.begin(); position != events_.end();) {
+      if (retainedDuringExport(position->event())) {
+        ++position;
+      } else {
+        discarded.push_back(std::move(*position));
+        position = events_.erase(position);
+      }
+    }
+  }
+  if (onDiscard) {
+    for (const auto &event : discarded) onDiscard(event.event());
+  }
 }
 }

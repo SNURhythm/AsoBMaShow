@@ -550,6 +550,16 @@ protected:
     renderLabels(context);
   }
 
+  void onPointerInputCancelled() override {
+    mouseDragging = false;
+    activeTouches.clear();
+    dragTouchId = -1;
+    pinchActive = false;
+    touchGestureWasPinch = false;
+    mouseDragDistance = 0.0f;
+    touchDragDistance = 0.0f;
+  }
+
   bool handleEventsImpl(SDL_Event &event) override {
     switch (event.type) {
     case SDL_EVENT_MOUSE_WHEEL: {

@@ -4554,3 +4554,11 @@ void MusicSelectScene::cleanupScene() {
   directoryStatusMessage_.clear();
   diagnostics_.clear();
 }
+
+void MusicSelectScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+  resetLogicalInput();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  skinTouchGesture_.cancel();
+#endif
+}

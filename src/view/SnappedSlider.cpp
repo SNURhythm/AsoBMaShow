@@ -141,6 +141,10 @@ void SnappedSlider::renderImpl(RenderContext &context) {
                     thumbColor.toABGR());
 }
 
+void SnappedSlider::onPointerInputCancelled() {
+  cancelInteraction();
+}
+
 void SnappedSlider::onPointerEventConsumed(const SDL_Event &event) {
   if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) {
     hovered = false;

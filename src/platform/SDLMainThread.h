@@ -6,6 +6,11 @@
 #include <string>
 
 namespace platform {
+#if TARGET_OS_IPHONE
+inline void setApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler) {
+  SetIOSApplicationEventDiscardHandler(std::move(handler));
+}
+#endif
 // SDL errors are thread-local. Preserve a failed operation's diagnostic on its
 // caller, rather than reporting an unrelated error from the worker's TLS.
 template <auto Function, typename... Args> auto sdlMain(Args &&...args) {

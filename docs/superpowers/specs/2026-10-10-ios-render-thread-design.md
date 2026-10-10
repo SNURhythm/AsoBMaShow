@@ -71,8 +71,10 @@ to the application worker. Copy pointer-backed text/drop payloads before their
 SDL lifetime ends. Preserve key/button edges, focus, cancellation and lifecycle
 ordering. Coalescing is limited to compatible motion/resize events between
 ordering barriers. Queue pressure must never block UIKit or silently lose an
-input release; exhaustion must invalidate the input session and recover to a
-paused state. Lifecycle cancellation must remain deliverable under pressure.
+input release; exhaustion must clear held and stale input while gameplay keeps
+running. Only an explicit user pause may pause gameplay; focus loss, background,
+queue overflow, and input-provider recovery must not open the pause menu or stop
+the gameplay clock/audio. Lifecycle cancellation must remain deliverable under pressure.
 
 **Platform operations:** route SDL APIs that require the main thread, UIKit
 queries/mutations, and native control work through a dedicated iOS bridge.
@@ -197,3 +199,64 @@ no violations. The original landscape preference was restored and the generated
 chart/audio fixtures and temporary export artifacts were removed.
 
 The final unsigned iOS build and artifact audit also passed after these corrections.
+
+### PR #136 follow-up review fixes
+
+The follow-up review preserves low-memory notifications during export and queue
+recovery, coalesces compatible motion without dropping key/button edges, and
+retires each discarded SDL realtime acknowledgement. Queue recovery clears held
+input and reconciles devices without synthesizing focus loss or pausing gameplay.
+SDL fallback keyboard, controller and joystick input now reaches the independent
+watcher on desktop and iOS, with native-provider ownership and consume-once
+acknowledgements preventing duplicate judgement.
+
+Background transitions cancel held logical, physical and legacy touch state on
+all platforms while CPU gameplay and terminal progression continue. Explicit
+user pause remains separate. An interrupted iOS prepared frame is retired before
+renderer callbacks or viewport restoration. Native touch resumes only after
+restoration and a rendered scene pass. The owner carries a completed producer
+pump's lifecycle generation from before its event drain; UIKit validates that
+generation when reopening ingress, so a rapid background/resize/foreground pulse
+cannot acknowledge geometry the owner has not consumed.
+
+Replay cancellation reaches chunked course WAV assembly, alignment, encoder
+finalization and native completion waits. Temporary iOS deactivation (including
+the initial Photos permission alert) gates presentation without cancelling the
+export; actual background and termination cancel it. Native completion retains
+its own file cleanup lifetime when the application owner stops waiting. A save
+already submitted to PhotoKit cannot be rolled back.
+
+Regression coverage exercises queue pressure and acknowledgement retirement,
+realtime native/fallback ownership, interruption without automatic pause,
+background CPU progression, prepared-frame restoration, generation races, and
+cancellation throughout export. Physical iPad behavior, Windows/Linux execution,
+and full native IME composition still require their respective runtime checks.
+The existing Android surface-retirement deadline does not guarantee recovery
+from an arbitrarily stalled GPU driver.
+
+A subsequent pressure review added a two-sided recovery boundary: ordinary input
+stays suppressed until the producer finishes its SDL batch and the owner drains
+retained state and acknowledges overflow. Owner-bound export similarly suppresses
+buffered input and the completion batch's tail on every platform, preserving
+system/device events and retiring discarded acknowledgements. Returning to the
+scene clears pre-export input ownership before dispatching fresh events.
+
+Generic scene recovery also cancels view captures, including detached content,
+recycled rows and overlays, and resets menu navigation/repeat and binding-capture
+activation state. A dropped release can no longer leave a button, scroll view or
+menu action held. Cancellation does not dispatch a click, clear text drafts or
+pause gameplay. Regression tests reproduce concurrent recovery mid-batch, lost
+menu touch-up, held navigation, and export completion within a producer batch.
+
+Final follow-up verification: two consecutive independent full-PR reviews
+reported zero Critical, Important, or Minor findings. The desktop all-target
+build, unsigned iOS build, restricted-access Android release build-only check,
+and all 481 CTest cases passed (final full run: 103.17 seconds). The queue suite
+also passed ThreadSanitizer. No distribution upload was performed.
+
+The first combined build/test run exposed a registry fixture that omitted the
+new owner acknowledgement; it now follows the production recovery protocol.
+An unchanged skin-draw fixture also failed while the Android compiler was busy;
+it uses a 4 ms Lua callback wall-time limit and passed both an isolated rerun and
+the final complete suite after compilation ended. No renderer or Lua budget
+change was made for that transient failure.

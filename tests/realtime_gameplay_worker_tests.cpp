@@ -1095,6 +1095,12 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
   require(waitUntil([&] { return audio.commitCount.load() == 2; }),
           "worker commits both keysounds without an engine update");
   auto snapshot = worker.acquireLatestSnapshot();
+  // Audio commit happens inside processing, before that batch is published.
+  // Wait for the snapshot boundary whose state the assertions inspect.
+  require(waitUntil([&] {
+    snapshot = worker.acquireLatestSnapshot();
+    return snapshot && snapshot->replayEventCount == 3;
+  }), "the completed input batch publishes without a frame pump");
   require(snapshot && snapshot->noteStates.size() == 2 &&
               snapshot->noteStates[0].played &&
               snapshot->noteStates[1].played &&

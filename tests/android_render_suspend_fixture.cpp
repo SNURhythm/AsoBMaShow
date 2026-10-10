@@ -36,6 +36,8 @@ void frame() {
 }
 struct TestScene {
   bool playing = false, paused = false;
+  int overflows = 0;
+  void onInputQueueOverflow() { ++overflows; }
   bool continuesAudioInBackground() const { return playing && !paused; }
   void onApplicationBackgroundChanged(bool) {}
 };
@@ -45,7 +47,7 @@ void dispatchApplicationBackgroundChange(TestScene *scene, bool background) {
 }
 }
 struct Context {
-  struct Registry { void reconcileSdlDevices() {} } inputDeviceRegistry;
+  struct Registry { void reconcileSdlDevices() {} void clearSdlInputState() {} } inputDeviceRegistry;
   struct Display {
     struct Message { bool empty() const { return true; } std::string resolve() const { return {}; } };
     struct Result { Message message; };
@@ -165,6 +167,7 @@ int main() {
   androidSystemSuspended = true;
   setAppBackground(true);
   recoverOverflow();
+  assert(scene.overflows == 1 && "recovery must notify the scene before reopening input");
   assert(!syncAndroidRenderSuspend() && !androidRenderSuspended &&
          "foreground event overflow must not leave Android rendering suspended");
   assert(!context.appInBackground && resizedWidth == 2400 && resizedHeight == 1080);

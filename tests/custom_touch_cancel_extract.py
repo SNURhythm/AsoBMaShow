@@ -31,6 +31,9 @@ for path, class_name in (
     ("src/scene/PracticeAnalyticsView.cpp", "Analytics"),
 ):
     method = extract((args.root / path).read_text(), "  bool handleEventsImpl(SDL_Event &event) override")
+    cancel = extract((args.root / path).read_text(), "  void onPointerInputCancelled() override")
+    methods.append(cancel.replace("onPointerInputCancelled(", f"{class_name}::onPointerInputCancelled(", 1)
+                   .replace(" override", ""))
     methods.append(method.replace("handleEventsImpl(", f"{class_name}::handleEventsImpl(", 1)
                    .replace(" override", ""))
 fixture = fixture.replace("HANDLER_METHODS", "\n\n".join(methods))

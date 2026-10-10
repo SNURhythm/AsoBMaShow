@@ -76,6 +76,7 @@ private:
                          MusicSelectToolbarCallbacks callbacks,
                          int viewportWidth, int viewportHeight);
   bool handleEventsImpl(SDL_Event &event) override;
+  void onPointerInputCancelled() override;
   void onPointerEventConsumed(const SDL_Event &event) override;
   void rebuild();
   void onLanguageChanged() override;

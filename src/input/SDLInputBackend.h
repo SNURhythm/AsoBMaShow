@@ -68,6 +68,7 @@ public:
   void handleSdlEvent(const SDL_Event &event) override;
   void pump() override;
   void reconcileDevices();
+  void clearInputState();
   void setRealtimeInputClaimed(input::DeviceClass deviceClass,
                                bool claimed) override;
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
@@ -75,6 +76,8 @@ public:
   std::size_t translateRealtimeInputs(
       const SDL_Event &event,
       std::span<input::PhysicalInputEvent> output, bool consumeOnce = false);
+  // Producer notification for a queued SDL copy that will never reach handleSdlEvent.
+  void discardRealtimeInput(const SDL_Event &event);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedDeviceId(const SDL_Event &event) const;
   [[nodiscard]] input::LegacyInputGeneration
@@ -87,6 +90,7 @@ private:
     bool delivered = false;
   };
   static std::optional<RealtimeEventKey> realtimeEventKey(const SDL_Event &);
+  std::optional<bool> takeRealtimeDeliveryLocked(const RealtimeEventKey &key);
   std::size_t translateRealtimeInputsUnclaimed(
       const SDL_Event &, std::span<input::PhysicalInputEvent>);
 

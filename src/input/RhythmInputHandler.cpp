@@ -57,6 +57,7 @@ bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
 }
 
 void RhythmInputHandler::onKeyDown(int keyCode, KeySource keySource) {
+  if (applicationBackground) return;
   const auto scancode = InputNormalizer::normalizeScancode(keyCode, keySource);
   SDL_Log("KeyDown: %d (%d)", keyCode, scancode);
   if (logicalInputPipeline != nullptr) {
@@ -189,6 +190,7 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
 
 void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
                                       Vector3 normalizedLocation) {
+  if (applicationBackground) return;
   cancelGraceExpiry.erase(fingerIndex);
   if (notifyTouchEvent(fingerIndex, ReplayTouchAction::Down,
                        normalizedLocation)) {
@@ -220,6 +222,7 @@ void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
 }
 void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
                                       Vector3 normalizedLocation) {
+  if (applicationBackground) return;
   if (notifyTouchEvent(fingerIndex, ReplayTouchAction::Move,
                        normalizedLocation)) {
     return;
@@ -369,8 +372,13 @@ void RhythmInputHandler::stopListen() {
 }
 void RhythmInputHandler::setApplicationBackground(bool background) {
   applicationBackground = background;
+  if (background) cancelInputState();
+  else discardPendingTouchEvents();
+}
+
+void RhythmInputHandler::cancelInputState() {
   discardPendingTouchEvents();
-  if (background && logicalInputPipeline != nullptr) {
+  if (logicalInputPipeline != nullptr) {
     // Reset resolves held bindings into ordinary logical releases, retaining
     // their gameplay/replay semantics before clearing the ownership state.
     logicalInputPipeline->reset();
@@ -408,6 +416,10 @@ void RhythmInputHandler::discardPendingTouchEvents() {
 #endif
 }
 void RhythmInputHandler::pumpPendingTouchEvents() {
+  if (applicationBackground) {
+    discardPendingTouchEvents();
+    return;
+  }
   if (touchInputSource != nullptr) {
     touchInputSource->pumpPendingEvents();
   }

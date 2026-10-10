@@ -59,6 +59,7 @@
 #endif
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "iOSNatives.hpp"
+#include "platform/IOSApplicationRuntime.h"
 #endif
 
 #if __APPLE__
@@ -861,6 +862,15 @@ void configureReplayExportRenderViews(int width, int height,
                             rendering::final_view);
 }
 
+bool waitForReplayExportForeground(std::stop_token stop) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  // Native alerts temporarily deactivate the app without cancelling export.
+  // The UIKit thread continues servicing them while the render owner waits.
+  while (!IOSApplicationActive() && !stop.stop_requested()) SDL_Delay(10);
+#endif
+  return !stop.stop_requested();
+}
+
 class ScopedReplayVideoBgfxAccess {
 public:
   explicit ScopedReplayVideoBgfxAccess(ApplicationContext &context)
@@ -1013,7 +1023,8 @@ long long replayAudioMicrosForFrames(sf_count_t frames) {
                    static_cast<long double>(kExportSampleRate)));
 }
 
-bool writeSilentAudioFrames(SNDFILE *output, sf_count_t frames) {
+bool writeSilentAudioFrames(SNDFILE *output, sf_count_t frames,
+                             std::stop_token stop) {
   if (output == nullptr || frames <= 0) {
     return output != nullptr;
   }
@@ -1023,13 +1034,14 @@ bool writeSilentAudioFrames(SNDFILE *output, sf_count_t frames) {
       static_cast<size_t>(kChunkFrames) * kExportChannels, 0);
   sf_count_t remaining = frames;
   while (remaining > 0) {
+    if (stop.stop_requested()) return false;
     const sf_count_t chunkFrames = std::min(remaining, kChunkFrames);
     if (sf_writef_short(output, silence.data(), chunkFrames) != chunkFrames) {
       return false;
     }
     remaining -= chunkFrames;
   }
-  return true;
+  return !stop.stop_requested();
 }
 
 struct CourseReplayAudioSegment {
@@ -1040,7 +1052,13 @@ struct CourseReplayAudioSegment {
 
 bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
                            sf_count_t maxFrames, sf_count_t &writtenFrames,
-                           std::string &errorMessage) {
+                           std::string &errorMessage, std::stop_token stop) {
+  auto cancelled = [&]() {
+    if (!stop.stop_requested()) return false;
+    errorMessage = "Replay export cancelled";
+    return true;
+  };
+  if (cancelled()) return false;
   if (output == nullptr) {
     errorMessage = "Course replay audio output is invalid";
     return false;
@@ -1065,10 +1083,12 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
       static_cast<size_t>(kChunkFrames) * kExportChannels);
   sf_count_t copiedFrames = 0;
   while (copiedFrames < maxFrames) {
+    if (cancelled()) return false;
     const sf_count_t requestedFrames =
         std::min(kChunkFrames, maxFrames - copiedFrames);
     const sf_count_t framesRead =
         sf_readf_short(inputHandle.get(), buffer.data(), requestedFrames);
+    if (cancelled()) return false;
     if (framesRead < 0) {
       errorMessage = std::string("Failed to read course replay stage audio: ") +
                      sf_strerror(inputHandle.get());
@@ -1085,14 +1105,19 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
     writtenFrames += framesRead;
     copiedFrames += framesRead;
   }
-  return true;
+  return !cancelled();
 }
 
 bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
                                     const std::filesystem::path &outputPath,
                                     long long durationMicros,
                                     long long contentDurationMicros,
-                                    std::string &errorMessage) {
+                                    std::string &errorMessage,
+                                    std::stop_token stop) {
+  if (stop.stop_requested()) {
+    errorMessage = "Replay export cancelled";
+    return false;
+  }
   const sf_count_t targetFrames = replayAudioFramesForMicros(durationMicros);
   const sf_count_t contentFrames = replayAudioFramesForMicros(
       std::min(durationMicros, contentDurationMicros));
@@ -1111,13 +1136,16 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
   sf_count_t writtenFrames = 0;
   if (contentFrames > 0 &&
       !appendReplayAudioFile(outputHandle.get(), inputPath, contentFrames,
-                             writtenFrames, errorMessage)) {
+                             writtenFrames, errorMessage, stop)) {
     return false;
   }
   if (writtenFrames < targetFrames &&
-      !writeSilentAudioFrames(outputHandle.get(), targetFrames - writtenFrames)) {
-    errorMessage = std::string("Failed to pad aligned replay audio: ") +
-                   sf_strerror(outputHandle.get());
+      !writeSilentAudioFrames(outputHandle.get(), targetFrames - writtenFrames,
+                              stop)) {
+    errorMessage = stop.stop_requested()
+                       ? "Replay export cancelled"
+                       : std::string("Failed to pad aligned replay audio: ") +
+                             sf_strerror(outputHandle.get());
     return false;
   }
   return true;
@@ -1125,7 +1153,12 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
 
 ReplayAudioTrackResult writeCourseReplayAudioTrack(
     const std::vector<CourseReplayAudioSegment> &segments,
-    const std::filesystem::path &path, ReplayVideoExportLog *log) {
+    const std::filesystem::path &path, ReplayVideoExportLog *log,
+    std::stop_token stop) {
+  if (stop.stop_requested()) {
+    return {.success = false, .outputPath = path,
+            .message = "Replay export cancelled"};
+  }
   if (segments.empty()) {
     return {.success = false, .message = "No course replay audio"};
   }
@@ -1152,7 +1185,7 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
     std::string errorMessage;
     const sf_count_t writtenFramesBeforeSegment = writtenFrames;
     if (!appendReplayAudioFile(outputHandle.get(), segment.wavPath,
-                               contentFrames, writtenFrames, errorMessage)) {
+                               contentFrames, writtenFrames, errorMessage, stop)) {
       return {.success = false, .outputPath = path, .message = errorMessage};
     }
     const sf_count_t segmentWrittenFrames =
@@ -1161,11 +1194,13 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
     const sf_count_t silenceFrames =
         std::max<sf_count_t>(0, segmentFrames - segmentWrittenFrames);
     if (silenceFrames > 0) {
-      if (!writeSilentAudioFrames(outputHandle.get(), silenceFrames)) {
+      if (!writeSilentAudioFrames(outputHandle.get(), silenceFrames, stop)) {
         return {.success = false,
                 .outputPath = path,
-                .message = std::string("Failed to write course replay silence: ") +
-                           sf_strerror(outputHandle.get())};
+                .message = stop.stop_requested()
+                               ? "Replay export cancelled"
+                               : std::string("Failed to write course replay silence: ") +
+                                     sf_strerror(outputHandle.get())};
       }
       writtenFrames += silenceFrames;
     }
@@ -1663,8 +1698,15 @@ struct ReplayFfmpegEncodeProfile {
 bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
                  AVStream *stream, AVFrame *frame, AVPacket *packet,
                  std::string &errorMessage, int64_t forcedPacketDuration = 0,
-                 ReplayFfmpegEncodeProfile *profile = nullptr) {
+                 ReplayFfmpegEncodeProfile *profile = nullptr,
+                 std::stop_token stop = {}) {
+  auto cancelled = [&]() {
+    if (!stop.stop_requested()) return false;
+    errorMessage = "Replay export cancelled";
+    return true;
+  };
   auto receiveAvailablePackets = [&](bool *wrotePacket = nullptr) {
+    if (cancelled()) return false;
     if (wrotePacket != nullptr) {
       *wrotePacket = false;
     }
@@ -1679,6 +1721,10 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
     }
 
     while (ret >= 0) {
+      if (cancelled()) {
+        av_packet_unref(packet);
+        return false;
+      }
       if (forcedPacketDuration > 0) {
         packet->duration = forcedPacketDuration;
       }
@@ -1720,6 +1766,7 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
 
   int stalledRetries = 0;
   while (true) {
+    if (cancelled()) return false;
     const auto sendStart = std::chrono::steady_clock::now();
     const int ret = avcodec_send_frame(encoderContext, frame);
     if (profile != nullptr) {
@@ -1825,7 +1872,11 @@ bool encodeNextAudioFrame(SNDFILE *audioFile, AVCodecContext *audioContext,
                           AVFrame *audioFrame, AVPacket *packet,
                           std::vector<float> &audioBuffer,
                           int64_t &nextAudioPts, bool &audioFinished,
-                          std::string &errorMessage) {
+                          std::string &errorMessage, std::stop_token stop) {
+  if (stop.stop_requested()) {
+    errorMessage = "Replay export cancelled";
+    return false;
+  }
   if (audioFinished) {
     return true;
   }
@@ -1850,7 +1901,7 @@ bool encodeNextAudioFrame(SNDFILE *audioFile, AVCodecContext *audioContext,
   }
 
   return encodeFrame(audioContext, formatContext, audioStream, audioFrame,
-                     packet, errorMessage);
+                     packet, errorMessage, 0, nullptr, stop);
 }
 
 #if __APPLE__
@@ -1897,7 +1948,13 @@ public:
 
   bool open(const std::filesystem::path &wavPath,
             const std::filesystem::path &outputPath, int width, int height,
-            int fps, ReplayVideoExportLog *log, std::string &errorMessage) {
+            int fps, ReplayVideoExportLog *log, std::string &errorMessage,
+            std::stop_token stop) {
+    this->stop = stop;
+    if (stop.stop_requested()) {
+      errorMessage = "Replay export cancelled";
+      return false;
+    }
 #if TARGET_OS_ANDROID
     const std::string hardwareName = findAndroidReplayHardwareEncoder(
         width, height, fps, static_cast<int>(replayVideoBitRate(width, height, fps)));
@@ -1940,6 +1997,10 @@ public:
     if (ret < 0 || formatContext == nullptr) {
       return failOpen("Failed to create MP4 muxer: " + ffmpegError(ret));
     }
+    formatContext->interrupt_callback = {
+        [](void *opaque) -> int {
+          return static_cast<ReplayMp4StreamWriter *>(opaque)->stop.stop_requested();
+        }, this};
 
     if (videoCodec == nullptr) {
       return failOpen("Replay video encoder was not found");
@@ -2241,8 +2302,9 @@ public:
                        0.0f);
 
     if (!(formatContext->oformat->flags & AVFMT_NOFILE)) {
-      ret = avio_open(&formatContext->pb, outputPathString.c_str(),
-                      AVIO_FLAG_WRITE);
+      ret = avio_open2(&formatContext->pb, outputPathString.c_str(),
+                       AVIO_FLAG_WRITE, &formatContext->interrupt_callback,
+                       nullptr);
       if (ret < 0) {
         return failOpen("Failed to open MP4 output: " + ffmpegError(ret));
       }
@@ -2275,7 +2337,7 @@ public:
       if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
                                 audioStream, audioFrame, audioPacket,
                                 audioBuffer, nextAudioPts, audioFinished,
-                                errorMessage)) {
+                                errorMessage, stop)) {
         return false;
       }
     }
@@ -2384,7 +2446,8 @@ public:
     ReplayFfmpegEncodeProfile profile;
     const bool success =
         encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                    videoPacket, errorMessage, videoFrameDuration, &profile);
+                    videoPacket, errorMessage, videoFrameDuration, &profile,
+                    stop);
     videoEncodeMicrosTotal += elapsedMicros(videoEncodeStart);
     videoSendMicrosTotal += profile.sendMicros;
     videoReceiveMicrosTotal += profile.receiveMicros;
@@ -2409,7 +2472,7 @@ public:
       if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
                                 audioStream, audioFrame, audioPacket,
                                 audioBuffer, nextAudioPts, audioFinished,
-                                errorMessage)) {
+                                errorMessage, stop)) {
         audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
         return fail(errorMessage);
       }
@@ -2419,7 +2482,7 @@ public:
     ReplayFfmpegEncodeProfile videoFlushProfile;
     if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
                      videoPacket, errorMessage, videoFrameDuration,
-                     &videoFlushProfile)) {
+                     &videoFlushProfile, stop)) {
       const long long videoFlushMicros = elapsedMicros(videoEncodeFlushStart);
       videoEncodeMicrosTotal += videoFlushMicros;
       videoFlushMicrosTotal += videoFlushMicros;
@@ -2447,13 +2510,15 @@ public:
 #endif
     const auto audioEncodeFlushStart = std::chrono::steady_clock::now();
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
-                     audioPacket, errorMessage)) {
+                     audioPacket, errorMessage, 0, nullptr, stop)) {
       audioEncodeMicrosTotal += elapsedMicros(audioEncodeFlushStart);
       return fail(errorMessage);
     }
     audioEncodeMicrosTotal += elapsedMicros(audioEncodeFlushStart);
 
+    if (stop.stop_requested()) return fail("Replay export cancelled");
     const int ret = av_write_trailer(formatContext);
+    if (stop.stop_requested()) return fail("Replay export cancelled");
     if (ret < 0) {
       return fail("Failed to write MP4 trailer: " + ffmpegError(ret));
     }
@@ -2508,6 +2573,7 @@ private:
   }
 
   std::filesystem::path outputPath;
+  std::stop_token stop;
   int width = 0;
   int height = 0;
   int fps = 0;
@@ -2675,9 +2741,17 @@ public:
   bool start(const std::filesystem::path &wavPath,
              const std::filesystem::path &outputPath, int width, int height,
              int fps, size_t frameBytes, size_t bufferCount,
-             ReplayVideoExportLog *log, std::string &errorMessage) {
+             ReplayVideoExportLog *log, std::string &errorMessage,
+             std::stop_token stop) {
+    lifecycleStop.emplace(stop, [this] {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        encoderStop.request_stop();
+      }
+      condition.notify_all();
+    });
     if (!writer.open(wavPath, outputPath, width, height, fps, log,
-                     errorMessage)) {
+                     errorMessage, encoderStop.get_token())) {
       return false;
     }
 
@@ -2701,8 +2775,13 @@ public:
   int acquireFrameBuffer(std::string &errorMessage) {
     std::unique_lock<std::mutex> lock(mutex);
     condition.wait(lock, [this]() {
-      return failed || !freeBuffers.empty() || !acceptingFrames;
+      return encoderStop.stop_requested() || failed || !freeBuffers.empty() ||
+             !acceptingFrames;
     });
+    if (encoderStop.stop_requested()) {
+      errorMessage = "Replay export cancelled";
+      return -1;
+    }
     if (failed) {
       errorMessage = failureMessage;
       return -1;
@@ -2759,6 +2838,9 @@ public:
     }
     joinWorker();
 
+    if (encoderStop.stop_requested()) {
+      return {.success = false, .message = "Replay export cancelled"};
+    }
     {
       std::lock_guard<std::mutex> lock(mutex);
       if (failed) {
@@ -2769,6 +2851,7 @@ public:
   }
 
   void cancel() {
+    encoderStop.request_stop();
     {
       std::lock_guard<std::mutex> lock(mutex);
       acceptingFrames = false;
@@ -2831,10 +2914,10 @@ private:
       {
         std::unique_lock<std::mutex> lock(mutex);
         condition.wait(lock, [this]() {
-          return cancelled || failed || !pendingFrames.empty() ||
+          return encoderStop.stop_requested() || cancelled || failed || !pendingFrames.empty() ||
                  !acceptingFrames;
         });
-        if (cancelled || failed ||
+        if (encoderStop.stop_requested() || cancelled || failed ||
             (pendingFrames.empty() && !acceptingFrames)) {
           return;
         }
@@ -2881,6 +2964,8 @@ private:
   bool failed = false;
   bool cancelled = false;
   std::string failureMessage;
+  std::stop_source encoderStop;
+  std::optional<std::stop_callback<std::function<void()>>> lifecycleStop;
 };
 
 ReplayVideoExportResult
@@ -2963,7 +3048,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   PracticeAnalyticsView *resultAnalytics = nullptr;
   PracticeAnalyticsMode resultAnalyticsMode =
       PracticeAnalyticsMode::Histogram;
+  std::function<void()> finishPendingReadbacks;
   auto cleanupBgfx = [&]() {
+    if (finishPendingReadbacks) finishPendingReadbacks();
     resultGraphPlaceholder = nullptr;
     resultAnalytics = nullptr;
     resultPresentation.reset();
@@ -3173,7 +3260,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     if (!writeReplayAudioFileAtDuration(wavPath, alignedAudioPath,
                                         totalDurationMicros,
                                         requestedAudioDurationMicros,
-                                        errorMessage)) {
+                                        errorMessage, resolvedOptions.stop)) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3181,7 +3268,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     videoAudioPath = alignedAudioPath;
   }
   if (!encoder.start(videoAudioPath, outputPath, width, height, fps, frameBytes,
-                     frameBufferCount, log, errorMessage)) {
+                      frameBufferCount, log, errorMessage, options.stop)) {
     bgfxCleanup.runNow();
     return {
         .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3219,6 +3306,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   GameplayBgaMissStateTracker bgaMissTracker;
   std::uint64_t presentationSerial = 1;
   replay_video_export::ReplayJudgementAuthorityPlayback replayJudgementAuthority;
+  if (!waitForReplayExportForeground(options.stop)) {
+    bgfxCleanup.runNow();
+    return {.success = false, .outputPath = outputPath,
+            .message = "Replay export cancelled"};
+  }
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   auto lastUiProgress =
@@ -3242,6 +3334,20 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     freeReadbackTextures.push_back(i);
   }
   std::deque<PendingReadback> pendingReadbacks;
+  finishPendingReadbacks = [&]() {
+    if (pendingReadbacks.empty()) return;
+    // readTexture borrows encoder buffers until its completion frame. Finish
+    // offscreen work before freeing either textures or those buffers, including
+    // cancellation during an encoder buffer wait or a failed packet write.
+    while (currentFrame < pendingReadbacks.back().expectedFrame) {
+      currentFrame = bgfx::frame();
+    }
+    pendingReadbacks.clear();
+  };
+  auto readbackCleanup = makeScopeExit([&]() {
+    finishPendingReadbacks();
+    finishPendingReadbacks = {};
+  });
 
   auto drainOldestReadback = [&]() -> bool {
     if (pendingReadbacks.empty()) {
@@ -3257,7 +3363,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     }
     readbackWaitMicros += elapsedMicros(readbackWaitStart);
 
-    if (!encoder.submitFrame(pending.frameBufferIndex, pending.frameIndex,
+    if (!options.stop.stop_requested() &&
+        !encoder.submitFrame(pending.frameBufferIndex, pending.frameIndex,
                              pending.songTimeMicros, errorMessage)) {
       return false;
     }
@@ -3312,7 +3419,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   auto renderAndQueueFrame = [&](size_t frameIndex, long long videoTimeMicros,
                                  auto &&renderFrame) -> bool {
-    if (options.stop.stop_requested()) {
+    if (!waitForReplayExportForeground(options.stop)) {
       // Drain already submitted readbacks before freeing the encoder buffers.
       // These are offscreen views and do not acquire a window drawable.
       while (!pendingReadbacks.empty()) {
@@ -3746,7 +3853,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   std::unique_ptr<View> courseResultRoot;
   View *courseResultGraphPlaceholder = nullptr;
 
+  std::function<void()> finishPendingReadbacks;
   auto cleanupBgfx = [&]() {
+    if (finishPendingReadbacks) finishPendingReadbacks();
     stageResultGraphPlaceholder = nullptr;
     stageResultAnalytics = nullptr;
     courseResultGraphPlaceholder = nullptr;
@@ -3893,7 +4002,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 
   ReplayAsyncFrameEncoder encoder;
   if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
-                     frameBufferCount, log, errorMessage)) {
+                      frameBufferCount, log, errorMessage, options.stop)) {
     bgfxCleanup.runNow();
     return {
         .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3922,6 +4031,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                   frameBufferMemoryMiB, frameBufferBudgetMiB);
 
   RenderContext renderContext(context.uiBatchRenderer);
+  if (!waitForReplayExportForeground(options.stop)) {
+    bgfxCleanup.runNow();
+    return {.success = false, .outputPath = outputPath,
+            .message = "Replay export cancelled"};
+  }
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   auto lastUiProgress =
@@ -3945,6 +4059,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     freeReadbackTextures.push_back(i);
   }
   std::deque<PendingReadback> pendingReadbacks;
+  finishPendingReadbacks = [&]() {
+    if (pendingReadbacks.empty()) return;
+    // readTexture borrows encoder buffers until its completion frame. Finish
+    // offscreen work before freeing either textures or those buffers, including
+    // cancellation during an encoder buffer wait or a failed packet write.
+    while (currentFrame < pendingReadbacks.back().expectedFrame) {
+      currentFrame = bgfx::frame();
+    }
+    pendingReadbacks.clear();
+  };
+  auto readbackCleanup = makeScopeExit([&]() {
+    finishPendingReadbacks();
+    finishPendingReadbacks = {};
+  });
 
   auto drainOldestReadback = [&]() -> bool {
     if (pendingReadbacks.empty()) {
@@ -3959,7 +4087,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     }
     readbackWaitMicros += elapsedMicros(readbackWaitStart);
 
-    if (!encoder.submitFrame(pending.frameBufferIndex, pending.frameIndex,
+    if (!options.stop.stop_requested() &&
+        !encoder.submitFrame(pending.frameBufferIndex, pending.frameIndex,
                              pending.songTimeMicros, errorMessage)) {
       return false;
     }
@@ -4013,7 +4142,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 
   auto renderAndQueueFrame = [&](size_t frameIndex, long long videoTimeMicros,
                                  auto &&renderFrame) -> bool {
-    if (options.stop.stop_requested()) {
+    if (!waitForReplayExportForeground(options.stop)) {
       // Drain already submitted readbacks before freeing the encoder buffers.
       // These are offscreen views and do not acquire a window drawable.
       while (!pendingReadbacks.empty()) {
@@ -4622,11 +4751,16 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 }
 
 ReplayVideoExportResult
-saveReplayVideoToPlatformLibrary(const ReplayVideoExportResult &muxResult) {
+saveReplayVideoToPlatformLibrary(const ReplayVideoExportResult &muxResult,
+                                 std::stop_token stop) {
+  if (stop.stop_requested()) {
+    return {.success = false, .outputPath = muxResult.outputPath,
+            .message = "Replay export cancelled"};
+  }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string errorMessage;
   if (!SaveVideoToIOSPhotos(fspath_to_utf8(muxResult.outputPath),
-                            errorMessage)) {
+                            errorMessage, stop)) {
     return {.success = false,
             .outputPath = muxResult.outputPath,
             .message = errorMessage.empty() ? "Failed to save video to Photos"
@@ -4687,7 +4821,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   reportReplayExportProgress(options, 0.01, "Requesting Photos permission");
   std::string photosErrorMessage;
-  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage, resolvedOptions.stop)) {
     return {.success = false,
             .message = photosErrorMessage.empty()
                            ? "Photos permission was not granted"
@@ -4817,7 +4951,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   removeReplayExportWorkDirectory(tempDir, exportLog);
 
   reportReplayExportProgress(resolvedOptions, 0.99, "Saving video");
-  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
+  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult,
+                                                            resolvedOptions.stop);
   if (!platformSaveResult.success) {
     replayExportLog(exportLog, "Replay export platform save failed: %s",
                     platformSaveResult.message.c_str());
@@ -4980,7 +5115,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   reportReplayExportProgress(options, 0.01, "Requesting Photos permission");
   std::string photosErrorMessage;
-  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage, resolvedOptions.stop)) {
     return {.success = false,
             .message = photosErrorMessage.empty()
                            ? "Photos permission was not granted"
@@ -5084,7 +5219,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
   reportReplayExportProgress(resolvedOptions, 0.05, "Building course audio");
   const auto audioStart = std::chrono::steady_clock::now();
   const auto courseAudioResult =
-      writeCourseReplayAudioTrack(audioSegments, wavPath, exportLog);
+      writeCourseReplayAudioTrack(audioSegments, wavPath, exportLog,
+                                  resolvedOptions.stop);
   if (!courseAudioResult.success) {
     removeReplayExportWorkDirectory(tempDir);
     return {.success = false,
@@ -5116,7 +5252,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
   removeReplayExportWorkDirectory(tempDir, exportLog);
 
   reportReplayExportProgress(resolvedOptions, 0.99, "Saving video");
-  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
+  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult,
+                                                            resolvedOptions.stop);
   if (!platformSaveResult.success) {
     replayExportLog(exportLog, "Course replay export platform save failed: %s",
                     platformSaveResult.message.c_str());

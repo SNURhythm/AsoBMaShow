@@ -35,7 +35,7 @@
 
 - [x] Add tests for owned text/drop/candidate payloads, FIFO key release, overflow cancellation and lifecycle delivery, stale callback generations, and producer progress while the consumer is stalled.
 - [x] Compile/run the focused test; expect missing interfaces, then failing behavior as implemented.
-- [x] Implement bounded handoff; never call consumer code under the queue mutex. Preserve lifecycle out of ordinary queue pressure, report overflow to cancel/pause input.
+- [x] Implement bounded handoff; never call consumer code under the queue mutex. Preserve lifecycle out of ordinary queue pressure, report overflow to clear held/stale input while gameplay continues.
 - [x] Run `cmake --build cmake-build-debug --target application_event_queue_tests -j 6` and `ctest --test-dir cmake-build-debug -R '^application_event_queue_tests$' --output-on-failure`; expect PASS.
 - [x] Commit the handoff and its tests.
 
@@ -61,7 +61,7 @@
 
 - [x] Add tests for worker startup failure/shutdown with pending main work and single-owner export completion/cancellation.
 - [x] Observe targeted failures, then move bgfx initialization, scene loop and shutdown into RunIOSApplication. Poll copied events and callbacks; preserve pacing with worker waits and cached refresh state.
-- [x] Suspend subsequent presentation after background delivery; reopen ingress only after viewport resynchronization. Overflow synthesizes focus cancellation and pauses gameplay.
+- [x] Suspend subsequent presentation after background delivery; reopen ingress only after viewport resynchronization. Overflow explicitly clears held/stale input without synthesizing focus loss or pausing gameplay.
 - [x] Route iOS export through the application owner; progress/cancel UI yields use the existing renderer reservation. Do not transfer bgfx thread identity to an arbitrary export worker.
 - [x] Run focused tests, desktop build and full parallel CTest; expect PASS. Run unsigned iOS verification; expect PASS.
 - [x] Commit the integrated runtime.

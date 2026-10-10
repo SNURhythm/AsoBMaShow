@@ -47,6 +47,7 @@ struct RenderContext {
   struct UiBatchScope { explicit UiBatchScope(RenderContext &) {} };
 };
 struct View {
+  void cancelPointerInput() {}
   i18n::Text label = i18n::message("menu.settings.label");
   std::string displayed = label.resolve();
   int languageChanges = 0;

@@ -40,6 +40,10 @@ public:
     }
   }
   virtual void onApplicationBackgroundChanged(bool) {}
+  // Input history was lost; retire held controls without changing playback.
+  virtual void onInputQueueOverflow() {
+    for (auto *view : views) view->cancelPointerInput();
+  }
   virtual bool continuesAudioInBackground() const { return false; }
   // CPU-only work: no rendering, resource preparation, or scene transitions.
   virtual void updateWhileBackgrounded() {}

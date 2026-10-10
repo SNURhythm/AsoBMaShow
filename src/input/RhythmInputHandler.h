@@ -104,6 +104,7 @@ public:
       std::function<void(const SDL_Event &, std::uint64_t)> callback);
   void stopListen();
   void discardPendingTouchEvents();
+  void cancelInputState();
   void setApplicationBackground(bool background);
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);

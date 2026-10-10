@@ -300,6 +300,7 @@ public:
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override;
 
+  void onInputQueueOverflow() override;
   void init() override;
   void onPresentationOrientationChanged() override;
   bool presentationSkinRefreshPending = false;

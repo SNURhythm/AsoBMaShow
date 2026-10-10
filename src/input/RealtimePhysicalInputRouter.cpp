@@ -53,6 +53,15 @@ void RealtimePhysicalInputRouter::disconnectDevice(
   pipeline_.disconnectDevice(deviceId);
 }
 
+void RealtimePhysicalInputRouter::cancelInputs(std::int64_t steadyTimestampMicros) {
+  const std::lock_guard lock(mutex_);
+  currentTimestampMicros_ = steadyTimestampMicros;
+  // Resolve held ownership into ordinary replay-aware releases. Disabling
+  // delivery alone intentionally retains published lanes for explicit pauses.
+  pipeline_.reset();
+  pendingTransitions_.clear();
+}
+
 void RealtimePhysicalInputRouter::setGameplayEnabled(
     bool enabled, std::int64_t steadyTimestampMicros) {
   const std::lock_guard lock(mutex_);

@@ -54,6 +54,7 @@ struct RenderContext {
   struct UiBatchScope { explicit UiBatchScope(RenderContext &) {} };
 };
 struct View {
+  void cancelPointerInput() {}
   std::function<bool()> eventCallback;
   virtual ~View() = default;
   bool handleEvents(SDL_Event &) {

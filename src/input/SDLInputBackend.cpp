@@ -404,6 +404,32 @@ SDLInputBackend::realtimeEventKey(const SDL_Event &event) {
   return key;
 }
 
+std::optional<bool>
+SDLInputBackend::takeRealtimeDeliveryLocked(const RealtimeEventKey &key) {
+  const auto found = std::ranges::find(realtimeDeliveries_, key, &RealtimeDelivery::key);
+  if (found == realtimeDeliveries_.end()) return std::nullopt;
+  const bool delivered = found->delivered;
+  if (!delivered) {
+    const auto pending = pendingRealtimeInputs_.find(static_cast<SDL_JoystickID>(key[2]));
+    if (pending != pendingRealtimeInputs_.end() && --pending->second == 0) {
+      pendingRealtimeInputs_.erase(pending);
+    }
+  }
+  realtimeDeliveries_.erase(found);
+  return delivered;
+}
+
+void SDLInputBackend::discardRealtimeInput(const SDL_Event &event) {
+  const auto key = realtimeEventKey(event);
+  if (!key) return;
+  const std::lock_guard lock(realtimeDeliveryMutex_);
+  (void)takeRealtimeDeliveryLocked(*key);
+  // Remove only this lost event: new producer input may already be observed
+  // but not yet queued. A global reset would replay those valid acknowledgements.
+  // Genuine >4096-watch bursts retain their conservative fallback latch: an
+  // empty acknowledgement list alone does not prove untracked fallback drained.
+}
+
 void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   if (event.type == SDL_EVENT_JOYSTICK_ADDED) {
     addDevice(event.jdevice.which);
@@ -417,18 +443,7 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   bool alreadyDelivered = false;
   if (const auto key = realtimeEventKey(event)) {
     deliveryLock.lock();
-    const auto found = std::ranges::find(realtimeDeliveries_, *key,
-                                         &RealtimeDelivery::key);
-    if (found != realtimeDeliveries_.end()) {
-      alreadyDelivered = found->delivered;
-      if (!alreadyDelivered) {
-        const auto pending = pendingRealtimeInputs_.find(static_cast<SDL_JoystickID>((*key)[2]));
-        if (pending != pendingRealtimeInputs_.end() && --pending->second == 0) {
-          pendingRealtimeInputs_.erase(pending);
-        }
-      }
-      realtimeDeliveries_.erase(found);
-    }
+    alreadyDelivered = takeRealtimeDeliveryLocked(*key).value_or(false);
   }
   const std::lock_guard lock(devicesMutex_);
   switch (event.type) {
@@ -527,12 +542,35 @@ void SDLInputBackend::pump() {
       // Native ingress may already have judged keys still in the OS/SDL queue.
       // Main-thread-only handover drains that backlog while native ownership
       // still suppresses it; subsequent SDL events are fresh fallback input.
-      platform::onMain([] {
+      platform::onMain([this] {
         SDL_PumpEvents();
-        SDL_FlushEvents(SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+        // These copies bypass ApplicationEventQueue, so retire their watcher
+        // acknowledgements here. Bound work to the current backlog; another
+        // thread pushing new SDL events must not keep the main owner in a drain.
+        int remaining = SDL_PeepEvents(nullptr, 0, SDL_PEEKEVENT,
+                                       SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+        std::array<SDL_Event, 64> discarded;
+        while (remaining > 0) {
+          const int count = SDL_PeepEvents(discarded.data(),
+              std::min(remaining, static_cast<int>(discarded.size())), SDL_GETEVENT,
+              SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+          if (count <= 0) break;
+          for (int index = 0; index < count; ++index) discardRealtimeInput(discarded[index]);
+          remaining -= count;
+        }
       });
     });
   }
+}
+
+void SDLInputBackend::clearInputState() {
+  const std::lock_guard lock(devicesMutex_);
+  for (auto &[id, device] : devices_) {
+    (void)id;
+    device.pressedRawButtons.reset();
+    std::ranges::fill(device.hatValues, SDL_HAT_CENTERED);
+  }
+  rebuildLegacyControllerGenerationLocked();
 }
 
 void SDLInputBackend::reconcileDevices() {
@@ -698,6 +736,7 @@ std::size_t SDLInputBackend::translateRealtimeInputs(
   }
   const auto deviceId = static_cast<SDL_JoystickID>((*key)[2]);
   bool known = event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP;
+  bool nativeOwned = known && nativeRealtimeOwns(input::DeviceClass::Keyboard);
   if (!known) {
     const std::lock_guard lock(devicesMutex_);
     const auto device = devices_.find(deviceId);
@@ -708,10 +747,14 @@ std::size_t SDLInputBackend::translateRealtimeInputs(
       // Mapped gamepads also emit raw joystick events. Leave those available
       // for legacy state snapshots without making them a gameplay fallback.
       if (device->second.gameController != gamepadEvent) return 0;
+      nativeOwned = gamepadEvent && device->second.playerIndex >= 0 &&
+          nativeRealtimeOwns(input::DeviceClass::GameController);
     }
   }
   const bool defer = !known || pendingRealtimeInputs_.contains(deviceId);
-  const auto count = defer ? 0 : translateRealtimeInputsUnclaimed(event, output);
+  // Acknowledge native-owned input too: queued SDL copies must not replay if
+  // the native provider or gameplay session stops before the owner drains them.
+  const auto count = defer || nativeOwned ? 0 : translateRealtimeInputsUnclaimed(event, output);
   realtimeDeliveries_.push_back({.key = *key, .delivered = !defer});
   if (defer) ++pendingRealtimeInputs_[deviceId];
   return count;

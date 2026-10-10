@@ -120,6 +120,10 @@ protected:
     batch.end();
   }
 
+  void onPointerInputCancelled() override {
+    pointerCapture.cancelAll();
+  }
+
   bool handleEventsImpl(SDL_Event &event) override {
     if (mode != PracticeAnalyticsMode::Sections ||
         model.displayedAnalysis().sections.empty()) {

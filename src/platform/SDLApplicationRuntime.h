@@ -26,12 +26,14 @@ bool waitApplicationEvent(SDL_Event *event, int timeoutMs);
 bool applicationActive();
 bool applicationCanPresent();
 bool takeApplicationOverflow();
+// Synchronous registration on the pump thread; clear before captured state dies.
+void setApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler);
 void pollApplicationDiagnostics();
 bool isApplicationThread();
 // Queue renderer work at an owner-loop boundary. Native quit/background events
 // request cancellation even while the owner is inside that work.
 void postApplicationWork(std::function<void()> work, std::stop_source stop);
-void pollApplicationWork();
+bool pollApplicationWork();
 // Android may retire a surface without changing application focus.
 void setApplicationSurfaceAvailable(bool available);
 std::optional<WindowSnapshot> getWindowSnapshot(SDL_Window *window);

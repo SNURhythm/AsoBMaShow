@@ -40,6 +40,7 @@ public:
   void consume(const PhysicalInputEvent &, std::int64_t steadyTimestampMicros);
   void disconnectDevice(std::string_view deviceId,
                         std::int64_t steadyTimestampMicros);
+  void cancelInputs(std::int64_t steadyTimestampMicros);
   void setGameplayEnabled(bool enabled,
                           std::int64_t steadyTimestampMicros);
 

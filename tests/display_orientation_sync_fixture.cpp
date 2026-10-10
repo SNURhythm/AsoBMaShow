@@ -44,6 +44,10 @@ struct Context {
   void restoreGameplayRenderViews() {}
 };
 int windowWidth = 2400, windowHeight = 1080;
+struct {
+  bool prepared = false;
+  bool pending() const { return prepared; }
+} iosPreparedFrame;
 bool iosApplicationActive = true;
 bool IOSApplicationActive() { return iosApplicationActive; }
 void *s_window = nullptr;
@@ -128,6 +132,11 @@ int main() {
   assert(!applyWindowResize(640, 480));
   assert(bgfx::resets == resetsBeforeBackground);
   iosApplicationActive = true;
+  iosPreparedFrame.prepared = true;
+  assert(!applyWindowResize(640, 480));
+  assert(bgfx::resets == resetsBeforeBackground &&
+         "pending draws must retire before a foreground renderer reset");
+  iosPreparedFrame.prepared = false;
   assert(applyWindowResize(640, 480));
   assert(sceneManager.orientation == PresentationOrientation::Landscape);
 #endif

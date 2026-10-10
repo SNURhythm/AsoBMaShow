@@ -95,6 +95,12 @@ void InputCaptureController::begin(input::InputScope scope,
   state_ = State::Listening;
 }
 
+void InputCaptureController::resetInputState() {
+  activationStates_.clear();
+  monitorSample_.reset();
+  resolver_.reset();
+}
+
 void InputCaptureController::cancel() {
   clearPending();
   lastError_.clear();

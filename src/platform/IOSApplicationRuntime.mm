@@ -21,8 +21,11 @@
 namespace {
 struct Runtime {
   platform::ApplicationEventQueue events;
-  std::atomic_bool active{true};
+  std::function<void(const SDL_Event &)> discardEvent; // UIKit main only.
+  bool inputSuppressed = false, finishInputSuppression = false; // UIKit main only.
+  platform::IOSApplicationLifecycle lifecycle;
   std::atomic_bool ingressPaused{false};
+  std::atomic_uint64_t completedPumpLifecycleGeneration{0};
 #ifndef NDEBUG
   std::atomic_uint64_t mainServiceCount{0};
   unsigned ownerIterations = 0;
@@ -34,8 +37,6 @@ struct Runtime {
   std::condition_variable wake;
   // Work is posted and consumed only by the application owner.
   std::deque<std::function<void()>> work;
-  // Main-thread state: the native cancel button owns only a copied stop source.
-  std::optional<std::stop_source> exportStop;
 };
 std::mutex runtimeMutex;
 std::shared_ptr<Runtime> runtime;
@@ -50,6 +51,12 @@ void publishRuntime(std::shared_ptr<Runtime> state) {
 // Poll callers retain the returned payload until their next poll, just as SDL
 // does on its pumping thread. No native pointer escapes the producer's pump.
 thread_local platform::OwnedApplicationEvent currentEvent;
+
+bool SDLCALL lifecycleWatch(void *opaque, SDL_Event *event) {
+  auto &state = *static_cast<Runtime *>(opaque);
+  state.lifecycle.observe(*event);
+  return true;
+}
 
 void updateViewport(Runtime &state, SDL_Window *window) {
   IOSWindowSnapshot next;
@@ -87,8 +94,10 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
   NSCAssert([NSThread isMainThread], @"Application bootstrap must own UIKit");
   auto state = std::make_shared<Runtime>();
   updateViewport(*state, window);
+  if (!SDL_AddEventWatch(lifecycleWatch, state.get())) return EXIT_FAILURE;
   publishRuntime(state);
-  auto cleanup = makeScopeExit([] {
+  auto cleanup = makeScopeExit([&] {
+    SDL_RemoveEventWatch(lifecycleWatch, state.get());
     SetIOSGameplayTouchInputEnabled(false);
     publishRuntime(nullptr);
   });
@@ -100,17 +109,18 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
     }
   }, [&] {
     @autoreleasepool {
+      // Capture before polling: a lifecycle watch can advance during the pump,
+      // before its queued events and viewport have reached the owner.
+      const auto pumpGeneration = state->lifecycle.presentation().generation;
+      state->events.beginProducerBatch();
       SDL_Event event{};
       while (SDL_PollEvent(&event)) {
         if (input::isBackgroundLifecycleEvent(event) || event.type == SDL_EVENT_TERMINATING ||
             event.type == SDL_EVENT_QUIT) {
-          state->active.store(false, std::memory_order_release);
           state->ingressPaused.store(true, std::memory_order_release);
           SetIOSGameplayTouchInputEnabled(false);
-          if (state->exportStop) state->exportStop->request_stop();
         } else if (input::isForegroundLifecycleEvent(event)) {
           updateViewport(*state, window);
-          state->active.store(true, std::memory_order_release);
           // The application acknowledges viewport restoration before ingress
           // reopens. Main never waits for that acknowledgement.
         }
@@ -118,13 +128,19 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
         if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
             (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST))
           updateViewport(*state, window);
-        if (!state->events.push(event, state->exportStop.has_value())) {
+        if (!state->events.push(event, state->inputSuppressed, state->discardEvent)) {
           state->ingressPaused.store(true, std::memory_order_release);
           SetIOSGameplayTouchInputEnabled(false);
         }
         state->wake.notify_one();
       }
       updateViewport(*state, window);
+      state->events.endProducerBatch();
+      if (state->finishInputSuppression) {
+        state->inputSuppressed = false;
+        state->finishInputSuppression = false;
+      }
+      state->completedPumpLifecycleGeneration.store(pumpGeneration, std::memory_order_release);
 #ifndef NDEBUG
       state->mainServiceCount.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -137,6 +153,12 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
     } catch (...) {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "iOS application worker failed");
     }
+  });
+}
+
+void SetIOSApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler) {
+  RunIOSMainThread([handler = std::move(handler)]() mutable {
+    if (const auto state = currentRuntime()) state->discardEvent = std::move(handler);
   });
 }
 
@@ -160,8 +182,12 @@ bool WaitIOSApplicationEvent(SDL_Event *event, int timeoutMs) {
 }
 
 bool IOSApplicationActive() {
+  return GetIOSPresentationState().active;
+}
+
+platform::IOSPresentationState GetIOSPresentationState() {
   const auto state = currentRuntime();
-  return !state || state->active.load(std::memory_order_acquire);
+  return state ? state->lifecycle.presentation() : platform::IOSPresentationState{};
 }
 
 std::optional<IOSWindowSnapshot> GetIOSWindowSnapshot(SDL_Window *window) {
@@ -172,12 +198,20 @@ std::optional<IOSWindowSnapshot> GetIOSWindowSnapshot(SDL_Window *window) {
   return state->viewport;
 }
 
-void ResumeIOSGameplayTouchInput() {
+std::uint64_t GetIOSCompletedPumpLifecycleGeneration() {
+  const auto state = currentRuntime();
+  return state ? state->completedPumpLifecycleGeneration.load(std::memory_order_acquire) : 0;
+}
+
+void ResumeIOSGameplayTouchInput(std::uint64_t expectedGeneration) {
   const auto state = currentRuntime();
   if (!state || !state->ingressPaused.load(std::memory_order_acquire)) return;
-  RunIOSMainThread([] {
+  RunIOSMainThread([expectedGeneration] {
     const auto state = currentRuntime();
-    if (state && state->active.load() && !state->exportStop) {
+    if (!state) return;
+    const auto presentation = state->lifecycle.presentation();
+    if (presentation.active && presentation.generation == expectedGeneration &&
+        !state->lifecycle.exporting() && !state->inputSuppressed) {
       SetIOSGameplayTouchInputEnabled(true);
       state->ingressPaused.store(false, std::memory_order_release);
     }
@@ -194,9 +228,9 @@ void PostIOSApplicationWork(std::function<void()> work) {
   state->work.push_back(std::move(work));
 }
 
-void PollIOSApplicationWork() {
+bool PollIOSApplicationWork() {
   const auto state = currentRuntime();
-  if (!state) return;
+  if (!state) return false;
 #ifndef NDEBUG
   // Opt-in acceptance probe, bounded and absent from release builds. Main's
   // service count measures scheduling independence, not hardware input latency.
@@ -222,21 +256,24 @@ void PollIOSApplicationWork() {
     }
   }
 #endif
-  if (state->work.empty()) return;
+  if (state->work.empty()) return false;
   // One job per safe scene-loop boundary. Destruction invalidates pending jobs.
   auto work = std::move(state->work.front());
   state->work.pop_front();
   work();
+  return true;
 }
 
 void BeginIOSReplayExport(std::stop_source stop) {
   RunIOSMainThread([stop] {
     const auto state = currentRuntime();
     if (!state) return;
-    state->exportStop = stop;
+    state->lifecycle.beginExport(stop);
+    state->inputSuppressed = true;
+    state->finishInputSuppression = false;
+    state->events.discardUserInput(state->discardEvent);
     state->ingressPaused.store(true, std::memory_order_release);
     SetIOSGameplayTouchInputEnabled(false);
-    if (!state->active.load()) state->exportStop->request_stop();
     ShowIOSReplayExportProgress([stop]() mutable { stop.request_stop(); });
   });
 }
@@ -249,7 +286,12 @@ void EndIOSReplayExport() {
   RunIOSMainThread([] {
     HideIOSReplayExportProgress();
     const auto state = currentRuntime();
-    if (state) state->exportStop.reset();
+    if (state) {
+      state->lifecycle.endExport();
+      // Resume admission only after the SDL batch containing this request has
+      // drained; remaining events still belong to the export interval.
+      state->finishInputSuppression = true;
+    }
   });
   // Reopen input only after the scene loop has consumed pending lifecycle state.
 }
