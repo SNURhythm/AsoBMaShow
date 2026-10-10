@@ -15,6 +15,16 @@
 #include <string>
 #include <vector>
 
+// This extracted-handler fixture has no SDL event loop. Native dispatch is
+// synchronous here; cross-thread behavior is covered by the runtime tests.
+bool SDLCALL SDL_IsMainThread() { return true; }
+bool SDLCALL SDL_RunOnMainThread(SDL_MainThreadCallback callback, void *context, bool) {
+  callback(context);
+  return true;
+}
+const char *SDLCALL SDL_GetError() { return "fixture SDL error"; }
+bool SDLCALL SDL_SetError(const char *, ...) { return false; }
+
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 namespace rendering {
 constexpr int window_width = 100, window_height = 100;

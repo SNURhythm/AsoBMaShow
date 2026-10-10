@@ -747,8 +747,14 @@ int main(int argv, char **args) {
     return runApplication(bgfx_init);
   });
 #else
-  SDL_Log("Using bgfx internal multithreaded mode");
-  const int appExitCode = runApplication(bgfx_init);
+  const int appExitCode = platform::runSDLApplication(win, [bgfx_init] {
+    SDL_Log("Using bgfx internal multithreaded mode on application worker");
+#if TARGET_OS_OSX
+    return RunMacApplication([&] { return runApplication(bgfx_init); });
+#else
+    return runApplication(bgfx_init);
+#endif
+  });
 #endif
 
 #if TARGET_OS_ANDROID
@@ -1052,6 +1058,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
     PollIOSNativeTextEditorCallbacks();
     if (IOSApplicationActive()) PollIOSApplicationWork();
+#else
+    platform::pollApplicationDiagnostics();
 #endif
     if (!orientationLocked &&
         appliedOrientation != context.settings.screenOrientation) {
@@ -1365,7 +1373,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
       if (WaitIOSApplicationEvent(&waitEvent, timeoutMs)) {
 #else
-      if (SDL_WaitEventTimeout(&waitEvent, timeoutMs)) {
+      if (platform::waitApplicationEvent(&waitEvent, timeoutMs)) {
 #endif
         if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
           ++rawEventsInWindow;
@@ -1378,7 +1386,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
     const auto pollApplicationEvent = PollIOSApplicationEvent;
 #else
-    const auto pollApplicationEvent = SDL_PollEvent;
+    const auto pollApplicationEvent = platform::pollApplicationEvent;
 #endif
     while (pollApplicationEvent(&e)) {
       if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
@@ -1437,6 +1445,16 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (!IOSApplicationActive()) setAppBackground(true);
     if (!context.appInBackground.load() && !context.quitFlag.load())
       ResumeIOSGameplayTouchInput();
+#else
+    const bool pressureRecovery = platform::takeApplicationOverflow();
+    if (pressureRecovery) {
+      context.inputDeviceRegistry.reconcileSdlDevices();
+      int width = 0, height = 0;
+      platform::windowSize(s_window, &width, &height);
+      deferWindowResize(width, height);
+      setAppBackground(!platform::applicationActive());
+    }
+    if (!platform::applicationActive()) setAppBackground(true);
 #endif
     flushPendingResize();
     if (!pendingFingerMotions.empty()) {
@@ -1781,7 +1799,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         const auto waitDeadline = waitStartedAt + waitDuration;
         while (!context.quitFlag &&
                !context.appInBackground.load(std::memory_order_acquire)) {
-          while (SDL_PollEvent(&e)) {
+          while (platform::pollApplicationEvent(&e)) {
             if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
               ++rawEventsInWindow;
             }

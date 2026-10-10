@@ -17,6 +17,11 @@ namespace {
 struct Runtime {
   ApplicationEventQueue events;
   std::atomic_bool active{true};
+#ifndef NDEBUG
+  std::atomic_uint64_t mainServiceCount{0};
+  unsigned ownerIterations = 0;
+  bool stallProbeRan = false;
+#endif
   std::mutex viewportMutex;
   WindowSnapshot viewport;
   std::mutex wakeMutex;
@@ -60,6 +65,9 @@ bool SDLCALL lifecycleWatch(void *opaque, SDL_Event *event) {
 int runSDLApplication(SDL_Window *window, std::function<int()> application) {
   if (!SDL_IsMainThread()) throw std::logic_error("SDL bootstrap must own event pumping");
   auto state = std::make_shared<Runtime>();
+#ifndef NDEBUG
+  const bool traceEvents = std::getenv("ASOBMASHOW_EVENT_TRACE") != nullptr;
+#endif
   updateViewport(*state, window);
   if (!SDL_AddEventWatch(lifecycleWatch, state.get())) return EXIT_FAILURE;
   publishRuntime(state);
@@ -73,10 +81,21 @@ int runSDLApplication(SDL_Window *window, std::function<int()> application) {
   return runApplicationThread(std::move(application), [&] {
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
+#ifndef NDEBUG
+      if (traceEvents && (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                          event.type == SDL_EVENT_MOUSE_BUTTON_UP))
+        SDL_Log("SDL pointer event %u: %.1f, %.1f", event.type, event.button.x, event.button.y);
+      if (traceEvents && (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP ||
+                          event.type == SDL_EVENT_TEXT_INPUT))
+        SDL_Log("SDL keyboard event %u", event.type);
+#endif
       state->events.push(event);
       state->wake.notify_one();
     }
     updateViewport(*state, window);
+#ifndef NDEBUG
+    state->mainServiceCount.fetch_add(1, std::memory_order_relaxed);
+#endif
     // SDL_PumpEvents services synchronous worker requests as well as native
     // events. Never wait for rendering or take a scene-owned lock here.
     SDL_Delay(1);
@@ -116,6 +135,25 @@ bool applicationActive() {
 bool takeApplicationOverflow() {
   const auto state = currentRuntime();
   return state && state->events.takeOverflow();
+}
+
+void pollApplicationDiagnostics() {
+#ifndef NDEBUG
+  const auto state = currentRuntime();
+  if (!state || state->stallProbeRan || ++state->ownerIterations < 120) return;
+  state->stallProbeRan = true;
+  if (const char *value = std::getenv("ASOBMASHOW_RENDER_STALL_MS")) {
+    const int milliseconds = std::clamp(std::atoi(value), 0, 5000);
+    const auto before = state->mainServiceCount.load(std::memory_order_relaxed);
+    SDL_Log("Render stall probe begin: %d ms", milliseconds);
+    std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+    SDL_Log("Render stall probe end: SDL main serviced %llu iterations",
+        static_cast<unsigned long long>(state->mainServiceCount.load(std::memory_order_relaxed) - before));
+    if (std::getenv("ASOBMASHOW_PROBE_QUIT")) {
+      SDL_Event quit{}; quit.type = SDL_EVENT_QUIT; SDL_PushEvent(&quit);
+    }
+  }
+#endif
 }
 
 std::optional<WindowSnapshot> getWindowSnapshot(SDL_Window *window) {

@@ -1057,9 +1057,7 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool acceptingNativeInput{false};
-#if TARGET_OS_IPHONE
   std::atomic_bool keyboardTextFocused{false};
-#endif
   std::mutex inputInterruptionMutex;
   std::atomic_bool inputInterrupted{false};
   std::atomic_bool inputFallbackReady{false};
@@ -1078,7 +1076,6 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::unique_ptr<input::AndroidRealtimeInputGate> androidPhysicalInputGate;
 
 #endif
-#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   // Presentation owns the coordinator; native callbacks read only a copy.
   void publishKeyboardTextFocus() {
     const auto *coordinator = scene == nullptr ? nullptr :
@@ -1093,7 +1090,6 @@ struct GamePlayScene::RealtimeGameplaySession {
     keyboardTextFocused.store(focused, std::memory_order_release);
 #endif
   }
-#endif
   gameplay::BoundedMpscQueue<input::LogicalInputTransition,
                              kInputCommandCapacity>
       inputCommands;
@@ -1517,15 +1513,17 @@ struct GamePlayScene::RealtimeGameplaySession {
     if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
         session.keyboardTextFocused.load(std::memory_order_acquire)) return 0;
 #else
-    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
-        session.scene != nullptr) {
-      const auto *coordinator =
-          dynamic_cast<const PlayfieldPresentationCoordinator *>(
-              session.scene->presentation);
-      if (coordinator != nullptr && coordinator->hasFocusedTextInput()) {
-        return 0;
-      }
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+        event->type == SDL_EVENT_WINDOW_HIDDEN || event->type == SDL_EVENT_WINDOW_MINIMIZED) {
+      // SDL now runs independently of the scene. Freeze judgement immediately;
+      // the application owner presents the pause UI after its render wait ends.
+      const auto timestamp = static_cast<std::uint64_t>(nowMicros());
+      session.interruptInput({input::DeviceClass::Keyboard, timestamp, false});
+      session.interruptInput({input::DeviceClass::Keyboard, timestamp, true});
+      return 0;
     }
+    if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
+        session.keyboardTextFocused.load(std::memory_order_acquire)) return 0;
 #endif
     if (const auto disconnected =
             session.inputRegistry->realtimeDisconnectedSdlDevice(*event);
@@ -2486,9 +2484,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   if (!enabled) session.cancelNativeUiTouches();
 #endif
-#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   session.publishKeyboardTextFocus();
-#endif
   {
     const std::lock_guard lock(session.inputInterruptionMutex);
     if (enabled && session.inputInterrupted.load(std::memory_order_acquire)) return;
@@ -2630,11 +2626,9 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
 
 void GamePlayScene::drainRealtimeTouchSamples(
     std::optional<long long> cancelPresentationAtSteadyMicros) {
-#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   const auto publishTextFocus = makeScopeExit([this] {
     if (realtimeGameplaySession != nullptr) realtimeGameplaySession->publishKeyboardTextFocus();
   });
-#endif
   if (!realtimeGameplayAuthorityActive()) {
     return;
   }
@@ -4197,6 +4191,13 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
     if (!background) realtimeGameplaySession->cancelNativeUiTouches();
     setRealtimeGameplayIngressEnabled(!background && state != nullptr &&
         state->isPlaying && !state->isEnding && !context.jukebox.isPaused());
+  }
+#else
+  if (background && realtimeGameplayAuthorityActive()) {
+    // Also covers the queue's synthetic cancellation after input overflow.
+    const auto timestamp = static_cast<std::uint64_t>(nowMicros());
+    realtimeGameplaySession->interruptInput({input::DeviceClass::Keyboard, timestamp, false});
+    realtimeGameplaySession->interruptInput({input::DeviceClass::Keyboard, timestamp, true});
   }
 #endif
   guidedAccessReminderBackground = background;
@@ -7198,11 +7199,9 @@ bool GamePlayScene::renderViewBeforeScene(const View *view) const {
 }
 
 bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
-#if TARGET_OS_ANDROID || TARGET_OS_IPHONE
   const auto publishTextFocus = makeScopeExit([this] {
     if (realtimeGameplaySession != nullptr) realtimeGameplaySession->publishKeyboardTextFocus();
   });
-#endif
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
   if (coordinator == nullptr) {

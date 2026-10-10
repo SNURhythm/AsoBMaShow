@@ -1,3 +1,4 @@
+#include "../platform/SDLMainThread.h"
 #include "../targets.h"
 
 #if TARGET_OS_LINUX && !TARGET_OS_ANDROID
@@ -47,9 +48,12 @@ public:
 #if defined(ASOBMASHOW_HAVE_X11)
     // SDL performs XInitThreads before opening its own X11 connection. Only
     // this worker uses our separate connection; never touch SDL's Display.
-    const char *driver = SDL_GetCurrentVideoDriver();
+    const std::string driver = platform::onMain([] {
+      const auto *value = SDL_GetCurrentVideoDriver();
+      return value ? std::string(value) : std::string{};
+    });
     const char *wayland = std::getenv("WAYLAND_DISPLAY");
-    if (driver == nullptr || std::string_view(driver) != "x11" ||
+    if (driver != "x11" ||
         (wayland != nullptr && *wayland != '\0') || !captureWindow()) {
       errorMessage = "Native keyboard requires an X11 window; using SDL";
       return false;
@@ -136,6 +140,8 @@ public:
 private:
 #if defined(ASOBMASHOW_HAVE_X11)
   bool captureWindow() {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return captureWindow(); });
     auto *window = SDL_GetKeyboardFocus(); // main-thread lifecycle only
     if (window == nullptr) return false;
     const auto properties = SDL_GetWindowProperties(window);

@@ -1,6 +1,8 @@
 
 
 #include "MacNatives.h"
+#include "platform/IOSApplicationRuntime.h"
+#include <pthread.h>
 #include <Foundation/Foundation.h>
 #if TARGET_OS_OSX
 #include <AppKit/AppKit.h>
@@ -13,7 +15,17 @@ void setSmoothScrolling(bool smoothScrolling) {
 }
 
 #if TARGET_OS_OSX
+int RunMacApplication(std::function<int()> application) {
+  @autoreleasepool {
+    pthread_setname_np("AsoBMaShow application");
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    return application();
+  }
+}
+
 bool RevealPathInFinder(const std::string &path, std::string &errorMessage) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return RevealPathInFinder(path, errorMessage); });
   errorMessage.clear();
   @autoreleasepool {
     NSString *pathString = [[NSString alloc] initWithBytes:path.data()
@@ -37,6 +49,8 @@ bool RevealPathInFinder(const std::string &path, std::string &errorMessage) {
 
 bool OpenPathWithDefaultApplication(const std::string &path,
                                     std::string &errorMessage) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return OpenPathWithDefaultApplication(path, errorMessage); });
   errorMessage.clear();
   @autoreleasepool {
     NSString *pathString = [[NSString alloc] initWithBytes:path.data()
@@ -56,6 +70,8 @@ bool OpenPathWithDefaultApplication(const std::string &path,
 }
 
 bool OpenURLInDefaultBrowser(const std::string &url, std::string &errorMessage) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return OpenURLInDefaultBrowser(url, errorMessage); });
   errorMessage.clear();
   @autoreleasepool {
     NSString *urlString = [[NSString alloc] initWithBytes:url.data()

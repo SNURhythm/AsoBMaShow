@@ -7294,6 +7294,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
+    set(desktop_realtime_ingress_methods
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/desktop_realtime_ingress_methods.h)
+    add_custom_command(OUTPUT ${desktop_realtime_ingress_methods}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/desktop_realtime_ingress_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${desktop_realtime_ingress_methods}
+        DEPENDS tests/desktop_realtime_ingress_extract.py tests/gameplay_terminal_scene_extract.py
+            src/scene/play/GamePlayScene.cpp
+        VERBATIM)
+    add_executable(desktop_realtime_ingress_tests tests/desktop_realtime_ingress_tests.cpp
+        ${desktop_realtime_ingress_methods})
+    target_include_directories(desktop_realtime_ingress_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_compile_features(desktop_realtime_ingress_tests PRIVATE cxx_std_23)
+    target_link_libraries(desktop_realtime_ingress_tests PRIVATE SDL3::SDL3)
+
     add_executable(sdl_application_runtime_tests
         tests/sdl_application_runtime_tests.cpp
         src/platform/SDLApplicationRuntime.cpp
@@ -9376,6 +9391,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
+    # These view fixtures exercise the same SDL-owned geometry snapshots as the app.
+    foreach(view_runtime_target builtin_renderer_characterization_tests
+            settings_button_layout_tests text_input_box_tests play_options_panel_view_tests)
+        if(TARGET ${view_runtime_target})
+            target_sources(${view_runtime_target} PRIVATE
+                src/platform/SDLApplicationRuntime.cpp src/platform/ApplicationEventQueue.cpp)
+        endif()
+    endforeach()
+
+    asobmashow_register_test(desktop_realtime_ingress_tests)
     asobmashow_register_test(sdl_application_runtime_tests)
     asobmashow_register_test(application_event_queue_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)

@@ -24,6 +24,7 @@ bool pollApplicationEvent(SDL_Event *event);
 bool waitApplicationEvent(SDL_Event *event, int timeoutMs);
 bool applicationActive();
 bool takeApplicationOverflow();
+void pollApplicationDiagnostics();
 std::optional<WindowSnapshot> getWindowSnapshot(SDL_Window *window);
 }
 #endif
