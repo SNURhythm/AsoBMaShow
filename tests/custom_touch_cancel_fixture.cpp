@@ -1,6 +1,7 @@
 // Real event handlers; geometry, drawing and external effects are controlled.
 #include <SDL3/SDL.h>
 #include "input/SDLPointerEvent.h"
+#include "platform/SDLMainThread.h"
 #include "math/Vector3.h"
 #include "music_select/MusicSelectExternalActions.h"
 #include "scene/PracticeAnalyticsPresentation.h"

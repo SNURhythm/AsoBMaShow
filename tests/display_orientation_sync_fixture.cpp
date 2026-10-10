@@ -44,12 +44,16 @@ struct Context {
   void restoreGameplayRenderViews() {}
 };
 int windowWidth = 2400, windowHeight = 1080;
+bool iosApplicationActive = true;
+bool IOSApplicationActive() { return iosApplicationActive; }
 void *s_window = nullptr;
 uint32_t s_bgfxResetFlags = 0;
 struct { void resize(int, int) {} } s_postProcess;
-void SDL_GetWindowSize(void *, int *width, int *height) {
+namespace platform {
+void windowSize(void *, int *width, int *height) {
   *width = windowWidth;
   *height = windowHeight;
+}
 }
 void getWindowDrawableSize(void *, int width, int height, int &rw, int &rh) {
   rw = width;
@@ -118,6 +122,15 @@ int main() {
         ? PresentationOrientation::Landscape : PresentationOrientation::Portrait));
   }
   assert(bgfx::resets == resetsBeforeFold + 4);
+#if TARGET_OS_IPHONE
+  iosApplicationActive = false;
+  const int resetsBeforeBackground = bgfx::resets;
+  assert(!applyWindowResize(640, 480));
+  assert(bgfx::resets == resetsBeforeBackground);
+  iosApplicationActive = true;
+  assert(applyWindowResize(640, 480));
+  assert(sceneManager.orientation == PresentationOrientation::Landscape);
+#endif
   const int changesAfterFold = sceneManager.changes;
   windowWidth = 0;
   assert(!syncDisplay(0, error));

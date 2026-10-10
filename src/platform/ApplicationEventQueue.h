@@ -33,7 +33,8 @@ private:
 class ApplicationEventQueue {
 public:
   explicit ApplicationEventQueue(std::size_t capacity = 256);
-  bool push(const SDL_Event &event);
+  // Export suppresses user input but defers window/device state for its owner.
+  bool push(const SDL_Event &event, bool stateOnly = false);
   bool poll(OwnedApplicationEvent &event);
   bool takeOverflow();
 

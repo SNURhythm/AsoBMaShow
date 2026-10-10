@@ -1865,6 +1865,40 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
          "reconnecting with a new SDL instance keeps its stable ID");
 }
 
+void testSdlReconciliationRecoversLostHotplugWithoutDuplicatePublication() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {controllerInfo(42, "/old-controller")};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  std::vector<input::InputDeviceSnapshot> changes;
+  registry.subscribeDevices([&](const auto &device) {
+    if (device.deviceClass != input::DeviceClass::Keyboard) changes.push_back(device);
+  });
+  registry.pump();
+  expect(changes.size() == 1, "initial controller is published");
+  const auto oldId = changes.front().stableId;
+  changes.clear();
+  // The app queue lost both hotplug edges during pressure recovery.
+  provider->devices = {controllerInfo(77, "/new-controller")};
+  registry.reconcileSdlDevices();
+  registry.pump();
+  expect(changes.size() == 2 && !changes.front().connected && changes.back().connected,
+         "reconciliation publishes the lost disconnect and connect");
+  expect(!registry.isConnected(oldId) && registry.isConnected(changes.back().stableId),
+         "reconciliation repairs registry connection state");
+  const auto opens = provider->openedInstances.size();
+  const auto closes = provider->closedInstances.size();
+  changes.clear();
+  registry.reconcileSdlDevices();
+  registry.pump();
+  expect(changes.empty() && provider->openedInstances.size() == opens &&
+             provider->closedInstances.size() == closes,
+         "reconciliation leaves retained device handles and subscriptions intact");
+  provider->deviceCountOverride = -1;
+  registry.reconcileSdlDevices();
+  registry.pump();
+  expect(changes.empty(), "enumeration failure must not invent disconnections");
+}
+
 void testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->devices = {
@@ -2042,6 +2076,7 @@ int main() {
   testSdlDuplicateSerialsKeepIndependentEffectiveIds();
   testSdlOverlappingReconnectWaitsForLastOwnerRemoval();
   testSdlReconnectRemovalDedupAndAxisNormalization();
+  testSdlReconciliationRecoversLostHotplugWithoutDuplicatePublication();
   testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals();
   testGyroscopeControlFanoutDispatchesWithoutBackendPump();
 

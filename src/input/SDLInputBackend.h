@@ -67,6 +67,7 @@ public:
   void stop() override;
   void handleSdlEvent(const SDL_Event &event) override;
   void pump() override;
+  void reconcileDevices();
   void setRealtimeInputClaimed(input::DeviceClass deviceClass,
                                bool claimed) override;
   [[nodiscard]] std::optional<input::PhysicalInputEvent>

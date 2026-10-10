@@ -50,6 +50,8 @@ public:
   // Dispatches this SDL event before returning without polling async backends.
   void handleSdlEventAndDispatch(const SDL_Event &event);
   void pump();
+  // Recover device topology after application event queue pressure.
+  void reconcileSdlDevices();
   // Main thread only, after a ready interruption has gated gameplay input.
   void completeRealtimeInputFallback();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);

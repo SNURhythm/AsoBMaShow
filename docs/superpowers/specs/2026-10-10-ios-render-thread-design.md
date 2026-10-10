@@ -145,7 +145,7 @@ Main-thread platform requests remain serviced until the worker has unwound.
 Replay export uses the same renderer owner and a native progress/cancel overlay.
 The overlay avoids reentrant scene callbacks during scene destruction.
 
-- Desktop build and all 472 CTest cases passed (205.18 seconds).
+- Desktop build and all 472 CTest cases passed after the review corrections (257.36 seconds).
 - Release verification passed 68 native cases, 53 iOS setup cases, 20 workflow
   cases and 18 artifact cases, plus the unsigned iOS build and artifact audit.
 - iPhone Duo Simulator / iOS 27.1 exercised gameplay, pause/resume, retry,
@@ -160,6 +160,15 @@ The overlay avoids reentrant scene callbacks during scene destruction.
   followed by normal quit. A sampled stack placed main in its native run loop
   and the application worker in Metal drawable acquisition. This establishes
   scheduling separation, not a physical-device latency improvement.
+- A second Debug probe stalled the application worker for five seconds after
+  three native touches. Five UIKit touch callbacks during that stall reached
+  the input queue in 23–37 microseconds; the four callbacks before the stall
+  took 17–155 microseconds, and four afterward took 26–46 microseconds. Main
+  serviced 3,911 iterations during the stall, and gameplay paused normally
+  afterward. These tiny simulator samples are a concurrency check, not a
+  statistical latency benchmark. Reproduce with `ASOBMASHOW_IOS_TOUCH_PROBE=1`,
+  `ASOBMASHOW_IOS_RENDER_STALL_AFTER_TOUCHES=3`, and
+  `ASOBMASHOW_IOS_RENDER_STALL_MS=5000` in a Debug build.
 
 The simulator checks used generated local chart/audio fixtures. Unicode IME
 composition and physical-device timing/background behavior were not verified.
@@ -168,3 +177,23 @@ shutdown and stale-generation behavior are covered by portable tests. The
 existing single-owner bgfx mode is retained, so this change does not introduce
 an extra bgfx producer/render frame queue. Physical frame pacing still requires
 measurement on the user's iPad.
+
+### Review corrections
+
+The fresh branch review identified two recovery defects. Export now defers
+window/display/device events while suppressing user input, so completion and
+cancellation deliver pending resize and hotplug changes. After queue overflow,
+the registry reconciles the actual attached SDL device set without reopening
+unchanged devices. Regression tests cover preserved resize/connect/disconnect
+events, lost hotplug reconciliation, repeated reconciliation and enumeration
+failure. The original export-resize defect was also reproduced in Simulator:
+rotation during encoding followed by cancellation returned a stretched
+landscape scene on a portrait drawable.
+The fixed Simulator build passed both branches: rotation during encoding
+followed by cancellation returned the correct portrait layout, and a short
+750-frame export rotated during encoding completed, saved to Photos in 10.52
+seconds, and returned the correct portrait layout. Main Thread Checker reported
+no violations. The original landscape preference was restored and the generated
+chart/audio fixtures and temporary export artifacts were removed.
+
+The final unsigned iOS build and artifact audit also passed after these corrections.

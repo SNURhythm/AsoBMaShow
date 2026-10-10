@@ -118,7 +118,31 @@ void ApplicationEventQueue::recover(const SDL_Event &incoming) {
   cancellationPending_ = true;
 }
 
-bool ApplicationEventQueue::push(const SDL_Event &event) {
+bool ApplicationEventQueue::push(const SDL_Event &event, bool stateOnly) {
+  if (stateOnly) {
+    const bool windowOrDisplay =
+        (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) ||
+        (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST);
+    switch (event.type) {
+    case SDL_EVENT_QUIT:
+    case SDL_EVENT_TERMINATING:
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+    case SDL_EVENT_JOYSTICK_ADDED:
+    case SDL_EVENT_JOYSTICK_REMOVED:
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_REMAPPED:
+    case SDL_EVENT_AUDIO_DEVICE_ADDED:
+    case SDL_EVENT_AUDIO_DEVICE_REMOVED:
+    case SDL_EVENT_AUDIO_DEVICE_FORMAT_CHANGED:
+      break;
+    default:
+      if (!windowOrDisplay) return true;
+    }
+  }
   // Own SDL's temporary bytes before they expire, outside the shared lock.
   std::optional<OwnedApplicationEvent> owned;
   try {

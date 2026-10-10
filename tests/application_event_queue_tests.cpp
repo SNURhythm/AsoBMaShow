@@ -17,6 +17,27 @@ void require(bool condition, const char *message) {
   }
 }
 
+void testExportDefersViewportAndDeviceStateButDropsInput() {
+  platform::ApplicationEventQueue queue(8);
+  SDL_Event event{};
+  event.type = SDL_EVENT_KEY_DOWN;
+  require(queue.push(event, true), "suppressed export input is not queue pressure");
+  for (const auto type : {SDL_EVENT_WINDOW_RESIZED, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED,
+                         SDL_EVENT_JOYSTICK_ADDED, SDL_EVENT_JOYSTICK_REMOVED,
+                         SDL_EVENT_DID_ENTER_FOREGROUND}) {
+    event.type = type;
+    require(queue.push(event, true), "export lost state event");
+  }
+  platform::OwnedApplicationEvent owned;
+  for (const auto type : {SDL_EVENT_WINDOW_RESIZED, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED,
+                         SDL_EVENT_JOYSTICK_ADDED, SDL_EVENT_JOYSTICK_REMOVED,
+                         SDL_EVENT_DID_ENTER_FOREGROUND}) {
+    require(queue.poll(owned) && owned.event().type == type,
+            "export completion/cancellation must deliver deferred state in order");
+  }
+  require(!queue.poll(owned), "export replayed suppressed input");
+}
+
 void testHostServicesCleanupBeforeJoinAndPropagatesStartupFailure() {
   std::atomic_bool needsMain = false;
   std::atomic_bool serviced = false;
@@ -191,6 +212,7 @@ void testProducerCompletesWhileConsumerIsStalled() {
 }
 
 int main() {
+  testExportDefersViewportAndDeviceStateButDropsInput();
   testHostServicesCleanupBeforeJoinAndPropagatesStartupFailure();
   testPayloadSurvivesSourceAndQueueMoves();
   testEdgesRemainOrderedAndOverflowCancelsBeforeRecovery();

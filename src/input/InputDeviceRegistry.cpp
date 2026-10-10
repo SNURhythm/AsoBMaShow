@@ -358,6 +358,10 @@ InputDeviceRegistry::~InputDeviceRegistry() {
   queueState_->close();
 }
 
+void InputDeviceRegistry::reconcileSdlDevices() {
+  if (sdlInputBackend_) sdlInputBackend_->reconcileDevices();
+}
+
 std::optional<InputDeviceRegistry::PointerPosition>
 InputDeviceRegistry::pointerPosition() const noexcept {
   const std::lock_guard lock(legacyInputMutex_);

@@ -1427,6 +1427,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
 #if TARGET_OS_IPHONE
     const bool pressureRecovery = TakeIOSApplicationOverflow();
+    if (pressureRecovery) context.inputDeviceRegistry.reconcileSdlDevices();
     // The cancellation event has already paused gameplay. Restore the window
     // state without synthesizing a gameplay resume or replaying stale input.
     if (pressureRecovery && IOSApplicationActive()) {

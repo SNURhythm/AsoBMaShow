@@ -114,10 +114,7 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
           // The application acknowledges viewport restoration before ingress
           // reopens. Main never waits for that acknowledgement.
         }
-        const bool lifecycle = input::isBackgroundLifecycleEvent(event) ||
-            input::isForegroundLifecycleEvent(event) || event.type == SDL_EVENT_QUIT ||
-            event.type == SDL_EVENT_TERMINATING;
-        if ((!state->exportStop || lifecycle) && !state->events.push(event)) {
+        if (!state->events.push(event, state->exportStop.has_value())) {
           state->ingressPaused.store(true, std::memory_order_release);
           SetIOSGameplayTouchInputEnabled(false);
         }

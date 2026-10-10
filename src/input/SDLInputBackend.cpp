@@ -535,6 +535,27 @@ void SDLInputBackend::pump() {
   }
 }
 
+void SDLInputBackend::reconcileDevices() {
+  // A bounded application queue may discard hotplug edges during recovery.
+  // Enumerate on the SDL pump owner without holding a lock its watcher needs.
+  if (!platform::isMainThread())
+    return platform::onMain([this] { reconcileDevices(); });
+  if (!started_) return;
+  const auto attached = provider_->deviceIds();
+  if (!attached) return;
+  std::vector<SDL_JoystickID> previous;
+  {
+    const std::lock_guard lock(devicesMutex_);
+    for (const auto &[id, device] : devices_) previous.push_back(id);
+  }
+  for (const auto id : previous) {
+    if (std::ranges::find(*attached, id) == attached->end()) removeDevice(id);
+  }
+  for (const auto id : *attached) {
+    if (std::ranges::find(previous, id) == previous.end()) addDevice(id);
+  }
+}
+
 void SDLInputBackend::setRealtimeInputClaimed(
     input::DeviceClass deviceClass, bool claimed) {
   const std::lock_guard lock(realtimeDeliveryMutex_);
