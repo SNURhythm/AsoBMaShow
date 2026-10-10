@@ -75,6 +75,7 @@ extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity
 }
 
 bool fixtureAndroid = false;
+bool fixtureIos = false;
 
 struct FixtureInput {
   int touchPumps = 0;
@@ -128,7 +129,7 @@ struct FixtureRealtimeSession {
   bool uiTouchCaptured = false;
   int pendingUiTouches = 0;
   int uiTouchCancellations = 0;
-  void cancelAndroidUiTouches() {
+  void cancelNativeUiTouches() {
     uiTouchCaptured = false;
     pendingUiTouches = 0;
     ++uiTouchCancellations;
@@ -2191,8 +2192,9 @@ void testBackgroundFinalTimelineFailureWinsOverPracticeLoop() {
           "foreground gives a failed final timeline priority over practice loop completion");
 }
 
-void testAndroidRealtimePauseResumeDiscardsDeferredTouches() {
-  fixtureAndroid = true;
+void testMobileRealtimePauseResumeDiscardsDeferredTouches(bool ios) {
+  fixtureIos = ios;
+  fixtureAndroid = !ios;
   GamePlayScene scene;
   FixtureInput input;
   scene.inputHandler = &input;
@@ -2214,6 +2216,7 @@ void testAndroidRealtimePauseResumeDiscardsDeferredTouches() {
   require(input.touchDiscards == 2 && input.pumpedTouches == 0 && !input.dragOwned,
           "Resume touch cannot enter the lane beneath the dismissed pause overlay");
   fixtureAndroid = false;
+  fixtureIos = false;
 }
 
 void testBackgroundGameplayProgress() {
@@ -2299,11 +2302,13 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc > 1 && std::string_view(argv[1]) == "android-resume-touch") {
-    testAndroidRealtimePauseResumeDiscardsDeferredTouches();
+    testMobileRealtimePauseResumeDiscardsDeferredTouches(false);
+  testMobileRealtimePauseResumeDiscardsDeferredTouches(true);
     return 0;
   }
   testBackgroundFinalTimelineFailureWinsOverPracticeLoop();
-  testAndroidRealtimePauseResumeDiscardsDeferredTouches();
+  testMobileRealtimePauseResumeDiscardsDeferredTouches(false);
+  testMobileRealtimePauseResumeDiscardsDeferredTouches(true);
   testBackgroundGameplayProgress();
   testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause();
   testDeferredTouchPumpWithRealtimeAuthority();

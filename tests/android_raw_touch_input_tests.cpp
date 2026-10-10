@@ -163,7 +163,21 @@ void testUiOverflowCannotTurnDroppedReleaseIntoClick() {
           "main-thread dispatch can reject an already-popped event after a Retry changes epoch");
 }
 
+void testUiPreservesNativeTouchIdentity() {
+  RawTouchRegistration registration(nullptr, nullptr);
+  RawTouchEvent touch;
+  const std::int64_t nativeIdentity = 0x123456780001LL;
+  touch.pointerId = nativeIdentity;
+  touch.phase = TouchPhase::Down;
+  RawTouchRegistration::dispatch(registration.epoch(), touch);
+  UiTouchEvent ui;
+  require(RawTouchRegistration::pollUiEvent(ui) &&
+              ui.touch.pointerId == nativeIdentity,
+          "64-bit UIKit touch identities must not collide after UI forwarding");
+}
+
 int main() {
+  testUiPreservesNativeTouchIdentity();
   testUiForwardingPreservesEpochAndOrder();
   testUiOverflowCancelsAndRequiresFreshContact();
   testUiBoundaryDiscardsUndeliveredContacts();

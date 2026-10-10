@@ -5836,8 +5836,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(android_input_timestamp_ingress_tests PRIVATE SDL3)
     endif()
 
+    add_executable(ios_touch_gesture_router_tests
+        tests/ios_touch_gesture_router_tests.cpp src/input/NativeRawTouchInput.cpp)
+    target_include_directories(ios_touch_gesture_router_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/SDL/include)
+    target_compile_features(ios_touch_gesture_router_tests PRIVATE cxx_std_23)
+    target_link_libraries(ios_touch_gesture_router_tests PRIVATE Threads::Threads)
+    add_test(NAME ios_touch_gesture_router_tests COMMAND ios_touch_gesture_router_tests)
+
     add_executable(android_raw_touch_input_tests
-        tests/android_raw_touch_input_tests.cpp src/input/AndroidRawTouchInput.cpp)
+        tests/android_raw_touch_input_tests.cpp src/input/NativeRawTouchInput.cpp)
     target_include_directories(android_raw_touch_input_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include)
     target_compile_features(android_raw_touch_input_tests PRIVATE cxx_std_23)
@@ -7287,7 +7295,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         VERBATIM
     )
     add_executable(realtime_gameplay_worker_tests
-        src/input/AndroidRawTouchInput.cpp
+        src/input/NativeRawTouchInput.cpp
         ${android_realtime_touch_methods}
         src/input/SDLTouchInputSource.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp

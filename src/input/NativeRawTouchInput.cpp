@@ -1,8 +1,8 @@
-#include "AndroidRawTouchInput.h"
+#include "NativeRawTouchInput.h"
 
 #include <mutex>
 
-namespace input::android {
+namespace input::native_touch {
 namespace {
 struct Registry {
   std::mutex mutex;
@@ -28,7 +28,7 @@ struct RawTouchRegistration::UiState {
   std::array<Contact, kMaximumUiTouchContacts> delivered{};
 
   static Contact *find(std::array<Contact, kMaximumUiTouchContacts> &contacts,
-                       int pointerId) {
+                       std::int64_t pointerId) {
     for (auto &contact : contacts) {
       if (contact.active && contact.last.pointerId == pointerId) return &contact;
     }
@@ -171,4 +171,4 @@ UiCancellationBatch RawTouchRegistration::cancelUiTouches() {
   return result;
 }
 
-} // namespace input::android
+} // namespace input::native_touch

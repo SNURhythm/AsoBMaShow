@@ -23,8 +23,10 @@ def runtime_android_branches(source):
         directive = line.strip()
         if directive.startswith(("#if ", "#ifdef ", "#ifndef ")):
             android = directive == "#if TARGET_OS_ANDROID"
-            branches.append(android)
-            lines.append("if (fixtureAndroid) {" if android else line)
+            mobile = directive == "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID"
+            branches.append(android or mobile)
+            lines.append("if (fixtureAndroid) {" if android else
+                         "if (fixtureAndroid || fixtureIos) {" if mobile else line)
         elif directive == "#else" and branches and branches[-1]:
             lines.append("} else {")
         elif directive == "#endif":
@@ -109,6 +111,12 @@ def main():
     ingress = extract(source, "void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled)")
     ingress = ingress.replace("setRealtimeGameplayIngressEnabled(",
                               "setRealtimeGameplayIngressEnabledFromProduction(", 1)
+    # This scene fixture covers lifecycle/UI cancellation and physical input.
+    # Native touch layout publication remains covered by router/worker fixtures.
+    ingress = ingress.replace(
+        "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID\n"
+        "  session.touchIngressDesired = enabled;",
+        "#if 0\n  session.touchIngressDesired = enabled;", 1)
     ingress = runtime_android_branches(ingress)
     methods += "\n" + ingress
     interruption = extract(source, "  void interruptInput(const input::InputInterruption &interruption)")

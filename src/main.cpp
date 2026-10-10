@@ -57,6 +57,8 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include "input/IOSTouchInput.h"
+#include "input/NativeRawTouchInput.h"
 #include <SDL3/SDL_uikit_rawtouch.h>
 // define something for iphone
 #include <dirent.h>
@@ -71,7 +73,7 @@
 #include "AndroidNatives.h"
 #include "input/AndroidInputHints.h"
 #include "input/AndroidInputTimestamp.h"
-#include "input/AndroidRawTouchInput.h"
+#include "input/NativeRawTouchInput.h"
 #include <dirent.h>
 #include <sys/system_properties.h>
 #include <sys/stat.h>
@@ -699,6 +701,10 @@ int main(int argv, char **args) {
     return EXIT_FAILURE;
   }
 #if TARGET_OS_IPHONE
+  if (!InstallIOSGameplayTouchInput(metalView.get())) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                "Could not install direct UIKit gameplay touch input; retaining SDL raw input");
+  }
   s_iosMetalLayer = pd.nwh;
   int metalDrawableW = 0;
   int metalDrawableH = 0;
@@ -743,6 +749,9 @@ int main(int argv, char **args) {
 #if TARGET_OS_ANDROID
   s_androidPreviousWindow.reset();
   s_androidNativeWindow.reset();
+#endif
+#if TARGET_OS_IPHONE
+  UninstallIOSGameplayTouchInput();
 #endif
   metalView.reset();
   SDL_DestroyWindow(win);
@@ -1405,18 +1414,18 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
     }
-#if TARGET_OS_ANDROID
-    // Gameplay-owned gestures never enter SDL on Android's UI thread. Their
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+    // Gameplay-owned gestures bypass SDL on the native input thread. Their
     // presentation events still traverse the ordinary registry and scene UI
     // here, without SDL event watches or a second gameplay delivery.
-    input::android::UiTouchEvent uiTouch;
+    input::native_touch::UiTouchEvent uiTouch;
     for (std::size_t count = 0;
-         count < input::android::kUiTouchQueueCapacity &&
-         input::android::RawTouchRegistration::pollUiEvent(uiTouch); ++count) {
-      if (!input::android::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
+         count < input::native_touch::kUiTouchQueueCapacity &&
+         input::native_touch::RawTouchRegistration::pollUiEvent(uiTouch); ++count) {
+      if (!input::native_touch::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
         continue;
       }
-      using input::android::TouchPhase;
+      using input::native_touch::TouchPhase;
       SDL_Event touchEvent{};
       touchEvent.type = uiTouch.touch.phase == TouchPhase::Down ? SDL_EVENT_FINGER_DOWN
           : uiTouch.touch.phase == TouchPhase::Up ? SDL_EVENT_FINGER_UP
@@ -1436,7 +1445,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           uiTouch.touch.phase == TouchPhase::Cancel ? 0.0f : 1.0f;
       touchEvent.tfinger.windowID = SDL_GetWindowID(s_window);
       context.inputDeviceRegistry.handleSdlEventAndDispatch(touchEvent);
-      if (input::android::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
+      if (input::native_touch::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
         processEvent(touchEvent);
       }
     }

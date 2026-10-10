@@ -366,7 +366,7 @@ void testAndroidDedicatedTouchBypassesBlockedSdlWatch() {
           "dedicated touch geometry publishes");
   require(worker.start(), "dedicated touch worker starts");
   input::android::RawTouchRegistration registration(
-      &RealtimeGameplaySession::androidRawTouchSink, &session);
+      &RealtimeGameplaySession::nativeRawTouchSink, &session);
   input::android::RawTouchEvent raw{
       .pointerId = 42, .phase = input::android::TouchPhase::Down,
       .x = .5F, .y = .5F, .steadyTimestampMicros = 1'000'000};
