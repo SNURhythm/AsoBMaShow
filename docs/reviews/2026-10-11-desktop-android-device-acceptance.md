@@ -8,6 +8,11 @@ Owned chart/archive/export fixtures were removed from the phone afterward;
 the library returned to its original nine charts. Existing settings and data
 were preserved. Desktop export artifacts were moved to temporary evidence storage.
 
+A subsequent [PR #135-style input-latency comparison](2026-10-11-android-input-latency.md)
+repeated the ordinary-play workload twice per build. It found no clear further
+input-latency reduction: event-to-sound-command p95 was 5.3–5.4 ms for the earlier
+measurement APK and 5.4–5.6 ms for this branch.
+
 ## Results
 
 | Check | Observed result |

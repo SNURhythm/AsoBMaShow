@@ -1,0 +1,586 @@
+{
+  "baseline1": {
+    "single": {
+      "audio-callback": {
+        "count": 47606,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 482
+      },
+      "audio-interval": {
+        "count": 47604,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 2200,
+        "max_us": 3636
+      },
+      "frame-submit": {
+        "count": 11099,
+        "p50_upper_us": 7900,
+        "p95_upper_us": 9300,
+        "p99_upper_us": 10000,
+        "max_us": 139631
+      },
+      "snapshot-age": {
+        "count": 870,
+        "p50_upper_us": 4700,
+        "p95_upper_us": 8000,
+        "p99_upper_us": 8900,
+        "max_us": 10151
+      },
+      "source-to-ingress": {
+        "count": 900,
+        "p50_upper_us": 2600,
+        "p95_upper_us": 3800,
+        "p99_upper_us": 4600,
+        "max_us": 5521
+      },
+      "ingress-to-worker": {
+        "count": 600,
+        "p50_upper_us": 300,
+        "p95_upper_us": 1900,
+        "p99_upper_us": 3300,
+        "max_us": 4051
+      },
+      "worker-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 1400,
+        "max_us": 1867
+      },
+      "sound-command-to-callback": {
+        "count": 300,
+        "p50_upper_us": 1000,
+        "p95_upper_us": 1900,
+        "p99_upper_us": 2000,
+        "max_us": 2027
+      },
+      "touch-to-worker": {
+        "count": 600,
+        "p50_upper_us": 3100,
+        "p95_upper_us": 5200,
+        "p99_upper_us": 6400,
+        "max_us": 7570
+      },
+      "touch-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 3400,
+        "p95_upper_us": 5600,
+        "p99_upper_us": 6500,
+        "max_us": 7604
+      }
+    },
+    "combined": {
+      "audio-callback": {
+        "count": 60114,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 482
+      },
+      "audio-interval": {
+        "count": 60112,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 2200,
+        "max_us": 3636
+      },
+      "frame-submit": {
+        "count": 14056,
+        "p50_upper_us": 7900,
+        "p95_upper_us": 9400,
+        "p99_upper_us": 10000,
+        "max_us": 139631
+      },
+      "snapshot-age": {
+        "count": 1256,
+        "p50_upper_us": 4300,
+        "p95_upper_us": 7900,
+        "p99_upper_us": 8800,
+        "max_us": 11465
+      },
+      "source-to-ingress": {
+        "count": 2400,
+        "p50_upper_us": 2300,
+        "p95_upper_us": 3600,
+        "p99_upper_us": 4300,
+        "max_us": 5521
+      },
+      "ingress-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 300,
+        "p95_upper_us": 1700,
+        "p99_upper_us": 2500,
+        "max_us": 4051
+      },
+      "worker-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 1100,
+        "max_us": 1867
+      },
+      "sound-command-to-callback": {
+        "count": 600,
+        "p50_upper_us": 1000,
+        "p95_upper_us": 1900,
+        "p99_upper_us": 2000,
+        "max_us": 2049
+      },
+      "touch-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 2800,
+        "p95_upper_us": 4900,
+        "p99_upper_us": 6200,
+        "max_us": 7570
+      },
+      "touch-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 3100,
+        "p95_upper_us": 5300,
+        "p99_upper_us": 6500,
+        "max_us": 7604
+      }
+    }
+  },
+  "current1": {
+    "single": {
+      "audio-callback": {
+        "count": 47539,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 281
+      },
+      "audio-interval": {
+        "count": 47537,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2200,
+        "p99_upper_us": 2200,
+        "max_us": 2742
+      },
+      "frame-submit": {
+        "count": 11112,
+        "p50_upper_us": 7900,
+        "p95_upper_us": 9400,
+        "p99_upper_us": 10100,
+        "max_us": 102496
+      },
+      "snapshot-age": {
+        "count": 876,
+        "p50_upper_us": 4700,
+        "p95_upper_us": 8100,
+        "p99_upper_us": 9100,
+        "max_us": 10038
+      },
+      "source-to-ingress": {
+        "count": 900,
+        "p50_upper_us": 2500,
+        "p95_upper_us": 3700,
+        "p99_upper_us": 4700,
+        "max_us": 5464
+      },
+      "ingress-to-worker": {
+        "count": 600,
+        "p50_upper_us": 300,
+        "p95_upper_us": 1800,
+        "p99_upper_us": 2400,
+        "max_us": 4205
+      },
+      "worker-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 200,
+        "max_us": 3276
+      },
+      "sound-command-to-callback": {
+        "count": 300,
+        "p50_upper_us": 1100,
+        "p95_upper_us": 2000,
+        "p99_upper_us": 2100,
+        "max_us": 2233
+      },
+      "touch-to-worker": {
+        "count": 600,
+        "p50_upper_us": 3000,
+        "p95_upper_us": 5100,
+        "p99_upper_us": 6400,
+        "max_us": 6913
+      },
+      "touch-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 3300,
+        "p95_upper_us": 5700,
+        "p99_upper_us": 6600,
+        "max_us": 6943
+      }
+    },
+    "combined": {
+      "audio-callback": {
+        "count": 57545,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 281
+      },
+      "audio-interval": {
+        "count": 57543,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2200,
+        "p99_upper_us": 2300,
+        "max_us": 2742
+      },
+      "frame-submit": {
+        "count": 13477,
+        "p50_upper_us": 7900,
+        "p95_upper_us": 9400,
+        "p99_upper_us": 10100,
+        "max_us": 102496
+      },
+      "snapshot-age": {
+        "count": 1270,
+        "p50_upper_us": 4400,
+        "p95_upper_us": 8000,
+        "p99_upper_us": 8900,
+        "max_us": 10038
+      },
+      "source-to-ingress": {
+        "count": 2400,
+        "p50_upper_us": 2300,
+        "p95_upper_us": 3400,
+        "p99_upper_us": 4500,
+        "max_us": 5520
+      },
+      "ingress-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 300,
+        "p95_upper_us": 1700,
+        "p99_upper_us": 2500,
+        "max_us": 4205
+      },
+      "worker-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 400,
+        "max_us": 3276
+      },
+      "sound-command-to-callback": {
+        "count": 600,
+        "p50_upper_us": 1100,
+        "p95_upper_us": 2000,
+        "p99_upper_us": 2100,
+        "max_us": 2233
+      },
+      "touch-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 2700,
+        "p95_upper_us": 4900,
+        "p99_upper_us": 6100,
+        "max_us": 6913
+      },
+      "touch-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 3000,
+        "p95_upper_us": 5400,
+        "p99_upper_us": 6400,
+        "max_us": 6943
+      }
+    }
+  },
+  "current2": {
+    "single": {
+      "audio-callback": {
+        "count": 42441,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 444
+      },
+      "audio-interval": {
+        "count": 42438,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 2200,
+        "max_us": 2979
+      },
+      "frame-submit": {
+        "count": 9942,
+        "p50_upper_us": 8000,
+        "p95_upper_us": 9300,
+        "p99_upper_us": 9900,
+        "max_us": 104527
+      },
+      "snapshot-age": {
+        "count": 860,
+        "p50_upper_us": 4500,
+        "p95_upper_us": 8000,
+        "p99_upper_us": 8800,
+        "max_us": 9933
+      },
+      "source-to-ingress": {
+        "count": 900,
+        "p50_upper_us": 2500,
+        "p95_upper_us": 3700,
+        "p99_upper_us": 4400,
+        "max_us": 5280
+      },
+      "ingress-to-worker": {
+        "count": 600,
+        "p50_upper_us": 400,
+        "p95_upper_us": 2400,
+        "p99_upper_us": 3400,
+        "max_us": 4830
+      },
+      "worker-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 1100,
+        "max_us": 2280
+      },
+      "sound-command-to-callback": {
+        "count": 300,
+        "p50_upper_us": 1000,
+        "p95_upper_us": 2000,
+        "p99_upper_us": 2000,
+        "max_us": 2009
+      },
+      "touch-to-worker": {
+        "count": 600,
+        "p50_upper_us": 3200,
+        "p95_upper_us": 5500,
+        "p99_upper_us": 6800,
+        "max_us": 8371
+      },
+      "touch-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 3400,
+        "p95_upper_us": 5800,
+        "p99_upper_us": 6900,
+        "max_us": 8397
+      }
+    },
+    "combined": {
+      "audio-callback": {
+        "count": 54954,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 444
+      },
+      "audio-interval": {
+        "count": 54951,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 2200,
+        "max_us": 2979
+      },
+      "frame-submit": {
+        "count": 12901,
+        "p50_upper_us": 8000,
+        "p95_upper_us": 9300,
+        "p99_upper_us": 9900,
+        "max_us": 104527
+      },
+      "snapshot-age": {
+        "count": 1252,
+        "p50_upper_us": 4000,
+        "p95_upper_us": 7900,
+        "p99_upper_us": 8800,
+        "max_us": 9933
+      },
+      "source-to-ingress": {
+        "count": 2400,
+        "p50_upper_us": 2200,
+        "p95_upper_us": 3400,
+        "p99_upper_us": 4300,
+        "max_us": 5280
+      },
+      "ingress-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 400,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 3200,
+        "max_us": 4830
+      },
+      "worker-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 1300,
+        "max_us": 2991
+      },
+      "sound-command-to-callback": {
+        "count": 600,
+        "p50_upper_us": 1100,
+        "p95_upper_us": 2000,
+        "p99_upper_us": 2000,
+        "max_us": 2009
+      },
+      "touch-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 2800,
+        "p95_upper_us": 5100,
+        "p99_upper_us": 6600,
+        "max_us": 8371
+      },
+      "touch-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 3100,
+        "p95_upper_us": 5600,
+        "p99_upper_us": 6700,
+        "max_us": 8397
+      }
+    }
+  },
+  "baseline2": {
+    "single": {
+      "audio-callback": {
+        "count": 39960,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 395
+      },
+      "audio-interval": {
+        "count": 39957,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 2200,
+        "max_us": 2568
+      },
+      "snapshot-age": {
+        "count": 865,
+        "p50_upper_us": 4800,
+        "p95_upper_us": 8100,
+        "p99_upper_us": 8900,
+        "max_us": 9670
+      },
+      "frame-submit": {
+        "count": 9354,
+        "p50_upper_us": 8000,
+        "p95_upper_us": 9300,
+        "p99_upper_us": 10000,
+        "max_us": 121892
+      },
+      "source-to-ingress": {
+        "count": 900,
+        "p50_upper_us": 2600,
+        "p95_upper_us": 3700,
+        "p99_upper_us": 4800,
+        "max_us": 5346
+      },
+      "ingress-to-worker": {
+        "count": 600,
+        "p50_upper_us": 300,
+        "p95_upper_us": 2000,
+        "p99_upper_us": 3000,
+        "max_us": 3488
+      },
+      "worker-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 1400,
+        "max_us": 1709
+      },
+      "sound-command-to-callback": {
+        "count": 300,
+        "p50_upper_us": 1000,
+        "p95_upper_us": 1900,
+        "p99_upper_us": 2000,
+        "max_us": 2125
+      },
+      "touch-to-worker": {
+        "count": 600,
+        "p50_upper_us": 3000,
+        "p95_upper_us": 5200,
+        "p99_upper_us": 6100,
+        "max_us": 6862
+      },
+      "touch-to-sound-command": {
+        "count": 300,
+        "p50_upper_us": 3200,
+        "p95_upper_us": 5700,
+        "p99_upper_us": 6600,
+        "max_us": 6911
+      }
+    },
+    "combined": {
+      "audio-callback": {
+        "count": 52479,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 100,
+        "max_us": 400
+      },
+      "audio-interval": {
+        "count": 52476,
+        "p50_upper_us": 2000,
+        "p95_upper_us": 2100,
+        "p99_upper_us": 2200,
+        "max_us": 2568
+      },
+      "snapshot-age": {
+        "count": 1272,
+        "p50_upper_us": 4300,
+        "p95_upper_us": 8000,
+        "p99_upper_us": 8800,
+        "max_us": 9670
+      },
+      "frame-submit": {
+        "count": 12314,
+        "p50_upper_us": 7900,
+        "p95_upper_us": 9400,
+        "p99_upper_us": 10000,
+        "max_us": 121892
+      },
+      "source-to-ingress": {
+        "count": 2400,
+        "p50_upper_us": 2300,
+        "p95_upper_us": 3400,
+        "p99_upper_us": 4200,
+        "max_us": 5581
+      },
+      "ingress-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 300,
+        "p95_upper_us": 1800,
+        "p99_upper_us": 2700,
+        "max_us": 3488
+      },
+      "worker-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 100,
+        "p95_upper_us": 100,
+        "p99_upper_us": 600,
+        "max_us": 1709
+      },
+      "sound-command-to-callback": {
+        "count": 600,
+        "p50_upper_us": 1000,
+        "p95_upper_us": 1900,
+        "p99_upper_us": 2000,
+        "max_us": 2125
+      },
+      "touch-to-worker": {
+        "count": 1200,
+        "p50_upper_us": 2800,
+        "p95_upper_us": 4900,
+        "p99_upper_us": 6100,
+        "max_us": 7148
+      },
+      "touch-to-sound-command": {
+        "count": 600,
+        "p50_upper_us": 3000,
+        "p95_upper_us": 5400,
+        "p99_upper_us": 6600,
+        "max_us": 7184
+      }
+    }
+  }
+}
