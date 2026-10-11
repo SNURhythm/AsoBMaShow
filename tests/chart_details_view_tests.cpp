@@ -4,6 +4,7 @@
 #include "view/ScrollView.h"
 #include "view/TextView.h"
 #include "view/UiTheme.h"
+#include "view/MainMenuTheme.h"
 
 #include <bgfx/bgfx.h>
 #include <cstdlib>
@@ -129,11 +130,44 @@ int main() {
             "clear lamp is independent of the high-score attempt");
     require(text(view, "chartDetailsNext") == "MAX −249",
             "AAA progress targets MAX rather than a duplicate displayed AAA");
-    // At 16:9, allow for root insets, the fixed Start / Records / Settings
-    // footer and the options summary below these details. iPad 4:3 has more room.
-    const int shortViewportContentHeight = 1080 - 56 - 16 - 88 - 84 - 84 - 36 - 2;
-    require(view.getHeight() + 16 + 10 + 122 <= shortViewportContentHeight,
-            "chart facts, best score and play settings fit above pinned actions at 16:9");
+    record.meta.KeyMode = 7;
+    record.meta.PlayLevel = 11;
+    for (const std::string units : {"★11", "sl3", "st2", "◆発狂", "sl3 / ★11"}) {
+      record.difficultyTableLabels = units;
+      view.setChart(&record, best, kClearTypeHardClearRank, "320");
+      require(text(view, "chartDetailsDifficulty") == units,
+              "table difficulty is the primary label and preserves every unit verbatim");
+      require(text(view, "chartDetailsChartLevel") == "7K1S · Lv. 11",
+              "the chart's own level remains available separately from table difficulty");
+    }
+    record.difficultyTableLabels.clear();
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    require(text(view, "chartDetailsDifficulty") == "Lv. 11" &&
+                text(view, "chartDetailsChartLevel") == "7K1S",
+            "charts outside a difficulty table fall back to their own level without duplicate labels");
+    // At 16:9, the play dock is separate from the details and records column.
+    const int shortViewportContentHeight = 1080 - 56 - 24 - 104 - 84 - 12;
+    require(view.getHeight() + 32 <= shortViewportContentHeight,
+            "chart facts and best score fit above pinned records at 16:9");
+
+    // Landscape artwork gets a square frame; long details remain scrollable
+    // without moving the primary controls into that scroll container.
+    record.meta.StageFile = "stage.png";
+    view.setCompact(false);
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    view.applyYogaLayout();
+    require(view.getHeight() > selectedHeight, "landscape artwork reserves its own space");
+    scroll.setHeight(shortViewportContentHeight);
+    scroll.refreshContentLayout();
+    scroll.scrollToBottom();
+    auto *score = view.findViewByName("chartDetailsScore");
+    require(score->getY() >= scroll.getY() &&
+                score->getY() + score->getHeight() <= scroll.getY() + scroll.getHeight(),
+            "personal best remains reachable with landscape artwork");
+    record.meta.StageFile.clear();
+    view.setCompact(true);
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    view.applyYogaLayout();
 
     // Selecting non-chart rows must not leave an existing scroll offset past
     // the end of the details now that placeholders preserve their height.
@@ -217,7 +251,7 @@ int main() {
       scroll.propagateThemeChange();
       view.applyYogaLayout();
       auto *bpm = dynamic_cast<TextView *>(view.findViewByName("chartDetailsBpm"));
-      const auto expectedColor = ui_theme::textPrimary();
+      const auto expectedColor = main_menu_theme::ink();
       const auto color = bpm->currentColor();
       require(color.r == expectedColor.r && color.g == expectedColor.g &&
                   color.b == expectedColor.b,

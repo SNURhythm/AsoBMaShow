@@ -4,6 +4,7 @@
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
+#include "MainMenuTheme.h"
 #include "../ScoreRankUtils.h"
 
 #include <cmath>
@@ -13,11 +14,11 @@
 #include <sstream>
 
 namespace {
-constexpr int kBottomGap = 8;
+constexpr int kBottomGap = 2;
 constexpr int kArtworkFramePadding = 3;
 constexpr int kArtworkFrameBorderWidth = 1;
 constexpr int kBannerWidth = 368;
-constexpr int kDifficultyColumnWidth = 72;
+constexpr int kDifficultyColumnWidth = 112;
 constexpr uint32_t kIconStar = 0xf005;
 constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
 
@@ -61,13 +62,13 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   textLayout = new View();
   detailsLayout = new View();
   scoreRankColumn = new View();
-  titleView = new TextView(kUiFont, 26);
+  titleView = new TextView(kUiFont, 28, TextView::FontWeight::Bold);
   artistView = new TextView(kUiFont, 17);
-  levelView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
+  levelView = new TextView(kUiFont, 24, TextView::FontWeight::Bold);
   keyModeView = new TextView(kUiFont, 14, TextView::FontWeight::Bold);
   scoreRankShadowView = new TextView(kUiFont, 34);
   scoreRankWeightView = new TextView(kUiFont, 34);
-  scoreRankView = new TextView(kUiFont, 34);
+  scoreRankView = new TextView(kUiFont, 34, TextView::FontWeight::Bold);
   bestScoreView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
   favoriteButton = new Button();
   favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 20);
@@ -105,7 +106,9 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   });
   contentCard->addView(bannerImage);
 
-  clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
+  clearLamp->setName("chartListClearLamp");
+  clearLamp->setWidth(8)->setHeight(78)->setFlexShrink(0);
+  clearLamp->setBorderColor(Color(76, 80, 89, 255));
   clearLamp->setCornerRadius(3.0f);
   contentCard->addView(clearLamp);
 
@@ -117,7 +120,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
       ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setCornerRadius(ui_theme::controlRadius())
+      ->setCornerRadius(0)
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
       ->setBorderWidth(kArtworkFrameBorderWidth);
   jacketImage->setWidth(78)->setHeight(78);
@@ -182,8 +185,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setFlexShrink(0)
       ->setAlignItems(YGAlignStretch)
       ->setJustifyContent(YGJustifyCenter)
-      ->setCornerRadius(12.0f)
-      ->setBorderWidth(1);
+      ->setCornerRadius(0)
+      ->setBorderWidth(0);
   scoreRankColumn->setDisplay(YGDisplayNone);
   scoreRankColumn->setVisible(false);
   scoreRankShadowView->setPositionType(YGPositionTypeAbsolute);
@@ -210,6 +213,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   bestScoreView->setVAlign(TextView::MIDDLE);
   bestScoreView->setOverflow(TextView::TextOverflow::Hidden);
   bestScoreView->setThemedColor(ui_theme::textPrimary);
+  scoreRankShadowView->setVisible(false);
+  scoreRankWeightView->setVisible(false);
   scoreRankColumn->addView(scoreRankShadowView);
   scoreRankColumn->addView(scoreRankWeightView);
   scoreRankColumn->addView(scoreRankView);
@@ -226,7 +231,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   favoriteButton->setWidth(56)
       ->setHeight(56)
       ->setFlexShrink(0)
-      ->setCornerRadius(ui_theme::controlRadius());
+      ->setCornerRadius(0);
   favoriteButton
       ->setThemedBackgroundColors(
           [] { return Color(0, 0, 0, 0); }, ui_theme::controlHover,
@@ -298,9 +303,11 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
                                      : keyModeDescription(meta));
   }
   if (!unavailable && !solidArchive && !meta.StageFile.empty()) {
+    artworkFrame->setDisplay(YGDisplayFlex);
     jacketImage->setImageAsync(meta.Folder / meta.StageFile,
                                prioritizeArtwork);
   } else {
+    artworkFrame->setDisplay(YGDisplayNone);
     jacketImage->freeImage();
   }
   if (!record.courseStart && !unavailable && !solidArchive &&
@@ -318,8 +325,10 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
 
 void ChartListItemView::setClearRank(int clearRank) {
   if (!solidArchive && hasClearLampColor(clearRank)) {
+    clearLamp->setBorderWidth(1);
     clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
   } else {
+    clearLamp->setBorderWidth(0);
     clearLamp->clearBackgroundColor();
   }
 }
@@ -365,120 +374,58 @@ void ChartListItemView::setFavoriteState(bool nextFavorite) {
 }
 
 void ChartListItemView::refreshFavoriteButton() {
-  if (favoriteIconView == nullptr) {
-    return;
-  }
-  if (favorite) {
-    favoriteIconView->setThemedColor(ui_theme::amber);
-  } else {
-    favoriteIconView->setThemedColor(selected ? ui_theme::textSecondary
-                                              : ui_theme::textMuted);
-  }
+  if (!favoriteIconView) return;
+  favoriteIconView->setThemedColor(favorite
+      ? (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent)
+      : (selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted));
 }
 
 void ChartListItemView::refreshScoreRankColor() {
-  if (scoreRankView == nullptr) {
-    return;
-  }
-  const std::string rank = score_rank::displayLabel(scoreRank);
-  scoreRankView->setThemedColor(
-      [rank] { return ui_theme::scoreRankColor(rank); });
-  scoreRankWeightView->setThemedColor(
-      [rank] { return ui_theme::scoreRankColor(rank); });
-  scoreRankShadowView->setThemedColor([] {
-    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-               ? Color(0, 0, 0, 92)
-               : Color(0, 0, 0, 184);
-  });
-  scoreRankColumn->setThemedBackgroundColor([rank] {
-    return ui_theme::withAlpha(
-        ui_theme::scoreRankColor(rank),
-        ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 22 : 30);
-  });
-  scoreRankColumn->setThemedBorderColor([rank] {
-    return ui_theme::withAlpha(
-        ui_theme::scoreRankColor(rank),
-        ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 92 : 112);
-  });
+  if (!scoreRankView) return;
+  scoreRankView->setThemedColor(selected ? main_menu_theme::onSelected
+                                        : main_menu_theme::ink);
+  bestScoreView->setThemedColor(selected ? main_menu_theme::selectedSecondary
+                                        : main_menu_theme::secondary);
+  scoreRankColumn->clearBackgroundColor();
+  scoreRankColumn->setBorderWidth(0);
 }
 
 void ChartListItemView::onSelected() {
   selected = true;
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
+  contentCard->setThemedBackgroundColor(main_menu_theme::selected);
+  contentCard->setCornerRadius(0);
+  contentCard->setThemedBorderColor(main_menu_theme::selected);
   contentCard->setBorderWidth(1);
-  artworkFrame->setThemedBackgroundColor(ui_theme::controlHover);
-  artworkFrame->setThemedBorderColor(ui_theme::accentBorder);
+  artworkFrame->setThemedBackgroundColor(main_menu_theme::selected);
+  artworkFrame->setThemedBorderColor(main_menu_theme::selected);
+  // A recycled banner keeps its identity, but cannot compromise selection contrast.
+  bannerImage->setVisible(false);
   applyTextColors(true);
   refreshFavoriteButton();
 }
 
 void ChartListItemView::onUnselected() {
   selected = false;
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
+  contentCard->setThemedBackgroundColor(main_menu_theme::canvas);
+  contentCard->setCornerRadius(0);
+  contentCard->setThemedBorderColor(main_menu_theme::canvas);
   contentCard->setBorderWidth(1);
-  artworkFrame->setThemedBackgroundColor(ui_theme::control);
-  artworkFrame->setThemedBorderColor(ui_theme::hairlineStrong);
+  artworkFrame->setThemedBackgroundColor(main_menu_theme::surface);
+  artworkFrame->setThemedBorderColor(main_menu_theme::surface);
+  bannerImage->setVisible(true);
   applyTextColors(false);
   refreshFavoriteButton();
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
-  if (currentRecord.courseStart) {
-    titleView->setThemedColor(selected ? ui_theme::lime
-                                       : ui_theme::textPrimary);
-    artistView->setThemedColor(selected ? ui_theme::textSecondary
-                                        : ui_theme::textMuted);
-    levelView->setThemedColor(ui_theme::lime);
-    keyModeView->setThemedColor(selected ? ui_theme::textSecondary
-                                         : ui_theme::textMuted);
-    scoreRankView->setThemedColor(selected ? ui_theme::textSecondary
-                                           : ui_theme::textMuted);
-    return;
+  titleView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::ink);
+  artistView->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::secondary);
+  levelView->setThemedColor(selected ? main_menu_theme::selectedAccent : main_menu_theme::accent);
+  keyModeView->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted);
+  if (!selected && unavailable) {
+    titleView->setThemedColor(main_menu_theme::error);
+  } else if (!selected && solidArchive) {
+    titleView->setThemedColor(main_menu_theme::warning);
   }
-
-  if (solidArchive) {
-    if (selected) {
-      titleView->setThemedColor(ui_theme::amber);
-    } else {
-      titleView->setColor(ui_theme::sdl(Color(226, 181, 82, 255)));
-    }
-    artistView->setThemedColor(selected ? ui_theme::textSecondary
-                                        : ui_theme::textMuted);
-    levelView->setThemedColor(ui_theme::amber);
-    keyModeView->setThemedColor(selected ? ui_theme::textSecondary
-                                         : ui_theme::textMuted);
-    scoreRankView->setThemedColor(selected ? ui_theme::textSecondary
-                                           : ui_theme::textMuted);
-    return;
-  }
-
-  if (unavailable) {
-    titleView->setThemedColor(ui_theme::coral);
-    artistView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
-                                                : Color(219, 101, 94, 255)));
-    levelView->setColor(ui_theme::sdl(selected ? Color(255, 218, 208, 255)
-                                               : Color(240, 132, 116, 255)));
-    keyModeView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
-                                                 : Color(211, 91, 84, 255)));
-    scoreRankView->setColor(ui_theme::sdl(
-        selected ? Color(255, 171, 158, 255) : Color(211, 91, 84, 255)));
-    return;
-  }
-
-  titleView->setThemedColor(ui_theme::textPrimary);
-  artistView->setThemedColor(selected ? ui_theme::textSecondary
-                                      : ui_theme::textMuted);
-  if (selected) {
-    levelView->setThemedColor(ui_theme::lime);
-  } else {
-    levelView->setThemedColor(
-        [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
-  }
-  keyModeView->setThemedColor(selected ? ui_theme::textSecondary
-                                       : ui_theme::textMuted);
   refreshScoreRankColor();
 }

@@ -24,12 +24,12 @@ if not settings_source_path.is_file():
 source = source_path.read_text(encoding="utf-8")
 settings_source = settings_source_path.read_text(encoding="utf-8")
 block_start = source.find("auto right = new View();")
-block_end = source.find("rootLayout->addView(right);", block_start)
+block_end = source.find("body->addView(right);", block_start)
 if block_start < 0 or block_end < 0:
     print("FAIL: unable to locate the main-menu right panel", file=sys.stderr)
     raise SystemExit(1)
 
-block = source[block_start : block_end + len("rootLayout->addView(right);")]
+block = source[block_start : block_end + len("body->addView(right);")]
 failures: list[str] = []
 
 
@@ -70,14 +70,14 @@ require(
 )
 require(
     "right->setGap(12);" in block and "right->setPadding(Edge::Bottom, 16);" in block,
-    "right panel must separate and pad its fixed Settings footer",
+    "right panel must separate and pad its fixed record actions",
 )
 require_in_order(
     "rightScroll->setContentView(rightContent);",
     "right->addView(rightScroll);",
     "primaryActions->addView(settingsButton);",
     "right->addView(primaryActions);",
-    "rootLayout->addView(right);",
+    "body->addView(right);",
 )
 require_settings_in_order(
     ".quiesceRemoteWork =",
@@ -140,4 +140,4 @@ if failures:
         print(f"FAIL: {failure}", file=sys.stderr)
     raise SystemExit(1)
 
-print("main-menu Settings footer audit passed")
+print("main-menu fixed Settings anchor audit passed")

@@ -2,6 +2,7 @@
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
+#include "MainMenuTheme.h"
 #include <algorithm>
 
 namespace {
@@ -92,9 +93,7 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
   if (hasClearLampColor(clearRank)) {
     const Color clearColor = clearLampColorForRank(clearRank);
     clearLamp->setBackgroundColor(
-        itemClearMarkFolder ? ui_theme::withAlpha(ui_theme::textOn(clearColor),
-                                                  176)
-                            : clearColor);
+        clearColor);
   } else {
     clearLamp->clearBackgroundColor();
   }
@@ -106,49 +105,19 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 }
 
 void LibraryFolderItemView::onSelected() {
-  if (itemClearMarkFolder && hasClearLampColor(itemClearRank)) {
-    const Color accent = clearLampColorForRank(itemClearRank);
-    contentCard->setBackgroundColor(Color(accent.r, accent.g, accent.b, 255));
-    contentCard->setCornerRadius(ui_theme::controlRadius());
-    contentCard->setBorderColor(
-        ui_theme::withAlpha(ui_theme::textOn(accent), 230));
-    contentCard->setBorderWidth(1);
-    const SDL_Color text = ui_theme::sdl(ui_theme::textOn(accent));
-    disclosureView->setColor(text);
-    labelView->setColor(text);
-    countView->setColor(text);
-    return;
-  }
-
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
-  contentCard->setBorderWidth(1);
-  disclosureView->setThemedColor(ui_theme::textSecondary);
-  labelView->setThemedColor(ui_theme::textPrimary);
-  countView->setThemedColor(ui_theme::lime);
+  contentCard->setThemedBackgroundColor(main_menu_theme::action);
+  contentCard->setCornerRadius(0);
+  contentCard->setBorderWidth(0);
+  disclosureView->setThemedColor(main_menu_theme::onAction);
+  labelView->setThemedColor(main_menu_theme::onAction);
+  countView->setThemedColor(main_menu_theme::onAction);
 }
 
 void LibraryFolderItemView::onUnselected() {
-  if (itemClearMarkFolder && hasClearLampColor(itemClearRank)) {
-    const Color accent = clearLampColorForRank(itemClearRank);
-    contentCard->setBackgroundColor(accent);
-    contentCard->setCornerRadius(ui_theme::controlRadius());
-    contentCard->setBorderColor(
-        ui_theme::withAlpha(ui_theme::textOn(accent), 112));
-    contentCard->setBorderWidth(1);
-    const SDL_Color text = ui_theme::sdl(ui_theme::textOn(accent));
-    disclosureView->setColor(text);
-    labelView->setColor(text);
-    countView->setColor(text);
-    return;
-  }
-
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
-  contentCard->setBorderWidth(1);
-  disclosureView->setThemedColor(ui_theme::textMuted);
-  labelView->setThemedColor(ui_theme::textPrimary);
-  countView->setThemedColor(ui_theme::textMuted);
+  contentCard->clearBackgroundColor();
+  contentCard->setCornerRadius(0);
+  contentCard->setBorderWidth(0);
+  disclosureView->setThemedColor(main_menu_theme::muted);
+  labelView->setThemedColor(main_menu_theme::ink);
+  countView->setThemedColor(main_menu_theme::muted);
 }

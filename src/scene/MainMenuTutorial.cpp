@@ -59,7 +59,11 @@ void MainMenuScene::buildTutorial() {
                            ? findBmsButton : readyPlayOptionsButton;
         // Play options scroll on short screens; Download stays in the fixed
         // primary action area. Only scroll a target inside the scroll view.
-        if (step != NewcomerTutorialStep::Download && target && tutorialRightScroll_) {
+        auto *scrollContent = tutorialRightScroll_
+            ? tutorialRightScroll_->getContentView() : nullptr;
+        const bool targetScrolls = scrollContent &&
+            scrollContent->findViewByName("mainMenuPlayOptions") == target;
+        if (step != NewcomerTutorialStep::Download && target && targetScrolls) {
           const int top = tutorialRightScroll_->getY();
           const int bottom = top + tutorialRightScroll_->getHeight();
           if (target->getY() < top || target->getY() + target->getHeight() > bottom) {

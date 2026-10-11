@@ -73,6 +73,7 @@
 #include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
+#include "../view/MainMenuTheme.h"
 #include <array>
 #include <chrono>
 #include <cctype>
@@ -122,6 +123,19 @@ using modal_view::makeModalButton;
 using modal_view::modalPanelBorder;
 using modal_view::styleThemedActionButton;
 
+
+void styleMenuButton(Button *button, TextView *text, bool primary = false) {
+  if (!button || !text) return;
+  button->setCornerRadius(0);
+  button->setStyledBorderWidth(primary ? 0 : 1);
+  button->setThemedBackgroundColors(
+      primary ? main_menu_theme::action : main_menu_theme::canvas,
+      primary ? main_menu_theme::actionHover : main_menu_theme::hover,
+      primary ? main_menu_theme::actionPressed : main_menu_theme::pressed);
+  button->setThemedBorderColors(main_menu_theme::rule,
+                                main_menu_theme::accent, main_menu_theme::accent);
+  text->setThemedColor(primary ? main_menu_theme::onAction : main_menu_theme::ink);
+}
 
 constexpr int kRootPadding = 28;
 constexpr int kLibraryPanelWidth = 320;
@@ -1319,21 +1333,32 @@ void MainMenuScene::initView(ApplicationContext &context) {
   lastSafeLeft = safe.left;
   lastSafeBottom = safe.bottom;
   lastSafeRight = safe.right;
-  rootLayout->setFlexDirection(FlexDirection::Row);
+  rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setGap(24);
   rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
-  rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+  rootLayout->setThemedBackgroundColor(main_menu_theme::canvas);
+  auto *body = new View();
+  body->setName("mainMenuBody");
+  body->setFlex(1)->setMinHeight(0)->setMinWidth(0);
+  body->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch)->setGap(24);
+  rootLayout->addView(body);
+  auto *playDock = new View();
+  playDock->setName("mainMenuPlayDock");
+  playDock->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
+  playDock->setHeight(104)->setFlexShrink(0)->setGap(16);
+  playDock->setThemedBackgroundColor(main_menu_theme::dock);
+  rootLayout->addView(playDock);
   auto *browser = new View();
   browser->setName("mainMenuBrowser");
   browser->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
   browser->setFlex(1)->setMinWidth(0)->setMinHeight(0)->setGap(24);
-  rootLayout->addView(browser);
+  body->addView(browser);
 
-overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                                      rendering::window_height);
   overlayPortal->setPositionType(YGPositionTypeAbsolute);
   overlayPortal->setPosition(Edge::Left, 0);
@@ -1412,11 +1437,18 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   nav->setWidth(kLibraryPanelWidth);
   nav->setGap(12);
   nav->setPadding(Edge::All, kLibraryPanelPadding);
-  nav->setThemedBackgroundColor(ui_theme::mainMenuPanel);
-  nav->setCornerRadius(ui_theme::panelRadius());
-  nav->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
-  nav->setThemedBorderColor(ui_theme::hairline);
-  nav->setBorderWidth(1);
+  nav->clearBackgroundColor();
+  nav->setCornerRadius(0);
+
+  nav->setThemedBorderColor(main_menu_theme::rule);
+  nav->setBorderWidth(0);
+
+  auto *wordmark = new TextView("assets/fonts/notosanscjkjp.ttf", 28,
+                                TextView::FontWeight::Bold);
+  wordmark->setText("AsoBMaShow");
+  wordmark->setHeight(48)->setFlexShrink(0);
+  wordmark->setThemedColor(main_menu_theme::ink);
+  nav->addView(wordmark);
 
   auto *libraryActions = new View();
   libraryActions->setName("mainMenuLibraryActions");
@@ -1435,12 +1467,8 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   addFolderText->setAlign(TextView::CENTER);
   addFolderText->setVAlign(TextView::MIDDLE);
   addFolderButton->setContentView(addFolderText);
-  styleThemedActionButton(addFolderButton, addFolderText, true,
-                          ui_theme::primaryAction,
-                          ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
-  addFolderButton->setCornerRadius(ui_theme::controlRadius());
+  styleMenuButton(addFolderButton, addFolderText);
+  addFolderButton->setCornerRadius(0);
   addFolderButton->setStyledBorderWidth(1);
   addFolderButton->setOnClickListener([this]() {
 #if TARGET_OS_ANDROID
@@ -1468,11 +1496,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   left->setFlex(1);
   left->setGap(14);
   left->setPadding(Edge::All, 16);
-  left->setThemedBackgroundColor(ui_theme::mainMenuPanel);
-  left->setCornerRadius(ui_theme::panelRadius());
-  left->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
-  left->setThemedBorderColor(ui_theme::hairline);
-  left->setBorderWidth(1);
+  left->clearBackgroundColor();
+  left->setCornerRadius(0);
+
+  left->setThemedBorderColor(main_menu_theme::rule);
+  left->setBorderWidth(0);
 
   auto *libraryHeader = new View();
   libraryHeader->setName("mainMenuToolbar");
@@ -1485,9 +1513,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(kMenuActionHeight);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
-  styleThemedActionButton(parseLogButton, parseLogButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleMenuButton(parseLogButton, parseLogButtonText);
   libraryHeader->addView(parseLogButton);
 
   musicButton = makeModalButton(i18n::message("menu.music.label"), 20, &musicButtonText);
@@ -1505,9 +1531,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
           true);
     }
   });
-  styleThemedActionButton(musicButton, musicButtonText, true, ui_theme::control,
-                          ui_theme::controlHover, ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
+  styleMenuButton(musicButton, musicButtonText);
   libraryHeader->addView(musicButton);
 
   irUploadsButton =
@@ -1526,19 +1550,14 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
           true);
     }
   });
-  styleThemedActionButton(irUploadsButton, irUploadsButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
+  styleMenuButton(irUploadsButton, irUploadsButtonText);
   libraryHeader->addView(irUploadsButton);
 
   tasksButton = makeModalButton(i18n::message("menu.task_count.empty"), 20, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(kMenuActionHeight);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
-  styleThemedActionButton(tasksButton, tasksButtonText, true, ui_theme::control,
-                          ui_theme::controlHover, ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
+  styleMenuButton(tasksButton, tasksButtonText);
   libraryHeader->addView(tasksButton);
   left->addView(libraryHeader);
 
@@ -1552,12 +1571,12 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   searchBox->setClearable(true);
   searchBox->setHeight(kMenuActionHeight);
   searchBox->setFlex(1);
-  searchBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
-  searchBox->setCornerRadius(ui_theme::controlRadius());
-  searchBox->setThemedBorderColor(ui_theme::hairlineSubtle);
+  searchBox->setThemedBackgroundColor(main_menu_theme::surface);
+  searchBox->setCornerRadius(0);
+  searchBox->setThemedBorderColor(main_menu_theme::rule);
   searchBox->setBorderWidth(1);
   searchBox->setVAlign(TextView::MIDDLE);
-  searchBox->setThemedColor(ui_theme::textPrimary);
+  searchBox->setThemedColor(main_menu_theme::ink);
   auto onSearchChanged = [this](const std::string &text) {
     searchText = text;
     reloadChartList();
@@ -1588,7 +1607,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   filterLabel->setLocalizedText(i18n::message("menu.search.label"));
-  filterLabel->setThemedColor(ui_theme::textSecondary);
+  filterLabel->setThemedColor(main_menu_theme::secondary);
   left->addView(filterLabel);
   left->addView(filterRow);
 
@@ -1648,11 +1667,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   right->setAlignItems(YGAlignCenter);
   right->setWidth(kDetailsPanelWidth);
   right->setFlexShrink(0);
-  right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
-  right->setCornerRadius(ui_theme::panelRadius());
-  right->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
-  right->setThemedBorderColor(ui_theme::hairline);
-  right->setBorderWidth(1);
+  right->clearBackgroundColor();
+  right->setCornerRadius(0);
+
+  right->setThemedBorderColor(main_menu_theme::rule);
+  right->setBorderWidth(0);
   right->setGap(12);
   right->setPadding(Edge::Bottom, 16);
 
@@ -1691,7 +1710,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   auto makeReadyStatusText = []() {
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
     text->setHeight(28);
-    text->setThemedColor(ui_theme::textPrimary);
+    text->setThemedColor(main_menu_theme::dockText);
     text->setOverflow(TextView::TextOverflow::Marquee);
     return text;
   };
@@ -1702,7 +1721,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readyGaugeRow->setHeight(28);
   auto *readyGaugeLabelText = makeReadyStatusText();
   readyGaugeLabelText->setLocalizedText(i18n::message("menu.gauge.label"));
-  readyGaugeLabelText->setThemedColor(ui_theme::textSecondary);
+  readyGaugeLabelText->setThemedColor(main_menu_theme::dockSecondary);
   readyGaugeLabelText->setWidth(70);
   readyGaugeText = makeReadyStatusText();
   readyGaugeText->setFlex(1);
@@ -1712,7 +1731,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readyAssistOptionText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   readyAssistOptionText->setHeight(28);
-  readyAssistOptionText->setThemedColor(ui_theme::textPrimary);
+  readyAssistOptionText->setThemedColor(main_menu_theme::dockText);
   readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
   readyPacemakerText = makeReadyStatusText();
   auto *readyStatusRow = new View();
@@ -1728,13 +1747,14 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readySettings->addView(readyAssistOptionText);
 
   readyPlayOptionsButton = new Button(0, 0, kDetailsContentWidth, 122);
+  readyPlayOptionsButton->setName("mainMenuPlayOptions");
   readyPlayOptionsButton->setWidth(kDetailsContentWidth);
   readyPlayOptionsButton->setHeight(122);
   readyPlayOptionsButton->setFlexShrink(0);
-  readyPlayOptionsButton->setCornerRadius(ui_theme::controlRadius());
-  readyPlayOptionsButton->setStyledBorderWidth(1);
+  readyPlayOptionsButton->setCornerRadius(0);
+  readyPlayOptionsButton->setStyledBorderWidth(0);
   readyPlayOptionsButton->setThemedBackgroundColors(
-      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+      main_menu_theme::dock, main_menu_theme::dockHover, main_menu_theme::dockPressed);
   readyPlayOptionsButton->setThemedBorderColors(
       ui_theme::hairlineStrong, ui_theme::accentBorderStrong,
       ui_theme::accentBorderStrong);
@@ -1747,16 +1767,13 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   startButton = new Button(0, 0, kDetailsContentWidth, 88);
   startButton->setName("mainMenuStart");
   startButton->setFlexShrink(0);
-  auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 36, TextView::FontWeight::Bold);
   startButtonText = buttonText;
   buttonText->setLocalizedText(i18n::message("menu.start.label"));
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   startButton->setContentView(buttonText);
-  styleThemedActionButton(startButton, buttonText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
+  styleMenuButton(startButton, buttonText, true);
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
@@ -1784,10 +1801,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
-  styleThemedActionButton(replayButton, replayButtonText, true,
-                          ui_theme::successAction, ui_theme::successActionHover,
-                          ui_theme::successActionPressed,
-                          ui_theme::accentBorder);
+  styleMenuButton(replayButton, replayButtonText);
   replayButton->setOnClickListener([this]() {
     if (willStart.load() || replayExportJob_.inProgress()) {
       return;
@@ -1821,10 +1835,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
   findBmsButton->setContentView(findBmsButtonText);
-  styleThemedActionButton(findBmsButton, findBmsButtonText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
+  styleMenuButton(findBmsButton, findBmsButtonText, true);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -1839,10 +1850,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
   unzipButton->setContentView(unzipButtonText);
-  styleThemedActionButton(unzipButton, unzipButtonText, true,
-                          ui_theme::warningAction, ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed,
-                          ui_theme::accentBorder);
+  styleMenuButton(unzipButton, unzipButtonText);
   unzipButton->setOnClickListener(
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
@@ -1854,10 +1862,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   rankingsButtonText->setAlign(TextView::CENTER);
   rankingsButtonText->setVAlign(TextView::MIDDLE);
   rankingsButton->setContentView(rankingsButtonText);
-  styleThemedActionButton(rankingsButton, rankingsButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed,
-                          ui_theme::accentBorder);
+  styleMenuButton(rankingsButton, rankingsButtonText);
   rankingsButton->setOnClickListener(
       [this]() { openRankingsForSelection(); });
   rankingsButton->setEnabled(false);
@@ -1882,9 +1887,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
   viewerButton->setContentView(viewerButtonText);
-  styleThemedActionButton(viewerButton, viewerButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleMenuButton(viewerButton, viewerButtonText);
   viewerButton->setOnClickListener([this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
 
@@ -1895,9 +1898,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   revealButtonText->setAlign(TextView::CENTER);
   revealButtonText->setVAlign(TextView::MIDDLE);
   revealButton->setContentView(revealButtonText);
-  styleThemedActionButton(revealButton, revealButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleMenuButton(revealButton, revealButtonText);
   revealButton->setOnClickListener([this]() { toggleRevealContextMenu(); });
   chartActionsRow->addView(revealButton);
   rightContent->addView(chartActionsRow);
@@ -1922,10 +1923,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
   settingsButton->setContentView(settingsText);
-  styleThemedActionButton(settingsButton, settingsText, true,
-                          ui_theme::dangerAction, ui_theme::dangerActionHover,
-                          ui_theme::dangerActionPressed,
-                          ui_theme::accentBorder);
+  styleMenuButton(settingsButton, settingsText);
   settingsButton->setOnClickListener([this, &context]() {
     if (willStart.load() || replayExportJob_.inProgress()) {
       return;
@@ -1966,7 +1964,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   detailsControlsScroll_->setContentView(detailsControlsContent_);
   controls->addView(detailsControlsScroll_);
   right->addView(controls);
-  rootLayout->addView(right);
+  body->addView(right);
   buildPlayOptionsModal();
   recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
   buildParseLogModal();
@@ -2014,7 +2012,12 @@ void MainMenuScene::updatePanelLayout() {
   auto *details = rootLayout->findViewByName("mainMenuDetails");
   auto *detailsScroll = rootLayout->findViewByName("mainMenuDetailsScroll");
   auto *controls = rootLayout->findViewByName("mainMenuControls");
-  rootLayout->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+  auto *body = rootLayout->findViewByName("mainMenuBody");
+  auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
+  rootLayout->setFlexDirection(FlexDirection::Column);
+  body->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
+  dock->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
+  dock->setVisible(!portrait);
   if (browser) {
     browser->setFlex(portrait ? 0.0F : 1.0F);
     browser->setWidth(portrait ? contentWidth : YGUndefined);
@@ -2046,6 +2049,7 @@ void MainMenuScene::updatePanelLayout() {
     controls->setWidth(YGUndefined);
     controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
   }
+  chartDetailsView_->setCompact(portrait);
   chartDetailsView_->setMinHeight(portrait ? std::max(0.0F, detailsHeight - 34) : 0);
   detailsContent_->setPadding(Edge::Top, portrait ? 0 : 16);
   detailsContent_->setPadding(Edge::Bottom, portrait ? 0 : 16);
@@ -2061,6 +2065,7 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   auto *settings = static_cast<Button *>(rootLayout->findViewByName("mainMenuSettings"));
   auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
   auto *target = portrait ? detailsControlsContent_ : detailsContent_;
+  startButton->moveTo(*primary);
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
   for (auto *view : std::array<View *, 3>{readyPlayOptionsButton, chartActionsRow,
            unzipButtonSlot}) {
@@ -2115,6 +2120,29 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
       child->setHeight(rowHeight);
       for (auto *label : child->getChildren()) label->setHeight(rowHeight);
     }
+  }
+  auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
+  auto *library = rootLayout->findViewByName("mainMenuLibrary");
+  if (!portrait) {
+    readyPlayOptionsButton->moveTo(*dock);
+    readyPlayOptionsButton->setWidth(YGUndefined)->setFlex(1)->setMinWidth(0)->setHeight(104);
+    startButton->moveTo(*dock);
+    startButton->setWidth(kDetailsPanelWidth)->setHeight(104);
+    settings->moveTo(*library);
+    settings->setWidthPercent(100)->setHeight(kPortraitMenuActionHeight);
+    auto *summary = readyPlayOptionsButton->getContentView();
+    summary->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(28);
+    for (auto *row : summary->getChildren()) row->setFlex(1)->setMinWidth(0);
+  } else {
+    // Move the following actions behind Start without rebuilding their state.
+    findBmsButtonSlot->moveTo(*dock);
+    findBmsButtonSlot->moveTo(*primary);
+    records->moveTo(*dock);
+    records->moveTo(*primary);
+    readyPlayOptionsButton->setFlex(0);
+    auto *summary = readyPlayOptionsButton->getContentView();
+    summary->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
+    for (auto *row : summary->getChildren()) row->setFlex(0);
   }
   detailsScroll->refreshContentLayout();
   detailsControlsScroll_->refreshContentLayout();
@@ -2667,22 +2695,12 @@ void MainMenuScene::refreshChartFilterButtons() {
       chartRecordFilters.bpmMax.has_value() ||
       chartRecordFilters.difficultyMinLevel.has_value() ||
       chartRecordFilters.difficultyMaxLevel.has_value();
-  styleThemedActionButton(
-      chartFilterButton, chartFilterButtonText, true,
-      filterActive ? ui_theme::primaryAction : ui_theme::control,
-      filterActive ? ui_theme::primaryActionHover : ui_theme::controlHover,
-      filterActive ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
-      filterActive ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
+  styleMenuButton(chartFilterButton, chartFilterButtonText, filterActive);
 
   const bool sortActive =
       chartSortPanelVisible ||
       chartRecordFilters.sort.criterion != ChartRecordSortCriterion::Default;
-  styleThemedActionButton(
-      chartSortButton, chartSortButtonText, true,
-      sortActive ? ui_theme::primaryAction : ui_theme::control,
-      sortActive ? ui_theme::primaryActionHover : ui_theme::controlHover,
-      sortActive ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
-      sortActive ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
+  styleMenuButton(chartSortButton, chartSortButtonText, sortActive);
 }
 
 void MainMenuScene::setChartClearFilter(std::optional<int> rank) {

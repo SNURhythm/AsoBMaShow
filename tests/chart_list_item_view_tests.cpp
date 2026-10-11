@@ -2,6 +2,7 @@
 #include "view/ChartListItemView.h"
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
+#include "view/MainMenuTheme.h"
 
 #include <bgfx/bgfx.h>
 
@@ -99,6 +100,27 @@ int main() {
     require(!card->getChildren().empty() &&
                 card->getChildren().front() == banner,
             "chart banner renders behind row content");
+
+    for (const auto mode : {ui_theme::ThemeMode::Light, ui_theme::ThemeMode::Dark}) {
+      ui_theme::setActiveMode(mode);
+      row.propagateThemeChange();
+      record.difficultyTableLabels = "sl3 / ★11";
+      row.setMeta(record);
+      row.setClearRank(kClearTypeHardClearRank);
+      row.onSelected();
+      auto *lamp = row.findViewByName("chartListClearLamp");
+      require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 1,
+              "clear lamps retain a contrasting outline on the selected surface");
+      const auto color = difficulty->currentColor();
+      const auto expected = main_menu_theme::selectedAccent();
+      require(difficulty->getText() == record.difficultyTableLabels &&
+                  color.r == expected.r && color.g == expected.g && color.b == expected.b,
+              "selected table units stay verbatim and readable in both themes");
+      require(!banner->getVisible(), "selection contrast is independent of banner artwork");
+      row.onUnselected();
+      require(banner->getVisible(), "deselecting restores banner presentation");
+    }
+    record.difficultyTableLabels.clear();
 
     for (const int keys : {5, 7}) {
       record.meta.KeyMode = keys;

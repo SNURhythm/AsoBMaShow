@@ -13,10 +13,11 @@ class ChartDetailsView : public View {
 public:
   explicit ChartDetailsView(ImageView *artwork);
   static constexpr float minimumChartHeight() {
-    return kIdentityHeight + kDifficultyHeight + 2 * kSectionGap +
+    return kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
            3 * kFactRowHeight + 2 * kFactGap + 2 * kFactPadding;
   }
   void setScoreContainer(View *container);
+  void setCompact(bool compact);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
@@ -29,6 +30,9 @@ private:
   static constexpr float kFactGap = 8;
   static constexpr float kFactPadding = 14;
   View *artworkFrame_ = nullptr;
+  View *identity_ = nullptr;
+  ImageView *artwork_ = nullptr;
+  bool compact_ = true;
   View *facts_ = nullptr;
   View *personalBest_ = nullptr;
   View *clearLamp_ = nullptr;
@@ -36,6 +40,7 @@ private:
   TextView *artist_ = nullptr;
   TextView *genre_ = nullptr;
   TextView *difficulty_ = nullptr;
+  TextView *chartLevel_ = nullptr;
   TextView *bpm_ = nullptr;
   TextView *judge_ = nullptr;
   TextView *length_ = nullptr;
