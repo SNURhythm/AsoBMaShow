@@ -82,7 +82,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   clearLamp->setName("chartListClearLamp");
   clearLamp->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0);
   clearLamp->setPosition(Edge::Top, 8)->setWidth(8)->setHeight(height - 17);
-  clearLamp->setBorderColor(Color(76, 80, 89, 255));
+  clearLamp->setBorderWidth(0);
   contentCard->addView(clearLamp);
 
   artworkFrame = new View();
@@ -139,7 +139,17 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   favoriteButton->setName("chartListFavorite");
   favoriteButton->setWidth(kFavoriteWidth)->setHeight(56)->setFlexShrink(0);
   favoriteButton->setThemedBackgroundColors(
-      [] { return Color(0, 0, 0, 0); }, main_menu_theme::hover, main_menu_theme::pressed);
+      [] { return Color(0, 0, 0, 0); },
+      [this] {
+        auto color = selected ? main_menu_theme::onSelected() : main_menu_theme::ink();
+        color.a = 18;
+        return color;
+      },
+      [this] {
+        auto color = selected ? main_menu_theme::onSelected() : main_menu_theme::ink();
+        color.a = 34;
+        return color;
+      });
   favoriteButton->setStyledBorderWidth(0);
   favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
   favoriteIconView->setText(ui_icons::textForCodepoint(0xf005));
@@ -246,10 +256,12 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
 
 void ChartListItemView::setClearRank(int clearRank) {
   if (!solidArchive && hasClearLampColor(clearRank)) {
-    clearLamp->setBorderWidth(1);
-    clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+    auto glow = clearLampColorForRank(clearRank);
+    clearLamp->setBackgroundColor(glow);
+    glow.a = 150;
+    clearLamp->setShadow(glow, 0, 0, 8);
   } else {
-    clearLamp->setBorderWidth(0);
+    clearLamp->clearShadow();
     clearLamp->clearBackgroundColor();
   }
 }
@@ -283,6 +295,7 @@ void ChartListItemView::setFavoriteState(bool nextFavorite) {
 
 void ChartListItemView::refreshFavoriteButton() {
   if (!favoriteIconView) return;
+  favoriteButton->propagateThemeChange();
   favoriteIconView->setVisible(favorite);
   favoriteIconView->setDisplay(favorite ? YGDisplayFlex : YGDisplayNone);
   favoriteOutlineView->setVisible(!favorite);

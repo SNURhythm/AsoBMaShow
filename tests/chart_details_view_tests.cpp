@@ -244,6 +244,13 @@ int main() {
     require(view.findViewByName("chartDetailsExpanded")->getVisible() &&
                 text(view, "chartDetailsJudge") == "NORMAL" && text(view, "chartDetailsScore") == "2451 / 2700",
             "all chart metadata and cached scores are visible without unfolding");
+    auto *scoreCard = view.findViewByName("chartDetailsPersonalBest");
+    auto *facts = view.findViewByName("chartDetailsFacts");
+    require(scoreCard->getY() >= summary->getY() + summary->getHeight() &&
+                scoreCard->getY() + scoreCard->getHeight() <= facts->getY() &&
+                !view.findViewByName("chartDetailsRate")->getVisible() &&
+                view.findViewByName("chartDetailsNext")->getVisible(),
+            "desktop EX score and next-rank card sits below the summary without duplicate grade/rate");
     const int fullHeight = view.getHeight();
     record.meta.StageFile.clear();
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
@@ -274,6 +281,8 @@ int main() {
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
 
+    require(view.findViewByName("chartDetailsRate")->getVisible(),
+            "portrait score card retains its sole rank/rate display after rotation");
     require(view.findViewByName("chartDetailsBpm")->getX() < view.findViewByName("chartDetailsJudge")->getX() &&
                 view.findViewByName("chartDetailsLength")->getX() < view.findViewByName("chartDetailsNotes")->getX(),
             "portrait rotation restores the original metric order in two columns");

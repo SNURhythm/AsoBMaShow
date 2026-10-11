@@ -54,6 +54,7 @@ private:
   int artworkLayoutHeight_ = -1;
   bool artworkLayoutCompact_ = true;
   View *summary_ = nullptr;
+  View *scoreSlot_ = nullptr;
   View *levelGroup_ = nullptr;
   View *levelLine_ = nullptr;
   View *expandedFacts_ = nullptr;

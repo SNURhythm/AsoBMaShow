@@ -291,6 +291,11 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   summary_->addView(bestOverview);
   addView(summary_);
   visible(summary_, false);
+  scoreSlot_ = new View();
+  scoreSlot_->setName("chartDetailsScoreSlot");
+  scoreSlot_->setFlexDirection(FlexDirection::Column)->setFlexShrink(0);
+  addView(scoreSlot_);
+  visible(scoreSlot_, false);
 
   expandedFacts_ = new View();
   expandedFacts_->setName("chartDetailsExpanded");
@@ -306,7 +311,7 @@ void ChartDetailsView::setMoreActionHandler(std::function<void()> more) {
 
 void ChartDetailsView::setScoreContainer(View *container) {
   scoreContainer_ = container;
-  personalBest_->moveTo(container ? *container : compact_ ? *this : *expandedFacts_);
+  personalBest_->moveTo(container ? *container : compact_ ? *this : *scoreSlot_);
 }
 
 void ChartDetailsView::onLayout() {
@@ -363,6 +368,10 @@ void ChartDetailsView::setCompact(bool compact) {
   genre_->setFlex(0)->setMinWidth(0);
   setGap(compact ? kSectionGap : 6);
   visible(summary_, !compact);
+  visible(scoreSlot_, !compact);
+  visible(rate_, compact);
+  next_->setFlex(compact ? 0 : 1);
+  personalBest_->setPadding(Edge::All, compact ? 14 : 0);
   difficulty_->moveTo(*levelLine_);
   chartLevel_->moveTo(*levelLine_);
   difficulty_->moveTo(compact ? *this : *levelLine_);
@@ -379,6 +388,8 @@ void ChartDetailsView::setCompact(bool compact) {
   if (!compact) {
     summary_->moveTo(*identity_);
     summary_->moveTo(*this);
+    scoreSlot_->moveTo(*identity_);
+    scoreSlot_->moveTo(*this);
   }
   facts_->moveTo(*this);
   expandedFacts_->moveTo(*identity_);

@@ -35,3 +35,22 @@ A fresh native screenshot could not be captured because the Mac was locked.
 Portrait and safe-area behavior are covered by real Yoga layout tests; no mobile
 build or device visual check was performed. Screenshots from the earlier tab
 redesign predate these refinements. No deployment was performed.
+
+## Clear lamp, favorite feedback and score-card follow-up
+
+The clear lamp now uses an eight-unit glow in its clear-state color, with no
+border; recycling to a row without a lamp clears the glow. Favorite hover and
+pressed feedback use subtle foreground-color overlays that adapt to selected
+and unselected rows in either theme.
+
+The landscape EX-score/next-rank card now follows the BPM/personal-best summary,
+before chart facts. Its duplicate grade/rate is hidden, while the sole portrait
+rank/rate remains visible. Rotation and external portrait score ownership remain
+covered by native detail-view tests.
+
+The desktop build and three affected CTest targets passed. A native desktop
+visual check confirmed the score-card placement using an unplayed chart
+(`/tmp/asobmashow-score-polish.png`). This library did not provide a scored chart
+for checking the glow and score values visually; scored geometry is covered by
+fixtures. Native pointer automation still did not reliably select/hover rows,
+so hover/down colors were checked in code rather than captured visually.

@@ -97,8 +97,8 @@ int main() {
       row.setClearRank(kClearTypeHardClearRank);
       row.onSelected();
       auto *lamp = row.findViewByName("chartListClearLamp");
-      require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 1,
-              "clear lamps retain a contrasting outline on the selected surface");
+      require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 0,
+              "clear lamps have no hard border on the selected surface");
       const auto color = difficulty->currentColor();
       const auto expected = main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::selectedAccent();
       require(difficulty->getText() == record.difficultyTableLabels &&
