@@ -2439,6 +2439,8 @@ public:
 #include <atomic>
 #include <filesystem>
 #include <map>
+#include <memory>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -2454,6 +2456,29 @@ struct ChartScanResult {
   bool HasBga = false;
   bool HasBpmStop = false;
   bool HasScrollChange = false;
+};
+
+// Optional wall-time breakdown for one scan. Parallel callers should sum
+// these as worker time, not compare the sum directly with elapsed scan time.
+struct ScanTimings {
+  std::uint64_t ReadNanoseconds = 0;
+  std::uint64_t HashNanoseconds = 0;
+  std::uint64_t DecodeNanoseconds = 0;
+  std::uint64_t ParseNanoseconds = 0;
+};
+
+// Reusable storage only: random state and chart results remain in Parser.
+// Confine each workspace to one worker; no output borrows its storage.
+class ScanWorkspace {
+public:
+  ScanWorkspace();
+  ~ScanWorkspace();
+  ScanWorkspace(const ScanWorkspace &) = delete;
+  ScanWorkspace &operator=(const ScanWorkspace &) = delete;
+private:
+  struct Storage;
+  std::unique_ptr<Storage> storage;
+  friend class Parser;
 };
 
 class Parser {
@@ -2486,6 +2511,13 @@ public:
        const std::filesystem::path &sourcePath);
   [[nodiscard]] std::optional<ChartScanResult>
   Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled,
+       const std::filesystem::path &sourcePath, ScanWorkspace &workspace,
+       ScanTimings *timings = nullptr);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled,
+       ScanWorkspace &workspace, ScanTimings *timings = nullptr);
   static int NoWav;
   static int MetronomeWav;
 
@@ -2493,7 +2525,13 @@ private:
   void ParseInternal(const std::vector<unsigned char> &bytes, Chart **chart,
                      bool addReadyMeasure, bool metaOnly,
                      std::atomic_bool &bCancelled, ChartScanResult *scan,
-                     bool pms = false);
+                     bool pms = false, ScanWorkspace *workspace = nullptr,
+                     ScanTimings *timings = nullptr);
+  std::optional<ChartScanResult>
+  ScanInternal(const std::vector<unsigned char> &bytes,
+               std::atomic_bool &bCancelled,
+               const std::filesystem::path &sourcePath,
+               ScanWorkspace *workspace, ScanTimings *timings);
   // bpmTable
   std::unordered_map<int, double> BpmTable;
   std::unordered_map<int, double> StopLengthTable;
@@ -4659,6 +4697,19 @@ public:
   void reset() noexcept {
     current = 0;
     for (auto &block : blocks) block.used = 0;
+  }
+
+  void releaseExcess(size_t maximumRetainedBytes) noexcept {
+    size_t remaining = maximumRetainedBytes;
+    for (const auto &block : blocks) {
+      if (block.bytes > remaining) {
+        std::vector<Block>().swap(blocks);
+        current = 0;
+        return;
+      }
+      remaining -= block.bytes;
+    }
+    reset();
   }
 
   void *allocate(size_t bytes, size_t alignment) {

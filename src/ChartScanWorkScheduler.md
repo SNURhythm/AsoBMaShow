@@ -186,6 +186,24 @@ With `W = 10`, the normal buffered archive-data budget is approximately
 `9 * 16 MiB = 144 MiB`, plus at most one oversized entry per active reader and
 the parser/result objects. This is a pressure bound, not a reservation.
 
+## Parser workspaces and stage timings
+
+Each parsing thread owns a reusable `ScanWorkspace`. Input bytes, decoded text,
+timing positions, and timeline arena blocks each retain at most 1 MiB after a
+job, so the retained bulk-buffer ceiling is approximately 4 MiB per parsing
+thread. Oversized charts can temporarily exceed this and release their larger
+buffers when finished. Result metadata owns its data. Every job still constructs
+a fresh parser, including independent random state. Thread exit releases the
+workspace; inline parsing on a long-lived caller may retain its bounded buffers.
+Archive readers retain their existing entry buffers and pipeline byte limits.
+
+The final `Chart scan worker stages` log reports attempted chart count and summed
+microseconds for parser input reads, hashes, decoding, remaining parsing work,
+and serial chart upserts. Parser sums measure worker time and may exceed elapsed
+scan time. Archive extraction/prefetch, discovery, parser construction, result
+wrapping, checkpoint writes, and transaction commits are outside these selected
+stages. Use the existing phase logs or an outer timer for total elapsed time.
+
 ## Cache behavior during manual rebuild
 
 Manual rebuild deletes persisted `chart_meta`, `solid_archives`,
