@@ -32,36 +32,87 @@ float sanitizeViewportComponent(std::string_view text, float fallback,
 
 } // namespace
 
+void SettingsScene::appendNumericSetting(
+    View *body, const LayoutMetrics &metrics, const i18n::Text &label,
+    std::function<std::string()> read, const std::string &defaultValue,
+    float step, int precision, std::function<void(const std::string &)> apply) {
+  body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+  input->setEditingText(read());
+  input->onEditingFinished([this, input, read, apply](const std::string &text) {
+    apply(text);
+    input->setEditingText(read());
+    lastLayoutWidth = -1;
+  });
+  auto *reset = makeResetButton(metrics);
+  reset->setOnClickListener([this, input, read, apply, defaultValue]() {
+    apply(defaultValue);
+    input->setEditingText(read());
+    lastLayoutWidth = -1;
+  });
+  body->addView(makeSteppedValueRow(metrics, input, formatFloatValue(step, precision),
+      [this, input, read, apply, step, precision](int direction) {
+        apply(formatFloatValue(std::stof(read()) + direction * step, precision));
+        input->setEditingText(read());
+        lastLayoutWidth = -1;
+      }, reset));
+}
+
+void SettingsScene::appendBuiltInLaneGeometryControls(
+  View *body, const LayoutMetrics &metrics, int keyMode) {
+  appendNumericSetting(body, metrics, i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
+                [this, keyMode] { return formatPlayAreaWidthLabel(
+                    context.settings.playAreaWidthForKeyMode(keyMode)); },
+                formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue), 0.5F, 1,
+                [this, keyMode](const std::string &text) {
+                  context.settings.setPlayAreaWidthForKeyMode(
+                      keyMode,
+                      sanitizeViewportComponent(
+                          text,
+                          context.settings.playAreaWidthForKeyMode(keyMode),
+                          context.settings.geometryPolicy().width.minimum,
+                          context.settings.geometryPolicy().width.maximum));
+                  persistSettings();
+                });
+  appendNumericSetting(body, metrics, i18n::message("settings.skins.lane_length.label"),
+                [this] { return formatFloatValue(context.settings.presentation().laneLength, 1); },
+                formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1), 0.5F, 1,
+                [this](const std::string &text) {
+                  context.settings.presentation().laneLength = sanitizeViewportComponent(
+                      text, context.settings.presentation().laneLength,
+                      context.settings.geometryPolicy().length.minimum, context.settings.geometryPolicy().length.maximum);
+                  persistSettings();
+                });
+  appendNumericSetting(body, metrics, i18n::message("settings.skins.lane_angle_deg.label"),
+                [this] { return formatFloatValue(context.settings.presentation().laneAngleDegrees, 1); },
+                formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1), 1.0F, 1,
+                [this](const std::string &text) {
+                  context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
+                      text, context.settings.presentation().laneAngleDegrees,
+                      context.settings.geometryPolicy().angle.minimum,
+                      context.settings.geometryPolicy().angle.maximum);
+                  persistSettings();
+                });
+}
+
+void SettingsScene::appendBuiltInBeamLengthControls(
+  View *body, const LayoutMetrics &metrics) {
+  appendNumericSetting(body, metrics, i18n::message("settings.skins.beam_length.percent_label"),
+                [this] { return std::to_string(context.settings.presentation().laneBeamLengthPercent); },
+                std::to_string(AppSettings::kDefaultLaneBeamLengthPercent), 5.0F, 0,
+                [this](const std::string &text) {
+                  context.settings.presentation().laneBeamLengthPercent =
+                      clampLaneBeamLengthPercent(sanitizeOffsetComponent(
+                          text, context.settings.presentation().laneBeamLengthPercent));
+                  persistSettings();
+                });
+}
+
 void SettingsScene::appendBuiltInGameplayTraitSettings(
     View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
   body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
                                 ui_theme::lime()));
   body->setAlignItems(YGAlignFlexStart);
-  const auto appendNumeric =
-      [this, body, &metrics](const i18n::Text &label, std::function<std::string()> read,
-                             const std::string &defaultValue, float step, int precision,
-                             std::function<void(const std::string &)> apply) {
-        body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
-        auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
-        input->setEditingText(read());
-        input->onEditingFinished([this, input, read, apply](const std::string &text) {
-          apply(text);
-          input->setEditingText(read());
-          lastLayoutWidth = -1;
-        });
-        auto *reset = makeResetButton(metrics);
-        reset->setOnClickListener([this, input, read, apply, defaultValue]() {
-          apply(defaultValue);
-          input->setEditingText(read());
-          lastLayoutWidth = -1;
-        });
-        body->addView(makeSteppedValueRow(metrics, input, formatFloatValue(step, precision),
-            [this, input, read, apply, step, precision](int direction) {
-              apply(formatFloatValue(std::stof(read()) + direction * step, precision));
-              input->setEditingText(read());
-              lastLayoutWidth = -1;
-            }, reset));
-      };
 
   if (keyMode == -5 || keyMode == -7) {
     const bool hide = keyMode == -5 ? context.settings.presentation().hideEmptyScratchLane5K
@@ -117,39 +168,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
       body->addView(buildScratchLanePositionControl(metrics));
     }
-    appendNumeric(i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
-                  [this, keyMode] { return formatPlayAreaWidthLabel(
-                      context.settings.playAreaWidthForKeyMode(keyMode)); },
-                  formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue), 0.5F, 1,
-                  [this, keyMode](const std::string &text) {
-                    context.settings.setPlayAreaWidthForKeyMode(
-                        keyMode,
-                        sanitizeViewportComponent(
-                            text,
-                            context.settings.playAreaWidthForKeyMode(keyMode),
-                            context.settings.geometryPolicy().width.minimum,
-                            context.settings.geometryPolicy().width.maximum));
-                    persistSettings();
-                  });
-    appendNumeric(i18n::message("settings.skins.lane_length.label"),
-                  [this] { return formatFloatValue(context.settings.presentation().laneLength, 1); },
-                  formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1), 0.5F, 1,
-                  [this](const std::string &text) {
-                    context.settings.presentation().laneLength = sanitizeViewportComponent(
-                        text, context.settings.presentation().laneLength,
-                        context.settings.geometryPolicy().length.minimum, context.settings.geometryPolicy().length.maximum);
-                    persistSettings();
-                  });
-    appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
-                  [this] { return formatFloatValue(context.settings.presentation().laneAngleDegrees, 1); },
-                  formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1), 1.0F, 1,
-                  [this](const std::string &text) {
-                    context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
-                        text, context.settings.presentation().laneAngleDegrees,
-                        context.settings.geometryPolicy().angle.minimum,
-                        context.settings.geometryPolicy().angle.maximum);
-                    persistSettings();
-                  });
+    appendBuiltInLaneGeometryControls(body, metrics, keyMode);
     appendBuiltInLaneOpacityControls(body, metrics, keyMode);
     appendBuiltInJudgeLineControls(body, metrics, keyMode);
     appendBuiltInMeasureLineControls(body, metrics, keyMode);
@@ -159,15 +178,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     appendBuiltInNoteControls(body, metrics, keyMode);
     break;
   case BuiltInSkinTab::Effects:
-    appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
-                  [this] { return std::to_string(context.settings.presentation().laneBeamLengthPercent); },
-                  std::to_string(AppSettings::kDefaultLaneBeamLengthPercent), 5.0F, 0,
-                  [this](const std::string &text) {
-                    context.settings.presentation().laneBeamLengthPercent =
-                        clampLaneBeamLengthPercent(sanitizeOffsetComponent(
-                            text, context.settings.presentation().laneBeamLengthPercent));
-                    persistSettings();
-                  });
+    appendBuiltInBeamLengthControls(body, metrics);
     body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
                                   metrics.bodyTextSize, ui_theme::textPrimary()));
     body->addView(buildKeybombControls(metrics, keyMode, false));

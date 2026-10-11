@@ -34,7 +34,8 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
   and judge/measure lines; Effects groups beams and keybombs. The catalog's
   screen/mode selectors stay vertical; only the built-in editor uses horizontal tabs.
   Built-in controls remain available here when custom skin services are
-  unavailable. The live preview retains its compact editing controls.
+  unavailable. The live preview uses the same left-aligned editable rows, including its
+  scroll duration and cover amounts.
   Background groups BGA playback, aspect, brightness, and blur. Skin package
   installation and diagnostics follow selection and appearance controls.
 - Audio starts with volumes and input sounds/count-in, followed by device,

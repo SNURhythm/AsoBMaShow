@@ -547,6 +547,14 @@ private:
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);
 
+  void appendNumericSetting(
+      View *body, const settings_scene::LayoutMetrics &metrics, const i18n::Text &label,
+      std::function<std::string()> read, const std::string &defaultValue,
+      float step, int precision, std::function<void(const std::string &)> apply);
+  void appendBuiltInLaneGeometryControls(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInBeamLengthControls(
+      View *body, const settings_scene::LayoutMetrics &metrics);
   void appendBuiltInGameplayTraitSettings(
       View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
       bool followsOriginal = false);

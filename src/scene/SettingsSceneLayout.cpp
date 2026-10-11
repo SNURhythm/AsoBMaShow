@@ -6,6 +6,7 @@
 #include "../BmsSearchService.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
+#include "../view/CheckboxButtonContent.h"
 #include "../view/DropdownView.h"
 #include "../view/IconText.h"
 #include "../view/LaneCoverControlsView.h"
@@ -279,6 +280,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
                                               bool compactAdjustments) {
   auto *visibleTimeControls = new View();
   visibleTimeControls->setFlexDirection(FlexDirection::Column);
+  visibleTimeControls->setWidthPercent(100);
   visibleTimeControls->setGap(metrics.compact ? 12.0f : 16.0f);
   visibleTimeControls->setAlignItems(YGAlignFlexStart);
   if (includeDescription) {
@@ -309,7 +311,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     visibleTimeModeRow->setGap(metrics.compact ? 8.0f : 10.0f);
     visibleTimeModeRow->setAlignItems(YGAlignCenter);
     visibleTimeModeRow->setWidthPercent(100.0f);
-    visibleTimeModeRow->setJustifyContent(YGJustifyCenter);
+    visibleTimeModeRow->setJustifyContent(YGJustifyFlexStart);
     visibleTimeModeRow->addView(visibleTimeModeButton);
   } else {
     visibleTimeControls->addView(visibleTimeModeButton);
@@ -383,6 +385,27 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     }
     visibleTimeControls->addView(fixedHispeedChoices);
   }
+  if (compactAdjustments) {
+    visibleTimeInput = makeTextInput(metrics, metrics.compact ? 116 : 136);
+    visibleTimeInput->onEditingFinished(
+        [this](const std::string &) { commitVisibleTimeInput(); });
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([this]() {
+      context.settings.setVisibleTimeGreenNumber(400);
+      persistSettings();
+      syncVisibleTimeInputText(true);
+    });
+    visibleTimeControls->addView(makeSteppedValueRow(metrics, visibleTimeInput, "10",
+        [this](int direction) {
+          context.settings.visibleTimeDurationMilliseconds = adjustVisibleTimeDurationMilliseconds(
+              context.settings.visibleTimeDurationMilliseconds,
+              context.settings.visibleTimeUseMilliseconds, direction * 10);
+          persistSettings();
+          syncVisibleTimeInputText(true);
+        }, reset));
+    return visibleTimeControls;
+  }
+
   auto *visibleTimeValueControls = new View();
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
   visibleTimeValueControls->setFlexWrap(YGWrapWrap);
@@ -706,23 +729,77 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   auto *previewControls = new View();
   previewControls->setFlexDirection(FlexDirection::Column);
   previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  previewControls->setAlignItems(YGAlignStretch);
+  previewControls->setAlignItems(YGAlignFlexStart);
   previewScroll->setContentView(previewControls);
   previewPanel->addView(previewScroll);
 
   if (previewPanelPage == 0) {
-    previewControls->addView(
-        makeSummaryRow(metrics, i18n::message("settings.preview_layout.visible_time.label"), &summaryVisibleTimeValueText));
+    previewControls->addView(makeWrappedText(
+        i18n::message("settings.preview_layout.visible_time.label"),
+        metrics.bodyTextSize, ui_theme::textPrimary()));
     previewControls->addView(buildVisibleTimeControls(metrics, false, true));
 
-    previewControls->addView(makeSummaryRow(
-        metrics, i18n::message("settings.preview_layout.note_start.label"), &summaryNoteStartPositionValueText));
-    auto *covers = new LaneCoverControlsView([this](const lane_cover::State &value) {
-      context.settings.presentation().setLaneCoverState(value);
-      persistSettings();
-    });
-    covers->refresh(context.settings.presentation().laneCoverState());
-    previewControls->addView(covers);
+    previewControls->addView(makeWrappedText(
+        i18n::message("settings.preview_layout.note_start.label"),
+        metrics.bodyTextSize, ui_theme::textPrimary()));
+    constexpr std::array coverLabels{"SUDDEN+", "HIDDEN+", "LIFT"};
+    for (std::size_t index = 0; index < coverLabels.size(); ++index) {
+      const auto read = [this, index]() {
+        const auto state = context.settings.presentation().laneCoverState();
+        return static_cast<int>(std::lround(index == 0 ? state.laneCoverPercent * 10
+            : index == 1 ? state.hiddenRatio * 1000 : state.liftRatio * 1000));
+      };
+      const auto apply = [this, index](int amount) {
+        auto state = context.settings.presentation().laneCoverState();
+        amount = std::clamp(amount, 0, 1000);
+        if (index == 0) state.laneCoverPercent = static_cast<float>(amount) / 10;
+        else if (index == 1) state.hiddenRatio = static_cast<float>(amount) / 1000;
+        else state.liftRatio = static_cast<float>(amount) / 1000;
+        context.settings.presentation().setLaneCoverState(state);
+        persistSettings();
+      };
+      auto *content = new CheckboxButtonContent(coverLabels[index], metrics.bodyTextSize, 20);
+      content->setThemedColor(ui_theme::textPrimary);
+      const auto state = context.settings.presentation().laneCoverState();
+      const bool enabled = index == 0 ? state.laneCoverEnabled
+          : index == 1 ? state.hiddenEnabled : state.liftEnabled;
+      content->setChecked(enabled);
+      auto *toggle = new Button(0, 0, metrics.actionButtonWidth, metrics.actionButtonHeight);
+      toggle->setCornerRadius(ui_theme::controlRadius());
+      toggle->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+      toggle->setContentView(content);
+      toggle->setSelected(enabled);
+      toggle->setOnClickListener([this, index, toggle, content]() {
+        auto value = context.settings.presentation().laneCoverState();
+        bool &enabled = index == 0 ? value.laneCoverEnabled
+            : index == 1 ? value.hiddenEnabled : value.liftEnabled;
+        enabled = !enabled;
+        content->setChecked(enabled);
+        toggle->setSelected(enabled);
+        context.settings.presentation().setLaneCoverState(value);
+        persistSettings();
+      });
+      previewControls->addView(toggle);
+      auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+      input->setEditingText(std::to_string(read()));
+      input->onEditingFinished([input, read, apply](const std::string &text) {
+        apply(sanitizeOffsetComponent(text, read()));
+        input->setEditingText(std::to_string(read()));
+      });
+      auto *reset = makeResetButton(metrics);
+      reset->setOnClickListener([input, read, apply, index]() {
+        apply(index == 0 ? 0 : 100);
+        input->setEditingText(std::to_string(read()));
+      });
+      previewControls->addView(makeSteppedValueRow(metrics, input, "10",
+          [input, read, apply](int direction) {
+            apply(read() + direction * 10);
+            input->setEditingText(std::to_string(read()));
+          }, reset));
+    }
+    previewControls->addView(makeWrappedText(
+        i18n::message("settings.lane.covers.shortcuts"),
+        metrics.smallTextSize, ui_theme::textSecondary()));
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   } else if (previewPanelPage == 1 && previewSkinRow != nullptr) {
     previewControls->addView(makeWrappedText(
@@ -740,139 +817,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         previewKeyMode == -5 || previewKeyMode == -7) {
       previewControls->addView(buildScratchLanePositionControl(metrics));
     }
-    previewControls->addView(makeSummaryRow(
-        metrics, i18n::message("settings.preview_layout.play_width_mode.label",
-            {{"mode", gameplay::keyModeLabel(previewKeyMode)}}), &summaryPreviewPlayAreaWidthValueText));
-    auto *playAreaWidthControls = new View();
-    playAreaWidthControls->setFlexDirection(FlexDirection::Row);
-    playAreaWidthControls->setFlexWrap(YGWrapWrap);
-    playAreaWidthControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    playAreaWidthControls->setAlignItems(YGAlignCenter);
-    playAreaWidthControls->setWidthPercent(100.0f);
-    playAreaWidthControls->setJustifyContent(YGJustifyCenter);
-    auto updatePreviewPlayAreaWidth = [this](float delta) {
-      context.settings.setPlayAreaWidthForKeyMode(
-          previewKeyMode,
-          clampPlayAreaWidth(context.settings,
-              context.settings.playAreaWidthForKeyMode(previewKeyMode) +
-              delta));
-      persistSettings();
-    };
-    auto *minusWidth =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
-    minusWidth->setOnClickListener(
-        [updatePreviewPlayAreaWidth]() { updatePreviewPlayAreaWidth(-0.5f); });
-    playAreaWidthControls->addView(minusWidth);
-    auto *plusWidth =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
-    plusWidth->setOnClickListener(
-        [updatePreviewPlayAreaWidth]() { updatePreviewPlayAreaWidth(0.5f); });
-    playAreaWidthControls->addView(plusWidth);
-    auto *resetWidth = makeResetButton(metrics);
-    resetWidth->setOnClickListener([this]() {
-      context.settings.setPlayAreaWidthForKeyMode(
-          previewKeyMode, context.settings.geometryPolicy().width.defaultValue);
-      persistSettings();
-    });
-    playAreaWidthControls->addView(resetWidth);
-    previewControls->addView(playAreaWidthControls);
-    previewControls->addView(
-        makeSummaryRow(metrics, i18n::message("settings.preview_layout.lane_length.label"), &summaryLaneLengthValueText));
-    auto *lengthControls = new View();
-    lengthControls->setFlexDirection(FlexDirection::Row);
-    lengthControls->setFlexWrap(YGWrapWrap);
-    lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    lengthControls->setAlignItems(YGAlignCenter);
-    lengthControls->setWidthPercent(100.0f);
-    lengthControls->setJustifyContent(YGJustifyCenter);
-    auto updateLaneLength = [this](float delta) {
-      context.settings.presentation().laneLength =
-          clampLaneLength(context.settings, context.settings.presentation().laneLength + delta);
-      persistSettings();
-    };
-    auto *minusLength =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
-    minusLength->setOnClickListener(
-        [updateLaneLength]() { updateLaneLength(-0.5f); });
-    lengthControls->addView(minusLength);
-    auto *plusLength =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
-    plusLength->setOnClickListener(
-        [updateLaneLength]() { updateLaneLength(0.5f); });
-    lengthControls->addView(plusLength);
-    auto *resetLength = makeResetButton(metrics);
-    resetLength->setOnClickListener([this]() {
-      context.settings.presentation().laneLength = context.settings.geometryPolicy().length.defaultValue;
-      persistSettings();
-    });
-    lengthControls->addView(resetLength);
-    previewControls->addView(lengthControls);
-
-    previewControls->addView(
-        makeSummaryRow(metrics, i18n::message("settings.preview_layout.lane_angle.label"), &summaryLaneAngleValueText));
-    auto *angleControls = new View();
-    angleControls->setFlexDirection(FlexDirection::Row);
-    angleControls->setFlexWrap(YGWrapWrap);
-    angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    angleControls->setAlignItems(YGAlignCenter);
-    angleControls->setWidthPercent(100.0f);
-    angleControls->setJustifyContent(YGJustifyCenter);
-    auto updateLaneAngle = [this](float delta) {
-      context.settings.presentation().laneAngleDegrees =
-          clampLaneAngle(context.settings, context.settings.presentation().laneAngleDegrees + delta);
-      persistSettings();
-    };
-    auto *minusAngle =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
-    minusAngle->setOnClickListener(
-        [updateLaneAngle]() { updateLaneAngle(-1.0f); });
-    angleControls->addView(minusAngle);
-    auto *plusAngle =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
-    plusAngle->setOnClickListener(
-        [updateLaneAngle]() { updateLaneAngle(1.0f); });
-    angleControls->addView(plusAngle);
-    auto *resetAngle = makeResetButton(metrics);
-    resetAngle->setOnClickListener([this]() {
-      context.settings.presentation().laneAngleDegrees = context.settings.geometryPolicy().angle.defaultValue;
-      persistSettings();
-    });
-    angleControls->addView(resetAngle);
-    previewControls->addView(angleControls);
-
+    appendBuiltInLaneGeometryControls(previewControls, metrics, previewKeyMode);
     appendBuiltInLaneOpacityControls(previewControls, metrics, previewKeyMode);
-    previewControls->addView(makeSummaryRow(metrics, i18n::message("settings.preview_layout.beam_length.label"),
-                                            &summaryLaneBeamLengthValueText));
-    auto *beamControls = new View();
-    beamControls->setFlexDirection(FlexDirection::Row);
-    beamControls->setFlexWrap(YGWrapWrap);
-    beamControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    beamControls->setAlignItems(YGAlignCenter);
-    beamControls->setWidthPercent(100.0f);
-    beamControls->setJustifyContent(YGJustifyCenter);
-    auto updateLaneBeamLength = [this](int deltaPercent) {
-      context.settings.presentation().laneBeamLengthPercent = clampLaneBeamLengthPercent(
-          context.settings.presentation().laneBeamLengthPercent + deltaPercent);
-      persistSettings();
-    };
-    auto *minusBeam =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5%");
-    minusBeam->setOnClickListener(
-        [updateLaneBeamLength]() { updateLaneBeamLength(-5); });
-    beamControls->addView(minusBeam);
-    auto *plusBeam =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5%");
-    plusBeam->setOnClickListener(
-        [updateLaneBeamLength]() { updateLaneBeamLength(5); });
-    beamControls->addView(plusBeam);
-    auto *resetBeam = makeResetButton(metrics);
-    resetBeam->setOnClickListener([this]() {
-      context.settings.presentation().laneBeamLengthPercent =
-          AppSettings::kDefaultLaneBeamLengthPercent;
-      persistSettings();
-    });
-    beamControls->addView(resetBeam);
-    previewControls->addView(beamControls);
+    appendBuiltInBeamLengthControls(previewControls, metrics);
 
     previewControls->addView(buildKeybombControls(metrics, previewKeyMode, true));
   } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
@@ -909,13 +856,11 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
   auto *previewActions = new View();
   previewActions->setFlexDirection(FlexDirection::Row);
-  for (auto *button : {restartButton, doneButton}) {
-    button->setWidth(0)->setMinWidth(0)->setFlex(1);
-  }
+  previewActions->setFlexWrap(YGWrapWrap);
   previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
   previewActions->setAlignItems(YGAlignCenter);
   previewActions->setWidthPercent(100.0f);
-  previewActions->setJustifyContent(YGJustifyCenter);
+  previewActions->setJustifyContent(YGJustifyFlexStart);
   previewActions->addView(restartButton);
   previewActions->addView(doneButton);
   previewPanel->addView(previewActions);
