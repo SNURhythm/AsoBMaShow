@@ -54,7 +54,6 @@ public:
 #endif
 
 private:
-  static constexpr size_t kAverageSampleCount = 20;
   static constexpr size_t kMaxVisibleSamples =
       judgement_indicator::kRecentTimingSampleCapacity;
 

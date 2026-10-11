@@ -9,6 +9,7 @@
 
 namespace {
 constexpr long long kFadeMicros = 1800000LL;
+const double kAverageWeightDecay = std::exp2(-1.0 / 32.0);
 constexpr float kWorldWidthRatio = 0.4f;
 constexpr float kHudWidthRatio = 0.2f;
 constexpr float kHudMinWidth = 220.0f;
@@ -138,7 +139,8 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   std::array<Sample, kMaxVisibleSamples> visibleSamples{};
   size_t visibleSampleCount = 0;
-  judgement_indicator::RawAverageAccumulator average;
+  double weightedTimingSum = 0.0;
+  double totalTimingWeight = 0.0;
   float averageAlpha = 0.0f;
   const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
   const uint64_t firstSequence =
@@ -146,28 +148,24 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   for (uint64_t sequence = firstSequence; sequence < nextSequence; ++sequence) {
     Sample sample;
-    if (!readSample(sequence, sample)) {
+    if (!readSample(sequence, sample) ||
+        currentTimeMicros < sample.createdTimeMicros) {
       continue;
     }
-    if (currentTimeMicros >= sample.createdTimeMicros &&
-        currentTimeMicros - sample.createdTimeMicros < kFadeMicros &&
+    const long long ageMicros = currentTimeMicros - sample.createdTimeMicros;
+    if (ageMicros < kFadeMicros &&
         visibleSampleCount < visibleSamples.size()) {
       visibleSamples[visibleSampleCount++] = sample;
     }
-  }
-
-  // Average the same recent input history that is visible on the bar.
-  for (size_t index = visibleSampleCount; index > 0;) {
-    const auto &sample = visibleSamples[--index];
-    if (sample.judgement == Kpoor) {
-      continue;
-    }
-    average.add(sample.diffMicros);
-    averageAlpha = std::max(averageAlpha,
-        1.0f - static_cast<float>(currentTimeMicros - sample.createdTimeMicros) /
-                   static_cast<float>(kFadeMicros));
-    if (average.count() >= kAverageSampleCount) {
-      break;
+    if (sample.judgement != Kpoor) {
+      // Weight by input order, not age: older bars fading cannot move the mean.
+      // Every 32 newer eligible hits halve a retained sample's weight.
+      weightedTimingSum = weightedTimingSum * kAverageWeightDecay +
+                          static_cast<double>(sample.diffMicros);
+      totalTimingWeight = totalTimingWeight * kAverageWeightDecay + 1.0;
+      averageAlpha = std::max(averageAlpha,
+          1.0f - static_cast<float>(ageMicros) /
+                     static_cast<float>(kFadeMicros));
     }
   }
 
@@ -232,9 +230,11 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
             judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
   }
 
-  if (average.count() > 0 && averageAlpha > 0.0f) {
+  if (totalTimingWeight > 0.0 && averageAlpha > 0.0f) {
+    const long long averageMicros =
+        std::llround(weightedTimingSum / totalTimingWeight);
     const float x =
-        offsetToX(average.value(), currentRangeMicros, indicatorLayout);
+        offsetToX(averageMicros, currentRangeMicros, indicatorLayout);
     // Keep the average below the history, with a distinct shape.
     const float down = currentHudMode || geometry.verticalDirection < 0.0f
                            ? 1.0f : -1.0f;

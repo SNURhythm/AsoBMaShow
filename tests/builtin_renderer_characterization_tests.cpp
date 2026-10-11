@@ -947,7 +947,7 @@ public:
   }
 };
 
-void verifyJudgementIndicatorAverageUsesRecentInput(const RenderTarget &target) {
+void verifyJudgementIndicatorAverageUsesRetainedBucket(const RenderTarget &target) {
   Judge judge(3);
   JudgementIndicatorRenderer indicator(judge.timingWindows);
   indicator.configure(true, 0.5F, 1.0F, true, 180);
@@ -972,8 +972,8 @@ void verifyJudgementIndicatorAverageUsesRecentInput(const RenderTarget &target) 
   indicator.clear();
   indicator.record(JudgeResult(Great, 60'000), 2'000'000);
   const auto fresh = render(2'000'000);
-  expect(withOldSample == fresh,
-         "expired samples cannot pull the average away from current hits");
+  expect(withOldSample != fresh,
+         "faded samples remain in the retained bucket average");
   indicator.record(JudgeResult(Great, -60'000), 3'000'000);
   expect(render(2'000'000) == fresh,
          "future timing samples cannot move the current average");
@@ -1001,6 +1001,45 @@ void verifyJudgementIndicatorAverageUsesRecentInput(const RenderTarget &target) 
   indicator.record(JudgeResult(Kpoor, -150'000), 2'900'000);
   expect(pointerBrightness(render(2'900'000)) == fadedBrightness,
          "an empty hit does not refresh the average pointer");
+
+  const auto pointerX = [&](const std::vector<std::uint8_t> &pixels) {
+    int left = kDrawableWidth;
+    int right = -1;
+    for (unsigned y = 370; y < 380; ++y) {
+      for (unsigned x = 0; x < kDrawableWidth; ++x) {
+        const auto offset = (y * kDrawableWidth + x) * 4U;
+        if (static_cast<int>(pixels[offset]) - empty[offset] > 20) {
+          left = std::min(left, static_cast<int>(x));
+          right = std::max(right, static_cast<int>(x));
+        }
+      }
+    }
+    return right < 0 ? -1 : (left + right) / 2;
+  };
+  indicator.clear();
+  indicator.record(JudgeResult(Great, -60'000), 0);
+  indicator.record(JudgeResult(Great, 60'000), 1'000'000);
+  const int beforeExpiry = pointerX(render(1'799'999));
+  expect(beforeExpiry >= 0 && pointerX(render(1'800'000)) == beforeExpiry,
+         "the average does not move when an older hit bar fades out");
+
+  indicator.clear();
+  indicator.record(JudgeResult(Great, 30'000), 2'000'000);
+  const int weightedTimingX = pointerX(render(2'000'000));
+  indicator.clear();
+  for (int index = 0; index < 96; ++index) {
+    indicator.record(JudgeResult(Great, index < 32 ? -70'000 :
+                                       index < 64 ? 0 : 70'000), 2'000'000);
+  }
+  // The three 32-hit blocks have total weights 1:2:4, yielding +30 ms.
+  expect(weightedTimingX >= 0 &&
+             pointerX(render(2'000'000)) == weightedTimingX,
+         "the whole bucket contributes with half the weight per 32 older hits");
+  for (int index = 0; index < 96; ++index) {
+    indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  }
+  expect(pointerX(render(2'000'000)) == pointerX(fresh),
+         "new samples replace overwritten bucket entries in the average");
 }
 
 void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
@@ -3682,7 +3721,7 @@ int main() {
 
   if (failures == 0) {
     try {
-      verifyJudgementIndicatorAverageUsesRecentInput(target);
+      verifyJudgementIndicatorAverageUsesRetainedBucket(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);
       verifySerialOrderingAndReset();
