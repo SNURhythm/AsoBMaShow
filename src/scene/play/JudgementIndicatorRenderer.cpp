@@ -177,45 +177,48 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   const float barY = indicatorLayout.centerY - indicatorLayout.barHeight * 0.5f;
   const float markerY =
       indicatorLayout.centerY - indicatorLayout.markerHeight * 0.5f;
+  const float outline = indicatorLayout.markerWidth * 0.5f;
 
-  addRect(batch, indicatorLayout.width,
-          indicatorLayout.barHeight + (currentHudMode ? 2.0f : 0.026f),
-          indicatorLayout.x, barY - (currentHudMode ? 1.0f : 0.013f),
-          Color(0, 0, 0, currentHudMode ? 132 : 118));
+  // Back the entire hit-marker area so bright notes cannot wash out the ticks.
+  addRect(batch, indicatorLayout.width + outline * 2.0f,
+          indicatorLayout.markerHeight + outline * 2.0f,
+          indicatorLayout.x - outline, markerY - outline,
+          Color(8, 12, 18, 210));
   drawSegment(batch, -currentRangeMicros, timingWindowEarly(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 118));
+              judgementColor(Poor, 190));
   drawSegment(batch, timingWindowEarly(Bad), timingWindowEarly(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 126));
+              judgementColor(Bad, 195));
   drawSegment(batch, timingWindowEarly(Good), timingWindowEarly(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 134));
+              judgementColor(Good, 200));
   drawSegment(batch, timingWindowEarly(Great), timingWindowEarly(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 142));
+              judgementColor(Great, 210));
   drawSegment(batch, timingWindowEarly(PGreat), timingWindowLate(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(PGreat, 170));
+              judgementColor(PGreat, 230));
   drawSegment(batch, timingWindowLate(PGreat), timingWindowLate(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 142));
+              judgementColor(Great, 210));
   drawSegment(batch, timingWindowLate(Great), timingWindowLate(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 134));
+              judgementColor(Good, 200));
   drawSegment(batch, timingWindowLate(Good), timingWindowLate(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 126));
+              judgementColor(Bad, 195));
   drawSegment(batch, timingWindowLate(Bad), currentRangeMicros,
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 118));
+              judgementColor(Poor, 190));
 
-  const float centerTickWidth = indicatorLayout.markerWidth * 0.8f;
-  addRect(batch, centerTickWidth, indicatorLayout.markerHeight * 0.64f,
-          indicatorLayout.x + indicatorLayout.width * 0.5f -
-              centerTickWidth * 0.5f,
-          indicatorLayout.centerY - indicatorLayout.markerHeight * 0.32f,
-          Color(255, 255, 255, currentHudMode ? 118 : 105));
+  const float centerX = indicatorLayout.x + indicatorLayout.width * 0.5f;
+  addRect(batch, indicatorLayout.markerWidth + outline * 2.0f,
+          indicatorLayout.markerHeight, centerX - indicatorLayout.markerWidth,
+          markerY, Color(0, 0, 0, 255));
+  addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
+          centerX - indicatorLayout.markerWidth * 0.5f, markerY,
+          Color(255, 255, 255, 230));
 
   for (size_t i = 0; i < visibleSampleCount; ++i) {
     const auto &sample = visibleSamples[i];
@@ -230,24 +233,44 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
     }
     const float x =
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
+    addRect(batch, indicatorLayout.markerWidth + outline * 2.0f,
+            indicatorLayout.markerHeight + outline * 2.0f,
+            x - indicatorLayout.markerWidth * 0.5f - outline,
+            markerY - outline, Color(0, 0, 0, alphaByte(alpha)));
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
             judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
   }
 
+  // Caps remain visible even when many recent hits overlap the zero line.
+  const float capWidth = indicatorLayout.markerWidth * 3.0f;
+  for (const float y : {markerY - outline * 2.0f,
+                        markerY + indicatorLayout.markerHeight}) {
+    addRect(batch, capWidth + outline * 2.0f, outline * 4.0f,
+            centerX - capWidth * 0.5f - outline, y - outline,
+            Color(0, 0, 0, 255));
+    addRect(batch, capWidth, outline * 2.0f,
+            centerX - capWidth * 0.5f, y, Color(255, 255, 255, 255));
+  }
+
   if (average.count() > 0) {
     const float x =
         offsetToX(average.value(), currentRangeMicros, indicatorLayout);
-    const float averageWidth = indicatorLayout.markerWidth * 2.4f;
-    const float averagePad = currentHudMode ? 3.0f : 0.04f;
-    addRect(batch, averageWidth,
-            indicatorLayout.markerHeight + averagePad * 2.0f,
-            x - averageWidth * 0.5f, markerY - averagePad,
-            Color(0, 0, 0, 205));
-    addRect(batch, averageWidth * 0.44f,
-            indicatorLayout.markerHeight + averagePad,
-            x - averageWidth * 0.22f, markerY - averagePad * 0.5f,
-            Color(255, 245, 140, 240));
+    // Keep the average below the history, with a distinct shape and an outline.
+    const float down = currentHudMode || geometry.verticalDirection < 0.0f
+                           ? 1.0f : -1.0f;
+    const float tipY = indicatorLayout.centerY +
+        down * (indicatorLayout.markerHeight * 0.5f + outline * 4.0f);
+    const float pointerSize = indicatorLayout.markerWidth * 3.0f;
+    batch.addTriangle(x, tipY, x - pointerSize,
+                      tipY + down * pointerSize, x + pointerSize,
+                      tipY + down * pointerSize, Color(0, 0, 0, 255).toABGR());
+    batch.addTriangle(x, tipY + down * outline * 1.5f,
+                      x - pointerSize + outline * 2.0f,
+                      tipY + down * (pointerSize - outline),
+                      x + pointerSize - outline * 2.0f,
+                      tipY + down * (pointerSize - outline),
+                      Color(255, 235, 110, 255).toABGR());
   }
 }
 
@@ -304,16 +327,18 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
     indicatorLayout.x =
         (static_cast<float>(rendering::window_width) - indicatorLayout.width) *
         0.5f;
-    indicatorLayout.barHeight = 5.0f;
-    indicatorLayout.markerHeight = 18.0f;
-    indicatorLayout.markerWidth = 2.0f;
+    indicatorLayout.barHeight = 7.0f;
+    indicatorLayout.markerHeight = 22.0f;
+    indicatorLayout.markerWidth = 3.0f;
     indicatorLayout.centerY =
         static_cast<float>(rendering::window_height) * (1.0f - normalizedY);
+    const float verticalMargin = indicatorLayout.markerHeight * 0.5f +
+                                 indicatorLayout.markerWidth * 5.0f;
     indicatorLayout.centerY =
         std::clamp(indicatorLayout.centerY,
-                   indicatorLayout.markerHeight * 0.5f,
+                   verticalMargin,
                    static_cast<float>(rendering::window_height) -
-                       indicatorLayout.markerHeight * 0.5f);
+                       verticalMargin);
     return indicatorLayout;
   }
 
@@ -325,12 +350,13 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
   const float verticalDirection =
       geometry.verticalDirection < 0.0f ? -1.0f : 1.0f;
   indicatorLayout.centerY = geometry.judgeY + verticalDirection * laneHeight * normalizedY;
+  const bool skinPixels = geometry.verticalDirection < 0.0f;
   indicatorLayout.barHeight =
-      std::max(0.02f, geometry.noteRenderHeight * 0.08f);
+      std::max(skinPixels ? 3.0f : 0.04f, geometry.noteRenderHeight * 0.16f);
   indicatorLayout.markerHeight =
-      std::max(0.16f, geometry.noteRenderHeight * 0.5f);
+      std::max(skinPixels ? 12.0f : 0.22f, geometry.noteRenderHeight * 0.7f);
   indicatorLayout.markerWidth =
-      std::max(0.01f, geometry.noteRenderWidth * 0.014f);
+      std::max(skinPixels ? 2.0f : 0.02f, geometry.noteRenderWidth * 0.025f);
   return indicatorLayout;
 }
 
