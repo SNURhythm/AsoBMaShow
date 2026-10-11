@@ -1,0 +1,22 @@
+{
+  "current_commit": "cd04112c6cb3ee8961a952b3f0bc8a02f207a60e",
+  "current_apk_sha256": "576840e08108529aaa45a7a4b81e674d5e4ab260deaedf564f0c55c0bf608c1b",
+  "current_build_identity": [
+    "AsoBMaShowBuildIdentityV1|a1ab8e6c42f4443eb7427c965670e984e5103fe7|RelWithDebInfo|0"
+  ],
+  "baseline_apk_sha256": "834de9bd8226b65a6e4ad5ac27fb4cc6d24a97fde0c1791de44d0aa870af664e",
+  "baseline_description": "Exact measured updated APK from PR 135; published checksum matches",
+  "original_phone_volume": 6,
+  "measurement_volume": 7,
+  "protocol": "300 single gestures then 100 three-finger gestures; 40 ms hold, 110 ms rest; y 840, x 730 / 730,1130,1530; fresh process for each run; about 24 s gameplay warmup",
+  "telemetry": "existing ASOBMASHOW_ENABLE_PERF_TELEMETRY=ON; histogram and realtime worker source unchanged since PR 135",
+  "fixture_sha256": {
+    "smoke.bms": "3d3520ea1f9e01165ee7e233a5c5985c84bffa0951ed427b14eb671029967e22",
+    "click.wav": "279e21244ce413479de8094872613bc3d8ebbec5393955fea6a3372e305e233d"
+  },
+  "identity_note": "The measurement APK was built from the clean cd04112c checkout with telemetry ON. Its separately compiled build-identity object retained the previous a1ab8e6 dirty marker during that build; the native input/application sources were rebuilt. The restoration build recompiles that identity object. APK SHA-256 identifies the measured binary.",
+  "restored_apk_sha256": "e6361c2cc1860a7cc81d8c557884267444776c2b24f4aaf59082520d3ced99bd",
+  "restored_build_identity": [
+    "AsoBMaShowBuildIdentityV1|cd04112c6cb3ee8961a952b3f0bc8a02f207a60e|RelWithDebInfo|1"
+  ]
+}

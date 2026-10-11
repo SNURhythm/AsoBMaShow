@@ -29,11 +29,21 @@ int windowToken;
 ANativeWindow first, second;
 ANativeWindow *publishedWindow = &first;
 bool locked = false, failLock = false, missingProperties = false;
+bool onMainThread = true;
 int acquires = 0, releases = 0, lockCalls = 0;
 }
 
+extern "C" bool SDLCALL SDL_IsMainThread() { return onMainThread; }
+extern "C" const char *SDLCALL SDL_GetError() { return "fixture dispatch failure"; }
+extern "C" bool SDLCALL SDL_RunOnMainThread(SDL_MainThreadCallback callback, void *context, bool wait) {
+  assert(wait && !onMainThread);
+  onMainThread = true;
+  callback(context);
+  onMainThread = false;
+  return true;
+}
 extern "C" SDL_PropertiesID SDLCALL SDL_GetWindowProperties(SDL_Window *window) {
-  assert(window == reinterpret_cast<SDL_Window *>(&windowToken));
+  assert(onMainThread && window == reinterpret_cast<SDL_Window *>(&windowToken));
   return missingProperties ? 0 : 42;
 }
 extern "C" bool SDLCALL SDL_LockProperties(SDL_PropertiesID properties) {
@@ -78,7 +88,9 @@ int main() {
   assert(!acquireAndroidNativeWindow(window) && !locked && acquires == 0);
 
   publishedWindow = &first;
+  onMainThread = false; // The application worker must acquire through the SDL owner.
   auto current = acquireAndroidNativeWindow(window);
+  onMainThread = true;
   assert(current.get() == &first && first.references == 2 && !locked);
   // SDL may release its reference after the render suspension handshake.
   publishedWindow = nullptr;

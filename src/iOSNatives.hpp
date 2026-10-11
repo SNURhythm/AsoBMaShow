@@ -8,8 +8,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <stop_token>
 #include <string>
 #include <vector>
+
+void ShowIOSReplayExportProgress(std::function<void()> cancel);
+void SetIOSReplayExportProgress(double fraction, const std::string &message);
+void HideIOSReplayExportProgress();
 
 struct IOSNormalizedSafeAreaInsets {
   float top = 0.0f;
@@ -180,9 +185,10 @@ bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           const IOSNormalizedRect &sourceAnchor,
                           std::string &errorMessage);
-bool RequestIOSPhotoAddAuthorization(std::string &errorMessage);
+bool RequestIOSPhotoAddAuthorization(std::string &errorMessage,
+                                     std::stop_token stop = {});
 bool SaveVideoToIOSPhotos(const std::string &filePath,
-                          std::string &errorMessage);
+                          std::string &errorMessage, std::stop_token stop = {});
 bool SaveImageToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
 bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
@@ -221,6 +227,8 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                              void *context,
                              IOSNativeTextEditorCallback callback);
 void HideIOSNativeTextEditor(void *context, bool notifyFinished);
+// Deliver copied UIKit state on the application owner, before scene events.
+void PollIOSNativeTextEditorCallbacks();
 void SetIOSNativeTextEditorSelection(void *context,
                                      std::size_t selectionStart,
                                      std::size_t selectionEnd);

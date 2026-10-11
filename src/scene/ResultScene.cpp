@@ -4683,3 +4683,11 @@ void ResultScene::cleanupScene() {
   practiceSectionButtonText = nullptr;
   resultPhotoExportInProgress = false;
 }
+
+void ResultScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  resultSkinMouseCapture.reset();
+  resultSkinTouchCaptures.clear();
+#endif
+}

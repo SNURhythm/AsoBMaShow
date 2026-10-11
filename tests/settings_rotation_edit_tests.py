@@ -22,8 +22,18 @@ class SettingsRotationEditTests(unittest.TestCase):
                           "void TextInputBox::finishEditing()",
                           "void TextInputBox::notifyEditingFinished()"):
             methods += "\n" + extract(text_input, signature)
+        methods = ("namespace platform {\n" + extract(
+            (root / "src/platform/SDLMainThread.h").read_text(),
+            "inline void stopFocusedTextInput()") + "\n}\n" + methods)
         fixture = r'''
 #include <array>
+#include <utility>
+namespace platform {
+inline bool isMainThread() { return true; }
+template <typename F> decltype(auto) onMain(F &&operation) {
+  return std::forward<F>(operation)();
+}
+}
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -126,7 +136,7 @@ int main() {
             source = Path(directory) / "settings_rotation.cpp"
             executable = Path(directory) / ("settings_rotation" + compiler.executable_suffix)
             source.write_text(fixture)
-            compiler.build([str(source)], executable, directory, standard=20)
+            compiler.build([str(source)], executable, directory, standard=20, includes=[str(root / "src")])
             result = subprocess.run([str(executable)], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

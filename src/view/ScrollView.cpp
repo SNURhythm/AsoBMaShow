@@ -158,6 +158,20 @@ void ScrollView::renderImpl(RenderContext &context) {
   renderPersistentScrollbar(context);
 }
 
+void ScrollView::onPointerInputCancelled() {
+  mousePressedInside = false;
+  mouseDragging = false;
+  mouseCapturedByContent = false;
+  cancelMouseClick = false;
+  activeTouchId = -1;
+  touchPressedInside = false;
+  touchDragging = false;
+  touchCapturedByContent = false;
+  cancelTouchClick = false;
+  touchMomentum.stop();
+  if (contentView) contentView->cancelPointerInput();
+}
+
 void ScrollView::onPointerEventConsumed(const SDL_Event &event) {
   if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
       event.button.button == SDL_BUTTON_LEFT &&

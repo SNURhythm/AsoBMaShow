@@ -19,6 +19,7 @@ public:
             context.settings.skinMusicSelectInput)) {}
   ~IntroScene() override;
 
+  void onInputQueueOverflow() override;
   void init() override;
   void update(float) override;
   void renderScene() override;

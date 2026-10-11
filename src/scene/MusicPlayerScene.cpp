@@ -4764,3 +4764,11 @@ void MusicPlayerScene::goBack() {
     (void)returnToScene(*context.sceneManager, returnTarget_);
   }
 }
+
+void MusicPlayerScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+  seekMouseDown = false;
+  activeSeekTouchId = -1;
+  videoSeekMouseDown = false;
+  activeVideoSeekTouchId = -1;
+}

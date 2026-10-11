@@ -281,6 +281,13 @@ void Button::onResize(int newWidth, int newHeight) {
   syncContentFrame(*this, contentView.get(), true);
 }
 
+void Button::onPointerInputCancelled() {
+  mousePressedInside = false;
+  isHovered = false;
+  activeTouchId = -1;
+  if (contentView) contentView->cancelPointerInput();
+}
+
 void Button::onPointerEventConsumed(const SDL_Event &event) {
   switch (event.type) {
   case SDL_EVENT_MOUSE_MOTION:

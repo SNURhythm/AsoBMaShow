@@ -1,0 +1,35 @@
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -59,0 +60 @@
++#include "perf/IOSTouchProbe.h"
+@@ -708,0 +710 @@
++  InstallIOSTouchProbe();
+@@ -1666,0 +1669,3 @@
++#if TARGET_OS_IPHONE
++        ios_touch_probe::dump();
++#endif
+--- a/src/perf/LatencyTelemetry.h
++++ b/src/perf/LatencyTelemetry.h
+@@ -10 +10 @@
+-#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0
++#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 1
+--- a/src/scene/play/GamePlayScene.cpp
++++ b/src/scene/play/GamePlayScene.cpp
+@@ -61,0 +62 @@
++#include "../../perf/IOSTouchProbe.h"
+@@ -1714,0 +1716,3 @@
++#if TARGET_OS_IPHONE
++    ios_touch_probe::markGameplay(event.steadyTimestampMicros);
++#endif
+@@ -1828,0 +1833 @@
++    ios_touch_probe::markGameplay(sample.steadyTimestampMicros);
+--- a/src/scene/play/RealtimeGameplayWorker.cpp
++++ b/src/scene/play/RealtimeGameplayWorker.cpp
+@@ -0,0 +1 @@
++#include "../../perf/IOSTouchProbe.h"
+@@ -189,0 +191 @@
++  const auto probeEnqueueEntered = perf::latency::nowMicros();
+@@ -208,0 +211,3 @@
++  if (input.source == RealtimeGameplayInputSource::Touch) {
++    ios_touch_probe::markEnqueue(input.steadyTimestampMicros, probeEnqueueEntered);
++  }

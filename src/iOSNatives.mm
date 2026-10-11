@@ -5,6 +5,9 @@
 #include "ir/IrHttpClientIOS.h"
 #include "platform/PhotoAuthorizationPolicy.h"
 #include "platform/ScreenOrientation.h"
+#include "platform/IOSApplicationRuntime.h"
+#include "platform/GenerationMailbox.h"
+#include "replay/ReplayNativeExportOperation.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -123,6 +126,8 @@ NSInteger Utf16OffsetFromUtf8ByteOffset(NSString *value,
 }
 
 CTFontRef CreateIOSSystemFont(int fontSize) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return CreateIOSSystemFont(fontSize); });
   const CGFloat pointSize = std::max(1, fontSize);
   UIFont *font = [UIFont systemFontOfSize:pointSize];
   return CTFontCreateWithName((__bridge CFStringRef)font.fontName, pointSize,
@@ -321,7 +326,8 @@ void OpenApplicationSettings() {
 
 bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
                                                NSString **preparedPath,
-                                               std::string &errorMessage) {
+                                               std::string &errorMessage,
+                                               std::stop_token stop) {
   *preparedPath = nil;
 
 #if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) &&                                \
@@ -371,12 +377,18 @@ bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
       exportError = session.error;
       dispatch_semaphore_signal(semaphore);
     }];
+    std::stop_callback cancelPreparation(stop, [session] { [session cancelExport]; });
 
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
     if (waitResult != 0) {
       [session cancelExport];
-      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      // cancelExport is asynchronous. Retain the path until AVFoundation has
+      // finished touching it, even if the application owner has cancelled.
+      dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+        [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      });
       errorMessage = "Timed out preparing replay video for Photos";
       return false;
     }
@@ -398,11 +410,16 @@ bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
   return true;
 }
 
-bool RequestPhotoAddAuthorization(std::string &errorMessage) {
+bool RequestPhotoAddAuthorization(std::string &errorMessage,
+                                   std::stop_token stop = {}) {
   __block PHAuthorizationStatus status = PHAuthorizationStatusNotDetermined;
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
 
   void (^requestBlock)(void) = ^{
+    if (stop.stop_requested()) {
+      dispatch_semaphore_signal(semaphore);
+      return;
+    }
     if (@available(iOS 14.0, *)) {
       status = [PHPhotoLibrary authorizationStatusForAccessLevel:
                                    PHAccessLevelAddOnly];
@@ -439,6 +456,10 @@ bool RequestPhotoAddAuthorization(std::string &errorMessage) {
 
   const long waitResult = dispatch_semaphore_wait(
       semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+  if (stop.stop_requested()) {
+    errorMessage = "Replay export cancelled";
+    return false;
+  }
   if (waitResult != 0) {
     errorMessage = "Timed out waiting for Photos permission";
     return false;
@@ -1251,8 +1272,37 @@ private:
 };
 } // namespace
 
-bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
-  return RequestPhotoAddAuthorization(errorMessage);
+bool RequestIOSPhotoAddAuthorization(std::string &errorMessage,
+                                     std::stop_token stop) {
+  return replay_video_export::runNativeExportOperation(
+      stop, [stop](std::string &error) {
+        @autoreleasepool {
+          return RequestPhotoAddAuthorization(error, stop);
+        }
+      }, errorMessage);
+}
+
+namespace {
+struct NativeTextDelivery {
+  IOSNativeTextEditorEvent event;
+  IOSNativeTextEditorState state;
+};
+platform::GenerationMailbox<NativeTextDelivery> nativeTextMailbox;
+// These owner fields are only read/written on the application thread. UIKit
+// holds an opaque identity and posts copied state tagged with its generation.
+std::uint64_t nativeTextGeneration = 0;
+void *nativeTextContext = nullptr;
+IOSNativeTextEditorCallback nativeTextCallback = nullptr;
+}
+
+void PollIOSNativeTextEditorCallbacks() {
+  const auto generation = nativeTextGeneration;
+  const auto callback = nativeTextCallback;
+  void *context = nativeTextContext;
+  for (const auto &delivery : nativeTextMailbox.take(generation)) {
+    if (nativeTextGeneration != generation || callback == nullptr) break;
+    callback(context, delivery.event, delivery.state);
+  }
 }
 
 @interface AsoNativeTextEditorView : UIView <UITextFieldDelegate> {
@@ -1262,14 +1312,14 @@ bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
   std::size_t _initialSelectionStart;
   std::size_t _initialSelectionEnd;
   void *_context;
-  IOSNativeTextEditorCallback _callback;
+  std::uint64_t _generation;
   CGRect _lastKeyboardFrame;
   BOOL _keyboardVisible;
   BOOL _hiding;
 }
 - (instancetype)initWithConfig:(const IOSNativeTextEditorConfig &)config
                        context:(void *)context
-                      callback:(IOSNativeTextEditorCallback)callback;
+                    generation:(std::uint64_t)generation;
 - (void *)context;
 - (void)showInView:(UIView *)containerView;
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished;
@@ -1296,14 +1346,14 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 @implementation AsoNativeTextEditorView
 - (instancetype)initWithConfig:(const IOSNativeTextEditorConfig &)config
                        context:(void *)context
-                      callback:(IOSNativeTextEditorCallback)callback {
+                    generation:(std::uint64_t)generation {
   self = [super initWithFrame:CGRectZero];
   if (self == nil) {
     return nil;
   }
 
   _context = context;
-  _callback = callback;
+  _generation = generation;
   _initialSelectionStart = config.selectionStart;
   _initialSelectionEnd = config.selectionEnd;
   _lastKeyboardFrame = CGRectZero;
@@ -1534,7 +1584,7 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 }
 
 - (void)emitEvent:(IOSNativeTextEditorEvent)event {
-  if (_callback == nullptr) {
+  if (_hiding && event != IOSNativeTextEditorEvent::Finished) {
     return;
   }
   NSString *nativeText = _textField.text != nil ? _textField.text : @"";
@@ -1555,7 +1605,7 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
     state.selectionEnd = Utf8ByteOffsetFromUtf16Offset(nativeText, selectionEnd);
   }
 
-  _callback(_context, event, state);
+  nativeTextMailbox.post(_generation, NativeTextDelivery{event, std::move(state)});
 }
 
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished {
@@ -1578,59 +1628,42 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                              void *context,
                              IOSNativeTextEditorCallback callback) {
-  const IOSNativeTextEditorConfig editorConfig = config;
-  void *editorContext = context;
-  auto editorCallback = callback;
-  auto showBlock = ^{
-    @autoreleasepool {
-      if (editorCallback == nullptr) {
-        return;
-      }
-      UIWindow *window = FindActiveWindow();
-      if (window == nil) {
-        return;
-      }
-      if (gNativeTextEditor != nil) {
-        if ([gNativeTextEditor context] == editorContext) {
-          return;
-        }
-        [gNativeTextEditor hideWithNotifyFinished:YES];
-      }
-      gNativeTextEditor =
-          [[AsoNativeTextEditorView alloc] initWithConfig:editorConfig
-                                                  context:editorContext
-                                                 callback:editorCallback];
-      [gNativeTextEditor showInView:window];
-    }
-  };
-
-  if ([NSThread isMainThread]) {
-    showBlock();
-  } else {
-    dispatch_async(dispatch_get_main_queue(), showBlock);
-  }
+  if (callback == nullptr) return;
+  if (nativeTextContext == context && nativeTextGeneration != 0) return;
+  if (nativeTextContext != nullptr) HideIOSNativeTextEditor(nativeTextContext, true);
+  nativeTextGeneration = nativeTextMailbox.open();
+  nativeTextContext = context;
+  nativeTextCallback = callback;
+  const auto generation = nativeTextGeneration;
+  platform::onMain([&] {
+    UIWindow *window = FindActiveWindow();
+    if (window == nil) return;
+    if (gNativeTextEditor != nil) [gNativeTextEditor hideWithNotifyFinished:NO];
+    gNativeTextEditor = [[AsoNativeTextEditorView alloc] initWithConfig:config
+                                                              context:context
+                                                           generation:generation];
+    [gNativeTextEditor showInView:window];
+  });
 }
 
 void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
-  void *editorContext = context;
-  auto hideBlock = ^{
-    @autoreleasepool {
-      if (gNativeTextEditor == nil) {
-        return;
-      }
-      if (editorContext != nullptr &&
-          [gNativeTextEditor context] != editorContext) {
-        return;
-      }
+  if (context != nullptr && context != nativeTextContext) return;
+  const auto generation = nativeTextGeneration;
+  // Closing first prevents callbacks captured during native teardown from
+  // reaching a destroyed TextInputBox, including reused addresses.
+  if (!notifyFinished) nativeTextMailbox.close(generation);
+  platform::onMain([&] {
+    if (gNativeTextEditor != nil &&
+        (context == nullptr || [gNativeTextEditor context] == context)) {
       [gNativeTextEditor hideWithNotifyFinished:notifyFinished ? YES : NO];
     }
-  };
-
-  if ([NSThread isMainThread]) {
-    hideBlock();
-  } else {
-    dispatch_async(dispatch_get_main_queue(), hideBlock);
-  }
+  });
+  if (notifyFinished) PollIOSNativeTextEditorCallbacks();
+  if (nativeTextGeneration != generation) return;
+  nativeTextMailbox.close(generation);
+  nativeTextGeneration = 0;
+  nativeTextContext = nullptr;
+  nativeTextCallback = nullptr;
 }
 
 void SetIOSNativeTextEditorSelection(void *context,
@@ -1653,7 +1686,7 @@ void SetIOSNativeTextEditorSelection(void *context,
   if ([NSThread isMainThread]) {
     selectionBlock();
   } else {
-    dispatch_async(dispatch_get_main_queue(), selectionBlock);
+    dispatch_sync(dispatch_get_main_queue(), selectionBlock);
   }
 }
 
@@ -1677,7 +1710,7 @@ void SetIOSNativeTextEditorState(
   if ([NSThread isMainThread]) {
     stateBlock();
   } else {
-    dispatch_async(dispatch_get_main_queue(), stateBlock);
+    dispatch_sync(dispatch_get_main_queue(), stateBlock);
   }
 }
 
@@ -5014,9 +5047,15 @@ bool RevealIOSFileInFiles(const std::string &filePath,
 }
 
 bool SaveVideoToIOSPhotos(const std::string &filePath,
-                          std::string &errorMessage) {
+                          std::string &errorMessage, std::stop_token stop) {
+  return replay_video_export::runNativeExportOperation(
+      stop, [filePath, stop](std::string &errorMessage) {
   @autoreleasepool {
-    if (!RequestIOSPhotoAddAuthorization(errorMessage)) {
+    if (!RequestPhotoAddAuthorization(errorMessage, stop)) {
+      return false;
+    }
+    if (stop.stop_requested()) {
+      errorMessage = "Replay export cancelled";
       return false;
     }
 
@@ -5032,7 +5071,14 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
 
     NSString *preparedPath = nil;
     if (!CreateFullFrameRatePlaybackVideoForPhotos(path, &preparedPath,
-                                                   errorMessage)) {
+                                                   errorMessage, stop)) {
+      return false;
+    }
+    if (stop.stop_requested()) {
+      if (preparedPath != nil) {
+        [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
+      }
+      errorMessage = "Replay export cancelled";
       return false;
     }
 
@@ -5058,14 +5104,19 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
         completionHandler:^(BOOL success, NSError *error) {
           saveSucceeded = success;
           saveError = error;
+          // PhotoKit may still be consuming the file after the owner cancels
+          // or its wait times out. Only its completion owns this cleanup.
+          if (preparedPath != nil) {
+            [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
+          }
+          if (success && requestCreated) {
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+          }
           dispatch_semaphore_signal(semaphore);
         }];
 
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
-    if (preparedPath != nil) {
-      [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
-    }
     if (waitResult != 0) {
       errorMessage = "Timed out saving video to Photos";
       return false;
@@ -5081,14 +5132,10 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       return false;
     }
 
-    if (preparedPath != nil && ![preparedPath isEqualToString:path]) {
-      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    } else if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    }
     return true;
   }
   return false;
+      }, errorMessage);
 }
 
 bool SaveImageToIOSPhotos(const std::string &filePath,
@@ -5508,6 +5555,8 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int logicalWidth, int logicalHeight,
                                            int &preferredWidth,
                                            int &preferredHeight) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return GetIOSPreferredFullscreenDrawableSize(currentWidth, currentHeight, logicalWidth, logicalHeight, preferredWidth, preferredHeight); });
   @autoreleasepool {
     preferredWidth = 0;
     preferredHeight = 0;
@@ -5584,6 +5633,8 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
 }
 
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return SetIOSMetalLayerDrawableSize(metalLayer, width, height); });
   @autoreleasepool {
     if (metalLayer == nullptr || width <= 0 || height <= 0) {
       return false;
@@ -5641,10 +5692,14 @@ void WaitIOSMainRunLoopForMicros(long long waitMicros) {
 }
 
 bool IsIOSPad() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return IsIOSPad(); });
   return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
 }
 
 bool IsIOSGuidedAccessEnabled() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return IsIOSGuidedAccessEnabled(); });
   static std::atomic_bool enabled{false};
   static dispatch_once_t once;
   dispatch_once(&once, ^{
@@ -5673,6 +5728,8 @@ bool IsIOSGuidedAccessEnabled() {
 }
 
 ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return GetIOSHardwareButtonLocation(); });
   using namespace ipad_hardware;
   static const Model model = [] {
 #if TARGET_OS_SIMULATOR
@@ -5715,6 +5772,8 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return GetIOSSafeAreaInsetsNormalized(); });
   IOSNormalizedSafeAreaInsets insets;
   UIWindow *window = FindActiveWindow();
   if (window == nil) {
@@ -5862,4 +5921,61 @@ SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
 //   // add touch event
 //   [view addGestureRecognizer:tapGesture];
 // }
+namespace {
+UIView *replayExportOverlay = nil;
+UILabel *replayExportLabel = nil;
+UIProgressView *replayExportProgress = nil;
+}
+
+void ShowIOSReplayExportProgress(std::function<void()> cancel) {
+  HideIOSReplayExportProgress();
+  UIWindow *window = FindActiveWindow();
+  if (window == nil) return;
+  replayExportOverlay = [[UIView alloc] initWithFrame:window.bounds];
+  replayExportOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  replayExportOverlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
+  UIStackView *stack = [[UIStackView alloc] init];
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.spacing = 20;
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  replayExportLabel = [[UILabel alloc] init];
+  replayExportLabel.text = @"Exporting replay…";
+  replayExportLabel.textColor = UIColor.whiteColor;
+  replayExportLabel.numberOfLines = 0;
+  replayExportLabel.textAlignment = NSTextAlignmentCenter;
+  replayExportProgress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+  UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+  [button setTitle:@"Cancel" forState:UIControlStateNormal];
+  [button addAction:[UIAction actionWithHandler:^(UIAction *action) {
+    cancel();
+    UIButton *sender = (UIButton *)action.sender;
+    sender.enabled = NO;
+    [sender setTitle:@"Cancelling…" forState:UIControlStateNormal];
+  }] forControlEvents:UIControlEventTouchUpInside];
+  [stack addArrangedSubview:replayExportLabel];
+  [stack addArrangedSubview:replayExportProgress];
+  [stack addArrangedSubview:button];
+  [replayExportOverlay addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.centerXAnchor constraintEqualToAnchor:replayExportOverlay.centerXAnchor],
+    [stack.centerYAnchor constraintEqualToAnchor:replayExportOverlay.centerYAnchor],
+    [stack.widthAnchor constraintLessThanOrEqualToConstant:420],
+    [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:replayExportOverlay.leadingAnchor constant:24],
+    [stack.widthAnchor constraintEqualToConstant:280]
+  ]];
+  [window addSubview:replayExportOverlay];
+}
+
+void SetIOSReplayExportProgress(double fraction, const std::string &message) {
+  replayExportLabel.text = NSStringFromUtf8(message);
+  replayExportProgress.progress = static_cast<float>(std::clamp(fraction, 0.0, 1.0));
+}
+
+void HideIOSReplayExportProgress() {
+  [replayExportOverlay removeFromSuperview];
+  replayExportOverlay = nil;
+  replayExportLabel = nil;
+  replayExportProgress = nil;
+}
+
 #endif

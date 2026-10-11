@@ -16,6 +16,11 @@ function(asobmashow_patch_bgfx_metal_readback content_variable)
                     unifiedMemory = device.hasUnifiedMemory;
                 }
 #endif
+#if TARGET_OS_SIMULATOR
+                // Simulator permits linear textures only on private buffers;
+                // use the ordinary texture/getBytes path for CPU readback.
+                unifiedMemory = false;
+#endif
                 if (@available(macOS 10.13, iOS 11.0, *))
                 {
                     if (unifiedMemory

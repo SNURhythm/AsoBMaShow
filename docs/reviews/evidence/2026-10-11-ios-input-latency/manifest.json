@@ -1,0 +1,35 @@
+{
+  "current": {
+    "binary_sha256": "0e6eeac724441b552ba736440df4a91adc4bc93135601f14cb5a51a36fd25d9a",
+    "revision": "6d50f19128b6938c2d5f5ddb2b8150f547069eea"
+  },
+  "baseline": {
+    "binary_sha256": "4fec509c96652dd308b2a7e7dcf95e7e523fbf598f807efabfe3e24f40e572ac",
+    "revision": "a2c95e8adfd3d06e2de5c957349f720ccf598572"
+  },
+  "method": {
+    "taps_per_run": 300,
+    "device_hub_click": [
+      1240,
+      980
+    ],
+    "order": [
+      "current1",
+      "baseline1",
+      "baseline2",
+      "current2"
+    ],
+    "simulator": "iPhone Duo iOS 27.1",
+    "configuration": "arm64 Debug",
+    "frame_cap": 0,
+    "vsync": true,
+    "instrumentation": "Same temporary observer hooks as PR 135; no input routing modifications"
+  },
+  "tap_loop_elapsed_ms": {
+    "current1": 58225,
+    "baseline1": 58931,
+    "baseline2": 59544,
+    "current2": 60175
+  },
+  "restored_normal_binary_sha256": "cea67fa2ea4ad1bd3a24ae8041e21ac56928ee7362bc3c4d2d338f8b29300759"
+}

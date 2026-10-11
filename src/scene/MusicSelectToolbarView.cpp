@@ -443,3 +443,8 @@ bool MusicSelectToolbarView::handleEventsImpl(SDL_Event &event) {
     return true;
   }
 }
+
+void MusicSelectToolbarView::onPointerInputCancelled() {
+  mouseDragging_ = false;
+  touchDragging_ = -1;
+}

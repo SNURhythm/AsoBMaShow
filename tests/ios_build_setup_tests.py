@@ -625,6 +625,8 @@ int main() { return 0; }
             self.assertIn("m_usesMTLBindings, macOS 13.0, iOS 17.0,", patched)
             self.assertNotIn("m_usesMTLBindings, macOS 13.0, iOS 16.0,", patched)
             self.assertIn("newTextureWithDescriptor:desc offset:0 bytesPerRow:pitch", patched)
+            self.assertIn("#if TARGET_OS_SIMULATOR\n", patched)
+            self.assertIn("unifiedMemory = false;", patched)
             self.assertIn("nativeTexture.bufferBytesPerRow", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
@@ -638,6 +640,41 @@ int main() { return 0; }
             self.assertNotEqual(0, result.returncode,
                                 "an upstream gate change must require review")
             self.assertIn("reflection gate changed", result.stderr)
+
+    def test_metal_layer_patch_rejects_changed_anchors_and_leaves_gpu_work_outside_main(self):
+        original = (ROOT / "bgfx/bgfx/src/renderer_mtl.mm").read_text()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "renderer.mm"
+            output = root / "patched.mm"
+            script = root / "patch.cmake"
+            script.write_text(
+                f'include("{ROOT / "cmake/IOSBgfxMainThreadLayer.cmake"}")\n'
+                f'file(READ "{source}" content)\n'
+                'asobmashow_patch_ios_bgfx_main_thread_layer(content)\n'
+                f'file(WRITE "{output}" "${{content}}")\n'
+            )
+            source.write_text(original)
+            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            patched = output.read_text()
+            # Examine the transformed configuration blocks, not the patch script.
+            blocks = re.findall(r"asobmashowConfigureMetalLayer\(\^\{([\s\S]*?)\n\s*}\);", patched)
+            self.assertEqual(len(blocks), 2)
+            self.assertIn("m_metalLayer.device", blocks[0])
+            self.assertIn("m_metalLayer.magnificationFilter", blocks[0])
+            self.assertIn("m_metalLayer.pixelFormat", blocks[0])
+            self.assertIn("m_metalLayer.drawableSize", blocks[1])
+            self.assertIn("m_metalLayer.pixelFormat", blocks[1])
+            for block in blocks:
+                self.assertNotIn("nextDrawable", block)
+                self.assertNotIn("waitUntilCompleted", block)
+            self.assertIn("m_drawable = m_metalLayer.nextDrawable;", patched)
+            self.assertEqual(source.read_text(), original)
+            source.write_text(original.replace("m_metalLayer.drawableSize = CGSizeMake(_width, _height);", "changed upstream resize;"))
+            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Metal layer resize changed", result.stderr)
 
     def test_bgfx_configuration_recovers_after_xcode_is_replaced(self):
         script = IOS_INIT.read_text(encoding="utf-8")
@@ -825,18 +862,6 @@ int main() {
                 self.assertEqual(result.returncode, 0, result.stderr)
                 result = subprocess.run([str(binary)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_ios_forces_bgfx_metal_work_onto_the_main_thread(self):
-        source = MAIN_SOURCE.read_text(encoding="utf-8")
-        limits = source.index("rendering::applyBgfxTransientBufferLimits")
-        ios_guard = source.index("#if TARGET_OS_IPHONE", limits)
-        force_single_threaded = source.index("bgfx::renderFrame();", ios_guard)
-        non_ios_branch = source.index("#else", ios_guard)
-        initialize_bgfx = source.index("int appExitCode = runApplication(bgfx_init);")
-        self.assertLess(ios_guard, force_single_threaded)
-        self.assertLess(force_single_threaded, non_ios_branch)
-        self.assertLess(force_single_threaded, initialize_bgfx)
-        self.assertIn("Using bgfx single-threaded mode on iOS", source)
 
     def test_ios_active_window_lookup_uses_a_validated_weak_cache(self):
         source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")

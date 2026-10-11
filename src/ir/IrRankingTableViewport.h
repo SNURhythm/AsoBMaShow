@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../input/SDLPointerEvent.h"
+#include "../platform/SDLMainThread.h"
 #include "../view/UiTheme.h"
 #include "../view/View.h"
 
@@ -54,6 +55,13 @@ protected:
     }
   }
 
+  void onPointerInputCancelled() override {
+    pointerActive_ = false;
+    touchId_ = -1;
+    axis_ = Axis::Undecided;
+    if (content_) content_->cancelPointerInput();
+  }
+
   void onPointerEventConsumed(const SDL_Event &event) override {
     const bool touchEnd = (event.type == SDL_EVENT_FINGER_UP ||
                            event.type == SDL_EVENT_FINGER_CANCELED) &&
@@ -84,8 +92,8 @@ protected:
       if (!inside(x * rendering::window_width, y * rendering::window_height)) return true;
       const float dx = event.wheel.x;
       const float dy = event.wheel.y;
-      if (std::abs(dx) > std::abs(dy) || (SDL_GetModState() & SDL_KMOD_SHIFT)) {
-        scrollBy(-((SDL_GetModState() & SDL_KMOD_SHIFT) ? dy : dx) * 32);
+      if (std::abs(dx) > std::abs(dy) || (platform::sdlMain<SDL_GetModState>() & SDL_KMOD_SHIFT)) {
+        scrollBy(-((platform::sdlMain<SDL_GetModState>() & SDL_KMOD_SHIFT) ? dy : dx) * 32);
         return false;
       }
       return content_->handleEvents(event);

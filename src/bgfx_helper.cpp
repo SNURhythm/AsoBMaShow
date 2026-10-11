@@ -1,4 +1,5 @@
 #include "bgfx_helper.h"
+#include "platform/SDLMainThread.h"
 #include <bx/platform.h>
 #include <SDL3/SDL.h>
 #if BX_PLATFORM_IOS || BX_PLATFORM_OSX
@@ -7,6 +8,8 @@
 
 #if defined(__ANDROID__)
 AndroidNativeWindowOwner acquireAndroidNativeWindow(SDL_Window *window) {
+  if (!platform::isMainThread())
+    return platform::onMain([&] { return acquireAndroidNativeWindow(window); });
   if (window == nullptr) return {};
   const SDL_PropertiesID properties = SDL_GetWindowProperties(window);
   if (properties == 0 || !SDL_LockProperties(properties)) return {};

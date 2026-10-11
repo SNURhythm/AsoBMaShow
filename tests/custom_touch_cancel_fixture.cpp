@@ -1,6 +1,7 @@
 // Real event handlers; geometry, drawing and external effects are controlled.
 #include <SDL3/SDL.h>
 #include "input/SDLPointerEvent.h"
+#include "platform/SDLMainThread.h"
 #include "math/Vector3.h"
 #include "music_select/MusicSelectExternalActions.h"
 #include "scene/PracticeAnalyticsPresentation.h"
@@ -13,6 +14,16 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+// This extracted-handler fixture has no SDL event loop. Native dispatch is
+// synchronous here; cross-thread behavior is covered by the runtime tests.
+bool SDLCALL SDL_IsMainThread() { return true; }
+bool SDLCALL SDL_RunOnMainThread(SDL_MainThreadCallback callback, void *context, bool) {
+  callback(context);
+  return true;
+}
+const char *SDLCALL SDL_GetError() { return "fixture SDL error"; }
+bool SDLCALL SDL_SetError(const char *, ...) { return false; }
 
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 namespace rendering {
@@ -42,6 +53,8 @@ struct View {
   virtual bool handleEvents(SDL_Event &) { return true; }
   virtual void notifyPointerEventConsumed(const SDL_Event &event) { onPointerEventConsumed(event); }
   virtual void onPointerEventConsumed(const SDL_Event &) {}
+  virtual void onPointerInputCancelled() {}
+  void cancelPointerInput() { onPointerInputCancelled(); }
   virtual bool handleEventsImpl(SDL_Event &) { return true; }
   virtual void onLayout() {}
   virtual void onMove(int, int) {}
@@ -156,6 +169,7 @@ struct Viewer : View {
   void applyPinch() {}
   void selectAtUiPoint(float, float) { ++selections; }
   bool handleEventsImpl(SDL_Event &) override;
+  void onPointerInputCancelled() override;
 };
 struct Analytics : View {
   struct Model {
@@ -171,6 +185,7 @@ struct Analytics : View {
   }
   void publish(std::size_t first, std::size_t last) { selections.emplace_back(first, last); }
   bool handleEventsImpl(SDL_Event &) override;
+  void onPointerInputCancelled() override;
 };
 enum KeySource { ScanCode };
 struct IInputHandler {
@@ -397,7 +412,27 @@ void testRanking() {
     expect(table->selections == 1, "ranking fresh tap remains actionable");
   }
 }
+void testBulkCustomCaptureCancellation() {
+  Viewer viewer;
+  Analytics analytics;
+  auto first = finger(SDL_EVENT_FINGER_DOWN, 11);
+  auto second = finger(SDL_EVENT_FINGER_DOWN, 12);
+  (void)viewer.handleEventsImpl(first);
+  (void)viewer.handleEventsImpl(second);
+  (void)analytics.handleEventsImpl(first);
+  viewer.cancelPointerInput();
+  analytics.cancelPointerInput();
+  expect(viewer.activeTouches.empty() && !viewer.pinchActive &&
+             !viewer.mouseDragging && viewer.selections == 0,
+         "bulk viewer cancellation retires all contacts without selecting");
+  expect(!analytics.pointerCapture.touchActive() && analytics.selections.size() == 1,
+         "bulk analytics cancellation does not change the selected range");
+  auto fresh = finger(SDL_EVENT_FINGER_DOWN, 13);
+  expect(!viewer.handleEventsImpl(fresh) && !analytics.handleEventsImpl(fresh),
+         "custom views accept new gestures after lost release recovery");
+}
 int main() {
+  testBulkCustomCaptureCancellation();
   testSelector(); testSeek(); testPauseHold(); testViewer(); testAnalytics();
   testPreview(); testResult(); testRanking();
   return failures ? 1 : 0;

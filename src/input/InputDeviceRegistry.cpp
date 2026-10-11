@@ -358,6 +358,18 @@ InputDeviceRegistry::~InputDeviceRegistry() {
   queueState_->close();
 }
 
+void InputDeviceRegistry::clearSdlInputState() {
+  if (sdlInputBackend_) sdlInputBackend_->clearInputState();
+  const std::lock_guard lock(legacyInputMutex_);
+  pressedSdlScancodes_.reset();
+  pressedGdxKeys_.reset();
+  pressedGdxKeyCounts_.fill(0);
+}
+
+void InputDeviceRegistry::reconcileSdlDevices() {
+  if (sdlInputBackend_) sdlInputBackend_->reconcileDevices();
+}
+
 std::optional<InputDeviceRegistry::PointerPosition>
 InputDeviceRegistry::pointerPosition() const noexcept {
   const std::lock_guard lock(legacyInputMutex_);
@@ -479,6 +491,10 @@ std::size_t InputDeviceRegistry::translateRealtimeSdlInputs(
     return 0;
   }
   return sdlInputBackend_->translateRealtimeInputs(event, output, consumeOnce);
+}
+
+void InputDeviceRegistry::discardRealtimeSdlInput(const SDL_Event &event) {
+  if (sdlInputBackend_) sdlInputBackend_->discardRealtimeInput(event);
 }
 
 std::optional<std::string> InputDeviceRegistry::realtimeDisconnectedSdlDevice(

@@ -37,6 +37,7 @@ public:
       : Scene(context), returnTarget_(std::move(returnTarget)) {}
   ~MusicPlayerScene() override;
 
+  void onInputQueueOverflow() override;
   void init() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   void update(float dt) override;

@@ -69,3 +69,7 @@ target_sources(main PRIVATE
     scene/RecordsIrActions.cpp
     scene/MusicSelectSceneRecords.cpp
 )
+
+if (NOT IOS)
+    target_sources(main PRIVATE platform/SDLApplicationRuntime.cpp platform/ApplicationEventQueue.cpp)
+endif ()

@@ -268,6 +268,19 @@ private:
     return true;
   }
 
+  void onPointerInputCancelled() override {
+    touchId = -1;
+    touchPressIndex = -1;
+    touchDragging = false;
+    touchMomentum.stop();
+    for (const auto &entry : viewEntries) {
+      if (entry.first) entry.first->cancelPointerInput();
+    }
+    for (auto *entry : recycledViewEntries) {
+      if (entry) entry->cancelPointerInput();
+    }
+  }
+
   void onPointerEventConsumed(const SDL_Event &event) override {
     if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
         !sdl_pointer_event::isMouseSynthesizedTouch(event) &&

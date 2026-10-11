@@ -3,6 +3,8 @@
 #include "settings/PresentationOrientationState.h"
 #include "perf/LatencyTelemetry.h"
 #include "targets.h"
+#include "platform/SDLMainThread.h"
+#include "RAII.h"
 #include "AppDatabaseInitializer.h"
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
@@ -230,7 +232,7 @@ void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
   renderW = 0;
   renderH = 0;
   if (window != nullptr) {
-    SDL_GetWindowSizeInPixels(window, &renderW, &renderH);
+    platform::windowSizeInPixels(window, &renderW, &renderH);
   }
   if (renderW <= 0 || renderH <= 0) {
     renderW = scaledDimension(logicalW);
@@ -268,7 +270,7 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
   renderW = 0;
   renderH = 0;
   if (window != nullptr) {
-    SDL_GetWindowSizeInPixels(window, &renderW, &renderH);
+    platform::windowSizeInPixels(window, &renderW, &renderH);
   }
   if (renderW <= 0 || renderH <= 0) {
     getWindowDrawableSize(window, logicalW, logicalH, renderW, renderH);
@@ -480,14 +482,15 @@ static int runApplication(const bgfx::Init &bgfxInit) {
 #if TARGET_OS_ANDROID
       SetAndroidRendererActive(true);
 #endif
-      const int runExitCode = run();
-      rendering::ShaderManager::getInstance().release();
-      rendering::UniformCache::getInstance().destroyAll();
-      bgfx::shutdown();
+      auto rendererCleanup = makeScopeExit([] {
+        rendering::ShaderManager::getInstance().release();
+        rendering::UniformCache::getInstance().destroyAll();
+        bgfx::shutdown();
 #if TARGET_OS_ANDROID
-      SetAndroidRendererActive(false);
+        SetAndroidRendererActive(false);
 #endif
-      return runExitCode;
+      });
+      return run();
     }
     SDL_Log("bgfx::init failed for renderer: %s",
             rendererType == bgfx::RendererType::Count
@@ -736,16 +739,23 @@ int main(int argv, char **args) {
   bgfx_init.platformData = pd;
   rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
 #if TARGET_OS_IPHONE
-  // Metal owns a CAMetalLayer supplied by UIKit. Register this thread as the
-  // render thread before init so bgfx does not mutate that layer from its
-  // internal worker. In single-threaded mode bgfx::frame() drives rendering.
-  bgfx::renderFrame();
-  SDL_Log("Using bgfx single-threaded mode on iOS");
+  const int appExitCode = RunIOSApplication(win, [bgfx_init] {
+    // Both the bgfx API and Metal submission belong to this application worker.
+    // Only layer configuration crosses synchronously to UIKit's main thread.
+    bgfx::renderFrame();
+    SDL_Log("Using bgfx single-threaded mode on iOS application worker");
+    return runApplication(bgfx_init);
+  });
 #else
-  SDL_Log("Using bgfx internal multithreaded mode");
+  const int appExitCode = platform::runSDLApplication(win, [bgfx_init] {
+    SDL_Log("Using bgfx internal multithreaded mode on application worker");
+#if TARGET_OS_OSX
+    return RunMacApplication([&] { return runApplication(bgfx_init); });
+#else
+    return runApplication(bgfx_init);
 #endif
-
-  int appExitCode = runApplication(bgfx_init);
+  });
+#endif
 
 #if TARGET_OS_ANDROID
   s_androidPreviousWindow.reset();
@@ -790,7 +800,7 @@ static void reportStartupFailure(const ApplicationContext &context,
     break;
   }
 
-  if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow Startup Error",
+  if (!platform::sdlMain<SDL_ShowSimpleMessageBox>(SDL_MESSAGEBOX_ERROR, "AsoBMaShow Startup Error",
                                result.userMessage.c_str(), s_window)) {
     SDL_Log("Unable to show the startup error dialog: %s", SDL_GetError());
   }
@@ -798,7 +808,7 @@ static void reportStartupFailure(const ApplicationContext &context,
 
 static void reportResultRecoveryWarning(
     const replay::ChartReplayRecoverySummary &) {
-  if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+  if (!platform::sdlMain<SDL_ShowSimpleMessageBox>(SDL_MESSAGEBOX_WARNING,
                                "AsoBMaShow Result Recovery",
                                replay::chartReplayRecoveryUserMessage().data(),
                                s_window)) {
@@ -816,7 +826,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (locked && !orientationLocked) {
       int logicalWidth = 0;
       int logicalHeight = 0;
-      SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
+      platform::windowSize(s_window, &logicalWidth, &logicalHeight);
       presentationOrientation.updateViewport(logicalWidth, logicalHeight);
     }
     orientationLocked = locked;
@@ -942,7 +952,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               int logicalHeight = 0;
               int renderWidth = 0;
               int renderHeight = 0;
-              SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
+              platform::windowSize(s_window, &logicalWidth, &logicalHeight);
               getWindowDrawableSize(s_window, logicalWidth, logicalHeight,
                                     renderWidth, renderHeight);
               if (logicalWidth <= 0 || logicalHeight <= 0 || renderWidth <= 0 ||
@@ -998,6 +1008,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
+  platform::IOSPreparedFrame iosPreparedFrame;
+  bool iosViewportRestorePending = false;
+  const auto submitIOSFrame = [](bool discard) {
+    bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
+  };
 #endif
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
@@ -1045,16 +1060,51 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
-    if (!orientationLocked &&
+    bool ranApplicationWork = false;
+#if TARGET_OS_IPHONE
+    // Only acknowledge lifecycle events already forwarded before this owner's
+    // event drain. A later UIKit pulse must wait for the next restored frame.
+    const auto iosInputGeneration = GetIOSCompletedPumpLifecycleGeneration();
+    // A frame interrupted after submit() owns bgfx's queued draws until a
+    // foreground discard. Retire it before callbacks, export, or resource work.
+    if (iosPreparedFrame.pending()) {
+      std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
+      iosPreparedFrame.retire(GetIOSPresentationState(), submitIOSFrame);
+    }
+    if (!iosPreparedFrame.pending()) {
+      PollIOSNativeTextEditorCallbacks();
+      if (IOSApplicationActive()) ranApplicationWork = PollIOSApplicationWork();
+    }
+#else
+    platform::pollApplicationDiagnostics();
+    ranApplicationWork = platform::pollApplicationWork();
+#endif
+    // Owner-bound export suppresses releases as well as presses. Retire any
+    // pre-export capture before fresh input can reach the restored scene.
+    if (ranApplicationWork) {
+      context.inputDeviceRegistry.clearSdlInputState();
+      if (sceneManager.currentScene) sceneManager.currentScene->onInputQueueOverflow();
+    }
+    if (
+#if TARGET_OS_IPHONE
+        !iosPreparedFrame.pending() &&
+#endif
+        !orientationLocked &&
         appliedOrientation != context.settings.screenOrientation) {
       appliedOrientation = context.settings.screenOrientation;
       screen_orientation::apply(appliedOrientation, false);
     }
 #if TARGET_OS_ANDROID
     if (!context.appInBackground.load(std::memory_order_acquire))
+#elif TARGET_OS_IPHONE
+    if (!iosPreparedFrame.pending())
 #endif
     context.pollGameplaySkinCommits();
-    if (context.chartLibraryFolderActions) {
+    if (
+#if TARGET_OS_IPHONE
+        !iosPreparedFrame.pending() &&
+#endif
+        context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
     }
 
@@ -1073,7 +1123,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       iosPresentationPacer.reset(currentFrameTime);
 #endif
     }
-    if (context.displaySettingsManager) {
+    if (
+#if TARGET_OS_IPHONE
+        !iosPreparedFrame.pending() &&
+#endif
+        context.displaySettingsManager) {
       if (const auto previewResult =
               context.displaySettingsManager->tick(currentFrameTime)) {
         if (!previewResult->message.empty()) {
@@ -1103,6 +1157,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     };
 
     auto applyWindowResize = [&](int logicalW, int logicalH) {
+#if TARGET_OS_IPHONE
+      if (iosPreparedFrame.pending() || !IOSApplicationActive()) return false;
+#endif
 #if TARGET_OS_ANDROID
       if (context.appInBackground.load(std::memory_order_acquire)) return false;
 #endif
@@ -1249,25 +1306,32 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
 #if TARGET_OS_IPHONE
     auto restoreIOSViewportAfterKeyboardFocus = [&]() {
+      if (iosPreparedFrame.pending()) {
+        iosViewportRestorePending = true;
+        return;
+      }
+      iosViewportRestorePending = false;
       RestoreIOSViewportAfterKeyboardFocus();
 
       int logicalW = 0;
       int logicalH = 0;
       if (s_window != nullptr) {
-        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
+        platform::windowSize(s_window, &logicalW, &logicalH);
       }
       if (logicalW > 0 && logicalH > 0 &&
           !applyWindowResize(logicalW, logicalH)) {
         deferWindowResize(logicalW, logicalH);
       }
     };
+    if (iosViewportRestorePending && IOSApplicationActive())
+      restoreIOSViewportAfterKeyboardFocus();
 #endif
 
     auto processEvent = [&](SDL_Event event) {
       if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
         ++processedEventsInWindow;
       }
-      if (event.type == SDL_EVENT_QUIT) {
+      if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_TERMINATING) {
         context.quitFlag = true;
       }
 
@@ -1309,13 +1373,16 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           (event.type == SDL_EVENT_WINDOW_RESIZED ||
            event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
         int logicalW = 0, logicalH = 0;
-        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
+        platform::windowSize(s_window, &logicalW, &logicalH);
         if (!applyWindowResize(logicalW, logicalH)) {
           deferWindowResize(logicalW, logicalH);
         }
       }
 
       if (scene_event_routing::shouldDispatchToScene(event) &&
+#if TARGET_OS_IPHONE
+          !iosPreparedFrame.pending() &&
+#endif
           !(TARGET_OS_ANDROID &&
             context.appInBackground.load(std::memory_order_acquire) &&
             (event.type < SDL_EVENT_WINDOW_FIRST || event.type > SDL_EVENT_WINDOW_LAST))) {
@@ -1342,15 +1409,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
     auto waitForBackgroundEvent = [&]() {
       int timeoutMs = kBackgroundEventWaitTimeoutMs;
-#if TARGET_OS_ANDROID
+      // Keep CPU gameplay/terminal progression independent of presentation on
+      // every platform, including an iOS frame waiting for safe retirement.
       if (sceneManager.currentScene != nullptr &&
           sceneManager.currentScene->continuesAudioInBackground()) {
         sceneManager.currentScene->updateWhileBackgrounded();
         timeoutMs = 16;
       }
-#endif
       SDL_Event waitEvent{};
-      if (SDL_WaitEventTimeout(&waitEvent, timeoutMs)) {
+#if TARGET_OS_IPHONE
+      if (WaitIOSApplicationEvent(&waitEvent, timeoutMs)) {
+#else
+      if (platform::waitApplicationEvent(&waitEvent, timeoutMs)) {
+#endif
         if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
           ++rawEventsInWindow;
         }
@@ -1359,7 +1430,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
     };
 
-    while (SDL_PollEvent(&e)) {
+#if TARGET_OS_IPHONE
+    const auto pollApplicationEvent = PollIOSApplicationEvent;
+#else
+    const auto pollApplicationEvent = platform::pollApplicationEvent;
+#endif
+    while (pollApplicationEvent(&e)) {
       if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
         ++rawEventsInWindow;
       }
@@ -1404,6 +1480,39 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       processEvent(e);
     }
 
+#if TARGET_OS_IPHONE
+    const bool pressureRecovery = TakeIOSApplicationOverflow();
+    if (pressureRecovery) {
+      context.inputDeviceRegistry.clearSdlInputState();
+      if (sceneManager.currentScene) sceneManager.currentScene->onInputQueueOverflow();
+      context.inputDeviceRegistry.reconcileSdlDevices();
+    }
+    // Restore the window after retiring lost input ownership. Recovery never
+    // changes gameplay playback or replays stale input.
+    if (pressureRecovery && IOSApplicationActive()) {
+      restoreIOSViewportAfterKeyboardFocus();
+      setAppBackground(false);
+    }
+    if (!IOSApplicationActive()) setAppBackground(true);
+#else
+    const bool pressureRecovery = platform::takeApplicationOverflow();
+    if (pressureRecovery) {
+      context.inputDeviceRegistry.clearSdlInputState();
+      if (sceneManager.currentScene) sceneManager.currentScene->onInputQueueOverflow();
+      context.inputDeviceRegistry.reconcileSdlDevices();
+      int width = 0, height = 0;
+      platform::windowSize(s_window, &width, &height);
+      deferWindowResize(width, height);
+      const bool active = platform::applicationActive();
+      setAppBackground(!active);
+#if TARGET_OS_ANDROID
+      // Queue pressure is not an OS suspend request. Keep real surface/picker
+      // requests in syncAndroidRenderSuspend's own gates.
+      androidSystemSuspended = !active;
+#endif
+    }
+    if (!platform::applicationActive()) setAppBackground(true);
+#endif
     flushPendingResize();
     if (!pendingFingerMotions.empty()) {
       for (const auto &pendingFingerMotion : pendingFingerMotions) {
@@ -1453,7 +1562,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       touchEvent.tfinger.y = uiTouch.touch.y;
       touchEvent.tfinger.pressure = uiTouch.touch.phase == TouchPhase::Up ||
           uiTouch.touch.phase == TouchPhase::Cancel ? 0.0f : 1.0f;
-      touchEvent.tfinger.windowID = SDL_GetWindowID(s_window);
+      touchEvent.tfinger.windowID = platform::windowID(s_window);
       context.inputDeviceRegistry.handleSdlEventAndDispatch(touchEvent);
       if (input::native_touch::RawTouchRegistration::isCurrentEpoch(uiTouch.epoch)) {
         processEvent(touchEvent);
@@ -1479,7 +1588,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       int logicalW = 0;
       int logicalH = 0;
       if (s_window != nullptr) {
-        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
+        platform::windowSize(s_window, &logicalW, &logicalH);
       }
       if (logicalW > 0 && logicalH > 0) {
         if (!applyWindowResize(logicalW, logicalH)) {
@@ -1487,6 +1596,16 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
       }
       androidResumeResizePending = false;
+    }
+#endif
+    if (context.quitFlag.load(std::memory_order_acquire)) break;
+#if TARGET_OS_IPHONE
+    if (iosPreparedFrame.pending()) {
+      // Keep handling cancellation/quit while inactive, but do not append a
+      // second scene's draws or enter owner work before the discard above.
+      if (!IOSApplicationActive()) waitForBackgroundEvent();
+      context.inputDeviceRegistry.pump();
+      continue;
     }
 #endif
     if (context.appInBackground.load(std::memory_order_acquire) &&
@@ -1536,6 +1655,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           context.replayVideoExportActive.load(std::memory_order_acquire) &&
           context.replayVideoExportUiFrameRequested.load(
               std::memory_order_acquire)) {
+#if TARGET_OS_IPHONE
+        iosPreparedFrame.begin(GetIOSPresentationState());
+#endif
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
         context.uiBatchRenderer.beginFrame();
@@ -1543,7 +1665,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
         const auto submitStarted = perf::latency::nowMicros();
 #endif
+#if TARGET_OS_IPHONE
+        if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame))
+          continue;
+#else
         bgfx::frame();
+#endif
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
         perf::latency::record(perf::latency::Stage::FrameSubmit,
                               perf::latency::nowMicros() - submitStarted);
@@ -1559,6 +1686,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                  !context.rendererAccess.exportRequested()) {
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
+#if TARGET_OS_IPHONE
+        iosPreparedFrame.begin(GetIOSPresentationState());
+#endif
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
         context.uiBatchRenderer.beginFrame();
@@ -1603,7 +1733,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
         const auto submitStarted = perf::latency::nowMicros();
 #endif
+#if TARGET_OS_IPHONE
+        if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame))
+          continue;
+#else
         bgfx::frame();
+#endif
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
         perf::latency::record(perf::latency::Stage::FrameSubmit,
                               perf::latency::nowMicros() - submitStarted);
@@ -1624,6 +1759,18 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (renderedFrame) {
       ++renderedFramesInWindow;
     }
+#if TARGET_OS_IPHONE
+    // Foreground can arrive while the old frame or resize is still deferred.
+    // Update refreshes realtime geometry; rendering publishes legacy skin hit
+    // regions. A skin without a fresh realtime layout keeps its raw sink gated
+    // until the following update publishes that layout and hit snapshot.
+    if (renderedFrame && !iosPreparedFrame.pending() &&
+        !iosViewportRestorePending && !hasDeferredRenderResize &&
+        IOSApplicationActive() && !context.appInBackground.load() &&
+        !context.quitFlag.load()) {
+      ResumeIOSGameplayTouchInput(iosInputGeneration);
+    }
+#endif
 
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
     {
@@ -1709,13 +1856,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
 #if TARGET_OS_IPHONE
-      // iOS Metal renders on UIKit's main thread. Pace default VSync here so
-      // its idle interval services touches instead of blocking in nextDrawable.
-      // A CADisplayLink wait regressed measured UIKit delivery latency.
-      const SDL_DisplayMode *iosMode =
-          SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window));
+      // Preserve the automatic refresh target without blocking UIKit or
+      // reading SDL's mutable display objects from this worker.
+      const auto iosViewport = GetIOSWindowSnapshot(s_window);
       iosPresentationPacer.setCap(video::iosPresentationPacingCap(
-          iosMode != nullptr ? iosMode->refresh_rate : 0.0F,
+          iosViewport ? iosViewport->refreshRate : 0.0F,
           context.framePacer.currentFrameCap(),
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
               context.rendererAccess.exportRequested()));
@@ -1733,7 +1878,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             1,
             std::chrono::duration_cast<std::chrono::microseconds>(waitDuration)
                 .count());
-        WaitIOSMainRunLoopForMicros(waitMicros);
+        std::this_thread::sleep_for(std::chrono::microseconds(waitMicros));
 #elif TARGET_OS_ANDROID
         std::this_thread::sleep_for(waitDuration);
 #else
@@ -1742,7 +1887,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         const auto waitDeadline = waitStartedAt + waitDuration;
         while (!context.quitFlag &&
                !context.appInBackground.load(std::memory_order_acquire)) {
-          while (SDL_PollEvent(&e)) {
+          while (platform::pollApplicationEvent(&e)) {
             if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
               ++rawEventsInWindow;
             }
@@ -1811,6 +1956,12 @@ static void runReadyApplication(ApplicationContext &context) {
 int run() {
   text_runtime::FontCacheSession fontCacheSession;
   ApplicationContext context;
+  platform::setApplicationEventDiscardHandler([&context](const SDL_Event &event) {
+    context.inputDeviceRegistry.discardRealtimeSdlInput(event);
+  });
+  const auto eventDiscardCleanup = makeScopeExit([] {
+    platform::setApplicationEventDiscardHandler({});
+  });
   return application_startup::execute(
       context.profileReady(),
       application_startup::Dependencies{

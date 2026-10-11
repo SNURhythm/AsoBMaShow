@@ -80,6 +80,7 @@ public:
   void init() override;
   void update(float dt) override;
   void onApplicationBackgroundChanged(bool background) override;
+  void onInputQueueOverflow() override;
   bool continuesAudioInBackground() const override;
   void updateWhileBackgrounded() override;
   bool renderViewBeforeScene(const View *view) const override;
@@ -139,7 +140,6 @@ private:
           std::nullopt);
   void drainRealtimeInputCommands();
   bool drainRealtimeInputInterruption();
-  bool inputInterruptionPause = false;
   void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
   void refreshLegacyTouchLayout();

@@ -1,0 +1,30 @@
+{
+  "baseline1": {
+    "battery_before_celsius": 35.1,
+    "battery_after_celsius": 35.1,
+    "battery_level": 100,
+    "avg_fps": 118.2,
+    "elapsed_seconds": 78.484
+  },
+  "current1": {
+    "battery_before_celsius": 33.5,
+    "battery_after_celsius": 34.0,
+    "battery_level": 100,
+    "avg_fps": 118.1,
+    "elapsed_seconds": 77.929
+  },
+  "current2": {
+    "battery_before_celsius": 34.0,
+    "battery_after_celsius": 34.2,
+    "battery_level": 100,
+    "avg_fps": 118.2,
+    "elapsed_seconds": 77.693
+  },
+  "baseline2": {
+    "battery_before_celsius": 34.2,
+    "battery_after_celsius": 34.5,
+    "battery_level": 100,
+    "avg_fps": 118.2,
+    "elapsed_seconds": 77.674
+  }
+}

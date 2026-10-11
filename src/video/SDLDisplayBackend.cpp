@@ -1,3 +1,4 @@
+#include "../platform/IOSApplicationRuntime.h"
 #include "SDLDisplayBackend.h"
 
 #include <SDL3/SDL.h>
@@ -51,16 +52,22 @@ public:
       : window(windowValue) {}
 
   int displayCount() const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return displayCount(); });
     return static_cast<int>(displayIds().size());
   }
 
   std::string displayName(int displayIndex) const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return displayName(displayIndex); });
     if (const char *name = SDL_GetDisplayName(displayId(displayIndex))) return name;
     return {};
   }
 
   std::vector<SDLNativeDisplayMode>
   displayModes(int displayIndex) const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return displayModes(displayIndex); });
     std::vector<SDLNativeDisplayMode> result;
     int count = 0;
     SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(displayId(displayIndex), &count);
@@ -71,6 +78,8 @@ public:
 
   std::optional<SDLNativeDisplayMode>
   desktopDisplayMode(int displayIndex) const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return desktopDisplayMode(displayIndex); });
     const auto *mode = SDL_GetDesktopDisplayMode(displayId(displayIndex));
     if (!mode) return std::nullopt;
     return nativeMode(*mode);
@@ -78,6 +87,8 @@ public:
 
   std::optional<SDLDisplayBounds>
   displayBounds(int displayIndex, std::string &errorMessage) const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return displayBounds(displayIndex, errorMessage); });
     SDL_Rect bounds{};
     if (!SDL_GetDisplayBounds(displayId(displayIndex), &bounds)) {
       errorMessage = sdlFailure("Could not read display bounds");
@@ -88,6 +99,8 @@ public:
   }
 
   SDLWindowState windowState() const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return windowState(); });
     SDLWindowState result;
     if (window == nullptr) {
       result.displayIndex = -1;
@@ -111,6 +124,8 @@ public:
 
   std::optional<SDLNativeDisplayMode>
   currentDisplayMode(int displayIndex) const override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return currentDisplayMode(displayIndex); });
     const auto *mode = SDL_GetCurrentDisplayMode(displayId(displayIndex));
     if (!mode) return std::nullopt;
     return nativeMode(*mode);
@@ -118,6 +133,8 @@ public:
 
   bool setFullscreenMode(player_settings::DisplayMode mode,
                          std::string &errorMessage) override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return setFullscreenMode(mode, errorMessage); });
     if (window == nullptr ||
         !SDL_SetWindowFullscreen(window, mode != player_settings::DisplayMode::Windowed) ||
         !SDL_SyncWindow(window)) {
@@ -128,6 +145,8 @@ public:
   }
 
   bool clearWindowDisplayMode(std::string &errorMessage) override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return clearWindowDisplayMode(errorMessage); });
     if (window == nullptr || !SDL_SetWindowFullscreenMode(window, nullptr)) {
       errorMessage = sdlFailure("Could not clear the SDL display mode");
       return false;
@@ -136,6 +155,8 @@ public:
   }
 
   void setWindowSize(int width, int height) override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return setWindowSize(width, height); });
     if (window != nullptr) {
       SDL_SetWindowSize(window, width, height);
       SDL_SyncWindow(window);
@@ -143,6 +164,8 @@ public:
   }
 
   void setWindowPosition(int x, int y) override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return setWindowPosition(x, y); });
     if (window != nullptr) {
       SDL_SetWindowPosition(window, x, y);
       SDL_SyncWindow(window);
@@ -151,6 +174,8 @@ public:
 
   bool setWindowDisplayMode(const SDLNativeDisplayMode &mode,
                             std::string &errorMessage) override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return setWindowDisplayMode(mode, errorMessage); });
     if (!window) {
       errorMessage = "No SDL window is available.";
       return false;
@@ -170,6 +195,8 @@ public:
   }
 
   void setWindowMaximized(bool maximized) override {
+    if (!platform::isMainThread())
+      return platform::onMain([&] { return setWindowMaximized(maximized); });
     if (window == nullptr) {
       return;
     }

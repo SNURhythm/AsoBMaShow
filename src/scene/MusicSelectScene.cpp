@@ -1,3 +1,5 @@
+#include "../platform/SDLMainThread.h"
+#include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
@@ -460,7 +462,11 @@ MusicSelectScene::MusicSelectScene(
     skin::GameplaySkinActivationRequest activationRequest)
     : Scene(context), activationRequest_(std::move(activationRequest)),
       selectedSkinPath_(
-          musicSelectSkinEntryPath(activationRequest_.activation.entry)) {}
+          musicSelectSkinEntryPath(activationRequest_.activation.entry))
+#if !TARGET_OS_IPHONE
+      , recordsExportJob_(platform::postApplicationWork)
+#endif
+{}
 
 MusicSelectScene::~MusicSelectScene() {
   // Join scene callbacks while their members are still alive. cleanup() also
@@ -2006,7 +2012,7 @@ void MusicSelectScene::copySelectedHash(bool sha256) {
           ? &snapshot.rowAt(snapshot.selectedIndex)
           : nullptr;
   const std::string hash = musicSelectSelectedHash(selected, sha256);
-  if (!hash.empty() && !SDL_SetClipboardText(hash.c_str())) {
+  if (!hash.empty() && !platform::sdlMain<SDL_SetClipboardText>(hash.c_str())) {
     SDL_Log("Unable to copy selected chart hash: %s", SDL_GetError());
   }
 }
@@ -4547,4 +4553,12 @@ void MusicSelectScene::cleanupScene() {
   directoryStatus_ = nullptr;
   directoryStatusMessage_.clear();
   diagnostics_.clear();
+}
+
+void MusicSelectScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+  resetLogicalInput();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  skinTouchGesture_.cancel();
+#endif
 }

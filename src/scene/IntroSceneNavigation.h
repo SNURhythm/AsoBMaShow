@@ -28,6 +28,11 @@ public:
     startHeld_ = false;
   }
 
+  void cancelInput(MusicSelectKeyLayout layout) {
+    processor_ = MusicSelectInputProcessor({.layout = layout});
+    startHeld_ = false;
+  }
+
   [[nodiscard]] IntroSceneNavigationResult
   process(MusicSelectLogicalInput input, std::int64_t nowMillis) {
     IntroSceneNavigationResult result;

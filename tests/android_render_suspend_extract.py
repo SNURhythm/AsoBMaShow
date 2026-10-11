@@ -13,9 +13,12 @@ def main():
     source = (args.root / "src/main.cpp").read_text()
     callback = extract(source, "auto applyAndroidRenderSuspend = [&](bool suspend)")
     lifecycle = extract(source, "auto setAppBackground = [&](bool background)")
+    sync = extract(source, "auto syncAndroidRenderSuspend = [&]()")
+    recovery_start = source.index("const bool pressureRecovery = platform::takeApplicationOverflow();")
+    recovery = extract(source[recovery_start:], "if (pressureRecovery) {")
     fixture = (args.root / "tests/android_render_suspend_fixture.cpp").read_text()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(fixture.replace("PRODUCTION_SUSPEND", callback).replace("PRODUCTION_LIFECYCLE", lifecycle))
+    args.output.write_text(fixture.replace("PRODUCTION_SUSPEND", callback).replace("PRODUCTION_LIFECYCLE", lifecycle).replace("PRODUCTION_SYNC", sync).replace("PRODUCTION_RECOVERY", recovery))
 
 
 if __name__ == "__main__":

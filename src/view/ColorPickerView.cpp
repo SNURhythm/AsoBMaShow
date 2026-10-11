@@ -107,6 +107,12 @@ void ColorPickerView::finish() {
   if (callback) callback(current, true);
 }
 
+void ColorPickerView::onPointerInputCancelled() {
+  dragging = Area::None;
+  mouseDragging = false;
+  touch.reset();
+}
+
 void ColorPickerView::onPointerEventConsumed(const SDL_Event &event) {
   if ((mouseDragging && event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
        event.button.which != SDL_TOUCH_MOUSEID && event.button.button == SDL_BUTTON_LEFT) ||

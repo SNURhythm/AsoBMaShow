@@ -86,6 +86,7 @@ public:
   std::uint64_t touchEventTimestampMicros() const { return ingressTimestamp; }
   bool notifyTouchEvent(SDL_FingerID, ReplayTouchAction, Vector3);
   void discardPendingTouchEvents();
+  void cancelInputState();
   void setApplicationBackground(bool background);
   Vector3 normalizedTouchToRenderLocation(Vector3) const;
   bool isLaneOccupied(int, SDL_FingerID) const;
@@ -338,6 +339,10 @@ int main() {
   interrupted.setApplicationBackground(true);
   expect(interrupted.applicationBackground && interrupted.pipeline.resets == 1,
          "background clears physical binding ownership as well as touch ownership");
+  interrupted.onFingerDown(20, firstLane);
+  interrupted.onFingerMove(20, secondLane);
+  expect(!callbackCapture && interrupted.fingerToLane.empty(),
+         "inactive legacy input cannot acquire a new pointer or lane");
   interrupted.setApplicationBackground(false);
   expect(!interrupted.applicationBackground && interrupted.pipeline.resets == 1,
          "foreground restores input without another synthetic binding release");
@@ -346,6 +351,11 @@ int main() {
   interrupted.discardPendingTouchEvents();
   expect(callbackCancels == 1,
          "a reused pointer ID that already lifted receives no stale cancellation");
+  interrupted.onFingerDown(20, firstLane);
+  interrupted.cancelInputState();
+  expect(!interrupted.applicationBackground && !callbackCapture &&
+             callbackCancels == 2 && interrupted.pipeline.resets == 2,
+         "input recovery cancels held controls without changing application activity");
 
   rendering::ui_scale_x = rendering::ui_scale_y = 1.0F;
   std::vector<ReplayTouchAction> laneCallbacks;

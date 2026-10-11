@@ -1,0 +1,21 @@
+10-11 02:07:40.868 I/SDL/APP (23919): Device render stall begin: token=touch1 milliseconds=5000
+10-11 02:07:40.969 I/SDL/APP (23919): Device raw touch probe: phase=0 sourceToIngressUs=4126 dispatchUs=21
+10-11 02:07:40.972 I/SDL/APP (23919): Device raw touch probe: phase=2 sourceToIngressUs=6899 dispatchUs=8
+10-11 02:07:40.972 I/SDL/APP (23919): Device raw touch probe: phase=1 sourceToIngressUs=6969 dispatchUs=6
+10-11 02:07:41.023 I/SDL/APP (23919): Device raw touch probe: phase=0 sourceToIngressUs=2154 dispatchUs=18
+10-11 02:07:41.026 I/SDL/APP (23919): Device raw touch probe: phase=2 sourceToIngressUs=4574 dispatchUs=7
+10-11 02:07:41.026 I/SDL/APP (23919): Device raw touch probe: phase=1 sourceToIngressUs=4619 dispatchUs=5
+10-11 02:07:41.082 I/SDL/APP (23919): Device raw touch probe: phase=0 sourceToIngressUs=2590 dispatchUs=24
+10-11 02:07:41.085 I/SDL/APP (23919): Device raw touch probe: phase=2 sourceToIngressUs=5690 dispatchUs=9
+10-11 02:07:41.085 I/SDL/APP (23919): Device raw touch probe: phase=1 sourceToIngressUs=5771 dispatchUs=7
+10-11 02:07:41.131 I/SDL/APP (23919): Device raw touch probe: phase=0 sourceToIngressUs=1982 dispatchUs=20
+10-11 02:07:41.133 I/SDL/APP (23919): Device raw touch probe: phase=2 sourceToIngressUs=4509 dispatchUs=7
+10-11 02:07:41.134 I/SDL/APP (23919): Device raw touch probe: phase=1 sourceToIngressUs=4552 dispatchUs=22
+10-11 02:07:41.183 I/SDL/APP (23919): Device raw touch probe: phase=0 sourceToIngressUs=1891 dispatchUs=20
+10-11 02:07:41.185 I/SDL/APP (23919): Device raw touch probe: phase=2 sourceToIngressUs=4347 dispatchUs=6
+10-11 02:07:41.185 I/SDL/APP (23919): Device raw touch probe: phase=1 sourceToIngressUs=4397 dispatchUs=5
+10-11 02:07:45.868 I/SDL/APP (23919): Device render stall end: token=touch1 mainIterations=4506 active=1
+10-11 02:07:54.567 I/SDL/APP (23919): Device render stall begin: token=background1 milliseconds=5000
+10-11 02:07:59.567 I/SDL/APP (23919): Device render stall end: token=background1 mainIterations=2102 active=0
+10-11 02:08:27.025 I/SDL/APP (23919): Modern chart persistence state=SavedWithoutReplay diagnostic=file association: replay omitted: Atomic replay install failed: Operation not permitted
+10-11 02:13:39.493 I/SDL/APP (24705): Modern chart persistence state=SavedWithoutReplay diagnostic=file association: replay omitted: Atomic replay install failed: Operation not permitted

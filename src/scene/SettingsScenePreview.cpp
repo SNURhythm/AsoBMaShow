@@ -785,3 +785,13 @@ void SettingsScene::resetPreviewSimulation() {
   previewRendererDirty = true;
   ensurePreviewRenderer();
 }
+
+void SettingsScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+  if (appearanceColorPopup) appearanceColorPopup->cancelPointerInput();
+  if (inputCaptureController) inputCaptureController->resetInputState();
+  if (previewTouchRouter) {
+    (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks()) * 1000);
+  }
+  if (previewInputHandler) previewInputHandler->cancelInputState();
+}

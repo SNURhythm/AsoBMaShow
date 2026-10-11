@@ -40,9 +40,15 @@ public:
     }
   }
   virtual void onApplicationBackgroundChanged(bool) {}
+  // Input history was lost; retire held controls without changing playback.
+  virtual void onInputQueueOverflow() {
+    for (auto *view : views) view->cancelPointerInput();
+  }
   virtual bool continuesAudioInBackground() const { return false; }
   // CPU-only work: no rendering, resource preparation, or scene transitions.
   virtual void updateWhileBackgrounded() {}
+  // Progress only: no scene transitions or event dispatch during owner export.
+  virtual void updateReplayExportProgress() {}
   virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual bool locksOrientation() const { return false; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {

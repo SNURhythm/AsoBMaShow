@@ -43,6 +43,7 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
+        "void GamePlayScene::onInputQueueOverflow()",
         "void GamePlayScene::onApplicationBackgroundChanged(",
         "bool GamePlayScene::continuesAudioInBackground() const",
         "void GamePlayScene::updateWhileBackgrounded()",

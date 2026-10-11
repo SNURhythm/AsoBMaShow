@@ -17,7 +17,10 @@ elseif(TARGET SDL3)
     target_link_libraries(input_registry_test_support PUBLIC SDL3)
 endif()
 
-add_executable(input_device_registry_tests tests/input_device_registry_tests.cpp)
+add_executable(input_device_registry_tests
+    tests/input_device_registry_tests.cpp
+    src/platform/ApplicationEventQueue.cpp
+)
 target_link_libraries(input_device_registry_tests PRIVATE input_registry_test_support)
 
 add_executable(realtime_gameplay_input_registration_tests

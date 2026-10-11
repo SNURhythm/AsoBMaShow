@@ -2624,6 +2624,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(gameplay_scene_feature_off_compile_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME ios_foreground_ingress_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/ios_foreground_ingress_tests.py)
+    add_test(NAME ios_export_input_suppression_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/ios_export_input_suppression_tests.py)
+    add_test(NAME background_gameplay_dispatch_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/background_gameplay_dispatch_tests.py)
+    add_test(NAME replay_export_cancellation_boundary
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/replay_export_cancellation_tests.py)
     add_test(NAME replay_video_ui_batch_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
@@ -7294,6 +7306,71 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
+    set(desktop_realtime_ingress_methods
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/desktop_realtime_ingress_methods.h)
+    add_custom_command(OUTPUT ${desktop_realtime_ingress_methods}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/desktop_realtime_ingress_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${desktop_realtime_ingress_methods}
+        DEPENDS tests/desktop_realtime_ingress_extract.py tests/gameplay_terminal_scene_extract.py
+            src/scene/play/GamePlayScene.cpp src/input/RhythmInputHandler.cpp
+        VERBATIM)
+    add_executable(desktop_realtime_ingress_tests tests/desktop_realtime_ingress_tests.cpp
+        src/input/SDLTouchInputSource.cpp ${desktop_realtime_ingress_methods})
+    target_include_directories(desktop_realtime_ingress_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
+    target_compile_features(desktop_realtime_ingress_tests PRIVATE cxx_std_23)
+    target_link_libraries(desktop_realtime_ingress_tests PRIVATE SDL3::SDL3)
+    add_executable(ios_realtime_ingress_tests tests/desktop_realtime_ingress_tests.cpp
+        src/input/SDLTouchInputSource.cpp ${desktop_realtime_ingress_methods})
+    target_include_directories(ios_realtime_ingress_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
+    target_compile_definitions(ios_realtime_ingress_tests PRIVATE FIXTURE_IOS=1)
+    target_compile_features(ios_realtime_ingress_tests PRIVATE cxx_std_23)
+    target_link_libraries(ios_realtime_ingress_tests PRIVATE SDL3::SDL3)
+
+    set(ui_input_overflow_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/ui_input_overflow_tests.cpp)
+    add_custom_command(OUTPUT ${ui_input_overflow_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_input_overflow_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${ui_input_overflow_source}
+        DEPENDS tests/ui_input_overflow_extract.py tests/ui_input_overflow_fixture.cpp
+            tests/gameplay_terminal_scene_extract.py src/scene/Scene.h src/view/View.h
+            src/view/Button.cpp src/view/ScrollView.cpp src/view/RecyclerView.h src/view/OverlayPortal.h
+            src/scene/IntroScene.cpp src/input/InputCaptureController.cpp
+        VERBATIM)
+    add_executable(ui_input_overflow_tests ${ui_input_overflow_source}
+        src/platform/ApplicationEventQueue.cpp
+        src/music_select/MusicSelectInputBindingAdapter.cpp
+        src/music_select/MusicSelectInputProcessor.cpp src/input/InputBindingResolver.cpp)
+    target_include_directories(ui_input_overflow_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include)
+    target_compile_features(ui_input_overflow_tests PRIVATE cxx_std_23)
+    target_link_libraries(ui_input_overflow_tests PRIVATE Threads::Threads)
+
+    add_executable(sdl_application_runtime_tests
+        tests/sdl_application_runtime_tests.cpp
+        tests/sdl_application_runtime_fixture.cpp
+        src/platform/ApplicationEventQueue.cpp
+    )
+    target_include_directories(sdl_application_runtime_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(sdl_application_runtime_tests PRIVATE cxx_std_23)
+    target_link_libraries(sdl_application_runtime_tests PRIVATE SDL3::SDL3)
+
+    add_executable(ios_application_lifecycle_tests tests/ios_application_lifecycle_tests.cpp)
+    target_include_directories(ios_application_lifecycle_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include)
+    target_compile_features(ios_application_lifecycle_tests PRIVATE cxx_std_23)
+    target_link_libraries(ios_application_lifecycle_tests PRIVATE Threads::Threads)
+
+    add_executable(application_event_queue_tests
+        tests/application_event_queue_tests.cpp
+        src/platform/ApplicationEventQueue.cpp
+    )
+    target_include_directories(application_event_queue_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/SDL/include
+    )
+    target_compile_features(application_event_queue_tests PRIVATE cxx_std_23)
+
     add_executable(realtime_gameplay_worker_tests
         src/input/NativeRawTouchInput.cpp
         ${android_realtime_touch_methods}
@@ -9358,6 +9435,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
+    # These view fixtures exercise the same SDL-owned geometry snapshots as the app.
+    foreach(view_runtime_target builtin_renderer_characterization_tests
+            settings_button_layout_tests text_input_box_tests play_options_panel_view_tests)
+        if(TARGET ${view_runtime_target})
+            target_sources(${view_runtime_target} PRIVATE
+                src/platform/SDLApplicationRuntime.cpp src/platform/ApplicationEventQueue.cpp)
+        endif()
+    endforeach()
+
+    asobmashow_register_test(desktop_realtime_ingress_tests)
+    asobmashow_register_test(ios_realtime_ingress_tests)
+    asobmashow_register_test(sdl_application_runtime_tests)
+    asobmashow_register_test(ui_input_overflow_tests)
+    asobmashow_register_test(application_event_queue_tests)
+    asobmashow_register_test(ios_application_lifecycle_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(realtime_gameplay_authority_policy_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)

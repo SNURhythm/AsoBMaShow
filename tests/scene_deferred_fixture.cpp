@@ -20,6 +20,7 @@ struct RenderContext {
   struct UiBatchScope { explicit UiBatchScope(RenderContext &) {} };
 };
 struct View {
+  void cancelPointerInput() {}
   void propagateLanguageChange() {}
   bool handleEvents(SDL_Event &) { return true; }
   void render(RenderContext &) {}

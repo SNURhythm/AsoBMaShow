@@ -22,6 +22,7 @@ protected:
   }
   void renderImpl(RenderContext &context) override;
   bool handleEventsImpl(SDL_Event &event) override;
+  void onPointerInputCancelled() override;
 
 private:
   enum class DragMode : unsigned char {

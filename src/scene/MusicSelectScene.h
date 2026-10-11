@@ -65,6 +65,7 @@ public:
                    skin::GameplaySkinActivationRequest);
   ~MusicSelectScene() override;
 
+  void onInputQueueOverflow() override;
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -183,6 +184,7 @@ private:
   void launchAutoPlayExport(const ChartMetaRecord &,
                             ReplayVideoExportOptions);
   void applyRecordsExportProgress();
+  void updateReplayExportProgress() override { applyRecordsExportProgress(); }
   void applyRecordsExportResult();
   void showTasksModal();
   void refreshTasksModal(bool force = false);

@@ -12,6 +12,7 @@ signatures = (
     "bool RhythmInputHandler::notifyTouchEvent(",
     "bms_parser::Note *RhythmInputHandler::applyTouchLane(",
     "void RhythmInputHandler::discardPendingTouchEvents()",
+    "void RhythmInputHandler::cancelInputState()",
     "void RhythmInputHandler::setApplicationBackground(bool background)",
     "Vector3 RhythmInputHandler::normalizedTouchToRenderLocation(",
     "bool RhythmInputHandler::isLaneOccupied(",

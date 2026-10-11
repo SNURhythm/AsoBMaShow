@@ -1,0 +1,91 @@
+10-11 02:31:52.230 V/SDL     (28414): surfaceCreated()
+10-11 02:31:52.387 I/SDL/APP (28414): Trying bgfx renderer: Vulkan
+10-11 02:31:52.509 I/SDL/APP (28414): bgfx renderer: Vulkan
+10-11 02:34:09.104 I/SDL/APP (28414): Replay export log: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023409.log
+10-11 02:34:09.104 I/SDL/APP (28414): Replay export chart: Event Thread Export Test
+10-11 02:34:09.104 I/SDL/APP (28414): Replay export random seed: 2564133609
+10-11 02:34:09.104 I/SDL/APP (28414): Replay export random PRNG: std::mt19937_64
+10-11 02:34:09.105 I/SDL/APP (28414): Replay export audio: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023409_tmp/audio.wav
+10-11 02:34:09.108 I/SDL/APP (28414): Replay export Chart audio mix started: 4096 frames
+10-11 02:34:09.109 I/SDL/APP (28414): Replay export Chart audio duration: 18.000s base=18.000s events=10
+10-11 02:34:09.110 I/SDL/APP (28414): Replay export Chart audio output started: 4096 frames
+10-11 02:34:09.118 I/SDL/APP (28414): Replay export audio finished in 0.01s
+10-11 02:34:09.118 I/SDL/APP (28414): Replay export MP4: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023409.mp4 (2400x1080 @ 120fps)
+10-11 02:34:09.358 I/SDL/APP (28414): Replay video export encoder: h264_mediacodec, pixel format: mediacodec, time base: 1/120, frame duration: 1, H.264 level: 5.2
+10-11 02:34:09.359 I/SDL/APP (28414): Replay video export FFmpeg buffers: refcounted Surface frame markers
+10-11 02:34:09.359 I/SDL/APP (28414): Replay video export pixel converter: Android encoder Surface (GPU BGRA upload, no CPU YUV conversion)
+10-11 02:34:09.359 I/SDL/APP (28414): Replay video export MP4 stream time base: 1/120
+10-11 02:34:09.359 I/SDL/APP (28414): Replay video export MP4 muxer: flush_packets=0, movflags=+faststart
+10-11 02:34:09.394 I/SDL/APP (28414): Replay video export workload: 3600 frames, 30.00s, 34.76 GiB BGRA readback
+10-11 02:34:09.394 I/SDL/APP (28414): Replay video export timing: gameplay 20.00s, result 10.00s, audio 18.00s
+10-11 02:34:09.394 I/SDL/APP (28414): Replay video export frame buffers/readbacks: 6, encoder threads: 1, queued memory: 118.7 MiB / 128.0 MiB budget
+10-11 02:34:09.602 I/SDL/APP (28414): Replay video export encoded frame 1/3600
+10-11 02:34:10.598 I/SDL/APP (28414): Replay video export encoded frame 120/3600
+10-11 02:34:11.436 I/SDL/APP (28414): Replay video export encoded frame 240/3600
+10-11 02:34:12.263 I/SDL/APP (28414): Replay video export encoded frame 360/3600
+10-11 02:34:13.127 I/SDL/APP (28414): Replay video export encoded frame 480/3600
+10-11 02:34:14.078 I/SurfaceView@5420db6(28414): surfaceDestroyed
+10-11 02:34:14.241 I/SDL/APP (28414): Replay export MP4 failed: Replay export cancelled
+10-11 02:34:14.280 I/SDL/APP (28414): Android rendering suspended
+10-11 02:34:14.281 V/SDL     (28414): surfaceDestroyed()
+10-11 02:34:16.790 V/SDL     (28414): surfaceCreated()
+10-11 02:34:16.825 I/SDL/APP (28414): Android rendering resumed
+10-11 02:34:16.843 I/SDL/APP (28414): Replay video export failed: Replay export cancelled (/storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023409.mp4)
+10-11 02:34:31.358 I/SDL/APP (28414): Replay export log: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023431.log
+10-11 02:34:31.358 I/SDL/APP (28414): Replay export chart: Event Thread Export Test
+10-11 02:34:31.358 I/SDL/APP (28414): Replay export random seed: 3704050158
+10-11 02:34:31.358 I/SDL/APP (28414): Replay export random PRNG: std::mt19937_64
+10-11 02:34:31.359 I/SDL/APP (28414): Replay export audio: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023431_tmp/audio.wav
+10-11 02:34:31.363 I/SDL/APP (28414): Replay export Chart audio mix started: 4096 frames
+10-11 02:34:31.364 I/SDL/APP (28414): Replay export Chart audio duration: 18.000s base=18.000s events=10
+10-11 02:34:31.365 I/SDL/APP (28414): Replay export Chart audio output started: 4096 frames
+10-11 02:34:31.372 I/SDL/APP (28414): Replay export audio finished in 0.01s
+10-11 02:34:31.373 I/SDL/APP (28414): Replay export MP4: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023431.mp4 (2400x1080 @ 120fps)
+10-11 02:34:31.488 I/SDL/APP (28414): Replay video export encoder: h264_mediacodec, pixel format: mediacodec, time base: 1/120, frame duration: 1, H.264 level: 5.2
+10-11 02:34:31.489 I/SDL/APP (28414): Replay video export FFmpeg buffers: refcounted Surface frame markers
+10-11 02:34:31.489 I/SDL/APP (28414): Replay video export pixel converter: Android encoder Surface (GPU BGRA upload, no CPU YUV conversion)
+10-11 02:34:31.490 I/SDL/APP (28414): Replay video export MP4 stream time base: 1/120
+10-11 02:34:31.490 I/SDL/APP (28414): Replay video export MP4 muxer: flush_packets=0, movflags=+faststart
+10-11 02:34:31.524 I/SDL/APP (28414): Replay video export workload: 3600 frames, 30.00s, 34.76 GiB BGRA readback
+10-11 02:34:31.524 I/SDL/APP (28414): Replay video export timing: gameplay 20.00s, result 10.00s, audio 18.00s
+10-11 02:34:31.524 I/SDL/APP (28414): Replay video export frame buffers/readbacks: 6, encoder threads: 1, queued memory: 118.7 MiB / 128.0 MiB budget
+10-11 02:34:31.560 I/SDL/APP (28414): Replay video export encoded frame 1/3600
+10-11 02:34:32.499 I/SDL/APP (28414): Replay video export encoded frame 120/3600
+10-11 02:34:33.347 I/SDL/APP (28414): Replay video export encoded frame 240/3600
+10-11 02:34:34.208 I/SDL/APP (28414): Replay video export encoded frame 360/3600
+10-11 02:34:35.068 I/SDL/APP (28414): Replay video export encoded frame 480/3600
+10-11 02:34:35.953 I/SDL/APP (28414): Replay video export encoded frame 600/3600
+10-11 02:34:36.810 I/SDL/APP (28414): Replay video export encoded frame 720/3600
+10-11 02:34:37.671 I/SDL/APP (28414): Replay video export encoded frame 840/3600
+10-11 02:34:38.531 I/SDL/APP (28414): Replay video export encoded frame 960/3600
+10-11 02:34:39.418 I/SDL/APP (28414): Replay video export encoded frame 1080/3600
+10-11 02:34:40.286 I/SDL/APP (28414): Replay video export encoded frame 1200/3600
+10-11 02:34:41.157 I/SDL/APP (28414): Replay video export encoded frame 1320/3600
+10-11 02:34:42.028 I/SDL/APP (28414): Replay video export encoded frame 1440/3600
+10-11 02:34:42.889 I/SDL/APP (28414): Replay video export encoded frame 1560/3600
+10-11 02:34:43.752 I/SDL/APP (28414): Replay video export encoded frame 1680/3600
+10-11 02:34:44.613 I/SDL/APP (28414): Replay video export encoded frame 1800/3600
+10-11 02:34:45.482 I/SDL/APP (28414): Replay video export encoded frame 1920/3600
+10-11 02:34:46.358 I/SDL/APP (28414): Replay video export encoded frame 2040/3600
+10-11 02:34:47.227 I/SDL/APP (28414): Replay video export encoded frame 2160/3600
+10-11 02:34:48.087 I/SDL/APP (28414): Replay video export encoded frame 2280/3600
+10-11 02:34:48.955 I/SDL/APP (28414): Replay video export encoded frame 2400/3600
+10-11 02:34:50.133 I/SDL/APP (28414): Replay video export encoded frame 2520/3600
+10-11 02:34:51.277 I/SDL/APP (28414): Replay video export encoded frame 2640/3600
+10-11 02:34:52.432 I/SDL/APP (28414): Replay video export encoded frame 2760/3600
+10-11 02:34:53.591 I/SDL/APP (28414): Replay video export encoded frame 2880/3600
+10-11 02:34:54.749 I/SDL/APP (28414): Replay video export encoded frame 3000/3600
+10-11 02:34:55.904 I/SDL/APP (28414): Replay video export encoded frame 3120/3600
+10-11 02:34:57.067 I/SDL/APP (28414): Replay video export encoded frame 3240/3600
+10-11 02:34:58.235 I/SDL/APP (28414): Replay video export encoded frame 3360/3600
+10-11 02:34:59.394 I/SDL/APP (28414): Replay video export encoded frame 3480/3600
+10-11 02:35:00.573 I/SDL/APP (28414): Replay video export encoded frame 3600/3600
+10-11 02:35:00.685 I/SDL/APP (28414): Replay video export profile: 29.16s total, 27.62s render submit, 0.01s readback wait, 25.66s encode worker, 0.37s waiting for frame buffers
+10-11 02:35:00.685 I/SDL/APP (28414): Replay export MP4 finished in 29.31s
+10-11 02:35:00.689 I/SDL/APP (28414): Replay export finished in 29.33s: MP4 exported
+10-11 02:35:00.696 I/SDL/APP (28414): Replay video exported: /storage/emulated/0/Android/data/com.snurhythm.asobmashow/files/Documents/video_exports/Event_Thread_Export_Test_20261011_023431.mp4 (MP4 exported)
+10-11 02:35:55.077 I/SDL/APP (28414): Android rendering suspended
+10-11 02:35:55.319 I/SurfaceView@5420db6(28414): surfaceDestroyed
+10-11 02:35:55.320 V/SDL     (28414): surfaceDestroyed()
+10-11 02:36:04.426 V/SDL     (28414): surfaceCreated()
+10-11 02:36:04.458 I/SDL/APP (28414): Android rendering resumed

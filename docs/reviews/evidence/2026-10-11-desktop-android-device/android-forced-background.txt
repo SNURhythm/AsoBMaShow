@@ -1,0 +1,21 @@
+10-11 02:07:54.567 I/SDL/APP (23919): Device render stall begin: token=background1 milliseconds=5000
+10-11 02:07:54.702 V/SDL     (23919): onPause()
+10-11 02:07:54.702 V/SDL     (23919): onWindowFocusChanged(): false
+10-11 02:07:54.702 V/SDL     (23919): nativeFocusChanged()
+10-11 02:07:56.982 I/SDL/APP (23919): Timed out waiting for Android rendering before surface destruction
+10-11 02:07:56.982 V/SDL     (23919): surfaceDestroyed()
+10-11 02:07:56.982 V/SDL     (23919): nativePause()
+10-11 02:07:57.005 V/SDL     (23919): onTrimMemory()
+10-11 02:07:57.007 V/SDL     (23919): onStop()
+10-11 02:07:59.567 I/SDL/APP (23919): Device render stall end: token=background1 mainIterations=2102 active=0
+10-11 02:07:59.569 I/SDL/APP (23919): Android rendering suspended
+10-11 02:08:14.653 V/SDL     (23919): onStart()
+10-11 02:08:14.655 V/SDL     (23919): onResume()
+10-11 02:08:14.706 V/SDL     (23919): surfaceCreated()
+10-11 02:08:14.707 V/SDL     (23919): surfaceChanged()
+10-11 02:08:14.707 V/SDL     (23919): Window size: 2400x1080
+10-11 02:08:14.707 V/SDL     (23919): Device size: 2400x1080
+10-11 02:08:14.708 V/SDL     (23919): nativeResume()
+10-11 02:08:14.734 V/SDL     (23919): onWindowFocusChanged(): true
+10-11 02:08:14.734 V/SDL     (23919): nativeFocusChanged()
+10-11 02:08:14.744 I/SDL/APP (23919): Android rendering resumed

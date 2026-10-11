@@ -574,6 +574,13 @@ public:
     onPointerEventConsumed(event);
   }
 
+  // Lost input history has no reliable pointer ID. Cancel every capture,
+  // including hidden children, without dispatching release/click callbacks.
+  void cancelPointerInput() {
+    for (auto *child : children) child->cancelPointerInput();
+    onPointerInputCancelled();
+  }
+
   using TemporaryEventListener = std::function<void(SDL_Event &)>;
   static uint64_t addTemporaryEventListener(TemporaryEventListener listener);
   static void removeTemporaryEventListener(uint64_t listenerId);
@@ -763,6 +770,7 @@ protected:
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
   virtual void onPointerEventConsumed(const SDL_Event &event) {}
+  virtual void onPointerInputCancelled() {}
   virtual void onThemeChanged();
   virtual void onLanguageChanged();
   // onResize

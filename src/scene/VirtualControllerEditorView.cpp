@@ -354,3 +354,10 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
                           context.scissor.width, context.scissor.height);
   batch.end();
 }
+
+void VirtualControllerEditorView::onPointerInputCancelled() {
+  if (dragMode_ != DragMode::None) config_ = dragStartConfig_;
+  dragMode_ = DragMode::None;
+  activePointerId_ = -1;
+  dragStartLayout_ = {};
+}

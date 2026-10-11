@@ -1,3 +1,4 @@
+#include "../platform/SDLMainThread.h"
 
 #include "InputNormalizer.h"
 #include "vkcodes.h"
@@ -427,5 +428,5 @@ SDL_Scancode InputNormalizer::normalizeScancode(int keyCode,
     }
     return static_cast<SDL_Scancode>(keyCode);
   }
-  return SDL_GetScancodeFromKey(normalize(keyCode, keySource), nullptr);
+  return platform::sdlMain<SDL_GetScancodeFromKey>(normalize(keyCode, keySource), nullptr);
 }

@@ -1,9 +1,45 @@
 #include "ReplayExportJob.h"
 
 #include <exception>
+#include "../targets.h"
+#if TARGET_OS_IPHONE
+#include "../platform/IOSApplicationRuntime.h"
+#include "../RAII.h"
+#endif
 #include <utility>
 
 namespace replay {
+
+ReplayExportJob::ReplayExportJob() {
+#if TARGET_OS_IPHONE
+  ownerExecutor_ = [](auto work, auto) { PostIOSApplicationWork(std::move(work)); };
+#endif
+}
+
+void ReplayExportJob::execute(ReplayVideoExportOptions options, Work work,
+                              std::stop_token stop) {
+  ReplayVideoExportResult result;
+  std::stop_callback cancel(stop, [this] { cancelled_ = true; });
+  try {
+#if TARGET_OS_IPHONE
+    auto overlay = makeScopeExit([] { EndIOSReplayExport(); });
+    BeginIOSReplayExport(ownerStop_);
+#endif
+    options.stop = stop;
+    options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
+      publishProgress(progress);
+#if TARGET_OS_IPHONE
+      UpdateIOSReplayExport(progress.fraction, progress.message);
+#endif
+    };
+    result = work(options, cancelled_);
+  } catch (const std::exception &error) {
+    result = {.success = false, .message = error.what()};
+  } catch (...) {
+    result = {.success = false, .message = "Unexpected replay export failure"};
+  }
+  publishResult(std::move(result));
+}
 
 bool ReplayExportJob::tryBegin() { return !active_.exchange(true); }
 
@@ -17,27 +53,27 @@ void ReplayExportJob::start(ReplayVideoExportOptions options, Work work) {
   }
   cancelled_ = false;
   try {
-    worker_ = std::jthread(
-        [this, options = std::move(options), work = std::move(work)](
-            const std::stop_token &stop) mutable {
-          ReplayVideoExportResult result;
-          try {
-            options.stop = stop;
-            options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-              publishProgress(progress);
-            };
-            result = work(options, cancelled_);
-          } catch (const std::exception &error) {
-            result = {.success = false, .message = error.what()};
-          } catch (...) {
-            result = {.success = false,
-                      .message = "Unexpected replay export failure"};
-          }
-          publishResult(std::move(result));
-        });
+    if (ownerExecutor_) {
+      ownerStop_ = std::stop_source{};
+      pending_ = std::make_shared<int>(0);
+      const std::weak_ptr<int> lifetime = pending_;
+      ownerExecutor_([this, lifetime, options = std::move(options), work = std::move(work)]() mutable {
+        if (lifetime.expired()) return;
+        execute(std::move(options), std::move(work), ownerStop_.get_token());
+        pending_.reset();
+      }, ownerStop_);
+    } else {
+      worker_ = std::jthread(
+          [this, options = std::move(options), work = std::move(work)](
+              const std::stop_token &stop) mutable {
+            execute(std::move(options), std::move(work), stop);
+          });
+    }
   } catch (const std::exception &error) {
+    pending_.reset();
     publishResult({.success = false, .message = error.what()});
   } catch (...) {
+    pending_.reset();
     publishResult({.success = false,
                    .message = "Unexpected replay export failure"});
   }
@@ -45,6 +81,11 @@ void ReplayExportJob::start(ReplayVideoExportOptions options, Work work) {
 
 void ReplayExportJob::cancelAndWait() {
   cancelled_ = true;
+  ownerStop_.request_stop();
+  if (pending_) {
+    pending_.reset();
+    publishResult({.success = false, .message = "Replay export cancelled"});
+  }
   if (worker_.joinable()) {
     worker_.request_stop();
     worker_.join();

@@ -60,6 +60,7 @@ struct RenderContext {
   };
 };
 struct View {
+  void cancelPointerInput() {}
   bool visible = false;
   int *renderCount = nullptr;
   virtual ~View() = default;

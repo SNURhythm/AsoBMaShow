@@ -12,6 +12,13 @@ PREAMBLE = r'''
 #import <Foundation/Foundation.h>
 #include <atomic>
 #include <cassert>
+#include <utility>
+namespace platform {
+inline bool isMainThread() { return true; }
+template <typename F> decltype(auto) onMain(F &&operation) {
+  return std::forward<F>(operation)();
+}
+}
 static bool simulatedEnabled = false;
 static int logCount = 0;
 bool UIAccessibilityIsGuidedAccessEnabled() { return simulatedEnabled; }
@@ -58,7 +65,7 @@ def main():
         binary = Path(temporary) / "test"
         source.write_text(PREAMBLE + method + TEST)
         subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                        "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                        "-fobjc-arc", "-fblocks", "-framework", "Foundation", "-I", str(ROOT / "src"),
                         str(source), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
         subprocess.run([str(binary), "initially-enabled"], check=True)
