@@ -69,7 +69,7 @@ clipSegment(std::int64_t startMicros, std::int64_t endMicros,
   return clipped;
 }
 
-// Shared by the running average and visible timing-bar opacity.
+// Continuous exponential weighting for the running timing average.
 [[nodiscard]] inline double timingWeight(std::int64_t sampleTimeMicros,
                                          std::int64_t currentTimeMicros) noexcept {
   constexpr double halfLifeMicros = 1'800'000.0;

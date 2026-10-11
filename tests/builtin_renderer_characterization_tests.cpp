@@ -1,4 +1,5 @@
 #include "scene/play/GameplaySimulation.h"
+#include "scene/play/JudgementTimingSample.h"
 #include "GameplayKeyMode.h"
 #include "input/RhythmInputHandler.h"
 #include "rendering/RenderPlan.h"
@@ -963,10 +964,10 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   };
   const auto empty = render(2'000'000);
   indicator.record(JudgeResult(Great, -60'000), 0);
-  expect(render(16'200'000) == empty,
-         "the indicator history disappears once exponential opacity rounds to zero");
-  expect(render(1'800'000) != empty,
-         "timing history remains visible at one exponential half-life");
+  expect(render(2'000'000) == empty,
+         "the indicator history disappears after its visual fade");
+  expect(render(1'800'000) == empty,
+         "timing history finishes its ease-in fade at exactly 1.8 seconds");
   indicator.record(JudgeResult(Great, 60'000), 2'000'000);
   const auto withOldSample = render(2'000'000);
   indicator.clear();
@@ -1005,22 +1006,19 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
     return brightest;
   };
   const int freshMarker = markerBrightness(fresh);
-  const auto halfLife = render(3'800'000);
-  const auto twoHalfLives = render(5'600'000);
+  const auto quarterFade = render(2'450'000);
+  const auto threeQuarterFade = render(3'350'000);
   const int fullMarkerBrightness = 255 - empty[350 * kDrawableWidth * 4 + 1];
   expect(std::abs(freshMarker - fullMarkerBrightness) <= 1,
          "fresh timing bars render at full brightness");
-  expect(std::abs(markerBrightness(halfLife) * 2 - freshMarker) <= 3 &&
-             std::abs(markerBrightness(twoHalfLives) * 4 - freshMarker) <= 4,
-         "timing bar brightness halves every 1.8 seconds like its average weight");
-  expect(std::abs(pointerBrightness(halfLife) * 2 -
-                  pointerBrightness(fresh)) <= 3,
-         "the average pointer fades consistently with the weighted timing bars");
-  const int freshBrightness = pointerBrightness(fresh);
+  expect(std::abs(markerBrightness(quarterFade) * 16 - freshMarker * 15) <= 16 &&
+             std::abs(markerBrightness(faded) * 4 - freshMarker * 3) <= 4 &&
+             std::abs(markerBrightness(threeQuarterFade) * 16 - freshMarker * 7) <= 16,
+         "timing bars use quadratic ease-in opacity across their 1.8-second fade");
+  expect(std::abs(pointerBrightness(faded) * 4 -
+                  pointerBrightness(fresh) * 3) <= 4,
+         "the average pointer uses the same ease-in fade as timing bars");
   const int fadedBrightness = pointerBrightness(faded);
-  expect(freshBrightness > 100 && fadedBrightness > freshBrightness / 4 &&
-             fadedBrightness < freshBrightness * 3 / 4,
-         "the average pointer fades during a gap instead of staying opaque");
   indicator.record(JudgeResult(Kpoor, -150'000), 2'900'000);
   expect(pointerBrightness(render(2'900'000)) == fadedBrightness,
          "an empty hit does not refresh the average pointer");
@@ -1039,6 +1037,12 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
     }
     return right < 0 ? -1 : (left + right) / 2;
   };
+  indicator.clear();
+  indicator.record(JudgeResult(Great, -60'000), 3'000'000);
+  indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  expect(render(2'000'000) == fresh,
+         "a past sample arriving after a future sample still supplies its average");
+
   indicator.clear();
   indicator.record(JudgeResult(Great, -60'000), 0);
   indicator.record(JudgeResult(Great, 60'000), 1'000'000);
@@ -1062,6 +1066,19 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   indicator.clear();
   indicator.record(JudgeResult(PGreat, 0), 2'000'000);
   const int zeroTimingX = pointerX(render(2'000'000));
+  judgement_indicator::ExponentialAverageAccumulator prefix;
+  prefix.add(-60'000, 2'000'000);
+  indicator.clear(prefix);
+  indicator.record(JudgeResult(Great, -60'000), 3'000'000);
+  indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  expect(pointerX(render(2'000'000)) == zeroTimingX,
+         "eligible retained inputs combine with the older prefix despite future arrivals");
+  prefix = {};
+  prefix.add(-60'000, 3'000'000);
+  indicator.clear(prefix);
+  indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  expect(render(2'000'000) == fresh,
+         "a future summarized prefix does not hide eligible retained timing");
   indicator.clear();
   for (int index = 0; index < 192; ++index) {
     indicator.record(JudgeResult(Great, index < 96 ? -60'000 : 60'000),
@@ -1070,6 +1087,41 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   expect(pointerX(render(2'000'000)) == zeroTimingX,
          "simultaneous inputs keep equal weight even after the bar bucket wraps");
 
+}
+
+void verifySelectedSkinTimingPointerStaysOnScreen(const RenderTarget &target) {
+  Judge judge(3);
+  JudgementIndicatorRenderer indicator(judge.timingWindows);
+  const auto render = [&](float y, float judgeY) {
+    indicator.configure(true, y, 1.0F, false, 180);
+    indicator.clear();
+    indicator.record(JudgeResult(Great, 60'000), 1'000'000);
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::SimpleBatchRenderer batch;
+    batch.setSubmitView(rendering::ui_view);
+    batch.begin();
+    indicator.render(batch, 1'000'000,
+        {.judgeY = judgeY, .upperBound = 0,
+         .playAreaLeftX = 500, .playAreaWidth = 280,
+         .noteRenderWidth = 40, .noteRenderHeight = 20,
+         .verticalDirection = -1.0F, .hudModeOverride = false});
+    batch.flush();
+    const auto pixels = readPixels(target);
+    int pointerPixels = 0;
+    for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
+      if (pixels[offset] > 220 && pixels[offset + 1] > 180 &&
+          pixels[offset + 2] < 150) ++pointerPixels;
+    }
+    return pointerPixels;
+  };
+  configureGeometryAndViews(target.framebuffer);
+  const float bottom = static_cast<float>(rendering::window_height);
+  const int centered = render(0.5F, bottom);
+  expect(centered > 0 && render(0.0F, bottom) == centered &&
+             render(0.0F, bottom - 1.0F) == centered &&
+             render(1.0F, bottom) == centered,
+         "selected-skin average pointer stays fully visible at both screen edges");
 }
 
 void verifyCapturedFrameRetainsContinuousAverage(const RenderTarget &target) {
@@ -3068,6 +3120,73 @@ void verifyPreviewScoreUsesRealJudgements() {
          "restarting clears preview score, note progression, and timing counters");
 }
 
+void verifyPreviewInputTimingSamples() {
+  for (const bool classic : {true, false}) {
+    for (const bool miss : {false, true}) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = 7;
+      chart.Meta.Rank = 3;
+      chart.Meta.TotalNotes = classic ? 1 : 2;
+      auto *measure = new bms_parser::Measure;
+      chart.Measures.push_back(measure);
+      auto *headTime = new bms_parser::TimeLine(8, false);
+      auto *tailTime = new bms_parser::TimeLine(8, false);
+      headTime->Timing = 1'000'000;
+      tailTime->Timing = 2'000'000;
+      headTime->Bpm = tailTime->Bpm = 120;
+      measure->TimeLines = {headTime, tailTime};
+      const auto type = classic ? bms_parser::LongNoteType::LongNote
+                                : bms_parser::LongNoteType::ChargeNote;
+      auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+      auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+      head->Tail = tail;
+      tail->Head = head;
+      headTime->SetNote(1, head);
+      tailTime->SetNote(1, tail);
+      const auto model = buildPlayfieldChartVisualModel(chart, 0);
+      PlayfieldVisualStateStore store(model);
+      Judge judge(chart.Meta.Rank);
+      BMSRenderer renderer(&chart, judge.timingWindows, 500, true);
+      SettingsScene scene;
+      scene.previewChart = &chart;
+      scene.previewRenderer = &renderer;
+      scene.previewVisualStateStore = &store;
+      scene.previewPresentationEvents =
+          std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+      scene.resetPreviewHudSample();
+      if (miss) {
+        scene.previewElapsedMicros = 2'300'000;
+        scene.advancePreviewSimulation();
+        expect(store.capture({}).judgementIndicatorSampleCount == 0 &&
+                   renderer.judgementIndicatorSampleCountForTesting() == 0,
+               "automatic preview misses do not invent input timing");
+        continue;
+      }
+      const auto before = store.capture({});
+      expect(before.judgementIndicatorSampleCount == 0,
+             "the synthetic preview HUD sample does not enter timing history");
+      scene.previewElapsedMicros = 1'020'000;
+      scene.pressLane(1, 0);
+      const auto pressed = store.capture({});
+      expect(pressed.judgementIndicatorSampleCount == 1 &&
+                 pressed.judgementIndicatorSamples[0].judge.Diff == 20'000 &&
+                 renderer.judgementIndicatorSampleCountForTesting() == 1,
+             "preview records long-note head input timing immediately");
+      expect(!classic || (pressed.lastJudge.Diff == before.lastJudge.Diff &&
+                          pressed.combo == before.combo && pressed.score == before.score),
+             "classic preview heads do not replace the score HUD");
+      scene.previewElapsedMicros = 1'990'000;
+      scene.releaseLane(1, 0);
+      const auto released = store.capture({});
+      expect(released.judgementIndicatorSampleCount == (classic ? 1U : 2U) &&
+                 renderer.judgementIndicatorSampleCountForTesting() == (classic ? 1U : 2U) &&
+                 released.score > before.score &&
+                 (classic || released.judgementIndicatorSamples[1].judge.Diff == -10'000),
+             "preview samples charge release timing without duplicating classic heads");
+    }
+  }
+}
+
 void verifyPreviewPause() {
   const auto chart = settings_scene::makePreviewChart(7);
   const auto model = buildPlayfieldChartVisualModel(*chart, 0);
@@ -3785,6 +3904,7 @@ int main() {
     try {
       verifyJudgementIndicatorContinuousAverage(target);
       verifyCapturedFrameRetainsContinuousAverage(target);
+      verifySelectedSkinTimingPointerStaysOnScreen(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);
       verifySerialOrderingAndReset();
@@ -3870,6 +3990,7 @@ int main() {
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyPreviewInputTimingSamples();
   verifyPreviewPause();
   verifyPausedAppearanceDraftUpdatesAndRestoresPreview();
   verifyPreviewAutoPlay();
