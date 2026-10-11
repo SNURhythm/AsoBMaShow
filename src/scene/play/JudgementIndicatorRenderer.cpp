@@ -183,39 +183,43 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
       indicatorLayout.centerY - indicatorLayout.markerHeight * 0.5f;
   // Keep the horizontal reference subtle so the vertical hit markers stand out.
   addRect(batch, indicatorLayout.width, indicatorLayout.barHeight,
-          indicatorLayout.x, barY, Color(8, 12, 18, 32));
+          indicatorLayout.x, barY, Color(8, 12, 18, 24));
   drawSegment(batch, -currentRangeMicros, timingWindowEarly(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 64));
+              judgementColor(Poor, 52));
   drawSegment(batch, timingWindowEarly(Bad), timingWindowEarly(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 72));
+              judgementColor(Bad, 60));
   drawSegment(batch, timingWindowEarly(Good), timingWindowEarly(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 80));
+              judgementColor(Good, 68));
   drawSegment(batch, timingWindowEarly(Great), timingWindowEarly(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 88));
+              judgementColor(Great, 76));
   drawSegment(batch, timingWindowEarly(PGreat), timingWindowLate(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(PGreat, 104));
+              judgementColor(PGreat, 88));
   drawSegment(batch, timingWindowLate(PGreat), timingWindowLate(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 88));
+              judgementColor(Great, 76));
   drawSegment(batch, timingWindowLate(Great), timingWindowLate(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 80));
+              judgementColor(Good, 68));
   drawSegment(batch, timingWindowLate(Good), timingWindowLate(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 72));
+              judgementColor(Bad, 60));
   drawSegment(batch, timingWindowLate(Bad), currentRangeMicros,
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 64));
+              judgementColor(Poor, 52));
 
   const float centerX = indicatorLayout.x + indicatorLayout.width * 0.5f;
-  addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
-          centerX - indicatorLayout.markerWidth * 0.5f, markerY,
-          Color(255, 255, 255, 230));
+  const float centerWidth = indicatorLayout.markerWidth * 1.65f;
+  const float centerHeight =
+      indicatorLayout.markerHeight + indicatorLayout.markerWidth * 2.0f;
+  addRect(batch, centerWidth, centerHeight,
+          centerX - centerWidth * 0.5f,
+          indicatorLayout.centerY - centerHeight * 0.5f,
+          Color(255, 255, 255, 245));
 
   for (size_t i = 0; i < visibleSampleCount; ++i) {
     const auto &sample = visibleSamples[i];
