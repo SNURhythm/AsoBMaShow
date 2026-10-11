@@ -465,6 +465,79 @@ void benchmark() {
             << std::chrono::duration<double, std::milli>(paged - counted).count() << '\n';
 }
 
+// Compare the real selector queries on identical data. Reopening only cools
+// SQLite's connection cache; fixture creation has already warmed the OS cache.
+void benchmarkMmap() {
+  for (const int rows : {5000, 100000}) {
+    Fixture fixture;
+    fixture.seed(rows);
+    fixture.execute("UPDATE chart_meta SET subtitle='',sub_artist='',genre=''");
+    fixture.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+    std::cout << "MMAP_DATABASE rows=" << rows << " bytes="
+              << std::filesystem::file_size(fixture.root / "charts.db") << '\n';
+    for (const bool keyword : {false, true}) {
+      std::optional<std::vector<std::string>> expected;
+      for (int iteration = 0; iteration < 8; ++iteration) {
+        // Alternate order to avoid consistently favoring the second mode.
+        for (int trial = 0; trial < 2; ++trial) {
+          const int limit = (iteration + trial) % 2 ? 268435456 : 0;
+          fixture.reopen();
+          const auto error = executeSqlite(fixture.sessionDatabase,
+              ("PRAGMA main.mmap_size=" + std::to_string(limit)).c_str());
+          if (error) throw std::runtime_error(*error);
+          {
+            SqliteStatementHandle setting;
+            assert(prepareSqliteStatement(fixture.sessionDatabase,
+                "PRAGMA main.mmap_size", setting) == SQLITE_OK);
+            if (sqlite3_step(setting.get()) != SQLITE_ROW ||
+                sqlite3_column_int64(setting.get(), 0) != limit) {
+              throw std::runtime_error("Requested mmap size is unavailable");
+            }
+          }
+          for (int pass = 0; pass < 2; ++pass) {
+            auto query = keyword ? ChartSelectorQuery{.keyword = "artist3"}
+                                 : fixture.query();
+            const auto begin = std::chrono::steady_clock::now();
+            const auto count = fixture.session->ResolveChartSelectorQuery(query);
+            const auto counted = std::chrono::steady_clock::now();
+            assert(count >= 128);
+            const auto first = fixture.session->SelectChartSelectorPage(query, 0, 128);
+            const auto paged = std::chrono::steady_clock::now();
+            const auto middle = fixture.session->SelectChartSelectorPage(query, count / 2, 128);
+            const auto last = fixture.session->SelectChartSelectorPage(query, count - 128, 128);
+            const auto finished = std::chrono::steady_clock::now();
+            std::vector<std::string> identities{std::to_string(count)};
+            for (const auto *page : {&first, &middle, &last}) {
+              assert(page->size() == 128);
+              for (const auto &record : *page) {
+                identities.push_back(fspath_to_utf8(record.meta.BmsPath));
+                identities.push_back(record.meta.SHA256);
+                identities.push_back(record.meta.Title);
+              }
+            }
+            if (!expected) expected = identities;
+            assert(identities == *expected);
+            int cacheBytes = 0, unused = 0;
+            assert(sqlite3_db_status(fixture.sessionDatabase,
+                SQLITE_DBSTATUS_CACHE_USED, &cacheBytes, &unused, 0) == SQLITE_OK);
+            const auto milliseconds = [](auto duration) {
+              return std::chrono::duration<double, std::milli>(duration).count();
+            };
+            std::cout << "MMAP rows=" << rows
+                      << " query=" << (keyword ? "keyword" : "folder")
+                      << " iteration=" << iteration << " limit=" << limit
+                      << " cache=" << (pass ? "warm" : "connection-cold")
+                      << " count_ms=" << milliseconds(counted - begin)
+                      << " first128_ms=" << milliseconds(paged - counted)
+                      << " total_ms=" << milliseconds(finished - begin)
+                      << " sqlite_cache_bytes=" << cacheBytes << '\n';
+          }
+        }
+      }
+    }
+  }
+}
+
 void keywordQueriesAndRawExistence() {
   Fixture fixture;
   fixture.seed(180);
@@ -561,7 +634,11 @@ void keywordSnapshotCancellationAndChangedRestriction() {
 
 }
 
-int main(int argc, char **) {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--benchmark-mmap") {
+    benchmarkMmap();
+    return 0;
+  }
   differentialQueries();
   durationOverflowCompatibility();
   errorsAndCancellation();

@@ -1305,9 +1305,12 @@ ChartRepository::OpenSession(ScoreRepository *scores) {
               << "\n";
     return std::nullopt;
   }
+  // Share read-only database pages with the OS cache. This caps the mapping at
+  // 256 MiB, not resident RAM; SQLite falls back to reads when mapping is unavailable.
   if (const auto pragmaError = applySqlitePragmas(
           connection.get(),
-          {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
+          {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL",
+           "PRAGMA main.mmap_size=268435456"})) {
     std::cerr << "Could not configure chart database session: "
               << *pragmaError << "\n";
   }
