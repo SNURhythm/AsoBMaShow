@@ -100,7 +100,7 @@ Restored 1:1 detail artwork frames and placeholders (112 units compact, up to
 472 units desktop). ImageView retains Contain mode so wide/tall images are
 letterboxed without cropping or changing the surrounding layout after decode.
 The clear status now fills its score-row rectangle with the clear-lamp color,
-centered bold text, 12-unit horizontal insets and a colored glow. Black or white
+right-aligned bold text, 12-unit horizontal insets and a colored glow. Black or white
 text is chosen using relative luminance. Missing clear status resets the fill,
 glow and text color. The separate thin clear bar was removed.
 

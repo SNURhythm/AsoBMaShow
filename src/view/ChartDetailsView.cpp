@@ -262,7 +262,7 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   clear_ = label("chartDetailsClear", 32, 52, main_menu_theme::ink,
                  TextView::FontWeight::Bold);
   clear_->setFlex(1)->setMinWidth(0)->setHeight(52);
-  clear_->setAlign(TextView::CENTER);
+  clear_->setAlign(TextView::RIGHT);
   clear_->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12);
   clear_->setVAlign(TextView::MIDDLE);
   clear_->setAutoFitText(true);
