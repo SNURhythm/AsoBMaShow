@@ -103,6 +103,7 @@ parser.add_argument('--build-dir', type=Path, default=root / 'cmake-build-debug'
 parser.add_argument('--output', type=Path)
 parser.add_argument('--rounds', type=int, default=8)
 parser.add_argument('--samples', type=int, default=7)
+parser.add_argument('--batch-only', action='store_true', help='Skip individual-asset cases')
 options = parser.parse_args()
 if options.rounds < 1 or options.samples < 1:
     raise ValueError('Round/sample counts must be positive')
@@ -182,14 +183,16 @@ for variant in ('baseline', 'current'):
     links.append(args)
 (out / 'commands.json').write_text(json.dumps({
     'baseline': revision, 'files': files, 'dependency_build': str(build),
-    'rounds': options.rounds, 'samples': options.samples,
+    'rounds': options.rounds, 'samples': options.samples, 'batch_only': options.batch_only,
     'baseline_archive_sha256': hashlib.sha256(baseline.read_bytes()).hexdigest(),
     'current_archive_sha256': hashlib.sha256((root / 'src/ArchiveFile.cpp').read_bytes()).hexdigest(),
     'compile_commands': [args for args, _ in jobs], 'link_commands': links,
 }, indent=2) + '\n')
 results = []
 # Individual entries expose size-dependent costs; the batch exercises parallel loading.
-for case, assets in [(f'asset-{i}', [path]) for i, path in enumerate(files)] + [('batch', files)]:
+cases = [] if options.batch_only else [(f'asset-{i}', [path]) for i, path in enumerate(files)]
+cases.append(('batch', files))
+for case, assets in cases:
     archive = out / (case + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for i, path in enumerate(assets):
@@ -213,8 +216,6 @@ for case, assets in [(f'asset-{i}', [path]) for i, path in enumerate(files)] + [
                 records[variant].append(dict(ms=ms, allocations=count, bytes=byte_count, checked=checked))
         row = dict(case=case, workers=workers, output_bytes=uncompressed,
                    compressed_bytes=sum(compressed),
-                   baseline_scratch_bytes_per_pass=sum(compressed),
-                   current_scratch_bytes_per_pass=sum(min(n, 65536) for n in compressed),
                    samples=records)
         for variant, samples in records.items():
             row[variant] = {key: statistics.median(s[key] for s in samples)

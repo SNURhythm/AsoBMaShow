@@ -1,5 +1,7 @@
 # Bounded ZIP asset input — 2026-10-11
 
+Follow-up: [mapped ZIP input](2026-10-11-zip-mapped-input.md) supersedes the default read path described here; bounded chunks remain its fallback.
+
 The concurrent ZIP asset reader now feeds DEFLATE from at most 64 KiB of compressed scratch per active entry, instead of allocating the entire compressed entry. Its scheduling reservation uses output size plus that bounded scratch. Stored entries still read directly into their output buffer.
 
 This path is used by chart audio rendering, jukebox loading and library scanning. This change does not modify the separate sequential miniz readers or disk extraction path.

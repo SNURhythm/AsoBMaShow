@@ -155,6 +155,7 @@ void appendDebugLogLine(const std::string &message);
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer);
+void setZipMappingEnabledForTesting(bool enabled);
 void resetSingleFlightWaiterCountForTesting();
 std::uint32_t singleFlightWaiterCountForTesting();
 #endif
