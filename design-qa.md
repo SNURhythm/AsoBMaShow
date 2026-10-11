@@ -93,3 +93,17 @@ Chart-list level badges now use the details panel's blue action fill and white
 foreground in dark mode as well as light mode, including selected rows. The
 existing theme regression expectation was updated to white text. Desktop build,
 chart-list and UI-scale tests passed. No fresh visual capture.
+
+## Square artwork and clear-status badge
+
+Restored 1:1 detail artwork frames and placeholders (112 units compact, up to
+472 units desktop). ImageView retains Contain mode so wide/tall images are
+letterboxed without cropping or changing the surrounding layout after decode.
+The clear status now fills its score-row rectangle with the clear-lamp color,
+centered bold text, 12-unit horizontal insets and a colored glow. Black or white
+text is chosen using relative luminance. Missing clear status resets the fill,
+glow and text color. The separate thin clear bar was removed.
+
+Desktop build and chart-details/UI-scale tests passed, including wide/tall
+image transitions, stable square placeholders and clear-status geometry/text.
+No fresh visual capture was made.

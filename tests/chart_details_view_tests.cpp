@@ -77,39 +77,39 @@ int main() {
     auto *frame = details.findViewByName("chartDetailsArtwork");
     auto *summary = details.findViewByName("chartDetailsSummary");
     details.applyYogaLayout();
-    require(frame->getWidth() == 472 && frame->getHeight() == 354,
-            "missing artwork uses a landscape 4:3 placeholder");
+    require(frame->getWidth() == 472 && frame->getHeight() == 472,
+            "missing artwork uses a square placeholder");
     const int placeholderSummaryY = summary->getY();
     writePpm(fixture, 32, 18);
     require(image->setImage(fspath_to_path_t(fixture)), "wide stagefile fixture decodes");
     RenderContext context;
     details.renderImpl(context);
     details.applyYogaLayout();
-    require(frame->getWidth() == 472 && frame->getHeight() == 266 &&
+    require(frame->getWidth() == 472 && frame->getHeight() == 472 &&
                 image->getWidth() == frame->getWidth() && image->getHeight() == frame->getHeight() &&
-                summary->getY() < placeholderSummaryY,
-            "decoded wide artwork removes letterboxing and brings metadata upward without rebinding");
+                summary->getY() == placeholderSummaryY,
+            "decoded wide artwork retains the square frame and stable metadata position");
     const int wideHeight = details.getHeight();
     details.renderImpl(context);
     require(details.getHeight() == wideHeight && !YGNodeIsDirty(details.getNode()),
             "unchanged decoded dimensions do not dirty layout on another frame");
     details.setCompact(true);
     details.applyYogaLayout();
-    require(frame->getWidth() == 112 && frame->getHeight() == 63,
-            "portrait keeps wide artwork at its native ratio in the compact frame");
+    require(frame->getWidth() == 112 && frame->getHeight() == 112,
+            "portrait contains wide artwork in a square frame");
     image->freeImage();
     ImageView::dropCache(fspath_to_path_t(fixture));
     writePpm(fixture, 18, 32);
     require(image->setImage(fspath_to_path_t(fixture)), "tall stagefile fixture decodes");
     details.renderImpl(context);
     details.applyYogaLayout();
-    require(frame->getWidth() == 63 && frame->getHeight() == 112,
-            "tall artwork fits the compact identity row without letterboxing");
+    require(frame->getWidth() == 112 && frame->getHeight() == 112,
+            "tall artwork retains the square compact frame");
     record.meta.StageFile.clear();
     details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
     details.applyYogaLayout();
-    require(frame->getWidth() == 112 && frame->getHeight() == 84,
-            "missing artwork restores the 4:3 placeholder after a tall image");
+    require(frame->getWidth() == 112 && frame->getHeight() == 112,
+            "missing artwork retains the square placeholder after a tall image");
     std::filesystem::remove(fixture);
   }
   {
@@ -240,7 +240,7 @@ int main() {
     require(view.getHeight() + 32 <= shortViewportContentHeight,
             "chart facts and best score fit above pinned records at 16:9");
 
-    // Landscape artwork keeps its native ratio; long details remain scrollable
+    // Landscape artwork uses a square frame; long details remain scrollable
     // without moving the primary controls into that scroll container.
     record.meta.StageFile = "stage.png";
     view.setCompact(false);
@@ -272,7 +272,7 @@ int main() {
             "short levels restore their natural badge width");
     auto *artwork = view.findViewByName("chartDetailsArtwork");
     auto *summary = view.findViewByName("chartDetailsSummary");
-    require(artwork && artwork->getWidth() == 460 && artwork->getHeight() == 345 &&
+    require(artwork && artwork->getWidth() == 460 && artwork->getHeight() == 460 &&
                 summary && summary->getY() > artwork->getY() + artwork->getHeight(),
             "desktop artwork occupies the hero frame above the chart and best-score summary");
     require(view.findViewByName("chartDetailsTotal")->getX() < view.findViewByName("chartDetailsNotes")->getX() &&
@@ -310,6 +310,10 @@ int main() {
                 next->getY() < clear->getY() && clear->getY() == scoreValue->getY() &&
                 clear->pointSize() == 32 && clear->fontWeight() == TextView::FontWeight::Bold,
             "next rank occupies the upper right above the larger clear rank at lower right");
+    require(clear->getHeight() == scoreValue->getHeight() && clear->getWidth() > 100 &&
+                clear->currentColor().r == 0 && clear->currentColor().g == 0 &&
+                clear->currentColor().b == 0 && !view.findViewByName("chartDetailsClearLamp"),
+            "clear status fills its score-row rectangle with contrasting text and no thin lamp");
     const int fullHeight = view.getHeight();
     record.meta.StageFile.clear();
     view.setChart(&record, best, kClearTypeHardClearRank, "320");

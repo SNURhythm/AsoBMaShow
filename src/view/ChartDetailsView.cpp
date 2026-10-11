@@ -18,24 +18,26 @@
 namespace {
 constexpr const char *kFont = main_menu_theme::font;
 
-void updateClearLamp(View &lamp, int rank) {
-  const bool show = hasClearLampColor(rank);
-  lamp.setVisible(show);
-  if (!show) {
-    lamp.clearBackgroundColor();
-    lamp.clearShadow();
+void updateClearLamp(TextView &badge, int rank) {
+  if (!hasClearLampColor(rank)) {
+    badge.clearBackgroundColor();
+    badge.clearShadow();
+    badge.setThemedColor(main_menu_theme::ink);
     return;
   }
   auto color = clearLampColorForRank(rank);
-  auto core = color;
-  core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);
-  core.g = static_cast<uint8_t>((3 * core.g + 255) / 4);
-  core.b = static_cast<uint8_t>((3 * core.b + 255) / 4);
-  core.a = 255;
-  lamp.setBackgroundColor(core);
+  color.a = 255;
+  badge.setBackgroundColor(color);
+  const auto linear = [](uint8_t channel) {
+    const double value = channel / 255.0;
+    return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+  };
+  const double luminance = 0.2126 * linear(color.r) + 0.7152 * linear(color.g) +
+                           0.0722 * linear(color.b);
+  badge.setColor(luminance > 0.179 ? SDL_Color{0, 0, 0, 255} : SDL_Color{255, 255, 255, 255});
   if (rank == kClearTypeHardClearRank) color = Color(140, 185, 255, 255);
   color.a = 160;
-  lamp.setShadow(color, 0, 0, 10);
+  badge.setShadow(color, 0, 0, 10);
 }
 
 class ArtworkPlaceholder final : public TextView {
@@ -257,14 +259,11 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   emptyScore_->setFlex(1)->setMinWidth(0);
   emptyScore_->setLocalizedText(i18n::message("menu.details.unplayed.label"));
   scoreRow->addView(emptyScore_);
-  clearLamp_ = new View();
-  clearLamp_->setName("chartDetailsClearLamp");
-  clearLamp_->setWidth(6)->setHeight(32)->setFlexShrink(0)->setCornerRadius(3);
-  scoreRow->addView(clearLamp_);
   clear_ = label("chartDetailsClear", 32, 52, main_menu_theme::ink,
                  TextView::FontWeight::Bold);
   clear_->setFlex(1)->setMinWidth(0)->setHeight(52);
-  clear_->setAlign(TextView::RIGHT);
+  clear_->setAlign(TextView::CENTER);
+  clear_->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12);
   clear_->setVAlign(TextView::MIDDLE);
   clear_->setAutoFitText(true);
   scoreRow->addView(clear_);
@@ -321,23 +320,14 @@ void ChartDetailsView::onLayout() {
 }
 
 void ChartDetailsView::renderImpl(RenderContext &) {
-  // Async image decodes arrive during ImageView rendering. Observe them on the
-  // next frame, without invalidating layout while the dimensions are unchanged.
+  // Keep the square frame stable as image data arrives and panel size changes.
   refreshArtworkLayout();
 }
 
 void ChartDetailsView::refreshArtworkLayout() {
   if (!artworkFrame_ || !artworkPlaceholder_ || !identity_) return;
-  const bool hasImage = artwork_->getVisible() && artwork_->imageWidth() > 0 &&
-                        artwork_->imageHeight() > 0;
-  const double aspect = hasImage
-      ? static_cast<double>(artwork_->imageWidth()) / artwork_->imageHeight()
-      : 4.0 / 3.0;
-  const int availableWidth = compact_ ? 112 : std::min(472, getWidth() > 0 ? getWidth() : 472);
-  const int width = compact_ && aspect < 1.0
-      ? std::max(1, static_cast<int>(std::lround(112 * aspect))) : availableWidth;
-  const int height = compact_ && aspect < 1.0
-      ? 112 : std::max(1, static_cast<int>(std::lround(width / aspect)));
+  const int width = compact_ ? 112 : std::min(472, getWidth() > 0 ? getWidth() : 472);
+  const int height = width;
   if (width == artworkLayoutWidth_ && height == artworkLayoutHeight_ &&
       compact_ == artworkLayoutCompact_) return;
   artworkLayoutWidth_ = width;
@@ -455,7 +445,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
     visible(score_, true);
     bestLabel_->setLocalizedText(i18n::message("menu.details.best.label"));
     totalLabel_->setLocalizedText(i18n::message("menu.details.total.label"));
-    updateClearLamp(*clearLamp_, kNoClearTypeRank);
+    updateClearLamp(*clear_, kNoClearTypeRank);
     rate_->setThemedColor(main_menu_theme::secondary);
     if (record) {
       difficulty_->setLocalizedText(i18n::message(record->courseStart
@@ -487,7 +477,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   bestLabel_->setLocalizedText(i18n::message(best && best->source == ScoreBestSource::ImportedIr
       ? "menu.details.best_ir.label" : "menu.details.best.label"));
   clear_->setText(clearRank == kNoClearTypeRank ? "—" : clearTypeRankToLabel(clearRank));
-  updateClearLamp(*clearLamp_, clearRank);
+  updateClearLamp(*clear_, clearRank);
   if (!best) {
     score_->setText("");
     rate_->setText("");

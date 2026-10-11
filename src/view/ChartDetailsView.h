@@ -71,7 +71,6 @@ private:
   TextView *noteTypes_ = nullptr;
   TextView *bestLabel_ = nullptr;
   TextView *clear_ = nullptr;
-  View *clearLamp_ = nullptr;
   TextView *score_ = nullptr;
   TextView *rate_ = nullptr;
   TextView *next_ = nullptr;
