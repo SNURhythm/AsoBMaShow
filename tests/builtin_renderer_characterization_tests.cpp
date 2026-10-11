@@ -13,6 +13,7 @@
 #include "settings/BuiltInNoteEditing.h"
 #include "settings/BuiltInScratchGradient.h"
 #include "view/DropdownView.h"
+#include "view/KeybombPreviewView.h"
 #include "view/IconText.h"
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
@@ -2323,6 +2324,252 @@ void verifyColorPickerPopupPixels(const RenderTarget &target) {
   }
 }
 
+void verifyKeybombPreview(const RenderTarget &target) {
+  keybomb::Style appearance;
+  KeybombPreviewView preview(PGreat, [&] { return appearance; });
+  preview.setSize(720, 220);
+  preview.setPosition(120, 120, YGPositionTypeAbsolute);
+  preview.applyYogaLayout();
+  const auto render = [&](long long now) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      preview.renderAt(context, now);
+    }
+    return readPixels(target);
+  };
+  const auto normal = render(80'000);
+  expect(render(160'000) != normal, "inline burst and hold previews animate over time");
+  appearance.color = 0xE83FA0;
+  expect(render(80'000) != normal, "inline preview reads color edits without recreating the view");
+  appearance = {true, 200, 100};
+  expect(render(80'000) != normal, "inline preview reads size edits");
+  appearance = {true, 100, 25};
+  expect(render(80'000) != normal, "inline preview reads opacity edits");
+  appearance = {false, 100, 100};
+  const auto hidden = render(80'000);
+  expect(hidden != normal && render(160'000) == hidden,
+         "hidden keybomb preview leaves only stationary lane guides");
+  appearance = {true, 100, 0};
+  expect(render(80'000) == hidden, "zero-opacity preview matches hidden preview");
+  preview.setSize(240, 160);
+  preview.applyYogaLayout();
+  const auto compactHidden = render(200'000);
+  appearance = {true, 300, 100};
+  const auto compactLarge = render(200'000);
+  expect(compactLarge != compactHidden, "maximum-size compact preview remains visible");
+  bool escaped = false;
+  const int left = static_cast<int>(preview.getX() * rendering::ui_scale_x);
+  const int top = static_cast<int>(preview.getY() * rendering::ui_scale_y);
+  const int right = static_cast<int>((preview.getX() + preview.getWidth()) * rendering::ui_scale_x);
+  const int bottom = static_cast<int>((preview.getY() + preview.getHeight()) * rendering::ui_scale_y);
+  for (int y = 0; y < kDrawableHeight; ++y)
+    for (int x = 0; x < kDrawableWidth; ++x) {
+      if (x >= left && x < right && y >= top && y < bottom) continue;
+      const auto offset = (y * kDrawableWidth + x) * 4;
+      if (!std::equal(compactLarge.begin() + offset, compactLarge.begin() + offset + 3,
+                      compactHidden.begin() + offset)) escaped = true;
+    }
+  expect(!escaped, "maximum-size compact preview never paints outside its bounds");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "keybomb-preview.png").string(),
+                           normal, kDrawableWidth, kDrawableHeight) == 0,
+           "inline keybomb preview inspection image encodes");
+  }
+}
+
+void verifyKeybombRendering(const RenderTarget &target) {
+  const auto render = [&](Judgement judgement, keybomb::Style style = {},
+                           long long age = 80'000, bool captured = false,
+                           bool rightScratch = false, bool allJudgements = false,
+                           bool reset = false, int holdLane = -1, bool holding = true,
+                           bool pressed = true, long long renderMicros = kRenderMicros,
+                           bool tailResolved = false) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    SyntheticChartFixture fixture;
+    if (holdLane >= 0) {
+      for (auto *measure : fixture.chart->Measures) {
+        for (auto *timeline : measure->TimeLines) {
+          for (auto *note : timeline->Notes) {
+            auto *head = dynamic_cast<bms_parser::LongNote *>(note);
+            if (!head || head->IsTail()) continue;
+            head->IsHolding = head->Lane == holdLane && holding;
+            if (head->Lane == holdLane) {
+              head->IsPlayed = true;
+              head->Tail->IsPlayed = tailResolved;
+              if (tailResolved) head->Tail->PlayedTime = head->Tail->Timeline->Timing;
+            }
+          }
+        }
+      }
+    }
+    const auto model = buildPlayfieldChartVisualModel(*fixture.chart, 0);
+    PlayfieldVisualStateStore store(model);
+    Judge judge(fixture.chart->Meta.Rank);
+    BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, false);
+    Recorder recorder;
+    renderer.setCharacterizationRecorder(&recorder);
+    auto config = presentationConfig(0);
+    config.laneBeamsEnabled = false;
+    config.judgementIndicatorEnabled = false;
+    config.scratchLaneOnRight = rightScratch;
+    for (auto &entry : config.keybombs) entry = style;
+    renderer.configure(config);
+    store.setConfiguration(config);
+    auto authority = authorityFor(*fixture.chart, 0);
+    authority.startLaneIndicatorsVisible = false;
+    store.applyAuthorityUpdate(authority);
+    applyAuthority(renderer, authority);
+    PlayfieldPresentationEventFanout events(store, renderer);
+    const auto publish = [&](int lane, Judgement result) {
+      events.onLaneJudge(lane, JudgeResult(result, 0), 1, 2,
+                         {.visualTimeMicros = renderMicros - age}, false);
+      // An empty press must not erase the judgement burst.
+      events.onLanePressed(lane, JudgeResult(None, 0), renderMicros - 1000);
+      events.onLaneReleased(lane, renderMicros);
+    };
+    if (holdLane >= 0) {
+      events.onLanePressed(holdLane, JudgeResult(judgement, 0), renderMicros - age);
+      if (!pressed) events.onLaneReleased(holdLane, renderMicros - 1);
+    } else if (allJudgements) {
+      int lane = 0;
+      for (auto result : {PGreat, Great, Good, Bad, Poor, Kpoor}) publish(lane++, result);
+    } else {
+      publish(7, judgement);
+    }
+    if (reset) renderer.reset();
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      if (captured) {
+        store.setNoteStates(captureNoteStates(*fixture.chart, model, renderMicros));
+        const auto state = store.capture({.serial = 1, .visualTimeMicros = renderMicros,
+                                          .gameplayTimeMicros = renderMicros});
+        PlayfieldProjection projector;
+        const auto projection = projector.project(model, state,
+            {.includeInvisibleNotes = config.showInvisibleNotes,
+             .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+             .builtInTraversal = renderer.builtInProjectionTraversal()});
+        renderer.render(context, state, projection);
+      } else {
+        renderer.render(context, renderMicros, renderMicros);
+      }
+    }
+    return readPixels(target);
+  };
+  const auto empty = render(None);
+  expect(render(Poor) == empty && render(Poor, {true, 300, 100, 0xFFFFFF}) == empty,
+         "POOR never renders a keybomb even with maximum visibility settings");
+  expect(render(Poor, {}, 80'000, true) == empty,
+         "captured replay POOR judgements do not render keybombs");
+  const auto perfect = render(PGreat);
+  expect(perfect != empty, "judgement keybomb renders with lane beams disabled");
+  expect(render(PGreat, {false, 100, 100}) == empty &&
+             render(PGreat, {true, 100, 0}) == empty,
+         "hidden or zero-opacity keybomb contributes no rendered pixels");
+  expect(render(PGreat, {}, -1) == empty && render(PGreat, {}, 500'000) == empty,
+         "keybombs are absent before their event and after their lifetime");
+  expect(render(PGreat, {}, 80'000, true) == perfect,
+         "captured replay presentation renders the same burst as direct lane events");
+  expect(render(PGreat, {}, 80'000, false, false, false, true) == empty,
+         "renderer reset removes stale bursts");
+  expect(render(PGreat, {true, 180, 100}) != perfect &&
+             render(PGreat, {true, 100, 30}) != perfect,
+         "keybomb size and opacity settings reach actual pixels");
+  expect(render(PGreat, {true, 100, 100, 0xE83FA0}) != perfect,
+         "custom keybomb color reaches actual pixels");
+  const auto hold = [&](int lane, bool enabled, bool active = true, bool pressed = true,
+                        long long now = 2'200'000, bool captured = false,
+                        bool resolved = false, Judgement judgement = PGreat) {
+    return render(judgement, {enabled, 100, 100, 0xE83FA0}, 800'000,
+                  captured, false, false, false, lane, active, pressed, now, resolved);
+  };
+  for (int lane : {3, 4, 6}) {
+    const auto lit = hold(lane, true);
+    expect(lit != hold(lane, false), "LN, CN and HCN keep sparking after the head burst expires");
+    expect(lit == hold(lane, true, true, true, 2'200'000, true),
+           "captured and direct long-hold effects match");
+    expect(hold(lane, true, true, true, 2'200'000, true, false, None) !=
+               hold(lane, false, true, true, 2'200'000, true, false, None),
+           "captured holds also render without a head judgement");
+    expect(hold(lane, true, true, false) == hold(lane, false, true, false),
+           "releasing a held lane stops its continuous sparks");
+    expect(hold(lane, true, true, true, 4'300'000) ==
+               hold(lane, false, true, true, 4'300'000),
+           "holding a key beyond the long-note tail does not sustain sparks");
+    expect(hold(lane, true, true, true, 2'200'000, false, true) ==
+               hold(lane, false, true, true, 2'200'000, false, true),
+           "resolved tails stop continuous sparks");
+  }
+  expect(hold(4, true, false) == hold(4, false, false),
+         "an ordinary pressed key or broken CN does not sustain sparks");
+  for (bool captured : {false, true})
+    expect(hold(6, true, false, true, 1'600'000, captured) ==
+               hold(6, false, false, true, 1'600'000, captured),
+           "an inactive future HCN does not sparkle before its head time");
+  expect(hold(6, true, false) != hold(6, false, false),
+         "regrabbing an HCN resumes continuous sparks");
+  expect(hold(3, true, true, true, 2'200'000, false, false, None) !=
+             hold(3, false, true, true, 2'200'000, false, false, None),
+         "classic holds without a published head judgement still sparkle");
+  std::vector<std::vector<std::uint8_t>> variants;
+  for (auto result : {PGreat, Great, Good, Bad, Kpoor}) {
+    auto pixels = render(result);
+    expect(pixels != empty, "supported judgements have visible keybombs");
+    for (const auto &previous : variants)
+      expect(pixels != previous, "judgements produce distinct rendered bursts");
+    variants.push_back(std::move(pixels));
+  }
+  const auto checkSide = [&](bool right) {
+    const auto background = render(None, {}, 80'000, false, right);
+    const auto burst = render(PGreat, {}, 80'000, false, right);
+    int left = kDrawableWidth, top = kDrawableHeight, edge = 0, bottom = 0;
+    for (int y = 0; y < kDrawableHeight; ++y) {
+      for (int x = 0; x < kDrawableWidth; ++x) {
+        const auto offset = (y * kDrawableWidth + x) * 4;
+        if (std::equal(burst.begin() + offset, burst.begin() + offset + 3,
+                       background.begin() + offset)) continue;
+        left = std::min(left, x); edge = std::max(edge, x);
+        top = std::min(top, y); bottom = std::max(bottom, y);
+      }
+    }
+    expect(left < edge && top < bottom &&
+               (right ? left > kDrawableWidth / 2 : edge < kDrawableWidth / 2),
+           "scratch keybomb follows the displayed scratch lane");
+  };
+  checkSide(false);
+  checkSide(true);
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    const auto pixels = render(PGreat, {}, 80'000, true, false, true);
+    expect(lodepng::encode((std::filesystem::path(directory) / "keybombs.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "keybomb comparison image encodes");
+    for (int frame = 0; frame < 24; ++frame) {
+      const auto animated = hold(4, true, true, true, 2'200'000 + frame * 40'000, true);
+      expect(lodepng::encode((std::filesystem::path(directory) /
+                             ("keybomb-hold-" + std::to_string(frame) + ".png")).string(),
+                             animated, kDrawableWidth, kDrawableHeight) == 0,
+             "moving long-hold frame encodes");
+    }
+    for (int frame = 0; frame < 10; ++frame) {
+      const auto animated = render(PGreat, {}, frame * 40'000, true, false, true);
+      expect(lodepng::encode((std::filesystem::path(directory) /
+                             ("keybomb-motion-" + std::to_string(frame) + ".png")).string(),
+                             animated, kDrawableWidth, kDrawableHeight) == 0,
+             "keybomb animation frame encodes");
+    }
+  }
+}
+
 void verifyCustomLaneAppearance(const RenderTarget &target) {
   using Kind = characterization::SubmissionKind;
   const built_in_lane::Style style{0x44EE88, 500, 100};
@@ -2604,7 +2851,7 @@ struct SettingsScene {
   bms_parser::Note *pressLane(int, double);
   bms_parser::Note *pressLane(int, int, double);
   bms_parser::Note *releaseLane(int, double, bool = false);
-  void publishPreviewJudgement(const JudgeResult &, long long);
+  void publishPreviewJudgement(const JudgeResult &, long long, int lane = -1);
 };
 using settings_scene::kPreviewBpm;
 using settings_scene::kPreviewLoopMicros;
@@ -3919,6 +4166,8 @@ int main() {
 
   if (failures == 0) {
     try {
+      verifyKeybombPreview(target);
+      verifyKeybombRendering(target);
       verifyJudgementIndicatorContinuousAverage(target);
       verifyCapturedFrameRetainsContinuousAverage(target);
       verifySelectedSkinTimingPointerStaysOnScreen(target);

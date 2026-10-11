@@ -8,6 +8,49 @@ for input, audio/video, Internet Ranking, gameplay options, tables, and skins.
 Views are reusable layout/rendering components, not owners of application
 transactions.
 
+## Settings organization
+
+Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,
+Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
+
+- Profiles shows the active profile first, other profiles next, then creation
+  and import/export tools.
+- Input separates profile-wide note priority, touch indicators, and iPad
+  gesture reminders from scoped configuration. These preferences appear above
+  the scope selector and apply to every mode/device. In the scoped section,
+  key mode selects touch/virtual-controller layouts and bindings; player and
+  device select bindings. Touch and virtual-controller editors precede bindings,
+  and the input monitor follows the binding list.
+- Timing contains audio and visual calibration offsets. HUD owns judgement
+  text/combo styling and position, FAST/SLOW and millisecond feedback, timing
+  indicators, judgement counts, and gauge placement. Built-in-only controls
+  are identified separately from HUD settings shared with custom skins.
+- Lane contains preview, shared scroll/covers, and visibility aids. Built-in
+  appearance has one editor in Skins, with horizontal Lane, Notes, Effects,
+  and HUD tabs. Numeric appearance controls consistently use left-aligned
+  decrement, editable value, increment, and reset controls, retaining each
+  setting’s limits and reset behavior. Toggle and choice-button groups start
+  below their labels at the left edge. Lane groups width, length, angle, scratch position, opacity,
+  and judge/measure lines; Effects groups beams and keybombs. The catalog's
+  screen/mode selectors stay vertical; only the built-in editor uses horizontal tabs.
+  Built-in controls remain available here when custom skin services are
+  unavailable. The live preview uses the same left-aligned editable rows, including its
+  scroll duration and cover amounts. Judge line and measure line controls belong
+  to Lane in both the skin editor and live preview.
+  Background groups BGA playback, aspect, brightness, and blur. Skin package
+  installation and diagnostics follow selection and appearance controls.
+- Audio starts with volumes and input sounds/count-in, followed by device,
+  sample rate/buffer settings, and test sound/status. Display retains orientation
+  and platform display controls.
+- BMS Library groups folders, archive preview/extraction preferences, and cache
+  cleanup. Difficulty Tables puts installation in its own first card, before
+  installed-table updates/removal. IR groups connection and submission tools.
+- General contains language and application theme.
+
+Keybomb appearance is stored per key mode within each profile and orientation.
+Scratchless modes follow the parent mode when their skin is set to follow it.
+Other settings retain their existing scope and saved values.
+
 ## Code map
 
 - `src/scene/SceneManager.*` and `Scene.*` define scene navigation and shared

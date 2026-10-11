@@ -3526,6 +3526,7 @@ void GamePlayScene::init() {
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           context.settings.presentation().judgementIndicatorRangeMilliseconds,
+      .keybombs = context.settings.keybombsForKeyMode(presentationKeyMode()),
       .judgementTextVisibility = context.settings.presentation().judgementTextVisibility,
       .judgementTextY = context.settings.presentation().judgementTextY,
       .judgementTimingY = context.settings.presentation().judgementTimingY,
@@ -8776,7 +8777,6 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                 note->Timeline->Timing, pressedTime);
   if (judgeResult.judgement != None) {
     if (judgeResult.isNotePlayed()) {
-      // TODO: play keybomb
       if (note->IsLongNote()) {
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {

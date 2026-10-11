@@ -109,7 +109,10 @@ private:
   std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
-  int builtInLaneOpacityMode = 7;
+  enum class BuiltInSkinTab { Lane, Notes, Effects, Hud };
+  BuiltInSkinTab builtInSkinTab = BuiltInSkinTab::Lane;
+  int builtInSkinFallbackMode = 7;
+  Judgement keybombEditingJudgement = PGreat;
   std::string builtInNoteDropdown;
   void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
                                    const std::string &id, std::uint32_t color,
@@ -124,15 +127,17 @@ private:
   void appendBuiltInLanePercentControl(View *body, const settings_scene::LayoutMetrics &metrics,
       int keyMode, const i18n::Text &label, int built_in_lane::Style::*property,
       const i18n::Text &resetLabel);
+  void appendKeybombColorControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode, Judgement judgement);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {
     Profile,
     Timing,
-    Visual,
+    Hud,
+    Background,
     Lane,
     Input,
-    Misc,
+    General,
     Audio,
     Display,
     DifficultyTables,
@@ -223,10 +228,11 @@ private:
   Button *archiveCacheCleanupButton = nullptr;
   Button *profileTabButton = nullptr;
   Button *timingTabButton = nullptr;
-  Button *visualTabButton = nullptr;
+  Button *hudTabButton = nullptr;
+  Button *backgroundTabButton = nullptr;
   Button *laneTabButton = nullptr;
   Button *inputTabButton = nullptr;
-  Button *miscTabButton = nullptr;
+  Button *generalTabButton = nullptr;
   Button *audioTabButton = nullptr;
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
@@ -234,10 +240,11 @@ private:
   Button *gameplaySkinsTabButton = nullptr;
   Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
-  TextView *visualTabText = nullptr;
+  TextView *hudTabText = nullptr;
+  TextView *backgroundTabText = nullptr;
   TextView *laneTabText = nullptr;
   TextView *inputTabText = nullptr;
-  TextView *miscTabText = nullptr;
+  TextView *generalTabText = nullptr;
   TextView *audioTabText = nullptr;
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
@@ -253,9 +260,6 @@ private:
   TextInputBox *irApiKeyInput = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
-  TextInputBox *laneAngleInput = nullptr;
-  TextInputBox *laneLengthInput = nullptr;
-  TextInputBox *laneBeamLengthInput = nullptr;
   TextInputBox *noteStartPositionInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
@@ -460,6 +464,7 @@ private:
   View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
   View *buildJudgementFeedbackPositionControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
+  View *buildKeybombControls(const settings_scene::LayoutMetrics &metrics, int keyMode, bool previewStyle);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
@@ -468,14 +473,15 @@ private:
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
-  View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildHudTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildBackgroundTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
   void buildInputConflictOverlay(
       const settings_scene::LayoutMetrics &metrics);
   void buildInputVirtualControllerEditorOverlay(
       const settings_scene::LayoutMetrics &metrics);
-  View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildGeneralTab(const settings_scene::LayoutMetrics &metrics);
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
@@ -515,7 +521,7 @@ private:
   void advancePreviewSimulation();
   void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult> transactions);
   void publishPreviewJudgement(const JudgeResult &judgeResult,
-                               long long sourceSongTimeMicros);
+                               long long sourceSongTimeMicros, int lane = -1);
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();
@@ -541,6 +547,19 @@ private:
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);
 
+  void appendNumericSetting(
+      View *body, const settings_scene::LayoutMetrics &metrics, const i18n::Text &label,
+      std::function<std::string()> read, const std::string &defaultValue,
+      float step, int precision, std::function<void(const std::string &)> apply);
+  void appendBuiltInLaneGeometryControls(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
+  void appendBuiltInBeamLengthControls(
+      View *body, const settings_scene::LayoutMetrics &metrics);
+  void appendBuiltInGameplayTraitSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
+      bool followsOriginal = false);
+  void appendBuiltInSkinFallbackSettings(
+      View *column, const settings_scene::LayoutMetrics &metrics);
   void appendScratchlessModeSettings(
       View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
       bool enabled);
@@ -571,9 +590,6 @@ private:
   void appendGameplaySkinViewportSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
-  void appendBuiltInGameplayTraitSettings(
-      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
-      bool followsOriginal = false);
   void buildGameplaySkinSafetyOverlay(
       const settings_scene::LayoutMetrics &metrics);
   bool handleGameplaySkinActionResult(skin::ControllerActionResult result);
@@ -610,9 +626,6 @@ private:
   void syncVisibleTimeInputText(bool force = false);
   void syncBgaBrightnessInputText(bool force = false);
   void syncBgaBlurInputText(bool force = false);
-  void syncLaneAngleInputText(bool force = false);
-  void syncLaneLengthInputText(bool force = false);
-  void syncLaneBeamLengthInputText(bool force = false);
   void syncNoteStartPositionInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
@@ -622,9 +635,6 @@ private:
   void commitVisibleTimeInput();
   void commitBgaBrightnessInput();
   void commitBgaBlurInput();
-  void commitLaneAngleInput();
-  void commitLaneLengthInput();
-  void commitLaneBeamLengthInput();
   void commitNoteStartPositionInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();

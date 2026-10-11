@@ -62,6 +62,44 @@ Skins still supply their own cover artwork. Replays record initial amounts and
 subsequent adjustments; older replays retain their existing fallback behavior.
 NOSPEED courses suppress cover amounts and their adjustment controls.
 
+## Built-in keybombs
+
+Judged lanes display short procedural bursts at the judgement line. PGREAT
+uses a layered halo and sparks; GREAT uses a ring and sparks; GOOD uses a soft
+pulse. Successful hits use a bright core, thicker rings and sparks, and a sustained
+fade for clear feedback. BAD fragments rise, KPOOR uses a subdued ripple, and
+POOR never renders keybombs.
+Default colors match judgement text in both light and dark themes. No external
+skin artwork is required.
+
+Settings → Skins → Built-in → Effects → Keybombs and the built-in preview's
+Lane controls expose per-mode settings with a judgement selector, visibility, size (25–300%),
+opacity (0–100%), and color presets, picker, and hex input. Reset color restores
+the original palette for that judgement. Each judgement is independent, and landscape/portrait
+presentations retain separate settings. The preview's random timing mode
+exercises poorer judgements as well as successful hits. An inline animated
+preview shows the selected judgement’s burst and hold sparks side by side and
+responds to appearance edits. POOR is excluded from the keybomb selector.
+
+`LaneEffects.h` shares the preallocated lane state with beams. A keybomb event
+publishes its judgement and timestamp with one lock-free atomic store; it
+adds no waits, allocations, particle simulation, or graphics calls to input
+callbacks. The render side samples both effects once per lane, generates
+bounded geometry, and submits batches. The newest judgement replaces a lane's
+previous burst. Empty presses/releases preserve it, reset clears it, and the
+visual clock controls expiry in live play, autoplay, preview, and replay.
+Holding an LN, CN, or HCN sustains a pulsing glow with staggered, rotating sparks
+using the selected judgement style. Release, a broken hold, or reaching the tail
+stops the continuous emitter; HCN regrabs restart it. The short judgement burst
+retains its own lifetime. Holds without a head judgement use the PGREAT style.
+The emitter reuses render traversal and fixed geometry, with no extra input work.
+Beams can be disabled independently. Custom skins keep their own effects.
+
+`lane_effects_tests` checks coherent publication, zero producer allocations,
+geometry, expiry, moving hold particles, and style controls. The captured-state and headless Metal
+renderer tests cover misses, preview/replay handoffs, reset, and actual pixels.
+These checks do not replace performance measurements on a mobile device.
+
 ## Verification
 
 Use `gameplay_ruleset_tests`, `gameplay_score_state_tests`,

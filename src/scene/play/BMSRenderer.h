@@ -16,6 +16,7 @@
 #include "../../rendering/Camera.h"
 #include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
+#include "LaneEffects.h"
 #include "Pacemaker.h"
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayGaugeRules.h"
@@ -47,27 +48,6 @@ class SimpleBatchRenderer;
 
 struct PlayfieldProjectionResult;
 struct BuiltInRendererTraversal;
-struct LaneState {
-  long long lastStateTime = -1;
-  long long lastPressedTime = -1;
-  bool isPressed = false;
-  JudgeResult lastPressedJudge = JudgeResult(None, 0);
-};
-
-struct AtomicLaneState {
-  std::atomic<long long> lastStateTime{-1};
-  std::atomic<long long> lastPressedTime{-1};
-  std::atomic<bool> isPressed{false};
-  std::atomic<int> lastPressedJudgement{None};
-  std::atomic<long long> lastPressedDiff{0};
-
-  AtomicLaneState() = default;
-  AtomicLaneState(const AtomicLaneState &) = delete;
-  AtomicLaneState &operator=(const AtomicLaneState &) = delete;
-  AtomicLaneState(AtomicLaneState &&other) noexcept;
-  AtomicLaneState &operator=(AtomicLaneState &&other) noexcept;
-};
-
 class JudgeResult;
 
 class BMSRendererState {
@@ -267,6 +247,8 @@ private:
   std::vector<AtomicLaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
+  std::vector<bool> longHoldEffectsByOrder; // Render-side only, reused every frame.
+  void markLongHoldEffect(int lane, bool active, long long tailMicros);
   std::vector<float> laneXLookup;
   std::vector<size_t> whiteKeyLaneIndices;
   std::vector<size_t> blueKeyLaneIndices;
@@ -338,6 +320,7 @@ private:
       AppSettings::HiSpeedFixMode::Main;
   double mainBpm = 0.0;
   bool renderHud = true;
+  keybomb::Settings keybombs;
   player_settings::JudgementTextVisibility judgementTextVisibility;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
@@ -562,6 +545,8 @@ public:
   void onLanePressed(int lane, JudgeResult judge,
                      long long time) override;
   void onLaneReleased(int lane, long long time) override;
+  void onLaneJudge(int lane, JudgeResult judge, int combo, int score,
+                   PlayfieldJudgeEventClock clock, bool recordTimingSample) override;
   void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) override;
   void onJudge(JudgeResult judgeResult, int combo, int score,
                PlayfieldJudgeEventClock clock,

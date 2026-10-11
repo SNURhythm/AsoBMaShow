@@ -2,7 +2,7 @@
 
 The built-in interface supports English, Korean, and Japanese. On a new
 installation the app uses the first supported language in SDL's device language
-preferences, falling back to English. Settings → Misc → Language provides a
+preferences, falling back to English. Settings → General → Language provides a
 dropdown with System language, English, 한국어, and 日本語. Changes apply immediately, including when returning to an already open screen.
 
 Language is saved in `application-ui-state.json`, independently of player

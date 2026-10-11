@@ -11,6 +11,7 @@
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
+#include "LaneEffects.h"
 #include "../../practice/PracticeConfiguration.h"
 
 #include <array>
@@ -125,6 +126,7 @@ struct PlayfieldPresentationConfig {
   float judgementIndicatorWidthScale = 1.0F;
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
+  keybomb::Settings keybombs;
   player_settings::JudgementTextVisibility judgementTextVisibility;
   float judgementTextY = 0.0F;
   float judgementTimingY = AppSettings::kDefaultJudgementTimingY;
@@ -406,6 +408,7 @@ struct LanePresentationState {
   long long releaseMicros = kPlayfieldTimestampOff;
   long long bombMicros = kPlayfieldTimestampOff;
   LaneJudgePresentationState lastJudgement;
+  LaneKeybombEvent keybomb;
 
   bool operator==(const LanePresentationState &other) const {
     return pressed == other.pressed &&
@@ -415,7 +418,7 @@ struct LanePresentationState {
            pressMicros == other.pressMicros &&
            releaseMicros == other.releaseMicros &&
            bombMicros == other.bombMicros &&
-           lastJudgement == other.lastJudgement;
+           lastJudgement == other.lastJudgement && keybomb == other.keybomb;
   }
 };
 

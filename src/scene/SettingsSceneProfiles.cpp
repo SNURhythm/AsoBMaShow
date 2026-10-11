@@ -617,51 +617,14 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     cardsColumn->addView(profileStatusText);
   }
 
-  auto *manageBody = new View();
-  manageBody->setFlexDirection(FlexDirection::Column);
-  manageBody->setGap(metrics.compact ? 10.0f : 14.0f);
-
-  profileCreateNameInput =
-      makeTextInput(metrics, std::max(260, metrics.cardsWidth / 2));
-  profileCreateNameInput->setEditingText(profileCreateNameText);
-  profileCreateNameInput->onTextChanged(
-      [this](const std::string &text) { profileCreateNameText = text; });
-  manageBody->addView(profileCreateNameInput);
-
-  auto *manageActions = new View();
-  manageActions->setFlexDirection(FlexDirection::Row);
-  manageActions->setFlexWrap(YGWrapWrap);
-  manageActions->setGap(metrics.compact ? 8.0f : 10.0f);
-  manageActions->addView(
-      makeProfileActionButton(metrics, i18n::message("settings.profiles.create.label"), idle, [this]() {
-        profileController->create(profileCreateNameText);
-        invalidateProfileLayout();
-      }));
-  manageBody->addView(manageActions);
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.profiles.player_profiles.label"), i18n::message("settings.profiles.keep_settings_records_separate.message"),
-      manageBody, metrics.modeCardHeight, metrics.cardsWidth));
-
-  auto *archiveBody = new View();
-  archiveBody->setFlexDirection(FlexDirection::Column);
-  archiveBody->setGap(metrics.compact ? 10.0f : 14.0f);
-  auto *archiveActions = new View();
-  archiveActions->setFlexDirection(FlexDirection::Row);
-  archiveActions->setFlexWrap(YGWrapWrap);
-  archiveActions->setGap(metrics.compact ? 8.0f : 10.0f);
-  archiveActions->addView(
-      makeProfileActionButton(metrics, i18n::message("settings.profiles.import.label"), idle, [this]() {
-        startProfileImportDocumentPicker(
-            {.mode = ProfileImportMode::CreateWithNewId});
-      }));
-  archiveBody->addView(archiveActions);
-
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.profiles.import_export.title"),
-      i18n::message("settings.profiles.move_profiles_between_devices.message"),
-      archiveBody, metrics.modeCardHeight, metrics.cardsWidth));
-
-  for (const PlayerProfile &profile : profileController->profiles()) {
+  std::vector<const PlayerProfile *> orderedProfiles;
+  for (const auto &profile : profileController->profiles()) orderedProfiles.push_back(&profile);
+  std::stable_sort(orderedProfiles.begin(), orderedProfiles.end(), [this](const auto *a, const auto *b) {
+    return (a->id == profileController->activeProfileId()) >
+           (b->id == profileController->activeProfileId());
+  });
+  for (const auto *entry : orderedProfiles) {
+    const PlayerProfile &profile = *entry;
     const bool active = profile.id == profileController->activeProfileId();
     const bool confirmingDelete =
         phase == ProfileSettingsPhase::ConfirmDelete &&
@@ -806,5 +769,49 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
         metrics, profile.displayName, "",
         body, metrics.modeCardHeight, metrics.cardsWidth));
   }
+  auto *manageBody = new View();
+  manageBody->setFlexDirection(FlexDirection::Column);
+  manageBody->setGap(metrics.compact ? 10.0f : 14.0f);
+
+  profileCreateNameInput =
+      makeTextInput(metrics, std::max(260, metrics.cardsWidth / 2));
+  profileCreateNameInput->setEditingText(profileCreateNameText);
+  profileCreateNameInput->onTextChanged(
+      [this](const std::string &text) { profileCreateNameText = text; });
+  manageBody->addView(profileCreateNameInput);
+
+  auto *manageActions = new View();
+  manageActions->setFlexDirection(FlexDirection::Row);
+  manageActions->setFlexWrap(YGWrapWrap);
+  manageActions->setGap(metrics.compact ? 8.0f : 10.0f);
+  manageActions->addView(
+      makeProfileActionButton(metrics, i18n::message("settings.profiles.create.label"), idle, [this]() {
+        profileController->create(profileCreateNameText);
+        invalidateProfileLayout();
+      }));
+  manageBody->addView(manageActions);
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.profiles.player_profiles.label"), i18n::message("settings.profiles.keep_settings_records_separate.message"),
+      manageBody, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *archiveBody = new View();
+  archiveBody->setFlexDirection(FlexDirection::Column);
+  archiveBody->setGap(metrics.compact ? 10.0f : 14.0f);
+  auto *archiveActions = new View();
+  archiveActions->setFlexDirection(FlexDirection::Row);
+  archiveActions->setFlexWrap(YGWrapWrap);
+  archiveActions->setGap(metrics.compact ? 8.0f : 10.0f);
+  archiveActions->addView(
+      makeProfileActionButton(metrics, i18n::message("settings.profiles.import.label"), idle, [this]() {
+        startProfileImportDocumentPicker(
+            {.mode = ProfileImportMode::CreateWithNewId});
+      }));
+  archiveBody->addView(archiveActions);
+
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.profiles.import_export.title"),
+      i18n::message("settings.profiles.move_profiles_between_devices.message"),
+      archiveBody, metrics.modeCardHeight, metrics.cardsWidth));
+
   return cardsColumn;
 }

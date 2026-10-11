@@ -9,6 +9,7 @@ inline constexpr uint32_t kBackgroundDepth = 100U;
 inline constexpr uint32_t kLaneBeamDepth = 180U;
 inline constexpr uint32_t kFirstOrderedNoteDepth = 181U;
 inline constexpr uint32_t kGhostDepth = 0x80000000U;
+inline constexpr uint32_t kKeybombDepth = 0x80000001U;
 inline constexpr uint32_t kLaneCoverDepth = 0x90000000U;
 inline constexpr uint32_t kIndicatorDepth = 0xA0000000U;
 inline constexpr uint32_t kJudgementIndicatorDepth = 0xB0000000U;

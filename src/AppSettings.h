@@ -10,6 +10,7 @@
 #include "settings/BuiltInJudgeLine.h"
 #include "settings/BuiltInLaneAppearance.h"
 #include "settings/JudgementTextVisibility.h"
+#include "settings/KeybombSettings.h"
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
 #include "skin/SkinProfileSettings.h"
@@ -193,6 +194,13 @@ public:
     const auto found = lanes.find(mode);
     return found == lanes.end() ? built_in_lane::Style{} : found->second;
   }
+  keybomb::Settings keybombsForKeyMode(int mode) const {
+    if (mode == -5 && presentation().skin.follow5K1S) mode = 5;
+    if (mode == -7 && presentation().skin.follow7K1S) mode = 7;
+    const auto &modes = presentation().keybombs;
+    const auto found = modes.find(mode);
+    return found == modes.end() ? keybomb::Settings{} : found->second;
+  }
   bool showInvisibleNotes = false;
   // PlayerConfig.showpastnote. Its narrow LaneRenderer condition is applied
   // by playfield projection rather than broadening past-note rendering.
@@ -261,6 +269,7 @@ public:
     float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
     int judgementIndicatorRangeMilliseconds =
         kDefaultJudgementIndicatorRangeMilliseconds;
+    std::map<int, keybomb::Settings> keybombs;
     player_settings::JudgementTextVisibility judgementTextVisibility;
     float judgementTextY = kDefaultJudgementTextY;
     float judgementTimingY = kDefaultJudgementTimingY;

@@ -408,6 +408,12 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   built_in_notes::sanitize(builtInNotes);
   built_in_judge_line::sanitize(builtInJudgeLines);
   built_in_lane::sanitize(builtInLanes);
+  std::erase_if(keybombs, [](const auto &entry) {
+    return std::find(built_in_notes::kModes.begin(), built_in_notes::kModes.end(), entry.first) ==
+           built_in_notes::kModes.end();
+  });
+  for (auto &[mode, styles] : keybombs)
+    for (auto &style : styles) style = keybomb::sanitize(style);
   laneAngleDegrees = sanitizeFloat(laneAngleDegrees, policy.angle.defaultValue,
                                    policy.angle.minimum, policy.angle.maximum);
   laneLength = sanitizeFloat(laneLength, policy.length.defaultValue, policy.length.minimum,

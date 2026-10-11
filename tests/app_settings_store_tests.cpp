@@ -2706,7 +2706,70 @@ void testSharedScratchlessPolicyMigration() {
   }
 }
 
+void testKeybombSettingsPersist() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "keybombs.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), "save keybomb defaults");
+  auto document = nlohmann::json::parse(readFile(path));
+  auto &modes = document["presentations"]["landscape"]["keybombs"];
+  modes = nlohmann::json::object();
+  for (const int mode : built_in_notes::kModes) {
+    modes[std::to_string(mode)] = {
+        {"PGREAT", {{"visible", false}, {"sizePercent", 100 + mode},
+                     {"opacityPercent", 35}, {"color", "E83FA0"}}},
+        {"POOR", {{"visible", true}, {"sizePercent", 999}, {"opacityPercent", -1}}},
+        {"GREAT", {{"color", "not-a-color"}}}, {"GOOD", {{"color", 42}}}};
+  }
+  modes["999"] = modes["7"];
+  document["presentations"]["portrait"]["keybombs"]["7"] = {
+      {"PGREAT", {{"visible", true}, {"sizePercent", 250}, {"opacityPercent", 80}, {"color", "112233"}}}};
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), "save loaded keybombs");
+  const auto saved = nlohmann::json::parse(readFile(path));
+  const auto &savedModes = saved["presentations"]["landscape"]["keybombs"];
+  for (const int mode : built_in_notes::kModes) {
+    const auto id = std::to_string(mode);
+    expect(savedModes.contains(id), "keybomb configuration survives restart for each mode");
+    if (!savedModes.contains(id)) continue;
+    const auto &bombs = savedModes[id];
+    expect(bombs["PGREAT"] == modes[id]["PGREAT"],
+           "visibility, size, opacity and color persist independently per mode and judgement");
+    expect(!bombs["GREAT"].contains("color") && !bombs["GOOD"].contains("color"),
+           "malformed keybomb colors retain their default palettes");
+    expect(bombs["POOR"]["sizePercent"] == 300 && bombs["POOR"]["opacityPercent"] == 0,
+           "keybomb size and opacity are bounded");
+  }
+  expect(!savedModes.contains("999"), "unsupported keybomb modes are discarded");
+  const auto &portraitModes = saved["presentations"]["portrait"]["keybombs"];
+  expect(portraitModes.contains("7") && portraitModes["7"]["PGREAT"] ==
+             document["presentations"]["portrait"]["keybombs"]["7"]["PGREAT"],
+         "landscape mode edits do not change portrait keybomb styles");
+}
+
+void testKeybombModeResolution() {
+  AppSettings settings;
+  expect(settings.keybombsForKeyMode(7) == keybomb::Settings{},
+         "unconfigured modes use default keybomb settings");
+  settings.presentation().keybombs[7][PGreat] = {false, 175, 35, 0xE83FA0};
+  settings.presentation().keybombs[5][PGreat] = {true, 200, 60, 0x112233};
+  settings.presentation().keybombs[-7][PGreat] = {true, 125, 80, 0x445566};
+  settings.presentation().skin.follow7K1S = true;
+  settings.presentation().skin.follow5K1S = true;
+  expect(settings.keybombsForKeyMode(-7) == settings.keybombsForKeyMode(7) &&
+             settings.keybombsForKeyMode(-5) == settings.keybombsForKeyMode(5),
+         "scratchless keybombs follow the selected parent skin policy");
+  settings.presentation().skin.follow7K1S = false;
+  expect(settings.keybombsForKeyMode(-7)[PGreat] == keybomb::Style{true, 125, 80, 0x445566} &&
+             settings.keybombsForKeyMode(7)[PGreat] == keybomb::Style{false, 175, 35, 0xE83FA0} &&
+             settings.keybombsForKeyMode(14) == keybomb::Settings{},
+         "independent scratchless styles and other modes do not overwrite each other");
+}
+
 int main() {
+  testKeybombSettingsPersist();
+  testKeybombModeResolution();
   testScratchlessPolicyDefaultsPersist();
   testScratchlessPolicyRoundTripAndSelection();
   testSharedScratchlessPolicyMigration();

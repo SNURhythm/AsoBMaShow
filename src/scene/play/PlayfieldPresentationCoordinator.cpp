@@ -703,6 +703,22 @@ void PlayfieldPresentationCoordinator::onTimingSample(
   }
 }
 
+void PlayfieldPresentationCoordinator::onLaneJudge(
+    int lane, JudgeResult judge, int combo, int score,
+    PlayfieldJudgeEventClock clock, bool recordTimingSample) {
+  lastEventMicros_ = clock.visualTimeMicros;
+  try {
+    builtIn_->onLaneJudge(lane, judge, combo, score, clock, recordTimingSample);
+  } catch (...) {
+  }
+  if (skin_) {
+    try {
+      skin_->onJudge(judge, combo, score, clock, recordTimingSample);
+    } catch (...) {
+    }
+  }
+}
+
 void PlayfieldPresentationCoordinator::onJudge(JudgeResult judge, int combo,
                                                int score,
                                                PlayfieldJudgeEventClock clock,

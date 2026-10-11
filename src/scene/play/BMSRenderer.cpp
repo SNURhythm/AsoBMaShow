@@ -24,6 +24,7 @@
 #include "../../skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "GameplayGeometry.h"
 #include "Judge.h"
+#include "KeybombEffect.h"
 #include "../../RAII.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
@@ -201,24 +202,10 @@ Color hudPanelBorder() {
 }
 
 Color hudCounterAccent(size_t index) {
-  switch (index) {
-  case 0:
-    return ui_theme::cyan();
-  case 1:
-    return ui_theme::lime();
-  case 2:
-    return ui_theme::amber();
-  case 3:
-    return Color(255, 132, 96, 255);
-  case 4:
-    return ui_theme::coral();
-  case 5:
-    return Color(255, 78, 102, 255);
-  case 6:
-    return ui_theme::coral();
-  default:
-    return ui_theme::textPrimary();
-  }
+  constexpr Judgement judgements[] = {PGreat, Great, Good, Bad, Poor, Kpoor, Poor};
+  if (index >= std::size(judgements)) return ui_theme::textPrimary();
+  return Color(0xFF000000U | judgement_colors::rgb(
+      judgements[index], ui_theme::activeMode() == ui_theme::ThemeMode::Light));
 }
 
 Color hudCounterFill(size_t index, bool active, bool topPosition) {
@@ -605,26 +592,6 @@ struct BMSRenderer::PreparedPresentationFrame {
   std::optional<PlayfieldProjectionResult> projection;
 };
 
-AtomicLaneState::AtomicLaneState(AtomicLaneState &&other) noexcept {
-  *this = std::move(other);
-}
-
-AtomicLaneState &
-AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
-  lastStateTime.store(other.lastStateTime.load(std::memory_order_relaxed),
-                      std::memory_order_relaxed);
-  lastPressedTime.store(other.lastPressedTime.load(std::memory_order_relaxed),
-                        std::memory_order_relaxed);
-  isPressed.store(other.isPressed.load(std::memory_order_relaxed),
-                  std::memory_order_relaxed);
-  lastPressedJudgement.store(
-      other.lastPressedJudgement.load(std::memory_order_relaxed),
-      std::memory_order_relaxed);
-  lastPressedDiff.store(other.lastPressedDiff.load(std::memory_order_relaxed),
-                        std::memory_order_relaxed);
-  return *this;
-}
-
 BMSRenderer::BMSRenderer(
     bms_parser::Chart *chart,
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
@@ -643,6 +610,7 @@ BMSRenderer::BMSRenderer(
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
   laneStateSnapshot.reserve(laneOrder.size());
+  longHoldEffectsByOrder.resize(laneOrder.size());
   whiteKeyLaneIndices.reserve(laneOrder.size());
   blueKeyLaneIndices.reserve(laneOrder.size());
   scratchLaneIndices.reserve(2);
@@ -1764,6 +1732,7 @@ void BMSRenderer::onLanePressed(int lane, JudgeResult judge,
     return;
   }
   AtomicLaneState &laneState = laneStatesByOrder[it->second];
+  laneState.publishKeybomb(judge.judgement, time);
   laneState.lastPressedJudgement.store(static_cast<int>(judge.judgement),
                                        std::memory_order_relaxed);
   laneState.lastPressedDiff.store(judge.Diff, std::memory_order_relaxed);
@@ -1781,6 +1750,14 @@ void BMSRenderer::onLaneReleased(int lane, long long time) {
   laneState.isPressed.store(false, std::memory_order_relaxed);
   laneState.lastStateTime.store(time, std::memory_order_release);
 }
+void BMSRenderer::onLaneJudge(int lane, JudgeResult judge, int combo, int score,
+                              PlayfieldJudgeEventClock clock, bool recordTimingSample) {
+  const auto it = laneToOrderIndex.find(lane);
+  if (it != laneToOrderIndex.end())
+    laneStatesByOrder[it->second].publishKeybomb(judge.judgement, clock.visualTimeMicros);
+  onJudge(judge, combo, score, clock, recordTimingSample);
+}
+
 void BMSRenderer::onTimingSample(JudgeResult judge,
                                   PlayfieldJudgeEventClock clock) {
   judgementIndicator.record(judge, clock.visualTimeMicros);
@@ -1884,11 +1861,17 @@ void BMSRenderer::recordCharacterizationSubmission(
 }
 #endif
 
+void BMSRenderer::markLongHoldEffect(int lane, bool active, long long tailMicros) {
+  if (!active || currentRenderMicros >= tailMicros) return;
+  const auto found = laneToOrderIndex.find(lane);
+  if (found != laneToOrderIndex.end()) longHoldEffectsByOrder[found->second] = true;
+}
+
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
     bool renderBudgetReserved) {
-  if (!renderBudgetReserved || head == nullptr || head->Timeline == nullptr ||
+  if (head == nullptr || head->Timeline == nullptr ||
       head->Tail == nullptr || head->Tail->Timeline == nullptr) {
     return;
   }
@@ -1903,6 +1886,11 @@ void BMSRenderer::drawLongNote(
     return;
   const bool isClassicLongNote = effectiveLongNoteIsClassic(head, chart);
   const bool isHellCharge = effectiveLongNoteIsHellCharge(head, chart);
+  markLongHoldEffect(head->Lane,
+      head->IsHolding || (isHellCharge && currentRenderMicros >= head->Timeline->Timing &&
+                         laneIsCurrentlyPressed(head->Lane)),
+      head->Tail->Timeline->Timing);
+  if (!renderBudgetReserved) return;
   const auto headType = isHellCharge ? NoteType::HellHead : NoteType::LongHead;
   const auto tailType = isHellCharge ? NoteType::HellTail : NoteType::LongTail;
   const float headRenderY =
@@ -2746,6 +2734,8 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
           index < laneCount ? capturedState.lanes[index]
                             : LanePresentationState{};
       auto &destination = laneStatesByOrder[index];
+      destination.clearKeybomb();
+      destination.publishKeybomb(lane.keybomb.judgement, lane.keybomb.timeMicros);
       destination.lastPressedJudgement.store(
           static_cast<int>(lane.lastPressedJudge.judgement),
           std::memory_order_relaxed);
@@ -2972,6 +2962,7 @@ void BMSRenderer::renderFrame(
   const long long chartTimeMicros =
       gameplay_scroll_geometry::chartRenderTimeMicros(micro);
   currentRenderMicros = micro;
+  std::fill(longHoldEffectsByOrder.begin(), longHoldEffectsByOrder.end(), false);
   applyPendingHudText(micro);
   updateJudgementCounterText();
 
@@ -3291,6 +3282,12 @@ void BMSRenderer::renderFrame(
           !longNote.tailReleasedEarly) {
         return;
       }
+      const int lane = rendererLaneFor(longNote.lane);
+      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
+      markLongHoldEffect(lane,
+          longNote.active || (isHellCharge && currentRenderMicros >= longNote.headTimeMicros &&
+                              laneIsCurrentlyPressed(lane)),
+          longNote.tailTimeMicros);
       if (!chartEntityRenderBudget.tryConsume(
               gameplay_chart_entity_render_budget::kLongNoteReservationCost)) {
         return;
@@ -3300,9 +3297,7 @@ void BMSRenderer::renderFrame(
       if (!std::isfinite(headY) || !std::isfinite(tailY)) {
         return;
       }
-      const int lane = rendererLaneFor(longNote.lane);
       const bool isClassicLongNote = longNote.mode == ChartLongNoteMode::LN;
-      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
       const auto headType = isHellCharge ? NoteType::HellHead : NoteType::LongHead;
       const auto tailType = isHellCharge ? NoteType::HellTail : NoteType::LongTail;
       const float legacyHeadY =
@@ -3715,10 +3710,10 @@ void BMSRenderer::renderFrame(
   flushOrderedNoteBatches();
   ghostBatchRenderer.flush();
 
-  if (renderLaneBeams) {
+  { // Both lane effects share one snapshot, clock, and render-side batch.
     simpleBatchRenderer.setSubmitDepth(kLaneBeamDepth);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
-    recordCharacterizationSubmission(
+    if (renderLaneBeams) recordCharacterizationSubmission(
         bms_renderer_characterization::SubmissionKind::LaneBeamPass,
         bms_renderer_characterization::Surface::Main, kLaneBeamDepth, nullptr,
         nullptr, -1, 0,
@@ -3747,11 +3742,30 @@ void BMSRenderer::renderFrame(
           static_cast<Judgement>(
               source.lastPressedJudgement.load(std::memory_order_relaxed)),
           source.lastPressedDiff.load(std::memory_order_relaxed));
+      snapshot.keybomb = source.keybomb();
       laneStateSnapshot.emplace_back(laneOrder[i], snapshot);
     }
     for (const auto &entry : laneStateSnapshot) {
-      if (!emptyScratchLaneHidden || entry.first != 7)
+      if (renderLaneBeams && (!emptyScratchLaneHidden || entry.first != 7))
         drawLaneBeam(entry.first, entry.second, nowMicros);
+    }
+    simpleBatchRenderer.flush();
+    simpleBatchRenderer.setSubmitDepth(gameplay_note_submission_order::kKeybombDepth);
+    const float keybombY = judgeY +
+        built_in_judge_line::height(noteRenderWidth, builtInJudgeLine) * 0.5F;
+    for (const auto &[lane, effects] : laneStateSnapshot) {
+      if (emptyScratchLaneHidden && lane == 7) continue;
+      const float x = laneToX(lane) + noteRenderWidth * 0.5F;
+      const auto judgement = keybomb::valid(effects.keybomb.judgement)
+          ? effects.keybomb.judgement : PGreat;
+      auto style = keybombs[judgement];
+      style.color = keybomb::resolvedColor(judgement, style,
+          ui_theme::activeMode() == ui_theme::ThemeMode::Light);
+      keybomb::draw(simpleBatchRenderer, effects.keybomb, nowMicros,
+                    x, keybombY, noteRenderWidth, style);
+      if (effects.isPressed && longHoldEffectsByOrder[laneToOrderIndex.at(lane)])
+        keybomb::drawHold(simpleBatchRenderer, judgement, nowMicros,
+                          x, keybombY, noteRenderWidth, style);
     }
     simpleBatchRenderer.flush();
   }
@@ -4227,6 +4241,7 @@ void BMSRenderer::configure(
       configuration.judgementIndicatorWidthScale,
       configuration.judgementIndicatorHudMode,
       configuration.judgementIndicatorRangeMilliseconds);
+  keybombs = configuration.keybombs;
   if (judgementTextVisibility != configuration.judgementTextVisibility) {
     judgementTextVisibility = configuration.judgementTextVisibility;
     hudRevision.fetch_add(1, std::memory_order_release);
@@ -4402,6 +4417,7 @@ void BMSRenderer::reset() {
   liveCancelledTouchIds.clear();
 
   for (auto &laneState : laneStatesByOrder) {
+    laneState.clearKeybomb();
     laneState.lastPressedJudgement.store(None, std::memory_order_relaxed);
     laneState.lastPressedDiff.store(0, std::memory_order_relaxed);
     laneState.lastPressedTime.store(-1, std::memory_order_relaxed);

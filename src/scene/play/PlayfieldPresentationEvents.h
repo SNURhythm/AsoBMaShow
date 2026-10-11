@@ -40,7 +40,7 @@ public:
   virtual void onJudge(JudgeResult judge, int combo, int score,
                        PlayfieldJudgeEventClock clock,
                        bool recordTimingSample) = 0;
-  // Legacy renderers consume the global HUD; custom skins also need the lane.
+  // Lane-aware consumers use this for judgement effects as well as the HUD.
   virtual void onLaneJudge(int, JudgeResult judge, int combo, int score,
                            PlayfieldJudgeEventClock clock,
                            bool recordTimingSample) {

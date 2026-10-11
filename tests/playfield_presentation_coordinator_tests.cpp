@@ -39,6 +39,7 @@ struct PresentationStats {
   int renderCalls = 0;
   int cursorAdvanceCalls = 0;
   int lanePressedCalls = 0;
+  int judgedLane = -1;
   int laneReleasedCalls = 0;
   int judgeCalls = 0;
   int beginCalls = 0;
@@ -176,6 +177,11 @@ public:
   }
   void onLanePressed(int, JudgeResult, long long) override {
     ++stats_->lanePressedCalls;
+  }
+  void onLaneJudge(int lane, JudgeResult judge, int combo, int score,
+                   PlayfieldJudgeEventClock clock, bool timing) override {
+    stats_->judgedLane = lane;
+    onJudge(judge, combo, score, clock, timing);
   }
   void onLaneReleased(int, long long) override { ++stats_->laneReleasedCalls; }
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) override {
@@ -775,6 +781,11 @@ void testEventFanoutAndTouchRoutingHaveOneAuthorityTarget() {
              skinStats->laneReleasedCalls == 1 && builtIn->judgeCalls == 1 &&
              skinStats->judgeCalls == 1,
          "events fan out exactly once to built-in and live skin");
+
+  coordinator.onLaneJudge(4, JudgeResult(Poor, 0), 0, 10,
+                          {.visualTimeMicros = 350}, false);
+  expect(builtIn->judgedLane == 4 && builtIn->judgeCalls == 2 && skinStats->judgeCalls == 2,
+         "lane judgement reaches built-in effects and each HUD exactly once");
 
   const auto hit = coordinator.hitTestUiControl({1.0F, 2.0F});
   const PresentationTouchEvent down{

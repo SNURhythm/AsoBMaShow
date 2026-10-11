@@ -79,20 +79,6 @@ std::string diagnosticPresentation(const skin::SkinDiagnostic &diagnostic) {
   return text;
 }
 
-float sanitizeViewportComponent(std::string_view text, float fallback,
-                                float minimum, float maximum) {
-  try {
-    std::size_t consumed = 0;
-    const float value = std::stof(std::string(text), &consumed);
-    if (consumed != text.size() || !std::isfinite(value)) {
-      return fallback;
-    }
-    return std::clamp(value, minimum, maximum);
-  } catch (...) {
-    return fallback;
-  }
-}
-
 std::string formatViewportComponent(float value) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(2) << value;
@@ -524,115 +510,6 @@ DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
        .maxVisibleItems = metrics.compact ? 5 : 7,
        .menuWidth = menuWidth});
   return skinDropdown;
-}
-
-void SettingsScene::appendBuiltInGameplayTraitSettings(
-    View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
-  body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
-                                ui_theme::lime()));
-  const auto appendNumeric =
-      [this, body, &metrics](const i18n::Text &label, const std::string &value,
-                             const std::string &defaultValue,
-                             std::function<void(const std::string &)> apply) {
-        auto *row = new View();
-        row->setFlexDirection(FlexDirection::Row);
-        row->setFlexWrap(YGWrapWrap);
-        row->setAlignItems(YGAlignCenter);
-        row->setGap(metrics.compact ? 8.0F : 10.0F);
-        auto *labelView =
-            makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
-                     TextView::LEFT, TextView::MIDDLE);
-        labelView->setMinWidth(0.0F);
-        labelView->setFlexShrink(1.0F);
-        row->addView(labelView);
-        auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
-        input->setEditingText(value);
-        input->onEditingFinished(
-            [this, input, apply](const std::string &) {
-              apply(input->getText());
-              lastLayoutWidth = -1;
-            });
-        row->addView(input);
-        auto *reset = makeResetButton(metrics);
-        reset->setOnClickListener([this, apply, defaultValue]() {
-          apply(defaultValue);
-          lastLayoutWidth = -1;
-        });
-        row->addView(reset);
-        body->addView(row);
-      };
-
-  if (keyMode == -5 || keyMode == -7) {
-    const bool hide = keyMode == -5 ? context.settings.presentation().hideEmptyScratchLane5K
-                                     : context.settings.presentation().hideEmptyScratchLane7K;
-    const auto apply = [this, keyMode](bool value) {
-      auto &settings = context.settings.presentation();
-      (keyMode == -5 ? settings.hideEmptyScratchLane5K : settings.hideEmptyScratchLane7K) = value;
-      persistSettings();
-      lastLayoutWidth = -1;
-    };
-    body->addView(makeGameplaySkinChoiceRow(
-        metrics, i18n::message("settings.skins.hide_empty_scratch.label"), true,
-        {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
-          .selected = !hide, .action = [apply] { apply(false); }},
-         {.label = i18n::message("settings.skins.judgement_hud.on.label"),
-          .selected = hide, .action = [apply] { apply(true); }}}));
-  }
-  if (followsOriginal) {
-    body->addView(makeWrappedText(
-        i18n::message("settings.skins.follow_original.description",
-            {{"mode", keyMode == -5 ? "5K1S" : "7K1S"}}),
-        metrics.smallTextSize, ui_theme::textSecondary()));
-    return;
-  }
-  if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
-    body->addView(buildScratchLanePositionControl(metrics));
-  }
-  appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
-                formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
-                formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1),
-                [this](const std::string &text) {
-                  context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
-                      text, context.settings.presentation().laneAngleDegrees,
-                      context.settings.geometryPolicy().angle.minimum,
-                      context.settings.geometryPolicy().angle.maximum);
-                  persistSettings();
-                });
-  appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
-                formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1),
-                [this](const std::string &text) {
-                  context.settings.presentation().laneLength = sanitizeViewportComponent(
-                      text, context.settings.presentation().laneLength,
-                      context.settings.geometryPolicy().length.minimum, context.settings.geometryPolicy().length.maximum);
-                  persistSettings();
-                });
-  appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
-                std::to_string(context.settings.presentation().laneBeamLengthPercent),
-                std::to_string(AppSettings::kDefaultLaneBeamLengthPercent),
-                [this](const std::string &text) {
-                  context.settings.presentation().laneBeamLengthPercent =
-                      clampLaneBeamLengthPercent(sanitizeOffsetComponent(
-                          text, context.settings.presentation().laneBeamLengthPercent));
-                  persistSettings();
-                });
-  appendNumeric(i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
-                formatPlayAreaWidthLabel(
-                    context.settings.playAreaWidthForKeyMode(keyMode)),
-                formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue),
-                [this, keyMode](const std::string &text) {
-                  context.settings.setPlayAreaWidthForKeyMode(
-                      keyMode,
-                      sanitizeViewportComponent(
-                          text,
-                          context.settings.playAreaWidthForKeyMode(keyMode),
-                          context.settings.geometryPolicy().width.minimum,
-                          context.settings.geometryPolicy().width.maximum));
-                  persistSettings();
-                });
-  appendBuiltInNoteControls(body, metrics, keyMode);
-  appendBuiltInJudgeLineControls(body, metrics, keyMode);
-  appendBuiltInMeasureLineControls(body, metrics, keyMode);
-  appendSelectedSkinHudSettings(body, metrics, true);
 }
 
 void SettingsScene::appendGameplaySkinCatalogSettings(
@@ -1150,6 +1027,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     }
     column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability.label"), body,
                              metrics.modeCardHeight, metrics.cardsWidth));
+    appendBuiltInSkinFallbackSettings(column, metrics);
     appendScratchlessFallbackSettings(column, metrics);
     return column;
   }
@@ -1396,9 +1274,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::lime()));
     imports->addView(nameRow);
   }
-  column->addView(makeCard(metrics, i18n::message("settings.skins.install.label"),
-                           i18n::message("settings.skins.import_zip_unpacked_folder.message"), imports,
-                           metrics.modeCardHeight, metrics.cardsWidth));
+
 
   const auto traits = skin::gameplaySkinSettingsTargets();
   if (!std::ranges::any_of(traits, [this](const auto &trait) {
@@ -1672,6 +1548,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     column->addView(makeCard(metrics, i18n::message("settings.skins.installed_skins.label"), i18n::message("settings.skins.catalog.label"), empty,
                              metrics.modeCardHeight, metrics.cardsWidth));
   }
+  column->addView(makeCard(metrics, i18n::message("settings.skins.install.label"),
+                           i18n::message("settings.skins.import_zip_unpacked_folder.message"), imports,
+                           metrics.modeCardHeight, metrics.cardsWidth));
+
   if (!snapshot.history.empty()) {
     auto *history = new View();
     history->setFlexDirection(FlexDirection::Column);
