@@ -1066,7 +1066,7 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   indicator.clear();
   indicator.record(JudgeResult(PGreat, 0), 2'000'000);
   const int zeroTimingX = pointerX(render(2'000'000));
-  judgement_indicator::ExponentialAverageAccumulator prefix;
+  judgement_indicator::TimingAverageHistory prefix;
   prefix.add(-60'000, 2'000'000);
   indicator.clear(prefix);
   indicator.record(JudgeResult(Great, -60'000), 3'000'000);
@@ -1086,6 +1086,17 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   }
   expect(pointerX(render(2'000'000)) == zeroTimingX,
          "simultaneous inputs keep equal weight even after the bar bucket wraps");
+
+  indicator.clear();
+  for (int index = 0; index < 96; ++index) {
+    indicator.record(JudgeResult(Great, -60'000), 2'000'000);
+  }
+  indicator.record(JudgeResult(Great, -60'000), 3'000'000);
+  for (int index = 0; index < 96; ++index) {
+    indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  }
+  expect(pointerX(render(2'000'000)) == zeroTimingX,
+         "a mixed-time evicted prefix preserves past inputs while excluding future inputs");
 
 }
 
@@ -1125,13 +1136,17 @@ void verifySelectedSkinTimingPointerStaysOnScreen(const RenderTarget &target) {
 }
 
 void verifyCapturedFrameRetainsContinuousAverage(const RenderTarget &target) {
-  const auto render = [&](bool wrappedHistory) {
+  const auto render = [&](bool wrappedHistory, bool mixedTimePrefix = false) {
     PresentationStateFixture fixture;
     auto configuration = presentationConfig(kAfterCoverPercent);
     configuration.judgementIndicatorHudMode = true;
     configuration.judgementIndicatorY = 0.5F;
     fixture.store.setConfiguration(configuration);
     for (int index = 0; index < (wrappedHistory ? 192 : 1); ++index) {
+      if (mixedTimePrefix && index == 96) {
+        fixture.store.onTimingSample(JudgeResult(Great, -60'000),
+            {.visualTimeMicros = kPastInvisibleRenderMicros + 1'000'000});
+      }
       fixture.store.onTimingSample(
           JudgeResult(Great, wrappedHistory ? (index < 96 ? -60'000 : 60'000) : 0),
           {.visualTimeMicros = kPastInvisibleRenderMicros});
@@ -1154,6 +1169,8 @@ void verifyCapturedFrameRetainsContinuousAverage(const RenderTarget &target) {
   };
   expect(render(true) == render(false),
          "captured frames retain the continuous average beyond 96 visible bars");
+  expect(render(true, true) == render(false),
+         "captured frames filter mixed-time prefixes after the visible bars wrap");
 }
 
 void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {

@@ -141,7 +141,7 @@ void JudgementIndicatorRenderer::record(const JudgeResult &judgeResult,
 }
 
 void JudgementIndicatorRenderer::clear(
-    const judgement_indicator::ExponentialAverageAccumulator &averageBeforeSamples) {
+    const judgement_indicator::TimingAverageHistory &averageBeforeSamples) {
   const std::lock_guard lock(recordMutex);
   this->averageBeforeSamples = averageBeforeSamples;
   writeSequence.store(0, std::memory_order_release);
@@ -165,11 +165,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   judgement_indicator::ExponentialAverageAccumulator average;
   {
     const std::lock_guard lock(recordMutex);
-    // A normal seek rebuilds history. If rendering before the summarized
-    // prefix, omit it rather than leak future timing into eligible inputs.
-    if (averageBeforeSamples.latestSampleTimeMicros() <= currentTimeMicros) {
-      average = averageBeforeSamples;
-    }
+    average = averageBeforeSamples.at(currentTimeMicros);
     const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
     const uint64_t firstSequence =
         nextSequence > kMaxVisibleSamples ? nextSequence - kMaxVisibleSamples : 0;

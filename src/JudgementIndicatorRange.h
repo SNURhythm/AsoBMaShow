@@ -4,8 +4,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace judgement_indicator {
 inline constexpr int kDefaultRangeMilliseconds = 180;
@@ -110,5 +113,64 @@ private:
   double weightedSumMicros_ = 0.0;
   double totalWeight_ = 0.0;
   std::int64_t latestSampleTimeMicros_ = 0;
+};
+
+// Evicted bars still contribute to the average. Keep their timestamps for
+// frames before the newest input, while ordinary forward frames use the cached
+// accumulator. Copies share an append-only journal but retain their own length,
+// so capturing a frame is constant-time and later inputs cannot change it.
+class TimingAverageHistory {
+public:
+  void add(std::int64_t diffMicros, std::int64_t sampleTimeMicros) {
+    if (!samples_) {
+      samples_ = std::make_shared<Journal>();
+    }
+    const auto journal = samples_;
+    const std::lock_guard lock(journal->mutex);
+    if (size_ < journal->entries.size() &&
+        (journal->entries[size_].diffMicros != diffMicros ||
+         journal->entries[size_].timeMicros != sampleTimeMicros)) {
+      // A copied frame may start a different timeline. Preserve the original
+      // journal for other snapshots and copy only this frame's prefix.
+      samples_ = std::make_shared<Journal>();
+      samples_->entries.assign(journal->entries.begin(),
+                               journal->entries.begin() + size_);
+    }
+    if (size_ == samples_->entries.size()) {
+      samples_->entries.push_back({diffMicros, sampleTimeMicros});
+    }
+    ++size_;
+    average_.add(diffMicros, sampleTimeMicros);
+  }
+
+  [[nodiscard]] ExponentialAverageAccumulator
+  at(std::int64_t currentTimeMicros) const {
+    if (!average_.hasSamples() ||
+        average_.latestSampleTimeMicros() <= currentTimeMicros) {
+      return average_;
+    }
+    ExponentialAverageAccumulator result;
+    const std::lock_guard lock(samples_->mutex);
+    for (std::size_t index = 0; index < size_; ++index) {
+      const auto &sample = samples_->entries[index];
+      if (sample.timeMicros <= currentTimeMicros) {
+        result.add(sample.diffMicros, sample.timeMicros);
+      }
+    }
+    return result;
+  }
+
+private:
+  struct Sample {
+    std::int64_t diffMicros;
+    std::int64_t timeMicros;
+  };
+  struct Journal {
+    std::mutex mutex;
+    std::vector<Sample> entries;
+  };
+  std::shared_ptr<Journal> samples_;
+  std::size_t size_ = 0;
+  ExponentialAverageAccumulator average_;
 };
 } // namespace judgement_indicator

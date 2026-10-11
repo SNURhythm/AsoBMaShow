@@ -87,6 +87,39 @@ void testContinuousExponentialAverage() {
          "a new hit after a long gap remains finite when old weights underflow");
 }
 
+void testTimeFilteredAverageHistory() {
+  judgement_indicator::TimingAverageHistory history;
+  expect(!history.at(0).hasSamples(), "empty history has no average");
+  history.add(-60'000, 0);
+  history.add(60'000, 1'800'000);
+  const auto captured = history;
+  history.add(-60'000, 0);
+  expect(history.at(0).value() == -60'000 &&
+             history.at(1'800'000).value() == 0,
+         "filtering preserves earlier inputs on both sides of a future input");
+  expect(!history.at(-1).hasSamples(),
+         "a frame before every input has no average");
+  expect(captured.at(0).value() == -60'000 &&
+             captured.at(1'800'000).value() == 20'000,
+         "later appends cannot alter a captured frame's filtered or full average");
+
+  auto replayed = captured;
+  replayed.add(-60'000, 0);
+  expect(replayed.at(1'800'000).value() == 0,
+         "replaying a captured prefix includes each input exactly once");
+  auto branched = captured;
+  branched.add(60'000, 0);
+  expect(branched.at(0).value() == 0 &&
+             branched.at(1'800'000).value() == 30'000 &&
+             history.at(1'800'000).value() == 0 &&
+             captured.at(1'800'000).value() == 20'000,
+         "a divergent timeline preserves the original history and earlier snapshots");
+  history = {};
+  expect(!history.at(1'800'000).hasSamples() &&
+             captured.at(1'800'000).value() == 20'000,
+         "reset clears the active history while retained frames remain immutable");
+}
+
 void testSegmentClipping() {
   using namespace judgement_indicator;
   const auto partial = clipSegment(-200000, -120000, 180000);
@@ -106,6 +139,7 @@ int main() {
   testPositionMapping();
   testRawAverageThenPositionClamp();
   testContinuousExponentialAverage();
+  testTimeFilteredAverageHistory();
   testSegmentClipping();
   if (failures != 0) {
     std::cerr << failures << " judgement indicator range assertion(s) failed\n";
