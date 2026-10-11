@@ -856,7 +856,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
   auto *previewActions = new View();
   previewActions->setFlexDirection(FlexDirection::Row);
-  previewActions->setFlexWrap(YGWrapWrap);
+  previewActions->setFlexWrap(YGWrapNoWrap);
+  for (auto *button : {restartButton, doneButton}) {
+    button->setWidth(0)->setMinWidth(0)->setFlex(1);
+  }
   previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
   previewActions->setAlignItems(YGAlignCenter);
   previewActions->setWidthPercent(100.0f);
