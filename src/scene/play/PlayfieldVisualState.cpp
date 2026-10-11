@@ -167,6 +167,7 @@ void PlayfieldVisualStateStore::resetModel(
   judgementIndicatorSamples_ = {};
   judgementIndicatorSampleCount_ = 0;
   nextJudgementIndicatorSample_ = 0;
+  judgementIndicatorAverageBeforeSamples_ = {};
   combo_ = 0;
   score_ = 0;
   fastSlowMicros_ = 0;
@@ -403,6 +404,7 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
   };
 
   result.judgementIndicatorSampleCount = judgementIndicatorSampleCount_;
+  result.judgementIndicatorAverageBeforeSamples = judgementIndicatorAverageBeforeSamples_;
   const std::size_t firstSample =
       judgementIndicatorSampleCount_ ==
               judgement_indicator::kRecentTimingSampleCapacity
@@ -504,6 +506,13 @@ void PlayfieldVisualStateStore::onTimingSample(
     JudgeResult judge, PlayfieldJudgeEventClock clock) {
   if (judge.judgement == None) {
     return;
+  }
+  if (judgementIndicatorSampleCount_ == judgementIndicatorSamples_.size()) {
+    const auto &evicted = judgementIndicatorSamples_[nextJudgementIndicatorSample_];
+    if (evicted.judge.judgement != Kpoor) {
+      judgementIndicatorAverageBeforeSamples_.add(
+          evicted.judge.Diff, evicted.visualTimeMicros);
+    }
   }
   judgementIndicatorSamples_[nextJudgementIndicatorSample_] = {
       .judge = judge,

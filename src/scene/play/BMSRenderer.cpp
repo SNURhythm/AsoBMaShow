@@ -1813,10 +1813,9 @@ void BMSRenderer::synchronizeCapturedJudgementHud(
   setJudgementCounters(capturedState.authority.judgementCounters,
                        capturedState.authority.comboBreak);
 
-  // Rebuild from the bounded history captured with the immutable frame.
-  // A single lastJudge field is insufficient: the indicator displays a
-  // recent sample window rather than only the most recent judgement.
-  judgementIndicator.clear();
+  // Restore the average's older contributions before replaying visible history.
+  // Marker eviction must not truncate the continuous timing average.
+  judgementIndicator.clear(capturedState.judgementIndicatorAverageBeforeSamples);
   if (capturedState.judgementIndicatorSampleCount > 0) {
     const std::size_t sampleCount =
         std::min(capturedState.judgementIndicatorSampleCount,

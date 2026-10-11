@@ -9,7 +9,6 @@
 
 namespace {
 constexpr long long kFadeMicros = 1800000LL;
-const double kAverageWeightDecay = std::exp2(-1.0 / 32.0);
 constexpr float kWorldWidthRatio = 0.4f;
 constexpr float kHudWidthRatio = 0.2f;
 constexpr float kHudMinWidth = 220.0f;
@@ -109,6 +108,10 @@ void JudgementIndicatorRenderer::record(const JudgeResult &judgeResult,
     return;
   }
 
+  const std::lock_guard lock(recordMutex);
+  if (judgeResult.judgement != Kpoor) {
+    average.add(judgeResult.Diff, displayTimeMicros);
+  }
   const uint64_t sequence =
       writeSequence.fetch_add(1, std::memory_order_acq_rel);
   auto &sample = samples[sequence % kMaxVisibleSamples];
@@ -117,10 +120,17 @@ void JudgementIndicatorRenderer::record(const JudgeResult &judgeResult,
   sample.createdTimeMicros.store(displayTimeMicros, std::memory_order_relaxed);
   sample.judgement.store(static_cast<int>(judgeResult.judgement),
                          std::memory_order_relaxed);
+  sample.averageMicros.store(average.value(), std::memory_order_relaxed);
+  sample.averageTimeMicros.store(average.latestSampleTimeMicros(),
+                                 std::memory_order_relaxed);
+  sample.hasAverage.store(average.hasSamples(), std::memory_order_relaxed);
   sample.sequence.store(sequence + 1, std::memory_order_release);
 }
 
-void JudgementIndicatorRenderer::clear() {
+void JudgementIndicatorRenderer::clear(
+    const judgement_indicator::ExponentialAverageAccumulator &averageBeforeSamples) {
+  const std::lock_guard lock(recordMutex);
+  average = averageBeforeSamples;
   writeSequence.store(0, std::memory_order_release);
   for (auto &sample : samples) {
     sample.sequence.store(0, std::memory_order_release);
@@ -139,8 +149,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   std::array<Sample, kMaxVisibleSamples> visibleSamples{};
   size_t visibleSampleCount = 0;
-  double weightedTimingSum = 0.0;
-  double totalTimingWeight = 0.0;
+  long long averageMicros = 0;
   float averageAlpha = 0.0f;
   const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
   const uint64_t firstSequence =
@@ -157,14 +166,10 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
         visibleSampleCount < visibleSamples.size()) {
       visibleSamples[visibleSampleCount++] = sample;
     }
-    if (sample.judgement != Kpoor) {
-      // Weight by input order, not age: older bars fading cannot move the mean.
-      // Every 32 newer eligible hits halve a retained sample's weight.
-      weightedTimingSum = weightedTimingSum * kAverageWeightDecay +
-                          static_cast<double>(sample.diffMicros);
-      totalTimingWeight = totalTimingWeight * kAverageWeightDecay + 1.0;
-      averageAlpha = std::max(averageAlpha,
-          1.0f - static_cast<float>(ageMicros) /
+    if (sample.hasAverage && sample.averageTimeMicros <= currentTimeMicros) {
+      averageMicros = sample.averageMicros;
+      averageAlpha = std::max(0.0f,
+          1.0f - static_cast<float>(currentTimeMicros - sample.averageTimeMicros) /
                      static_cast<float>(kFadeMicros));
     }
   }
@@ -230,9 +235,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
             judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
   }
 
-  if (totalTimingWeight > 0.0 && averageAlpha > 0.0f) {
-    const long long averageMicros =
-        std::llround(weightedTimingSum / totalTimingWeight);
+  if (averageAlpha > 0.0f) {
     const float x =
         offsetToX(averageMicros, currentRangeMicros, indicatorLayout);
     // Keep the average below the history, with a distinct shape.
@@ -368,6 +371,9 @@ bool JudgementIndicatorRenderer::readSample(uint64_t sequence,
           slot.createdTimeMicros.load(std::memory_order_relaxed),
       .judgement =
           static_cast<Judgement>(slot.judgement.load(std::memory_order_relaxed)),
+      .averageMicros = slot.averageMicros.load(std::memory_order_relaxed),
+      .averageTimeMicros = slot.averageTimeMicros.load(std::memory_order_relaxed),
+      .hasAverage = slot.hasAverage.load(std::memory_order_relaxed),
   };
 
   const uint64_t secondSequence = slot.sequence.load(std::memory_order_acquire);

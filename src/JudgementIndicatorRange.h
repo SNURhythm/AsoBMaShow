@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -68,22 +69,42 @@ clipSegment(std::int64_t startMicros, std::int64_t endMicros,
   return clipped;
 }
 
-class RawAverageAccumulator {
+// Normalized exponential weighting, anchored at the newest input rather than
+// wall-clock time. Idle time cannot move the mean or underflow both sums.
+class ExponentialAverageAccumulator {
 public:
-  void add(std::int64_t diffMicros) noexcept {
-    sumMicros_ += diffMicros;
-    ++count_;
+  void add(std::int64_t diffMicros, std::int64_t sampleTimeMicros) noexcept {
+    if (totalWeight_ == 0.0) {
+      latestSampleTimeMicros_ = sampleTimeMicros;
+    }
+    if (sampleTimeMicros >= latestSampleTimeMicros_) {
+      const double decay = std::exp2(
+          (static_cast<double>(latestSampleTimeMicros_) -
+           static_cast<double>(sampleTimeMicros)) / kHalfLifeMicros);
+      weightedSumMicros_ = weightedSumMicros_ * decay + diffMicros;
+      totalWeight_ = totalWeight_ * decay + 1.0;
+      latestSampleTimeMicros_ = sampleTimeMicros;
+    } else {
+      const double weight = std::exp2(
+          (static_cast<double>(sampleTimeMicros) -
+           static_cast<double>(latestSampleTimeMicros_)) / kHalfLifeMicros);
+      weightedSumMicros_ += diffMicros * weight;
+      totalWeight_ += weight;
+    }
   }
 
-  [[nodiscard]] std::size_t count() const noexcept { return count_; }
-
+  [[nodiscard]] bool hasSamples() const noexcept { return totalWeight_ > 0.0; }
+  [[nodiscard]] std::int64_t latestSampleTimeMicros() const noexcept {
+    return latestSampleTimeMicros_;
+  }
   [[nodiscard]] std::int64_t value() const noexcept {
-    return count_ == 0 ? 0
-                       : sumMicros_ / static_cast<std::int64_t>(count_);
+    return hasSamples() ? std::llround(weightedSumMicros_ / totalWeight_) : 0;
   }
 
 private:
-  std::int64_t sumMicros_ = 0;
-  std::size_t count_ = 0;
+  static constexpr double kHalfLifeMicros = 1'800'000.0;
+  double weightedSumMicros_ = 0.0;
+  double totalWeight_ = 0.0;
+  std::int64_t latestSampleTimeMicros_ = 0;
 };
 } // namespace judgement_indicator

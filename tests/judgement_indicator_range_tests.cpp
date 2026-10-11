@@ -57,19 +57,34 @@ void testPositionMapping() {
 
 void testRawAverageThenPositionClamp() {
   using namespace judgement_indicator;
-  RawAverageAccumulator average;
-  average.add(300000);
-  average.add(0);
-  expect(average.count() == 2, "average tracks included samples");
+  ExponentialAverageAccumulator average;
+  average.add(300000, 0);
+  average.add(0, 0);
+  expect(average.hasSamples(), "average tracks included samples");
   expect(average.value() == 150000,
          "average uses raw values before display clamping");
   expectNear(normalizedOffset(average.value(), 180000), 5.0f / 6.0f,
              "raw average maps inside the configured range");
-  average.add(300000);
+  average.add(300000, 0);
   expect(average.value() == 200000,
          "raw average can exceed the configured range");
   expectNear(normalizedOffset(average.value(), 180000), 1.0f,
              "only the final average marker position clamps");
+}
+
+void testContinuousExponentialAverage() {
+  judgement_indicator::ExponentialAverageAccumulator average;
+  average.add(-60'000, 0);
+  average.add(60'000, 1'800'000);
+  expect(average.value() == 20'000,
+         "one half-life gives the older hit half the newer hit's weight");
+  average.add(-60'000, 0);
+  expect(average.value() == 0,
+         "out-of-order samples receive their timestamp's exponential weight");
+  average.add(15'000, 10'000'000'000LL);
+  expect(average.value() == 15'000 &&
+             average.latestSampleTimeMicros() == 10'000'000'000LL,
+         "a new hit after a long gap remains finite when old weights underflow");
 }
 
 void testSegmentClipping() {
@@ -90,6 +105,7 @@ int main() {
   testRangeRules();
   testPositionMapping();
   testRawAverageThenPositionClamp();
+  testContinuousExponentialAverage();
   testSegmentClipping();
   if (failures != 0) {
     std::cerr << failures << " judgement indicator range assertion(s) failed\n";

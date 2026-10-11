@@ -947,7 +947,7 @@ public:
   }
 };
 
-void verifyJudgementIndicatorAverageUsesRetainedBucket(const RenderTarget &target) {
+void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   Judge judge(3);
   JudgementIndicatorRenderer indicator(judge.timingWindows);
   indicator.configure(true, 0.5F, 1.0F, true, 180);
@@ -1024,22 +1024,61 @@ void verifyJudgementIndicatorAverageUsesRetainedBucket(const RenderTarget &targe
          "the average does not move when an older hit bar fades out");
 
   indicator.clear();
-  indicator.record(JudgeResult(Great, 30'000), 2'000'000);
-  const int weightedTimingX = pointerX(render(2'000'000));
+  indicator.record(JudgeResult(Great, 30'000), 3'600'000);
+  const int weightedTimingX = pointerX(render(3'600'000));
   indicator.clear();
   for (int index = 0; index < 96; ++index) {
     indicator.record(JudgeResult(Great, index < 32 ? -70'000 :
-                                       index < 64 ? 0 : 70'000), 2'000'000);
+                                       index < 64 ? 0 : 70'000),
+                     (index / 32) * 1'800'000LL);
   }
-  // The three 32-hit blocks have total weights 1:2:4, yielding +30 ms.
+  // Equal-sized groups one half-life apart have weights 1:2:4: +30 ms.
   expect(weightedTimingX >= 0 &&
-             pointerX(render(2'000'000)) == weightedTimingX,
-         "the whole bucket contributes with half the weight per 32 older hits");
-  for (int index = 0; index < 96; ++index) {
-    indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+             pointerX(render(3'600'000)) == weightedTimingX,
+         "continuous weighting halves older input weight every 1.8 seconds");
+  indicator.clear();
+  indicator.record(JudgeResult(PGreat, 0), 2'000'000);
+  const int zeroTimingX = pointerX(render(2'000'000));
+  indicator.clear();
+  for (int index = 0; index < 192; ++index) {
+    indicator.record(JudgeResult(Great, index < 96 ? -60'000 : 60'000),
+                     2'000'000);
   }
-  expect(pointerX(render(2'000'000)) == pointerX(fresh),
-         "new samples replace overwritten bucket entries in the average");
+  expect(pointerX(render(2'000'000)) == zeroTimingX,
+         "simultaneous inputs keep equal weight even after the bar bucket wraps");
+
+}
+
+void verifyCapturedFrameRetainsContinuousAverage(const RenderTarget &target) {
+  const auto render = [&](bool wrappedHistory) {
+    PresentationStateFixture fixture;
+    auto configuration = presentationConfig(kAfterCoverPercent);
+    configuration.judgementIndicatorHudMode = true;
+    configuration.judgementIndicatorY = 0.5F;
+    fixture.store.setConfiguration(configuration);
+    for (int index = 0; index < (wrappedHistory ? 192 : 1); ++index) {
+      fixture.store.onTimingSample(
+          JudgeResult(Great, wrappedHistory ? (index < 96 ? -60'000 : 60'000) : 0),
+          {.visualTimeMicros = kPastInvisibleRenderMicros});
+    }
+    const auto frame = fixture.input(71);
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      fixture.renderer.render(context, frame.state, frame.projection);
+    }
+    const auto pixels = readPixels(target);
+    // The HUD pointer occupies these rows below the independently drawn bars.
+    return std::vector<std::uint8_t>(
+        pixels.begin() + 370 * kDrawableWidth * 4,
+        pixels.begin() + 380 * kDrawableWidth * 4);
+  };
+  expect(render(true) == render(false),
+         "captured frames retain the continuous average beyond 96 visible bars");
 }
 
 void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
@@ -3721,7 +3760,8 @@ int main() {
 
   if (failures == 0) {
     try {
-      verifyJudgementIndicatorAverageUsesRetainedBucket(target);
+      verifyJudgementIndicatorContinuousAverage(target);
+      verifyCapturedFrameRetainsContinuousAverage(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);
       verifySerialOrderingAndReset();
