@@ -7,7 +7,7 @@
 #include "../view/DropdownView.h"
 #include "../view/CheckboxButtonContent.h"
 #include "play/StartLaneIndicatorGeometry.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "../settings/BuiltInNoteEditing.h"
 #include "../settings/BuiltInScratchGradient.h"
 
@@ -36,7 +36,7 @@ void SettingsScene::appendNumericSetting(
     View *body, const LayoutMetrics &metrics, const i18n::Text &label,
     std::function<std::string()> read, const std::string &defaultValue,
     float step, int precision, std::function<void(const std::string &)> apply) {
-  body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+  body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
   auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
   input->setEditingText(read());
   input->onEditingFinished([this, input, read, apply](const std::string &text) {
@@ -111,7 +111,7 @@ void SettingsScene::appendBuiltInBeamLengthControls(
 void SettingsScene::appendBuiltInGameplayTraitSettings(
     View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
   body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
-                                ui_theme::lime()));
+                                app_theme::lime()));
   body->setAlignItems(YGAlignFlexStart);
 
   if (keyMode == -5 || keyMode == -7) {
@@ -134,7 +134,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     body->addView(makeWrappedText(
         i18n::message("settings.skins.follow_original.description",
             {{"mode", keyMode == -5 ? "5K1S" : "7K1S"}}),
-        metrics.smallTextSize, ui_theme::textSecondary()));
+        metrics.smallTextSize, app_theme::textSecondary()));
     return;
   }
   auto *tabs = new View();
@@ -142,11 +142,11 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
   tabs->setFlexWrap(YGWrapWrap);
   tabs->setGap(metrics.compact ? 8.0F : 10.0F);
   const auto appendTab = [this, tabs, &metrics](BuiltInSkinTab page, const i18n::Text &label) {
-    auto *text = makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+    auto *text = makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                           TextView::CENTER, TextView::MIDDLE);
     const int width = std::max(metrics.compact ? 96 : 116, text->textureWidth() + 32);
     auto *button = builtInSkinTab == page
-        ? makeAccentButton(width, metrics.actionButtonHeight, text, ui_theme::cyan())
+        ? makeAccentButton(width, metrics.actionButtonHeight, text, app_theme::cyan())
         : makeControlButton(width, metrics.actionButtonHeight, text);
     button->setOnClickListener([this, page]() {
       if (builtInSkinTab == page) return;
@@ -161,7 +161,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
   appendTab(BuiltInSkinTab::Hud, "HUD");
   body->addView(tabs);
   body->addView(makeWrappedText(i18n::message("settings.skins.builtin_scope.description"),
-                                metrics.smallTextSize, ui_theme::textSecondary()));
+                                metrics.smallTextSize, app_theme::textSecondary()));
 
   switch (builtInSkinTab) {
   case BuiltInSkinTab::Lane: {
@@ -180,7 +180,7 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
   case BuiltInSkinTab::Effects:
     appendBuiltInBeamLengthControls(body, metrics);
     body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
-                                  metrics.bodyTextSize, ui_theme::textPrimary()));
+                                  metrics.bodyTextSize, app_theme::textPrimary()));
     body->addView(buildKeybombControls(metrics, keyMode, false));
     break;
   case BuiltInSkinTab::Hud:
@@ -224,10 +224,10 @@ void SettingsScene::appendScratchlessModeSettings(
   scratchlessControls->setAlignSelf(YGAlignStretch);
   scratchlessControls->addView(makeWrappedText(
       i18n::message("settings.scratchless.title"), metrics.bodyTextSize,
-      ui_theme::textPrimary()));
+      app_theme::textPrimary()));
   scratchlessControls->addView(makeWrappedText(
       i18n::message("settings.scratchless.description"), metrics.smallTextSize,
-      ui_theme::textSecondary()));
+      app_theme::textSecondary()));
   auto *scratchlessMode = new DropdownView(
       {.onOptionSelected = [this, keyMode](const std::string &id) {
         context.settings.scratchlessForKeyMode(keyMode).mode =
@@ -249,12 +249,12 @@ void SettingsScene::appendScratchlessModeSettings(
     scratchlessControls->addView(makeWrappedText(
         i18n::message("settings.scratchless.tables.message",
                       {{"table", keyMode == -5 ? "5KEYS AERY" : "7KEYS AERY"}}),
-        metrics.bodyTextSize, ui_theme::textSecondary()));
+        metrics.bodyTextSize, app_theme::textSecondary()));
     for (const auto &table : difficultyTables) {
       if (table.sourceUrl.empty()) continue;
       auto *content = new CheckboxButtonContent(table.name, metrics.bodyTextSize,
                                                 metrics.bodyTextSize);
-      content->setThemedColor(ui_theme::textPrimary);
+      content->setThemedColor(app_theme::textPrimary);
       content->setJustifyContent(YGJustifyFlexStart);
       content->setPadding(Edge::Left, 12.0f);
       content->setPadding(Edge::Right, 12.0f);
@@ -264,7 +264,7 @@ void SettingsScene::appendScratchlessModeSettings(
                           policy.tableUrls.end());
       auto *button = makeControlButton(0, metrics.actionButtonHeight,
                                        makeText("", metrics.bodyTextSize,
-                                                ui_theme::textPrimary()));
+                                                app_theme::textPrimary()));
       button->setContentView(content);
       button->setWidthPercent(100)->setMinWidth(0);
       button->setEnabled(enabled);
@@ -281,7 +281,7 @@ void SettingsScene::appendScratchlessModeSettings(
     if (difficultyTables.empty()) {
       scratchlessControls->addView(makeWrappedText(
           i18n::message("settings.difficulty_tables.no_difficulty_tables_installed.message"),
-          metrics.bodyTextSize, ui_theme::textSecondary()));
+          metrics.bodyTextSize, app_theme::textSecondary()));
     }
   }
   body->addView(scratchlessControls);
@@ -312,10 +312,10 @@ View *makeAppearanceColorPresets(const LayoutMetrics &metrics, std::uint32_t def
   for (const auto rgb : built_in_notes::colorPresets(defaultColor)) {
     const Color color(0xFF000000U | rgb);
     auto *button = makeButton(78, metrics.actionButtonHeight,
-        makeText(built_in_notes::colorHex(rgb), metrics.smallTextSize, ui_theme::textOn(color),
+        makeText(built_in_notes::colorHex(rgb), metrics.smallTextSize, app_theme::textOn(color),
                  TextView::CENTER, TextView::MIDDLE),
-        color, color, color, selectedColor == rgb ? ui_theme::textPrimary() : color,
-        ui_theme::textPrimary(), ui_theme::textPrimary());
+        color, color, color, selectedColor == rgb ? app_theme::textPrimary() : color,
+        app_theme::textPrimary(), app_theme::textPrimary());
     button->setOnClickListener([apply, rgb] { apply(rgb); });
     swatches->addView(button);
   }
@@ -371,75 +371,75 @@ View::ThemeColorProvider semanticBackgroundProvider(SettingsButtonTone tone,
     case SettingsButtonTone::Primary:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::primaryAction();
+        return app_theme::primaryAction();
       case ButtonVisualState::Hover:
-        return ui_theme::primaryActionHover();
+        return app_theme::primaryActionHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::primaryActionPressed();
+        return app_theme::primaryActionPressed();
       }
       break;
     case SettingsButtonTone::Info:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::infoAction();
+        return app_theme::infoAction();
       case ButtonVisualState::Hover:
-        return ui_theme::infoActionHover();
+        return app_theme::infoActionHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::infoActionPressed();
+        return app_theme::infoActionPressed();
       }
       break;
     case SettingsButtonTone::Success:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::successAction();
+        return app_theme::successAction();
       case ButtonVisualState::Hover:
-        return ui_theme::successActionHover();
+        return app_theme::successActionHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::successActionPressed();
+        return app_theme::successActionPressed();
       }
       break;
     case SettingsButtonTone::Warning:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::warningAction();
+        return app_theme::warningAction();
       case ButtonVisualState::Hover:
-        return ui_theme::warningActionHover();
+        return app_theme::warningActionHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::warningActionPressed();
+        return app_theme::warningActionPressed();
       }
       break;
     case SettingsButtonTone::Danger:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::dangerAction();
+        return app_theme::dangerAction();
       case ButtonVisualState::Hover:
-        return ui_theme::dangerActionHover();
+        return app_theme::dangerActionHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::dangerActionPressed();
+        return app_theme::dangerActionPressed();
       }
       break;
     case SettingsButtonTone::Violet:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::violetAction();
+        return app_theme::violetAction();
       case ButtonVisualState::Hover:
-        return ui_theme::violetActionHover();
+        return app_theme::violetActionHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::violetActionPressed();
+        return app_theme::violetActionPressed();
       }
       break;
     case SettingsButtonTone::Neutral:
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::control();
+        return app_theme::control();
       case ButtonVisualState::Hover:
-        return ui_theme::controlHover();
+        return app_theme::controlHover();
       case ButtonVisualState::Pressed:
-        return ui_theme::controlPressed();
+        return app_theme::controlPressed();
       }
       break;
     }
-    return ui_theme::control();
+    return app_theme::control();
   };
 }
 
@@ -449,11 +449,11 @@ View::ThemeColorProvider semanticBorderProvider(SettingsButtonTone tone,
     if (tone == SettingsButtonTone::Neutral) {
       switch (state) {
       case ButtonVisualState::Normal:
-        return ui_theme::hairline();
+        return app_theme::hairline();
       case ButtonVisualState::Hover:
-        return ui_theme::accentBorder();
+        return app_theme::accentBorder();
       case ButtonVisualState::Pressed:
-        return ui_theme::accentBorderStrong();
+        return app_theme::accentBorderStrong();
       }
     }
 
@@ -462,7 +462,7 @@ View::ThemeColorProvider semanticBorderProvider(SettingsButtonTone tone,
     const uint8_t alpha = state == ButtonVisualState::Normal
                               ? 164
                               : (state == ButtonVisualState::Hover ? 206 : 232);
-    return ui_theme::withAlpha(baseProvider(), alpha);
+    return app_theme::withAlpha(baseProvider(), alpha);
   };
 }
 
@@ -473,7 +473,7 @@ void applySemanticButtonStyle(Button *button, TextView *text,
   }
 
   auto normal = semanticBackgroundProvider(tone, ButtonVisualState::Normal);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setThemedBackgroundColors(
       normal, semanticBackgroundProvider(tone, ButtonVisualState::Hover),
       semanticBackgroundProvider(tone, ButtonVisualState::Pressed));
@@ -487,9 +487,9 @@ void applySemanticButtonStyle(Button *button, TextView *text,
     return;
   }
   if (tone == SettingsButtonTone::Neutral) {
-    text->setThemedColor(ui_theme::textPrimary);
+    text->setThemedColor(app_theme::textPrimary);
   } else {
-    text->setThemedColor([normal]() { return ui_theme::textOn(normal()); });
+    text->setThemedColor([normal]() { return app_theme::textOn(normal()); });
   }
 }
 } // namespace
@@ -907,12 +907,12 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
 
 void SettingsScene::persistSettings() {
   context.settings.sanitize();
-  const ui_theme::ThemeMode previousMode = ui_theme::activeMode();
-  const ui_theme::ThemeMode nextMode =
+  const app_theme::ThemeMode previousMode = app_theme::activeMode();
+  const app_theme::ThemeMode nextMode =
       context.settings.uiThemeMode == AppSettings::UiThemeMode::Light
-          ? ui_theme::ThemeMode::Light
-          : ui_theme::ThemeMode::Dark;
-  ui_theme::setActiveMode(nextMode);
+          ? app_theme::ThemeMode::Light
+          : app_theme::ThemeMode::Dark;
+  app_theme::setActiveMode(nextMode);
   const bool themeChanged = previousMode != nextMode;
   if (!context.saveSettings()) {
     SDL_Log("Failed to save settings");
@@ -1256,7 +1256,7 @@ void SettingsScene::appendAppearanceColorPicker(
     std::function<void(std::uint32_t)> preview) {
   auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, metrics.bodyTextSize);
   icon->setText(ui_icons::textForCodepoint(ui_icons::kPalette));
-  icon->setThemedColor(ui_theme::textPrimary);
+  icon->setThemedColor(app_theme::textPrimary);
   icon->setAlign(TextView::CENTER);
   icon->setVAlign(TextView::MIDDLE);
   auto *button = makeControlButton(78, metrics.actionButtonHeight, icon);
@@ -1320,9 +1320,9 @@ void SettingsScene::appendBuiltInNoteControls(
     lastLayoutWidth = -1;
   };
   body->addView(makeWrappedText(i18n::message("settings.notes.title"),
-                               metrics.bodyTextSize, ui_theme::textPrimary()));
+                               metrics.bodyTextSize, app_theme::textPrimary()));
   body->addView(makeWrappedText(i18n::message("settings.notes.help"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   const auto laneLabel = [&scratches, &keys](int candidate) -> std::string {
     const auto scratchIt = std::find(scratches.begin(), scratches.end(), candidate);
     const auto keyIt = std::find(keys.begin(), keys.end(), candidate);
@@ -1331,14 +1331,14 @@ void SettingsScene::appendBuiltInNoteControls(
     return std::to_string(keyIt - keys.begin() + 1);
   };
   body->addView(makeWrappedText(i18n::message("settings.notes.lanes"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *laneToggles = new View();
   laneToggles->setFlexDirection(FlexDirection::Row);
   laneToggles->setFlexWrap(YGWrapWrap);
   laneToggles->setGap(6.0F);
   for (const int candidate : lanes) {
     auto *toggle = makeControlButton(metrics.actionButtonHeight, metrics.actionButtonHeight,
-        makeText(laneLabel(candidate), metrics.smallTextSize, ui_theme::textPrimary(),
+        makeText(laneLabel(candidate), metrics.smallTextSize, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE));
     styleGameplaySkinChoiceButton(toggle, selectedLanes.contains(candidate));
     toggle->setOnClickListener([this, keyMode, candidate] {
@@ -1351,7 +1351,7 @@ void SettingsScene::appendBuiltInNoteControls(
   body->addView(laneToggles);
   auto *unselectAll = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.notes.unselect_all"), metrics.smallTextSize,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   unselectAll->setEnabled(!targets.empty());
   unselectAll->setOnClickListener([this, keyMode] {
     builtInNoteLanes[keyMode].clear();
@@ -1364,7 +1364,7 @@ void SettingsScene::appendBuiltInNoteControls(
   selectionActions->addView(unselectAll);
   auto *invert = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.notes.invert_selection"), metrics.smallTextSize,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   invert->setOnClickListener([this, keyMode, lanes] {
     auto &selection = builtInNoteLanes[keyMode];
     std::set<int> inverted;
@@ -1406,7 +1406,7 @@ void SettingsScene::appendBuiltInNoteControls(
 
   if (targets.empty()) {
     body->addView(makeWrappedText(i18n::message("settings.notes.select_lanes"),
-                                 metrics.smallTextSize, ui_theme::textSecondary()));
+                                 metrics.smallTextSize, app_theme::textSecondary()));
     return;
   }
 
@@ -1426,7 +1426,7 @@ void SettingsScene::appendBuiltInNoteControls(
     auto *sampleColumn = new View();
     sampleColumn->setWidth(180.0F);
     sampleColumn->addView(makeText(laneLabel(target.lane), metrics.smallTextSize,
-                                  ui_theme::textSecondary()));
+                                  app_theme::textSecondary()));
     auto *sampleFrame = new View();
     sampleFrame->setHeight(std::max(80.0F, height(160.0F, type, style) + 16.0F));
     sampleFrame->setWidthPercent(100.0F);
@@ -1451,7 +1451,7 @@ void SettingsScene::appendBuiltInNoteControls(
   body->addView(samples);
 
   body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *presets = makeAppearanceColorPresets(metrics, defaultStyle(targets.front().palette, type).color,
       common.color, [apply](std::uint32_t rgb) { apply(EditKind::Color, rgb); });
   body->addView(presets);
@@ -1467,7 +1467,7 @@ void SettingsScene::appendBuiltInNoteControls(
         };
       });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
   colorInput->setEditingText(common.color ? "#" + colorHex(*common.color)
                                          : i18n::message("settings.notes.mixed").resolve());
@@ -1479,7 +1479,7 @@ void SettingsScene::appendBuiltInNoteControls(
   body->addView(colorInput);
   const auto makePropertyReset = [&metrics, apply](const i18n::Text &label, EditKind kind) {
     auto *button = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+        makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE));
     button->setOnClickListener([apply, kind] { apply(kind); });
     return button;
@@ -1487,7 +1487,7 @@ void SettingsScene::appendBuiltInNoteControls(
   body->addView(makePropertyReset(i18n::message("settings.notes.reset_color"), EditKind::ResetColor));
   body->addView(makeWrappedText(i18n::message(isBody(type)
       ? "settings.notes.body_width" : "settings.notes.thickness"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
   auto *thicknessInput = makeTextInput(metrics, 140);
   thicknessInput->setEditingText(common.thickness ? std::to_string(*common.thickness)
       : i18n::message("settings.notes.mixed").resolve());
@@ -1508,7 +1508,7 @@ void SettingsScene::appendBuiltInNoteControls(
 void SettingsScene::appendKeybombColorControls(
     View *body, const LayoutMetrics &metrics, int keyMode, Judgement judgement) {
   const auto style = context.settings.keybombsForKeyMode(keyMode)[judgement];
-  const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
+  const bool light = app_theme::activeMode() == app_theme::ThemeMode::Light;
   const auto color = keybomb::resolvedColor(judgement, style, light);
   const auto apply = [this, keyMode, judgement](std::optional<std::uint32_t> rgb) {
     context.settings.presentation().keybombs[keyMode][judgement].color = rgb;
@@ -1517,7 +1517,7 @@ void SettingsScene::appendKeybombColorControls(
     lastLayoutWidth = -1;
   };
   body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *presets = makeAppearanceColorPresets(metrics, keybomb::defaultColor(judgement, light),
       color, [apply](std::uint32_t rgb) { apply(rgb); });
   body->addView(presets);
@@ -1530,7 +1530,7 @@ void SettingsScene::appendKeybombColorControls(
         };
       });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *input = makeTextInput(metrics, 140);
   input->setEditingText("#" + built_in_notes::colorHex(color));
   input->onEditingFinished([this, apply](const std::string &text) {
@@ -1540,7 +1540,7 @@ void SettingsScene::appendKeybombColorControls(
   body->addView(input);
   auto *reset = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.notes.reset_color"), metrics.smallTextSize,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   reset->setOnClickListener([apply] { apply(std::nullopt); });
   body->addView(reset);
 }
@@ -1562,7 +1562,7 @@ void SettingsScene::appendBuiltInJudgeLineControls(
     lastLayoutWidth = -1;
   };
   body->addView(makeWrappedText(i18n::message("settings.judge_line.title"),
-                               metrics.bodyTextSize, ui_theme::textPrimary()));
+                               metrics.bodyTextSize, app_theme::textPrimary()));
   auto *sampleFrame = new View();
   sampleFrame->setWidthPercent(100.0F);
   sampleFrame->setHeight(std::max(48.0F, built_in_judge_line::height(160.0F, style) + 16.0F));
@@ -1578,7 +1578,7 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   body->addView(sampleFrame);
 
   body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *presets = makeAppearanceColorPresets(metrics, built_in_judge_line::Style{}.color,
       style.color, [apply](std::uint32_t rgb) { apply(rgb, std::nullopt); });
   body->addView(presets);
@@ -1593,7 +1593,7 @@ void SettingsScene::appendBuiltInJudgeLineControls(
         };
       });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
   colorInput->setEditingText("#" + built_in_notes::colorHex(style.color));
   colorInput->onEditingFinished([this, apply](const std::string &text) {
@@ -1603,14 +1603,14 @@ void SettingsScene::appendBuiltInJudgeLineControls(
   body->addView(colorInput);
   const auto makeReset = [&metrics](const i18n::Text &label) {
     return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+        makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE));
   };
   auto *resetColor = makeReset(i18n::message("settings.notes.reset_color"));
   resetColor->setOnClickListener([apply] { apply(0xFFFFFF, std::nullopt); });
   body->addView(resetColor);
   body->addView(makeWrappedText(i18n::message("settings.judge_line.height"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *heightInput = makeTextInput(metrics, 140);
   heightInput->setEditingText(std::to_string(style.heightPercent));
   heightInput->onEditingFinished([this, apply](const std::string &text) {
@@ -1644,13 +1644,13 @@ void SettingsScene::appendBuiltInMeasureLineControls(
   };
   const auto makeReset = [&metrics](const i18n::Text &label) {
     return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+        makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE));
   };
   body->addView(makeWrappedText(i18n::message("settings.measure_line.title"),
-                               metrics.bodyTextSize, ui_theme::textPrimary()));
+                               metrics.bodyTextSize, app_theme::textPrimary()));
   body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   const auto setColor = [apply](std::uint32_t color) {
     apply([color](auto &next) { next.measureLineColor = color; });
   };
@@ -1667,7 +1667,7 @@ void SettingsScene::appendBuiltInMeasureLineControls(
         };
       });
   body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
-                               metrics.smallTextSize, ui_theme::textSecondary()));
+                               metrics.smallTextSize, app_theme::textSecondary()));
   auto *colorInput = makeTextInput(metrics, 140);
   colorInput->setEditingText("#" + built_in_notes::colorHex(style.measureLineColor));
   colorInput->onEditingFinished([this, setColor](const std::string &text) {
@@ -1688,7 +1688,7 @@ void SettingsScene::appendBuiltInMeasureLineControls(
 void SettingsScene::appendBuiltInLaneOpacityControls(
     View *body, const LayoutMetrics &metrics, int keyMode) {
   body->addView(makeWrappedText(i18n::message("settings.lane_background.title"),
-                               metrics.bodyTextSize, ui_theme::textPrimary()));
+                               metrics.bodyTextSize, app_theme::textPrimary()));
   appendBuiltInLanePercentControl(body, metrics, keyMode,
       i18n::message("settings.lane_background.opacity"),
       &built_in_lane::Style::backgroundOpacityPercent,
@@ -1710,10 +1710,10 @@ void SettingsScene::appendBuiltInLanePercentControl(
   };
   const auto makeReset = [&metrics](const i18n::Text &label) {
     return makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+        makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE));
   };
-  body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+  body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
   auto *input = makeTextInput(metrics, 140);
   input->setEditingText(std::to_string(context.settings.builtInLaneForKeyMode(keyMode).*property));
   input->onEditingFinished([this, apply, property](const std::string &text) {

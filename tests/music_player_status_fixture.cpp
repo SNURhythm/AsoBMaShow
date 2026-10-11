@@ -89,7 +89,7 @@ struct Player {
     return !failClear;
   }
 };
-namespace ui_theme {
+namespace app_theme {
 int primaryAction, primaryActionHover, primaryActionPressed, accentBorderStrong,
     control, controlHover, controlPressed, hairlineStrong, warningAction,
     warningActionHover, warningActionPressed, accentBorder, successAction,

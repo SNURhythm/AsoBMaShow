@@ -4,7 +4,7 @@
 #include "../ScoreRankUtils.h"
 #include "../scene/play/GameplayGaugeTypes.h"
 #include "ClearLampColors.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <iomanip>
 #include <sstream>
@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kUiFont = app_theme::font;
 
 std::string formatGauge(float gauge) {
   std::ostringstream stream;
@@ -66,7 +66,7 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   artworkFrame_ = new View();
   jacketImage_ = new ImageView(0, 0, 0, 0);
   textColumn_ = new View();
-  titleText_ = new TextView(kUiFont, 22);
+  titleText_ = new TextView(app_theme::boldFont, 22);
   artistText_ = new TextView(kUiFont, 15);
   attemptText_ = new TextView(kUiFont, 14);
   difficultyColumn_ = new View();
@@ -81,20 +81,20 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
       ->setAlignItems(YGAlignCenter)
       ->setPadding(Edge::All, 8)
       ->setGap(10)
-      ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setThemedBackgroundColor(app_theme::panelSubtle)
+      ->setThemedBorderColor(app_theme::hairlineSubtle)
       ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::controlRadius());
+      ->setCornerRadius(app_theme::controlRadius());
 
   selectionButton_->setName("irUploadSelection");
   selectionButton_->setWidth(34)->setHeight(34)->setFlexShrink(0);
-  selectionButton_->setCornerRadius(6.0F);
+  selectionButton_->setCornerRadius(app_theme::controlRadius());
   selectionButton_->setContentView(selectionContent_);
   addView(selectionButton_);
 
   clearLamp_->setName("irUploadClearLamp");
   clearLamp_->setWidth(6)->setHeight(84)->setFlexShrink(0);
-  clearLamp_->setCornerRadius(3.0F);
+  clearLamp_->setCornerRadius(app_theme::controlRadius());
   addView(clearLamp_);
 
   artworkFrame_->setWidth(84)
@@ -103,14 +103,14 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
       ->setPadding(Edge::All, 2)
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
-      ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setThemedBackgroundColor(app_theme::panelSubtle)
+      ->setThemedBorderColor(app_theme::hairlineSubtle)
       ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::controlRadius());
+      ->setCornerRadius(app_theme::controlRadius());
   jacketImage_->setName("irUploadJacket");
   jacketImage_->setWidth(78)->setHeight(78);
   jacketImage_->setCornerRadius(
-      ui_theme::childRadiusForInset(ui_theme::controlRadius(), 1.0F, 2.0F));
+      app_theme::childRadiusForInset(app_theme::controlRadius(), 1.0F, 2.0F));
   artworkFrame_->addView(jacketImage_);
   addView(artworkFrame_);
 
@@ -176,7 +176,7 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   statusText_->setWidth(58)->setHeight(28)->setFlexShrink(0);
   statusText_->setAlign(TextView::TextAlign::CENTER);
   statusText_->setVAlign(TextView::TextVAlign::MIDDLE);
-  statusText_->setCornerRadius(6.0F);
+  statusText_->setCornerRadius(app_theme::controlRadius());
   addView(statusText_);
 }
 
@@ -192,9 +192,9 @@ void IrUploadCandidateListItemView::setCandidate(
   selectionButton_->setEnabled(true);
   selectionContent_->setChecked(selected);
   if (selected) {
-    selectionContent_->setThemedColor(ui_theme::cyan);
+    selectionContent_->setThemedColor(app_theme::cyan);
   } else {
-    selectionContent_->setThemedColor(ui_theme::textMuted);
+    selectionContent_->setThemedColor(app_theme::textMuted);
   }
   if (!selectionLocked) {
     selectionButton_->setOnClickListener(
@@ -224,8 +224,8 @@ void IrUploadCandidateListItemView::setCandidate(
     scoreText_->setText("");
     rankText_->setText("");
   }
-  scoreText_->setThemedColor(ui_theme::cyan);
-  rankText_->setThemedColor(ui_theme::amber);
+  scoreText_->setThemedColor(app_theme::cyan);
+  rankText_->setThemedColor(app_theme::amber);
 
   if (hasClearLampColor(score.clearType)) {
     clearLamp_->setBackgroundColor(clearLampColorForRank(score.clearType));
@@ -241,17 +241,17 @@ void IrUploadCandidateListItemView::setCandidate(
   statusText_->setLocalizedText(i18n::message(
       failed ? "ir.upload.candidate.retry.label" : "ir.upload.candidate.eligible.label"));
   if (failed) {
-    statusText_->setThemedBackgroundColor(ui_theme::coral);
+    statusText_->setThemedBackgroundColor(app_theme::coral);
     statusText_->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::coral()); });
+        [] { return app_theme::textOn(app_theme::coral()); });
   } else {
-    statusText_->setThemedBackgroundColor(ui_theme::amber);
+    statusText_->setThemedBackgroundColor(app_theme::amber);
     statusText_->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::amber()); });
+        [] { return app_theme::textOn(app_theme::amber()); });
   }
-  titleText_->setThemedColor(ui_theme::textPrimary);
-  artistText_->setThemedColor(ui_theme::textSecondary);
-  attemptText_->setThemedColor(ui_theme::textMuted);
+  titleText_->setThemedColor(app_theme::textPrimary);
+  artistText_->setThemedColor(app_theme::textSecondary);
+  attemptText_->setThemedColor(app_theme::textMuted);
 }
 
 IrUploadCandidateListView::IrUploadCandidateListView()

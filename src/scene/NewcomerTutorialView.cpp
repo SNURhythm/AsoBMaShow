@@ -4,7 +4,7 @@
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <utility>
@@ -14,19 +14,19 @@ constexpr std::array<const char *, 5> kLanguages{"en", "ko", "ja", "zh-Hans", "z
 constexpr std::array<const char *, 5> kLanguageNames{"English", "한국어", "日本語", "简体中文", "繁體中文"};
 
 TextView *label(int size) {
-  auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", size);
-  text->setThemedColor(ui_theme::textPrimary);
+  auto *text = new TextView(size >= 26 ? app_theme::boldFont : app_theme::font, size);
+  text->setThemedColor(app_theme::textPrimary);
   text->setVAlign(TextView::MIDDLE);
   return text;
 }
 
 Button *button(const i18n::Text &caption, TextView **textOut = nullptr) {
   auto *result = new Button();
-  result->setHeight(52)->setFlex(1)->setCornerRadius(ui_theme::controlRadius());
-  result->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  result->setThemedBorderColors(ui_theme::hairlineStrong, ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
+  result->setHeight(52)->setFlex(1)->setCornerRadius(app_theme::controlRadius());
+  result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  result->setThemedBorderColors(app_theme::hairlineStrong, app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
   result->setStyledBorderWidth(1);
   auto *text = label(22);
   text->setAlign(TextView::CENTER);
@@ -58,23 +58,23 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
   setZIndex(2000);
   for (auto *&scrim : scrims_) {
     scrim = new View();
-    scrim->setBackgroundColor(Color(0, 0, 0, 170));
+    scrim->setThemedBackgroundColor(app_theme::scrim);
     addView(scrim);
   }
   highlight_ = new View();
-  highlight_->setThemedBorderColor(ui_theme::cyan);
-  highlight_->setBorderWidth(3)->setCornerRadius(ui_theme::controlRadius());
+  highlight_->setThemedBorderColor(app_theme::cyan);
+  highlight_->setBorderWidth(3)->setCornerRadius(app_theme::controlRadius());
   addView(highlight_);
 
   panel_ = new View();
   panel_->setFlexDirection(FlexDirection::Column)
       ->setPadding(Edge::All, 24)->setGap(12)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setThemedBorderColor(ui_theme::accentBorderStrong)
-      ->setBorderWidth(1)->setCornerRadius(ui_theme::panelRadius());
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setThemedBorderColor(app_theme::accentBorderStrong)
+      ->setBorderWidth(1)->setCornerRadius(app_theme::panelRadius());
   progress_ = label(18);
   progress_->setHeight(32)->setFlexShrink(0);
-  progress_->setThemedColor(ui_theme::textSecondary);
+  progress_->setThemedColor(app_theme::textSecondary);
   panel_->addView(progress_);
   title_ = label(30);
   title_->setWrap(true);
@@ -107,7 +107,7 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
   }
   panel_->addView(languages_);
   status_ = label(18);
-  status_->setThemedColor(ui_theme::coral);
+  status_->setThemedColor(app_theme::coral);
   status_->setWrap(true);
   panel_->addView(status_);
 
@@ -121,10 +121,10 @@ NewcomerTutorialView::NewcomerTutorialView(NewcomerTutorialCallbacks callbacks,
   back_->setOnClickListener([this] { back(); });
   footer->addView(back_);
   auto *next = button(i18n::message("tutorial.controls.next"), &nextText_);
-  next->setThemedBackgroundColors(ui_theme::primaryAction,
-                                  ui_theme::primaryActionHover,
-                                  ui_theme::primaryActionPressed);
-  nextText_->setThemedColor([] { return ui_theme::textOn(ui_theme::primaryAction()); });
+  next->setThemedBackgroundColors(app_theme::primaryAction,
+                                  app_theme::primaryActionHover,
+                                  app_theme::primaryActionPressed);
+  nextText_->setThemedColor([] { return app_theme::textOn(app_theme::primaryAction()); });
   next->setOnClickListener([this] { advance(); });
   footer->addView(next);
   panel_->addView(footer);
@@ -205,8 +205,8 @@ void NewcomerTutorialView::refresh() {
     const bool selected = language_ == kLanguages[i];
     languageButtons_[i]->setSelected(selected);
     languageButtons_[i]->setThemedBorderColors(
-        selected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
-        ui_theme::accentBorder, ui_theme::accentBorderStrong);
+        selected ? app_theme::accentBorderStrong : app_theme::hairlineStrong,
+        app_theme::accentBorder, app_theme::accentBorderStrong);
   }
   back_->setEnabled(!language);
   nextText_->setLocalizedText(i18n::message(language ? "tutorial.controls.begin"

@@ -196,7 +196,7 @@ int main() {
             "eligible badge resets semantic text and upload glyph");
     require(reusedRow->irBadgeIconFontPath() ==
                     std::string(ui_icons::kFontAwesomeSolidPath) &&
-                sameColor(reusedRow->currentIrBadgeAccent(), ui_theme::amber()),
+                sameColor(reusedRow->currentIrBadgeAccent(), app_theme::amber()),
             "eligible badge resets FontAwesome font and amber color");
     require(reusedRow->irBadgeCallbackStableKey() == eligible.stableKey(),
             "eligible badge callback is bound to the current stable key");
@@ -219,7 +219,7 @@ int main() {
                 rowText(*row, "recordRank")->getText() == "B" &&
                 badgeText(*irBadge, "irBadgeIcon")->getText() ==
                     ui_icons::textForCodepoint(0xf2f1) &&
-                sameColor(row->currentIrBadgeAccent(), ui_theme::cyan()),
+                sameColor(row->currentIrBadgeAccent(), app_theme::cyan()),
             "uploading rebind replaces labels, glyph, and color");
     clickThroughList(list, *irBadge);
     require(uploads == 1 && feedback == 1 &&
@@ -236,7 +236,7 @@ int main() {
                 row->irBadgeCallbackStableKey() == uploaded.stableKey() &&
                 badgeText(*irBadge, "irBadgeIcon")->getText() ==
                     ui_icons::textForCodepoint(0xf00c) &&
-                sameColor(row->currentIrBadgeAccent(), ui_theme::lime()),
+                sameColor(row->currentIrBadgeAccent(), app_theme::lime()),
             "uploaded local rebind replaces identity, callback, glyph, color");
     clickThroughList(list, *irBadge);
     require(uploads == 1 && feedback == 2 &&
@@ -259,7 +259,7 @@ int main() {
                 badgeText(*irBadge, "irBadgeLabel")->getText() == "IR" &&
                 badgeText(*irBadge, "irBadgeIcon")->getText() ==
                     ui_icons::textForCodepoint(0xf00c) &&
-                sameColor(row->currentIrBadgeAccent(), ui_theme::lime()),
+                sameColor(row->currentIrBadgeAccent(), app_theme::lime()),
             "remote row always renders the semantic uploaded IR badge");
     clickThroughList(list, *irBadge);
     require(uploads == 1 && feedback == 3 &&

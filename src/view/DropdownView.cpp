@@ -5,7 +5,7 @@
 #include "OverlayPortal.h"
 #include "ScrollView.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,38 +51,38 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   if (button == nullptr || text == nullptr) {
     return;
   }
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
   if (!enabled) {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
     return;
   }
   if (selected) {
-    button->setThemedBackgroundColors(ui_theme::primaryAction,
-                                      ui_theme::primaryActionHover,
-                                      ui_theme::primaryActionPressed);
+    button->setThemedBackgroundColors(app_theme::primaryAction,
+                                      app_theme::primaryActionHover,
+                                      app_theme::primaryActionPressed);
     button->setThemedBorderColors(
-        [] { return ui_theme::withAlpha(ui_theme::accentBorderStrong(), 150); },
-        [] { return ui_theme::withAlpha(ui_theme::accentBorderStrong(), 190); },
+        [] { return app_theme::withAlpha(app_theme::accentBorderStrong(), 150); },
+        [] { return app_theme::withAlpha(app_theme::accentBorderStrong(), 190); },
         [] {
-          return ui_theme::withAlpha(ui_theme::accentBorderStrong(), 220);
+          return app_theme::withAlpha(app_theme::accentBorderStrong(), 220);
         });
     text->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+        [] { return app_theme::textOn(app_theme::primaryAction()); });
     return;
   }
 
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                ui_theme::hairlineStrong,
-                                ui_theme::hairlineStrong);
-  text->setThemedColor(ui_theme::textPrimary);
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                app_theme::hairlineStrong,
+                                app_theme::hairlineStrong);
+  text->setThemedColor(app_theme::textPrimary);
 }
 
 bool mouseEventToUi(const SDL_MouseButtonEvent &event, float &uiX, float &uiY) {
@@ -157,7 +157,7 @@ void DropdownView::buildView() {
   triggerIndicator->setFlexShrink(0.0f);
   triggerIndicator->setCornerRadius(2.5f);
   content->addView(triggerIndicator);
-  triggerText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  triggerText = new TextView(app_theme::font, 16);
   triggerText->setVAlign(TextView::MIDDLE);
   triggerText->setOverflow(TextView::TextOverflow::Hidden);
   triggerText->setMinWidth(0);
@@ -180,11 +180,11 @@ void DropdownView::buildView() {
                               160, static_cast<int>(kOptionHeight));
   menuScroll->setPositionType(YGPositionTypeAbsolute);
   menuScroll->setContentPadding(Edge::All, kMenuPadding);
-  menuScroll->setThemedBackgroundColor(ui_theme::panelStrong);
-  menuScroll->setThemedBorderColor(ui_theme::hairlineStrong);
+  menuScroll->setThemedBackgroundColor(app_theme::panelStrong);
+  menuScroll->setThemedBorderColor(app_theme::hairlineStrong);
   menuScroll->setBorderWidth(1);
-  menuScroll->setCornerRadius(ui_theme::controlRadius());
-  menuScroll->setThemedShadow(ui_theme::backdrop, ui_theme::kPanelShadow);
+  menuScroll->setCornerRadius(app_theme::controlRadius());
+  menuScroll->setThemedShadow(app_theme::shadow, app_theme::kPanelShadow);
   menuScroll->setZIndex(100);
   menuScroll->setVisible(false);
   menuScroll->setContentView(menuContent);
@@ -264,7 +264,7 @@ void DropdownView::rebuildOptions() {
     indicator->setCornerRadius(2.5f);
     content->addView(indicator);
 
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    auto *text = new TextView(app_theme::font, 15);
     text->setLocalizedText(option.label);
     text->setAlign(TextView::LEFT);
     text->setVAlign(TextView::MIDDLE);
@@ -354,8 +354,8 @@ void DropdownView::refreshVisualState() {
         menuVisible ? kIconCaretUp : kIconCaretDown));
     triggerIcon->setThemedColor(
         !current.enabled
-            ? ui_theme::textMuted
-            : (menuVisible ? ui_theme::textPrimary : ui_theme::textSecondary));
+            ? app_theme::textMuted
+            : (menuVisible ? app_theme::onAction : app_theme::textSecondary));
   }
 
   styleButton(triggerButton, triggerText, menuVisible, current.enabled);

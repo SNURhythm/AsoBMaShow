@@ -12,18 +12,18 @@
 #include "PlayOptionSectionView.h"
 #include "SnappedSlider.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace {
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = app_theme::font;
 
 TextView *makeLabel(const i18n::Text &label) {
   auto *text = new TextView(kFont, 20);
   text->setLocalizedText(label);
-  text->setThemedColor(ui_theme::textSecondary);
+  text->setThemedColor(app_theme::textSecondary);
   text->setVAlign(TextView::MIDDLE);
   text->setHeight(28);
   return text;
@@ -43,19 +43,19 @@ Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
   button->setFlexGrow(1.0f);
   button->setFlexBasis(0.0f);
   button->setFlexShrink(1.0f);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                ui_theme::hairlineStrong,
-                                ui_theme::accentBorder);
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                app_theme::hairlineStrong,
+                                app_theme::accentBorder);
   auto *text = new TextView(kFont, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setThemedColor(ui_theme::textPrimary);
+  text->setThemedColor(app_theme::textPrimary);
   button->setContentView(text);
   if (textOut != nullptr) {
     *textOut = text;
@@ -70,28 +70,28 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   button->setEnabled(enabled);
   button->setSelected(selected);
   if (selected) {
-    button->setThemedBackgroundColors(ui_theme::primaryAction,
-                                      ui_theme::primaryActionHover,
-                                      ui_theme::primaryActionPressed);
-    button->setThemedBorderColors(ui_theme::accentBorderStrong,
-                                  ui_theme::accentBorderStrong,
-                                  ui_theme::accentBorderStrong);
+    button->setThemedBackgroundColors(app_theme::primaryAction,
+                                      app_theme::primaryActionHover,
+                                      app_theme::primaryActionPressed);
+    button->setThemedBorderColors(app_theme::accentBorderStrong,
+                                  app_theme::accentBorderStrong,
+                                  app_theme::accentBorderStrong);
     text->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+        [] { return app_theme::textOn(app_theme::primaryAction()); });
   } else if (!enabled) {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
   } else {
-    button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                      ui_theme::controlPressed);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineStrong,
-                                  ui_theme::accentBorder);
-    text->setThemedColor(ui_theme::textPrimary);
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineStrong,
+                                  app_theme::accentBorder);
+    text->setThemedColor(app_theme::textPrimary);
   }
 }
 
@@ -313,10 +313,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       ->setGap(10)
       ->setMargin(Edge::Left, 20)
       ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setThemedBackgroundColor(app_theme::panelSubtle)
+      ->setThemedBorderColor(app_theme::hairlineSubtle)
       ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::controlRadius());
+      ->setCornerRadius(app_theme::controlRadius());
   playbackGroup->addView(makeLabel(i18n::message("play_options.playback_rate.label")));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
@@ -329,7 +329,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackRateText = new TextView(kFont, 22);
   playbackRateText->setAlign(TextView::RIGHT);
   playbackRateText->setVAlign(TextView::MIDDLE);
-  playbackRateText->setThemedColor(ui_theme::textPrimary);
+  playbackRateText->setThemedColor(app_theme::textPrimary);
   playbackRateText->setWidth(72);
   playbackRateRow->addView(playbackRateText);
   playbackGroup->addView(playbackRateRow);
@@ -477,9 +477,9 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     clubModeButtonContent->setThemedColor(
         state.clubMode
             ? View::ThemeColorProvider{[] {
-                return ui_theme::textOn(ui_theme::primaryAction());
+                return app_theme::textOn(app_theme::primaryAction());
               }}
-            : View::ThemeColorProvider{ui_theme::textPrimary});
+            : View::ThemeColorProvider{app_theme::textPrimary});
   }
   for (const auto &item : pacemakerButtons) {
     styleButton(item.button, item.text,

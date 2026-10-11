@@ -8,7 +8,7 @@
 #include "../view/SnappedSlider.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -16,7 +16,7 @@
 #include <utility>
 
 namespace {
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = app_theme::font;
 constexpr std::string_view kLastUsedPresetId = "last-used";
 
 std::string formatMicros(long long micros) {
@@ -31,9 +31,9 @@ std::string formatMicros(long long micros) {
 }
 
 TextView *makeText(std::string text, int size, Color color) {
-  auto *view = new TextView(kFont, size);
+  auto *view = new TextView(size >= 26 ? app_theme::boldFont : kFont, size);
   view->setText(text);
-  view->setColor(ui_theme::sdl(color));
+  view->setColor(app_theme::sdl(color));
   view->setVAlign(TextView::MIDDLE);
   view->setOverflow(TextView::TextOverflow::Hidden);
   return view;
@@ -44,13 +44,13 @@ Button *makeButton(std::string label, int width = 96,
   auto *button = new Button(0, 0, width, 44);
   button->setWidth(width);
   button->setHeight(44);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
-  button->setBackgroundColors(ui_theme::control(), ui_theme::controlHover(),
-                              ui_theme::controlPressed());
-  button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
-                          ui_theme::cyan());
-  auto *text = makeText(std::move(label), 16, ui_theme::textPrimary());
+  button->setBackgroundColors(app_theme::control(), app_theme::controlHover(),
+                              app_theme::controlPressed());
+  button->setBorderColors(app_theme::hairline(), app_theme::cyan(),
+                          app_theme::cyan());
+  auto *text = makeText(std::move(label), 16, app_theme::textPrimary());
   text->setAlign(TextView::CENTER);
   if (textOut != nullptr) {
     *textOut = text;
@@ -64,7 +64,7 @@ View *makeRow(std::string label, View *control) {
   row->setFlexDirection(FlexDirection::Column);
   row->setAlignItems(YGAlignStretch);
   row->setGap(4);
-  auto *labelView = makeText(std::move(label), 14, ui_theme::textMuted());
+  auto *labelView = makeText(std::move(label), 14, app_theme::textMuted());
   labelView->setHeight(20);
   row->addView(labelView);
   control->setWidthPercent(100.0f);
@@ -84,8 +84,8 @@ View *makeSliderRow(std::string label, SnappedSlider *slider,
   header->setFlexDirection(FlexDirection::Row);
   header->setAlignItems(YGAlignCenter);
   header->setJustifyContent(YGJustifySpaceBetween);
-  header->addView(makeText(std::move(label), 14, ui_theme::textMuted()));
-  auto *value = makeText("", 14, ui_theme::textPrimary());
+  header->addView(makeText(std::move(label), 14, app_theme::textMuted()));
+  auto *value = makeText("", 14, app_theme::textPrimary());
   value->setAlign(TextView::RIGHT);
   header->addView(value);
   *valueOut = value;
@@ -109,14 +109,14 @@ PracticePanelView::PracticePanelView(
   setFlexShrink(0.0f);
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
-  setBackgroundColor(ui_theme::panelStrong());
-  setBorderColor(ui_theme::hairline());
+  setBackgroundColor(app_theme::panelStrong());
+  setBorderColor(app_theme::hairline());
   setBorderWidth(1);
   build(portal);
 }
 
 void PracticePanelView::build(OverlayPortal *portal) {
-  auto *header = makeText(i18n::tr("practice.controls.practice.label"), 26, ui_theme::textPrimary());
+  auto *header = makeText(i18n::tr("practice.controls.practice.label"), 26, app_theme::textPrimary());
   header->setHeight(54);
   header->setPadding(Edge::Left, 18);
   addView(header);
@@ -147,11 +147,11 @@ void PracticePanelView::build(OverlayPortal *portal) {
   content->addView(
       makeRow(i18n::tr("practice.controls.preset.label"), dropdowns[static_cast<size_t>(DropDownIndex::Preset)]));
 
-  rangeText = makeText("", 16, ui_theme::textSecondary());
+  rangeText = makeText("", 16, app_theme::textSecondary());
   rangeText->setHeight(30);
   content->addView(rangeText);
 
-  diagnosticText = makeText("", 14, ui_theme::textSecondary());
+  diagnosticText = makeText("", 14, app_theme::textSecondary());
   diagnosticText->setWrap(true);
   diagnosticText->setHeight(42);
   content->addView(diagnosticText);
@@ -161,8 +161,8 @@ void PracticePanelView::build(OverlayPortal *portal) {
   markerRow->setGap(8);
   auto *startMarkerButton = makeButton(i18n::tr("practice.controls.set_start.label"), 0);
   startMarkerButton->setFlex(1.0f);
-  startMarkerButton->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
-                                     ui_theme::cyan());
+  startMarkerButton->setBorderColors(app_theme::cyan(), app_theme::cyan(),
+                                     app_theme::cyan());
   startMarkerButton->setOnClickListener([this]() {
     activeMarker = practice::Marker::Start;
     if (onMarkerSelected) {
@@ -173,8 +173,8 @@ void PracticePanelView::build(OverlayPortal *portal) {
   markerRow->addView(startMarkerButton);
   auto *endMarkerButton = makeButton(i18n::tr("practice.controls.set_end.label"), 0);
   endMarkerButton->setFlex(1.0f);
-  endMarkerButton->setBorderColors(ui_theme::amber(), ui_theme::amber(),
-                                   ui_theme::amber());
+  endMarkerButton->setBorderColors(app_theme::amber(), app_theme::amber(),
+                                   app_theme::amber());
   endMarkerButton->setOnClickListener([this]() {
     activeMarker = practice::Marker::End;
     if (onMarkerSelected) {
@@ -249,10 +249,10 @@ void PracticePanelView::build(OverlayPortal *portal) {
       makeRow(i18n::tr("practice.controls.mode.label"), dropdowns[static_cast<size_t>(DropDownIndex::Mode)]));
 
   presetNameInput = new TextInputBox(kFont, 17);
-  presetNameInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  presetNameInput->setBackgroundColor(ui_theme::control());
-  presetNameInput->setCornerRadius(ui_theme::controlRadius());
-  presetNameInput->setBorderColor(ui_theme::hairline());
+  presetNameInput->setColor(app_theme::sdl(app_theme::textPrimary()));
+  presetNameInput->setBackgroundColor(app_theme::control());
+  presetNameInput->setCornerRadius(app_theme::controlRadius());
+  presetNameInput->setBorderColor(app_theme::hairline());
   presetNameInput->setBorderWidth(1);
   presetNameInput->setPadding(Edge::Left, 12);
   presetNameInput->setPadding(Edge::Right, 12);
@@ -260,12 +260,12 @@ void PracticePanelView::build(OverlayPortal *portal) {
   presetNameInput->setOverflow(TextView::TextOverflow::Hidden);
   content->addView(makeRow(i18n::tr("practice.controls.name.label"), presetNameInput));
 
-  presetMessageText = makeText("", 14, ui_theme::textSecondary());
+  presetMessageText = makeText("", 14, app_theme::textSecondary());
   presetMessageText->setWrap(true);
   presetMessageText->setHeight(0);
   presetMessageText->setDisplay(YGDisplayNone);
   content->addView(presetMessageText);
-  presetMessageSecondLine = makeText("", 14, ui_theme::textSecondary());
+  presetMessageSecondLine = makeText("", 14, app_theme::textSecondary());
   presetMessageSecondLine->setHeight(0);
   presetMessageSecondLine->setDisplay(YGDisplayNone);
   content->addView(presetMessageSecondLine);
@@ -312,11 +312,16 @@ void PracticePanelView::build(OverlayPortal *portal) {
   mutationRow->addView(deleteButton);
   content->addView(mutationRow);
 
-  startButton = makeButton(i18n::tr("practice.controls.start.label"), 0);
+  TextView *startText = nullptr;
+  startButton = makeButton(i18n::tr("practice.controls.start.label"), 0, &startText);
+  startText->setColor(app_theme::sdl(app_theme::onAction()));
+  startButton->setBackgroundColors(app_theme::primaryAction(),
+                                   app_theme::primaryActionHover(),
+                                   app_theme::primaryActionPressed());
   startButton->setWidthPercent(100.0f);
   startButton->setHeight(52);
-  startButton->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
-                               ui_theme::cyan());
+  startButton->setBorderColors(app_theme::cyan(), app_theme::cyan(),
+                               app_theme::cyan());
   startButton->setOnClickListener([this]() {
     if (callbacks.onStart) {
       callbacks.onStart();
@@ -375,7 +380,7 @@ void PracticePanelView::setPresetMessage(std::string message, bool error) {
     message.erase(split);
   }
   const SDL_Color color =
-      ui_theme::sdl(error ? ui_theme::coral() : ui_theme::cyan());
+      app_theme::sdl(error ? app_theme::coral() : app_theme::cyan());
   const bool hasSecondLine = !secondLine.empty();
   presetMessageText->setText(std::move(message));
   presetMessageText->setColor(color);
@@ -530,13 +535,16 @@ void PracticePanelView::refreshControls() {
 
   if (loopButton != nullptr && loopButtonText != nullptr) {
     loopButtonText->setText(currentConfiguration.loop ? i18n::tr("practice.controls.on.label") : i18n::tr("practice.controls.off.label"));
+    loopButtonText->setColor(app_theme::sdl(
+        currentConfiguration.loop ? app_theme::onAction()
+                                  : app_theme::textPrimary()));
     loopButton->setBackgroundColors(
-        currentConfiguration.loop ? ui_theme::primaryAction()
-                                  : ui_theme::control(),
-        currentConfiguration.loop ? ui_theme::primaryActionHover()
-                                  : ui_theme::controlHover(),
-        currentConfiguration.loop ? ui_theme::primaryActionPressed()
-                                  : ui_theme::controlPressed());
+        currentConfiguration.loop ? app_theme::primaryAction()
+                                  : app_theme::control(),
+        currentConfiguration.loop ? app_theme::primaryActionHover()
+                                  : app_theme::controlHover(),
+        currentConfiguration.loop ? app_theme::primaryActionPressed()
+                                  : app_theme::controlPressed());
   }
   if (countInSlider != nullptr) {
     countInSlider->refresh({.minimum = 0,
@@ -573,12 +581,14 @@ void PracticePanelView::refreshControls() {
       startingGaugeDefaultText != nullptr) {
     startingGaugeDefaultText->setText(usesDefaultGauge ? i18n::tr("practice.controls.preset.default_selected.label")
                                                        : i18n::tr("practice.controls.use_default.label"));
+    startingGaugeDefaultText->setColor(app_theme::sdl(
+        usesDefaultGauge ? app_theme::onAction() : app_theme::textPrimary()));
     startingGaugeDefaultButton->setBackgroundColors(
-        usesDefaultGauge ? ui_theme::primaryAction() : ui_theme::control(),
-        usesDefaultGauge ? ui_theme::primaryActionHover()
-                         : ui_theme::controlHover(),
-        usesDefaultGauge ? ui_theme::primaryActionPressed()
-                         : ui_theme::controlPressed());
+        usesDefaultGauge ? app_theme::primaryAction() : app_theme::control(),
+        usesDefaultGauge ? app_theme::primaryActionHover()
+                         : app_theme::controlHover(),
+        usesDefaultGauge ? app_theme::primaryActionPressed()
+                         : app_theme::controlPressed());
   }
   if (judgeSlider != nullptr) {
     judgeSlider->refresh({.minimum = 25,
@@ -622,7 +632,7 @@ void PracticePanelView::refreshControls() {
     if (diagnosticText != nullptr) {
       diagnosticText->setText(issue.value_or(i18n::tr("practice.controls.ready_start_practice.message")));
       diagnosticText->setColor(
-          ui_theme::sdl(issue ? ui_theme::coral() : ui_theme::cyan()));
+          app_theme::sdl(issue ? app_theme::coral() : app_theme::cyan()));
     }
   }
 }

@@ -75,6 +75,7 @@
 #endif
 #include "../../view/Button.h"
 #include "../../view/UiTheme.h"
+#include "../../view/AppTheme.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
 #include "../../rendering/UiSafeArea.h"
@@ -3663,7 +3664,7 @@ void GamePlayScene::init() {
   pauseLayout->setFlexDirection(FlexDirection::Column);
   pauseLayout->setAlignItems(YGAlignCenter);
   pauseLayout->setJustifyContent(YGJustifyCenter);
-  pauseLayout->setBackgroundColor(Color(2, 5, 9, 198));
+  pauseLayout->setThemedBackgroundColor(app_theme::scrim);
   {
     auto pauseScreen = new View();
     pauseScreen->setWidth(520);
@@ -3675,39 +3676,39 @@ void GamePlayScene::init() {
     pauseScreen->setJustifyContent(YGJustifyCenter);
     pauseScreen->setGap(14);
     pauseScreen->setPadding(Edge::All, 28);
-    pauseScreen->setBackgroundColor(ui_theme::panelStrong());
-    pauseScreen->setCornerRadius(ui_theme::panelRadius());
-    pauseScreen->setShadow(ui_theme::shadow(), ui_theme::kModalShadow);
-    pauseScreen->setBorderColor(ui_theme::hairlineSubtle());
+    pauseScreen->setThemedBackgroundColor(app_theme::panelStrong);
+    pauseScreen->setCornerRadius(app_theme::panelRadius());
+    pauseScreen->setBorderColor(app_theme::hairlineSubtle());
     pauseScreen->setBorderWidth(1);
     {
       auto makePauseButton = [](const std::string &label, const Color &normal,
                                 const Color &hover, const Color &pressed,
                                 const Color &border, auto onClick) {
         auto button = new Button();
-        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+        auto text = new TextView(app_theme::font, 24);
         text->setText(label);
         text->setAlign(TextView::CENTER);
         text->setVAlign(TextView::MIDDLE);
-        text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+        text->setColor(app_theme::sdl(normal.a >= 230
+            ? app_theme::onAction() : app_theme::textPrimary()));
         button->setContentView(text);
         button->setOnClickListener(onClick);
         button->setSize(360, 64);
-        button->setCornerRadius(ui_theme::controlRadius());
+        button->setCornerRadius(app_theme::controlRadius());
         button->setBackgroundColors(normal, hover, pressed);
-        button->setBorderColors(ui_theme::withAlpha(border, 150),
-                                ui_theme::withAlpha(border, 190),
-                                ui_theme::withAlpha(border, 220));
+        button->setBorderColors(app_theme::withAlpha(border, 150),
+                                app_theme::withAlpha(border, 190),
+                                app_theme::withAlpha(border, 220));
         button->setStyledBorderWidth(1);
         return button;
       };
 
-      auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+      auto pauseText = new TextView(app_theme::boldFont, 46, TextView::FontWeight::Bold);
       pauseText->setSize(420, 72);
       pauseText->setText(coursePlayback ? i18n::tr("gameplay.course_menu.badge") : i18n::tr("gameplay.paused.badge"));
       pauseText->setAlign(TextView::CENTER);
       pauseText->setVAlign(TextView::MIDDLE);
-      pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+      pauseText->setColor(app_theme::sdl(app_theme::textPrimary()));
       pauseScreen->addView(pauseText);
       if (showsPausePenalty) {
         auto penaltyText = new View();
@@ -3718,32 +3719,32 @@ void GamePlayScene::init() {
         penaltyText->setFlexDirection(FlexDirection::Column);
         std::istringstream lines(i18n::tr("gameplay.paused.penalty"));
         for (std::string line; std::getline(lines, line);) {
-          auto label = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+          auto label = new TextView(app_theme::font, 18);
           label->setSize(420, 28);
           label->setText(line);
           label->setAlign(TextView::CENTER);
           label->setVAlign(TextView::MIDDLE);
-          label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+          label->setColor(app_theme::sdl(app_theme::textSecondary()));
           penaltyText->addView(label);
         }
         pauseScreen->addView(penaltyText);
       }
       pauseScreen->addView(makePauseButton(
-          coursePlayback ? i18n::tr("gameplay.close.label") : i18n::tr("gameplay.resume.label"), Color(22, 132, 126, 238),
-          Color(28, 151, 144, 248), Color(40, 173, 164, 255),
-          ui_theme::accentBorderStrong(), [this]() { closePauseMenu(); }));
+          coursePlayback ? i18n::tr("gameplay.close.label") : i18n::tr("gameplay.resume.label"), app_theme::action(),
+          app_theme::actionHover(), app_theme::actionPressed(),
+          app_theme::accentBorderStrong(), [this]() { closePauseMenu(); }));
       if (options.practiceSession != nullptr) {
         pauseScreen->addView(makePauseButton(
-            i18n::tr("gameplay.restart_section.label"), Color(57, 105, 42, 238), Color(72, 127, 51, 248),
-            Color(91, 153, 61, 255), ui_theme::lime(),
+            i18n::tr("gameplay.restart_section.label"), app_theme::control(), app_theme::controlHover(),
+            app_theme::controlPressed(), app_theme::hairline(),
             [this]() { restartCurrentPattern(); }));
         pauseScreen->addView(makePauseButton(
-            i18n::tr("gameplay.finish_practice.label"), ui_theme::primaryAction(),
-            ui_theme::primaryActionHover(), ui_theme::primaryActionPressed(),
-            ui_theme::cyan(), [this]() { finishPractice(); }));
+            i18n::tr("gameplay.finish_practice.label"), app_theme::primaryAction(),
+            app_theme::primaryActionHover(), app_theme::primaryActionPressed(),
+            app_theme::cyan(), [this]() { finishPractice(); }));
         pauseScreen->addView(makePauseButton(
-            i18n::tr("gameplay.exit_without_summary.label"), Color(119, 45, 46, 238),
-            Color(145, 53, 51, 248), Color(174, 64, 57, 255), ui_theme::coral(),
+            i18n::tr("gameplay.exit_without_summary.label"), app_theme::dangerAction(),
+            app_theme::dangerActionHover(), app_theme::dangerActionPressed(), app_theme::coral(),
             [this]() { exitPracticeWithoutSummary(); }));
       } else {
         const bool canRetrySame =
@@ -3753,8 +3754,8 @@ void GamePlayScene::init() {
         pauseScreen->addView(makePauseButton(
             coursePlayback ? i18n::tr("gameplay.restart_course.label")
                            : (isReplayPlayback() ? i18n::tr("gameplay.replay.label") : i18n::tr("gameplay.retry.label")),
-            Color(57, 105, 42, 238), Color(72, 127, 51, 248),
-            Color(91, 153, 61, 255), ui_theme::lime(), [this, canRetrySame]() {
+            app_theme::control(), app_theme::controlHover(),
+            app_theme::controlPressed(), app_theme::hairline(), [this, canRetrySame]() {
               if (isCoursePlayback()) {
                 restartCourseFromBeginning();
               } else if (isReplayPlayback() || options.practiceMode ||
@@ -3766,13 +3767,13 @@ void GamePlayScene::init() {
             }));
         if (canRetrySame) {
           pauseScreen->addView(makePauseButton(
-              i18n::tr("gameplay.retry_same.label"), ui_theme::control(), ui_theme::controlHover(),
-              ui_theme::controlPressed(), ui_theme::hairline(),
+              i18n::tr("gameplay.retry_same.label"), app_theme::control(), app_theme::controlHover(),
+              app_theme::controlPressed(), app_theme::hairline(),
               [this]() { restartCurrentPattern(); }));
         }
         pauseScreen->addView(makePauseButton(
-            i18n::tr("gameplay.exit.label"), Color(119, 45, 46, 238), Color(145, 53, 51, 248),
-            Color(174, 64, 57, 255), ui_theme::coral(), [this]() {
+            i18n::tr("gameplay.exit.label"), app_theme::dangerAction(), app_theme::dangerActionHover(),
+            app_theme::dangerActionPressed(), app_theme::coral(), [this]() {
               context.jukebox.stop();
               defer(
                   [this]() {
@@ -3800,16 +3801,16 @@ void GamePlayScene::init() {
   pauseText->setText(ui_icons::textForCodepoint(kIconPause));
   pauseText->setAlign(TextView::CENTER);
   pauseText->setVAlign(TextView::MIDDLE);
-  pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  pauseText->setColor(app_theme::sdl(app_theme::textPrimary()));
   pauseButton->setContentView(pauseText);
   pauseButton->setSize(52, 52);
-  pauseButton->setCornerRadius(ui_theme::controlRadius());
-  pauseButton->setBackgroundColors(Color(236, 253, 255, 42),
-                                   Color(70, 230, 224, 88),
-                                   Color(255, 204, 81, 120));
-  pauseButton->setBorderColors(ui_theme::hairlineSubtle(),
-                               ui_theme::accentBorder(),
-                               ui_theme::withAlpha(ui_theme::amber(), 190));
+  pauseButton->setCornerRadius(app_theme::controlRadius());
+  pauseButton->setThemedBackgroundColors(app_theme::control,
+                                         app_theme::controlHover,
+                                         app_theme::controlPressed);
+  pauseButton->setThemedBorderColors(app_theme::hairline,
+                                     app_theme::accentBorder,
+                                     app_theme::accentBorderStrong);
   pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
     if (isCoursePlayback()) {
@@ -3823,20 +3824,18 @@ void GamePlayScene::init() {
       new Button(rendering::window_width - 250, 38, 162, 52);
   addView(skinResetLayoutButton);
   auto resetLayoutText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+      new TextView(app_theme::font, 20);
   resetLayoutText->setText(i18n::tr("gameplay.reset_layout.label"));
   resetLayoutText->setAlign(TextView::CENTER);
   resetLayoutText->setVAlign(TextView::MIDDLE);
-  resetLayoutText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  resetLayoutText->setColor(app_theme::sdl(app_theme::textPrimary()));
   skinResetLayoutButton->setContentView(resetLayoutText);
   skinResetLayoutButton->setSize(162, 52);
-  skinResetLayoutButton->setCornerRadius(ui_theme::controlRadius());
-  skinResetLayoutButton->setBackgroundColors(
-      Color(236, 253, 255, 42), Color(70, 230, 224, 88),
-      Color(255, 204, 81, 120));
-  skinResetLayoutButton->setBorderColors(
-      ui_theme::hairlineSubtle(), ui_theme::accentBorder(),
-      ui_theme::withAlpha(ui_theme::amber(), 190));
+  skinResetLayoutButton->setCornerRadius(app_theme::controlRadius());
+  skinResetLayoutButton->setThemedBackgroundColors(
+      app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+  skinResetLayoutButton->setThemedBorderColors(
+      app_theme::hairline, app_theme::accentBorder, app_theme::accentBorderStrong);
   skinResetLayoutButton->setStyledBorderWidth(1);
   skinResetLayoutButton->setOnClickListener([this]() {
     auto *coordinator =
@@ -3857,27 +3856,24 @@ void GamePlayScene::init() {
     restartText->setText(ui_icons::textForCodepoint(kIconRestart));
     restartText->setAlign(TextView::CENTER);
     restartText->setVAlign(TextView::MIDDLE);
-    restartText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    restartText->setColor(app_theme::sdl(app_theme::textPrimary()));
     practiceRestartButton->setContentView(restartText);
-    practiceRestartButton->setCornerRadius(ui_theme::controlRadius());
-    practiceRestartButton->setBackgroundColors(Color(57, 105, 42, 238),
-                                               Color(72, 127, 51, 248),
-                                               Color(91, 153, 61, 255));
-    practiceRestartButton->setBorderColors(
-        ui_theme::withAlpha(ui_theme::lime(), 150),
-        ui_theme::withAlpha(ui_theme::lime(), 190),
-        ui_theme::withAlpha(ui_theme::lime(), 220));
+    practiceRestartButton->setCornerRadius(app_theme::controlRadius());
+    practiceRestartButton->setThemedBackgroundColors(
+        app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+    practiceRestartButton->setThemedBorderColors(
+        app_theme::hairline, app_theme::accentBorder, app_theme::accentBorderStrong);
     practiceRestartButton->setStyledBorderWidth(1);
     practiceRestartButton->setOnClickListener(
         [this]() { restartCurrentPattern(); });
 
-    practiceHudText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    practiceHudText = new TextView(app_theme::font, 20);
     addView(practiceHudText);
     practiceHudText->setSize(620, 58);
     practiceHudText->setPositionNoLayout(24, 118);
     practiceHudText->setAlign(TextView::LEFT);
     practiceHudText->setVAlign(TextView::MIDDLE);
-    practiceHudText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    practiceHudText->setColor(app_theme::sdl(app_theme::textPrimary()));
     updatePracticeHud(context.jukebox.getTimeMicros());
   }
   updateSkinResetLayoutVisibility();
@@ -4310,20 +4306,20 @@ void GamePlayScene::showGuidedAccessReminder() {
     auto *overlay = new View();
     guidedAccessReminderLayout = overlay;
     addView(overlay);
-    overlay->setThemedBackgroundColor(ui_theme::backdrop);
+    overlay->setThemedBackgroundColor(app_theme::backdrop);
     overlay->setFlexDirection(FlexDirection::Column);
     overlay->setAlignItems(YGAlignCenter);
     overlay->setJustifyContent(YGJustifyCenter);
     overlay->setGap(18);
     overlay->setPadding(Edge::All, 32);
-    auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 40, TextView::FontWeight::Bold);
+    auto *title = new TextView(app_theme::boldFont, 40, TextView::FontWeight::Bold);
     guidedAccessReminderTitle = title;
     title->setWidthPercent(100);
     title->setMinHeight(72);
     title->setWrap(true);
     title->setAlign(TextView::CENTER);
     title->setVAlign(TextView::MIDDLE);
-    title->setThemedColor(ui_theme::textPrimary);
+    title->setThemedColor(app_theme::textPrimary);
     overlay->addView(title);
     auto *guide = new View();
     guide->setSize(300, 200);
@@ -4332,18 +4328,18 @@ void GamePlayScene::showGuidedAccessReminder() {
     guidedAccessReminderIcon = lock;
     lock->setAlign(TextView::CENTER);
     lock->setVAlign(TextView::MIDDLE);
-    lock->setThemedColor(ui_theme::textPrimary);
+    lock->setThemedColor(app_theme::textPrimary);
     lock->setSize(180, 160);
     lock->setPosition(60, 32, YGPositionTypeAbsolute);
     guide->addView(lock);
-    auto *why = new TextView("assets/fonts/notosanscjkjp.ttf", 26, TextView::FontWeight::Bold);
+    auto *why = new TextView(app_theme::boldFont, 26, TextView::FontWeight::Bold);
     guidedAccessReminderWhy = why;
     why->setWidthPercent(100);
     why->setMinHeight(60);
     why->setWrap(true);
     why->setAlign(TextView::CENTER);
     why->setVAlign(TextView::MIDDLE);
-    why->setThemedColor(ui_theme::cyan);
+    why->setThemedColor(app_theme::cyan);
     why->setMargin(Edge::Bottom, 6);
     overlay->addView(why);
     auto *help = new GuidedAccessInstructionView();
@@ -4362,48 +4358,48 @@ void GamePlayScene::showGuidedAccessReminder() {
     controls->setGap(20);
     overlay->addView(controls);
     auto *back = new Button();
-    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    auto *label = new TextView(app_theme::font, 22);
     label->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.back"));
     label->setAlign(TextView::CENTER);
     label->setVAlign(TextView::MIDDLE);
-    label->setThemedColor(ui_theme::textPrimary);
+    label->setThemedColor(app_theme::textPrimary);
     back->setContentView(label);
     back->setSize(300, 64);
-    back->setCornerRadius(ui_theme::controlRadius());
+    back->setCornerRadius(app_theme::controlRadius());
     back->setThemedBackgroundColors(
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
+        []() { return app_theme::withAlpha(app_theme::textPrimary(), 12); },
+        []() { return app_theme::withAlpha(app_theme::textPrimary(), 26); },
+        []() { return app_theme::withAlpha(app_theme::textPrimary(), 38); });
     back->setOnClickListener([this]() { returnFromGuidedAccessReminder(); });
     controls->addView(back);
     auto *dismiss = new Button();
-    auto *dismissLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    auto *dismissLabel = new TextView(app_theme::font, 22);
     dismissLabel->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.dismiss"));
     dismissLabel->setAlign(TextView::CENTER);
     dismissLabel->setVAlign(TextView::MIDDLE);
-    dismissLabel->setThemedColor(ui_theme::textPrimary);
+    dismissLabel->setThemedColor(app_theme::textPrimary);
     dismiss->setContentView(dismissLabel);
     dismiss->setSize(300, 64);
-    dismiss->setCornerRadius(ui_theme::controlRadius());
+    dismiss->setCornerRadius(app_theme::controlRadius());
     dismiss->setThemedBackgroundColors(
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
-        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
+        []() { return app_theme::withAlpha(app_theme::textPrimary(), 12); },
+        []() { return app_theme::withAlpha(app_theme::textPrimary(), 26); },
+        []() { return app_theme::withAlpha(app_theme::textPrimary(), 38); });
     dismiss->setOnClickListener([this]() { options.guidedAccessReminderSkipped = true; });
     controls->addView(dismiss);
     guidedAccessButtonMarker = new View();
     guidedAccessButtonMarker->setPosition(0, 0, YGPositionTypeAbsolute);
-    guidedAccessButtonMarker->setCornerRadius(3);
+    guidedAccessButtonMarker->setCornerRadius(0);
     overlay->addView(guidedAccessButtonMarker);
-    guidedAccessButtonHint = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    guidedAccessButtonHint = new TextView(app_theme::font, 22);
     guidedAccessButtonHint->setPosition(0, 0, YGPositionTypeAbsolute);
     guidedAccessButtonHint->setAlign(TextView::CENTER);
     guidedAccessButtonHint->setVAlign(TextView::MIDDLE);
     guidedAccessButtonHint->setWrap(true);
     guidedAccessButtonHint->setPadding(Edge::All, 8);
-    guidedAccessButtonHint->setThemedColor(ui_theme::textPrimary);
-    guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
-    guidedAccessButtonHint->setCornerRadius(ui_theme::controlRadius());
+    guidedAccessButtonHint->setThemedColor(app_theme::textPrimary);
+    guidedAccessButtonHint->setThemedBackgroundColor(app_theme::panelStrong);
+    guidedAccessButtonHint->setCornerRadius(app_theme::controlRadius());
     overlay->addView(guidedAccessButtonHint);
     guidedAccessButtonCheck = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
     guidedAccessButtonCheck->setText(ui_icons::textForCodepoint(0xf00c));
@@ -4442,7 +4438,7 @@ void GamePlayScene::showGuidedAccessReminder() {
   const float pulseTime = static_cast<float>(SDL_GetTicks() % 1800);
   const float pulse = pulseTime < 900 ? std::sin(3.14159265F * pulseTime / 300) : 0;
   guidedAccessButtonMarker->setBackgroundColor(
-      ui_theme::withAlpha(ui_theme::lime(), confirming
+      app_theme::withAlpha(app_theme::lime(), confirming
           ? 255 : 150 + static_cast<int>(105 * pulse * pulse)));
   guidedAccessButtonHint->setSize(cue.label.width, cue.label.height);
   guidedAccessButtonHint->setPositionNoLayout(cue.label.x, cue.label.y);
@@ -4452,9 +4448,9 @@ void GamePlayScene::showGuidedAccessReminder() {
       : buttonLocation.button == ipad_hardware::Button::Home
           ? "gameplay.ipad_gesture_reminder.home_button"
           : "gameplay.ipad_gesture_reminder.top_button"));
-  guidedAccessButtonHint->setThemedColor(ui_theme::textPrimary);
-  guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
-  guidedAccessButtonCheck->setThemedColor(ui_theme::lime);
+  guidedAccessButtonHint->setThemedColor(app_theme::textPrimary);
+  guidedAccessButtonHint->setThemedBackgroundColor(app_theme::panelStrong);
+  guidedAccessButtonCheck->setThemedColor(app_theme::lime);
   guidedAccessButtonHint->setVisible(cue.label.width > 0);
   guidedAccessButtonCheck->setVisible(confirming && guidedAccessButtonHint->getVisible());
   if (confirming && cue.label.width > 0) {
@@ -4473,7 +4469,7 @@ void GamePlayScene::showGuidedAccessReminder() {
       : progress < 0.82F ? 7.0F * std::sin(pi * (progress - 0.60F) / 0.22F) : 0.0F;
   guidedAccessReminderIcon->setPositionNoLayout(60, 32 - std::lround(bounce));
   guidedAccessReminderIcon->setColor(
-      ui_theme::sdl(locked ? ui_theme::lime() : ui_theme::textPrimary()));
+      app_theme::sdl(locked ? app_theme::lime() : app_theme::textPrimary()));
   guidedAccessReminderTitle->setLocalizedText(i18n::message(confirming
       ? "gameplay.ipad_gesture_reminder.ready_title"
       : "gameplay.ipad_gesture_reminder.title"));
@@ -4587,39 +4583,39 @@ void GamePlayScene::showPlaybackInitializationFailure(
   playbackFailureLayout->setJustifyContent(YGJustifyCenter);
   playbackFailureLayout->setGap(18);
   playbackFailureLayout->setPadding(Edge::All, 32);
-  playbackFailureLayout->setBackgroundColor(Color(2, 5, 9, 255));
+  playbackFailureLayout->setThemedBackgroundColor(app_theme::backdrop);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 38);
+  auto *title = new TextView(app_theme::boldFont, 38, TextView::FontWeight::Bold);
   title->setText(i18n::tr("gameplay.playback_unavailable.badge"));
   title->setAlign(TextView::CENTER);
   title->setVAlign(TextView::MIDDLE);
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setColor(app_theme::sdl(app_theme::textPrimary()));
   title->setSize(720, 64);
   playbackFailureLayout->addView(title);
 
-  auto *detail = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  auto *detail = new TextView(app_theme::font, 22);
   detail->setText(message);
   detail->setAlign(TextView::CENTER);
   detail->setVAlign(TextView::MIDDLE);
-  detail->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  detail->setColor(app_theme::sdl(app_theme::textSecondary()));
   detail->setSize(820, 84);
   playbackFailureLayout->addView(detail);
 
   auto *returnButton = new Button();
-  auto *returnText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  auto *returnText = new TextView(app_theme::font, 24);
   returnText->setText(i18n::tr("gameplay.return.label"));
   returnText->setAlign(TextView::CENTER);
   returnText->setVAlign(TextView::MIDDLE);
-  returnText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  returnText->setThemedColor(app_theme::onAction);
   returnButton->setContentView(returnText);
   returnButton->setSize(320, 64);
-  returnButton->setCornerRadius(ui_theme::controlRadius());
-  returnButton->setBackgroundColors(ui_theme::primaryAction(),
-                                    ui_theme::primaryActionHover(),
-                                    ui_theme::primaryActionPressed());
-  returnButton->setBorderColors(ui_theme::accentBorder(),
-                                ui_theme::accentBorderStrong(),
-                                ui_theme::withAlpha(ui_theme::amber(), 210));
+  returnButton->setCornerRadius(app_theme::controlRadius());
+  returnButton->setBackgroundColors(app_theme::primaryAction(),
+                                    app_theme::primaryActionHover(),
+                                    app_theme::primaryActionPressed());
+  returnButton->setThemedBorderColors(app_theme::action,
+                                      app_theme::actionHover,
+                                      app_theme::actionPressed);
   returnButton->setStyledBorderWidth(1);
 
   const bool requestedReturnSceneIsLive =
@@ -7531,8 +7527,8 @@ void GamePlayScene::renderCoursePauseHoldRing() {
                            0.5f +
                        8.0f;
   constexpr float thickness = 4.0f;
-  const uint32_t baseColor = Color(236, 253, 255, 72).toABGR();
-  const uint32_t progressColor = ui_theme::amber().toABGR();
+  const uint32_t baseColor = app_theme::withAlpha(app_theme::textPrimary(), 72).toABGR();
+  const uint32_t progressColor = app_theme::amber().toABGR();
 
   rendering::SimpleBatchRenderer batch;
   batch.setSubmitView(rendering::ui_view);

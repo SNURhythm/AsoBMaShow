@@ -1,7 +1,7 @@
 #include "ScrollView.h"
 
 #include "../input/SDLPointerEvent.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <algorithm>
 #include <array>
@@ -500,11 +500,11 @@ void ScrollView::renderPersistentScrollbar(RenderContext &context) const {
 
   appendRoundedRect(context, trackX, trackY, kScrollbarTrackWidth, trackHeight,
                     kScrollbarTrackWidth * 0.5f,
-                    ui_theme::withAlpha(ui_theme::hairlineStrong(), 118)
+                    app_theme::withAlpha(app_theme::hairlineStrong(), 118)
                         .toABGR());
   appendRoundedRect(context, trackX, thumbY, kScrollbarTrackWidth, thumbHeight,
                     kScrollbarTrackWidth * 0.5f,
-                    ui_theme::withAlpha(ui_theme::textSecondary(), 218)
+                    app_theme::withAlpha(app_theme::textSecondary(), 218)
                         .toABGR());
 }
 

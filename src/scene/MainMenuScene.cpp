@@ -73,7 +73,7 @@
 #include "../view/DropdownView.h"
 #include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "../view/MainMenuTheme.h"
 #include <array>
 #include <chrono>
@@ -302,8 +302,8 @@ public:
     setPadding(Edge::Left, 10);
     setPadding(Edge::Right, 14);
 
-    label = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
-    label->setThemedColor(ui_theme::textSecondary);
+    label = new TextView(app_theme::font, 15);
+    label->setThemedColor(app_theme::textSecondary);
     label->setWrap(true);
     label->setOverflow(TextView::TextOverflow::Hidden);
     label->setVAlign(TextView::MIDDLE);
@@ -529,21 +529,21 @@ SDL_Color readyGaugeTextColor(GaugeType gaugeType,
 
 void styleOptionButton(Button *button, TextView *text, bool selected) {
   if (selected) {
-    styleThemedActionButton(button, text, true, ui_theme::primaryAction,
-                            ui_theme::primaryActionHover,
-                            ui_theme::primaryActionPressed,
-                            ui_theme::accentBorderStrong);
+    styleThemedActionButton(button, text, true, app_theme::primaryAction,
+                            app_theme::primaryActionHover,
+                            app_theme::primaryActionPressed,
+                            app_theme::accentBorderStrong);
   } else {
-    styleThemedActionButton(button, text, true, ui_theme::control,
-                            ui_theme::controlHover, ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+    styleThemedActionButton(button, text, true, app_theme::control,
+                            app_theme::controlHover, app_theme::controlPressed,
+                            app_theme::hairlineStrong);
   }
 }
 
 TextView *makeModalLabel(const i18n::Text &text) {
-  auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  auto *label = new TextView(app_theme::font, 20);
   label->setLocalizedText(text);
-  label->setThemedColor(ui_theme::textSecondary);
+  label->setThemedColor(app_theme::textSecondary);
   label->setHeight(28);
   return label;
 }
@@ -567,7 +567,7 @@ Button *makeModalIconButton(uint32_t iconCodepoint, int fontSize,
   text->setOverflow(TextView::TextOverflow::Hidden);
   button->setContentView(text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -1077,7 +1077,7 @@ void MainMenuScene::reloadProfileSelectionsFromSettings() {
 }
 
 void MainMenuScene::applyThemeChange() {
-  const ui_theme::ThemeMode activeMode = ui_theme::activeMode();
+  const app_theme::ThemeMode activeMode = app_theme::activeMode();
   if (appliedUiThemeMode == activeMode) {
     return;
   }
@@ -1309,7 +1309,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartDifficultyMaxDropdownOpen = false;
   publishedResultRecordDiagnostic.clear();
 
-  appliedUiThemeMode = ui_theme::activeMode();
+  appliedUiThemeMode = app_theme::activeMode();
 
   recyclerView = new RecyclerView<ChartMetaRecord>(
       [](const ChartMetaRecord &a, const ChartMetaRecord &b) {
@@ -1743,7 +1743,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
   folderRecyclerView->setBorderWidth(0);
-  folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
+  folderRecyclerView->setCornerRadius(app_theme::controlRadius());
   nav->addView(folderRecyclerView);
   browser->addView(nav);
 
@@ -1906,7 +1906,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
   recyclerView->setBorderWidth(0);
-  recyclerView->setCornerRadius(ui_theme::controlRadius());
+  recyclerView->setCornerRadius(app_theme::controlRadius());
   left->addView(recyclerView);
   browser->addView(left);
 
@@ -2019,8 +2019,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton->setThemedBackgroundColors(
       main_menu_theme::dock, main_menu_theme::dockHover, main_menu_theme::dockPressed);
   readyPlayOptionsButton->setThemedBorderColors(
-      ui_theme::hairlineStrong, ui_theme::accentBorderStrong,
-      ui_theme::accentBorderStrong);
+      app_theme::hairlineStrong, app_theme::accentBorderStrong,
+      app_theme::accentBorderStrong);
   readyPlayOptionsButton->setContentView(readySettings);
   readyPlayOptionsButton->setOnClickListener(
       [this]() { showPlayOptionsModal(); });
@@ -5070,7 +5070,7 @@ void MainMenuScene::buildFileActionsModal() {
   fileActionsModalRoot_->setFlexDirection(FlexDirection::Column);
   fileActionsModalRoot_->setAlignItems(YGAlignCenter);
   fileActionsModalRoot_->setJustifyContent(YGJustifyCenter);
-  fileActionsModalRoot_->setThemedBackgroundColor(ui_theme::scrim);
+  fileActionsModalRoot_->setThemedBackgroundColor(app_theme::scrim);
 
   auto makePanel = [this](const char *titleKey, const char *introKey,
                           const char *footerKey,
@@ -5081,21 +5081,21 @@ void MainMenuScene::buildFileActionsModal() {
         ->setAlignItems(YGAlignStretch)
         ->setGap(14)
         ->setPadding(Edge::All, 20)
-        ->setThemedBackgroundColor(ui_theme::panelStrong)
-        ->setCornerRadius(ui_theme::panelRadius())
-        ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+        ->setThemedBackgroundColor(app_theme::panelStrong)
+        ->setCornerRadius(app_theme::panelRadius())
+        ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
         ->setThemedBorderColor(modal_view::modalPanelBorder)
         ->setBorderWidth(1);
-    auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    auto *title = new TextView(app_theme::font, 28);
     title->setLocalizedText(i18n::message(titleKey));
-    title->setThemedColor(ui_theme::textPrimary);
+    title->setThemedColor(app_theme::textPrimary);
     title->setWrap(true);
     title->setFlexShrink(0);
     panel->addView(title);
 
-    auto *intro = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    auto *intro = new TextView(app_theme::font, 18);
     intro->setLocalizedText(i18n::message(introKey));
-    intro->setThemedColor(ui_theme::textSecondary);
+    intro->setThemedColor(app_theme::textSecondary);
     intro->setWrap(true);
     intro->setFlexShrink(0);
     panel->addView(intro);
@@ -5117,9 +5117,9 @@ void MainMenuScene::buildFileActionsModal() {
     auto *close = makeModalButton(i18n::message(footerKey), 20, &closeText);
     close->setWidth(140)->setAlignSelf(YGAlignFlexEnd)->setFlexShrink(0);
     close->setOnClickListener(std::move(onClose));
-    styleThemedActionButton(close, closeText, true, ui_theme::control,
-                            ui_theme::controlHover, ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+    styleThemedActionButton(close, closeText, true, app_theme::control,
+                            app_theme::controlHover, app_theme::controlPressed,
+                            app_theme::hairlineStrong);
     if (showComputerHelp) {
       auto *footer = new View();
       footer->setFlexDirection(FlexDirection::Row)
@@ -5133,11 +5133,11 @@ void MainMenuScene::buildFileActionsModal() {
       help->setStyledBorderWidth(0);
       help->setThemedBackgroundColors(
           [] { return Color(0, 0, 0, 0); },
-          [] { return ui_theme::withAlpha(ui_theme::cyan(), 14); },
-          [] { return ui_theme::withAlpha(ui_theme::cyan(), 26); });
+          [] { return app_theme::withAlpha(app_theme::cyan(), 14); },
+          [] { return app_theme::withAlpha(app_theme::cyan(), 26); });
       helpText->setAlign(TextView::LEFT);
       helpText->setWrap(true);
-      helpText->setThemedColor(ui_theme::cyan);
+      helpText->setThemedColor(app_theme::cyan);
       help->setOnClickListener([this] {
         fileActionsPanel_->setVisible(false);
         fileActionsPanel_->setDisplay(YGDisplayNone);
@@ -5165,19 +5165,19 @@ void MainMenuScene::buildFileActionsModal() {
         ->setFlexShrink(0)
         ->setGap(18)
         ->setPadding(Edge::All, 20)
-        ->setCornerRadius(ui_theme::controlRadius());
-    card->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-    card->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorderStrong,
-                                ui_theme::accentBorderStrong);
+        ->setCornerRadius(app_theme::controlRadius());
+    card->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+    card->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorderStrong,
+                                app_theme::accentBorderStrong);
     card->setStyledBorderWidth(1);
     card->setOnClickListener(std::move(onClick));
 
     auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, 80);
     icon->setName("fileActionIcon");
     icon->setText(ui_icons::textForCodepoint(iconCodepoint));
-    icon->setThemedColor([] { return ui_theme::activePalette().cyan; });
+    icon->setThemedColor([] { return app_theme::cyan(); });
     icon->setAlign(TextView::CENTER);
     icon->setVAlign(TextView::MIDDLE);
     icon->setSize(88, 88);
@@ -5188,17 +5188,17 @@ void MainMenuScene::buildFileActionsModal() {
     copy->setName("fileActionCopy");
     copy->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignStretch)->setGap(8);
-    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    auto *label = new TextView(app_theme::font, 28);
     label->setName("fileActionLabel");
     label->setLocalizedText(i18n::message(labelKey));
-    label->setThemedColor(ui_theme::textPrimary);
+    label->setThemedColor(app_theme::textPrimary);
     label->setWrap(true);
     label->setFlexShrink(0);
     copy->addView(label);
-    auto *description = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    auto *description = new TextView(app_theme::font, 20);
     description->setName("fileActionDescription");
     description->setLocalizedText(i18n::message(descriptionKey));
-    description->setThemedColor(ui_theme::textSecondary);
+    description->setThemedColor(app_theme::textSecondary);
     description->setWrap(true);
     description->setFlexShrink(0);
     copy->addView(description);
@@ -5422,7 +5422,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->setFlexDirection(FlexDirection::Column);
   parseLogModalRoot->setAlignItems(YGAlignCenter);
   parseLogModalRoot->setJustifyContent(YGJustifyCenter);
-  parseLogModalRoot->setThemedBackgroundColor(ui_theme::scrim);
+  parseLogModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -5431,15 +5431,15 @@ void MainMenuScene::buildParseLogModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  auto *title = new TextView(app_theme::font, 30);
   title->setLocalizedText(i18n::message("menu.parsing_logs.label"));
-  title->setThemedColor(ui_theme::textPrimary);
+  title->setThemedColor(app_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -5451,9 +5451,9 @@ void MainMenuScene::buildParseLogModal() {
   parseLogRecyclerView->reserveScrollbarGutter = true;
   parseLogRecyclerView->setWidth(kModalContentWidth);
   parseLogRecyclerView->setFlex(1);
-  parseLogRecyclerView->setThemedBackgroundColor(ui_theme::insetSurface);
-  parseLogRecyclerView->setCornerRadius(ui_theme::controlRadius());
-  parseLogRecyclerView->setThemedBorderColor(ui_theme::hairline);
+  parseLogRecyclerView->setThemedBackgroundColor(app_theme::insetSurface);
+  parseLogRecyclerView->setCornerRadius(app_theme::controlRadius());
+  parseLogRecyclerView->setThemedBorderColor(app_theme::hairline);
   parseLogRecyclerView->setBorderWidth(1);
   parseLogRecyclerView->onCreateView = [](const MainMenuParseLogRow &) {
     return new ParseLogRowView();
@@ -5476,11 +5476,11 @@ void MainMenuScene::buildParseLogModal() {
   footer->setHeight(58);
 
   parseLogExportStatusText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+      new TextView(app_theme::font, 16);
   parseLogExportStatusText->setFlex(1);
   parseLogExportStatusText->setVAlign(TextView::MIDDLE);
   parseLogExportStatusText->setOverflow(TextView::TextOverflow::Hidden);
-  parseLogExportStatusText->setThemedColor(ui_theme::textSecondary);
+  parseLogExportStatusText->setThemedColor(app_theme::textSecondary);
   footer->addView(parseLogExportStatusText);
 
   parseLogExportButton =
@@ -5494,8 +5494,8 @@ void MainMenuScene::buildParseLogModal() {
   parseLogCloseButton->setWidth(130);
   parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
   styleThemedActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          app_theme::infoAction, app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
 
   footer->addView(parseLogCloseButton);
   panel->addView(footer);
@@ -5572,8 +5572,8 @@ void MainMenuScene::refreshParseLogExportControls() {
   parseLogExportButtonText->setLocalizedText(enabled ? i18n::message("menu.export_log.label") : i18n::message("menu.exporting.progress"));
   styleThemedActionButton(
       parseLogExportButton, parseLogExportButtonText, enabled,
-      ui_theme::primaryAction, ui_theme::primaryActionHover,
-      ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
+      app_theme::primaryAction, app_theme::primaryActionHover,
+      app_theme::primaryActionPressed, app_theme::accentBorderStrong);
 }
 
 void MainMenuScene::refreshParseLogModal(bool forceScrollToBottom) {
@@ -5641,7 +5641,7 @@ void MainMenuScene::buildMusicModal() {
   musicModalRoot->setFlexDirection(FlexDirection::Column);
   musicModalRoot->setAlignItems(YGAlignCenter);
   musicModalRoot->setJustifyContent(YGJustifyCenter);
-  musicModalRoot->setThemedBackgroundColor(ui_theme::scrim);
+  musicModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -5650,36 +5650,36 @@ void MainMenuScene::buildMusicModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  auto *title = new TextView(app_theme::font, 30);
   title->setLocalizedText(i18n::message("menu.music_player.label"));
-  title->setThemedColor(ui_theme::textPrimary);
+  title->setThemedColor(app_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
-  musicTrackText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  musicTrackText = new TextView(app_theme::font, 24);
   musicTrackText->setHeight(62);
   musicTrackText->setWrap(true);
   musicTrackText->setOverflow(TextView::TextOverflow::Hidden);
-  musicTrackText->setThemedColor(ui_theme::textPrimary);
+  musicTrackText->setThemedColor(app_theme::textPrimary);
   panel->addView(musicTrackText);
 
-  musicStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  musicStatusText = new TextView(app_theme::font, 18);
   musicStatusText->setHeight(70);
   musicStatusText->setWrap(true);
-  musicStatusText->setThemedColor(ui_theme::textSecondary);
+  musicStatusText->setThemedColor(app_theme::textSecondary);
   panel->addView(musicStatusText);
 
-  musicPlaylistText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  musicPlaylistText = new TextView(app_theme::font, 16);
   musicPlaylistText->setHeight(100);
   musicPlaylistText->setWrap(true);
   musicPlaylistText->setOverflow(TextView::TextOverflow::Hidden);
-  musicPlaylistText->setThemedColor(ui_theme::textSecondary);
+  musicPlaylistText->setThemedColor(app_theme::textSecondary);
   panel->addView(musicPlaylistText);
 
   auto *sourceRow = makeModalOptionRow();
@@ -5838,53 +5838,53 @@ void MainMenuScene::refreshMusicModal() {
   }
 
   styleThemedActionButton(musicSelectedButton, musicSelectedButtonText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
+                          app_theme::primaryAction, app_theme::primaryActionHover,
+                          app_theme::primaryActionPressed,
+                          app_theme::accentBorderStrong);
   styleThemedActionButton(musicAddSelectedButton, musicAddSelectedButtonText,
-                          true, ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          true, app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(musicRemoveSelectedButton,
                           musicRemoveSelectedButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(musicPlaylistButton, musicPlaylistButtonText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
+                          app_theme::primaryAction, app_theme::primaryActionHover,
+                          app_theme::primaryActionPressed,
+                          app_theme::accentBorderStrong);
   styleThemedActionButton(musicClearPlaylistButton,
                           musicClearPlaylistButtonText, true,
-                          ui_theme::warningAction,
-                          ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed,
-                          ui_theme::accentBorder);
+                          app_theme::warningAction,
+                          app_theme::warningActionHover,
+                          app_theme::warningActionPressed,
+                          app_theme::accentBorder);
   styleThemedActionButton(musicRandomButton, musicRandomButtonText, true,
-                          ui_theme::successAction, ui_theme::successActionHover,
-                          ui_theme::successActionPressed,
-                          ui_theme::accentBorder);
+                          app_theme::successAction, app_theme::successActionHover,
+                          app_theme::successActionPressed,
+                          app_theme::accentBorder);
   styleThemedActionButton(musicPreviousButton, musicPreviousButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(musicSeekBackwardButton,
                           musicSeekBackwardButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(musicPlayPauseButton, musicPlayPauseButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          app_theme::infoAction, app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
   styleThemedActionButton(musicSeekForwardButton, musicSeekForwardButtonText,
-                          true, ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          true, app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(musicNextButton, musicNextButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(musicStopButton, musicStopButtonText, true,
-                          ui_theme::warningAction, ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed,
-                          ui_theme::accentBorder);
+                          app_theme::warningAction, app_theme::warningActionHover,
+                          app_theme::warningActionPressed,
+                          app_theme::accentBorder);
   styleThemedActionButton(musicCloseButton, musicCloseButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          app_theme::infoAction, app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
 }
 
 void MainMenuScene::playSelectedChartAsMusic() {
@@ -6120,7 +6120,7 @@ void MainMenuScene::buildTasksModal() {
   tasksModalRoot->setFlexDirection(FlexDirection::Column);
   tasksModalRoot->setAlignItems(YGAlignCenter);
   tasksModalRoot->setJustifyContent(YGJustifyCenter);
-  tasksModalRoot->setThemedBackgroundColor(ui_theme::scrim);
+  tasksModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
 #if TARGET_OS_ANDROID
@@ -6132,15 +6132,15 @@ void MainMenuScene::buildTasksModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  auto *title = new TextView(app_theme::font, 30);
   title->setLocalizedText(i18n::message("menu.tasks.label"));
-  title->setThemedColor(ui_theme::textPrimary);
+  title->setThemedColor(app_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -6151,9 +6151,9 @@ void MainMenuScene::buildTasksModal() {
 #if TARGET_OS_ANDROID
   tasksScrollView->setMinHeight(0);
 #endif
-  tasksScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
-  tasksScrollView->setCornerRadius(ui_theme::controlRadius());
-  tasksScrollView->setThemedBorderColor(ui_theme::hairline);
+  tasksScrollView->setThemedBackgroundColor(app_theme::insetSurface);
+  tasksScrollView->setCornerRadius(app_theme::controlRadius());
+  tasksScrollView->setThemedBorderColor(app_theme::hairline);
   tasksScrollView->setBorderWidth(1);
   tasksScrollView->setContentPadding(Edge::All, 12);
 
@@ -6161,9 +6161,9 @@ void MainMenuScene::buildTasksModal() {
   tasksContent->setFlexDirection(FlexDirection::Column);
   tasksContent->setAlignItems(YGAlignStretch);
 
-  tasksText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  tasksText = new TextView(app_theme::font, 18);
   tasksText->setText(tasksModalTextSnapshot());
-  tasksText->setThemedColor(ui_theme::textSecondary);
+  tasksText->setThemedColor(app_theme::textSecondary);
   tasksText->setWrap(true);
   tasksText->setOverflow(TextView::TextOverflow::Visible);
   tasksContent->addView(tasksText);
@@ -6186,16 +6186,16 @@ void MainMenuScene::buildTasksModal() {
     hideTasksModal();
   });
   styleThemedActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
-                          ui_theme::successAction, ui_theme::successActionHover,
-                          ui_theme::successActionPressed,
-                          ui_theme::accentBorder);
+                          app_theme::successAction, app_theme::successActionHover,
+                          app_theme::successActionPressed,
+                          app_theme::accentBorder);
 
   tasksCloseButton = makeModalButton(i18n::message("menu.tasks.close.label"), 20, &tasksCloseButtonText);
   tasksCloseButton->setWidth(130);
   tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
   styleThemedActionButton(tasksCloseButton, tasksCloseButtonText, true,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          app_theme::infoAction, app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
 
 #if TARGET_OS_ANDROID
   footer->setFlexShrink(0);

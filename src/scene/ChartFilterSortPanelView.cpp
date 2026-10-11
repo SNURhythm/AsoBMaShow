@@ -8,7 +8,7 @@
 #include "../view/IconText.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <array>
@@ -47,34 +47,34 @@ void styleActionButton(Button *button, TextView *text, bool enabled,
   if (button == nullptr || text == nullptr) {
     return;
   }
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (enabled) {
     button->setThemedBackgroundColors(normal, hover, pressed);
     button->setThemedBorderColors(
-        [border] { return ui_theme::withAlpha(border(), 150); },
-        [border] { return ui_theme::withAlpha(border(), 190); },
-        [border] { return ui_theme::withAlpha(border(), 220); });
-    text->setThemedColor([normal] { return ui_theme::textOn(normal()); });
+        [border] { return app_theme::withAlpha(border(), 150); },
+        [border] { return app_theme::withAlpha(border(), 190); },
+        [border] { return app_theme::withAlpha(border(), 220); });
+    text->setThemedColor([normal] { return app_theme::textOn(normal()); });
   } else {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
   }
 }
 
 void styleOptionButton(Button *button, TextView *text, bool selected) {
   if (selected) {
-    styleActionButton(button, text, true, ui_theme::primaryAction,
-                      ui_theme::primaryActionHover,
-                      ui_theme::primaryActionPressed,
-                      ui_theme::accentBorderStrong);
+    styleActionButton(button, text, true, app_theme::primaryAction,
+                      app_theme::primaryActionHover,
+                      app_theme::primaryActionPressed,
+                      app_theme::accentBorderStrong);
   } else {
-    styleActionButton(button, text, true, ui_theme::control,
-                      ui_theme::controlHover, ui_theme::controlPressed,
-                      ui_theme::hairlineStrong);
+    styleActionButton(button, text, true, app_theme::control,
+                      app_theme::controlHover, app_theme::controlPressed,
+                      app_theme::hairlineStrong);
   }
 }
 
@@ -109,9 +109,9 @@ void setDisplayed(View *view, bool displayed) {
 }
 
 TextView *makePanelLabel(const i18n::Text &text) {
-  auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  auto *label = new TextView(app_theme::font, 20);
   label->setLocalizedText(text);
-  label->setThemedColor(ui_theme::textSecondary);
+  label->setThemedColor(app_theme::textSecondary);
   label->setHeight(28);
   return label;
 }
@@ -139,7 +139,7 @@ Button *makeCheckboxButton(const i18n::Text &label, TextView **iconOut,
   icon->setAlign(TextView::CENTER);
   icon->setVAlign(TextView::MIDDLE);
   icon->setWidth(16);
-  auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+  auto *text = new TextView(app_theme::font, 14);
   text->setLocalizedText(label);
   text->setAlign(TextView::LEFT);
   text->setVAlign(TextView::MIDDLE);
@@ -150,7 +150,7 @@ Button *makeCheckboxButton(const i18n::Text &label, TextView **iconOut,
   content->addView(text);
   button->setContentView(content);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setWidth(118);
   button->setHeight(42);
   button->setFlexShrink(0.0f);
@@ -339,22 +339,22 @@ void ChartFilterPanelView::buildStaticContent() {
   addView(makePanelLabel(i18n::message("library.filter_sort.bpm_range.label")));
   auto *bpmRow = makePanelOptionRow(48);
   auto makeBpmLabel = [](const i18n::Text &label) {
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    auto *text = new TextView(app_theme::font, 18);
     text->setLocalizedText(label);
-    text->setThemedColor(ui_theme::textSecondary);
+    text->setThemedColor(app_theme::textSecondary);
     text->setWidth(44);
     text->setVAlign(TextView::MIDDLE);
     return text;
   };
-  bpmMinBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 24);
+  bpmMinBox = new TextInputBox(app_theme::font, 24);
   bpmMinBox->setHeight(48);
   bpmMinBox->setFlex(1);
-  bpmMinBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
-  bpmMinBox->setCornerRadius(ui_theme::controlRadius());
-  bpmMinBox->setThemedBorderColor(ui_theme::hairlineSubtle);
+  bpmMinBox->setThemedBackgroundColor(app_theme::mainMenuSurface);
+  bpmMinBox->setCornerRadius(app_theme::controlRadius());
+  bpmMinBox->setThemedBorderColor(app_theme::hairlineSubtle);
   bpmMinBox->setBorderWidth(1);
   bpmMinBox->setVAlign(TextView::MIDDLE);
-  bpmMinBox->setThemedColor(ui_theme::textPrimary);
+  bpmMinBox->setThemedColor(app_theme::textPrimary);
   bpmMinBox->onTextChanged([this](const std::string &text) {
     if (callbacks.onBpmMinChanged) {
       callbacks.onBpmMinChanged(text);
@@ -366,15 +366,15 @@ void ChartFilterPanelView::buildStaticContent() {
     }
   });
 
-  bpmMaxBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 24);
+  bpmMaxBox = new TextInputBox(app_theme::font, 24);
   bpmMaxBox->setHeight(48);
   bpmMaxBox->setFlex(1);
-  bpmMaxBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
-  bpmMaxBox->setCornerRadius(ui_theme::controlRadius());
-  bpmMaxBox->setThemedBorderColor(ui_theme::hairlineSubtle);
+  bpmMaxBox->setThemedBackgroundColor(app_theme::mainMenuSurface);
+  bpmMaxBox->setCornerRadius(app_theme::controlRadius());
+  bpmMaxBox->setThemedBorderColor(app_theme::hairlineSubtle);
   bpmMaxBox->setBorderWidth(1);
   bpmMaxBox->setVAlign(TextView::MIDDLE);
-  bpmMaxBox->setThemedColor(ui_theme::textPrimary);
+  bpmMaxBox->setThemedColor(app_theme::textPrimary);
   bpmMaxBox->onTextChanged([this](const std::string &text) {
     if (callbacks.onBpmMaxChanged) {
       callbacks.onBpmMaxChanged(text);
@@ -528,17 +528,17 @@ void ChartFilterPanelView::refreshRangeButtons(const State &state) {
                                                         : kIconSquare));
       if (selected) {
         icon->setThemedColor(
-            [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+            [] { return app_theme::textOn(app_theme::primaryAction()); });
       } else {
-        icon->setThemedColor(ui_theme::textMuted);
+        icon->setThemedColor(app_theme::textMuted);
       }
     }
     styleActionButton(
         button, text, enabled,
-        selected ? ui_theme::primaryAction : ui_theme::control,
-        selected ? ui_theme::primaryActionHover : ui_theme::controlHover,
-        selected ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
-        selected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
+        selected ? app_theme::primaryAction : app_theme::control,
+        selected ? app_theme::primaryActionHover : app_theme::controlHover,
+        selected ? app_theme::primaryActionPressed : app_theme::controlPressed,
+        selected ? app_theme::accentBorderStrong : app_theme::hairlineStrong);
   };
 
   const bool clearEnabled = state.filters.clearMarkRank.has_value();
@@ -618,7 +618,7 @@ void ChartSortPanelView::buildContent() {
     content->setAlignItems(YGAlignCenter);
     content->setJustifyContent(YGJustifyCenter);
     content->setGap(6);
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+    auto *text = new TextView(app_theme::font, 14);
     text->setLocalizedText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
@@ -632,7 +632,7 @@ void ChartSortPanelView::buildContent() {
     content->addView(icon);
     button->setContentView(content);
     button->setStyledBorderWidth(1);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setHeight(42);
     button->setOnClickListener([this, criterion]() {
       if (criterion == ChartRecordSortCriterion::Difficulty &&
@@ -706,10 +706,10 @@ void ChartSortPanelView::refreshButtons(const State &state) {
               ? kIconCaretUp
               : kIconCaretDown));
       item.icon->setThemedColor(
-          [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+          [] { return app_theme::textOn(app_theme::primaryAction()); });
     } else {
       item.icon->setText("");
-      item.icon->setThemedColor(ui_theme::textMuted);
+      item.icon->setThemedColor(app_theme::textMuted);
     }
   }
 }

@@ -96,13 +96,13 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
              cleanup ? "settings.archive_cache_cleanup_failed.label"
                      : "settings.archive_cache_measurement_failed.label")},
          {"details", completion->error.empty() ? "." : ": " + completion->error}});
-    archiveCacheCleanupStatusColor = {255, 177, 170, 255};
+    archiveCacheCleanupStatusColor = app_theme::sdl(app_theme::coral());
   } else if (cleanup) {
     archiveCacheCleanupStatusMessage = formatCacheCleanupResult(completion->cleanup);
-    archiveCacheCleanupStatusColor = {181, 228, 165, 255};
+    archiveCacheCleanupStatusColor = app_theme::sdl(app_theme::lime());
   } else {
     archiveCacheCleanupStatusMessage = formatCacheUsageResult(completion->usage);
-    archiveCacheCleanupStatusColor = {157, 177, 200, 255};
+    archiveCacheCleanupStatusColor = app_theme::sdl(app_theme::textSecondary());
   }
 
   if (archiveCacheCleanupStatusText != nullptr) {
@@ -127,7 +127,7 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
   }
 
   archiveCacheCleanupStatusMessage = i18n::message("settings.cleaning_temporary_archive_cache.progress");
-  archiveCacheCleanupStatusColor = {239, 244, 251, 255};
+  archiveCacheCleanupStatusColor = app_theme::sdl(app_theme::textPrimary());
   if (archiveCacheCleanupStatusText != nullptr) {
     archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
@@ -143,7 +143,7 @@ void SettingsScene::measureTemporaryArchiveCache() {
   }
 
   archiveCacheCleanupStatusMessage = i18n::message("settings.measuring_temporary_archive_cache.progress");
-  archiveCacheCleanupStatusColor = {239, 244, 251, 255};
+  archiveCacheCleanupStatusColor = app_theme::sdl(app_theme::textPrimary());
   if (archiveCacheCleanupStatusText != nullptr) {
     archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
@@ -239,8 +239,8 @@ void SettingsScene::update(float dt) {
     if (previewResult.has_value() && !previewResult->message.empty()) {
       setDisplayStatus(previewResult->message,
                        previewResult->status == display::ApplyStatus::Applied
-                           ? SDL_Color{157, 220, 176, 255}
-                           : SDL_Color{255, 177, 170, 255});
+                           ? app_theme::sdl(app_theme::lime())
+                           : app_theme::sdl(app_theme::coral()));
     } else if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
       setDisplayStatus(i18n::tr("settings.display_preview_ended_previous_settings_restored.message"),
                        {255, 209, 128, 255});

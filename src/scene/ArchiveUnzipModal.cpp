@@ -7,7 +7,7 @@
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -19,13 +19,13 @@ namespace {
 Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, 160, 58);
-  auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
+  auto *text = new TextView(app_theme::font, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -33,9 +33,7 @@ Button *makeModalButton(const i18n::Text &label, int fontSize,
 }
 
 Color modalPanelBorder() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? ui_theme::hairlineStrong()
-             : Color(86, 118, 153, 210);
+  return app_theme::hairlineStrong();
 }
 
 }
@@ -85,7 +83,7 @@ void ArchiveUnzipModal::build(View *parent) {
   root_->setFlexDirection(FlexDirection::Column);
   root_->setAlignItems(YGAlignCenter);
   root_->setJustifyContent(YGJustifyCenter);
-  root_->setThemedBackgroundColor(ui_theme::scrim);
+  root_->setThemedBackgroundColor(app_theme::scrim);
   parent->addView(root_);
 
   auto *panel = new View();
@@ -93,21 +91,21 @@ void ArchiveUnzipModal::build(View *parent) {
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
   root_->addView(panel);
 
-  title_ = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title_ = new TextView(app_theme::boldFont, 30);
   title_->setLocalizedText(i18n::message("library.archive.unzip.label"));
-  title_->setThemedColor(ui_theme::textPrimary);
+  title_->setThemedColor(app_theme::textPrimary);
   title_->setHeight(42);
   panel->addView(title_);
 
-  message_ = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  message_->setThemedColor(ui_theme::textSecondary);
+  message_ = new TextView(app_theme::font, 22);
+  message_->setThemedColor(app_theme::textSecondary);
   message_->setMinHeight(32);
   message_->setWidthPercent(100);
   message_->setWrap(true);
@@ -116,22 +114,22 @@ void ArchiveUnzipModal::build(View *parent) {
   track_ = new View();
   track_->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::progressTrack)
+      ->setCornerRadius(app_theme::controlRadius())
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1);
   fill_ = new View();
-  fill_->setWidth(0)->setHeight(20)->setBackgroundColor(ui_theme::progressFill());
+  fill_->setWidth(0)->setHeight(20)->setBackgroundColor(app_theme::progressFill());
   track_->addView(fill_);
   panel->addView(track_);
 
-  percent_ = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  percent_->setThemedColor(ui_theme::textSecondary);
+  percent_ = new TextView(app_theme::font, 20);
+  percent_->setThemedColor(app_theme::textSecondary);
   percent_->setHeight(28);
   panel->addView(percent_);
 
-  detail_ = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  detail_->setThemedColor(ui_theme::textMuted);
+  detail_ = new TextView(app_theme::font, 18);
+  detail_->setThemedColor(app_theme::textMuted);
   detail_->setMinHeight(54);
   detail_->setWidthPercent(100);
   detail_->setWrap(true);

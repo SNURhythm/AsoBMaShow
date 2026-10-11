@@ -3,7 +3,7 @@
 #include "Button.h"
 #include "ScrollView.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -65,11 +65,11 @@ ContextMenuView::ContextMenuView(OverlayPortal *portalValue,
   panel = new ScrollView();
   panel->setPositionType(YGPositionTypeAbsolute);
   panel->setContentPadding(Edge::All, kPanelPadding);
-  panel->setThemedBackgroundColor(ui_theme::panelStrong);
-  panel->setThemedBorderColor(ui_theme::hairlineStrong);
+  panel->setThemedBackgroundColor(app_theme::panelStrong);
+  panel->setThemedBorderColor(app_theme::hairlineStrong);
   panel->setBorderWidth(1);
-  panel->setCornerRadius(ui_theme::controlRadius());
-  panel->setThemedShadow(ui_theme::backdrop, ui_theme::kPanelShadow);
+  panel->setCornerRadius(app_theme::controlRadius());
+  panel->setThemedShadow(app_theme::shadow, app_theme::kPanelShadow);
 
   actionList = new View();
   actionList->setFlexDirection(FlexDirection::Column);
@@ -136,24 +136,24 @@ void ContextMenuView::rebuildActions() {
     button->setWidthPercent(100.0F);
     button->setHeight(kActionHeight);
     button->setFlexShrink(0.0F);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setStyledBorderWidth(1);
-    button->setThemedBackgroundColors(ui_theme::control,
-                                      ui_theme::controlHover,
-                                      ui_theme::controlPressed);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineStrong,
-                                  ui_theme::hairlineStrong);
+    button->setThemedBackgroundColors(app_theme::control,
+                                      app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineStrong,
+                                  app_theme::hairlineStrong);
     button->setEnabled(action.enabled);
 
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+    auto *text = new TextView(app_theme::font, 17);
     text->setLocalizedText(action.label);
     text->setAlign(TextView::LEFT);
     text->setVAlign(TextView::MIDDLE);
     text->setPadding(Edge::Left, 14);
     text->setPadding(Edge::Right, 14);
-    text->setThemedColor(action.enabled ? ui_theme::textPrimary
-                                        : ui_theme::textMuted);
+    text->setThemedColor(action.enabled ? app_theme::textPrimary
+                                        : app_theme::textMuted);
     button->setContentView(text);
     button->setOnClickListener(
         [this, id = action.id]() { dispatchAction(id); });

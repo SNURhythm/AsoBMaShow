@@ -29,6 +29,7 @@
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
 #include "../../view/ClearLampColors.h"
+#include "../../view/AppTheme.h"
 #include "../../view/UiTheme.h"
 
 #include <assert.h>
@@ -183,23 +184,12 @@ gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
                         noteHeight, judgeY);
 }
 
-Color hudPanelFill() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? Color(250, 254, 255, 174)
-             : Color(7, 13, 22, 158);
-}
+// These panels are screen-space chrome; lane feedback keeps its own palette.
+Color hudPanelFill() { return app_theme::panel(); }
 
-Color hudPanelStrongFill() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? Color(255, 255, 255, 206)
-             : Color(10, 18, 30, 190);
-}
+Color hudPanelStrongFill() { return app_theme::panelStrong(); }
 
-Color hudPanelBorder() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? Color(60, 132, 138, 82)
-             : Color(110, 219, 213, 74);
-}
+Color hudPanelBorder() { return app_theme::hairlineSubtle(); }
 
 Color hudCounterAccent(size_t index) {
   constexpr Judgement judgements[] = {PGreat, Great, Good, Bad, Poor, Kpoor, Poor};
@@ -211,13 +201,9 @@ Color hudCounterAccent(size_t index) {
 Color hudCounterFill(size_t index, bool active, bool topPosition) {
   if (active) {
     if (topPosition) {
-      return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-                 ? Color(255, 255, 255, 30)
-                 : Color(4, 9, 16, 42);
+      return app_theme::panelSubtle();
     }
-    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-               ? Color(255, 255, 255, 226)
-               : Color(3, 8, 14, 218);
+    return app_theme::panelStrong();
   }
 
   const Color accent = hudCounterAccent(index);
@@ -241,14 +227,14 @@ Color hudCounterBorder(size_t index, bool active, bool topPosition) {
 
 Color hudCounterLabelColor(size_t index, int value, bool topPosition) {
   if (value <= 0) {
-    const Color muted = ui_theme::textMuted();
+    const Color muted = app_theme::textMuted();
     return Color(muted.r, muted.g, muted.b, 16);
   }
   if (topPosition) {
     const Color accent = hudCounterAccent(index);
     return Color(accent.r, accent.g, accent.b, 210);
   }
-  const Color text = ui_theme::textSecondary();
+  const Color text = app_theme::textSecondary();
   return Color(text.r, text.g, text.b,
                ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 238
                                                                     : 248);
@@ -256,16 +242,14 @@ Color hudCounterLabelColor(size_t index, int value, bool topPosition) {
 
 Color hudCounterValueColor(size_t index, int value, bool topPosition) {
   if (value <= 0) {
-    const Color muted = ui_theme::textMuted();
+    const Color muted = app_theme::textMuted();
     return Color(muted.r, muted.g, muted.b, 20);
   }
   if (topPosition) {
     const Color accent = hudCounterAccent(index);
     return Color(accent.r, accent.g, accent.b, 250);
   }
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? ui_theme::darkText()
-             : Color(248, 253, 255, 255);
+  return app_theme::textPrimary();
 }
 
 Color hudJudgementAccent(Judgement judgement) {
@@ -752,12 +736,12 @@ BMSRenderer::BMSRenderer(
   }
   rebuildPlayAreaGeometry();
 
-  titleText = std::make_unique<TextView>(kHudFontPath, 26);
+  titleText = std::make_unique<TextView>(app_theme::boldFont, 26);
   titleText->setText(chart->Meta.Title);
   titleText->setAlign(TextView::LEFT);
   titleText->setVAlign(TextView::MIDDLE);
   titleText->setOverflow(TextView::TextOverflow::Marquee);
-  titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
 
   judgeText = std::make_unique<TextView>(kHudFontPath, 38);
   judgeText->setAlign(TextView::CENTER);
@@ -791,22 +775,23 @@ BMSRenderer::BMSRenderer(
   judgementTimingMsText->setVisible(false);
   refreshJudgementFeedbackTextStyle();
   layoutCenteredJudgementText();
-  scoreText = std::make_unique<TextView>(kHudFontPath, 34);
+  scoreText = std::make_unique<TextView>(app_theme::boldFont, 34);
   scoreText->setAlign(TextView::LEFT);
   scoreText->setVAlign(TextView::MIDDLE);
   scoreText->setText("SCORE 0");
-  scoreText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  comboText = std::make_unique<TextView>(kHudFontPath, 24);
+  scoreText->setColor(app_theme::sdl(app_theme::textPrimary()));
+  // This combo belongs to the score panel; judgementComboText stays in-lane.
+  comboText = std::make_unique<TextView>(app_theme::font, 24);
   comboText->setAlign(TextView::RIGHT);
   comboText->setVAlign(TextView::MIDDLE);
   comboText->setText("COMBO 0");
   comboText->setColor(ui_theme::sdl(ui_theme::lime()));
-  pacemakerText = std::make_unique<TextView>(kHudFontPath, 18);
+  pacemakerText = std::make_unique<TextView>(app_theme::font, 18);
   pacemakerText->setAlign(TextView::CENTER);
   pacemakerText->setVAlign(TextView::MIDDLE);
   pacemakerText->setOverflow(TextView::TextOverflow::Hidden);
   pacemakerText->setText("");
-  pacemakerText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  pacemakerText->setColor(app_theme::sdl(app_theme::textMuted()));
   pacemakerText->setVisible(false);
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
   gaugeText->setAlign(TextView::CENTER);
@@ -829,11 +814,11 @@ BMSRenderer::BMSRenderer(
                  initialGaugeRules.gauges[gaugeTypeIndex(GaugeType::Normal)]
                      .initial,
                  initialGaugeRules);
-  playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
+  playOptionText = std::make_unique<TextView>(app_theme::font, 19);
   playOptionText->setAlign(TextView::LEFT);
   playOptionText->setVAlign(TextView::MIDDLE);
   playOptionText->setOverflow(TextView::TextOverflow::Marquee);
-  playOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
+  playOptionText->setColor(app_theme::sdl(app_theme::cyan()));
   playOptionText->setVisible(false);
   autoPlayMarkText = createAutoPlayMarkText();
   autoPlayMarkText->setVisible(false);
@@ -853,14 +838,14 @@ BMSRenderer::BMSRenderer(
 
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     auto &label = judgementCounterLabelTexts[i];
-    label = std::make_unique<TextView>(kHudFontPath, 14);
+    label = std::make_unique<TextView>(app_theme::font, 14);
     label->setText(kCounterLabels[i]);
     label->setAlign(TextView::CENTER);
     label->setVAlign(TextView::MIDDLE);
-    label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+    label->setColor(app_theme::sdl(app_theme::textSecondary()));
 
     auto &value = judgementCounterValueTexts[i];
-    value = std::make_unique<TextView>(kHudFontPath, 24);
+    value = std::make_unique<TextView>(app_theme::boldFont, 24);
     value->setText("0");
     value->setAlign(TextView::CENTER);
     value->setVAlign(TextView::MIDDLE);
@@ -871,16 +856,16 @@ BMSRenderer::BMSRenderer(
 }
 
 std::unique_ptr<TextView> BMSRenderer::createAutoPlayMarkText() {
-  auto text = std::make_unique<TextView>(kHudFontPath, 27);
+  auto text = std::make_unique<TextView>(app_theme::boldFont, 27);
   text->setText("AUTO PLAY");
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  text->setBackgroundColor(Color(7, 13, 22, 218));
-  text->setBorderColor(ui_theme::amber());
+  text->setColor(app_theme::sdl(app_theme::textPrimary()));
+  text->setBackgroundColor(app_theme::panelStrong());
+  text->setBorderColor(app_theme::cyan());
   text->setBorderWidth(1);
-  text->setCornerRadius(ui_theme::controlRadius());
+  text->setCornerRadius(app_theme::controlRadius());
   return text;
 }
 
@@ -959,7 +944,7 @@ void BMSRenderer::drawRoundedPanel(float x, float y, float width, float height,
 void BMSRenderer::drawGameplayHudPanels() {
   const auto safe = rendering::uiSafeAreaInsets();
   constexpr float margin = 28.0f;
-  constexpr float radius = 12.0f;
+  constexpr float radius = 0.0f;
   const float titleWidth = gameplayHudTitleWidth();
   const float metricsWidth = gameplayHudMetricsWidth();
   const bool showPacemaker =
@@ -1216,7 +1201,7 @@ void BMSRenderer::drawJudgementAccentBar() {
 }
 
 void BMSRenderer::drawJudgementCounterPanels() {
-  constexpr float radius = 10.0f;
+  constexpr float radius = 0.0f;
   const bool counterSharesGaugeSide =
       (judgementCounterPosition ==
            AppSettings::JudgementCounterPosition::Left &&
@@ -4116,7 +4101,7 @@ void BMSRenderer::applyPendingPacemakerText() {
   }
   if (pacemakerText != nullptr) {
     pacemakerText->setText(text);
-    pacemakerText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+    pacemakerText->setColor(app_theme::sdl(app_theme::textSecondary()));
   }
   if (pacemakerDeltaText != nullptr) {
     pacemakerDeltaText->setVisible(playedNotes > 0);

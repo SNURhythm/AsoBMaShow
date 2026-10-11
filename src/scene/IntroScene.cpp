@@ -10,16 +10,16 @@
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <memory>
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 TextView *text(std::string value, int size, View::ThemeColorProvider color) {
-  auto *view = new TextView(kFontPath, size);
+  auto *view = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   view->setText(std::move(value));
   view->setThemedColor(std::move(color));
   view->setAlign(TextView::CENTER);
@@ -31,14 +31,14 @@ Button *button(std::string label) {
   auto *result = new Button();
   result->setWidth(300)
       ->setHeight(64)
-      ->setCornerRadius(ui_theme::controlRadius());
-  result->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  result->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
+      ->setCornerRadius(app_theme::controlRadius());
+  result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  result->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
   result->setStyledBorderWidth(1);
-  result->setContentView(text(std::move(label), 24, ui_theme::textPrimary));
+  result->setContentView(text(std::move(label), 24, app_theme::textPrimary));
   return result;
 }
 } // namespace
@@ -60,10 +60,10 @@ void IntroScene::buildView() {
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
       ->setGap(18)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
-  auto *title = text("AsoBMaShow", 58, ui_theme::textPrimary);
+  auto *title = text("AsoBMaShow", 58, app_theme::textPrimary);
   title->setWidth(720)->setHeight(92);
   rootLayout_->addView(title);
 
@@ -236,9 +236,15 @@ void IntroScene::syncNavigationSelection() {
     if (buttons[i] == nullptr) continue;
     const bool selected = static_cast<std::size_t>(navigation_.choice()) == i;
     buttons[i]->setSelected(selected);
+    buttons[i]->setThemedBackgroundColors(
+        selected ? app_theme::primaryAction : app_theme::control,
+        selected ? app_theme::primaryActionHover : app_theme::controlHover,
+        selected ? app_theme::primaryActionPressed : app_theme::controlPressed);
+    if (auto *label = dynamic_cast<TextView *>(buttons[i]->getContentView()))
+      label->setThemedColor(selected ? app_theme::onAction : app_theme::textPrimary);
     buttons[i]->setThemedBorderColors(
-        selected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
-        ui_theme::accentBorder, ui_theme::accentBorderStrong);
+        selected ? app_theme::accentBorderStrong : app_theme::hairlineStrong,
+        app_theme::accentBorder, app_theme::accentBorderStrong);
   }
 }
 

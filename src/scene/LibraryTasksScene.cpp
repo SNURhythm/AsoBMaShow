@@ -7,14 +7,14 @@
 #include "../view/Button.h"
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <iomanip>
 #include <sstream>
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 std::string statusName(chart_library_tasks::TaskStatus status) {
   using chart_library_tasks::TaskStatus;
@@ -30,7 +30,7 @@ std::string statusName(chart_library_tasks::TaskStatus status) {
 
 TextView *makeText(std::string value, int size,
                    View::ThemeColorProvider color) {
-  auto *result = new TextView(kFontPath, size);
+  auto *result = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   result->setText(std::move(value));
   result->setThemedColor(std::move(color));
   result->setVAlign(TextView::MIDDLE);
@@ -48,7 +48,7 @@ void LibraryTasksScene::buildView() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
       ->setPadding(Edge::All, 24)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
   auto *header = new View();
@@ -57,13 +57,13 @@ void LibraryTasksScene::buildView() {
       ->setAlignItems(YGAlignCenter)
       ->setGap(14);
   auto *back = new Button();
-  back->setWidth(116)->setHeight(52)->setCornerRadius(ui_theme::controlRadius());
-  back->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                  ui_theme::controlPressed);
-  back->setContentView(makeText(i18n::tr("library.tasks.back.label"), 20, ui_theme::textPrimary));
+  back->setWidth(116)->setHeight(52)->setCornerRadius(app_theme::controlRadius());
+  back->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                  app_theme::controlPressed);
+  back->setContentView(makeText(i18n::tr("library.tasks.back.label"), 20, app_theme::textPrimary));
   back->setOnClickListener([this] { goBack(); });
   header->addView(back);
-  auto *title = makeText(i18n::tr("library.tasks.library_tasks.label"), 34, ui_theme::textPrimary);
+  auto *title = makeText(i18n::tr("library.tasks.library_tasks.label"), 34, app_theme::textPrimary);
   title->setFlex(1)->setHeight(52);
   header->addView(title);
   rootLayout_->addView(header);
@@ -92,7 +92,7 @@ void LibraryTasksScene::refreshTasks() {
 
   if (snapshot.tasks.empty()) {
     auto *empty = makeText(i18n::tr("library.tasks.no_library_tasks.message"), 20,
-                           ui_theme::textSecondary);
+                           app_theme::textSecondary);
     empty->setHeight(54);
     taskList_->addView(empty);
   } else {
@@ -111,15 +111,15 @@ void LibraryTasksScene::refreshTasks() {
           ->setFlexDirection(FlexDirection::Column)
           ->setGap(2)
           ->setPadding(Edge::All, 12)
-          ->setThemedBackgroundColor(ui_theme::panelStrong)
-          ->setThemedBorderColor(ui_theme::hairline)
+          ->setThemedBackgroundColor(app_theme::panel)
+          ->setThemedBorderColor(app_theme::hairline)
           ->setBorderWidth(1)
-          ->setCornerRadius(ui_theme::panelRadius());
-      auto *taskTitle = makeText(task.title.resolve(), 21, ui_theme::textPrimary);
+          ->setCornerRadius(app_theme::panelRadius());
+      auto *taskTitle = makeText(task.title.resolve(), 21, app_theme::textPrimary);
       taskTitle->setHeight(30);
       row->addView(taskTitle);
       auto *taskDetail =
-          makeText(detail.str(), 17, ui_theme::textSecondary);
+          makeText(detail.str(), 17, app_theme::textSecondary);
       taskDetail->setHeight(26);
       row->addView(taskDetail);
       taskList_->addView(row);

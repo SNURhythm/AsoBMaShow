@@ -61,6 +61,34 @@ void requireFits(const SDL_FRect &text, int x, int y, int width, int height) {
           "Japanese button text fits its allocated content without clipping");
 }
 
+void testApplicationThemePreservesGameplayPalette() {
+  const auto originalMode = ui_theme::activeMode();
+  const auto same = [](Color a, Color b) { return a.toABGR() == b.toABGR(); };
+  for (const auto mode : {ui_theme::ThemeMode::Dark, ui_theme::ThemeMode::Light}) {
+    ui_theme::setActiveMode(mode);
+    const auto gameplayAccent = ui_theme::cyan();
+    const auto gameplayRadius = ui_theme::controlRadius();
+    require(same(app_theme::primaryAction(), main_menu_theme::action()) &&
+                same(app_theme::infoAction(), main_menu_theme::action()) &&
+                same(app_theme::violetAction(), main_menu_theme::action()) &&
+                same(app_theme::successAction(), main_menu_theme::action()),
+            "normal application actions share the selector blue");
+    require(same(app_theme::textOn(app_theme::primaryAction()), main_menu_theme::onAction()),
+            "blue application actions retain white labels in both themes");
+    require(app_theme::panelRadius() == 0 && app_theme::controlRadius() == 0 &&
+                app_theme::shadow().a == 0 && app_theme::cardShadow().a == 0,
+            "application chrome uses square surfaces without decorative shadows");
+    require(app_theme::backdrop().a < 255 && app_theme::control().a < 255 &&
+                app_theme::textPrimary().a == 255,
+            "application surfaces remain translucent while text stays opaque");
+    require(same(ui_theme::cyan(), gameplayAccent) && gameplayRadius == 8 &&
+                ui_theme::controlRadius() == gameplayRadius &&
+                !same(app_theme::primaryAction(), ui_theme::primaryAction()),
+            "application styling does not mutate the gameplay palette or geometry");
+  }
+  ui_theme::setActiveMode(originalMode);
+}
+
 void testFixedJapaneseButtonsShrinkOnlyTheirRenderedText() {
   i18n::setLanguage(i18n::Language::Japanese);
   for (const auto &[key, width] :
@@ -146,6 +174,7 @@ void testButtonFittingRespondsToLanguageAndAvailableHeight() {
 } // namespace
 
 int main() {
+  testApplicationThemePreservesGameplayPalette();
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;

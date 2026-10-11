@@ -7,17 +7,17 @@
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <memory>
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 TextView *makeText(std::string value, int size,
                    View::ThemeColorProvider color) {
-  auto *result = new TextView(kFontPath, size);
+  auto *result = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   result->setText(std::move(value));
   result->setThemedColor(std::move(color));
   result->setWrap(true);
@@ -28,14 +28,14 @@ TextView *makeText(std::string value, int size,
 Button *makeButton(std::string label) {
   auto *result = new Button();
   result->setWidth(180)->setHeight(56)->setCornerRadius(
-      ui_theme::controlRadius());
-  result->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  result->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
+      app_theme::controlRadius());
+  result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  result->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
   result->setStyledBorderWidth(1);
-  auto *labelView = makeText(std::move(label), 21, ui_theme::textPrimary);
+  auto *labelView = makeText(std::move(label), 21, app_theme::textPrimary);
   labelView->setAlign(TextView::CENTER);
   result->setContentView(labelView);
   return result;
@@ -56,21 +56,21 @@ void MusicSelectSkinErrorScene::init() {
       ->setJustifyContent(YGJustifyCenter)
       ->setGap(12)
       ->setPadding(Edge::All, 32)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
-  auto *title = makeText(i18n::tr("music_select.skin_error.music_select_skin_failed.label"), 38, ui_theme::coral);
+  auto *title = makeText(i18n::tr("music_select.skin_error.music_select_skin_failed.label"), 38, app_theme::coral);
   title->setHeight(58);
   rootLayout_->addView(title);
   if (!selectedSkinPath_.empty()) {
     auto *path = makeText(i18n::tr("music_select.skin_error.selected_skin.prefix") + selectedSkinPath_, 20,
-                          ui_theme::textSecondary);
+                          app_theme::textSecondary);
     path->setHeight(44);
     rootLayout_->addView(path);
   }
   if (diagnostics_.empty()) {
     auto *reason = makeText(i18n::tr("music_select.skin_error.no_diagnostic_reported.message"), 20,
-                            ui_theme::textSecondary);
+                            app_theme::textSecondary);
     reason->setHeight(46);
     rootLayout_->addView(reason);
   } else {
@@ -78,7 +78,7 @@ void MusicSelectSkinErrorScene::init() {
       const auto &diagnostic = diagnostics_[index];
       auto *reasonView = makeText(
           musicSelectSkinFailureReason(index, diagnostic), 19,
-                                  ui_theme::textPrimary);
+                                  app_theme::textPrimary);
       reasonView->setMinHeight(42);
       rootLayout_->addView(reasonView);
     }

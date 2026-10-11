@@ -6,7 +6,7 @@
 #include "CheckboxButtonContent.h"
 #include "SnappedSlider.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <array>
 #include <functional>
@@ -27,10 +27,10 @@ public:
       row->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setHeight(48)->setFlexShrink(0);
       control.button = new Button(0, 0, 140, 48);
       control.button->setName(std::string("lane-cover-") + names[i]);
-      control.button->setCornerRadius(ui_theme::controlRadius());
-      control.button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+      control.button->setCornerRadius(app_theme::controlRadius());
+      control.button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
       control.content = new CheckboxButtonContent(labels[i], 18, 20);
-      control.content->setThemedColor(ui_theme::textPrimary);
+      control.content->setThemedColor(app_theme::textPrimary);
       control.button->setContentView(control.content);
       control.button->setOnClickListener([this, i] {
         bool &value = enabled(i);
@@ -47,17 +47,17 @@ public:
       control.slider->setName(std::string("lane-cover-") + names[i] + "-amount");
       control.slider->setFlex(1)->setMinWidth(50);
       row->addView(control.slider);
-      control.number = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+      control.number = new TextView(app_theme::font, 18);
       control.number->setWidth(48);
       control.number->setAlign(TextView::RIGHT);
       control.number->setVAlign(TextView::MIDDLE);
-      control.number->setThemedColor(ui_theme::textPrimary);
+      control.number->setThemedColor(app_theme::textPrimary);
       row->addView(control.number);
       addView(row);
     }
-    auto *help = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+    auto *help = new TextView(app_theme::font, 16);
     help->setLocalizedText(i18n::message("settings.lane.covers.shortcuts"));
-    help->setThemedColor(ui_theme::textSecondary);
+    help->setThemedColor(app_theme::textSecondary);
     help->setWidthPercent(100);
     help->setWrap(true);
     addView(help);

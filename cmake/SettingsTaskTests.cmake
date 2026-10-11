@@ -11,6 +11,7 @@ add_custom_command(
     VERBATIM
 )
 add_executable(settings_cache_maintenance_tests
+    src/rendering/Color.cpp
     tests/settings_cache_maintenance_tests.cpp
     ${settings_cache_scene_methods}
     src/scene/SettingsCacheMaintenance.cpp
@@ -57,6 +58,7 @@ add_custom_command(
     VERBATIM
 )
 add_executable(settings_library_task_tests
+    src/rendering/Color.cpp
     tests/settings_library_task_tests.cpp
     ${settings_library_scene_methods}
     src/scene/SettingsLibraryTask.cpp
@@ -92,7 +94,8 @@ add_custom_command(
             src/scene/SettingsScene.h src/scene/SettingsSceneAudioVideo.cpp
     VERBATIM
 )
-add_executable(settings_audio_video_scene_tests ${settings_audio_video_scene_source})
+add_executable(settings_audio_video_scene_tests ${settings_audio_video_scene_source}
+    src/rendering/Color.cpp)
 target_include_directories(settings_audio_video_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(settings_audio_video_scene_tests PRIVATE cxx_std_23)
 asobmashow_register_test(settings_audio_video_scene_tests)

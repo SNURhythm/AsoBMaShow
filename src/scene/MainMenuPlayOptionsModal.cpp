@@ -7,18 +7,16 @@
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 Color modalPanelBorder() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? ui_theme::hairlineStrong()
-             : Color(86, 118, 153, 210);
+  return app_theme::hairlineStrong();
 }
 
 Button *makeCloseButton() {
@@ -28,16 +26,16 @@ Button *makeCloseButton() {
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setThemedColor(
-      [] { return ui_theme::textOn(ui_theme::control()); });
+      [] { return app_theme::textOn(app_theme::control()); });
   button->setContentView(text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
   button->setThemedBorderColors(
-      [] { return ui_theme::withAlpha(ui_theme::hairlineStrong(), 150); },
-      [] { return ui_theme::withAlpha(ui_theme::hairlineStrong(), 190); },
-      [] { return ui_theme::withAlpha(ui_theme::hairlineStrong(), 220); });
+      [] { return app_theme::withAlpha(app_theme::hairlineStrong(), 150); },
+      [] { return app_theme::withAlpha(app_theme::hairlineStrong(), 190); },
+      [] { return app_theme::withAlpha(app_theme::hairlineStrong(), 220); });
   return button;
 }
 } // namespace
@@ -71,7 +69,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   root->setFlexDirection(FlexDirection::Column);
   root->setAlignItems(YGAlignCenter);
   root->setJustifyContent(YGJustifyCenter);
-  root->setThemedBackgroundColor(ui_theme::scrim);
+  root->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(panelWidth)
@@ -80,15 +78,15 @@ MainMenuPlayOptionsModal::Create(View *parent,
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
       ->setPadding(Edge::All, kPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  auto *title = new TextView(kFontPath, 30);
+  auto *title = new TextView(app_theme::boldFont, 30);
   title->setLocalizedText(i18n::message("menu.play_options.play_options.label"));
-  title->setThemedColor(ui_theme::textPrimary);
+  title->setThemedColor(app_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 

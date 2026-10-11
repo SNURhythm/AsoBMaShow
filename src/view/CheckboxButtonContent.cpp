@@ -1,3 +1,4 @@
+#include "AppTheme.h"
 #include "CheckboxButtonContent.h"
 
 #include "IconText.h"
@@ -7,7 +8,7 @@
 #include <utility>
 
 namespace {
-constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kUiFont = app_theme::font;
 }
 
 CheckboxButtonContent::CheckboxButtonContent(std::string label, int labelSize,

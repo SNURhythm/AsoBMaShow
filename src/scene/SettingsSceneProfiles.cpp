@@ -33,23 +33,23 @@ View *makeProfileCardsColumn(const LayoutMetrics &metrics) {
 SDL_Color statusColor(ProfileSettingsStatusKind kind) {
   switch (kind) {
   case ProfileSettingsStatusKind::Success:
-    return {157, 220, 176, 255};
+    return app_theme::sdl(app_theme::lime());
   case ProfileSettingsStatusKind::Warning:
-    return {255, 209, 128, 255};
+    return app_theme::sdl(app_theme::amber());
   case ProfileSettingsStatusKind::Error:
-    return {255, 177, 170, 255};
+    return app_theme::sdl(app_theme::coral());
   case ProfileSettingsStatusKind::Info:
-    return {185, 214, 255, 255};
+    return app_theme::sdl(app_theme::cyan());
   case ProfileSettingsStatusKind::None:
-    return {157, 177, 200, 255};
+    return app_theme::sdl(app_theme::textSecondary());
   }
-  return {157, 177, 200, 255};
+  return app_theme::sdl(app_theme::textSecondary());
 }
 
 Button *makeProfileActionButton(const LayoutMetrics &metrics,
                                 const i18n::Text &label, bool enabled,
                                 std::function<void()> action, int width = 0) {
-  auto *text = makeText(label, metrics.bodyTextSize, ui_theme::textPrimary(),
+  auto *text = makeText(label, metrics.bodyTextSize, app_theme::textPrimary(),
                         TextView::CENTER, TextView::MIDDLE);
   auto *button =
       makeControlButton(width > 0 ? width : metrics.actionButtonWidth,
@@ -58,7 +58,7 @@ Button *makeProfileActionButton(const LayoutMetrics &metrics,
   if (enabled) {
     button->setOnClickListener(std::move(action));
   } else {
-    text->setThemedColor(ui_theme::textMuted);
+    text->setThemedColor(app_theme::textMuted);
   }
   return button;
 }
@@ -487,10 +487,10 @@ void SettingsScene::activateProfile(std::string_view profileId) {
       {.sanitize = [this]() { context.settings.sanitize(); },
        .applyTheme =
            [this]() {
-             ui_theme::setActiveMode(context.settings.uiThemeMode ==
+             app_theme::setActiveMode(context.settings.uiThemeMode ==
                                              AppSettings::UiThemeMode::Light
-                                         ? ui_theme::ThemeMode::Light
-                                         : ui_theme::ThemeMode::Dark);
+                                         ? app_theme::ThemeMode::Light
+                                         : app_theme::ThemeMode::Dark);
            },
        .applyJukebox =
            [this]() {
@@ -525,8 +525,8 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                             : i18n::message("settings.profiles.profile_audio_settings_need_attention.message"))
                      : result.message,
                  result.status == audio::ApplyStatus::Applied
-                     ? SDL_Color{157, 220, 176, 255}
-                     : SDL_Color{255, 177, 170, 255});
+                     ? app_theme::sdl(app_theme::lime())
+                     : app_theme::sdl(app_theme::coral()));
              if (result.status == audio::ApplyStatus::Applied) {
                return std::string{};
              }
@@ -559,8 +559,8 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                                          ? i18n::message("settings.profiles.profile_display_settings_applied.message")
                                          : i18n::message("settings.profiles.profile_display_settings_need_attention.message"))
                                   : result.message,
-                              accepted ? SDL_Color{157, 220, 176, 255}
-                                       : SDL_Color{255, 177, 170, 255});
+                              accepted ? app_theme::sdl(app_theme::lime())
+                                       : app_theme::sdl(app_theme::coral()));
              updateDisplayPreviewUi();
              if (result.status == display::ApplyStatus::PreviewPending) {
                return ProfileDisplayRuntimeResult{
@@ -594,7 +594,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     cardsColumn->addView(makeCard(
         metrics, i18n::message("settings.profiles.player_profiles.label"), i18n::message("settings.profiles.profile_services_unavailable.message"),
         makeWrappedText(i18n::message("settings.profiles.restart_app_try_again.message"),
-                        metrics.bodyTextSize, ui_theme::textSecondary()),
+                        metrics.bodyTextSize, app_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
   }
@@ -612,7 +612,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   const auto &status = profileController->status();
   if (!status.message.empty()) {
     profileStatusText = makeWrappedText(
-        status.text, metrics.bodyTextSize, ui_theme::textSecondary());
+        status.text, metrics.bodyTextSize, app_theme::textSecondary());
     profileStatusText->setColor(statusColor(status.kind));
     cardsColumn->addView(profileStatusText);
   }
@@ -647,7 +647,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
                        {"lastUsed", i18n::message("settings.profiles.last_used.prefix")},
                        {"timestamp", display_time::formatStoredTimestamp(profile.lastUsedAt)}}),
         metrics.smallTextSize,
-        active ? ui_theme::lime() : ui_theme::textSecondary()));
+        active ? app_theme::lime() : app_theme::textSecondary()));
 
     auto *actions = new View();
     actions->setFlexDirection(FlexDirection::Row);
@@ -702,7 +702,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
           confirmingDelete
               ? i18n::message("settings.profiles.delete_profile.label")
               : i18n::message("settings.profiles.replace_profile.label"),
-          metrics.bodyTextSize, ui_theme::amber()));
+          metrics.bodyTextSize, app_theme::amber()));
       actions->addView(makeProfileActionButton(
           metrics, i18n::message("settings.profiles.cancel.label"), true, [this]() {
             profileController->cancelConfirmation();
@@ -761,7 +761,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     }
     if (!disabledReason.empty()) {
       auto *reason = makeWrappedText(disabledReason, metrics.smallTextSize,
-                                     ui_theme::textMuted());
+                                     app_theme::textMuted());
       body->addView(reason);
     }
 

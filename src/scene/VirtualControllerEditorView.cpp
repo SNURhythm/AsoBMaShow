@@ -1,7 +1,7 @@
 #include "VirtualControllerEditorView.h"
 
 #include "../rendering/SimpleBatchRenderer.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -326,7 +326,7 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
   batch.begin(context.getTransformMatrix());
   batch.addRoundedRect(editCanvas.x, editCanvas.y, editCanvas.width,
                        editCanvas.height, 14.0F,
-                       ui_theme::withAlpha(ui_theme::panelSubtle(), 190)
+                       app_theme::withAlpha(app_theme::panelSubtle(), 190)
                            .toABGR());
   if (currentLayout.valid()) {
     const uint32_t border = ui_theme::withAlpha(ui_theme::cyan(), 218).toABGR();

@@ -8,7 +8,7 @@
 #include "../view/Button.h"
 #include "../view/IrUploadCandidateListView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "SceneManager.h"
 #include "SettingsScene.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -28,7 +28,7 @@
 
 namespace {
 
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 constexpr float kScreenPadding = 18.0F;
 constexpr float kHeaderHeight = 82.0F;
 
@@ -57,20 +57,20 @@ Button *makeButton(const i18n::Text &label, int fontSize,
                    TextView **textOut = nullptr) {
   auto *button = new Button();
   button->setHeight(52);
-  button->setCornerRadius(ui_theme::controlRadius());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::hairlineStrong,
-                                ui_theme::hairlineStrong);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::hairlineStrong,
+                                app_theme::hairlineStrong);
   button->setStyledBorderWidth(1);
 
-  auto *text = new TextView(kFontPath, fontSize);
+  auto *text = new TextView(fontSize >= 26 ? app_theme::boldFont : kFontPath, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setThemedColor([] { return ui_theme::textOn(ui_theme::control()); });
+  text->setThemedColor([] { return app_theme::textOn(app_theme::control()); });
   button->setContentView(text);
   if (textOut != nullptr) {
     *textOut = text;
@@ -80,7 +80,7 @@ Button *makeButton(const i18n::Text &label, int fontSize,
 
 TextView *makeText(const i18n::Text &text, int fontSize,
                    View::ThemeColorProvider color) {
-  auto *view = new TextView(kFontPath, fontSize);
+  auto *view = new TextView(fontSize >= 26 ? app_theme::boldFont : kFontPath, fontSize);
   view->setLocalizedText(text);
   view->setThemedColor(std::move(color));
   view->setOverflow(TextView::TextOverflow::Hidden);
@@ -247,7 +247,7 @@ void IrUploadsScene::buildView() {
   rootLayout->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout);
 
   auto *header = new View();
@@ -261,9 +261,9 @@ void IrUploadsScene::buildView() {
       ->setPadding(Edge::Left, safe.left + kScreenPadding)
       ->setPadding(Edge::Right, safe.right + kScreenPadding)
       ->setPadding(Edge::Bottom, 10)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kHeaderShadow)
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::panel)
+      ->setThemedShadow(app_theme::shadow, app_theme::kHeaderShadow)
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1);
 
   auto *backButton = makeButton(i18n::message("ir.upload.back.label"), 20);
@@ -273,12 +273,12 @@ void IrUploadsScene::buildView() {
   backButton->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   header->addView(backButton);
 
-  auto *title = makeText(i18n::message("ir.upload.ir_uploads.label"), 34, ui_theme::textPrimary);
+  auto *title = makeText(i18n::message("ir.upload.ir_uploads.label"), 34, app_theme::textPrimary);
   title->setHeight(42);
   title->setFlex(1);
   header->addView(title);
 
-  candidateCountText = makeText(i18n::message("ir.upload.score_count.empty"), 18, ui_theme::textSecondary);
+  candidateCountText = makeText(i18n::message("ir.upload.score_count.empty"), 18, app_theme::textSecondary);
   candidateCountText->setWidth(150);
   candidateCountText->setHeight(32);
   candidateCountText->setAlign(TextView::RIGHT);
@@ -313,20 +313,20 @@ void IrUploadsScene::buildView() {
       ->setAlignItems(YGAlignCenter)
       ->setGap(16)
       ->setPadding(Edge::All, 16)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::panel)
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::panelRadius());
+      ->setCornerRadius(app_theme::panelRadius());
   auto *providerColumn = new View();
   providerColumn->setFlex(1)
       ->setMinWidth(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(4);
-  auto *providerTitle = makeText("Bokutachi", 24, ui_theme::textPrimary);
+  auto *providerTitle = makeText("Bokutachi", 24, app_theme::textPrimary);
   providerTitle->setHeight(32);
   providerColumn->addView(providerTitle);
   providerStatusText =
-      makeText(i18n::message("ir.upload.checking_configuration.progress"), 17, ui_theme::textSecondary);
+      makeText(i18n::message("ir.upload.checking_configuration.progress"), 17, app_theme::textSecondary);
   providerStatusText->setHeight(26);
   providerColumn->addView(providerStatusText);
   providerCard->addView(providerColumn);
@@ -356,7 +356,7 @@ void IrUploadsScene::buildView() {
     refreshUi();
   });
   selectionToolbar->addView(clearButton);
-  selectionCountText = makeText(i18n::message("ir.upload.selection_count.empty"), 18, ui_theme::textSecondary);
+  selectionCountText = makeText(i18n::message("ir.upload.selection_count.empty"), 18, app_theme::textSecondary);
   selectionCountText->setHeight(32);
   selectionCountText->setVAlign(TextView::MIDDLE);
   selectionToolbar->addView(selectionCountText);
@@ -368,10 +368,10 @@ void IrUploadsScene::buildView() {
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setPadding(Edge::All, 10)
-      ->setThemedBackgroundColor(ui_theme::mainMenuPanel)
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::mainMenuPanel)
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::panelRadius());
+      ->setCornerRadius(app_theme::panelRadius());
   candidateList = new IrUploadCandidateListView();
   candidateList->setFlex(1);
   candidateList->clearBackgroundColor();
@@ -387,7 +387,7 @@ void IrUploadsScene::buildView() {
   };
   listPanel->addView(candidateList);
   stateText =
-      makeText(i18n::message("ir.upload.no_scores_waiting_ir_upload.message"), 21, ui_theme::textSecondary);
+      makeText(i18n::message("ir.upload.no_scores_waiting_ir_upload.message"), 21, app_theme::textSecondary);
   stateText->setHeight(58);
   stateText->setWrap(true);
   stateText->setAlign(TextView::CENTER);
@@ -402,8 +402,8 @@ void IrUploadsScene::buildView() {
       ->setAlignItems(YGAlignCenter)
       ->setGap(14)
       ->setPadding(Edge::Top, 8)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
-  progressText = makeText("", 18, ui_theme::textSecondary);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
+  progressText = makeText("", 18, app_theme::textSecondary);
   progressText->setFlex(1);
   progressText->setHeight(48);
   progressText->setWrap(true);
@@ -565,8 +565,8 @@ void IrUploadsScene::refreshUi() {
     stateText->setVisible(visible);
     stateText->setLocalizedText(!loadError.empty() ? loadError
                                           : i18n::message("ir.upload.no_scores_waiting_ir_upload.message"));
-    stateText->setThemedColor(!loadError.empty() ? ui_theme::coral
-                                                 : ui_theme::textSecondary);
+    stateText->setThemedColor(!loadError.empty() ? app_theme::coral
+                                                 : app_theme::textSecondary);
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();

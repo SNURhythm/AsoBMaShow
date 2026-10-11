@@ -191,9 +191,16 @@ void testDisabledButtonDimsWholeContentAndRestoresFollowingViews() {
 
   REQUIRE(backend.submissions.size() == 5);
   const auto &decoration = backend.submissions[0].colors;
-  REQUIRE(decoration.size() == 8);
+  REQUIRE(decoration.size() == 20);
+  // Each border quad stays outside the interior so translucent fills reveal
+  // the scene instead of compositing over an opaque border underlay.
+  for (size_t index = 0; index < 16; index += 4) {
+    const auto &first = decoration[index];
+    const auto &last = decoration[index + 2];
+    REQUIRE(last.x <= 2 || first.x >= 98 || last.y <= 2 || first.y >= 48);
+  }
   REQUIRE(decoration[0].abgr == 0x725a5046U);
-  REQUIRE(decoration[4].abgr == 0x5a3c3228U);
+  REQUIRE(decoration[16].abgr == 0x5a3c3228U);
   REQUIRE(backend.submissions[1].colors[0].abgr == 0x561e140aU);
   const auto &disabledTexture = backend.submissions[2];
   REQUIRE(disabledTexture.textured);
@@ -214,9 +221,21 @@ void testDisabledButtonDimsWholeContentAndRestoresFollowingViews() {
   }
   REQUIRE(backend.submissions.size() == 3);
   REQUIRE(backend.submissions[0].colors[0].abgr == 0xff5a5046U);
-  REQUIRE(backend.submissions[0].colors[4].abgr == 0xc83c3228U);
+  REQUIRE(backend.submissions[0].colors[16].abgr == 0xc83c3228U);
   REQUIRE(backend.submissions[1].colors[0].abgr == 0xc01e140aU);
   REQUIRE(backend.submissions[2].state.uniformCount == 0);
+
+  backend.submissions.clear();
+  button.setCornerRadius(8);
+  {
+    RenderContext::UiBatchScope batch(context);
+    button.render(context);
+  }
+  const auto &rounded = backend.submissions[0].colors;
+  REQUIRE(rounded.size() == 42);
+  REQUIRE(rounded[0].x == 50 && rounded[0].y == 25);
+  REQUIRE(rounded[0].abgr == 0xff5a5046U);
+  REQUIRE(rounded[21].abgr == 0xc83c3228U);
 }
 
 void testDisabledButtonContentPixels() {

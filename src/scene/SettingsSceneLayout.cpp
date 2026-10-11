@@ -287,11 +287,11 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     visibleTimeControls->addView(makeWrappedText(
         metrics.compact ? i18n::message("settings.visible_time_controls.note_duration.green_number_help")
                         : i18n::message("settings.visible_time_controls.green_number.unit_help"),
-        metrics.bodyTextSize, ui_theme::textSecondary()));
+        metrics.bodyTextSize, app_theme::textSecondary()));
   }
 
   visibleTimeModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   visibleTimeModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -339,7 +339,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     }
     visibleTimeControls->addView(makeWrappedText(
         i18n::message("settings.visible_time_controls.fixed_hi_speed.label"),
-        metrics.smallTextSize, ui_theme::textSecondary()));
+        metrics.smallTextSize, app_theme::textSecondary()));
     fixedHispeed->refresh({.selectedId = std::to_string(static_cast<int>(context.settings.hispeedFixMode)),
                            .options = std::move(modes), .maxVisibleItems = 5});
     fixedHispeed->setWidthPercent(100)->setMinWidth(0);
@@ -353,7 +353,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     fixedHispeedChoices->setGap(metrics.compact ? 6.0F : 8.0F);
     auto *fixedHispeedLabel =
         makeText(i18n::message("settings.visible_time_controls.fixed_hi_speed.label"), metrics.smallTextSize,
-                 ui_theme::textSecondary(), TextView::LEFT, TextView::MIDDLE);
+                 app_theme::textSecondary(), TextView::LEFT, TextView::MIDDLE);
     fixedHispeedLabel->setMinWidth(0.0F);
     fixedHispeedLabel->setFlexShrink(1.0F);
     fixedHispeedChoices->addView(fixedHispeedLabel);
@@ -362,7 +362,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
           AppSettings::HiSpeedFixMode::Max, AppSettings::HiSpeedFixMode::Main,
           AppSettings::HiSpeedFixMode::Min}) {
       auto *choiceLabel = makeText(formatVisibleTimeBpmStrategyLabel(mode),
-                                   metrics.smallTextSize, ui_theme::textPrimary(),
+                                   metrics.smallTextSize, app_theme::textPrimary(),
                                    TextView::CENTER, TextView::MIDDLE);
       const int width =
           std::max(metrics.compact ? 84 : 96, choiceLabel->textureWidth() + 28);
@@ -370,7 +370,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
           context.settings.hispeedFixMode == mode
               ? makeAccentButton(width, metrics.actionButtonHeight,
                                  choiceLabel,
-                                 ui_theme::cyan())
+                                 app_theme::cyan())
               : makeControlButton(width, metrics.actionButtonHeight, choiceLabel);
       choice->setOnClickListener([this, mode]() {
         if (context.settings.hispeedFixMode == mode) {
@@ -537,16 +537,15 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->setFlexDirection(FlexDirection::Column);
   previewPanel->setAlignItems(previewPanelFolded ? YGAlignFlexEnd
                                                  : YGAlignStretch);
-  previewPanel->setThemedBackgroundColor(ui_theme::panel);
-  previewPanel->setCornerRadius(ui_theme::panelRadius());
-  previewPanel->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
-  previewPanel->setThemedBorderColor(ui_theme::hairline);
+  previewPanel->setThemedBackgroundColor(app_theme::panel);
+  previewPanel->setCornerRadius(app_theme::panelRadius());
+  previewPanel->setThemedBorderColor(app_theme::hairline);
   previewPanel->setBorderWidth(1);
 
   auto makeFoldButton = [this, foldButtonSize](const i18n::Text &label) {
     auto *button =
         makeControlButton(foldButtonSize, foldButtonSize,
-                          makeText(label, 18, ui_theme::textPrimary(),
+                          makeText(label, 18, app_theme::textPrimary(),
                                    TextView::CENTER, TextView::MIDDLE));
     button->setOnClickListener([this]() {
       previewPanelFolded = !previewPanelFolded;
@@ -570,7 +569,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->setAlignItems(YGAlignCenter);
   previewHeader->setJustifyContent(YGJustifySpaceBetween);
   previewHeader->addView(
-      makeText(i18n::message("settings.preview_layout.preview.label"), metrics.sectionTitleSize, ui_theme::textPrimary()));
+      makeHeading(i18n::message("settings.preview_layout.preview.label"), metrics.sectionTitleSize));
 
   auto *headerActions = new View();
   headerActions->setFlexDirection(FlexDirection::Row);
@@ -579,7 +578,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   auto *movePanel = makeControlButton(metrics.compact ? 108 : 120, foldButtonSize,
       makeText(i18n::message(previewPanelOnLeft
           ? "settings.preview_layout.move_right.label" : "settings.preview_layout.move_left.label"),
-          metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+          metrics.smallTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   movePanel->setOnClickListener([this]() {
     previewPanelOnLeft = !previewPanelOnLeft;
     lastLayoutWidth = -1;
@@ -638,9 +637,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
                                       std::function<void()> action) {
     auto *label = makeText(i18n::message(labelKey, {{"state", i18n::tr(selected
         ? "settings.skins.judgement_hud.on.label" : "settings.skins.judgement_hud.off.label")}}),
-        metrics.smallTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+        metrics.smallTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
     auto *button = selected
-        ? makeAccentButton(playbackToggleWidth, metrics.actionButtonHeight, label, ui_theme::cyan())
+        ? makeAccentButton(playbackToggleWidth, metrics.actionButtonHeight, label, app_theme::cyan())
         : makeControlButton(playbackToggleWidth, metrics.actionButtonHeight, label);
     button->setEnabled(enabled);
     button->setOnClickListener([this, action = std::move(action)]() {
@@ -658,9 +657,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   pauseIcon->setText(ui_icons::textForCodepoint(previewPaused ? kIconPlay : kIconPause));
   pauseIcon->setAlign(TextView::CENTER);
   pauseIcon->setVAlign(TextView::MIDDLE);
-  pauseIcon->setThemedColor(ui_theme::textPrimary);
+  pauseIcon->setThemedColor(app_theme::textPrimary);
   auto *pauseButton = previewPaused
-      ? makeAccentButton(pauseButtonSize, pauseButtonSize, pauseIcon, ui_theme::cyan())
+      ? makeAccentButton(pauseButtonSize, pauseButtonSize, pauseIcon, app_theme::cyan())
       : makeControlButton(pauseButtonSize, pauseButtonSize, pauseIcon);
   pauseButton->setOnClickListener([this]() {
     previewPaused = !previewPaused;
@@ -671,13 +670,13 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   if (previewAutoPlay && previewRandomTiming)
     previewPanel->addView(makeWrappedText(
         i18n::message("settings.preview_layout.random_timing.description"),
-        metrics.smallTextSize, ui_theme::textSecondary()));
+        metrics.smallTextSize, app_theme::textSecondary()));
   previewPanel->addView(makeWrappedText(
       previewError.empty()
           ? i18n::message(previewPresentation && previewPresentation->activeMode() == PresentationMode::Skin
                 ? "settings.preview_layout.skin_selected.label" : "settings.preview_layout.skin_builtin.label")
           : i18n::message("settings.preview_layout.skin_error.message", {{"error", previewError}}),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
 
   auto *previewTabs = new View();
   previewTabs->setFlexDirection(FlexDirection::Row);
@@ -693,12 +692,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   auto makePreviewTab = [this, &metrics, previewTabWidth](int page,
                                                           const i18n::Text &label) {
     auto *labelText =
-        makeText(label, metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+        makeText(label, metrics.bodyTextSize + 2, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     auto *button =
         previewPanelPage == page
             ? makeAccentButton(previewTabWidth, metrics.actionButtonHeight,
-                               labelText, ui_theme::cyan())
+                               labelText, app_theme::cyan())
             : makeControlButton(previewTabWidth, metrics.actionButtonHeight,
                                 labelText);
     button->setOnClickListener([this, page]() {
@@ -736,12 +735,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   if (previewPanelPage == 0) {
     previewControls->addView(makeWrappedText(
         i18n::message("settings.preview_layout.visible_time.label"),
-        metrics.bodyTextSize, ui_theme::textPrimary()));
+        metrics.bodyTextSize, app_theme::textPrimary()));
     previewControls->addView(buildVisibleTimeControls(metrics, false, true));
 
     previewControls->addView(makeWrappedText(
         i18n::message("settings.preview_layout.note_start.label"),
-        metrics.bodyTextSize, ui_theme::textPrimary()));
+        metrics.bodyTextSize, app_theme::textPrimary()));
     constexpr std::array coverLabels{"SUDDEN+", "HIDDEN+", "LIFT"};
     for (std::size_t index = 0; index < coverLabels.size(); ++index) {
       const auto read = [this, index]() {
@@ -759,14 +758,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         persistSettings();
       };
       auto *content = new CheckboxButtonContent(coverLabels[index], metrics.bodyTextSize, 20);
-      content->setThemedColor(ui_theme::textPrimary);
+      content->setThemedColor(app_theme::textPrimary);
       const auto state = context.settings.presentation().laneCoverState();
       const bool enabled = index == 0 ? state.laneCoverEnabled
           : index == 1 ? state.hiddenEnabled : state.liftEnabled;
       content->setChecked(enabled);
       auto *toggle = new Button(0, 0, metrics.actionButtonWidth, metrics.actionButtonHeight);
-      toggle->setCornerRadius(ui_theme::controlRadius());
-      toggle->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+      toggle->setCornerRadius(app_theme::controlRadius());
+      toggle->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
       toggle->setContentView(content);
       toggle->setSelected(enabled);
       toggle->setOnClickListener([this, index, toggle, content]() {
@@ -799,14 +798,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     }
     previewControls->addView(makeWrappedText(
         i18n::message("settings.lane.covers.shortcuts"),
-        metrics.smallTextSize, ui_theme::textSecondary()));
+        metrics.smallTextSize, app_theme::textSecondary()));
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   } else if (previewPanelPage == 1 && previewSkinRow != nullptr) {
     previewControls->addView(makeWrappedText(
         previewSkinRow->metadata.displayName.empty()
             ? previewSkinRow->entry.packageRelativePath
             : previewSkinRow->metadata.displayName,
-        metrics.bodyTextSize, ui_theme::cyan()));
+        metrics.bodyTextSize, app_theme::cyan()));
     appendGameplaySkinCatalogSettings(previewControls, metrics,
                                        *previewSkinRow, previewSkinActionsEnabled);
     appendGameplaySkinViewportSettings(previewControls, metrics,
@@ -833,25 +832,25 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (gameplaySkinTraitsRuntimeAvailable()) {
     gameplaySkinUiMessageText = makeWrappedText(gameplaySkinUiMessage,
-        metrics.smallTextSize, ui_theme::textSecondary());
+        metrics.smallTextSize, app_theme::textSecondary());
     previewControls->addView(gameplaySkinUiMessageText);
   }
 #endif
 
   auto *restartButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.preview_layout.restart.label"), metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.preview_layout.restart.label"), metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
-      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
+      app_theme::control(), app_theme::controlHover(), app_theme::controlPressed(),
+      app_theme::hairline(), app_theme::cyan(), app_theme::cyan());
   restartButton->setOnClickListener([this]() { resetPreviewSimulation(); });
 
   auto *doneButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.preview_layout.done.label"), metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.preview_layout.done.label"), metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
-      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
+      app_theme::control(), app_theme::controlHover(), app_theme::controlPressed(),
+      app_theme::hairline(), app_theme::cyan(), app_theme::cyan());
   doneButton->setOnClickListener([this]() { stopLanePreview(); });
 
   auto *previewActions = new View();
@@ -882,10 +881,10 @@ View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metric
   row->setJustifyContent(YGJustifyFlexStart);
   row->setGap(12);
   auto *label = makeWrappedText(i18n::message("settings.skins.scratch_position.label"),
-                                metrics.smallTextSize, ui_theme::textSecondary());
+                                metrics.smallTextSize, app_theme::textSecondary());
   label->setFlexShrink(1)->setMinWidth(0);
   row->addView(label);
-  auto *value = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+  auto *value = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
   const auto refresh = [this, value]() {
     value->setLocalizedText(i18n::message(context.settings.presentation().scratchLaneOnRight
@@ -913,7 +912,7 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
   body->setAlignItems(YGAlignFlexStart);
   const auto appendPosition = [this, body, &metrics](const i18n::Text &label,
       float AppSettings::PresentationSettings::*member) {
-    body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+    body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
     auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
     const auto refresh = [this, input, member]() {
       input->setEditingText(std::to_string(judgementTextYToPercent(context.settings.presentation().*member)));
@@ -963,7 +962,7 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, int keyM
   body->setAlignItems(YGAlignFlexStart);
   if (previewStyle)
     body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
-                                  metrics.bodyTextSize, ui_theme::textPrimary()));
+                                  metrics.bodyTextSize, app_theme::textPrimary()));
   auto *selector = new DropdownView({
       .onOptionSelected = [this](const std::string &id) {
         keybombEditingJudgement = static_cast<Judgement>(std::stoi(id));
@@ -980,7 +979,7 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, int keyM
   body->addView(selector);
   const auto judgement = keybombEditingJudgement;
   body->addView(makeWrappedText(i18n::message("settings.keybomb.preview"),
-                                metrics.smallTextSize, ui_theme::textSecondary()));
+                                metrics.smallTextSize, app_theme::textSecondary()));
   auto *sample = new KeybombPreviewView(judgement, [this, keyMode, judgement]() {
     auto styles = context.settings.keybombsForKeyMode(keyMode);
     if (appearanceColorPreview) {
@@ -995,7 +994,7 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, int keyM
   sample->setHeight(previewStyle ? 160 : 220);
   sample->setFlexShrink(0);
   body->addView(sample);
-  auto *visibleText = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+  auto *visibleText = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                                 TextView::CENTER, TextView::MIDDLE);
   auto *visibleButton = makeControlButton(metrics.actionButtonWidth,
                                            metrics.actionButtonHeight, visibleText);
@@ -1015,7 +1014,7 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, int keyM
   body->addView(visibleButton);
   const auto appendPercent = [&](const i18n::Text &label, int keybomb::Style::*member,
                                   int minimum, int maximum) {
-    body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+    body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
     auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
     const auto refresh = [this, keyMode, judgement, member, input]() {
       input->setEditingText(std::to_string(context.settings.keybombsForKeyMode(keyMode)[judgement].*member));
@@ -1058,7 +1057,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   const auto appendStyle = [this, body, &metrics](const i18n::Text &label,
       int AppSettings::PresentationSettings::*sizeMember,
       bool AppSettings::PresentationSettings::*boldMember) {
-    body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+    body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
     auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
     const auto refreshSize = [this, input, sizeMember]() {
       input->setEditingText(std::to_string(context.settings.presentation().*sizeMember));
@@ -1071,7 +1070,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
       refreshSize();
       persistSettings();
     });
-    auto *weightText = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+    auto *weightText = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                                 TextView::CENTER, TextView::MIDDLE);
     const auto refreshWeight = [this, weightText, boldMember]() {
       weightText->setLocalizedText(i18n::message(context.settings.presentation().*boldMember
@@ -1113,14 +1112,14 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   separationRow->setGap(8.0F);
   auto *separationLabel = makeWrappedText(
       i18n::message("settings.skins.feedback.combo_layout.label"),
-      metrics.bodyTextSize, ui_theme::textPrimary());
+      metrics.bodyTextSize, app_theme::textPrimary());
   separationLabel->setFlexShrink(1)->setMinWidth(0);
   separationRow->addView(separationLabel);
   auto *separationText = makeText(i18n::message(
       context.settings.presentation().judgementComboSeparated
           ? "settings.skins.feedback.combo_layout.separated.label"
           : "settings.skins.feedback.combo_layout.combined.label"),
-      metrics.bodyTextSize, ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+      metrics.bodyTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
   auto *separationToggle = makeControlButton(metrics.compact ? 132 : 156,
                                               metrics.actionButtonHeight, separationText);
   separationToggle->setOnClickListener([this]() {
@@ -1133,7 +1132,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   body->addView(separationRow);
   auto *visibilityLabel = makeWrappedText(
       i18n::message("settings.skins.feedback.judgement_visibility.label"),
-      metrics.smallTextSize, ui_theme::textSecondary());
+      metrics.smallTextSize, app_theme::textSecondary());
   body->addView(visibilityLabel);
   auto *visibilityControls = new View();
   visibilityControls->setWidthPercent(100);
@@ -1143,7 +1142,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
   visibilityControls->setJustifyContent(YGJustifyFlexStart);
   const auto appendVisibility = [this, visibilityControls, &metrics](
       const i18n::Text &label, bool player_settings::JudgementTextVisibility::*member) {
-    auto *text = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+    auto *text = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                           TextView::CENTER, TextView::MIDDLE);
     auto *toggle = makeControlButton(metrics.compact ? 180 : 200,
                                      metrics.actionButtonHeight, text);
@@ -1215,9 +1214,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *offsetValue = new View();
   offsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   offsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  offsetValue->setThemedBackgroundColor(ui_theme::control);
-  offsetValue->setCornerRadius(ui_theme::controlRadius());
-  offsetValue->setThemedBorderColor(ui_theme::hairline);
+  offsetValue->setThemedBackgroundColor(app_theme::control);
+  offsetValue->setCornerRadius(app_theme::controlRadius());
+  offsetValue->setThemedBorderColor(app_theme::hairline);
   offsetValue->setBorderWidth(1);
   offsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   offsetInput->setText("");
@@ -1226,7 +1225,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   offsetInput->setBorderWidth(0);
   offsetInput->setAlign(TextView::CENTER);
   offsetInput->setVAlign(TextView::MIDDLE);
-  offsetInput->setThemedColor(ui_theme::textPrimary);
+  offsetInput->setThemedColor(app_theme::textPrimary);
   offsetInput->onEditingFinished(
       [this](const std::string &) { commitOffsetInput(); });
   offsetValue->addView(offsetInput);
@@ -1281,9 +1280,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *visualOffsetValue = new View();
   visualOffsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   visualOffsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  visualOffsetValue->setThemedBackgroundColor(ui_theme::control);
-  visualOffsetValue->setCornerRadius(ui_theme::controlRadius());
-  visualOffsetValue->setThemedBorderColor(ui_theme::hairline);
+  visualOffsetValue->setThemedBackgroundColor(app_theme::control);
+  visualOffsetValue->setCornerRadius(app_theme::controlRadius());
+  visualOffsetValue->setThemedBorderColor(app_theme::hairline);
   visualOffsetValue->setBorderWidth(1);
   visualOffsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   visualOffsetInput->setText("");
@@ -1293,7 +1292,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   visualOffsetInput->setBorderWidth(0);
   visualOffsetInput->setAlign(TextView::CENTER);
   visualOffsetInput->setVAlign(TextView::MIDDLE);
-  visualOffsetInput->setThemedColor(ui_theme::textPrimary);
+  visualOffsetInput->setThemedColor(app_theme::textPrimary);
   visualOffsetInput->onEditingFinished(
       [this](const std::string &) { commitVisualOffsetInput(); });
   visualOffsetValue->addView(visualOffsetInput);
@@ -1329,7 +1328,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
 View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   cardsColumn->addView(makeWrappedText(i18n::message("settings.hud.scope_help"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
   auto *judgementFeedbackControls = new View();
   judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
   judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1347,9 +1346,9 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   timingFastSlowGroup->setFlexDirection(FlexDirection::Column);
   timingFastSlowGroup->setGap(metrics.compact ? 6.0f : 8.0f);
   timingFastSlowGroup->addView(
-      makeText("FAST/SLOW", metrics.bodyTextSize, ui_theme::textSecondary()));
+      makeText("FAST/SLOW", metrics.bodyTextSize, app_theme::textSecondary()));
   judgementTimingFastSlowCriteriaText =
-      makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementTimingFastSlowCriteriaButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1367,9 +1366,9 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   timingMillisecondsGroup->setFlexDirection(FlexDirection::Column);
   timingMillisecondsGroup->setGap(metrics.compact ? 6.0f : 8.0f);
   timingMillisecondsGroup->addView(makeText(
-      i18n::message("settings.timing.milliseconds.label"), metrics.bodyTextSize, ui_theme::textSecondary()));
+      i18n::message("settings.timing.milliseconds.label"), metrics.bodyTextSize, app_theme::textSecondary()));
   judgementTimingMillisecondsCriteriaText =
-      makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementTimingMillisecondsCriteriaButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1401,11 +1400,11 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
 
   judgementIndicatorModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementIndicatorModeButton =
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       judgementIndicatorModeText, ui_theme::lime());
+                       judgementIndicatorModeText, app_theme::lime());
   judgementIndicatorModeButton->setOnClickListener([this]() {
     context.settings.presentation().judgementIndicatorEnabled =
         !context.settings.presentation().judgementIndicatorEnabled;
@@ -1414,7 +1413,7 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->addView(judgementIndicatorModeButton);
 
   judgementIndicatorRenderModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementIndicatorRenderModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1429,7 +1428,7 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorModeControls);
 
   judgementIndicatorControls->addView(
-      makeText(i18n::message("settings.timing.y_position.label"), metrics.bodyTextSize, ui_theme::textSecondary()));
+      makeText(i18n::message("settings.timing.y_position.label"), metrics.bodyTextSize, app_theme::textSecondary()));
   auto *judgementIndicatorYControls = new View();
   judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
@@ -1481,7 +1480,7 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorYControls);
 
   judgementIndicatorControls->addView(
-      makeText(i18n::message("settings.timing.width.label"), metrics.bodyTextSize, ui_theme::textSecondary()));
+      makeText(i18n::message("settings.timing.width.label"), metrics.bodyTextSize, app_theme::textSecondary()));
   auto *judgementIndicatorWidthControls = new View();
   judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
@@ -1540,7 +1539,7 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorWidthControls);
 
   judgementIndicatorControls->addView(makeText(
-      i18n::message("settings.timing.range_ms.label"), metrics.bodyTextSize, ui_theme::textSecondary()));
+      i18n::message("settings.timing.range_ms.label"), metrics.bodyTextSize, app_theme::textSecondary()));
   auto *judgementIndicatorRangeControls = new View();
   judgementIndicatorRangeControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorRangeControls->setFlexWrap(YGWrapWrap);
@@ -1614,11 +1613,11 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementCounterModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
   judgementCounterModeControls->setAlignItems(YGAlignFlexStart);
   judgementCounterModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementCounterModeButton =
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       judgementCounterModeText, ui_theme::lime());
+                       judgementCounterModeText, app_theme::lime());
   judgementCounterModeButton->setOnClickListener([this]() {
     context.settings.presentation().judgementCounterEnabled =
         !context.settings.presentation().judgementCounterEnabled;
@@ -1626,7 +1625,7 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   });
   judgementCounterModeControls->addView(judgementCounterModeButton);
   judgementCounterPositionText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementCounterPositionButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1648,14 +1647,14 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   gaugeControls->setAlignItems(YGAlignFlexStart);
   gaugeControls->addView(makeWrappedText(
       i18n::message("settings.visual.gauge_position.help"),
-      metrics.bodyTextSize, ui_theme::textSecondary()));
+      metrics.bodyTextSize, app_theme::textSecondary()));
   auto *gaugePositionControls = new View();
   gaugePositionControls->setFlexDirection(FlexDirection::Row);
   gaugePositionControls->setFlexWrap(YGWrapWrap);
   gaugePositionControls->setGap(metrics.compact ? 8.0f : 10.0f);
   gaugePositionControls->setAlignItems(YGAlignFlexStart);
   gaugeBarPositionText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   gaugeBarPositionButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1680,7 +1679,7 @@ View *SettingsScene::buildBackgroundTab(const LayoutMetrics &metrics) {
   bgaControls->setFlexDirection(FlexDirection::Column);
   bgaControls->setGap(metrics.compact ? 12.0f : 16.0f);
   bgaControls->setAlignItems(YGAlignFlexStart);
-  bgaModeText = makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+  bgaModeText = makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
   bgaModeButton = makeControlButton(metrics.actionButtonWidth,
                                     metrics.actionButtonHeight, bgaModeText);
@@ -1699,9 +1698,9 @@ View *SettingsScene::buildBackgroundTab(const LayoutMetrics &metrics) {
   bgaDisplayControls->setAlignItems(YGAlignFlexStart);
   bgaDisplayControls->addView(makeWrappedText(
       i18n::message("settings.visual.fit_shows_all_fill_crops_stretch_distorts.message"),
-      metrics.bodyTextSize, ui_theme::textSecondary()));
+      metrics.bodyTextSize, app_theme::textSecondary()));
   bgaDisplayModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   bgaDisplayModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1818,9 +1817,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   previewControls->setAlignItems(YGAlignFlexStart);
   auto *previewButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.lane.preview.label"), metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.lane.preview.label"), metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
+      app_theme::lime());
   previewButton->setOnClickListener([this]() { startLanePreview(); });
   previewControls->addView(previewButton);
   cardsColumn->addView(makeCard(
@@ -1847,7 +1846,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
 
   hispeedAutoAdjustModeText =
       makeText(i18n::message("settings.lane.hi_speed_auto_adjust_off.label"), metrics.bodyTextSize + 6,
-               ui_theme::textPrimary(),
+               app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   constexpr int hispeedAutoAdjustHorizontalPadding = 32;
   const int hispeedAutoAdjustButtonWidth =
@@ -1872,7 +1871,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   invisibleNoteControls->setGap(metrics.compact ? 12.0f : 16.0f);
   invisibleNoteControls->setAlignItems(YGAlignFlexStart);
   showInvisibleNotesModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   showInvisibleNotesModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1892,7 +1891,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   processedNoteControls->setGap(metrics.compact ? 12.0f : 16.0f);
   processedNoteControls->setAlignItems(YGAlignFlexStart);
   markProcessedNotesModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   markProcessedNotesModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1912,7 +1911,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   startLaneIndicatorControls->setGap(metrics.compact ? 12.0f : 16.0f);
   startLaneIndicatorControls->setAlignItems(YGAlignFlexStart);
   startLaneIndicatorsModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   startLaneIndicatorsModeButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -1940,7 +1939,7 @@ View *SettingsScene::buildGeneralTab(const LayoutMetrics &metrics) {
   languageControls->setAlignItems(YGAlignFlexStart);
   auto *languageStatus = makeWrappedText(
       i18n::message("settings.language.change_notice"),
-      metrics.bodyTextSize, ui_theme::textSecondary());
+      metrics.bodyTextSize, app_theme::textSecondary());
   auto *languageDropdown = new DropdownView(
       {.onOptionSelectedResult =
            [this, languageStatus](const std::string &id) {
@@ -1987,11 +1986,11 @@ View *SettingsScene::buildGeneralTab(const LayoutMetrics &metrics) {
   themeControls->setGap(metrics.compact ? 12.0f : 16.0f);
   themeControls->setAlignItems(YGAlignFlexStart);
   uiThemeModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   uiThemeModeButton =
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       uiThemeModeText, ui_theme::cyan());
+                       uiThemeModeText, app_theme::cyan());
   uiThemeModeButton->setOnClickListener([this]() {
     context.settings.uiThemeMode =
         nextUiThemeMode(context.settings.uiThemeMode);
@@ -2044,9 +2043,9 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
 
   auto *addButton = makeAccentButton(
       addButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.difficulty_tables.add_table.label"), metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.difficulty_tables.add_table.label"), metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
+      app_theme::lime());
   addButton->setOnClickListener([this]() { addDifficultyTableFromUrl(); });
   urlRow->addView(addButton);
   addControls->addView(urlRow);
@@ -2069,16 +2068,16 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
   if (difficultyTables.empty()) {
     tableList->addView(makeWrappedText(i18n::message("settings.difficulty_tables.no_difficulty_tables_installed.message"),
                                        metrics.bodyTextSize,
-                                       ui_theme::textSecondary()));
+                                       app_theme::textSecondary()));
   } else {
     for (const auto &table : difficultyTables) {
       auto *row = new View();
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setThemedBackgroundColor(ui_theme::panelSubtle);
-      row->setCornerRadius(ui_theme::controlRadius());
-      row->setThemedBorderColor(ui_theme::hairline);
+      row->setThemedBackgroundColor(app_theme::panelSubtle);
+      row->setCornerRadius(app_theme::controlRadius());
+      row->setThemedBorderColor(app_theme::hairline);
       row->setBorderWidth(1);
 
       auto *titleRow = new View();
@@ -2087,17 +2086,17 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
       titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
       titleRow->setAlignItems(YGAlignCenter);
       titleRow->addView(makeWrappedText(table.name, metrics.bodyTextSize + 6,
-                                        ui_theme::textPrimary()));
+                                        app_theme::textPrimary()));
       titleRow->addView(
-          makeText(table.symbol, metrics.bodyTextSize, ui_theme::cyan()));
+          makeText(table.symbol, metrics.bodyTextSize, app_theme::cyan()));
       titleRow->addView(makeText(formatTableCount(table.chartCount),
                                  metrics.bodyTextSize,
-                                 ui_theme::textSecondary()));
+                                 app_theme::textSecondary()));
       row->addView(titleRow);
 
       row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
                                    metrics.smallTextSize,
-                                   ui_theme::textMuted()));
+                                   app_theme::textMuted()));
 
       auto *actions = new View();
       actions->setFlexDirection(FlexDirection::Row);
@@ -2107,7 +2106,7 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
       const int smallActionWidth = metrics.compact ? 136 : 156;
       auto *updateButton = makeControlButton(
           smallActionWidth, metrics.actionButtonHeight,
-          makeText(i18n::message("settings.difficulty_tables.update.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+          makeText(i18n::message("settings.difficulty_tables.update.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       updateButton->setOnClickListener([this, tableId = table.id]() {
         updateDifficultyTableFromSource(tableId);
@@ -2118,9 +2117,9 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
       auto *deleteButton = makeAccentButton(
           smallActionWidth, metrics.actionButtonHeight,
           makeText(confirmingDelete ? i18n::message("settings.difficulty_tables.confirm.label") : i18n::message("settings.difficulty_tables.delete.label"),
-                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   metrics.bodyTextSize + 2, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          ui_theme::coral());
+          app_theme::coral());
       deleteButton->setOnClickListener(
           [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
       actions->addView(deleteButton);
@@ -2155,8 +2154,8 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   auto *refreshFoldersButton = makeAccentButton(
       kFitContentWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.bms_library.rebuild_library.label"), metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      app_theme::lime());
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
   folderActions->addView(refreshFoldersButton);
 
@@ -2177,8 +2176,8 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
     auto *addFolderButton = makeAccentButton(
         kFitContentWidth, metrics.actionButtonHeight,
         makeText(addFolderButtonLabel, metrics.bodyTextSize + 2,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-        ui_theme::cyan());
+                 app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+        app_theme::cyan());
     addFolderButton->setOnClickListener([this, importFolderByCopy,
                                          addFolderButtonLabel]() {
       if (context.requestAddChartFolderFromFiles) {
@@ -2186,10 +2185,10 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
         chartFolderStatusMessage = importFolderByCopy
                                        ? i18n::message("settings.bms_library.choose_folder_import.message")
                                        : i18n::message("settings.bms_library.choose_folder_add.message");
-        chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
+        chartFolderStatusColor = app_theme::sdl(app_theme::textSecondary());
       } else {
         chartFolderStatusMessage = i18n::message("settings.library.action.unavailable", {{"action", addFolderButtonLabel}});
-        chartFolderStatusColor = {255, 177, 170, 255};
+        chartFolderStatusColor = app_theme::sdl(app_theme::coral());
       }
 
       if (chartFolderStatusText != nullptr) {
@@ -2210,24 +2209,24 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
     playNote->setAlignSelf(YGAlignStretch);
     playNote->setPadding(Edge::All,
                          static_cast<float>(metrics.compact ? 14 : 16));
-    playNote->setThemedBackgroundColor(ui_theme::panelSubtle);
-    playNote->setCornerRadius(ui_theme::controlRadius());
-    playNote->setThemedBorderColor(ui_theme::hairline);
+    playNote->setThemedBackgroundColor(app_theme::panelSubtle);
+    playNote->setCornerRadius(app_theme::controlRadius());
+    playNote->setThemedBorderColor(app_theme::hairline);
     playNote->setBorderWidth(1);
     playNote->addView(makeWrappedText(
         i18n::message("settings.bms_library.folder_import.play_storage_notice"),
-        metrics.bodyTextSize, ui_theme::textSecondary()));
+        metrics.bodyTextSize, app_theme::textSecondary()));
 
     auto *repoButton = makeAccentButton(
         metrics.compact ? 150 : 170, metrics.actionButtonHeight,
         makeText(i18n::message("settings.bms_library.open_git_hub.label"), metrics.bodyTextSize + 2,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-        ui_theme::cyan());
+                 app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+        app_theme::cyan());
     repoButton->setOnClickListener([this]() {
       std::string errorMessage;
       if (!OpenURLInAndroidBrowser(kRepositoryUrl, errorMessage)) {
         chartFolderStatusMessage = i18n::message("settings.bms_library.could_not_open_git_hub_link.message");
-        chartFolderStatusColor = {255, 177, 170, 255};
+        chartFolderStatusColor = app_theme::sdl(app_theme::coral());
         if (chartFolderStatusText != nullptr) {
           chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
           chartFolderStatusText->setColor(chartFolderStatusColor);
@@ -2251,10 +2250,10 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   if (chartEntries.empty()) {
     folderList->addView(makeWrappedText(i18n::message("settings.bms_library.no_chart_folders_installed.message"),
                                         metrics.bodyTextSize,
-                                        ui_theme::textSecondary()));
+                                        app_theme::textSecondary()));
     folderList->addView(makeWrappedText(
         i18n::message("settings.bms_library.default_download_folder.help"),
-        metrics.smallTextSize, ui_theme::textMuted()));
+        metrics.smallTextSize, app_theme::textMuted()));
   } else {
     for (const auto &entry : chartEntries) {
       const std::string entryPathText = formatChartEntryPath(entry);
@@ -2263,17 +2262,17 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setThemedBackgroundColor(ui_theme::panelSubtle);
-      row->setCornerRadius(ui_theme::controlRadius());
-      row->setThemedBorderColor(ui_theme::hairline);
+      row->setThemedBackgroundColor(app_theme::panelSubtle);
+      row->setCornerRadius(app_theme::controlRadius());
+      row->setThemedBorderColor(app_theme::hairline);
       row->setBorderWidth(1);
 
       row->addView(makeWrappedText(formatChartEntryName(entry),
                                    metrics.bodyTextSize + 6,
-                                   ui_theme::textPrimary()));
+                                   app_theme::textPrimary()));
       row->addView(makeWrappedText(formatChartEntrySource(entry),
                                    metrics.smallTextSize,
-                                   ui_theme::textMuted()));
+                                   app_theme::textMuted()));
 
       auto *actions = new View();
       actions->setFlexDirection(FlexDirection::Row);
@@ -2284,14 +2283,14 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       if (entry.primaryStorageFolder) {
         actions->addView(makeWrappedText(i18n::message("settings.bms_library.download_folder.label"),
                                          metrics.smallTextSize,
-                                         ui_theme::lime()));
+                                         app_theme::lime()));
       } else if (entry.primaryStorageEligible) {
         auto *downloadButton = makeAccentButton(
             metrics.compact ? 180 : 210, metrics.actionButtonHeight,
             makeText(i18n::message("settings.bms_library.use_downloads.label"), metrics.smallTextSize,
-                     ui_theme::textPrimary(), TextView::CENTER,
+                     app_theme::textPrimary(), TextView::CENTER,
                      TextView::MIDDLE),
-            ui_theme::cyan());
+            app_theme::cyan());
         downloadButton->setOnClickListener([this, entryPathText]() {
           setFindBmsDownloadEntry(entryPathText);
         });
@@ -2300,11 +2299,11 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
                      std::filesystem::path(entry.path))) {
         actions->addView(makeWrappedText(i18n::message("settings.bms_library.fallback_download_folder.label"),
                                          metrics.smallTextSize,
-                                         ui_theme::textMuted()));
+                                         app_theme::textMuted()));
       } else {
         actions->addView(makeWrappedText(i18n::message("settings.bms_library.not_writable_by_find_bms.label"),
                                          metrics.smallTextSize,
-                                         ui_theme::textMuted()));
+                                         app_theme::textMuted()));
       }
 
       if (entry.removable) {
@@ -2313,15 +2312,15 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
         auto *deleteButton = makeAccentButton(
             folderActionWidth, metrics.actionButtonHeight,
             makeText(confirmingDelete ? i18n::message("settings.bms_library.confirm.label") : i18n::message("settings.bms_library.delete.label"),
-                     metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                     metrics.bodyTextSize + 2, app_theme::textPrimary(),
                      TextView::CENTER, TextView::MIDDLE),
-            ui_theme::coral());
+            app_theme::coral());
         deleteButton->setOnClickListener(
             [this, entryPathText]() { deleteChartEntry(entryPathText); });
         actions->addView(deleteButton);
       } else {
         actions->addView(makeWrappedText(i18n::message("settings.bms_library.built_in.label"), metrics.smallTextSize,
-                                         ui_theme::textMuted()));
+                                         app_theme::textMuted()));
       }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -2335,9 +2334,9 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
           backupActionWidth, metrics.actionButtonHeight,
           makeText(backupExcluded ? i18n::message("settings.bms_library.enable_i_cloud_backup.label")
                                   : i18n::message("settings.bms_library.disable_i_cloud_backup.label"),
-                   metrics.smallTextSize, ui_theme::textPrimary(),
+                   metrics.smallTextSize, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          backupExcluded ? ui_theme::cyan() : ui_theme::lime());
+          backupExcluded ? app_theme::cyan() : app_theme::lime());
       backupButton->setOnClickListener([this, entryPathText]() {
         toggleChartEntryICloudBackup(entryPathText);
       });
@@ -2357,11 +2356,11 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   archivePreviewControls->setGap(metrics.compact ? 12.0f : 16.0f);
   archivePreviewControls->setAlignItems(YGAlignFlexStart);
   archiveChartPreviewModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   archiveChartPreviewModeButton =
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       archiveChartPreviewModeText, ui_theme::lime());
+                       archiveChartPreviewModeText, app_theme::lime());
   archiveChartPreviewModeButton->setOnClickListener([this]() {
     context.settings.archiveChartPreviewEnabled =
         !context.settings.archiveChartPreviewEnabled;
@@ -2377,11 +2376,11 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   findBmsArchiveControls->setGap(metrics.compact ? 12.0f : 16.0f);
   findBmsArchiveControls->setAlignItems(YGAlignFlexStart);
   findBmsSkipUnarchivingModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   findBmsSkipUnarchivingModeButton =
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       findBmsSkipUnarchivingModeText, ui_theme::lime());
+                       findBmsSkipUnarchivingModeText, app_theme::lime());
   findBmsSkipUnarchivingModeButton->setOnClickListener([this]() {
     context.settings.findBmsSkipUnarchivingForNonSolidArchives =
         !context.settings.findBmsSkipUnarchivingForNonSolidArchives;
@@ -2399,17 +2398,17 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   cacheCleanupControls->setAlignItems(YGAlignFlexStart);
   archiveCacheCleanupButtonText =
       makeText(archiveCacheMaintenance.cleanupRunning() ? i18n::message("settings.misc.cleaning.progress") : i18n::message("settings.misc.clean_up.label"),
-               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               metrics.bodyTextSize + 4, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   archiveCacheCleanupButton =
       makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       archiveCacheCleanupButtonText, ui_theme::coral());
+                       archiveCacheCleanupButtonText, app_theme::coral());
   archiveCacheCleanupButton->setOnClickListener(
       [this]() { cleanupTemporaryArchiveCache(); });
   cacheCleanupControls->addView(archiveCacheCleanupButton);
   archiveCacheCleanupStatusText =
       makeWrappedText(archiveCacheCleanupStatusMessage, metrics.bodyTextSize,
-                      ui_theme::textSecondary());
+                      app_theme::textSecondary());
   archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   cacheCleanupControls->addView(archiveCacheCleanupStatusText);
   cardsColumn->addView(makeCard(
@@ -2431,7 +2430,7 @@ void SettingsScene::buildDifficultyTableImportModal(
   difficultyTableImportModalRoot->setFlexDirection(FlexDirection::Column);
   difficultyTableImportModalRoot->setAlignItems(YGAlignCenter);
   difficultyTableImportModalRoot->setJustifyContent(YGJustifyCenter);
-  difficultyTableImportModalRoot->setThemedBackgroundColor(ui_theme::scrim);
+  difficultyTableImportModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *importPanel = new View();
   importPanel
@@ -2443,47 +2442,45 @@ void SettingsScene::buildDifficultyTableImportModal(
       ->setAlignItems(YGAlignStretch)
       ->setGap(metrics.compact ? 14.0f : 18.0f)
       ->setPadding(Edge::All, static_cast<float>(metrics.cardPadding))
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1);
 
   difficultyTableImportTitleText =
-      makeWrappedText(i18n::message("settings.difficulty_table_import_modal.importing_difficulty_tables.label"), metrics.sectionTitleSize,
-                      ui_theme::textPrimary());
+      makeHeading(i18n::message("settings.difficulty_table_import_modal.importing_difficulty_tables.label"), metrics.sectionTitleSize);
   importPanel->addView(difficultyTableImportTitleText);
 
   difficultyTableImportStatusText = makeWrappedText(
-      i18n::message("settings.difficulty_table_import_modal.preparing_import.progress"), metrics.bodyTextSize, ui_theme::textSecondary());
+      i18n::message("settings.difficulty_table_import_modal.preparing_import.progress"), metrics.bodyTextSize, app_theme::textSecondary());
   importPanel->addView(difficultyTableImportStatusText);
 
   difficultyTableImportTableText =
       makeWrappedText(i18n::message("settings.difficulty_table_import_modal.current_table_resolving_table_url.label"),
-                      metrics.bodyTextSize, ui_theme::textPrimary());
+                      metrics.bodyTextSize, app_theme::textPrimary());
   importPanel->addView(difficultyTableImportTableText);
 
   auto *progressRow = new View();
   progressRow->setFlexDirection(FlexDirection::Column);
   progressRow->setGap(metrics.compact ? 8.0f : 10.0f);
   difficultyTableImportProgressText =
-      makeText(i18n::message("settings.difficulty_table_import_modal.import.initial_progress"), metrics.bodyTextSize, ui_theme::textMuted());
+      makeText(i18n::message("settings.difficulty_table_import_modal.import.initial_progress"), metrics.bodyTextSize, app_theme::textMuted());
   progressRow->addView(difficultyTableImportProgressText);
 
   auto *progressTrack = new View();
   progressTrack->setHeight(static_cast<float>(metrics.compact ? 16 : 18));
   progressTrack->setAlignSelf(YGAlignStretch);
   progressTrack->setFlexDirection(FlexDirection::Row);
-  progressTrack->setThemedBackgroundColor(ui_theme::control);
-  progressTrack->setCornerRadius(ui_theme::controlRadius());
-  progressTrack->setThemedBorderColor(ui_theme::hairline);
+  progressTrack->setThemedBackgroundColor(app_theme::control);
+  progressTrack->setCornerRadius(app_theme::controlRadius());
+  progressTrack->setThemedBorderColor(app_theme::hairline);
   progressTrack->setBorderWidth(1);
   difficultyTableImportProgressFill = new View();
   difficultyTableImportProgressFill->setWidthPercent(0.0f);
   difficultyTableImportProgressFill->setHeight(
       static_cast<float>(metrics.compact ? 16 : 18));
   difficultyTableImportProgressFill->setThemedBackgroundColor(
-      ui_theme::progressFill);
+      app_theme::progressFill);
   progressTrack->addView(difficultyTableImportProgressFill);
   progressRow->addView(progressTrack);
   importPanel->addView(progressRow);
@@ -2493,7 +2490,7 @@ void SettingsScene::buildDifficultyTableImportModal(
   modalActions->setJustifyContent(YGJustifyFlexEnd);
   difficultyTableImportCloseButton = makeControlButton(
       160, 60,
-      makeText(i18n::message("settings.difficulty_table_import_modal.close.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.difficulty_table_import_modal.close.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE));
   difficultyTableImportCloseButton->setOnClickListener(
       [this]() { hideDifficultyTableImportModal(); });
@@ -2538,7 +2535,7 @@ void SettingsScene::initView() {
     return;
   }
 
-  rootLayout->setThemedBackgroundColor(ui_theme::backdrop);
+  rootLayout->setThemedBackgroundColor(app_theme::backdrop);
 
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row);
@@ -2549,20 +2546,20 @@ void SettingsScene::initView() {
   headerText->setFlexDirection(FlexDirection::Column);
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
-      makeText(i18n::message("settings.navigation.settings.label"), metrics.titleSize, ui_theme::textPrimary()));
+      makeHeading(i18n::message("settings.navigation.settings.label"), metrics.titleSize));
   headerText->addView(makeText(i18n::message(
       context.settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait
           ? "settings.presentation.portrait.label" : "settings.presentation.landscape.label"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
   header->addView(headerText);
 
   auto *backLabel =
-      makeText(i18n::message("settings.navigation.back.label"), metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.navigation.back.label"), metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   auto *backButton = makeButton(
       metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
-      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
-      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
+      app_theme::control(), app_theme::controlHover(), app_theme::controlPressed(),
+      app_theme::hairline(), app_theme::cyan(), app_theme::cyan());
   const auto profilePhase = profileController ? profileController->phase()
                                               : ProfileSettingsPhase::Idle;
   const bool profilePipelineBusy =
@@ -2615,16 +2612,16 @@ void SettingsScene::initView() {
   auto makeTabButton = [&](SettingsTab tab, const i18n::Text &label,
                            TextView **labelOut) {
     auto *labelText =
-        makeText(label, metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+        makeText(label, metrics.bodyTextSize + 4, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     if (labelOut != nullptr) {
       *labelOut = labelText;
     }
     auto *button =
         makeButton(tabColumnWidth, metrics.actionButtonHeight, labelText,
-                   ui_theme::control(), ui_theme::controlHover(),
-                   ui_theme::controlPressed(), ui_theme::hairline(),
-                   ui_theme::accentBorder(), ui_theme::accentBorderStrong());
+                   app_theme::control(), app_theme::controlHover(),
+                   app_theme::controlPressed(), app_theme::hairline(),
+                   app_theme::accentBorder(), app_theme::accentBorderStrong());
     button->setOnClickListener([this, tab]() {
       if (activeTab == tab) {
         return;
@@ -2787,29 +2784,21 @@ namespace settings_scene {
 
 void styleGameplaySkinChoiceButton(Button *button, bool selected) {
   button->setSelected(selected);
+  if (auto *label = dynamic_cast<TextView *>(button->getContentView())) {
+    label->setThemedColor(selected ? app_theme::onAction : app_theme::textPrimary);
+  }
   if (!selected) {
-    button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                      ui_theme::controlPressed);
-    button->setThemedBorderColors(ui_theme::hairline, ui_theme::accentBorder,
-                                  ui_theme::accentBorderStrong);
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairline, app_theme::accentBorder,
+                                  app_theme::accentBorderStrong);
     return;
   }
 
-  const auto accent = []() { return ui_theme::cyan(); };
-  const auto accentWithModeAlpha = [](uint8_t lightAlpha, uint8_t darkAlpha) {
-    return [lightAlpha, darkAlpha]() {
-      return ui_theme::withAlpha(
-          ui_theme::cyan(), ui_theme::activeMode() == ui_theme::ThemeMode::Light
-                                ? lightAlpha
-                                : darkAlpha);
-    };
-  };
-  button->setThemedBackgroundColors(accentWithModeAlpha(54, 82),
-                                    accentWithModeAlpha(74, 108),
-                                    accentWithModeAlpha(100, 136));
-  button->setThemedBorderColors(
-      []() { return ui_theme::withAlpha(ui_theme::cyan(), 178); },
-      []() { return ui_theme::withAlpha(ui_theme::cyan(), 216); }, accent);
+  button->setThemedBackgroundColors(app_theme::action, app_theme::actionHover,
+                                    app_theme::actionPressed);
+  button->setThemedBorderColors(app_theme::action, app_theme::actionHover,
+                                app_theme::actionPressed);
 }
 
 View *makeGameplaySkinChoiceRow(
@@ -2823,7 +2812,7 @@ View *makeGameplaySkinChoiceRow(
   row->setGap(metrics.compact ? 8.0f : 10.0f);
 
   auto *labelView = makeText(label, metrics.smallTextSize,
-                             ui_theme::textSecondary(), TextView::LEFT,
+                             app_theme::textSecondary(), TextView::LEFT,
                              TextView::MIDDLE);
   labelView->setMinWidth(0.0f);
   labelView->setFlexShrink(1.0f);
@@ -2838,7 +2827,7 @@ View *makeGameplaySkinChoiceRow(
   auto choiceButtons = std::make_shared<std::vector<Button *>>();
   for (auto &choice : choices) {
     auto *choiceLabel = makeText(choice.label, metrics.smallTextSize,
-                                 ui_theme::textPrimary(), TextView::CENTER,
+                                 app_theme::textPrimary(), TextView::CENTER,
                                  TextView::MIDDLE);
     constexpr int horizontalContentPadding = 28;
     const int minimumWidth = metrics.compact ? 84 : 96;
@@ -2847,7 +2836,7 @@ View *makeGameplaySkinChoiceRow(
         std::max(0, choiceLabel->textureWidth()) + horizontalContentPadding);
     auto *button = choice.selected
                        ? makeAccentButton(width, metrics.actionButtonHeight,
-                                          choiceLabel, ui_theme::cyan())
+                                          choiceLabel, app_theme::cyan())
                        : makeControlButton(width, metrics.actionButtonHeight,
                                            choiceLabel);
     button->setSelected(choice.selected);
@@ -2887,14 +2876,14 @@ void SettingsScene::appendSelectedSkinHudSettings(
     View *body, const LayoutMetrics &metrics, bool includeBuiltInOnlySettings) {
   const auto appendHeading = [body, &metrics](const i18n::Text &label) {
     body->addView(
-        makeWrappedText(label, metrics.bodyTextSize, ui_theme::cyan()));
+        makeWrappedText(label, metrics.bodyTextSize, app_theme::cyan()));
   };
   body->setAlignItems(YGAlignFlexStart);
   const auto appendNumeric =
       [this, body, &metrics](const i18n::Text &label, std::function<std::string()> read,
                              const std::string &defaultValue,
                              std::function<void(const std::string &)> apply) {
-        body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
+        body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
         auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
         input->setEditingText(read());
         input->onEditingFinished([this, input, read, apply](const std::string &text) {

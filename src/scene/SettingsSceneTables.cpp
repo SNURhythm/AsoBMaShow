@@ -52,7 +52,7 @@ void SettingsScene::loadDifficultyTables() {
   if (!session.has_value()) {
     difficultyTables.clear();
     difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
-    difficultyTableStatusColor = {255, 177, 170, 255};
+    difficultyTableStatusColor = app_theme::sdl(app_theme::coral());
     return;
   }
 
@@ -75,7 +75,7 @@ void SettingsScene::loadChartEntries() {
   if (!session.has_value()) {
     chartEntries.clear();
     chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
-    chartFolderStatusColor = {255, 177, 170, 255};
+    chartFolderStatusColor = app_theme::sdl(app_theme::coral());
     return;
   }
 
@@ -185,8 +185,8 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
   if (pending.tableStatus) {
     difficultyTableStatusMessage = std::move(pending.tableStatus->text);
     difficultyTableStatusColor = pending.tableStatus->succeeded
-                                     ? SDL_Color{181, 228, 165, 255}
-                                     : SDL_Color{255, 177, 170, 255};
+                                     ? app_theme::sdl(app_theme::lime())
+                                     : app_theme::sdl(app_theme::coral());
     if (difficultyTableStatusText != nullptr) {
       difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
       difficultyTableStatusText->setColor(difficultyTableStatusColor);
@@ -195,8 +195,8 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
   if (pending.folderStatus) {
     chartFolderStatusMessage = pending.folderStatus->text;
     chartFolderStatusColor = pending.folderStatus->succeeded
-                                ? SDL_Color{181, 228, 165, 255}
-                                : SDL_Color{255, 177, 170, 255};
+                                ? app_theme::sdl(app_theme::lime())
+                                : app_theme::sdl(app_theme::coral());
     if (chartFolderStatusText != nullptr) {
       chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
@@ -304,9 +304,8 @@ void SettingsScene::refreshDifficultyTableImportModal() {
   }
   if (difficultyTableImportProgressFill != nullptr) {
     difficultyTableImportProgressFill->setWidthPercent(progressPercent);
-    difficultyTableImportProgressFill->setBackgroundColor(
-        finished && !succeeded ? Color(191, 82, 92, 255)
-                               : Color(97, 157, 142, 255));
+    difficultyTableImportProgressFill->setThemedBackgroundColor(
+        finished && !succeeded ? app_theme::coral : app_theme::progressFill);
   }
   if (difficultyTableImportCloseButton != nullptr) {
     const bool canClose = finished;
@@ -337,7 +336,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
       tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
   if (url.empty()) {
     difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.enter_table_webpage_url_first.message");
-    difficultyTableStatusColor = {255, 177, 170, 255};
+    difficultyTableStatusColor = app_theme::sdl(app_theme::coral());
     if (difficultyTableStatusText != nullptr) {
       difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
       difficultyTableStatusText->setColor(difficultyTableStatusColor);
@@ -348,7 +347,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.adding_table.progress");
-  difficultyTableStatusColor = {239, 244, 251, 255};
+  difficultyTableStatusColor = app_theme::sdl(app_theme::textPrimary());
   difficultyTableImportModalVisible = true;
   difficultyTableImportFinished = false;
   difficultyTableImportSucceeded = false;
@@ -413,7 +412,7 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.updating_table.progress");
-  difficultyTableStatusColor = {239, 244, 251, 255};
+  difficultyTableStatusColor = app_theme::sdl(app_theme::textPrimary());
   if (difficultyTableStatusText != nullptr) {
     difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
@@ -455,14 +454,14 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     pendingDeleteDifficultyTableId = tableId;
     pendingDeleteChartEntryPath.clear();
     difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.tap_confirm_on_table_delete.message");
-    difficultyTableStatusColor = {255, 213, 151, 255};
+    difficultyTableStatusColor = app_theme::sdl(app_theme::amber());
     lastLayoutWidth = -1;
     return;
   }
 
   pendingDeleteDifficultyTableId = 0;
   difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.deleting_table.progress");
-  difficultyTableStatusColor = {239, 244, 251, 255};
+  difficultyTableStatusColor = app_theme::sdl(app_theme::textPrimary());
   if (difficultyTableStatusText != nullptr) {
     difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
@@ -500,7 +499,7 @@ void SettingsScene::refreshChartLibrary() {
   if (context.requestRebuildChartLibrary) {
     context.requestRebuildChartLibrary();
     chartFolderStatusMessage = i18n::message("settings.difficulty_tables.chart_list_rebuild_started_in_background.message");
-    chartFolderStatusColor = {181, 228, 165, 255};
+    chartFolderStatusColor = app_theme::sdl(app_theme::lime());
     if (chartFolderStatusText != nullptr) {
       chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
@@ -509,7 +508,7 @@ void SettingsScene::refreshChartLibrary() {
   }
 
   chartFolderStatusMessage = i18n::message("settings.difficulty_tables.rebuilding_chart_list.progress");
-  chartFolderStatusColor = {239, 244, 251, 255};
+  chartFolderStatusColor = app_theme::sdl(app_theme::textPrimary());
   if (chartFolderStatusText != nullptr) {
     chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);
@@ -601,15 +600,15 @@ void SettingsScene::setFindBmsDownloadEntry(
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
     chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
-    chartFolderStatusColor = {255, 177, 170, 255};
+    chartFolderStatusColor = app_theme::sdl(app_theme::coral());
   } else if (!session->SetPrimaryStorageEntry(
                  std::filesystem::path(utf8_to_path_t(entryPathText)))) {
     chartFolderStatusMessage =
         i18n::message("settings.difficulty_tables.could_not_use_folder_find_bms_downloads.message");
-    chartFolderStatusColor = {255, 177, 170, 255};
+    chartFolderStatusColor = app_theme::sdl(app_theme::coral());
   } else {
     chartFolderStatusMessage = i18n::message("settings.difficulty_tables.find_bms_download_folder_updated.message");
-    chartFolderStatusColor = {181, 228, 165, 255};
+    chartFolderStatusColor = app_theme::sdl(app_theme::lime());
     loadChartEntries();
     refreshChartEntryBackupStatuses();
   }
@@ -630,7 +629,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   if (ChartRepository::IsDefaultBmsFolderPath(
           std::filesystem::path(utf8_to_path_t(entryPathText)))) {
     chartFolderStatusMessage = i18n::message("settings.difficulty_tables.default_bms_folder_built_in.message");
-    chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
+    chartFolderStatusColor = app_theme::sdl(app_theme::textSecondary());
     if (chartFolderStatusText != nullptr) {
       chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
       chartFolderStatusText->setColor(chartFolderStatusColor);
@@ -649,7 +648,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
   pendingDeleteChartEntryPath.clear();
   chartFolderStatusMessage = i18n::message("settings.difficulty_tables.removing_folder.progress");
-  chartFolderStatusColor = {239, 244, 251, 255};
+  chartFolderStatusColor = app_theme::sdl(app_theme::textPrimary());
   if (chartFolderStatusText != nullptr) {
     chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
     chartFolderStatusText->setColor(chartFolderStatusColor);

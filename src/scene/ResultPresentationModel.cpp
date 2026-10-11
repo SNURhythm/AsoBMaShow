@@ -1,3 +1,4 @@
+#include "../view/AppTheme.h"
 #include "../GameplayKeyMode.h"
 #include "../i18n/Localization.h"
 #include "ResultPresentationModel.h"
@@ -255,8 +256,8 @@ localScoreComparison(int currentScore, int maxScore,
               .detail = hasPrevious ? score_rank::displayLabelForScore(
                                           previousScore, previousMax)
                                     : std::string{},
-              .accent = hasPrevious ? ui_theme::textPrimary()
-                                    : ui_theme::textMuted()};
+              .accent = hasPrevious ? app_theme::textPrimary()
+                                    : app_theme::textMuted()};
   }
 
   return {
@@ -265,13 +266,13 @@ localScoreComparison(int currentScore, int maxScore,
       .current = {.label = i18n::tr("result.summary.score.current.badge"),
                   .value = std::to_string(currentScore),
                   .detail = "MAX " + std::to_string(maxScore),
-                  .accent = ui_theme::textPrimary()},
+                  .accent = app_theme::textPrimary()},
       .delta = (hasPacemaker || hasPrevious)
                    ? std::optional<std::string>(
                          std::string(hasPacemaker ? "PACEMAKER " : "DELTA ") +
                          formatSignedDelta(delta))
                    : std::optional<std::string>("DELTA --"),
-      .deltaAccent = !(hasPacemaker || hasPrevious) ? ui_theme::textMuted()
+      .deltaAccent = !(hasPacemaker || hasPrevious) ? app_theme::textMuted()
                          : delta >= 0 ? ui_theme::lime() : ui_theme::coral(),
   };
 }
@@ -302,7 +303,7 @@ localLampComparison(const RhythmState &state,
                       ? "GAUGE " + formatGauge(previous->finalGauge)
                       : std::string{},
               .accent = hasPrevious ? clearLampColorForRank(previousRank)
-                                    : ui_theme::textMuted()},
+                                    : app_theme::textMuted()},
       .current = {.label = i18n::tr("result.summary.lamp.current.badge"),
                   .value = currentLabel,
                   .detail = "GAUGE " + formatGauge(state.currentGauge),
@@ -330,7 +331,7 @@ localComboComparison(const RhythmState &state,
                             ? "BREAK " + std::to_string(
                                              options.previousBest->comboBreak)
                             : std::string{},
-              .accent = hasPrevious ? ui_theme::lime() : ui_theme::textMuted()},
+              .accent = hasPrevious ? ui_theme::lime() : app_theme::textMuted()},
       .current = {.label = i18n::tr("result.summary.combo.current.badge"),
                   .value = std::to_string(state.maxCombo),
                   .detail = "BREAK " + std::to_string(state.comboBreak),
@@ -339,7 +340,7 @@ localComboComparison(const RhythmState &state,
                                  "COMBO " + formatSignedDelta(comboDelta) +
                                  " / BREAK " + formatSignedDelta(breakDelta))
                            : std::optional<std::string>("COMBO -- / BREAK --"),
-      .deltaAccent = !hasPrevious ? ui_theme::textMuted()
+      .deltaAccent = !hasPrevious ? app_theme::textMuted()
                          : comboDelta >= 0 && breakDelta <= 0
                                ? ui_theme::lime() : ui_theme::amber(),
   };
@@ -438,21 +439,21 @@ makeLocalResultPresentation(const bms_parser::ChartMeta &meta,
                               : std::nullopt;
   model.infoTiles = {
       infoTile(ResultInfoTileKind::NextGrade, i18n::tr("result.summary.next_grade.badge"), nextRank.first, formatSignedDelta(nextRank.second),
-               ui_theme::amber()),
+               app_theme::cyan()),
       infoTile(ResultInfoTileKind::TotalNotes, i18n::tr("result.summary.total_notes.badge"), std::to_string(meta.TotalNotes), longNotes,
-               ui_theme::lime()),
-      infoTile(ResultInfoTileKind::Bpm, "BPM", formatBpm(meta), std::nullopt, ui_theme::amber()),
+               app_theme::cyan()),
+      infoTile(ResultInfoTileKind::Bpm, "BPM", formatBpm(meta), std::nullopt, app_theme::cyan()),
       infoTile(ResultInfoTileKind::JudgeRank, i18n::tr("result.summary.judge_rank.badge"), Judge::getRankDescription(meta.Rank), std::nullopt,
-               ui_theme::cyan()),
+               app_theme::cyan()),
       infoTile(ResultInfoTileKind::Duration, i18n::tr("result.summary.duration.badge"), formatDuration(meta.PlayLength),
                meta.TotalLength > meta.PlayLength
                    ? std::optional<std::string>(
                          "BGA " + formatDuration(meta.TotalLength))
                    : std::nullopt,
-               ui_theme::violetActionHover()),
+               app_theme::cyan()),
       infoTile(ResultInfoTileKind::PlayMode, i18n::tr("result.summary.play_mode.badge"),
                options.playModeLabel.empty() ? "NORMAL" : options.playModeLabel,
-               nonEmptyText(options.laneOrderLabel), ui_theme::amber()),
+               nonEmptyText(options.laneOrderLabel), app_theme::cyan()),
   };
 
   model.judgements = {
@@ -494,7 +495,7 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
         .current = {.label = i18n::tr("result.summary.remote.current.badge"),
                     .value = std::to_string(score.score),
                     .detail = "MAX " + std::to_string(*model.maxScore),
-                    .accent = ui_theme::textPrimary()},
+                    .accent = app_theme::textPrimary()},
     };
   }
 
@@ -528,24 +529,24 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   if (score.noteCount > 0) {
     model.infoTiles.push_back(infoTile(ResultInfoTileKind::TotalNotes, i18n::tr("result.summary.total_notes.badge"),
                                        std::to_string(score.noteCount),
-                                       std::nullopt, ui_theme::lime()));
+                                       std::nullopt, app_theme::cyan()));
   }
   if (score.badPoints.has_value()) {
     model.infoTiles.push_back(infoTile(ResultInfoTileKind::BadPoints, "BP", std::to_string(*score.badPoints),
                                        std::nullopt, ui_theme::coral()));
   }
   addOptionalMetadataTile(model.infoTiles, ResultInfoTileKind::Service, "SERVICE", model.service,
-                          ui_theme::cyan());
+                          app_theme::cyan());
   addOptionalMetadataTile(model.infoTiles, ResultInfoTileKind::Client, "CLIENT", model.client,
-                          ui_theme::cyan());
+                          app_theme::cyan());
   addOptionalMetadataTile(model.infoTiles, ResultInfoTileKind::InputDevice, i18n::tr("result.summary.input_device.badge"), model.inputDevice,
-                          ui_theme::amber());
+                          app_theme::cyan());
   addOptionalMetadataTile(model.infoTiles, ResultInfoTileKind::Random, "RANDOM", model.random,
-                          ui_theme::amber());
+                          app_theme::cyan());
   addOptionalMetadataTile(model.infoTiles, ResultInfoTileKind::GaugeType, i18n::tr("result.summary.gauge_type.badge"), model.gaugeType,
-                          ui_theme::lime());
+                          app_theme::cyan());
   addOptionalMetadataTile(model.infoTiles, ResultInfoTileKind::Level, i18n::tr("result.summary.level.badge"),
-                          nonEmptyOptional(score.level), ui_theme::amber());
+                          nonEmptyOptional(score.level), app_theme::cyan());
 
   model.judgements = remoteJudgementRows(score);
   model.fast = score.fast;

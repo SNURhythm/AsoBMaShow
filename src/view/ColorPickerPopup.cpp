@@ -1,3 +1,4 @@
+#include "AppTheme.h"
 #include "ColorPickerPopup.h"
 #include "ColorPickerView.h"
 #include "ModalViewHelpers.h"
@@ -10,9 +11,9 @@ void place(View *view, int x, int y, int width, int height) {
   view->setSize(std::max(0, width), std::max(0, height));
 }
 TextView *text(const i18n::Text &label, int size) {
-  auto *view = new TextView("assets/fonts/notosanscjkjp.ttf", size);
+  auto *view = new TextView(app_theme::font, size);
   view->setLocalizedText(label);
-  view->setThemedColor(ui_theme::textPrimary);
+  view->setThemedColor(app_theme::textPrimary);
   view->setAlign(TextView::CENTER);
   view->setVAlign(TextView::MIDDLE);
   view->setAutoFitText(true);
@@ -59,10 +60,10 @@ private:
 ColorPickerPopup::ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample> samples,
                                    std::function<void(std::uint32_t)> onPreviewColor)
     : draft(initial), onPreviewColor(std::move(onPreviewColor)), samples(std::move(samples)) {
-  setThemedBackgroundColor(ui_theme::scrim);
+  setThemedBackgroundColor(app_theme::scrim);
   panel = new View();
-  panel->setThemedBackgroundColor(ui_theme::panelStrong);
-  panel->setCornerRadius(ui_theme::controlRadius());
+  panel->setThemedBackgroundColor(app_theme::panelStrong);
+  panel->setCornerRadius(app_theme::controlRadius());
   addView(panel);
   title = text(i18n::message("settings.color_picker.title"), 28);
   panel->addView(title);
@@ -89,13 +90,13 @@ ColorPickerPopup::ColorPickerPopup(color_picker::Hsv initial, std::vector<Sample
   panel->addView(picker);
   TextView *buttonText = nullptr;
   cancel = modal_view::makeModalButton(i18n::message("settings.color_picker.cancel"), 24, &buttonText);
-  modal_view::styleThemedActionButton(cancel, buttonText, true, ui_theme::panelSubtle,
-      ui_theme::panelStrong, ui_theme::panelSubtle, ui_theme::hairlineStrong);
+  modal_view::styleThemedActionButton(cancel, buttonText, true, app_theme::panelSubtle,
+      app_theme::panelStrong, app_theme::panelSubtle, app_theme::hairlineStrong);
   cancel->setOnClickListener([this] { outcome = Result{false, draft}; });
   panel->addView(cancel);
   confirm = modal_view::makeModalButton(i18n::message("settings.color_picker.confirm"), 24, &buttonText);
-  modal_view::styleThemedActionButton(confirm, buttonText, true, ui_theme::primaryAction,
-      ui_theme::primaryActionHover, ui_theme::primaryActionPressed, ui_theme::primaryAction);
+  modal_view::styleThemedActionButton(confirm, buttonText, true, app_theme::primaryAction,
+      app_theme::primaryActionHover, app_theme::primaryActionPressed, app_theme::primaryAction);
   confirm->setOnClickListener([this] { outcome = Result{true, draft}; });
   panel->addView(confirm);
   refreshDraft();

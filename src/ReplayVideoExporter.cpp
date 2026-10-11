@@ -1,3 +1,4 @@
+#include "view/AppTheme.h"
 #include "ScratchlessGameplayPolicy.h"
 #include "GameplayKeyMode.h"
 #include "ReplayVideoExporter.h"
@@ -1232,7 +1233,7 @@ Color resultGaugeLineColor(float value) {
 void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
                               const RhythmState &resultState, float x, float y,
                               float w, float h) {
-  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+  batch.addRect(x, y, w, h, app_theme::resultPanelSubtle().toABGR());
 
   const float padding = 8.0f;
   const float graphX = x + padding;
@@ -1248,7 +1249,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
     return graphY + graphH - (clampedValue(value) / gaugeMaximum) * graphH;
   };
 
-  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  const uint32_t guideColor = app_theme::hairlineSubtle().toABGR();
   batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
                 guideColor);
   batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,

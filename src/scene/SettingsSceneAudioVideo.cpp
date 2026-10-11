@@ -60,11 +60,11 @@ View *makeChoiceField(const LayoutMetrics &metrics, const i18n::Text &title,
   field->setMinWidth(static_cast<float>(metrics.compact ? 260 : 320));
   field->setFlex(1.0F);
   field->addView(
-      makeText(title, metrics.bodyTextSize, ui_theme::textSecondary()));
+      makeText(title, metrics.bodyTextSize, app_theme::textSecondary()));
   field->addView(dropdown);
   if (!explanation.empty()) {
     field->addView(makeWrappedText(explanation, metrics.smallTextSize,
-                                   ui_theme::textMuted()));
+                                   app_theme::textMuted()));
   }
   return field;
 }
@@ -132,8 +132,8 @@ i18n::Text audioApplyMessage(const audio::ApplyResult &result) {
 }
 
 SDL_Color audioApplyColor(audio::ApplyStatus status) {
-  return status == audio::ApplyStatus::Applied ? SDL_Color{157, 220, 176, 255}
-                                               : SDL_Color{255, 177, 170, 255};
+  return status == audio::ApplyStatus::Applied ? app_theme::sdl(app_theme::lime())
+                                               : app_theme::sdl(app_theme::coral());
 }
 
 i18n::Text displayApplyMessage(const display::ApplyResult &result) {
@@ -159,13 +159,13 @@ i18n::Text displayApplyMessage(const display::ApplyResult &result) {
 
 SDL_Color displayApplyColor(display::ApplyStatus status) {
   if (status == display::ApplyStatus::Applied) {
-    return {157, 220, 176, 255};
+    return app_theme::sdl(app_theme::lime());
   }
   if (status == display::ApplyStatus::PreviewPending ||
       status == display::ApplyStatus::RollbackPending) {
-    return {255, 209, 128, 255};
+    return app_theme::sdl(app_theme::amber());
   }
-  return {255, 177, 170, 255};
+  return app_theme::sdl(app_theme::coral());
 }
 
 void refreshFixedDisplayGeometry(player_settings::VideoSettings &draft,
@@ -234,7 +234,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     cardsColumn->addView(makeCard(
         metrics, i18n::message("settings.audio.audio.label"), i18n::message("settings.audio.still_initializing.message"),
         makeWrappedText(i18n::message("settings.audio.try_again_shortly.message"),
-                        metrics.bodyTextSize, ui_theme::textSecondary()),
+                        metrics.bodyTextSize, app_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
   }
@@ -248,7 +248,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     group->setFlexDirection(FlexDirection::Column);
     group->setGap(metrics.compact ? 7.0F : 9.0F);
     group->addView(
-        makeText(label, metrics.bodyTextSize, ui_theme::textSecondary()));
+        makeText(label, metrics.bodyTextSize, app_theme::textSecondary()));
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row);
     row->setFlexWrap(YGWrapWrap);
@@ -286,7 +286,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   keysoundControls->setGap(metrics.compact ? 12.0f : 16.0f);
   keysoundControls->setAlignItems(YGAlignFlexStart);
   keysoundModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   keysoundModeButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText);
@@ -297,7 +297,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   });
   keysoundControls->addView(keysoundModeButton);
   prepMetronomeModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   prepMetronomeModeButton =
       makeControlButton(kFitContentWidth, metrics.actionButtonHeight,
@@ -397,8 +397,8 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     auto *applyButton = makeAccentButton(
         metrics.actionButtonWidth, metrics.actionButtonHeight,
         makeText(i18n::message("settings.audio.apply.label"), metrics.bodyTextSize + 2,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-        ui_theme::cyan());
+                 app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+        app_theme::cyan());
     applyButton->setOnClickListener([this]() { applyAudioStreamDraft(); });
     streamControls->addView(applyButton);
   }
@@ -410,23 +410,23 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   diagnostics->setFlexDirection(FlexDirection::Column);
   diagnostics->setGap(metrics.compact ? 12.0F : 16.0F);
   audioEffectiveText =
-      makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
+      makeWrappedText("", metrics.bodyTextSize, app_theme::textSecondary());
   diagnostics->addView(audioEffectiveText);
   auto *testSoundButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.audio.test_sound.label"), metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      app_theme::lime());
   testSoundButton->setOnClickListener([this]() {
     const bool played =
         audioVideoSession != nullptr && audioVideoSession->playTestSound();
     setAudioStatus(played ? i18n::message("settings.audio.sound_played.message") : i18n::message("settings.audio.could_not_play_sound.message"),
-                   played ? SDL_Color{157, 220, 176, 255}
-                          : SDL_Color{255, 177, 170, 255});
+                   played ? app_theme::sdl(app_theme::lime())
+                          : app_theme::sdl(app_theme::coral()));
   });
   diagnostics->addView(testSoundButton);
   audioStatusText =
-      makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
+      makeWrappedText("", metrics.bodyTextSize, app_theme::textSecondary());
   diagnostics->addView(audioStatusText);
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.audio.current_audio.label"), "",
@@ -447,9 +447,9 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
            std::pair{screen_orientation::Mode::Landscape, "settings.display.orientation_landscape.label"},
            std::pair{screen_orientation::Mode::Portrait, "settings.display.orientation_portrait.label"}}) {
     auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
-                          ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+                          app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
     auto *button = context.settings.screenOrientation == mode
-        ? makeAccentButton(0, metrics.actionButtonHeight, text, ui_theme::cyan())
+        ? makeAccentButton(0, metrics.actionButtonHeight, text, app_theme::cyan())
         : makeControlButton(0, metrics.actionButtonHeight, text);
     button->setFlex(1)->setMinWidth(0);
     button->setOnClickListener([this, mode] {
@@ -470,7 +470,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
     cardsColumn->addView(makeCard(
         metrics, i18n::message("settings.display.display.label"), i18n::message("settings.display.still_initializing.message"),
         makeWrappedText(i18n::message("settings.display.try_again_shortly.message"),
-                        metrics.bodyTextSize, ui_theme::textSecondary()),
+                        metrics.bodyTextSize, app_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
   }
@@ -606,12 +606,12 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   auto *applyButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.display.apply.label"), metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-      ui_theme::cyan());
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      app_theme::cyan());
   applyButton->setOnClickListener([this]() { applyDisplayDraft(); });
   controls->addView(applyButton);
   displayStatusText =
-      makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
+      makeWrappedText("", metrics.bodyTextSize, app_theme::textSecondary());
   controls->addView(displayStatusText);
 
   cardsColumn->addView(makeCard(
@@ -631,7 +631,7 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   displayPreviewOverlayRoot->setFlexDirection(FlexDirection::Column);
   displayPreviewOverlayRoot->setAlignItems(YGAlignCenter);
   displayPreviewOverlayRoot->setJustifyContent(YGJustifyCenter);
-  displayPreviewOverlayRoot->setThemedBackgroundColor(ui_theme::scrim);
+  displayPreviewOverlayRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(static_cast<float>(std::min(
@@ -641,20 +641,17 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   panel->setAlignItems(YGAlignStretch);
   panel->setGap(metrics.compact ? 14.0F : 18.0F);
   panel->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  panel->setThemedBackgroundColor(ui_theme::panelStrong);
-  panel->setCornerRadius(ui_theme::panelRadius());
-  panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
-  panel->setThemedBorderColor(ui_theme::hairline);
+  panel->setThemedBackgroundColor(app_theme::panelStrong);
+  panel->setCornerRadius(app_theme::panelRadius());
+  panel->setThemedBorderColor(app_theme::hairline);
   panel->setBorderWidth(1);
-  panel->addView(makeWrappedText(i18n::message("settings.display.keep_display_changes.label"),
-                                 metrics.sectionTitleSize,
-                                 ui_theme::textPrimary()));
+  panel->addView(makeHeading(i18n::message("settings.display.keep_display_changes.label"), metrics.sectionTitleSize));
   displayPreviewCountdownText =
       makeWrappedText(i18n::message("settings.display.reverting_in_15_seconds.label"), metrics.bodyTextSize + 4,
-                      ui_theme::amber(), TextView::CENTER);
+                      app_theme::amber(), TextView::CENTER);
   panel->addView(displayPreviewCountdownText);
   displayPreviewStatusText =
-      makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
+      makeWrappedText("", metrics.bodyTextSize, app_theme::textSecondary());
   panel->addView(displayPreviewStatusText);
 
   auto *actions = new View();
@@ -664,16 +661,16 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   actions->setJustifyContent(YGJustifyCenter);
   auto *revertButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.display.revert.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.display.revert.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::coral());
+      app_theme::coral());
   revertButton->setOnClickListener([this]() { revertDisplayPreview(); });
   actions->addView(revertButton);
   displayPreviewKeepButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.display.keep.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.display.keep.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
+      app_theme::lime());
   displayPreviewKeepButton->setOnClickListener(
       [this]() { keepDisplayPreview(); });
   actions->addView(displayPreviewKeepButton);

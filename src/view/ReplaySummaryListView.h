@@ -10,7 +10,7 @@
 #include "IconText.h"
 #include "RecyclerView.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 #include "View.h"
 
 #include <functional>
@@ -30,7 +30,7 @@ struct IrBadgeBinding {
   bool visible = false;
   bool actionable = false;
   std::uint32_t codepoint = 0;
-  Color (*accent)() = ui_theme::amber;
+  Color (*accent)() = app_theme::amber;
 };
 
 inline IrBadgeBinding bindingForIrRecordState(
@@ -42,22 +42,22 @@ inline IrBadgeBinding bindingForIrRecordState(
     return {.visible = true,
             .actionable = true,
             .codepoint = 0xf0ee,
-            .accent = ui_theme::amber};
+            .accent = app_theme::amber};
   case ir::IrRecordState::Queued:
     return {.visible = true,
             .actionable = false,
             .codepoint = 0xf017,
-            .accent = ui_theme::amber};
+            .accent = app_theme::amber};
   case ir::IrRecordState::Uploading:
     return {.visible = true,
             .actionable = false,
             .codepoint = 0xf2f1,
-            .accent = ui_theme::cyan};
+            .accent = app_theme::cyan};
   case ir::IrRecordState::AwaitingRemote:
     return {.visible = true,
             .actionable = false,
             .codepoint = 0xf252,
-            .accent = ui_theme::cyan};
+            .accent = app_theme::cyan};
   case ir::IrRecordState::Blocked:
     return {.visible = true,
             .actionable = false,
@@ -67,12 +67,12 @@ inline IrBadgeBinding bindingForIrRecordState(
     return {.visible = true,
             .actionable = true,
             .codepoint = 0xf071,
-            .accent = ui_theme::coral};
+            .accent = app_theme::coral};
   case ir::IrRecordState::Uploaded:
     return {.visible = true,
             .actionable = false,
             .codepoint = 0xf00c,
-            .accent = ui_theme::lime};
+            .accent = app_theme::lime};
   }
   return {};
 }
@@ -86,13 +86,13 @@ public:
     textColumn = new View();
     irBadge = new Button();
     irBadgeContent = new View();
-    irBadgeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+    irBadgeLabel = new TextView(app_theme::font, 14);
     irBadgeIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 14);
     scoreColumn = new View();
-    titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-    detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
-    scoreText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-    rankText = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+    titleText = new TextView(app_theme::boldFont, 22);
+    detailText = new TextView(app_theme::font, 15);
+    scoreText = new TextView(app_theme::boldFont, 18);
+    rankText = new TextView(app_theme::font, 14);
 
     setFlexDirection(FlexDirection::Row)
         ->setAlignItems(YGAlignCenter)
@@ -100,7 +100,7 @@ public:
         ->setGap(12);
 
     clearLamp->setWidth(5)->setHeight(52)->setFlexShrink(0);
-    clearLamp->setCornerRadius(3.0f);
+    clearLamp->setCornerRadius(app_theme::controlRadius());
     addView(clearLamp);
 
     textColumn->setFlexDirection(FlexDirection::Column)
@@ -118,7 +118,7 @@ public:
     addView(textColumn);
 
     irBadge->setWidth(0)->setHeight(28)->setFlexShrink(0);
-    irBadge->setCornerRadius(6.0F);
+    irBadge->setCornerRadius(app_theme::controlRadius());
     irBadge->setName("irUploadBadge");
     irBadgeContent->setFlexDirection(FlexDirection::Row)
         ->setAlignItems(YGAlignCenter)
@@ -234,9 +234,9 @@ public:
     const auto accent = badge.accent;
     irBadge->setThemedBackgroundColors(
         accent,
-        [accent] { return ui_theme::withAlpha(accent(), 226); },
-        [accent] { return ui_theme::withAlpha(accent(), 194); });
-    const auto foreground = [accent] { return ui_theme::textOn(accent()); };
+        [accent] { return app_theme::withAlpha(accent(), 226); },
+        [accent] { return app_theme::withAlpha(accent(), 194); });
+    const auto foreground = [accent] { return app_theme::textOn(accent()); };
     irBadgeLabel->setThemedColor(foreground);
     irBadgeIcon->setThemedColor(foreground);
 
@@ -249,28 +249,28 @@ public:
   }
 
   void onSelected() override {
-    setThemedBackgroundColor(ui_theme::panelStrong);
-    setCornerRadius(ui_theme::controlRadius());
-    setThemedBorderColor(ui_theme::accentBorderStrong);
+    setThemedBackgroundColor(app_theme::controlHover);
+    setCornerRadius(app_theme::controlRadius());
+    setThemedBorderColor(app_theme::accentBorderStrong);
     setBorderWidth(1);
-    titleText->setThemedColor(ui_theme::textPrimary);
-    detailText->setThemedColor(ui_theme::textSecondary);
-    scoreText->setThemedColor(ui_theme::lime);
-    rankText->setThemedColor(ui_theme::amber);
+    titleText->setThemedColor(app_theme::textPrimary);
+    detailText->setThemedColor(app_theme::textSecondary);
+    scoreText->setThemedColor(app_theme::textPrimary);
+    rankText->setThemedColor(app_theme::amber);
     applyRankColor();
   }
 
   void onUnselected() override {
-    setThemedBackgroundColor(ui_theme::panelSubtle);
-    setCornerRadius(ui_theme::controlRadius());
-    setThemedBorderColor(ui_theme::hairlineSubtle);
+    setThemedBackgroundColor(app_theme::panelSubtle);
+    setCornerRadius(app_theme::controlRadius());
+    setThemedBorderColor(app_theme::hairlineSubtle);
     setBorderWidth(1);
-    titleText->setThemedColor(ui_theme::textPrimary);
-    detailText->setThemedColor(ui_theme::textMuted);
+    titleText->setThemedColor(app_theme::textPrimary);
+    detailText->setThemedColor(app_theme::textMuted);
     scoreText->setThemedColor(
-        [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
+        [] { return app_theme::withAlpha(app_theme::cyan(), 218); });
     rankText->setThemedColor(
-        [] { return ui_theme::withAlpha(ui_theme::amber(), 218); });
+        [] { return app_theme::withAlpha(app_theme::amber(), 218); });
     applyRankColor();
   }
 
@@ -278,7 +278,7 @@ private:
   void applyRankColor() {
     const std::string rank = score_rank::displayLabel(currentRank);
     rankText->setThemedColor(
-        [rank] { return ui_theme::scoreRankColor(rank); });
+        [rank] { return app_theme::scoreRankColor(rank); });
   }
 
   View *clearLamp = nullptr;

@@ -1,9 +1,9 @@
 // Production launch/delivery methods and the real task/URL policy; view,
 // repository, and network-import doubles control the asynchronous boundaries.
+#include "view/AppTheme.h"
 #include "scene/DifficultyTableUrlCompletion.h"
 
 namespace {
-struct SDL_Color { unsigned char r, g, b, a; };
 struct LibraryText {
   std::thread::id owner = std::this_thread::get_id();
   std::string text;

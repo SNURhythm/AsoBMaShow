@@ -1,10 +1,10 @@
 // Only views are replaced. The generated methods below are complete, unchanged
 // production methods; the controller, workers, and filesystem operations are real.
+#include "view/AppTheme.h"
 #include <iomanip>
 #include <sstream>
 
 namespace {
-struct SDL_Color { unsigned char r, g, b, a; };
 struct CacheTextView {
   std::thread::id owner = std::this_thread::get_id();
   std::string text;

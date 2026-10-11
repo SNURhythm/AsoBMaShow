@@ -6,7 +6,7 @@
 #include "../targets.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <cctype>
@@ -90,7 +90,7 @@ legacyGradeCard(const ResultPresentationModel &presentation) {
   return ResultGradeCard{
       .grade = {},
       .rate = "0.00%",
-      .accent = ui_theme::scoreRankColor({}),
+      .accent = app_theme::scoreRankColor({}),
   };
 }
 } // namespace
@@ -240,13 +240,13 @@ void DefaultSkin::buildPresentationResultLayout(
     rootLayout->setJustifyContent(YGJustifyCenter);
     rootLayout->setPadding(Edge::All, layoutMetrics.rootPadding);
     rootLayout->setGap(layoutMetrics.rootGap);
-    rootLayout->setBackgroundColor(ui_theme::resultBackdrop());
+    rootLayout->setBackgroundColor(app_theme::resultBackdrop());
   }
 
   const auto makeLabel = [](const std::string &text, int size, Color color) {
-    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", size);
+    auto *label = new TextView(app_theme::font, size);
     label->setText(text);
-    label->setColor(ui_theme::sdl(color));
+    label->setColor(app_theme::sdl(color));
     label->setVAlign(TextView::MIDDLE);
     return label;
   };
@@ -254,8 +254,8 @@ void DefaultSkin::buildPresentationResultLayout(
   const auto makePanel = [](Color fill, Color border) {
     auto *panel = new View();
     panel->setBackgroundColor(fill);
-    panel->setCornerRadius(ui_theme::panelRadius());
-    panel->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+    panel->setCornerRadius(app_theme::panelRadius());
+    panel->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
     panel->setBorderColor(border);
     panel->setBorderWidth(1);
     return panel;
@@ -265,7 +265,7 @@ void DefaultSkin::buildPresentationResultLayout(
     auto *divider = new View();
     divider->setWidth(1);
     divider->setAlignSelf(YGAlignStretch);
-    divider->setBackgroundColor(ui_theme::hairlineSubtle());
+    divider->setBackgroundColor(app_theme::hairlineSubtle());
     divider->setFlexShrink(0);
     return divider;
   };
@@ -289,9 +289,9 @@ void DefaultSkin::buildPresentationResultLayout(
     titleRow->setGap(14);
     titleRow->setHeight(58);
 
-    auto *titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+    auto *titleText = new TextView(app_theme::font, 46, TextView::FontWeight::Bold);
     titleText->setText(presentation.title);
-    titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
     titleText->setOverflow(TextView::TextOverflow::Marquee);
     titleText->setHeight(58);
     titleText->setFlex(1);
@@ -301,7 +301,7 @@ void DefaultSkin::buildPresentationResultLayout(
 
     if (authoritativePresentation && presentation.playtype.has_value()) {
       auto *playtypeText =
-          makeLabel(*presentation.playtype, 30, ui_theme::cyan());
+          makeLabel(*presentation.playtype, 30, app_theme::cyan());
       playtypeText->setHeight(46);
       playtypeText->setFlexShrink(0);
       playtypeText->setWidth(
@@ -312,9 +312,9 @@ void DefaultSkin::buildPresentationResultLayout(
     }
 
     if (presentation.difficulty.has_value()) {
-      auto *difficultyText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+      auto *difficultyText = new TextView(app_theme::font, 46, TextView::FontWeight::Bold);
       difficultyText->setText(*presentation.difficulty);
-      difficultyText->setColor(ui_theme::sdl(ui_theme::amber()));
+      difficultyText->setColor(app_theme::sdl(app_theme::amber()));
       difficultyText->setOverflow(TextView::TextOverflow::Hidden);
       difficultyText->setHeight(58);
       difficultyText->setFlexShrink(0);
@@ -327,7 +327,7 @@ void DefaultSkin::buildPresentationResultLayout(
 
     if (presentation.artist.has_value()) {
       auto *artistText =
-          makeLabel(*presentation.artist, 26, ui_theme::textSecondary());
+          makeLabel(*presentation.artist, 26, app_theme::textSecondary());
       artistText->setHeight(36);
       artistText->setName("artist");
       titleStack->addView(artistText);
@@ -339,7 +339,7 @@ void DefaultSkin::buildPresentationResultLayout(
 
   const auto addPanelTitle = [&](View *panel, const std::string &title,
                                  const std::string &semanticName) {
-    auto *titleView = makeLabel(title, 17, ui_theme::textSecondary());
+    auto *titleView = makeLabel(title, 17, app_theme::textSecondary());
     titleView->setHeight(25);
     titleView->setOverflow(TextView::TextOverflow::Hidden);
     titleView->setName("resultSummaryTitle:" + semanticName);
@@ -373,7 +373,7 @@ void DefaultSkin::buildPresentationResultLayout(
     column->setGap(lampStyle ? 4 : 2);
     column->setName("resultSummaryValue:" + semanticName);
 
-    auto *labelView = makeLabel(value.label, 16, ui_theme::textSecondary());
+    auto *labelView = makeLabel(value.label, 16, app_theme::textSecondary());
     labelView->setHeight(22);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
@@ -393,12 +393,12 @@ void DefaultSkin::buildPresentationResultLayout(
       lampSwatch->setHeight(38);
       lampSwatch->setFlexShrink(0);
       lampSwatch->setBackgroundColor(value.accent);
-      lampSwatch->setCornerRadius(4.0f);
+      lampSwatch->setCornerRadius(0);
       lampSwatch->setName("resultLampSwatch:" + semanticName);
       lampRow->addView(lampSwatch);
 
       auto *valueView =
-          makeLabel(value.value, valueSize, ui_theme::textPrimary());
+          makeLabel(value.value, valueSize, app_theme::textPrimary());
       valueView->setHeight(38);
       valueView->setFlexShrink(1);
       valueView->setMinWidth(0);
@@ -416,7 +416,7 @@ void DefaultSkin::buildPresentationResultLayout(
     }
 
     if (!value.detail.empty() || !authoritativePresentation) {
-      auto *detailView = makeLabel(value.detail, 18, ui_theme::textSecondary());
+      auto *detailView = makeLabel(value.detail, 18, app_theme::textSecondary());
       detailView->setHeight(24);
       detailView->setAlign(TextView::CENTER);
       detailView->setOverflow(TextView::TextOverflow::Hidden);
@@ -430,13 +430,13 @@ void DefaultSkin::buildPresentationResultLayout(
                                       const std::string &semanticName,
                                       bool lampStyle, int valueSize) {
     const Color border =
-        lampStyle ? ui_theme::withAlpha(card.current.accent,
+        lampStyle ? app_theme::withAlpha(card.current.accent,
                                         card.target.has_value() &&
                                                 card.target->value != "NO PLAY"
                                             ? 120
                                             : 96)
-                  : ui_theme::hairlineSubtle();
-    auto *panel = makePanel(ui_theme::resultPanel(), border);
+                  : app_theme::hairlineSubtle();
+    auto *panel = makePanel(app_theme::resultPanel(), border);
     configureSummaryCard(panel, semanticName);
     addPanelTitle(panel, card.title, semanticName);
 
@@ -458,7 +458,7 @@ void DefaultSkin::buildPresentationResultLayout(
     if (card.delta.has_value()) {
       auto *deltaView =
           makeLabel(*card.delta, semanticName == "combo" ? 20 : 22,
-                    card.deltaAccent.value_or(ui_theme::textMuted()));
+                    card.deltaAccent.value_or(app_theme::textMuted()));
       deltaView->setHeight(semanticName == "combo" ? 28 : 30);
       deltaView->setAlign(TextView::CENTER);
       deltaView->setOverflow(TextView::TextOverflow::Hidden);
@@ -473,8 +473,8 @@ void DefaultSkin::buildPresentationResultLayout(
                                                : legacyGradeCard(presentation);
   if (grade.has_value()) {
     auto *gradePanel = makePanel(
-        ui_theme::resultPanelStrong(),
-        ui_theme::withAlpha(grade->accent, static_cast<uint8_t>(138)));
+        app_theme::resultPanelStrong(),
+        app_theme::withAlpha(grade->accent, static_cast<uint8_t>(138)));
     if (authoritativePresentation) {
       gradePanel->setWidth(0.0f);
       gradePanel->setFlexGrow(1.0f);
@@ -493,21 +493,21 @@ void DefaultSkin::buildPresentationResultLayout(
     gradePanel->setGap(2);
     gradePanel->setName("resultSummaryCard:grade");
 
-    auto *gradeLabel = makeLabel("GRADE", 17, ui_theme::textSecondary());
+    auto *gradeLabel = makeLabel("GRADE", 17, app_theme::textSecondary());
     gradeLabel->setHeight(23);
     gradeLabel->setAlign(TextView::CENTER);
     gradeLabel->setName("resultSummaryTitle:grade");
     gradePanel->addView(gradeLabel);
 
-    auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
+    auto *gradeText = new TextView(app_theme::font, 96, TextView::FontWeight::Bold);
     gradeText->setText(grade->grade);
-    gradeText->setColor(ui_theme::sdl(grade->accent));
+    gradeText->setColor(app_theme::sdl(grade->accent));
     gradeText->setAlign(TextView::CENTER);
     gradeText->setHeight(106);
     gradeText->setName("grade");
     gradePanel->addView(gradeText);
 
-    auto *rateText = makeLabel(grade->rate, 22, ui_theme::cyan());
+    auto *rateText = makeLabel(grade->rate, 22, app_theme::cyan());
     rateText->setHeight(30);
     rateText->setAlign(TextView::CENTER);
     rateText->setName("resultGradeRate");
@@ -552,7 +552,7 @@ void DefaultSkin::buildPresentationResultLayout(
 
   if (!presentation.infoTiles.empty()) {
     auto *infoGrid =
-        makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
+        makePanel(app_theme::resultPanelSubtle(), app_theme::hairlineSubtle());
     infoGrid->setFlexDirection(FlexDirection::Row);
     infoGrid->setFlexWrap(authoritativePresentation ? YGWrapWrap
                                                     : YGWrapNoWrap);
@@ -587,7 +587,7 @@ void DefaultSkin::buildPresentationResultLayout(
       tile->setJustifyContent(YGJustifyCenter);
       tile->setName("resultInfoTile:" + id);
 
-      auto *labelView = makeLabel(info.label, 15, ui_theme::textSecondary());
+      auto *labelView = makeLabel(info.label, 15, app_theme::textSecondary());
       labelView->setHeight(21);
       labelView->setAlign(TextView::CENTER);
       labelView->setOverflow(TextView::TextOverflow::Hidden);
@@ -622,16 +622,16 @@ void DefaultSkin::buildPresentationResultLayout(
           valueRow->addView(textView);
         };
         const auto appendPart = [&](const BpmTextPart &part) {
-          appendText(part.prefix, prefixSize, ui_theme::textMuted());
-          appendText(part.value, valueSize, ui_theme::textPrimary());
+          appendText(part.prefix, prefixSize, app_theme::textMuted());
+          appendText(part.value, valueSize, app_theme::textPrimary());
         };
         if (bpm.variable) {
           appendPart(bpm.minimum);
-          appendText("-", punctuationSize, ui_theme::textSecondary());
+          appendText("-", punctuationSize, app_theme::textSecondary());
           appendPart(bpm.maximum);
-          appendText("(", punctuationSize, ui_theme::textSecondary());
+          appendText("(", punctuationSize, app_theme::textSecondary());
           appendPart(bpm.main);
-          appendText(")", punctuationSize, ui_theme::textSecondary());
+          appendText(")", punctuationSize, app_theme::textSecondary());
         } else {
           appendPart(bpm.main);
         }
@@ -656,7 +656,7 @@ void DefaultSkin::buildPresentationResultLayout(
               ? info.accent
               : (presentation.readOnlyIrUploaded && !info.detail.has_value()
                      ? info.accent
-                     : ui_theme::textPrimary());
+                     : app_theme::textPrimary());
       auto *valueView = makeLabel(info.value, valueSize, valueColor);
       valueView->setHeight(laneOrder ? 30 : 38);
       valueView->setAlign(TextView::CENTER);
@@ -706,7 +706,7 @@ void DefaultSkin::buildPresentationResultLayout(
   const bool showSlow = presentation.slow.has_value();
   if (showJudgements || showBreak || showFast || showSlow) {
     auto *detailsGrid =
-        makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
+        makePanel(app_theme::resultPanelSubtle(), app_theme::hairlineSubtle());
     detailsGrid->setFlexDirection(FlexDirection::Row);
     detailsGrid->setFlexWrap(YGWrapNoWrap);
     detailsGrid->setJustifyContent(YGJustifyCenter);
@@ -735,7 +735,7 @@ void DefaultSkin::buildPresentationResultLayout(
       tile->setJustifyContent(YGJustifyCenter);
       tile->setName("resultMetricTile:" + id);
 
-      auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
+      auto *labelView = makeLabel(label, 15, app_theme::textSecondary());
       labelView->setHeight(21);
       labelView->setAlign(TextView::CENTER);
       labelView->setOverflow(TextView::TextOverflow::Hidden);
@@ -766,7 +766,7 @@ void DefaultSkin::buildPresentationResultLayout(
         tile->setName("resultJudgementTile:" + id);
 
         auto *labelView =
-            makeLabel(judgement.label, 15, ui_theme::textSecondary());
+            makeLabel(judgement.label, 15, app_theme::textSecondary());
         labelView->setHeight(21);
         labelView->setAlign(TextView::CENTER);
         labelView->setOverflow(TextView::TextOverflow::Hidden);
@@ -790,21 +790,21 @@ void DefaultSkin::buildPresentationResultLayout(
           timingRow->setName("resultJudgementTiming:" + id);
 
           auto *fastText = makeLabel(std::to_string(*judgement.early), 20,
-                                     ui_theme::fastFeedback());
+                                     app_theme::fastFeedback());
           fastText->setWidth(52);
           fastText->setHeight(24);
           fastText->setAlign(TextView::RIGHT);
           fastText->setName(id + "Fast");
           timingRow->addView(fastText);
 
-          auto *slashText = makeLabel("/", 20, ui_theme::textSecondary());
+          auto *slashText = makeLabel("/", 20, app_theme::textSecondary());
           slashText->setWidth(14);
           slashText->setHeight(24);
           slashText->setAlign(TextView::CENTER);
           timingRow->addView(slashText);
 
           auto *slowText = makeLabel(std::to_string(*judgement.late), 20,
-                                     ui_theme::slowFeedback());
+                                     app_theme::slowFeedback());
           slowText->setWidth(52);
           slowText->setHeight(24);
           slowText->setAlign(TextView::LEFT);
@@ -816,7 +816,7 @@ void DefaultSkin::buildPresentationResultLayout(
       }
     }
     if (showBreak) {
-      makeMetricTile("BREAK", *presentation.comboBreak, ui_theme::coral(),
+      makeMetricTile("BREAK", *presentation.comboBreak, app_theme::coral(),
                      "break");
     }
     if (showFast && showSlow) {
@@ -826,23 +826,23 @@ void DefaultSkin::buildPresentationResultLayout(
       tile->setFlexGrow(1)->setFlexBasis(0)->setFlexShrink(1)->setMinWidth(0);
       tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
       tile->setFlexDirection(FlexDirection::Column)->setJustifyContent(YGJustifyCenter);
-      auto *label = makeLabel("FAST / SLOW", 15, ui_theme::textSecondary());
+      auto *label = makeLabel("FAST / SLOW", 15, app_theme::textSecondary());
       label->setHeight(21);
       label->setAlign(TextView::CENTER);
       tile->addView(label);
       auto *values = new View();
       values->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
       values->setHeight(43);
-      auto *fast = makeLabel(std::to_string(*presentation.fast), 34, ui_theme::fastFeedback());
+      auto *fast = makeLabel(std::to_string(*presentation.fast), 34, app_theme::fastFeedback());
       fast->setName("fast");
       fast->setFlex(1)->setMinWidth(0)->setHeight(43)->setAutoFitText(true);
       fast->setAlign(TextView::RIGHT);
       values->addView(fast);
-      auto *slash = makeLabel(" / ", 24, ui_theme::textSecondary());
+      auto *slash = makeLabel(" / ", 24, app_theme::textSecondary());
       slash->setWidth(22)->setHeight(43);
       slash->setAlign(TextView::CENTER);
       values->addView(slash);
-      auto *slow = makeLabel(std::to_string(*presentation.slow), 34, ui_theme::slowFeedback());
+      auto *slow = makeLabel(std::to_string(*presentation.slow), 34, app_theme::slowFeedback());
       slow->setName("slow");
       slow->setFlex(1)->setMinWidth(0)->setHeight(43)->setAutoFitText(true);
       slow->setAlign(TextView::LEFT);
@@ -850,10 +850,10 @@ void DefaultSkin::buildPresentationResultLayout(
       tile->addView(values);
       detailsGrid->addView(tile);
     } else if (showFast) {
-      makeMetricTile("FAST", *presentation.fast, ui_theme::fastFeedback(),
+      makeMetricTile("FAST", *presentation.fast, app_theme::fastFeedback(),
                      "fast");
     } else if (showSlow) {
-      makeMetricTile("SLOW", *presentation.slow, ui_theme::slowFeedback(),
+      makeMetricTile("SLOW", *presentation.slow, app_theme::slowFeedback(),
                      "slow");
     }
     rootLayout->addView(detailsGrid);
@@ -864,10 +864,10 @@ void DefaultSkin::buildPresentationResultLayout(
   View *graphPlaceHolder = nullptr;
   if (showGraph) {
     graphPlaceHolder = new Button();
-    graphPlaceHolder->setBackgroundColor(ui_theme::resultPanelSubtle());
-    graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
-    graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
-    graphPlaceHolder->setBorderColor(ui_theme::hairlineSubtle());
+    graphPlaceHolder->setBackgroundColor(app_theme::resultPanelSubtle());
+    graphPlaceHolder->setCornerRadius(app_theme::panelRadius());
+    graphPlaceHolder->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
+    graphPlaceHolder->setBorderColor(app_theme::hairlineSubtle());
     graphPlaceHolder->setBorderWidth(1);
     graphPlaceHolder->setName("graph");
   }
@@ -926,22 +926,22 @@ void DefaultSkin::buildPresentationResultLayout(
   actionsRow->setName("resultActions");
 
   auto *button = new Button(0, 0, 232, 64);
-  auto *buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  auto *buttonText = new TextView(app_theme::font, 24);
   buttonText->setText(i18n::tr("result.builtin.back_menu.label"));
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   buttonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
+      app_theme::sdl(app_theme::textOn(app_theme::primaryAction())));
   button->setContentView(buttonText);
   button->setName("backButton");
   button->setSize(232, 64);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setBackgroundColors(
-      ui_theme::withAlpha(ui_theme::primaryAction(), 182),
-      ui_theme::withAlpha(ui_theme::primaryActionHover(), 210),
-      ui_theme::withAlpha(ui_theme::primaryActionPressed(), 226));
-  button->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 170),
-                          ui_theme::withAlpha(ui_theme::cyan(), 210),
+      app_theme::primaryAction(),
+      app_theme::primaryActionHover(),
+      app_theme::primaryActionPressed());
+  button->setBorderColors(app_theme::withAlpha(app_theme::cyan(), 170),
+                          app_theme::withAlpha(app_theme::cyan(), 210),
                           Color(255, 255, 255, 216));
   button->setStyledBorderWidth(1);
   ApplicationContext *context = data->context;
