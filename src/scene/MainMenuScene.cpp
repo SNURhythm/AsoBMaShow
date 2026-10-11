@@ -166,12 +166,39 @@ Button *makeSelectorButton(const i18n::Text &label, int size, TextView **out = n
   return button;
 }
 
+constexpr int kDetailsContentWidth = 472;
+
+Button *makePrimarySelectorButton(const i18n::Text &label, uint32_t glyph,
+                                  TextView **out) {
+  auto *button = new Button(0, 0, kDetailsContentWidth, 88);
+  button->setFlexShrink(0);
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+  content->setJustifyContent(YGJustifyCenter)->setGap(24);
+  auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, 42);
+  icon->setName("selectorButtonIcon");
+  icon->setText(ui_icons::textForCodepoint(glyph));
+  icon->setWidth(48)->setHeight(60)->setFlexShrink(0);
+  icon->setVAlign(TextView::MIDDLE);
+  auto *text = new TextView(main_menu_theme::font, 44, TextView::FontWeight::Bold);
+  text->setName("selectorButtonLabel");
+  text->setLocalizedText(label);
+  text->setAlign(TextView::CENTER);
+  text->setVAlign(TextView::MIDDLE);
+  text->setHeight(64)->setMinWidth(0)->setAutoFitText(true);
+  content->addView(icon);
+  content->addView(text);
+  button->setContentView(content);
+  styleMenuButton(button, text, true);
+  *out = text;
+  return button;
+}
+
 constexpr int kRootPadding = 0;
 constexpr int kMenuHeaderHeight = 80;
 constexpr int kPlayDockHeight = 120;
 constexpr int kLibraryPanelWidth = 350;
 constexpr int kDetailsPanelWidth = 540;
-constexpr int kDetailsContentWidth = 472;
 // Compact desktop chrome leaves the chart table as the primary browsing surface.
 constexpr int kMenuActionHeight = 56;
 constexpr int kPortraitMenuActionHeight = 64;
@@ -1997,26 +2024,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightContent->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
-  startButton = new Button(0, 0, kDetailsContentWidth, 88);
+  startButton = makePrimarySelectorButton(
+      i18n::message("menu.selector.play.label"), 0xf04b, &startButtonText);
   startButton->setName("mainMenuStart");
-  startButton->setFlexShrink(0);
-  auto buttonText = new TextView(main_menu_theme::font, 44, TextView::FontWeight::Bold);
-  startButtonText = buttonText;
-  buttonText->setLocalizedText(i18n::message("menu.selector.play.label"));
-  buttonText->setAlign(TextView::CENTER);
-  buttonText->setVAlign(TextView::MIDDLE);
-  auto *playContent = new View();
-  playContent->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter)->setGap(24);
-  auto *playIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 42);
-  playIcon->setText(ui_icons::textForCodepoint(0xf04b));
-  playIcon->setWidth(48)->setHeight(60);
-  playIcon->setVAlign(TextView::MIDDLE);
-  playIcon->setThemedColor(main_menu_theme::onAction);
-  buttonText->setHeight(64)->setMinWidth(0)->setAutoFitText(true);
-  playContent->addView(playIcon);
-  playContent->addView(buttonText);
-  startButton->setContentView(playContent);
-  styleMenuButton(startButton, buttonText, true);
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
@@ -2070,13 +2080,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButtonSlot->setDisplay(YGDisplayNone);
   findBmsButtonSlot->setAlignItems(YGAlignStretch);
 
-  findBmsButton = new Button(0, 0, kDetailsContentWidth, 88);
-  findBmsButtonText = new TextView(main_menu_theme::font, 32);
-  findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
-  findBmsButtonText->setAlign(TextView::CENTER);
-  findBmsButtonText->setVAlign(TextView::MIDDLE);
-  findBmsButton->setContentView(findBmsButtonText);
-  styleMenuButton(findBmsButton, findBmsButtonText, true);
+  findBmsButton = makePrimarySelectorButton(
+      i18n::message("menu.find_bms.label"), ui_icons::kDownload, &findBmsButtonText);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -2086,13 +2091,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonSlot->setDisplay(YGDisplayNone);
   unzipButtonSlot->setAlignItems(YGAlignStretch);
 
-  unzipButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
-  unzipButtonText = new TextView(main_menu_theme::font, 26);
-  unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
-  unzipButtonText->setAlign(TextView::CENTER);
-  unzipButtonText->setVAlign(TextView::MIDDLE);
-  unzipButton->setContentView(unzipButtonText);
-  styleMenuButton(unzipButton, unzipButtonText, true);
+  unzipButton = makePrimarySelectorButton(
+      i18n::message("menu.unzip.label"), 0xf1c6, &unzipButtonText);
   unzipButton->setOnClickListener(
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);

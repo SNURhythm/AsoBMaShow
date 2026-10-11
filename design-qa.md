@@ -63,3 +63,8 @@ insets, growing right from its existing left edge. Long labels leave at least
 96 units for the adjacent key-mode value. Regression checks cover growth,
 neighbor spacing and restoring the short-label width. The desktop build and
 chart-details/UI-scale CTest targets passed; no new visual capture was made.
+
+Download and Unzip now share Play's primary-button constructor: bold 44-unit
+labels, 42-unit icons, identical spacing and theme colors. Download uses the
+download icon and Unzip uses the archive icon. Desktop compilation and the UI
+scale regression target passed. No new visual capture was made.
