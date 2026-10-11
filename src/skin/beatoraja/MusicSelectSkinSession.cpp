@@ -353,6 +353,8 @@ MusicSelectSkinSession::MusicSelectSkinSession(
       preparedRuntimeStringsByObject_(
           std::move(preparedRuntimeStringsByObject)),
       preparedBuiltinImagePaths_(std::move(preparedBuiltinImagePaths)) {
+  // The owning session keeps this model immutable at its final address.
+  renderer_.prepareModelIndex(sessionSerial_, model_);
   for (std::size_t index = 0; index < model_.model.customEvents.size();
        ++index) {
     customEventLastDefinitionIndexes_.insert_or_assign(

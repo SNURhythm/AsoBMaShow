@@ -1641,6 +1641,91 @@ void testConcurrentStoredZipFitsExactBudget() {
   assert(received == 1);
 }
 
+void testConcurrentDeflatedZipBoundedScratch() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "bounded-deflate.zip";
+  const std::string payload(65537, 'x');
+  // More than 5 MiB of valid compressed input, including a long suffix that
+  // must still be consumed after the output buffer is full.
+  writeZipWithEmptyDeflateBlocks(path, payload, false);
+  std::string error;
+  std::size_t received = 0;
+  const auto caller = std::this_thread::get_id();
+  assert(archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, [&](archive_file::FileData &&file) {
+        bounded_allocation_probe::enabled = false;
+        assert(bounded_allocation_probe::largest <= payload.size());
+        assert(std::string(file.bytes.begin(), file.bytes.end()) == payload);
+        ++received;
+        return true;
+      }, 2, payload.size() + 64 * 1024, &error, [&] {
+        if (std::this_thread::get_id() != caller) {
+          bounded_allocation_probe::enabled = true;
+        }
+        return true;
+      }));
+  assert(received == 1);
+  assert(!archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, [](archive_file::FileData &&) {
+        assert(false && "Entry exceeds the output-plus-scratch budget");
+        return true;
+      }, 2, payload.size() + 64 * 1024 - 1, &error));
+}
+
+void testConcurrentMappedZipNeedsNoCompressedAllocation() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "mapped-deflate.zip";
+  const std::string payload(128 * 1024 + 1, 'x');
+  writeZipWithEmptyDeflateBlocks(path, payload, true);
+  const auto caller = std::this_thread::get_id();
+  bounded_allocation_probe::rejectedEntrySize = 64 * 1024;
+  bounded_allocation_probe::rejectedAllocations = 0;
+  bounded_allocation_probe::allocationFailureKind = 1;
+  std::size_t received = 0;
+  std::string error;
+  const bool read = archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, [&](archive_file::FileData &&file) {
+        bounded_allocation_probe::rejectEntryAllocation = false;
+        assert(std::string(file.bytes.begin(), file.bytes.end()) == payload);
+        ++received;
+        return true;
+      }, 2, payload.size() + 64 * 1024, &error, [&] {
+        bounded_allocation_probe::rejectEntryAllocation =
+            std::this_thread::get_id() != caller;
+        return true;
+      });
+  bounded_allocation_probe::rejectEntryAllocation = false;
+  bounded_allocation_probe::rejectedEntrySize = 0;
+  assert(read && received == 1);
+  assert(bounded_allocation_probe::rejectedAllocations == 0);
+}
+
+void testConcurrentZipFallbackTruncatedDuringRead() {
+  archive_file::setZipMappingEnabledForTesting(false);
+  TempDirectory temporary;
+  const auto path = temporary.path() / "truncated-deflate.zip";
+  const std::string payload(128 * 1024 + 1, 'x');
+  writeZipWithEmptyDeflateBlocks(path, payload, true);
+  bounded_allocation_probe::observedEntry = nullptr;
+  bounded_allocation_probe::observedEntrySize = payload.size();
+  std::atomic_bool truncated = false;
+  std::string error;
+  assert(!archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, [](archive_file::FileData &&) {
+        assert(false && "Truncated ZIP must not deliver an entry");
+        return true;
+      }, 2, 16 * 1024 * 1024, &error, [&] {
+        if (bounded_allocation_probe::observedEntry && !truncated.exchange(true)) {
+          std::filesystem::resize_file(path, 0);
+        }
+        return true;
+      }));
+  bounded_allocation_probe::observedEntrySize = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  archive_file::setZipMappingEnabledForTesting(true);
+  assert(truncated && !error.empty());
+}
+
 void testConcurrentOversizedEntries(const std::string &format, int allocationFailure = 0) {
   TempDirectory temporary;
   const bool zip = format == "stored" || format == "deflated";
@@ -3722,9 +3807,31 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
   assert(error == "Materialize cancelled." && !std::filesystem::exists(root));
 }
 
+void testConcurrentZipMappingFallback() {
+  archive_file::setZipMappingEnabledForTesting(false);
+  testConcurrentDeflatedZipBoundedScratch();
+  testZipChunkedReadBoundaryIntegrity(true);
+  testLargeZipCancellation(true, true, false);
+  testLargeZipCancellation(true, true, true);
+  for (bool prefix : {false, true}) {
+    testZipCancellationDuringEmptyDeflateBlocks(prefix, 0);
+  }
+  archive_file::setZipMappingEnabledForTesting(true);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--mapped-zip") {
+    testConcurrentMappedZipNeedsNoCompressedAllocation();
+    testConcurrentZipMappingFallback();
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--bounded-zip-scratch") {
+    testConcurrentDeflatedZipBoundedScratch();
+    testConcurrentZipFallbackTruncatedDuringRead();
+    return 0;
+  }
   if (argc == 3 && std::string(argv[1]) == "--unicode-entry") {
     try {
       testUnicodeZipArtworkPaths(argv[2]);
@@ -3869,6 +3976,10 @@ int main(int argc, char **argv) {
   testBoundedStreamingRejectsOversizedPayload();
   testConcurrentReaderRejectsOversizedPayload();
   testConcurrentStoredZipFitsExactBudget();
+  testConcurrentZipMappingFallback();
+  testConcurrentMappedZipNeedsNoCompressedAllocation();
+  testConcurrentDeflatedZipBoundedScratch();
+  testConcurrentZipFallbackTruncatedDuringRead();
   for (const auto *format : {"stored", "deflated", "rar4", "rar5",
                              "rar5-solid", "rar5-parallel"}) {
     testConcurrentOversizedEntries(format);
@@ -3913,7 +4024,7 @@ int main(int argc, char **argv) {
     testLargeZipCancellation(deflated, false, false);
   }
   for (bool emptyPrefix : {false, true}) {
-    for (int operation = 1; operation < 4; ++operation) {
+    for (int operation = 0; operation < 4; ++operation) {
       testZipCancellationDuringEmptyDeflateBlocks(emptyPrefix, operation);
     }
   }

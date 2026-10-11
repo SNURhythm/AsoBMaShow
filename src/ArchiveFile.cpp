@@ -47,6 +47,8 @@
 
 #ifndef _WIN32
 #include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -526,6 +528,7 @@ IndexBuildCoordinator gIndexBuilds;
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
+std::atomic_bool gZipMappingEnabledForTesting{true};
 #endif
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
@@ -664,6 +667,7 @@ public:
   RandomAccessFile &operator=(const RandomAccessFile &) = delete;
 
   ~RandomAccessFile() {
+    resetMapping();
 #ifndef _WIN32
     if (fd_ >= 0) {
       ::close(fd_);
@@ -676,6 +680,7 @@ public:
   }
 
   bool open(const std::filesystem::path &path, std::string *errorMessage) {
+    resetMapping();
 #ifndef _WIN32
     if (fd_ >= 0) {
       ::close(fd_);
@@ -713,6 +718,52 @@ public:
     }
     return true;
 #endif
+  }
+
+  // Best-effort shared input view. The owner must outlive all readers, and the
+  // underlying archive must remain intact while mapped. Mapping failures leave
+  // readAt available, including on address-space-constrained devices.
+  const unsigned char *tryMapReadOnly(std::uint64_t expectedSize) {
+    resetMapping();
+    if (expectedSize == 0 ||
+        expectedSize > static_cast<std::uint64_t>(
+                           std::numeric_limits<std::ptrdiff_t>::max())) {
+      return nullptr;
+    }
+    const auto size = static_cast<std::size_t>(expectedSize);
+#ifndef _WIN32
+    struct stat info{};
+    if (fd_ < 0 || ::fstat(fd_, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_size < 0 ||
+        static_cast<std::uint64_t>(info.st_size) != expectedSize) {
+      return nullptr;
+    }
+    void *view = ::mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd_, 0);
+    if (view == MAP_FAILED) {
+      return nullptr;
+    }
+#else
+    LARGE_INTEGER fileSize{};
+    if (handle_ == INVALID_HANDLE_VALUE ||
+        !::GetFileSizeEx(handle_, &fileSize) || fileSize.QuadPart < 0 ||
+        static_cast<std::uint64_t>(fileSize.QuadPart) != expectedSize) {
+      return nullptr;
+    }
+    mappingHandle_ = ::CreateFileMappingW(handle_, nullptr, PAGE_READONLY,
+                                           0, 0, nullptr);
+    if (mappingHandle_ == nullptr) {
+      return nullptr;
+    }
+    void *view = ::MapViewOfFile(mappingHandle_, FILE_MAP_READ, 0, 0, size);
+    if (view == nullptr) {
+      ::CloseHandle(mappingHandle_);
+      mappingHandle_ = nullptr;
+      return nullptr;
+    }
+#endif
+    mapping_ = view;
+    mappingSize_ = size;
+    return static_cast<const unsigned char *>(mapping_);
   }
 
   bool readAt(std::uint64_t offset, void *data, std::size_t size,
@@ -822,10 +873,31 @@ public:
   }
 
 private:
+  void resetMapping() {
+    if (mappingSize_ != 0) {
+#ifndef _WIN32
+      ::munmap(mapping_, mappingSize_);
+#else
+      ::UnmapViewOfFile(mapping_);
+#endif
+      mapping_ = nullptr;
+      mappingSize_ = 0;
+    }
+#ifdef _WIN32
+    if (mappingHandle_ != nullptr) {
+      ::CloseHandle(mappingHandle_);
+      mappingHandle_ = nullptr;
+    }
+#endif
+  }
+
+  void *mapping_ = nullptr;
+  std::size_t mappingSize_ = 0;
 #ifndef _WIN32
   int fd_ = -1;
 #else
   HANDLE handle_ = INVALID_HANDLE_VALUE;
+  HANDLE mappingHandle_ = nullptr;
 #endif
 };
 
@@ -4772,9 +4844,12 @@ bool prepareZipDirectReadTarget(mz_zip_archive *archive,
   return true;
 }
 
+constexpr std::size_t kZipDirectChunkSize = 64 * 1024;
+
 bool readZipDirectTarget(RandomAccessFile &archiveFile,
                          const ZipDirectReadTarget &target, FileData &file,
                          std::vector<unsigned char> &compressedScratch,
+                         const unsigned char *mappedArchive,
                          std::string *errorMessage,
                          ZipDirectReadTiming *timing,
                          const PauseCallback &pauseCallback) {
@@ -4806,7 +4881,7 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     return true;
   }
 
-  constexpr std::size_t kChunkSize = 64 * 1024;
+  constexpr std::size_t kChunkSize = kZipDirectChunkSize;
   const auto readChunks = [&](std::vector<unsigned char> &bytes) {
     for (std::size_t offset = 0; offset < bytes.size();) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -4839,13 +4914,18 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       return false;
     }
   } else if (target.method == MZ_DEFLATED) {
-    compressedScratch.resize(static_cast<std::size_t>(target.compressedSize));
-    if (!readChunks(compressedScratch)) {
-      return false;
+    const auto compressedSize = static_cast<std::size_t>(target.compressedSize);
+    const auto *mappedInput = mappedArchive && compressedSize != 0
+        ? mappedArchive + static_cast<std::size_t>(target.dataOffset)
+        : nullptr;
+    if (mappedInput == nullptr) {
+      compressedScratch.resize(std::min(kChunkSize, compressedSize));
     }
     tinfl_decompressor decompressor;
     tinfl_init(&decompressor);
     std::size_t inputOffset = 0;
+    std::size_t bufferedOffset = 0;
+    std::size_t bufferedSize = 0;
     std::size_t outputOffset = 0;
     unsigned char emptyBuffer = 0;
     auto *output = file.bytes.empty() ? &emptyBuffer : file.bytes.data();
@@ -4856,21 +4936,44 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
         return false;
       }
-      std::size_t inputSize =
-          std::min(kChunkSize, compressedScratch.size() - inputOffset);
+      // Refill only after tinfl consumes the previous chunk. It may need
+      // multiple output calls per input chunk, or consume input without output.
+      if (mappedInput == nullptr && bufferedOffset == bufferedSize &&
+          inputOffset < compressedSize) {
+        bufferedSize = std::min(kChunkSize, compressedSize - inputOffset);
+        bufferedOffset = 0;
+        const auto readStart = std::chrono::steady_clock::now();
+        const bool read = archiveFile.readAt(target.dataOffset + inputOffset,
+                                              compressedScratch.data(), bufferedSize,
+                                              errorMessage);
+        if (timing != nullptr) {
+          timing->readMicros += elapsedMicrosSince(readStart);
+        }
+        if (!read) {
+          return false;
+        }
+      }
+      std::size_t inputSize = mappedInput
+          ? std::min(kChunkSize, compressedSize - inputOffset)
+          : bufferedSize - bufferedOffset;
       std::size_t outputSize =
           std::min(kChunkSize, file.bytes.size() - outputOffset);
       const mz_uint32 flags = TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
-          (inputOffset + inputSize < compressedScratch.size()
+          (inputOffset + inputSize < compressedSize
                ? TINFL_FLAG_HAS_MORE_INPUT : 0);
       const auto inflateStart = std::chrono::steady_clock::now();
-      status = tinfl_decompress(&decompressor, input + inputOffset, &inputSize,
+      const auto *nextInput = mappedInput ? mappedInput + inputOffset
+                                           : input + bufferedOffset;
+      status = tinfl_decompress(&decompressor, nextInput, &inputSize,
                                 output, output + outputOffset, &outputSize,
                                 flags);
       if (timing != nullptr) {
         timing->inflateMicros += elapsedMicrosSince(inflateStart);
       }
       inputOffset += inputSize;
+      if (mappedInput == nullptr) {
+        bufferedOffset += inputSize;
+      }
       outputOffset += outputSize;
       if (status <= TINFL_STATUS_DONE ||
           (inputSize == 0 && outputSize == 0)) {
@@ -5843,6 +5946,19 @@ bool readZipEntriesByIndexConcurrent(
     return true;
   }
 
+  // A single mapping is shared by all workers and released after they join.
+  // Keep the fallback scratch reservation so admission remains predictable on
+  // systems that cannot map the archive; mapped pages are OS-managed file cache.
+  const unsigned char *mappedArchive = nullptr;
+  bool mappingEnabled = true;
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+  mappingEnabled = gZipMappingEnabledForTesting.load(std::memory_order_relaxed);
+#endif
+  if (mappingEnabled && std::any_of(directTargets.begin(), directTargets.end(),
+      [](const auto &target) { return target.method == MZ_DEFLATED; })) {
+    mappedArchive = headerFile.tryMapReadOnly(archiveSize);
+  }
+
   auto addSaturated = [](std::uint64_t &total, std::uint64_t value) {
     if (value > std::numeric_limits<std::uint64_t>::max() - total) {
       total = std::numeric_limits<std::uint64_t>::max();
@@ -5976,7 +6092,9 @@ bool readZipEntriesByIndexConcurrent(
 
       // Stored entries read directly into the output buffer.
       const std::uint64_t scratchBytes =
-          target.method == MZ_DEFLATED ? target.compressedSize : 0;
+          target.method == MZ_DEFLATED
+              ? std::min<std::uint64_t>(target.compressedSize, kZipDirectChunkSize)
+              : 0;
       const std::uint64_t targetBytes =
           target.size > std::numeric_limits<std::uint64_t>::max() - scratchBytes
               ? std::numeric_limits<std::uint64_t>::max()
@@ -5991,7 +6109,8 @@ bool readZipEntriesByIndexConcurrent(
       std::string readError;
       ZipDirectReadTiming timing;
       bool ok = readZipDirectTarget(archiveFile, target, file,
-                                    compressedScratch, &readError, &timing,
+                                    compressedScratch, mappedArchive,
+                                    &readError, &timing,
                                     pauseCallback);
       localStats.readMicros += timing.readMicros;
       localStats.inflateMicros += timing.inflateMicros;
@@ -8580,6 +8699,10 @@ void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer) {
   std::lock_guard lock(gStreamingEntryObserverMutex);
   gStreamingEntryObserver = std::move(observer);
+}
+
+void setZipMappingEnabledForTesting(bool enabled) {
+  gZipMappingEnabledForTesting.store(enabled, std::memory_order_relaxed);
 }
 
 void resetSingleFlightWaiterCountForTesting() {

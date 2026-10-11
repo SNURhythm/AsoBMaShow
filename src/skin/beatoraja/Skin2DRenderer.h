@@ -464,7 +464,8 @@ public:
 
 private:
   friend class PlaySkinSession;
-  // Only owning gameplay activations may retain pointers into their immutable
+  friend class MusicSelectSkinSession;
+  // Only owning skin activations may retain pointers into their immutable
   // model. Standalone evaluators and non-owning test sessions can mutate it.
   void prepareModelIndex(std::uint64_t sessionSerial,
                          const ValidatedBeatorajaSkinModel &);

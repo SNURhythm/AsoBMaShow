@@ -1,0 +1,64 @@
+{
+  "reviewer": "independent read-only code review",
+  "findings": [],
+  "fontDifferential": {
+    "realDescriptors": 63,
+    "generatedDescriptors": 5000,
+    "matched": true
+  },
+  "nativeBuild": {
+    "command": "cmake --build cmake-build-debug -j 6",
+    "exitCode": 0
+  },
+  "fullTests": {
+    "command": "ctest --test-dir cmake-build-debug --output-on-failure -j 6",
+    "passed": 481,
+    "failed": 0,
+    "seconds": 124.17
+  },
+  "combinedBenchmarkSmoke": {
+    "coldSamplesMicros": [
+      4271,
+      735
+    ],
+    "frames": {
+      "diagnosticCodes": [],
+      "entryIdentity": "skin/select.luaskin",
+      "frameEvaluation": {
+        "batches": 8,
+        "geometryDigest": "8336827619684426293",
+        "measuredFrames": 8,
+        "medianNanos": 10584,
+        "p95Nanos": 10625,
+        "samplesNanos": [
+          10459,
+          10542,
+          10584,
+          10417,
+          10834,
+          10584,
+          10500,
+          10625
+        ],
+        "scope": "CPU render including recording backend; synthetic song list; no GPU submission",
+        "vertices": 32,
+        "warmupFrames": 256
+      },
+      "schemaVersion": 1,
+      "screen": "music-select",
+      "sessionPublished": true
+    },
+    "warmSamplesMicros": [
+      875,
+      488
+    ]
+  },
+  "performanceComparison": {
+    "cases": 4,
+    "samplesPerFrameRun": 20000,
+    "selectorGeometryAndRenderStateMatched": true,
+    "gameplayCommandCountsMatched": true,
+    "diagnosticCodesMatched": true,
+    "gameplayCallbackBudgetViolations": 0
+  }
+}

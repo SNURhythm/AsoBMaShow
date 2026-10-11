@@ -2439,6 +2439,8 @@ public:
 #include <atomic>
 #include <filesystem>
 #include <map>
+#include <memory>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -2454,6 +2456,29 @@ struct ChartScanResult {
   bool HasBga = false;
   bool HasBpmStop = false;
   bool HasScrollChange = false;
+};
+
+// Optional wall-time breakdown for one scan. Parallel callers should sum
+// these as worker time, not compare the sum directly with elapsed scan time.
+struct ScanTimings {
+  std::uint64_t ReadNanoseconds = 0;
+  std::uint64_t HashNanoseconds = 0;
+  std::uint64_t DecodeNanoseconds = 0;
+  std::uint64_t ParseNanoseconds = 0;
+};
+
+// Reusable storage only: random state and chart results remain in Parser.
+// Confine each workspace to one worker; no output borrows its storage.
+class ScanWorkspace {
+public:
+  ScanWorkspace();
+  ~ScanWorkspace();
+  ScanWorkspace(const ScanWorkspace &) = delete;
+  ScanWorkspace &operator=(const ScanWorkspace &) = delete;
+private:
+  struct Storage;
+  std::unique_ptr<Storage> storage;
+  friend class Parser;
 };
 
 class Parser {
@@ -2486,6 +2511,13 @@ public:
        const std::filesystem::path &sourcePath);
   [[nodiscard]] std::optional<ChartScanResult>
   Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled,
+       const std::filesystem::path &sourcePath, ScanWorkspace &workspace,
+       ScanTimings *timings = nullptr);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled,
+       ScanWorkspace &workspace, ScanTimings *timings = nullptr);
   static int NoWav;
   static int MetronomeWav;
 
@@ -2493,7 +2525,13 @@ private:
   void ParseInternal(const std::vector<unsigned char> &bytes, Chart **chart,
                      bool addReadyMeasure, bool metaOnly,
                      std::atomic_bool &bCancelled, ChartScanResult *scan,
-                     bool pms = false);
+                     bool pms = false, ScanWorkspace *workspace = nullptr,
+                     ScanTimings *timings = nullptr);
+  std::optional<ChartScanResult>
+  ScanInternal(const std::vector<unsigned char> &bytes,
+               std::atomic_bool &bCancelled,
+               const std::filesystem::path &sourcePath,
+               ScanWorkspace *workspace, ScanTimings *timings);
   // bpmTable
   std::unordered_map<int, double> BpmTable;
   std::unordered_map<int, double> StopLengthTable;
@@ -4661,6 +4699,19 @@ public:
     for (auto &block : blocks) block.used = 0;
   }
 
+  void releaseExcess(size_t maximumRetainedBytes) noexcept {
+    size_t remaining = maximumRetainedBytes;
+    for (const auto &block : blocks) {
+      if (block.bytes > remaining) {
+        std::vector<Block>().swap(blocks);
+        current = 0;
+        return;
+      }
+      remaining -= block.bytes;
+    }
+    reset();
+  }
+
   void *allocate(size_t bytes, size_t alignment) {
     for (;;) {
       if (current == blocks.size()) {
@@ -4710,6 +4761,79 @@ template <typename T> struct ParserScratchAllocator {
   }
 };
 
+// One node-size class shared by the parser's lane maps. Erasure returns nodes
+// immediately, so memory follows the maximum live set rather than total notes.
+// The owning parser must outlive all maps; this pool is never shared by threads.
+class ParserNodePool {
+  struct FreeNode { FreeNode *next; };
+  ParserScratchArena arena;
+  FreeNode *free = nullptr;
+  size_t nodeBytes = 0;
+  size_t nodeAlignment = 0;
+
+public:
+  ParserNodePool() = default;
+  ParserNodePool(const ParserNodePool &) = delete;
+  ParserNodePool &operator=(const ParserNodePool &) = delete;
+
+  void *allocate(size_t bytes, size_t alignment) {
+    bytes = std::max(bytes, sizeof(FreeNode));
+    alignment = std::max(alignment, alignof(FreeNode));
+    if (nodeBytes == 0) {
+      nodeBytes = bytes;
+      nodeAlignment = alignment;
+    }
+    // Allocator rebinds of a different size remain valid but are not pooled.
+    if (bytes != nodeBytes || alignment != nodeAlignment)
+      return ::operator new(bytes);
+    if (free) {
+      auto *node = free;
+      free = node->next;
+      return node;
+    }
+    return arena.allocate(bytes, alignment);
+  }
+
+  void deallocate(void *memory, size_t bytes, size_t alignment) noexcept {
+    bytes = std::max(bytes, sizeof(FreeNode));
+    alignment = std::max(alignment, alignof(FreeNode));
+    if (bytes != nodeBytes || alignment != nodeAlignment) {
+      ::operator delete(memory);
+      return;
+    }
+    free = new (memory) FreeNode{free};
+  }
+};
+
+template <typename T> struct ParserNodeAllocator {
+  using value_type = T;
+  ParserNodePool *pool;
+
+  explicit ParserNodeAllocator(ParserNodePool &storage) noexcept : pool(&storage) {}
+  template <typename U>
+  ParserNodeAllocator(const ParserNodeAllocator<U> &other) noexcept : pool(other.pool) {}
+
+  T *allocate(size_t count) {
+    static_assert(alignof(T) <= alignof(std::max_align_t));
+    if (count > std::numeric_limits<size_t>::max() / sizeof(T))
+      throw std::bad_array_new_length();
+    if (count != 1) return static_cast<T *>(::operator new(count * sizeof(T)));
+    return static_cast<T *>(pool->allocate(sizeof(T), alignof(T)));
+  }
+  void deallocate(T *memory, size_t count) noexcept {
+    if (count != 1) ::operator delete(memory);
+    else pool->deallocate(memory, sizeof(T), alignof(T));
+  }
+  template <typename U>
+  bool operator==(const ParserNodeAllocator<U> &other) const noexcept {
+    return pool == other.pool;
+  }
+  template <typename U>
+  bool operator!=(const ParserNodeAllocator<U> &other) const noexcept {
+    return !(*this == other);
+  }
+};
+
 } // namespace bms_parser::detail
 
 
@@ -4745,10 +4869,23 @@ public:
     bool published = false;
   };
   static constexpr int Lanes = 16;
-  std::array<std::map<Position, Event *>, Lanes> lanes;
+private:
+  // Declared before the containers so their nodes are destroyed first.
+  ParserNodePool laneNodes;
+  using LaneAllocator = ParserNodeAllocator<std::pair<const Position, Event *>>;
+  using LaneSlots = std::map<Position, Event *, std::less<Position>, LaneAllocator>;
+  template <size_t... I>
+  static std::array<LaneSlots, Lanes> makeLanes(ParserNodePool &pool,
+                                               std::index_sequence<I...>) {
+    return {{(static_cast<void>(I), LaneSlots{LaneAllocator(pool)})...}};
+  }
+
+public:
+  std::array<LaneSlots, Lanes> lanes;
 
   explicit ParserNotes(int silentWav, int mode, const std::atomic_bool &cancelled)
-      : noWav(silentWav), lnType(LongNoteTypeFromLnMode(mode)), cancelled(cancelled) {}
+      : lanes(makeLanes(laneNodes, std::make_index_sequence<Lanes>{})),
+        noWav(silentWav), lnType(LongNoteTypeFromLnMode(mode)), cancelled(cancelled) {}
 
   void normal(int lane, Position pos, int wav, bool endpoint, TimeLine *timeline) {
     auto &slots = lanes[lane];

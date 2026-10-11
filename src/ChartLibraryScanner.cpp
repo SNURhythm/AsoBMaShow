@@ -44,6 +44,22 @@
 namespace {
 using asobmshow::bms_metadata::normalizedHash;
 
+struct ScanParserTotals {
+  std::atomic_uint64_t charts{0}, read{0}, hash{0}, decode{0}, parse{0};
+  struct Sample {
+    ScanParserTotals &totals;
+    bms_parser::ScanTimings timings;
+    std::uint64_t externalRead = 0;
+    ~Sample() {
+      totals.charts.fetch_add(1, std::memory_order_relaxed);
+      totals.read.fetch_add(timings.ReadNanoseconds + externalRead, std::memory_order_relaxed);
+      totals.hash.fetch_add(timings.HashNanoseconds, std::memory_order_relaxed);
+      totals.decode.fetch_add(timings.DecodeNanoseconds, std::memory_order_relaxed);
+      totals.parse.fetch_add(timings.ParseNanoseconds, std::memory_order_relaxed);
+    }
+  };
+};
+
 constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr std::size_t kIndividualParseBatchSize = 512;
 constexpr std::size_t kIndividualCommitInterval = 1000;
@@ -765,14 +781,19 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   }
 
+  ScanParserTotals parserTotals;
   auto parseChartMeta = [&](const std::filesystem::path &path,
                             const std::vector<unsigned char> *bytes)
       -> std::optional<ParsedChartMetadata> {
     const std::string chartText = fspath_to_utf8(path);
     bms_parser::Parser parser;
+    ScanParserTotals::Sample sample{parserTotals, {}};
     std::optional<bms_parser::ChartScanResult> chart;
     std::atomic_bool cancelled(false);
     try {
+      // Only buffers persist between jobs. Parser state and its random seed
+      // remain fresh for each chart, as before.
+      thread_local bms_parser::ScanWorkspace workspace;
       const bool inputWasFile = bytes == nullptr;
       std::filesystem::path archivePath;
       std::filesystem::path innerPath;
@@ -785,7 +806,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       std::vector<unsigned char> fileBytes;
       if (inputWasFile && bufferedRead) {
         std::string error;
-        if (!archive_file::readFile(path, fileBytes, &error)) {
+        const auto readStart = std::chrono::steady_clock::now();
+        const bool read = archive_file::readFile(path, fileBytes, &error);
+        sample.externalRead = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - readStart).count());
+        if (!read) {
           SDL_Log("Failed to read chart %s: %s", chartText.c_str(), error.c_str());
           archive_file::appendDebugLogLine("DB read failed: " + chartText + ": " + error);
           return std::nullopt;
@@ -793,7 +819,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         bytes = &fileBytes;
       }
       if (bytes != nullptr) {
-        chart = parser.Scan(*bytes, cancelled, isArchive ? innerPath : path);
+        chart = parser.Scan(*bytes, cancelled, isArchive ? innerPath : path,
+                            workspace, &sample.timings);
         if (chart) {
           chart->Meta.BmsPath = path;
           if (isArchive) {
@@ -804,7 +831,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           }
         }
       } else {
-        chart = parser.Scan(path, cancelled);
+        chart = parser.Scan(path, cancelled, workspace, &sample.timings);
       }
     } catch (const std::exception &e) {
       SDL_Log("Error parsing %s: %s", chartText.c_str(), e.what());
@@ -2246,6 +2273,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return {};
   }
   bool storageHealthy = true;
+  std::uint64_t chartUpsertNanoseconds = 0;
+  auto timedChartUpsert = [&](auto &&write) {
+    const auto start = std::chrono::steady_clock::now();
+    const bool success = write();
+    chartUpsertNanoseconds += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count());
+    return success;
+  };
   auto recordStorageResult = [&](bool success) {
     storageHealthy = success && storageHealthy;
     return success;
@@ -2462,9 +2498,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         parsed.meta.Preview = found->second;
       }
     }
-    if (!recordStorageResult(
-            scanBatch->UpsertChart(parsed.meta, std::nullopt, hasDocument,
-                                   parsed.sequenceFeatures))) {
+    if (!recordStorageResult(timedChartUpsert([&] {
+          return scanBatch->UpsertChart(parsed.meta, std::nullopt, hasDocument,
+                                        parsed.sequenceFeatures);
+        }))) {
       return false;
     }
     if (!reconcileExisting) {
@@ -3183,9 +3220,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
               parsed.meta->meta.Preview = found->second;
             }
           }
-          if (recordStorageResult(scanBatch->UpsertChart(
-                  parsed.meta->meta, storedArchiveSourcePreference,
-                  hasDocument, parsed.meta->sequenceFeatures))) {
+          if (recordStorageResult(timedChartUpsert([&] {
+                return scanBatch->UpsertChart(
+                    parsed.meta->meta, storedArchiveSourcePreference,
+                    hasDocument, parsed.meta->sequenceFeatures);
+              }))) {
             ++insertedCharts;
             ++storedChartCount;
             if (!reconcileExisting) {
@@ -3359,6 +3398,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           "Chart scan worker failed with an unknown error.");
     }
   }
+  // Parser counters are accumulated worker time, so they can exceed wall
+  // time. Archive extraction and folder discovery retain their phase logs.
+  archive_file::appendDebugLogLine(
+      "Chart scan worker stages: charts=" + std::to_string(parserTotals.charts.load()) +
+      " inputReadUs=" + std::to_string(parserTotals.read.load() / 1000) +
+      " hashUs=" + std::to_string(parserTotals.hash.load() / 1000) +
+      " decodeUs=" + std::to_string(parserTotals.decode.load() / 1000) +
+      " parseUs=" + std::to_string(parserTotals.parse.load() / 1000) +
+      " chartUpsertUs=" + std::to_string(chartUpsertNanoseconds / 1000));
   const int changedCount = scanBatch->ChangedCount();
   const bool commitSucceeded = traversalHealthy && scanBatch->Commit();
   if (!traversalHealthy) {

@@ -756,6 +756,33 @@ std::array<int, 4> numericCatalogKey(SkinBindingType type, int selector) {
               ? static_cast<int>(type.floatDomain) : 0,
           selector};
 }
+
+std::uint16_t numericCatalogMask(SkinBindingType type) noexcept {
+  switch (type.kind) {
+  case SkinBindingKind::BooleanProperty: return 1U << 0;
+  case SkinBindingKind::IntegerProperty:
+    if (type.integerDomain == SkinIntegerPropertyDomain::IntegerValue) return 1U << 1;
+    if (type.integerDomain == SkinIntegerPropertyDomain::ImageIndex) return 1U << 2;
+    return 0;
+  case SkinBindingKind::FloatProperty:
+    if (type.floatDomain == SkinFloatPropertyDomain::Rate) return 1U << 3;
+    if (type.floatDomain == SkinFloatPropertyDomain::FloatValue) return 1U << 4;
+    return 0;
+  case SkinBindingKind::StringProperty: return 1U << 5;
+  case SkinBindingKind::TimerProperty: return 1U << 6;
+  case SkinBindingKind::FloatWriter: return 1U << 7;
+  case SkinBindingKind::StringWriter: return 1U << 8;
+  case SkinBindingKind::Event: return 1U << 9;
+  }
+  return 0;
+}
+
+struct NumericCatalogIndex {
+  static constexpr int first = -4096;
+  static constexpr int last = 4095;
+  std::array<std::uint16_t, last - first + 1> dense{};
+  std::vector<std::array<int, 4>> sparse;
+};
 } // namespace
 
 SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
@@ -767,18 +794,32 @@ bool gameplaySkinBuiltinNumericContains(SkinBindingType type, int selector) {
   // Keep the sparse catalog authoritative: unknown numeric properties must
   // not become supported just because a neighboring ID is implemented.
   static const auto index = [] {
-    std::vector<std::array<int, 4>> keys;
-    keys.reserve(builtinEntries().size());
+    NumericCatalogIndex result;
     for (const auto &entry : builtinEntries()) {
       if (const auto *numeric = std::get_if<int>(&entry.selector.value)) {
-        keys.push_back(numericCatalogKey(entry.type, *numeric));
+        const auto mask = numericCatalogMask(entry.type);
+        if (mask != 0 && *numeric >= NumericCatalogIndex::first &&
+            *numeric <= NumericCatalogIndex::last) {
+          result.dense[*numeric - NumericCatalogIndex::first] |= mask;
+        } else {
+          result.sparse.push_back(numericCatalogKey(entry.type, *numeric));
+        }
       }
     }
-    std::ranges::sort(keys);
-    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-    return keys;
+    std::ranges::sort(result.sparse);
+    result.sparse.erase(std::unique(result.sparse.begin(), result.sparse.end()),
+                        result.sparse.end());
+    return result;
   }();
-  return std::binary_search(index.begin(), index.end(),
+  // One 16-KiB table covers common selectors, including negated Booleans.
+  // Membership bits come from the exact same entries as the sparse fallback.
+  if (selector >= NumericCatalogIndex::first &&
+      selector <= NumericCatalogIndex::last &&
+      (index.dense[selector - NumericCatalogIndex::first] &
+       numericCatalogMask(type)) != 0) {
+    return true;
+  }
+  return std::binary_search(index.sparse.begin(), index.sparse.end(),
                             numericCatalogKey(type, selector)) ||
          SkinBuiltinBindingCatalogView({}, builtinRanges()).contains(
              type, SkinBuiltinPropertySelector{selector});
