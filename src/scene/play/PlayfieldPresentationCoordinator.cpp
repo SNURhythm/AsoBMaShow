@@ -694,6 +694,15 @@ void PlayfieldPresentationCoordinator::onLaneReleased(int lane,
   }
 }
 
+void PlayfieldPresentationCoordinator::onTimingSample(
+    JudgeResult judge, PlayfieldJudgeEventClock clock) {
+  // The built-in renderer also owns the timing indicator overlay for skins.
+  try {
+    builtIn_->onTimingSample(judge, clock);
+  } catch (...) {
+  }
+}
+
 void PlayfieldPresentationCoordinator::onJudge(JudgeResult judge, int combo,
                                                int score,
                                                PlayfieldJudgeEventClock clock,

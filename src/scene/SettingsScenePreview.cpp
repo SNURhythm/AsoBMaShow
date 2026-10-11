@@ -8,6 +8,7 @@
 #include "../rendering/common.h"
 #include "../GameplayKeyMode.h"
 #include "play/BMSRenderer.h"
+#include "play/JudgementTimingSample.h"
 #include "play/PlayfieldProjection.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../ArchiveFile.h"
@@ -698,7 +699,7 @@ void SettingsScene::publishPreviewJudgement(
     const PlayfieldJudgeEventClock clock =
         makePlayfieldJudgeEventClock(sourceSongTimeMicros, 0, 0);
     previewPresentationEvents->onJudge(judgeResult, previewCombo,
-                                       previewScore, clock, true);
+                                       previewScore, clock, false);
   }
   previewRenderer->setJudgementCounter(
       judgeResult.judgement, previewJudgeCount[judgeResult.judgement],
@@ -718,6 +719,21 @@ void SettingsScene::consumePreviewTransactions(
     if (transaction.hasJudge)
       publishPreviewJudgement(transaction.judge,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : previewElapsedMicros);
+    const auto *timingNote =
+        previewDefinition && transaction.noteId < previewDefinition->noteCount()
+            ? &previewDefinition->note(transaction.noteId) : nullptr;
+    const bool sampleInputTiming = transaction.hasReplayEvent &&
+        judgement_indicator::recordsInputTiming(
+            transaction.replayEvent.action,
+            timingNote != nullptr &&
+                timingNote->kind == gameplay::NoteKind::LongTail &&
+                timingNote->longNoteRule == gameplay::LongNoteRule::Classic);
+    if (sampleInputTiming && previewPresentationEvents) {
+      previewPresentationEvents->onTimingSample(
+          transaction.judge,
+          makePlayfieldJudgeEventClock(transaction.replayEvent.songTimeMicros,
+                                       0, 0));
+    }
   }
 }
 

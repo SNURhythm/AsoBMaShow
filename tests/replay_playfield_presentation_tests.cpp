@@ -1708,6 +1708,7 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
                           .noteTimeMicros = 1'000,
                           .judgeTimeMicros = 1'010,
                           .judgement = PGreat,
+                          .diffMicros = 10,
                           .gauge = 0.73F};
   const PlayfieldJudgeEventClock clock{.songTimeMicros = 1'100,
                                        .visualTimeMicros = 1'050,
@@ -1720,12 +1721,30 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   expect(beforeTail.notes.size() == 2 && beforeTail.notes[0].longActive &&
              beforeTail.notes[1].longActive && !beforeTail.notes[1].judged,
          "classic long-note tail stays held before its authored release time");
+  expect(beforeTail.judgementIndicatorSampleCount == 1 &&
+             beforeTail.judgementIndicatorSamples[0].judge.Diff == 10 &&
+             beforeTail.judgementIndicatorSamples[0].visualTimeMicros == 1'050 &&
+             beforeTail.lastJudge.judgement == None && beforeTail.score == 0 &&
+             beforeTail.combo == 0,
+         "classic LN head contributes immediate timing without a score HUD judgement");
   created.presentation->releaseDueClassicLongNoteTails(2'000);
   const auto afterTail = created.presentation->captureVisualStateForTesting({});
   expect(afterTail.notes.size() == 2 && !afterTail.notes[0].longActive &&
              !afterTail.notes[1].longActive && afterTail.notes[1].judged &&
              afterTail.notes[1].playedTimeMicros == 2'000,
          "adapter releases a due classic long-note tail at its authored time");
+  ReplayEvent release = event;
+  release.action = ReplayEventAction::Release;
+  release.noteTimeMicros = 2'000;
+  release.judgeTimeMicros = 2'000;
+  release.combo = 1;
+  release.score = 2;
+  expect(created.presentation->applyReplayEvent(release, clock, true),
+         "classic LN completion still updates its score HUD");
+  const auto completed = created.presentation->captureVisualStateForTesting({});
+  expect(completed.judgementIndicatorSampleCount == 1 && completed.combo == 1 &&
+             completed.score == 2,
+         "classic LN completion does not duplicate its head timing sample");
   RenderContext context;
   const auto frame = created.presentation->renderFrame(
       context, {.serial = 1, .visualTimeMicros = 1'050}, {});
@@ -1733,6 +1752,68 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
              frame.submittedMode == PresentationMode::BuiltIn &&
              !bga.lastMissState.active,
          "classic long-note head remains lane-only and does not fan out a BGA miss");
+}
+
+void testChargeTimingSamplesAndMissFiltering() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  addLongNotePair(chart, bms_parser::LongNoteType::ChargeNote, 1, 1'000, 2'000);
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  const auto created = ReplayPlayfieldPresentation::create(
+      createInfo(chart, settings, configuration, bga));
+  expect(created.presentation != nullptr, "charge timing adapter is created");
+  if (!created.presentation) return;
+  const auto apply = [&](ReplayEventAction action, long long noteTime,
+                         Judgement judgement, long long diff, bool sample = true) {
+    (void)created.presentation->applyReplayEvent(
+        {.action = action, .lane = 1, .noteTimeMicros = noteTime,
+         .judgeTimeMicros = noteTime + diff, .judgement = judgement,
+         .diffMicros = diff},
+        {.visualTimeMicros = noteTime + diff}, sample);
+    return created.presentation->captureVisualStateForTesting({});
+  };
+  expect(apply(ReplayEventAction::Press, 1'000, PGreat, -10)
+                 .judgementIndicatorSampleCount == 1,
+         "charge head timing is recorded once");
+  const auto released = apply(ReplayEventAction::Release, 2'000, Great, 30);
+  expect(released.judgementIndicatorSampleCount == 2 &&
+             released.judgementIndicatorSamples[1].judge.Diff == 30,
+         "charge release keeps its independent measured timing sample");
+  const auto missed = apply(ReplayEventAction::Miss, 2'000, Poor, 200'000);
+  expect(missed.judgementIndicatorSampleCount == 2 &&
+             missed.lastJudge.judgement == Poor,
+         "automatic misses change the HUD without adding timing samples");
+  expect(apply(ReplayEventAction::Press, 1'000, Great, 15, false)
+                 .judgementIndicatorSampleCount == 2,
+         "replay timing sampling can be disabled without suppressing its HUD");
+}
+
+void testAutoplayReplayDoesNotSampleTiming() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  addLongNotePair(chart, bms_parser::LongNoteType::LongNote, 1, 1'000, 2'000);
+  AppSettings settings;
+  PlayfieldPresentationConfig configuration;
+  TestBga bga;
+  ReplayData replay;
+  replay.autoPlay = true;
+  auto info = createInfo(chart, settings, configuration, bga);
+  info.replayData = &replay;
+  const auto created = ReplayPlayfieldPresentation::create(std::move(info));
+  expect(created.presentation != nullptr, "autoplay timing adapter is created");
+  if (!created.presentation) return;
+  for (const int lane : {1, 2}) {
+    (void)created.presentation->applyReplayEvent(
+        {.action = ReplayEventAction::Press, .lane = lane,
+         .noteTimeMicros = 1'000, .judgement = PGreat, .combo = 1, .score = 2},
+        {.visualTimeMicros = 1'000}, true);
+  }
+  const auto state = created.presentation->captureVisualStateForTesting({});
+  expect(state.judgementIndicatorSampleCount == 0 &&
+             state.lastJudge.judgement == PGreat && state.score == 2,
+         "autoplay replay keeps its HUD without synthetic normal or classic LN timing");
 }
 
 void testReplayGraphAuthorityMatchesTheGameplayProducer() {
@@ -2655,6 +2736,8 @@ int main() {
   testSelectedReadySkinReceivesOneInitialSnapshotAndSubmitsSkinFrame();
   testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn();
   testClassicLongHeadSuppressesJudgeHudAndBgaMissClock();
+  testChargeTimingSamplesAndMissFiltering();
+  testAutoplayReplayDoesNotSampleTiming();
   testReplayGraphAuthorityMatchesTheGameplayProducer();
   testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
   testDetachedPartnerCannotReplaceActiveReplayPresentationIdentity();

@@ -167,6 +167,7 @@ void PlayfieldVisualStateStore::resetModel(
   judgementIndicatorSamples_ = {};
   judgementIndicatorSampleCount_ = 0;
   nextJudgementIndicatorSample_ = 0;
+  judgementIndicatorAverageBeforeSamples_ = {};
   combo_ = 0;
   score_ = 0;
   fastSlowMicros_ = 0;
@@ -403,6 +404,7 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
   };
 
   result.judgementIndicatorSampleCount = judgementIndicatorSampleCount_;
+  result.judgementIndicatorAverageBeforeSamples = judgementIndicatorAverageBeforeSamples_;
   const std::size_t firstSample =
       judgementIndicatorSampleCount_ ==
               judgement_indicator::kRecentTimingSampleCapacity
@@ -500,6 +502,30 @@ void PlayfieldVisualStateStore::onLaneJudge(
       .sequence = ++judgeSequence_};
 }
 
+void PlayfieldVisualStateStore::onTimingSample(
+    JudgeResult judge, PlayfieldJudgeEventClock clock) {
+  if (judge.judgement == None) {
+    return;
+  }
+  if (judgementIndicatorSampleCount_ == judgementIndicatorSamples_.size()) {
+    const auto &evicted = judgementIndicatorSamples_[nextJudgementIndicatorSample_];
+    if (evicted.judge.judgement != Kpoor) {
+      judgementIndicatorAverageBeforeSamples_.add(
+          evicted.judge.Diff, evicted.visualTimeMicros);
+    }
+  }
+  judgementIndicatorSamples_[nextJudgementIndicatorSample_] = {
+      .judge = judge,
+      .visualTimeMicros = clock.visualTimeMicros,
+  };
+  nextJudgementIndicatorSample_ =
+      (nextJudgementIndicatorSample_ + 1) %
+      judgement_indicator::kRecentTimingSampleCapacity;
+  judgementIndicatorSampleCount_ = std::min(
+      judgementIndicatorSampleCount_ + 1,
+      judgement_indicator::kRecentTimingSampleCapacity);
+}
+
 void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
                                         int score,
                                         PlayfieldJudgeEventClock clock,
@@ -511,16 +537,7 @@ void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
   lastJudge_ = judge;
   lastJudgeVisualMicros_ = clock.visualTimeMicros;
   if (recordTimingSample) {
-    judgementIndicatorSamples_[nextJudgementIndicatorSample_] = {
-        .judge = judge,
-        .visualTimeMicros = clock.visualTimeMicros,
-    };
-    nextJudgementIndicatorSample_ =
-        (nextJudgementIndicatorSample_ + 1) %
-        judgement_indicator::kRecentTimingSampleCapacity;
-    judgementIndicatorSampleCount_ = std::min(
-        judgementIndicatorSampleCount_ + 1,
-        judgement_indicator::kRecentTimingSampleCapacity);
+    onTimingSample(judge, clock);
   }
   combo_ = combo;
   score_ = score;
@@ -551,6 +568,12 @@ void PlayfieldPresentationEventFanout::onLaneReleased(int lane,
                                                        long long eventMicros) {
   state_.onLaneReleased(lane, eventMicros);
   presentation_->onLaneReleased(lane, eventMicros);
+}
+
+void PlayfieldPresentationEventFanout::onTimingSample(
+    JudgeResult judge, PlayfieldJudgeEventClock clock) {
+  state_.onTimingSample(judge, clock);
+  presentation_->onTimingSample(judge, clock);
 }
 
 void PlayfieldPresentationEventFanout::onJudge(

@@ -35,6 +35,8 @@ public:
   virtual void onLanePressed(int lane, JudgeResult judge,
                              long long eventMicros) = 0;
   virtual void onLaneReleased(int lane, long long eventMicros) = 0;
+  // Input timing can arrive before a scoring judgement (classic LN heads).
+  virtual void onTimingSample(JudgeResult, PlayfieldJudgeEventClock) {}
   virtual void onJudge(JudgeResult judge, int combo, int score,
                        PlayfieldJudgeEventClock clock,
                        bool recordTimingSample) = 0;

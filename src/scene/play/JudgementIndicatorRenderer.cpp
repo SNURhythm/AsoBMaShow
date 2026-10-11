@@ -8,7 +8,6 @@
 #include <cmath>
 
 namespace {
-constexpr long long kFadeMicros = 1800000LL;
 constexpr float kWorldWidthRatio = 0.4f;
 constexpr float kHudWidthRatio = 0.2f;
 constexpr float kHudMinWidth = 220.0f;
@@ -42,6 +41,13 @@ uint8_t alphaByte(float alpha) {
       std::clamp(static_cast<int>(std::lround(alpha * 255.0f)), 0, 255));
 }
 
+float fadeOpacity(long long sampleTimeMicros, long long currentTimeMicros) {
+  const double progress = std::clamp(
+      (static_cast<double>(currentTimeMicros) - sampleTimeMicros) / 1'800'000.0,
+      0.0, 1.0);
+  return static_cast<float>(1.0 - progress * progress);
+}
+
 Color judgementColor(Judgement judgement, uint8_t alpha) {
   switch (judgement) {
   case PGreat:
@@ -61,6 +67,14 @@ Color judgementColor(Judgement judgement, uint8_t alpha) {
     break;
   }
   return Color(255, 255, 255, alpha);
+}
+
+Color timingMarkerColor(Judgement judgement, uint8_t alpha) {
+  Color color = judgementColor(judgement, alpha);
+  color.r = static_cast<uint8_t>((color.r + 255) / 2);
+  color.g = static_cast<uint8_t>((color.g + 255) / 2);
+  color.b = static_cast<uint8_t>((color.b + 255) / 2);
+  return color;
 }
 
 void addRect(rendering::SimpleBatchRenderer &batch, float width, float height,
@@ -108,9 +122,16 @@ void JudgementIndicatorRenderer::record(const JudgeResult &judgeResult,
     return;
   }
 
+  const std::lock_guard lock(recordMutex);
   const uint64_t sequence =
       writeSequence.fetch_add(1, std::memory_order_acq_rel);
   auto &sample = samples[sequence % kMaxVisibleSamples];
+  if (sequence >= kMaxVisibleSamples &&
+      sample.judgement.load(std::memory_order_relaxed) != Kpoor) {
+    averageBeforeSamples.add(
+        sample.diffMicros.load(std::memory_order_relaxed),
+        sample.createdTimeMicros.load(std::memory_order_relaxed));
+  }
   sample.sequence.store(0, std::memory_order_release);
   sample.diffMicros.store(judgeResult.Diff, std::memory_order_relaxed);
   sample.createdTimeMicros.store(displayTimeMicros, std::memory_order_relaxed);
@@ -119,7 +140,10 @@ void JudgementIndicatorRenderer::record(const JudgeResult &judgeResult,
   sample.sequence.store(sequence + 1, std::memory_order_release);
 }
 
-void JudgementIndicatorRenderer::clear() {
+void JudgementIndicatorRenderer::clear(
+    const judgement_indicator::TimingAverageHistory &averageBeforeSamples) {
+  const std::lock_guard lock(recordMutex);
+  this->averageBeforeSamples = averageBeforeSamples;
   writeSequence.store(0, std::memory_order_release);
   for (auto &sample : samples) {
     sample.sequence.store(0, std::memory_order_release);
@@ -138,37 +162,31 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   std::array<Sample, kMaxVisibleSamples> visibleSamples{};
   size_t visibleSampleCount = 0;
-  judgement_indicator::RawAverageAccumulator average;
-  const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
-  const uint64_t firstSequence =
-      nextSequence > kMaxVisibleSamples ? nextSequence - kMaxVisibleSamples : 0;
-
-  for (uint64_t sequence = firstSequence; sequence < nextSequence; ++sequence) {
-    Sample sample;
-    if (!readSample(sequence, sample)) {
-      continue;
-    }
-    if (currentTimeMicros >= sample.createdTimeMicros &&
-        currentTimeMicros - sample.createdTimeMicros <= kFadeMicros &&
-        visibleSampleCount < visibleSamples.size()) {
-      visibleSamples[visibleSampleCount++] = sample;
-    }
-  }
-
-  for (uint64_t sequence = nextSequence; sequence > firstSequence;) {
-    --sequence;
-    Sample sample;
-    if (!readSample(sequence, sample)) {
-      continue;
-    }
-    if (sample.judgement == Kpoor) {
-      continue;
-    }
-    average.add(sample.diffMicros);
-    if (average.count() >= kAverageSampleCount) {
-      break;
+  judgement_indicator::ExponentialAverageAccumulator average;
+  {
+    const std::lock_guard lock(recordMutex);
+    average = averageBeforeSamples.at(currentTimeMicros);
+    const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
+    const uint64_t firstSequence =
+        nextSequence > kMaxVisibleSamples ? nextSequence - kMaxVisibleSamples : 0;
+    for (uint64_t sequence = firstSequence; sequence < nextSequence; ++sequence) {
+      Sample sample;
+      if (readSample(sequence, sample) &&
+          sample.createdTimeMicros <= currentTimeMicros) {
+        visibleSamples[visibleSampleCount++] = sample;
+      }
     }
   }
+  // Rebuild from eligible timestamps: arrivals need not be in timestamp order.
+  for (size_t index = 0; index < visibleSampleCount; ++index) {
+    const auto &sample = visibleSamples[index];
+    if (sample.judgement != Kpoor) {
+      average.add(sample.diffMicros, sample.createdTimeMicros);
+    }
+  }
+  const long long averageMicros = average.value();
+  const float averageAlpha = average.hasSamples()
+      ? fadeOpacity(average.latestSampleTimeMicros(), currentTimeMicros) : 0.0f;
 
   const bool currentHudMode = geometry.hudModeOverride.value_or(isHudMode());
   const long long currentRangeMicros =
@@ -177,77 +195,74 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   const float barY = indicatorLayout.centerY - indicatorLayout.barHeight * 0.5f;
   const float markerY =
       indicatorLayout.centerY - indicatorLayout.markerHeight * 0.5f;
-
-  addRect(batch, indicatorLayout.width,
-          indicatorLayout.barHeight + (currentHudMode ? 2.0f : 0.026f),
-          indicatorLayout.x, barY - (currentHudMode ? 1.0f : 0.013f),
-          Color(0, 0, 0, currentHudMode ? 132 : 118));
+  // Keep the horizontal reference subtle so the vertical hit markers stand out.
+  addRect(batch, indicatorLayout.width, indicatorLayout.barHeight,
+          indicatorLayout.x, barY, Color(8, 12, 18, 24));
   drawSegment(batch, -currentRangeMicros, timingWindowEarly(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 118));
+              judgementColor(Poor, 52));
   drawSegment(batch, timingWindowEarly(Bad), timingWindowEarly(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 126));
+              judgementColor(Bad, 60));
   drawSegment(batch, timingWindowEarly(Good), timingWindowEarly(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 134));
+              judgementColor(Good, 68));
   drawSegment(batch, timingWindowEarly(Great), timingWindowEarly(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 142));
+              judgementColor(Great, 76));
   drawSegment(batch, timingWindowEarly(PGreat), timingWindowLate(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(PGreat, 170));
+              judgementColor(PGreat, 88));
   drawSegment(batch, timingWindowLate(PGreat), timingWindowLate(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 142));
+              judgementColor(Great, 76));
   drawSegment(batch, timingWindowLate(Great), timingWindowLate(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 134));
+              judgementColor(Good, 68));
   drawSegment(batch, timingWindowLate(Good), timingWindowLate(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 126));
+              judgementColor(Bad, 60));
   drawSegment(batch, timingWindowLate(Bad), currentRangeMicros,
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 118));
+              judgementColor(Poor, 52));
 
-  const float centerTickWidth = indicatorLayout.markerWidth * 0.8f;
-  addRect(batch, centerTickWidth, indicatorLayout.markerHeight * 0.64f,
-          indicatorLayout.x + indicatorLayout.width * 0.5f -
-              centerTickWidth * 0.5f,
-          indicatorLayout.centerY - indicatorLayout.markerHeight * 0.32f,
-          Color(255, 255, 255, currentHudMode ? 118 : 105));
+  const float centerX = indicatorLayout.x + indicatorLayout.width * 0.5f;
+  const float centerWidth = indicatorLayout.markerWidth * 1.65f;
+  const float centerHeight =
+      indicatorLayout.markerHeight + indicatorLayout.markerWidth * 2.0f;
+  addRect(batch, centerWidth, centerHeight,
+          centerX - centerWidth * 0.5f,
+          indicatorLayout.centerY - centerHeight * 0.5f,
+          Color(255, 255, 255, 245));
 
   for (size_t i = 0; i < visibleSampleCount; ++i) {
     const auto &sample = visibleSamples[i];
-    long long ageMicros = currentTimeMicros - sample.createdTimeMicros;
-    if (ageMicros < 0) {
-      ageMicros = 0;
-    }
-    const float alpha =
-        1.0f - static_cast<float>(ageMicros) / static_cast<float>(kFadeMicros);
-    if (alpha <= 0.0f) {
+    const uint8_t alpha = alphaByte(
+        fadeOpacity(sample.createdTimeMicros, currentTimeMicros));
+    if (alpha == 0) {
       continue;
     }
     const float x =
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
-            judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
+            timingMarkerColor(sample.judgement, alpha));
   }
 
-  if (average.count() > 0) {
+  if (alphaByte(averageAlpha) > 0) {
     const float x =
-        offsetToX(average.value(), currentRangeMicros, indicatorLayout);
-    const float averageWidth = indicatorLayout.markerWidth * 2.4f;
-    const float averagePad = currentHudMode ? 3.0f : 0.04f;
-    addRect(batch, averageWidth,
-            indicatorLayout.markerHeight + averagePad * 2.0f,
-            x - averageWidth * 0.5f, markerY - averagePad,
-            Color(0, 0, 0, 205));
-    addRect(batch, averageWidth * 0.44f,
-            indicatorLayout.markerHeight + averagePad,
-            x - averageWidth * 0.22f, markerY - averagePad * 0.5f,
-            Color(255, 245, 140, 240));
+        offsetToX(averageMicros, currentRangeMicros, indicatorLayout);
+    // Keep the average below the history, with a distinct shape.
+    const float down = currentHudMode || geometry.verticalDirection < 0.0f
+                           ? 1.0f : -1.0f;
+    const float tipY = indicatorLayout.centerY +
+        down * (indicatorLayout.markerHeight * 0.5f +
+                indicatorLayout.markerWidth * 2.0f);
+    const float pointerSize = indicatorLayout.markerWidth * 2.0f;
+    batch.addTriangle(x, tipY, x - pointerSize,
+                      tipY + down * pointerSize, x + pointerSize,
+                      tipY + down * pointerSize,
+                      Color(255, 235, 110, alphaByte(averageAlpha)).toABGR());
   }
 }
 
@@ -304,16 +319,18 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
     indicatorLayout.x =
         (static_cast<float>(rendering::window_width) - indicatorLayout.width) *
         0.5f;
-    indicatorLayout.barHeight = 5.0f;
-    indicatorLayout.markerHeight = 18.0f;
-    indicatorLayout.markerWidth = 2.0f;
+    indicatorLayout.barHeight = 7.0f;
+    indicatorLayout.markerHeight = 22.0f;
+    indicatorLayout.markerWidth = 3.0f;
     indicatorLayout.centerY =
         static_cast<float>(rendering::window_height) * (1.0f - normalizedY);
+    const float verticalMargin = indicatorLayout.markerHeight * 0.5f +
+                                 indicatorLayout.markerWidth * 4.0f;
     indicatorLayout.centerY =
         std::clamp(indicatorLayout.centerY,
-                   indicatorLayout.markerHeight * 0.5f,
+                   verticalMargin,
                    static_cast<float>(rendering::window_height) -
-                       indicatorLayout.markerHeight * 0.5f);
+                       verticalMargin);
     return indicatorLayout;
   }
 
@@ -325,12 +342,20 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
   const float verticalDirection =
       geometry.verticalDirection < 0.0f ? -1.0f : 1.0f;
   indicatorLayout.centerY = geometry.judgeY + verticalDirection * laneHeight * normalizedY;
+  const bool skinPixels = geometry.verticalDirection < 0.0f;
   indicatorLayout.barHeight =
-      std::max(0.02f, geometry.noteRenderHeight * 0.08f);
+      std::max(skinPixels ? 3.0f : 0.04f, geometry.noteRenderHeight * 0.16f);
   indicatorLayout.markerHeight =
-      std::max(0.16f, geometry.noteRenderHeight * 0.5f);
+      std::max(skinPixels ? 12.0f : 0.22f, geometry.noteRenderHeight * 0.7f);
   indicatorLayout.markerWidth =
-      std::max(0.01f, geometry.noteRenderWidth * 0.014f);
+      std::max(skinPixels ? 2.0f : 0.02f, geometry.noteRenderWidth * 0.025f);
+  if (skinPixels) {
+    const float windowHeight = static_cast<float>(rendering::window_height);
+    const float verticalMargin = std::min(windowHeight * 0.5f,
+        indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f);
+    indicatorLayout.centerY = std::clamp(
+        indicatorLayout.centerY, verticalMargin, windowHeight - verticalMargin);
+  }
   return indicatorLayout;
 }
 

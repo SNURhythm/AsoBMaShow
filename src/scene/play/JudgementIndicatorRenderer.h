@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <utility>
 
@@ -41,7 +42,8 @@ public:
   void updateTimingWindows(
       const std::map<Judgement, std::pair<long long, long long>> &windows);
   void record(const JudgeResult &judgeResult, long long displayTimeMicros);
-  void clear();
+  void clear(const judgement_indicator::TimingAverageHistory &
+                 averageBeforeSamples = {});
   void render(rendering::SimpleBatchRenderer &batch, long long currentTimeMicros,
               const Geometry &geometry);
 
@@ -54,7 +56,6 @@ public:
 #endif
 
 private:
-  static constexpr size_t kAverageSampleCount = 20;
   static constexpr size_t kMaxVisibleSamples =
       judgement_indicator::kRecentTimingSampleCapacity;
 
@@ -94,6 +95,9 @@ private:
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
   std::atomic<long long> rangeMicros{judgement_indicator::rangeMicros(
       judgement_indicator::kDefaultRangeMilliseconds)};
+  // Snapshot the evicted prefix and retained input history coherently.
+  std::mutex recordMutex;
+  judgement_indicator::TimingAverageHistory averageBeforeSamples;
   std::array<AtomicSample, kMaxVisibleSamples> samples;
   std::atomic<uint64_t> writeSequence{0};
   std::atomic_bool enabled{true};

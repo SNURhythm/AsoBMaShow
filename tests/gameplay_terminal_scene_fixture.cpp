@@ -11,6 +11,7 @@
 #include "input/RealtimePhysicalInputRouter.h"
 #include "input/AndroidRealtimeInputGate.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
+#include "scene/play/JudgementTimingSample.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/StartSelectControl.h"
@@ -167,12 +168,20 @@ struct FixtureRealtimeSession {
 
 struct FixturePresentation {
   std::unordered_map<ChartVisualId, NotePresentationState> noteStates;
+  std::unique_ptr<PlayfieldVisualStateStore> timingState;
   void setNoteState(NotePresentationState state) {
     noteStates.insert_or_assign(state.id, state);
   }
   void onLanePressed(int, JudgeResult, long long) {}
   void onLaneReleased(int, long long) {}
-  void onLaneJudge(int, JudgeResult, int, int, PlayfieldJudgeEventClock, bool) {}
+  void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) {
+    if (timingState) timingState->onTimingSample(judge, clock);
+  }
+  void onLaneJudge(int lane, JudgeResult judge, int combo, int score,
+                   PlayfieldJudgeEventClock clock, bool recordTimingSample) {
+    if (timingState)
+      timingState->onLaneJudge(lane, judge, combo, score, clock, recordTimingSample);
+  }
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &) {}
   void clearLiveTouchPoints() {}
 };
@@ -1321,6 +1330,114 @@ void testPracticeTerminalExceptions() {
   }
 }
 
+bms_parser::LongNote *addTimingLongNote(GamePlayScene &scene,
+                                        bms_parser::LongNoteType type) {
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  headTimeline->Timing = 1'000'000;
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  tailTimeline->Timing = 1'500'000;
+  auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+  auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav, type);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(1, head);
+  tailTimeline->SetNote(1, tail);
+  auto &timelines = scene.chart->Measures.front()->TimeLines;
+  timelines.insert(timelines.begin(), {headTimeline, tailTimeline});
+  scene.presentationEventFanout->timingState =
+      std::make_unique<PlayfieldVisualStateStore>(
+          buildPlayfieldChartVisualModel(*scene.chart, 0));
+  return head;
+}
+
+void testLegacyLongNoteTimingSamples() {
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                          bms_parser::LongNoteType::ChargeNote}) {
+    GamePlayScene scene;
+    auto *head = addTimingLongNote(scene, type);
+    auto &store = *scene.presentationEventFanout->timingState;
+    scene.useProductionJudging = true;
+    scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+    const bool classic = type == bms_parser::LongNoteType::LongNote;
+    const auto judge = scene.pressNote(head, 990'000, nullptr, 990'000, false);
+    const auto pressed = store.capture({});
+    require(judge.judgement == PGreat &&
+                pressed.judgementIndicatorSampleCount == 1 &&
+                pressed.judgementIndicatorSamples[0].judge.Diff == -10'000 &&
+                (pressed.lastJudge.judgement == None) == classic &&
+                scene.state->getScore() == (classic ? 0 : 2),
+            "legacy LN head records timing immediately without changing score semantics");
+    scene.releaseNote(head->Tail, 1'400'000, nullptr, 1'400'000, false);
+    const auto released = store.capture({});
+    require(released.judgementIndicatorSampleCount == (classic ? 1U : 2U) &&
+                released.lastJudge.judgement != None,
+            "legacy release samples charge timing but does not duplicate a classic head");
+  }
+}
+
+void testRealtimeTimingSamplesFollowInputEvents() {
+  GamePlayScene scene;
+  auto *head = addTimingLongNote(scene, bms_parser::LongNoteType::LongNote);
+  auto *tail = head->Tail;
+  auto &store = *scene.presentationEventFanout->timingState;
+  scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  auto &session = *scene.realtimeGameplaySession;
+  session.notes = {head, tail};
+  session.worker = std::make_unique<FixtureWorker>();
+  auto &snapshot = session.worker->snapshot;
+  snapshot.gaugeState = scene.state->gaugeSnapshot();
+  const auto publish = [&](gameplay::GameplayReplayAction action,
+                           gameplay::NoteId noteId, JudgeResult judge,
+                           bool hasJudge, long long eventMicros) {
+    ++snapshot.generation;
+    snapshot.transactionCount = 1;
+    snapshot.transactions[0] = {
+        .sequence = snapshot.generation,
+        .result = {.noteId = noteId,
+                   .hasJudge = hasJudge,
+                   .judge = judge,
+                   .hasReplayEvent = true,
+                   .replayEvent = {.action = action,
+                                   .noteId = noteId,
+                                   .lane = 1,
+                                   .songTimeMicros = eventMicros,
+                                   .judgement = judge.judgement,
+                                   .diffMicros = judge.Diff}}};
+    scene.syncRealtimeGameplaySnapshotFromWorker();
+    return store.capture({});
+  };
+  const auto headState = publish(gameplay::GameplayReplayAction::Press, 0,
+                                  JudgeResult(PGreat, -10'000), false, 990'000);
+  require(headState.judgementIndicatorSampleCount == 1 &&
+              headState.judgementIndicatorSamples[0].judge.Diff == -10'000 &&
+              headState.judgementIndicatorSamples[0].visualTimeMicros == 990'000 &&
+              headState.lastJudge.judgement == None,
+          "realtime classic LN head publishes timing before its score judgement");
+  const auto tailState = publish(gameplay::GameplayReplayAction::Release, 1,
+                                  JudgeResult(Bad, -100'000), true, 1'400'000);
+  require(tailState.judgementIndicatorSampleCount == 1 &&
+              tailState.lastJudge.judgement == Bad,
+          "realtime classic LN release updates the HUD without resampling its combined error");
+  const auto missState = publish(gameplay::GameplayReplayAction::Miss, 0,
+                                  JudgeResult(Poor, 180'000), true, 1'600'000);
+  require(missState.judgementIndicatorSampleCount == 1 &&
+              missState.lastJudge.judgement == Poor,
+          "automatic misses update the HUD without inventing input timing");
+  scene.options.autoPlay = true;
+  const auto autoState = publish(gameplay::GameplayReplayAction::Press, 0,
+                                  JudgeResult(PGreat, 0), false, 2'000'000);
+  require(autoState.judgementIndicatorSampleCount == 1,
+          "autoplay does not inject perfect timing into the manual input history");
+  scene.options.autoPlay = false;
+  scene.options.replayData = std::make_shared<ReplayData>();
+  scene.options.replayData->autoPlay = true;
+  const auto replayState = publish(gameplay::GameplayReplayAction::Press, 0,
+                                    JudgeResult(PGreat, 0), false, 2'100'000);
+  require(replayState.judgementIndicatorSampleCount == 1,
+          "recorded autoplay does not inject synthetic timing during replay");
+}
+
 void testRealtimeTerminalRouting() {
   for (const bool practice : {false, true}) {
     GamePlayScene scene;
@@ -2376,6 +2493,8 @@ void testBackgroundGameplayProgress() {
 }
 
 int main(int argc, char **argv) {
+  testLegacyLongNoteTimingSamples();
+  testRealtimeTimingSamplesFollowInputEvents();
   for (const bool ios : {false, true}) {
     fixtureIos = ios;
     fixtureAndroid = !ios;

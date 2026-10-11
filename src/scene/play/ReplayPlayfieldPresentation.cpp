@@ -2,6 +2,7 @@
 #include "ReplayPlayfieldPresentation.h"
 
 #include "BeatorajaHiSpeedChart.h"
+#include "JudgementTimingSample.h"
 
 #include "BuiltInPlayfieldPresentation.h"
 #include "../../ReplayGhostUtils.h"
@@ -71,13 +72,14 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     std::optional<skin::RuntimeSkinConfigurationSelection>
         runtimeSkinConfigurationSelection,
     std::array<SkinJudgeWindow, 5> judgeWindows,
-    std::size_t gaugeHistoryCapacity)
+    std::size_t gaugeHistoryCapacity, bool replayAutoPlay)
     : chartModel_(std::move(chartModel)), state_(std::move(state)),
       projection_(std::move(projection)), coordinator_(std::move(coordinator)),
       builtIn_(builtIn), authority_(std::move(authority)),
       configuration_(std::move(configuration)), hispeed_(std::move(hispeed)),
       runtimeSkinConfigurationSelection_(
-          std::move(runtimeSkinConfigurationSelection)) {
+          std::move(runtimeSkinConfigurationSelection)),
+      replayAutoPlay_(replayAutoPlay) {
   if (coordinator_ == nullptr || builtIn_ == nullptr) {
     throw std::invalid_argument(
         "ReplayPlayfieldPresentation requires a coordinator and BMSRenderer");
@@ -280,7 +282,8 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
                        .laneCoverEnabled = creation.configuration.laneCoverEnabled},
                       gameplay_hispeed::summarizeChartBpm(creation.chart)),
                   std::move(runtimeSkinConfigurationSelection),
-                  graphJudgeWindows, graphGaugeHistoryCapacity)),
+                  graphJudgeWindows, graphGaugeHistoryCapacity,
+                  creation.replayData != nullptr && creation.replayData->autoPlay)),
           .failure = std::nullopt};
 }
 
@@ -543,9 +546,14 @@ void ReplayPlayfieldPresentation::markReplayMissedNote(
 
 bool ReplayPlayfieldPresentation::applyReplayEvent(
     const ReplayEvent &event, const PlayfieldJudgeEventClock &clock,
-    bool /*recordTimingSample*/) {
+    bool recordTimingSample) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   const ChartVisualNote *resolvedGraphNote = replayNote(event);
+  const bool sampleInputTiming = recordTimingSample && !replayAutoPlay_ &&
+      judgement_indicator::recordsInputTiming(
+          event.action, resolvedGraphNote != nullptr &&
+              resolvedGraphNote->kind == ChartVisualNoteKind::LongTail &&
+              isClassicLongNote(*resolvedGraphNote));
   const int keyMode = chartModel_->keyCount;
   const bool beatoraja = authority_.gaugeRules.ruleset == GameplayRuleset::Beatoraja;
   const bool pms = beatoraja && (keyMode == 9 || keyMode == 18);
@@ -571,7 +579,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
       skinGameplayGraphDirty_ = true;
     }
     events_->onLaneJudge(event.lane, recordedJudge, event.combo, event.score,
-                         clock, event.action != ReplayEventAction::Miss);
+                         clock, sampleInputTiming);
     setReplayGauge(event, resolvedGraphNote);
     return true;
   };
@@ -627,6 +635,9 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
       events_->onLanePressed(event.lane, recordedJudge,
                              clock.visualTimeMicros);
       return appliedHud;
+    }
+    if (sampleInputTiming) {
+      events_->onTimingSample(recordedJudge, clock);
     }
     events_->onLanePressed(event.lane, recordedJudge, clock.visualTimeMicros);
     return false;

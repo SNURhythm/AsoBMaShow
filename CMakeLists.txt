@@ -7092,6 +7092,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     add_executable(gameplay_terminal_scene_tests
         ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        src/audio/GameplayBgaMissStateTracker.cpp
+        src/scene/play/PlayfieldChartVisualModel.cpp
+        src/scene/play/PlayfieldVisualState.cpp
         src/settings/AudioVideoSettings.cpp
         src/AtomicFile.cpp
         src/ArchiveFile.cpp

@@ -483,6 +483,8 @@ struct PlayfieldVisualState {
              judgement_indicator::kRecentTimingSampleCapacity>
       judgementIndicatorSamples{};
   std::size_t judgementIndicatorSampleCount = 0;
+  // Seed for rebuilding the running average before the retained marker history.
+  judgement_indicator::TimingAverageHistory judgementIndicatorAverageBeforeSamples;
   GameplayBgaMissState bgaMiss;
   int combo = 0;
   int score = 0;
@@ -575,6 +577,7 @@ public:
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;
   void onLaneReleased(int lane, long long eventMicros) override;
+  void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) override;
   void onJudge(JudgeResult judge, int combo, int score,
                PlayfieldJudgeEventClock clock,
                bool recordTimingSample) override;
@@ -639,6 +642,7 @@ private:
       judgementIndicatorSamples_{};
   std::size_t judgementIndicatorSampleCount_ = 0;
   std::size_t nextJudgementIndicatorSample_ = 0;
+  judgement_indicator::TimingAverageHistory judgementIndicatorAverageBeforeSamples_;
   int combo_ = 0;
   int score_ = 0;
   int fastSlowMicros_ = 0;
@@ -653,6 +657,7 @@ public:
                                    IPlayfieldPresentationEvents &presentation);
 
   void setPresentationSink(IPlayfieldPresentationEvents &presentation) noexcept;
+  void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) override;
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;
   void onLaneReleased(int lane, long long eventMicros) override;

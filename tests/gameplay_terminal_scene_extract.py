@@ -84,6 +84,8 @@ def main():
         "bool longNoteTailJudgedBeforeTiming(",
         "void markReplayMissedNote(",
         "void markLongNoteMissed(",
+        "bool shouldRecordInputTiming(",
+        "bool isClassicLongNoteTail(",
         "JudgeResult normalizeLongNoteReleaseJudge(",
         "JudgeResult judgeClassicLongNoteRelease(",
         "ReplayEventAction\nreplayActionFromRealtime(",

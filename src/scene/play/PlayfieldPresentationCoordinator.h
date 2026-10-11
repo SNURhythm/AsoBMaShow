@@ -88,6 +88,7 @@ public:
   void cancelTextInput() noexcept;
   void onLanePressed(int, JudgeResult, long long) override;
   void onLaneReleased(int, long long) override;
+  void onTimingSample(JudgeResult, PlayfieldJudgeEventClock) override;
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) override;
   void reset() override;
   void refreshGeometry() override;

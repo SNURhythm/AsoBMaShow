@@ -562,6 +562,7 @@ public:
   void onLanePressed(int lane, JudgeResult judge,
                      long long time) override;
   void onLaneReleased(int lane, long long time) override;
+  void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) override;
   void onJudge(JudgeResult judgeResult, int combo, int score,
                PlayfieldJudgeEventClock clock,
                bool recordTimingSample = true) override;
