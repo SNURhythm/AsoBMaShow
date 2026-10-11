@@ -500,6 +500,23 @@ void PlayfieldVisualStateStore::onLaneJudge(
       .sequence = ++judgeSequence_};
 }
 
+void PlayfieldVisualStateStore::onTimingSample(
+    JudgeResult judge, PlayfieldJudgeEventClock clock) {
+  if (judge.judgement == None) {
+    return;
+  }
+  judgementIndicatorSamples_[nextJudgementIndicatorSample_] = {
+      .judge = judge,
+      .visualTimeMicros = clock.visualTimeMicros,
+  };
+  nextJudgementIndicatorSample_ =
+      (nextJudgementIndicatorSample_ + 1) %
+      judgement_indicator::kRecentTimingSampleCapacity;
+  judgementIndicatorSampleCount_ = std::min(
+      judgementIndicatorSampleCount_ + 1,
+      judgement_indicator::kRecentTimingSampleCapacity);
+}
+
 void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
                                         int score,
                                         PlayfieldJudgeEventClock clock,
@@ -511,16 +528,7 @@ void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
   lastJudge_ = judge;
   lastJudgeVisualMicros_ = clock.visualTimeMicros;
   if (recordTimingSample) {
-    judgementIndicatorSamples_[nextJudgementIndicatorSample_] = {
-        .judge = judge,
-        .visualTimeMicros = clock.visualTimeMicros,
-    };
-    nextJudgementIndicatorSample_ =
-        (nextJudgementIndicatorSample_ + 1) %
-        judgement_indicator::kRecentTimingSampleCapacity;
-    judgementIndicatorSampleCount_ = std::min(
-        judgementIndicatorSampleCount_ + 1,
-        judgement_indicator::kRecentTimingSampleCapacity);
+    onTimingSample(judge, clock);
   }
   combo_ = combo;
   score_ = score;
@@ -551,6 +559,12 @@ void PlayfieldPresentationEventFanout::onLaneReleased(int lane,
                                                        long long eventMicros) {
   state_.onLaneReleased(lane, eventMicros);
   presentation_->onLaneReleased(lane, eventMicros);
+}
+
+void PlayfieldPresentationEventFanout::onTimingSample(
+    JudgeResult judge, PlayfieldJudgeEventClock clock) {
+  state_.onTimingSample(judge, clock);
+  presentation_->onTimingSample(judge, clock);
 }
 
 void PlayfieldPresentationEventFanout::onJudge(

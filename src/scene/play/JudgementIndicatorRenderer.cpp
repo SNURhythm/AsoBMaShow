@@ -139,6 +139,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   std::array<Sample, kMaxVisibleSamples> visibleSamples{};
   size_t visibleSampleCount = 0;
   judgement_indicator::RawAverageAccumulator average;
+  float averageAlpha = 0.0f;
   const uint64_t nextSequence = writeSequence.load(std::memory_order_acquire);
   const uint64_t firstSequence =
       nextSequence > kMaxVisibleSamples ? nextSequence - kMaxVisibleSamples : 0;
@@ -149,22 +150,22 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
       continue;
     }
     if (currentTimeMicros >= sample.createdTimeMicros &&
-        currentTimeMicros - sample.createdTimeMicros <= kFadeMicros &&
+        currentTimeMicros - sample.createdTimeMicros < kFadeMicros &&
         visibleSampleCount < visibleSamples.size()) {
       visibleSamples[visibleSampleCount++] = sample;
     }
   }
 
-  for (uint64_t sequence = nextSequence; sequence > firstSequence;) {
-    --sequence;
-    Sample sample;
-    if (!readSample(sequence, sample)) {
-      continue;
-    }
+  // Average the same recent input history that is visible on the bar.
+  for (size_t index = visibleSampleCount; index > 0;) {
+    const auto &sample = visibleSamples[--index];
     if (sample.judgement == Kpoor) {
       continue;
     }
     average.add(sample.diffMicros);
+    averageAlpha = std::max(averageAlpha,
+        1.0f - static_cast<float>(currentTimeMicros - sample.createdTimeMicros) /
+                   static_cast<float>(kFadeMicros));
     if (average.count() >= kAverageSampleCount) {
       break;
     }
@@ -231,7 +232,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
             judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
   }
 
-  if (average.count() > 0) {
+  if (average.count() > 0 && averageAlpha > 0.0f) {
     const float x =
         offsetToX(average.value(), currentRangeMicros, indicatorLayout);
     // Keep the average below the history, with a distinct shape.
@@ -244,7 +245,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
     batch.addTriangle(x, tipY, x - pointerSize,
                       tipY + down * pointerSize, x + pointerSize,
                       tipY + down * pointerSize,
-                      Color(255, 235, 110, 255).toABGR());
+                      Color(255, 235, 110, alphaByte(averageAlpha)).toABGR());
   }
 }
 

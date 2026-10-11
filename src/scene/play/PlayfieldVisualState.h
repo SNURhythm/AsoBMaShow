@@ -575,6 +575,7 @@ public:
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;
   void onLaneReleased(int lane, long long eventMicros) override;
+  void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) override;
   void onJudge(JudgeResult judge, int combo, int score,
                PlayfieldJudgeEventClock clock,
                bool recordTimingSample) override;
@@ -653,6 +654,7 @@ public:
                                    IPlayfieldPresentationEvents &presentation);
 
   void setPresentationSink(IPlayfieldPresentationEvents &presentation) noexcept;
+  void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) override;
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;
   void onLaneReleased(int lane, long long eventMicros) override;

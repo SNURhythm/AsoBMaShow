@@ -947,6 +947,62 @@ public:
   }
 };
 
+void verifyJudgementIndicatorAverageUsesRecentInput(const RenderTarget &target) {
+  Judge judge(3);
+  JudgementIndicatorRenderer indicator(judge.timingWindows);
+  indicator.configure(true, 0.5F, 1.0F, true, 180);
+  const auto render = [&](long long now) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::SimpleBatchRenderer batch;
+    batch.setSubmitView(rendering::ui_view);
+    batch.begin();
+    indicator.render(batch, now, {});
+    batch.flush();
+    return readPixels(target);
+  };
+  const auto empty = render(2'000'000);
+  indicator.record(JudgeResult(Great, -60'000), 0);
+  expect(render(2'000'000) == empty,
+         "the average disappears when all timing samples have expired");
+  expect(render(1'800'000) == empty,
+         "the average expires exactly with the vertical markers");
+  indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  const auto withOldSample = render(2'000'000);
+  indicator.clear();
+  indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  const auto fresh = render(2'000'000);
+  expect(withOldSample == fresh,
+         "expired samples cannot pull the average away from current hits");
+  indicator.record(JudgeResult(Great, -60'000), 3'000'000);
+  expect(render(2'000'000) == fresh,
+         "future timing samples cannot move the current average");
+
+  indicator.clear();
+  indicator.record(JudgeResult(Great, 60'000), 2'000'000);
+  const auto faded = render(2'900'000);
+  // The pointer lies below the vertical hit markers in this centered HUD.
+  const auto pointerBrightness = [&](const std::vector<std::uint8_t> &pixels) {
+    int brightest = 0;
+    for (unsigned y = 370; y < 380; ++y) {
+      for (unsigned x = 0; x < kDrawableWidth; ++x) {
+        const auto offset = (y * kDrawableWidth + x) * 4U;
+        brightest = std::max(brightest,
+            static_cast<int>(pixels[offset]) - empty[offset]);
+      }
+    }
+    return brightest;
+  };
+  const int freshBrightness = pointerBrightness(fresh);
+  const int fadedBrightness = pointerBrightness(faded);
+  expect(freshBrightness > 100 && fadedBrightness > freshBrightness / 4 &&
+             fadedBrightness < freshBrightness * 3 / 4,
+         "the average pointer fades during a gap instead of staying opaque");
+  indicator.record(JudgeResult(Kpoor, -150'000), 2'900'000);
+  expect(pointerBrightness(render(2'900'000)) == fadedBrightness,
+         "an empty hit does not refresh the average pointer");
+}
+
 void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
   PresentationStateFixture fixture;
   PlayfieldPresentationEventFanout fanout(fixture.store, fixture.renderer);
@@ -968,6 +1024,27 @@ void verifyPreparedFrameRetainsRecentJudgementIndicatorSamples() {
          "the multi-judge built-in frame prepares successfully");
   expect(fixture.renderer.judgementIndicatorSampleCountForTesting() == 3,
          "preparing a captured frame retains every recent judgement sample");
+}
+
+void verifyTimingOnlySampleDoesNotBecomeAHudJudgement() {
+  PresentationStateFixture fixture;
+  PlayfieldPresentationEventFanout fanout(fixture.store, fixture.renderer);
+  fanout.onTimingSample(JudgeResult(Great, -25'000),
+                        {.songTimeMicros = 1'400'000,
+                         .visualTimeMicros = 1'390'000,
+                         .bgaTimeMicros = 1'380'000});
+  expect(fixture.renderer.judgementIndicatorSampleCountForTesting() == 1 &&
+             fixture.renderer.pendingJudgementForTesting().judgement == None,
+         "timing-only input reaches the renderer without changing HUD text");
+  const auto frame = fixture.input(72);
+  expect(frame.state.judgementIndicatorSampleCount == 1 &&
+             frame.state.lastJudge.judgement == None,
+         "captured timing-only input does not create a scoring judgement");
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.renderer.judgementIndicatorSampleCountForTesting() == 1 &&
+             fixture.renderer.pendingJudgementForTesting().judgement == None,
+         "restoring timing history cannot turn an LN head into HUD feedback");
 }
 
 void verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText() {
@@ -3605,6 +3682,7 @@ int main() {
 
   if (failures == 0) {
     try {
+      verifyJudgementIndicatorAverageUsesRecentInput(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);
       verifySerialOrderingAndReset();
@@ -3662,6 +3740,7 @@ int main() {
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
       verifyBuiltInLiftMovesJudgementAndScrollOrigin(target);
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
+      verifyTimingOnlySampleDoesNotBecomeAHudJudgement();
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();

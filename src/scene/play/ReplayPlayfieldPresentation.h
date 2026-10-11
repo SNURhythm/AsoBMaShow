@@ -137,7 +137,7 @@ private:
                               PlayfieldPresentationConfig,
                               gameplay_hispeed::State,
                               std::optional<skin::RuntimeSkinConfigurationSelection>,
-                              std::array<SkinJudgeWindow, 5>, std::size_t);
+                              std::array<SkinJudgeWindow, 5>, std::size_t, bool);
 
   [[nodiscard]] const ChartVisualNote *replayNote(const ReplayEvent &) const;
   [[nodiscard]] NotePresentationState *noteState(ChartVisualId) noexcept;
@@ -166,6 +166,7 @@ private:
   SkinGameplayGraphAccumulator skinGameplayGraph_;
   std::optional<GameplayScoreState> replayGraphGaugeState_;
   bool skinGameplayGraphDirty_ = false;
+  bool replayAutoPlay_ = false;
   std::unordered_map<ChartVisualId, long long> timelineTimeById_;
   std::unordered_map<ChartVisualId, const ChartVisualNote *> notesById_;
   std::unordered_map<ReplayNoteLookupKey, const ChartVisualNote *,

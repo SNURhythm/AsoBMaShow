@@ -1781,6 +1781,11 @@ void BMSRenderer::onLaneReleased(int lane, long long time) {
   laneState.isPressed.store(false, std::memory_order_relaxed);
   laneState.lastStateTime.store(time, std::memory_order_release);
 }
+void BMSRenderer::onTimingSample(JudgeResult judge,
+                                  PlayfieldJudgeEventClock clock) {
+  judgementIndicator.record(judge, clock.visualTimeMicros);
+}
+
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
                           PlayfieldJudgeEventClock clock,
                           bool recordTimingSample) {
@@ -1789,7 +1794,7 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     return;
   }
   if (recordTimingSample) {
-    judgementIndicator.record(judgeResult, displayTimeMicros);
+    onTimingSample(judgeResult, clock);
   }
   if (renderHud && judgeText != nullptr && scoreText != nullptr) {
     pendingJudge.store(static_cast<int>(judgeResult.judgement),
@@ -1820,11 +1825,10 @@ void BMSRenderer::synchronizeCapturedJudgementHud(
       const auto &sample = capturedState.judgementIndicatorSamples[index];
       if (sample.judge.judgement != None &&
           sample.visualTimeMicros != kPlayfieldTimestampOff) {
-        onJudge(sample.judge, capturedState.combo, capturedState.score,
-                {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
-                 .visualTimeMicros = sample.visualTimeMicros,
-                 .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
-                true);
+        onTimingSample(sample.judge,
+                       {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+                        .visualTimeMicros = sample.visualTimeMicros,
+                        .bgaTimeMicros = capturedState.clock.bgaTimeMicros});
       }
     }
   }

@@ -16,6 +16,7 @@
 #include "GamePlayStartup.h"
 #include "GuidedAccessButtonCue.h"
 #include "GamePlayTiming.h"
+#include "JudgementTimingSample.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
 #include "../../ArchiveFile.h"
@@ -715,6 +716,19 @@ void addRingArc(rendering::SimpleBatchRenderer &batch, float cx, float cy,
     previousX = x;
     previousY = y;
   }
+}
+
+bool shouldRecordInputTiming(const StartOptions &options) {
+  return !options.autoPlay &&
+         (options.replayData == nullptr || !options.replayData->autoPlay);
+}
+
+bool isClassicLongNoteTail(const bms_parser::Note *note,
+                           const bms_parser::Chart *chart,
+                           int longNoteModeOverride) {
+  const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+  return longNote != nullptr && longNote->IsTail() &&
+         effectiveLongNoteIsClassic(longNote, chart, longNoteModeOverride);
 }
 
 JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
@@ -3074,13 +3088,22 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
                                                 eventVisualTimeMicros);
       }
     }
+    const auto *timingNote = result.noteId < session.notes.size()
+                                 ? session.notes[result.noteId] : nullptr;
+    const bool sampleInputTiming = shouldRecordInputTiming(options) &&
+        result.hasReplayEvent && judgement_indicator::recordsInputTiming(
+            result.replayEvent.action,
+            isClassicLongNoteTail(timingNote, chart, options.longNoteMode));
     if (result.hasJudge) {
       const long long eventSongTimeMicros = result.replayEvent.songTimeMicros;
       const int eventCombo = result.replayEvent.combo;
       const int eventScore = result.replayEvent.score;
       presentationEventFanout->onLaneJudge(
           result.replayEvent.lane, result.judge, eventCombo, eventScore,
-          judgeEventClock(eventSongTimeMicros), true);
+          judgeEventClock(eventSongTimeMicros), sampleInputTiming);
+    } else if (sampleInputTiming) {
+      presentationEventFanout->onTimingSample(
+          result.judge, judgeEventClock(result.replayEvent.songTimeMicros));
     }
     session.appliedTransactionSequence = transaction.sequence;
   }
@@ -7671,8 +7694,15 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
                                      : inputContext.songTimeMicros;
       onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
-              !options.autoPlay || isReplayPlayback(), transaction.note,
+              shouldRecordInputTiming(options), transaction.note,
               transaction.hasReplayEvent ? transaction.replayEvent.lane : mainLane);
+    } else if (shouldRecordInputTiming(options) &&
+               transaction.hasReplayEvent &&
+               judgement_indicator::recordsInputTiming(
+                   transaction.replayEvent.action, false)) {
+      presentationEventFanout->onTimingSample(
+          transaction.judge,
+          judgeEventClock(transaction.replayEvent.songTimeMicros));
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -7747,7 +7777,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
                                      : inputContext.songTimeMicros;
       onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
-              !options.autoPlay || isReplayPlayback(), transaction.note,
+              shouldRecordInputTiming(options), transaction.note,
               transaction.hasReplayEvent ? transaction.replayEvent.lane : lane);
     }
     if (transaction.hasReplayEvent) {
@@ -8097,7 +8127,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
           longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
         longNote->Tail->Play(event.judgeTimeMicros);
       }
-      onJudge(recordedJudge, eventClock, false, note, event.lane);
+      onJudge(recordedJudge, eventClock, true, note, event.lane);
       applyReplayGauge(event);
     }
     break;
@@ -8383,7 +8413,9 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   const int judgementCount = previousCount + 1;
   presentationEventFanout->onLaneJudge(
       graphNote != nullptr ? graphNote->Lane : lane, judgeResult, state->combo,
-      state->getScore(), clock, recordTimingSample);
+      state->getScore(), clock, recordTimingSample &&
+          shouldRecordInputTiming(options) &&
+          !isClassicLongNoteTail(graphNote, chart, options.longNoteMode));
   const int adjustedNotesDisplayTimingMilliseconds =
       gameplay_timing::nextNotesDisplayTimingMilliseconds(
           context.settings.notesDisplayTimingMilliseconds,
@@ -8753,7 +8785,10 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
               effectiveLongNoteIsCharge(longNote, chart, options.longNoteMode);
           if (chargeLongNote) {
             onJudge(judgeResult, judgeEventClock(eventSongTimeMicros),
-                    !options.autoPlay || isReplayPlayback(), note);
+                    shouldRecordInputTiming(options), note);
+          } else if (shouldRecordInputTiming(options)) {
+            presentationEventFanout->onTimingSample(
+                judgeResult, judgeEventClock(eventSongTimeMicros));
           }
           if (recordEvent) {
             appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
@@ -8766,7 +8801,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       note->Press(pressedTime);
     }
     onJudge(judgeResult, judgeEventClock(eventSongTimeMicros),
-            !options.autoPlay || isReplayPlayback(), note);
+            shouldRecordInputTiming(options), note);
     if (recordEvent) {
       appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
                         eventSongTimeMicros,
@@ -8814,7 +8849,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                   options.longNoteMode, LongNote, ReleasedTime);
   }
   onJudge(appliedJudge, judgeEventClock(eventSongTimeMicros),
-          !options.autoPlay || isReplayPlayback(), Note);
+          shouldRecordInputTiming(options), Note);
   if (recordEvent) {
     appendReplayEvent(ReplayEventAction::Release, Note->Lane, Note,
                       eventSongTimeMicros,
