@@ -200,7 +200,7 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   titles->setFlex(1)->setMinWidth(0)->setGap(2);
   title_ = label("chartDetailsTitle", 48, 88, main_menu_theme::ink,
                  TextView::FontWeight::Bold);
-  title_->setWrap(true);
+  title_->setWrap(false);
   artist_ = label("chartDetailsArtist", 28, 32, main_menu_theme::secondary);
   artist_->setOverflow(TextView::TextOverflow::Marquee);
   genre_ = label("chartDetailsGenre", 21, 26, main_menu_theme::muted);
@@ -235,7 +235,7 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
     auto *view = new View();
     view->setFlexDirection(FlexDirection::Row)->setGap(14);
     view->setHeight(kFactRowHeight)->setMinHeight(kFactRowHeight)->setFlexShrink(0);
-    view->setFlexGrow(1);
+    view->setFlexGrow(0);
     facts_->addView(view);
     factRows_[rowIndex++] = view;
     return view;
@@ -245,7 +245,7 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
                    TextView **caption = nullptr) {
     auto *cell = new View();
     factCells_[cellIndex++] = cell;
-    cell->setFlex(1)->setMinWidth(0)->setJustifyContent(YGJustifySpaceBetween);
+    cell->setFlex(1)->setMinWidth(0)->setJustifyContent(YGJustifyFlexStart);
     auto *heading = label("", 20, 26, main_menu_theme::secondary);
     heading->setLocalizedText(i18n::message(key));
     auto *value = label(name, 28, 34);
@@ -394,8 +394,8 @@ void ChartDetailsView::setCompact(bool compact) {
   refreshArtworkLayout();
   titleRow_->setHeight(compact ? 74 : 56);
   title_->setHeight(compact ? 74 : 56);
-  title_->setWrap(compact);
-  title_->setOverflow(compact ? TextView::TextOverflow::Hidden : TextView::TextOverflow::Marquee);
+  title_->setWrap(false);
+  title_->setOverflow(TextView::TextOverflow::Marquee);
   artist_->moveTo(*titles_);
   genre_->moveTo(*titles_);
   artist_->setFlex(0)->setMinWidth(0)->setHeight(compact ? 28 : 30);
@@ -427,6 +427,7 @@ void ChartDetailsView::setCompact(bool compact) {
   facts_->moveTo(*this);
   facts_->setPadding(Edge::All, compact ? kFactPadding : 0);
   facts_->setGap(compact ? kFactGap : 0)->setFlexGrow(compact ? 1 : 0);
+  facts_->setJustifyContent(compact ? YGJustifySpaceBetween : YGJustifyFlexStart);
   for (size_t i = 0; i < factCells_.size(); ++i) {
     factCells_[i]->moveTo(*levelGroup_);
     visible(factCells_[i], compact || (i != 0 && i != 2));
@@ -445,7 +446,7 @@ void ChartDetailsView::setCompact(bool compact) {
     auto *row = factRows_[i];
     visible(row, compact || i == 0);
     row->setHeight(compact ? kFactRowHeight : 48)->setMinHeight(compact ? kFactRowHeight : 48);
-    row->setFlexGrow(compact ? 1 : 0)->setGap(compact ? 14 : 10);
+    row->setFlexGrow(0)->setGap(compact ? 14 : 10);
     for (auto *cell : row->getChildren()) {
       cell->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)->setGap(0);
       for (size_t j = 0; j < cell->getChildren().size(); ++j) {

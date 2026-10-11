@@ -37,3 +37,12 @@ The Mac locked during the fresh native visual check, so no screenshot of this
 revision was captured. Earlier screenshots predate this revision. Glow
 appearance still needs a visual check on an unlocked desktop or device.
 No mobile build, download, extraction, score upload or deployment was performed.
+
+## Portrait title and fact spacing fix
+
+Portrait titles now use the same single-line marquee behavior as landscape.
+Fact rows keep their natural height, with labels and values adjacent; extra
+portrait height is distributed between rows instead of inside each pair.
+Regression checks cover long-title metrics and pair/row spacing at 520- and
+720-unit panel heights. The desktop build and the three affected CTest targets
+(chart details, UI scale and text input) passed. No new visual capture was made.

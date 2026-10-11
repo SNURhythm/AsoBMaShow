@@ -142,6 +142,27 @@ int main() {
                 std::abs(lastValue->getY() + lastValue->getHeight() -
                          (facts->getY() + facts->getHeight() - 14)) <= 1,
             "portrait chart facts distribute content through the aligned column height");
+    for (const int height : {520, 720}) {
+      details.setMinHeight(height);
+      details.applyYogaLayout();
+      auto *bpm = details.findViewByName("chartDetailsBpm");
+      auto *length = details.findViewByName("chartDetailsLength");
+      auto *bpmCell = static_cast<View *>(YGNodeGetContext(YGNodeGetParent(bpm->getNode())));
+      auto *lengthCell = static_cast<View *>(YGNodeGetContext(YGNodeGetParent(length->getNode())));
+      auto *bpmLabel = bpmCell->getChildren().front();
+      auto *lengthLabel = lengthCell->getChildren().front();
+      const int pairGap = bpm->getY() - bpmLabel->getY() - bpmLabel->getHeight();
+      const int rowGap = lengthLabel->getY() - bpm->getY() - bpm->getHeight();
+      require(pairGap == 0 && rowGap >= 8 && rowGap > pairGap,
+              "stretched portrait facts keep label/value pairs close and distribute space between rows");
+    }
+    record.meta.Title = "A long portrait chart title that must scroll horizontally rather than wrap into clipped lines";
+    details.setChart(&record, best, kClearTypeHardClearRank, "300");
+    details.applyYogaLayout();
+    auto *portraitTitle = dynamic_cast<TextView *>(details.findViewByName("chartDetailsTitle"));
+    require(portraitTitle->textureWidth() > portraitTitle->getWidth() &&
+                portraitTitle->textureHeight() <= portraitTitle->getHeight(),
+            "portrait long titles retain a single overflowing line for marquee");
     details.setMinHeight(0);
     details.applyYogaLayout();
     require(details.getHeight() == naturalHeight,
