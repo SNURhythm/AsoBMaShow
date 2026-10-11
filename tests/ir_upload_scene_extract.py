@@ -15,6 +15,10 @@ def main():
         "void IrUploadsScene::startUpload()",
         "void IrUploadsScene::applyPreparationUpdates()",
         "void IrUploadsScene::stopPreparation()",
+        "void IrUploadsScene::onPause()",
+        "void IrUploadsScene::onProfileWillChange()",
+        "void IrUploadsScene::openIrSettings()",
+        "void IrUploadsScene::setTabTopInset(float topInset)",
     ]]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("\n\n".join(methods) + "\n")

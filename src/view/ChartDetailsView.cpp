@@ -19,6 +19,25 @@
 namespace {
 constexpr const char *kFont = main_menu_theme::font;
 
+class ArtworkPlaceholder final : public TextView {
+public:
+  explicit ArtworkPlaceholder(ImageView &artwork)
+      : TextView(ui_icons::kFontAwesomeSolidPath, 56), artwork_(artwork) {}
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    // The image renders first, so an async decode can replace the placeholder
+    // in the same frame. Missing and failed images keep the glyph visible.
+    if (!artwork_.getVisible() || artwork_.imageWidth() <= 0 ||
+        artwork_.imageHeight() <= 0) {
+      TextView::renderImpl(context);
+    }
+  }
+
+private:
+  ImageView &artwork_;
+};
+
 TextView *label(const char *name, int size, int height,
                 View::ThemeColorProvider color = main_menu_theme::ink,
                 TextView::FontWeight weight = TextView::FontWeight::Regular) {
@@ -103,10 +122,20 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   artworkFrame_->setPadding(Edge::All, 0);
   artworkFrame_->setCornerRadius(0);
   artworkFrame_->setThemedBackgroundColor(main_menu_theme::surface);
-  artwork->setWidth(108)->setHeight(108);
+  artwork->setWidthPercent(100)->setHeight(112);
+  artwork->setPositionType(YGPositionTypeAbsolute);
+  artwork->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
   artwork->setCornerRadius(0);
   artwork->setContentMode(ImageView::ContentMode::Contain);
   artworkFrame_->addView(artwork);
+  artworkPlaceholder_ = new ArtworkPlaceholder(*artwork);
+  artworkPlaceholder_->setName("chartDetailsArtworkPlaceholder");
+  artworkPlaceholder_->setText(ui_icons::textForCodepoint(ui_icons::kMusic));
+  artworkPlaceholder_->setWidthPercent(100)->setHeight(112);
+  artworkPlaceholder_->setAlign(TextView::CENTER);
+  artworkPlaceholder_->setVAlign(TextView::MIDDLE);
+  artworkPlaceholder_->setThemedColor(main_menu_theme::muted);
+  artworkFrame_->addView(artworkPlaceholder_);
   identity->addView(artworkFrame_);
 
   auto *titles = new View();
@@ -334,10 +363,11 @@ void ChartDetailsView::setCompact(bool compact) {
   identity_->setFlexDirection(compact ? FlexDirection::Row : FlexDirection::Column);
   identity_->setAlignItems(compact ? YGAlignCenter : YGAlignStretch);
   identity_->setGap(compact ? 14 : 8);
-  identity_->setHeight(compact ? kIdentityHeight : artworkFrame_->getVisible() ? 568 : 88);
+  identity_->setHeight(compact ? kIdentityHeight : 568);
   artworkFrame_->setWidth(compact ? 112 : 472)->setHeight(compact ? 112 : 472);
   artworkFrame_->setAlignSelf(YGAlignCenter);
   artwork_->setWidthPercent(100)->setHeight(compact ? 112 : 472);
+  artworkPlaceholder_->setHeight(compact ? 112 : 472);
   titleRow_->setHeight(compact ? 74 : 56);
   title_->setHeight(compact ? 74 : 56);
   visible(titleActions_, !compact);
@@ -417,7 +447,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   moreButton_->setEnabled(chart);
   visible(favoriteIcon_, favorite_);
   visible(favoriteOutline_, !favorite_);
-  visible(artworkFrame_, chart && !record->meta.StageFile.empty());
+  artwork_->setVisible(chart && !record->meta.StageFile.empty());
   setCompact(compact_);
   title_->setLocalizedText(record ? i18n::Text(record->meta.Title +
       (record->meta.SubTitle.empty() ? "" : " " + record->meta.SubTitle))

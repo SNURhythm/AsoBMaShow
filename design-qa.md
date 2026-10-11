@@ -1,85 +1,61 @@
-# Song selector design QA
+# Song selector and navigation QA
 
-final result: passed with documented differences
-Date: 2026-10-11.
+Date: 2026-10-11. Result: passed with the validation limits below.
 
-Target: the selected revised Pressing Room light mockup and its dark counterpart.
-The user rejected the first palette-only pass, then the detail hierarchy, then
-remaining full-screen mismatches. This report covers the final corrective pass.
+This follow-up implements the user's explicit changes to the earlier selector
+reference. The existing light/dark typography and palette remain; the requested
+navigation and row structure supersede the earlier mockup's column heading.
 
-## Comparison method and evidence
+## Requested changes
 
-Reference and actual screenshots were viewed together in normalized side-by-side
-images, in both themes. The native 2560 × 1440 content area was cropped below the
-64-pixel macOS title bar and resized to the reference dimensions. Screenshots
-were not retouched. Final captures come from the final compiled native app and
-show the user's real 4UE1 difficulty-table library and Aeventyr chart.
+- Removed the list heading and numeric index column.
+- Title and artist share one vertically stacked column at every width.
+- Clear state uses the thin left vertical lamp; score and favorite remain visible.
+- Details reserve jacket space with a music placeholder for absent, loading or
+  failed artwork, including an empty selection.
+- The bottom surface reaches the viewport edge. Dock controls retain bottom
+  safe-area padding; portrait details extend behind that inset.
+- PLAY omits course folders. COURSE displays the former Courses children as
+  top-level folders and uses the same chart/details interface.
+- MUSIC and IR retain their existing interfaces under the shared four-tab
+  header. Ctrl/Cmd+1 through 4 switch tabs; Escape from a utility returns to PLAY.
 
-- Light capture: `/tmp/asobmashow-redesign2-light-final.png`
-- Light comparison: `/tmp/asobmashow-redesign2-light-comparison.jpg`
-- Dark capture: `/tmp/asobmashow-redesign2-dark-final.png`
-- Dark comparison: `/tmp/asobmashow-redesign2-dark-comparison.jpg`
+## Visual checks
 
-## Findings resolved
+The final compiled native app was opened on all four tabs. COURSE showed only
+course-table roots, MUSIC showed its library/player navigation, and IR showed
+its existing provider/upload controls. Returning from IR restored PLAY.
 
-| Surface | Correction verified |
-| --- | --- |
-| Typography | Roboto Condensed regular and real bold faces replace the wider Latin typography in the selector. Existing Noto fallback retains CJK coverage. Removed accidental synthetic thickening from the new bold asset's metadata. |
-| Composition | 80-unit header, 350-unit library, aligned 100-unit chart rows, 540-unit details column, 472-unit artwork frame and pinned 120-unit dock. Closed filter/sort panels no longer reserve layout gaps. |
-| Sidebar | Difficulty-table section heading and rule, bold roots, music/favorite icons, disclosure carets and full-width selected background. Table units and clear-state children remain live. |
-| Header and list | Search icon and hint, Filter/Sort carets, live chart count, uppercase column labels and outline favorite stars. Filled stars indicate actual favorites. |
-| Details | Artwork, title/artist hierarchy, working title favorite/overflow actions, divider, difficulty/native level and tempo at left, personal best at right, four-column facts, expandable metadata and Records/Rankings footer with icons. |
-| Dock and color | Segmented icon/value/caret controls and Play action, sampled ivory/cobalt light values and matching dark palette. Non-default assist/ruleset/LN settings retain a visible status. |
+Final dark screenshots:
 
-Earlier iterations fixed clipped facts/actions, undersized detail typography,
-portrait metric order, records-container height restoration, compact clear
-lamps, and narrow toolbar/search geometry. This final pass addressed the wider
-font, sidebar, icon, separator and control mismatches previously accepted too
-quickly.
+- `/tmp/asobmashow-tabs-play.png`
+- `/tmp/asobmashow-tabs-course.png`
+- `/tmp/asobmashow-tabs-music.png`
+- `/tmp/asobmashow-tabs-ir.png`
 
-## Deliberate differences and limits
+The screenshot library has no fabricated scores. Empty detail artwork and
+missing course charts use the real placeholder/warning states. MUSIC and IR
+keep their existing inner styling; their shared selector header is new.
 
-This is not a pixel-identical reproduction of fictional data. Real chart art is
-contained with its original aspect ratio, so the captured 4:3 jacket is
-letterboxed inside the square frame. Real names, table units, chart counts,
-missing-chart states and unplayed scores replace the mockup's invented library.
-The captured table has several missing charts, shown with the existing warning
-color, and no fabricated personal best. Long names retain marquee behavior.
+## Functional checks
 
-The native header keeps actual application utilities and supported tabs. The
-dock retains the existing target option; its normal randomization state remains
-labeled NORMAL. Viewer and Reveal are accessible from the overflow menu, while
-additional metadata and full score details remain in the Chart details
-expansion. The dark theme keeps the same navigation structure as the light
-theme. These preserve native functionality while following the reference's
-composition.
+The desktop app and affected native targets built successfully. All 21 affected
+CTest targets passed, including production-method tests for eight tab/folder
+and chart-handoff scenarios, real Yoga rotation/narrow-header/safe-area layout,
+row/details geometry, preview ownership, music/video lifecycle, IR preparation,
+settings return ownership, profile ownership and localization.
+The complete CTest suite subsequently passed all 483 tests in parallel.
 
-Mouse automation on this machine sometimes sends cached SDL pointer positions
-instead of the requested location. Keyboard navigation was used to reach the
-final real-chart captures and confirmed crossing the sidebar section heading.
-This is not a complete pointer-driven smoke test of every action. Existing
-native callback paths were reviewed. The app's existing arrow-key dispatch can
-update both library and chart selection during one key press; the final capture
-therefore highlights the library level while retaining the chart detail.
-Portrait and narrow layouts were verified through geometry tests, not a mobile
-device build. No new shader/animation passes were added; no quantitative
-performance claim is made.
+Review fixes preserve separate PLAY/COURSE selection and scroll state, restore
+pathless course-start/archive rows, end hidden text editing, avoid redundant
+per-frame layouts, refresh MUSIC after PLAY changes, retain the shell across IR
+Settings, and prevent recursive All Songs fallback while in COURSE.
 
-## Functional verification
+## Limits
 
-- Final desktop main target and affected native test targets built successfully.
-- All 14 affected tests passed: main-menu lifecycle/library/settings audits,
-  chart details/list, localization, UI scale, input controls and font lifetime. The initial localization run found one unused
-  old Search label; removed it, reran that audit successfully and rebuilt main.
-- New input regression coverage verifies skipping a section heading in both
-  keyboard directions, wrapping, ignoring pointer selection on the heading,
-  and an all-nonselectable list.
-- New font coverage verifies real bold selection, CJK fallback, and native
-  rendering dimensions against the bundled static font.
-- Review findings fixed: headings no longer trap keyboard navigation, section
-  labels resolve the current language, and active assist/ruleset/LN settings
-  are no longer hidden from the pre-play summary.
-- `git diff --check` passed.
-
-The original dark theme preference and original window size were restored.
-The final dark preview remains running. No deployment was performed.
+Native desktop tab navigation was exercised through keyboard input because
+mouse automation on this machine can deliver stale SDL pointer coordinates.
+Settings retention and background preparation are covered by extracted native
+lifecycle tests rather than an end-to-end upload. Portrait and bottom safe-area
+behavior were verified with layout tests, not a mobile device build. No upload,
+deployment, real score submission or preference change was performed.

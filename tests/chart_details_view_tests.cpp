@@ -116,6 +116,12 @@ int main() {
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
     const int selectedHeight = view.getHeight();
+    auto *artworkPlaceholder = view.findViewByName("chartDetailsArtworkPlaceholder");
+    auto *reservedArtwork = view.findViewByName("chartDetailsArtwork");
+    require(artworkPlaceholder && artworkPlaceholder->getVisible() &&
+                reservedArtwork && reservedArtwork->getVisible() &&
+                reservedArtwork->getWidth() > 0 && reservedArtwork->getHeight() > 0,
+            "a chart without a stage image retains its artwork frame and music placeholder");
     require(text(view, "chartDetailsBpm") == "75.5–180",
             "variable BPM preserves both ends and fractional values");
     require(text(view, "chartDetailsJudge") == "NORMAL",
@@ -175,6 +181,19 @@ int main() {
     require(!view.findViewByName("chartDetailsExpanded")->getVisible(),
             "additional metadata begins collapsed to preserve the reference composition");
     const int collapsedHeight = view.getHeight();
+    record.meta.StageFile.clear();
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    view.applyYogaLayout();
+    require(artwork->getVisible() && artworkPlaceholder->getVisible() &&
+                view.getHeight() == collapsedHeight,
+            "missing landscape artwork preserves the hero frame and panel height");
+    view.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
+    view.applyYogaLayout();
+    require(artwork->getVisible() && artworkPlaceholder->getVisible() &&
+                view.getHeight() == collapsedHeight,
+            "an empty landscape selection retains the same artwork placeholder");
+    record.meta.StageFile = "stage.png";
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.setExpanded(true);
     view.applyYogaLayout();
     require(view.findViewByName("chartDetailsExpanded")->getVisible() && view.getHeight() > collapsedHeight &&
@@ -210,6 +229,8 @@ int main() {
     require(selectedOffset > 0, "the details fixture starts scrolled down");
     const auto requireStableScroll = [&]() {
       view.applyYogaLayout();
+      require(reservedArtwork->getVisible() && artworkPlaceholder->getVisible(),
+              "non-chart selections retain the artwork placeholder");
       require(view.getHeight() == selectedHeight &&
                   scroll.getScrollOffset() == selectedOffset &&
                   view.getY() + view.getHeight() == scroll.getY() + scroll.getHeight(),

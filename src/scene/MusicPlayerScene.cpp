@@ -617,7 +617,86 @@ MusicPlayerScene::~MusicPlayerScene() {
   }
 }
 
+void MusicPlayerScene::configureTab(float topInset,
+                                    std::function<void()> onClose, Scene *) {
+  embeddedTab = true;
+  tabClose = std::move(onClose);
+  setTabTopInset(topInset);
+}
+
+void MusicPlayerScene::setTabTopInset(float topInset) {
+  const float inset = std::max(0.0F, topInset);
+  if (tabTopInset == inset) {
+    return;
+  }
+  tabTopInset = inset;
+  updateLayoutInsets();
+}
+
+void MusicPlayerScene::onPause() {
+  exitVideoFullscreen();
+  onInputQueueOverflow();
+  for (auto *input : {librarySearchInput, favoritesSearchInput,
+                      playlistNameInput, playlistRenameInput, sleepTimerInput}) {
+    if (input != nullptr) input->endEditing();
+  }
+  playbackModeDropdownOpen = false;
+  refreshPlaybackRateControl();
+}
+
+void MusicPlayerScene::onResume() {
+  const auto &profileId = context.profileManager.activeProfile().id;
+  const bool sameProfile = displayedProfileId == profileId;
+  applySystemPlaybackPrivacy(false);
+  if (!sameProfile) {
+    pendingDeletePlaylistId = 0;
+    pendingClearPlaylistId = 0;
+    selectedLibraryPlaylistId = 0;
+    statusMessage.clear();
+  }
+  // PLAY can change charts and favorites without changing the active profile.
+  reloadData(sameProfile);
+  displayedProfileId = profileId;
+  refreshLanguageIfNeeded();
+  updateLayoutInsets();
+}
+
+void MusicPlayerScene::onLanguageChanged() {
+  Scene::onLanguageChanged();
+  rebindFavoriteAwareTrackLists();
+  for (auto *list : {libraryPlaylistList, favoritesPlaylistList,
+                     playlistDirectoryList}) {
+    if (list != nullptr) list->rebindVisibleItems();
+  }
+  refreshUi();
+  refreshVideoOverlay();
+}
+
+void MusicPlayerScene::updateLayoutInsets() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+  auto safe = getSafeAreaInsetsUi();
+  if (embeddedTab) safe.top = 0;
+  rootLayout->setSize(rendering::window_width, rendering::window_height);
+  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
+  headerLayout->setHeight(safe.top + kHeaderHeight)
+      ->setPadding(Edge::Top, safe.top + 10)
+      ->setPadding(Edge::Left, safe.left + kScreenPadding)
+      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  contentLayout->setPadding(Edge::Bottom, safe.bottom + 16)
+      ->setPadding(Edge::Left, safe.left + kScreenPadding)
+      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  rootLayout->applyYogaLayout();
+  if (videoOverlayRoot != nullptr) {
+    videoOverlayRoot->setPadding(Edge::Left, safe.left + 24)
+        ->setPadding(Edge::Right, safe.right + 24)
+        ->setPadding(Edge::Bottom, safe.bottom + 24);
+  }
+}
+
 void MusicPlayerScene::init() {
+  displayedProfileId = context.profileManager.activeProfile().id;
   context.jukebox.stop();
   applySystemPlaybackPrivacy(false);
   std::string clubModeStatus;
@@ -672,8 +751,7 @@ void MusicPlayerScene::update(float) {
                                 lastLayoutHeight != rendering::window_height)) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
-    rootLayout->setSize(rendering::window_width, rendering::window_height);
-    rootLayout->applyYogaLayout();
+    updateLayoutInsets();
     if (overlayPortal != nullptr) {
       overlayPortal->setSize(rendering::window_width, rendering::window_height);
     }
@@ -725,6 +803,8 @@ void MusicPlayerScene::cleanupScene() {
     context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
   }
   rootLayout = nullptr;
+  headerLayout = nullptr;
+  contentLayout = nullptr;
   overlayPortal = nullptr;
   videoOverlayRoot = nullptr;
   videoArtworkBackdrop = nullptr;
@@ -827,11 +907,13 @@ void MusicPlayerScene::cleanupScene() {
 }
 
 void MusicPlayerScene::buildView() {
-  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  auto safe = getSafeAreaInsetsUi();
+  if (embeddedTab) safe.top = 0;
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
+  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
   addView(rootLayout);
 
@@ -843,6 +925,8 @@ void MusicPlayerScene::buildView() {
   overlayPortal->setZIndex(900);
 
   auto *header = new View();
+  headerLayout = header;
+  header->setFlexShrink(0);
   header->setHeight(safe.top + kHeaderHeight)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
@@ -863,7 +947,7 @@ void MusicPlayerScene::buildView() {
       ->setMinWidth(0);
 
   auto *title = new TextView(kFontPath, 34);
-  title->setText(i18n::tr("music_player.music_player.label"));
+  title->setLocalizedText(i18n::message("music_player.music_player.label"));
   title->setHeight(42);
   title->setThemedColor(ui_theme::textPrimary);
   titleColumn->addView(title);
@@ -876,16 +960,19 @@ void MusicPlayerScene::buildView() {
   header->addView(titleColumn);
 
   TextView *backText = nullptr;
-  auto *backButton = makeButton(i18n::tr("music_player.back.label"), 20, &backText);
+  auto *backButton = makeButton(i18n::message("music_player.back.label"), 20, &backText);
   backButton->setWidth(118);
   backButton->setHeight(52);
   styleButton(backButton, backText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
   backButton->setOnClickListener([this]() { goBack(); });
+  backButton->setVisible(!embeddedTab);
+  backButton->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   header->addView(backButton);
   rootLayout->addView(header);
 
   auto *content = new View();
+  contentLayout = content;
   content->setFlex(1)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
@@ -907,22 +994,22 @@ void MusicPlayerScene::buildView() {
       ->setCornerRadius(ui_theme::panelRadius());
 
   auto *railTitle = new TextView(kFontPath, 18);
-  railTitle->setText(i18n::tr("music_player.music.label"));
+  railTitle->setLocalizedText(i18n::message("music_player.music.label"));
   railTitle->setHeight(26);
   railTitle->setThemedColor(ui_theme::textSecondary);
   railTitle->setOverflow(TextView::TextOverflow::Hidden);
   rail->addView(railTitle);
 
-  libraryNavButton = makeNavButton(i18n::tr("music_player.navigation.library.label"), &libraryNavText);
+  libraryNavButton = makeNavButton(i18n::message("music_player.navigation.library.label"), &libraryNavText);
   libraryNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Library); });
-  favoritesNavButton = makeNavButton(i18n::tr("music_player.navigation.favorites.label"), &favoritesNavText);
+  favoritesNavButton = makeNavButton(i18n::message("music_player.navigation.favorites.label"), &favoritesNavText);
   favoritesNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Favorites); });
-  playlistsNavButton = makeNavButton(i18n::tr("music_player.navigation.playlists.label"), &playlistsNavText);
+  playlistsNavButton = makeNavButton(i18n::message("music_player.navigation.playlists.label"), &playlistsNavText);
   playlistsNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Playlists); });
-  playerNavButton = makeNavButton(i18n::tr("music_player.navigation.player.label"), &playerNavText);
+  playerNavButton = makeNavButton(i18n::message("music_player.navigation.player.label"), &playerNavText);
   playerNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Player); });
   rail->addView(libraryNavButton);
@@ -996,7 +1083,7 @@ void MusicPlayerScene::buildVideoOverlay() {
   videoArtworkBackdrop->setVisible(false);
 
   videoArtworkFallbackText = new TextView(kFontPath, 24);
-  videoArtworkFallbackText->setText(i18n::tr("music_player.no_jacket_available.label"));
+  videoArtworkFallbackText->setLocalizedText(i18n::message("music_player.no_jacket_available.label"));
   videoArtworkFallbackText->setHeight(40);
   videoArtworkFallbackText->setAlign(TextView::CENTER);
   videoArtworkFallbackText->setVAlign(TextView::MIDDLE);
@@ -1168,7 +1255,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   const bool isLibrary = kind == TrackBrowserKind::Library;
   TextView **subtitleText =
       isLibrary ? &librarySubtitleText : &favoritesSubtitleText;
-  auto *panel = makePanel(isLibrary ? i18n::tr("music_player.page.library.label") : i18n::tr("music_player.page.favorites.label"), subtitleText);
+  auto *panel = makePanel(isLibrary ? i18n::message("music_player.page.library.label") : i18n::message("music_player.page.favorites.label"), subtitleText);
   panel->setFlex(1);
   page->addView(panel);
 
@@ -1178,7 +1265,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
       ->setAlignItems(YGAlignStretch)
       ->setGap(10);
   auto *searchLabel = new TextView(kFontPath, 17);
-  searchLabel->setText(i18n::tr("music_player.search.label"));
+  searchLabel->setLocalizedText(i18n::message("music_player.search.label"));
   searchLabel->setWidth(72);
   searchLabel->setHeight(52);
   searchLabel->setVAlign(TextView::MIDDLE);
@@ -1267,7 +1354,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   } else {
     favoritesArtworkFallbackText = artworkFallbackText;
   }
-  artworkFallbackText->setText(i18n::tr("music_player.library.no_album_art.label"));
+  artworkFallbackText->setLocalizedText(i18n::message("music_player.library.no_album_art.label"));
   artworkFallbackText->setHeight(36);
   artworkFallbackText->setAlign(TextView::CENTER);
   artworkFallbackText->setVAlign(TextView::MIDDLE);
@@ -1289,7 +1376,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   actions->addView(libraryArtFrame);
 
   auto *selectionTitle = new TextView(kFontPath, 18);
-  selectionTitle->setText(i18n::tr("music_player.selected.label"));
+  selectionTitle->setLocalizedText(i18n::message("music_player.selected.label"));
   selectionTitle->setHeight(28);
   selectionTitle->setThemedColor(ui_theme::textSecondary);
   actions->addView(selectionTitle);
@@ -1319,7 +1406,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   auto *primaryRow = new View();
   primaryRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   TextView *playTrackText = nullptr;
-  auto *playTrackButton = makeButton(i18n::tr("music_player.library.play.label"), 17, &playTrackText);
+  auto *playTrackButton = makeButton(i18n::message("music_player.library.play.label"), 17, &playTrackText);
   playTrackButton->setFlex(1);
   styleButton(playTrackButton, playTrackText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
@@ -1327,7 +1414,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   playTrackButton->setOnClickListener(
       [this, kind]() { playTrackBrowserTrack(kind); });
   TextView *addText = nullptr;
-  auto *addButton = makeButton(i18n::tr("music_player.add.label"), 15, &addText);
+  auto *addButton = makeButton(i18n::message("music_player.add.label"), 15, &addText);
   addButton->setFlex(1);
   styleButton(addButton, addText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
@@ -1340,7 +1427,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   auto *secondaryRow = new View();
   secondaryRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   TextView *randomText = nullptr;
-  auto *randomButton = makeButton(i18n::tr("music_player.shuffle.label"), 17, &randomText);
+  auto *randomButton = makeButton(i18n::message("music_player.shuffle.label"), 17, &randomText);
   randomButton->setFlex(1);
   styleButton(randomButton, randomText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
@@ -1348,7 +1435,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   randomButton->setOnClickListener(
       [this, kind]() { playRandomTrackBrowser(kind); });
   TextView *reloadText = nullptr;
-  auto *reloadButton = makeButton(i18n::tr("music_player.refresh.label"), 17, &reloadText);
+  auto *reloadButton = makeButton(i18n::message("music_player.refresh.label"), 17, &reloadText);
   reloadButton->setFlex(1);
   styleButton(reloadButton, reloadText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
@@ -1360,7 +1447,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
 
   if (isLibrary) {
     TextView *groupText = nullptr;
-    auto *groupButton = makeButton(i18n::tr("music_player.expand.label"), 17, &groupText);
+    auto *groupButton = makeButton(i18n::message("music_player.expand.label"), 17, &groupText);
     libraryGroupButtonText = groupText;
     groupButton->setHeight(48);
     styleButton(groupButton, groupText, ui_theme::control,
@@ -1371,7 +1458,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   }
 
   auto *addToHeader = new TextView(kFontPath, 18);
-  addToHeader->setText(i18n::tr("music_player.page.playlists.label"));
+  addToHeader->setLocalizedText(i18n::message("music_player.page.playlists.label"));
   addToHeader->setHeight(28);
   addToHeader->setThemedColor(ui_theme::textSecondary);
   actions->addView(addToHeader);
@@ -1411,7 +1498,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
 }
 
 void MusicPlayerScene::buildPlaylistsPage(View *page) {
-  auto *panel = makePanel(i18n::tr("music_player.playlist.playlists.label"), &playlistSubtitleText);
+  auto *panel = makePanel(i18n::message("music_player.playlist.playlists.label"), &playlistSubtitleText);
   panel->setFlex(1);
   page->addView(panel);
 
@@ -1446,7 +1533,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistNameInput->onSubmit(
       [this](const std::string &) { createPlaylist(); });
   TextView *createText = nullptr;
-  auto *createButton = makeButton(i18n::tr("music_player.playlist.create.label"), 17, &createText);
+  auto *createButton = makeButton(i18n::message("music_player.playlist.create.label"), 17, &createText);
   createButton->setWidth(112);
   styleButton(createButton, createText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
@@ -1458,7 +1545,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
 
   TextView *saveNowPlayingText = nullptr;
   auto *saveNowPlayingButton =
-      makeButton(i18n::tr("music_player.playlist.save_queue.label"), 16, &saveNowPlayingText);
+      makeButton(i18n::message("music_player.playlist.save_queue.label"), 16, &saveNowPlayingText);
   saveNowPlayingButton->setHeight(52);
   styleButton(saveNowPlayingButton, saveNowPlayingText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
@@ -1483,7 +1570,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistRenameInput->onSubmit(
       [this](const std::string &) { renameSelectedPlaylist(); });
   TextView *renameText = nullptr;
-  auto *renameButton = makeButton(i18n::tr("music_player.playlist.rename.label"), 16, &renameText);
+  auto *renameButton = makeButton(i18n::message("music_player.playlist.rename.label"), 16, &renameText);
   renameButton->setWidth(112);
   styleButton(renameButton, renameText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
@@ -1498,7 +1585,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
       ->setFlexDirection(FlexDirection::Row)
       ->setGap(10);
   auto *deletePlaylistButton =
-      makeButton(i18n::tr("music_player.playlist.delete.label"), 15, &deletePlaylistButtonText);
+      makeButton(i18n::message("music_player.playlist.delete.label"), 15, &deletePlaylistButtonText);
   deletePlaylistButton->setFlex(1);
   styleButton(deletePlaylistButton, deletePlaylistButtonText,
               ui_theme::warningAction, ui_theme::warningActionHover,
@@ -1547,7 +1634,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
       ->setGap(12);
 
   auto *selectedHeader = new TextView(kFontPath, 18);
-  selectedHeader->setText(i18n::tr("music_player.playlist.tracks.label"));
+  selectedHeader->setLocalizedText(i18n::message("music_player.playlist.tracks.label"));
   selectedHeader->setHeight(28);
   selectedHeader->setThemedColor(ui_theme::textSecondary);
   editorColumn->addView(selectedHeader);
@@ -1598,32 +1685,32 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   auto *playlistRowB = new View();
   playlistRowB->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   TextView *playPlaylistText = nullptr;
-  auto *playPlaylistButton = makeButton(i18n::tr("music_player.playlist.play.label"), 17, &playPlaylistText);
+  auto *playPlaylistButton = makeButton(i18n::message("music_player.playlist.play.label"), 17, &playPlaylistText);
   playPlaylistButton->setFlex(1);
   styleButton(playPlaylistButton, playPlaylistText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
   playPlaylistButton->setOnClickListener([this]() { playPlaylist(); });
   TextView *removeText = nullptr;
-  auto *removeButton = makeButton(i18n::tr("music_player.playlist.remove.label"), 16, &removeText);
+  auto *removeButton = makeButton(i18n::message("music_player.playlist.remove.label"), 16, &removeText);
   removeButton->setFlex(1);
   styleButton(removeButton, removeText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
   removeButton->setOnClickListener([this]() { removePlaylistTrack(); });
   TextView *upText = nullptr;
-  auto *upButton = makeButton(i18n::tr("music_player.playlist.up.label"), 17, &upText);
+  auto *upButton = makeButton(i18n::message("music_player.playlist.up.label"), 17, &upText);
   upButton->setFlex(1);
   styleButton(upButton, upText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
   upButton->setOnClickListener([this]() { movePlaylistTrack(-1); });
   TextView *downText = nullptr;
-  auto *downButton = makeButton(i18n::tr("music_player.playlist.down.label"), 17, &downText);
+  auto *downButton = makeButton(i18n::message("music_player.playlist.down.label"), 17, &downText);
   downButton->setFlex(1);
   styleButton(downButton, downText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
   downButton->setOnClickListener([this]() { movePlaylistTrack(1); });
-  auto *clearButton = makeButton(i18n::tr("music_player.playlist.clear.label"), 17, &clearPlaylistButtonText);
+  auto *clearButton = makeButton(i18n::message("music_player.playlist.clear.label"), 17, &clearPlaylistButtonText);
   clearButton->setFlex(1);
   styleButton(clearButton, clearPlaylistButtonText, ui_theme::warningAction,
               ui_theme::warningActionHover, ui_theme::warningActionPressed,
@@ -1641,7 +1728,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
 }
 
 void MusicPlayerScene::buildPlayerPage(View *page) {
-  auto *panel = makePanel(i18n::tr("music_player.page.player.label"), &playerSubtitleText);
+  auto *panel = makePanel(i18n::message("music_player.page.player.label"), &playerSubtitleText);
   panel->setFlex(1);
   page->addView(panel);
 
@@ -1669,7 +1756,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setBorderWidth(1)
       ->setCornerRadius(ui_theme::controlRadius());
   artworkFallbackText = new TextView(kFontPath, 18);
-  artworkFallbackText->setText(i18n::tr("music_player.player.no_album_art.label"));
+  artworkFallbackText->setLocalizedText(i18n::message("music_player.player.no_album_art.label"));
   artworkFallbackText->setHeight(36);
   artworkFallbackText->setAlign(TextView::CENTER);
   artworkFallbackText->setVAlign(TextView::MIDDLE);
@@ -1775,7 +1862,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   nextButton->setOnClickListener([this]() { playNext(); });
 
   TextView *playSelectedText = nullptr;
-  auto *playSelectedButton = makeButton(i18n::tr("music_player.player.play.label"), 17, &playSelectedText);
+  auto *playSelectedButton = makeButton(i18n::message("music_player.player.play.label"), 17, &playSelectedText);
   playSelectedButton->setFlex(1);
   styleButton(playSelectedButton, playSelectedText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
@@ -1834,7 +1921,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   playbackModeDropdown->setWidth(150)->setFlexShrink(0.0F);
 
   auto *rateLabel = new TextView(kFontPath, 16);
-  rateLabel->setText(i18n::tr("music_player.rate.label"));
+  rateLabel->setLocalizedText(i18n::message("music_player.rate.label"));
   rateLabel->setWidth(40);
   rateLabel->setVAlign(TextView::MIDDLE);
   rateLabel->setThemedColor(ui_theme::textSecondary);
@@ -1886,7 +1973,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setGap(12);
 
   queueTitleText = new TextView(kFontPath, 18);
-  queueTitleText->setText(i18n::tr("music_player.queue.label"));
+  queueTitleText->setLocalizedText(i18n::message("music_player.queue.label"));
   queueTitleText->setHeight(28);
   queueTitleText->setThemedColor(ui_theme::textSecondary);
   queueColumn->addView(queueTitleText);
@@ -1919,21 +2006,21 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   auto *queueButtons = new View();
   queueButtons->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   TextView *playPlaylistText = nullptr;
-  auto *playPlaylistButton = makeButton(i18n::tr("music_player.player.play.label"), 17, &playPlaylistText);
+  auto *playPlaylistButton = makeButton(i18n::message("music_player.player.play.label"), 17, &playPlaylistText);
   playPlaylistButton->setFlex(1);
   styleButton(playPlaylistButton, playPlaylistText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
   playPlaylistButton->setOnClickListener([this]() { playPlaylist(); });
   TextView *editText = nullptr;
-  auto *editButton = makeButton(i18n::tr("music_player.edit.label"), 17, &editText);
+  auto *editButton = makeButton(i18n::message("music_player.edit.label"), 17, &editText);
   editButton->setFlex(1);
   styleButton(editButton, editText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
   editButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Playlists); });
   TextView *saveQueueText = nullptr;
-  auto *saveQueueButton = makeButton(i18n::tr("music_player.save_queue.label"), 17, &saveQueueText);
+  auto *saveQueueButton = makeButton(i18n::message("music_player.save_queue.label"), 17, &saveQueueText);
   saveQueueButton->setFlex(1);
   styleButton(saveQueueButton, saveQueueText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
@@ -1960,12 +2047,12 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setAlignItems(YGAlignCenter)
       ->setGap(10);
   auto *sleepTitle = new TextView(kFontPath, 18);
-  sleepTitle->setText(i18n::tr("music_player.sleep_timer.label"));
+  sleepTitle->setLocalizedText(i18n::message("music_player.sleep_timer.label"));
   sleepTitle->setFlex(1);
   sleepTitle->setHeight(26);
   sleepTitle->setThemedColor(ui_theme::textSecondary);
   sleepTimerStatusText = new TextView(kFontPath, 16);
-  sleepTimerStatusText->setText(i18n::tr("music_player.off.label"));
+  sleepTimerStatusText->setLocalizedText(i18n::message("music_player.off.label"));
   sleepTimerStatusText->setWidth(180);
   sleepTimerStatusText->setHeight(26);
   sleepTimerStatusText->setAlign(TextView::RIGHT);
@@ -1988,14 +2075,14 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   sleepTimerInput->setVAlign(TextView::MIDDLE);
   sleepTimerInput->onSubmit(
       [this](const std::string &) { setSleepTimerFromInput(); });
-  sleepTimerSetButton = makeButton(i18n::tr("music_player.set.label"), 16, &sleepTimerSetText);
+  sleepTimerSetButton = makeButton(i18n::message("music_player.set.label"), 16, &sleepTimerSetText);
   sleepTimerSetButton->setWidth(92);
   styleButton(sleepTimerSetButton, sleepTimerSetText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
               ui_theme::accentBorder);
   sleepTimerSetButton->setOnClickListener(
       [this]() { setSleepTimerFromInput(); });
-  sleepTimerClearButton = makeButton(i18n::tr("music_player.clear.label"), 16, &sleepTimerClearText);
+  sleepTimerClearButton = makeButton(i18n::message("music_player.clear.label"), 16, &sleepTimerClearText);
   sleepTimerClearButton->setWidth(106);
   sleepTimerClearButton->setOnClickListener([this]() { clearSleepTimer(); });
   sleepRow->addView(sleepTimerInput);
@@ -2015,7 +2102,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setBorderWidth(1)
       ->setCornerRadius(ui_theme::controlRadius());
   auto *privacyTitle = new TextView(kFontPath, 18);
-  privacyTitle->setText(i18n::tr("music_player.lock_screen.label"));
+  privacyTitle->setLocalizedText(i18n::message("music_player.lock_screen.label"));
   privacyTitle->setHeight(26);
   privacyTitle->setThemedColor(ui_theme::textSecondary);
   privacyCard->addView(privacyTitle);
@@ -2023,17 +2110,17 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   auto *privacyRow = new View();
   privacyRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   systemPlaybackJacketButton =
-      makeButton(i18n::tr("music_player.jacket_on.label"), 16, &systemPlaybackJacketText);
+      makeButton(i18n::message("music_player.jacket_on.label"), 16, &systemPlaybackJacketText);
   systemPlaybackJacketButton->setFlex(1);
   systemPlaybackJacketButton->setOnClickListener(
       [this]() { toggleSystemPlaybackJacket(); });
   systemPlaybackTitleButton =
-      makeButton(i18n::tr("music_player.title_on.label"), 16, &systemPlaybackTitleText);
+      makeButton(i18n::message("music_player.title_on.label"), 16, &systemPlaybackTitleText);
   systemPlaybackTitleButton->setFlex(1);
   systemPlaybackTitleButton->setOnClickListener(
       [this]() { toggleSystemPlaybackTitle(); });
   systemPlaybackArtistButton =
-      makeButton(i18n::tr("music_player.artist_on.label"), 16, &systemPlaybackArtistText);
+      makeButton(i18n::message("music_player.artist_on.label"), 16, &systemPlaybackArtistText);
   systemPlaybackArtistButton->setFlex(1);
   systemPlaybackArtistButton->setOnClickListener(
       [this]() { toggleSystemPlaybackArtist(); });
@@ -2045,7 +2132,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   workspace->addView(queueColumn);
 }
 
-View *MusicPlayerScene::makePanel(const std::string &title,
+View *MusicPlayerScene::makePanel(const i18n::Text &title,
                                   TextView **subtitleText) {
   auto *panel = new View();
   panel->setFlexDirection(FlexDirection::Column)
@@ -2058,7 +2145,7 @@ View *MusicPlayerScene::makePanel(const std::string &title,
       ->setCornerRadius(ui_theme::panelRadius());
 
   auto *titleText = new TextView(kFontPath, 26);
-  titleText->setText(title);
+  titleText->setLocalizedText(title);
   titleText->setHeight(34);
   titleText->setThemedColor(ui_theme::textPrimary);
   titleText->setOverflow(TextView::TextOverflow::Hidden);
@@ -2074,14 +2161,14 @@ View *MusicPlayerScene::makePanel(const std::string &title,
   return panel;
 }
 
-Button *MusicPlayerScene::makeButton(const std::string &label, int fontSize,
+Button *MusicPlayerScene::makeButton(const i18n::Text &label, int fontSize,
                                      TextView **textOut) {
   auto *button = new Button();
   button->setHeight(52);
   button->setCornerRadius(ui_theme::controlRadius());
 
   auto *text = new TextView(kFontPath, fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
@@ -2155,7 +2242,7 @@ Button *MusicPlayerScene::makeDualIconButton(uint32_t leadingIconCodepoint,
   return button;
 }
 
-Button *MusicPlayerScene::makeNavButton(const std::string &label,
+Button *MusicPlayerScene::makeNavButton(const i18n::Text &label,
                                         TextView **textOut) {
   auto *button = makeButton(label, 18, textOut);
   button->setHeight(58);
@@ -2226,10 +2313,6 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
     return -1;
   };
 
-  const int libraryIndex =
-      preserveSelection ? findIndex(libraryTracks, selectedLibraryId) : -1;
-  const int favoriteIndex =
-      preserveSelection ? findIndex(favoriteTracks, selectedFavoriteId) : -1;
   refreshActiveQueueList(true);
   int playlistIndex = preserveSelection
                           ? findIndex(playlistTracks, selectedPlaylistTrackId)
@@ -2241,8 +2324,12 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
   const int preferredPlaylistId = preserveSelection
                                       ? previousPlaylistId
                                       : persistedState.selectedPlaylistId;
-  refreshLibraryList(libraryIndex);
-  refreshTrackBrowserList(TrackBrowserKind::Favorites, favoriteIndex);
+  applyTrackBrowserFilterForTrackId(
+      TrackBrowserKind::Library, preserveSelection ? selectedLibraryId : "",
+      preserveSelection);
+  applyTrackBrowserFilterForTrackId(
+      TrackBrowserKind::Favorites, preserveSelection ? selectedFavoriteId : "",
+      preserveSelection);
   refreshLibraryPlaylistList(preserveSelection ? selectedLibraryPlaylistId : 0);
   refreshPlaylistDirectoryList(preferredPlaylistId);
   refreshPlaylistList(playlistIndex);
@@ -2578,9 +2665,9 @@ void MusicPlayerScene::refreshUi() {
     const auto track = selectedLibraryTrack();
     if (track && !track->groupId.empty() &&
         expandedLibraryGroupIds.contains(track->groupId)) {
-      libraryGroupButtonText->setText(i18n::tr("music_player.collapse.label"));
+      libraryGroupButtonText->setLocalizedText(i18n::message("music_player.collapse.label"));
     } else {
-      libraryGroupButtonText->setText(i18n::tr("music_player.expand.label"));
+      libraryGroupButtonText->setLocalizedText(i18n::message("music_player.expand.label"));
     }
   }
 
@@ -2624,9 +2711,9 @@ void MusicPlayerScene::refreshUi() {
   }
   if (playbackText != nullptr) {
     if (!playback.supported) {
-      playbackText->setText(i18n::tr("music_player.native_playback_unavailable.label"));
+      playbackText->setLocalizedText(i18n::message("music_player.native_playback_unavailable.label"));
     } else if (!playback.loaded) {
-      playbackText->setText(i18n::tr("music_player.idle.label"));
+      playbackText->setLocalizedText(i18n::message("music_player.idle.label"));
     } else {
       playbackText->setText((playback.playing ? i18n::tr("music_player.playing.prefix") : i18n::tr("music_player.paused.prefix")) +
                             formatMusicTime(playback.positionMicros) + " / " +
@@ -4533,7 +4620,7 @@ void MusicPlayerScene::refreshVideoOverlay() {
   }
   if (videoPlaybackText != nullptr) {
     if (!playback.loaded) {
-      videoPlaybackText->setText(i18n::tr("music_player.idle.label"));
+      videoPlaybackText->setLocalizedText(i18n::message("music_player.idle.label"));
     } else {
       videoPlaybackText->setText(formatMusicTime(playback.positionMicros) +
                                  " / " +
@@ -4758,6 +4845,10 @@ void MusicPlayerScene::stopPlayback() {
 void MusicPlayerScene::goBack() {
   if (videoFullscreenActive) {
     exitVideoFullscreen();
+    return;
+  }
+  if (embeddedTab) {
+    if (tabClose) tabClose();
     return;
   }
   if (context.sceneManager != nullptr) {

@@ -35,6 +35,7 @@ private:
   static constexpr float kFactGap = 8;
   static constexpr float kFactPadding = 14;
   View *artworkFrame_ = nullptr;
+  TextView *artworkPlaceholder_ = nullptr;
   View *identity_ = nullptr;
   View *titles_ = nullptr;
   View *titleRow_ = nullptr;

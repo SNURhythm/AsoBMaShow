@@ -696,7 +696,154 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
     return {};
   }
 #endif
+  const bool shellModalOpen =
+      (playOptionsModalRoot && playOptionsModalRoot->getVisible()) ||
+      (parseLogModalRoot && parseLogModalRoot->getVisible()) ||
+      (musicModalRoot && musicModalRoot->getVisible()) ||
+      (tasksModalRoot && tasksModalRoot->getVisible()) ||
+      (rankingsModal && rankingsModal->isOpen())
+#if TARGET_OS_ANDROID
+      || (fileActionsModalRoot_ && fileActionsModalRoot_->getVisible())
+#endif
+      ;
+  if (!shellModalOpen && event.type == SDL_EVENT_KEY_UP &&
+      (event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0 &&
+      event.key.key >= SDLK_1 && event.key.key <= SDLK_4) {
+    selectTab(static_cast<Tab>(event.key.key - SDLK_1));
+    return {};
+  }
+  if (auto *scene = activeUtilityTab()) {
+    if (activeTab_ == Tab::Music && musicTab_->coversTabHeader())
+      return scene->handleEvents(event);
+    for (auto *view : views)
+      if (!view->handleEvents(event)) return {};
+    return scene->handleEvents(event);
+  }
   return Scene::handleEvents(event);
+}
+
+bool MainMenuScene::selectorTabActive() const {
+  return activeTab_ == Tab::Play || activeTab_ == Tab::Course;
+}
+
+Scene *MainMenuScene::activeUtilityTab() const {
+  if (activeTab_ == Tab::Music) return musicTab_.get();
+  if (activeTab_ == Tab::Ir) return irTab_.get();
+  return nullptr;
+}
+
+bool MainMenuScene::renderViewBeforeScene(const View *) const {
+  return selectorTabActive();
+}
+
+void MainMenuScene::selectTab(Tab tab) {
+  if (tab == activeTab_ || willStart.load()) return;
+  if (selectorTabActive()) {
+    const auto endEditing = [](View *root, const auto &self) -> void {
+      if (auto *input = dynamic_cast<TextInputBox *>(root)) input->endEditing();
+      for (auto *child : root->getChildren()) self(child, self);
+    };
+    endEditing(rootLayout, endEditing);
+  }
+  if (selectorTabActive()) {
+    auto &state = selectorStates_[selectorTab_ == Tab::Course ? 1 : 0];
+    state.folder = activeFolder;
+    state.selected = selectedChartRecord;
+    state.temporaryFolder = temporaryChartFolder;
+    state.search = searchText;
+    state.songScroll = recyclerView->scrollOffset;
+    state.folderScroll = folderRecyclerView->scrollOffset;
+    if (previewWorker_) previewWorker_->stop();
+    stopAndClearSelectedChart();
+  } else if (auto *scene = activeUtilityTab()) {
+    scene->onPause();
+  }
+  for (auto *view : views) view->cancelPointerInput();
+  if (revealContextMenu) revealContextMenu->dismiss();
+  activeTab_ = tab;
+  const float inset = getSafeAreaInsetsUi().top +
+      kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);
+  const auto returnToPlay = [this] { selectTab(Tab::Play); };
+  if (tab == Tab::Music && !musicTab_) {
+    musicTab_ = std::make_unique<MusicPlayerScene>(context);
+    musicTab_->prepareForUse();
+    musicTab_->configureTab(inset, returnToPlay, this);
+    musicTab_->init();
+  } else if (tab == Tab::Ir && !irTab_) {
+    irTab_ = std::make_unique<IrUploadsScene>(context);
+    irTab_->prepareForUse();
+    irTab_->configureTab(inset, returnToPlay, this);
+    irTab_->init();
+  }
+  if (selectorTabActive()) {
+    selectorTab_ = tab;
+    auto &state = selectorStates_[tab == Tab::Course ? 1 : 0];
+    activeFolder = state.folder;
+    temporaryChartFolder = state.temporaryFolder;
+    searchText = state.search;
+    searchBox->setEditingText(searchText);
+    if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint"))
+      hint->setVisible(searchText.empty());
+    restoringTabSelection_ = true;
+    selectedChartRecord.reset();
+    reloadFolderItems();
+    reloadChartList();
+    if (state.selected) {
+      int index = -1;
+      if (chartListCache.leadingRecord &&
+          ((state.selected->courseStart && chartListCache.leadingRecord->courseStart) ||
+           (state.selected->unzipAll && chartListCache.leadingRecord->unzipAll))) {
+        index = 0;
+      } else if (!state.selected->meta.BmsPath.empty()) {
+        index = chartSession->FindChartMetaIndex(chartQueryForActiveFolder(), state.selected->meta.BmsPath);
+        if (index >= 0 && chartListCache.leadingRecord) ++index;
+      }
+      if (index >= 0 && index < recyclerView->size()) {
+        recyclerView->selectedIndex = index;
+        recyclerView->onSelected(recyclerView->get(index), index);
+      }
+    }
+    recyclerView->scrollOffset = std::clamp(state.songScroll, 0.0F,
+        std::max(0.0F, float(recyclerView->size() * recyclerView->itemHeight - recyclerView->getHeight())));
+    folderRecyclerView->scrollOffset = std::clamp(state.folderScroll, 0.0F,
+        std::max(0.0F, float(folderRecyclerView->size() * folderRecyclerView->itemHeight - folderRecyclerView->getHeight())));
+    recyclerView->rebindVisibleItems();
+    folderRecyclerView->rebindVisibleItems();
+    restoringTabSelection_ = false;
+  } else if (auto *scene = activeUtilityTab()) {
+    scene->refreshLanguageIfNeeded();
+    scene->onResume();
+  }
+  updatePanelLayout();
+  refreshTabPresentation();
+  rootLayout->applyYogaLayout();
+}
+
+void MainMenuScene::refreshTabPresentation() {
+  if (!rootLayout) return;
+  const bool selector = selectorTabActive();
+  const bool fullscreen = activeTab_ == Tab::Music && musicTab_ && musicTab_->coversTabHeader();
+  rootLayout->setVisible(!fullscreen);
+  if (selector) rootLayout->setThemedBackgroundColor(main_menu_theme::canvas);
+  else rootLayout->clearBackgroundColor();
+  auto *body = rootLayout->findViewByName("mainMenuBody");
+  body->setDisplay(selector ? YGDisplayFlex : YGDisplayNone);
+  body->setVisible(selector);
+  auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
+  const bool showDock = selector && rendering::window_width >= rendering::window_height;
+  dock->setDisplay(showDock ? YGDisplayFlex : YGDisplayNone);
+  dock->setVisible(showDock);
+  const std::array<const char *, 4> labels{"PLAY", "COURSE", "MUSIC", "IR"};
+  for (size_t index = 0; index < labels.size(); ++index) {
+    auto *button = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + labels[index]));
+    auto *label = dynamic_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonLabel"));
+    styleMenuButton(button, label, index == static_cast<size_t>(activeTab_));
+    button->setStyledBorderWidth(0);
+  }
+  const float inset = getSafeAreaInsetsUi().top +
+      kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);
+  if (musicTab_) musicTab_->setTabTopInset(inset);
+  if (irTab_) irTab_->setTabTopInset(inset);
 }
 
 MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
@@ -758,7 +905,15 @@ void MainMenuScene::init() {
   SDL_Log("Main Menu Scene Initialized");
 }
 
+void MainMenuScene::onInputQueueOverflow() {
+  Scene::onInputQueueOverflow();
+  if (auto *scene = activeUtilityTab()) scene->onInputQueueOverflow();
+}
+
 void MainMenuScene::onPause() {
+  if (auto *scene = activeUtilityTab()) scene->onPause();
+  // External settings may switch profile databases while the shell is retained.
+  if (irTab_) irTab_->onProfileWillChange();
   if (replayLoadTask_.active()) {
     stopReplayLoadWorker();
     willStart.store(false);
@@ -806,8 +961,9 @@ void MainMenuScene::onResume() {
     refreshLongNoteModeClearRankViews();
   }
   refreshLibraryIfNeeded();
-  reselectCurrentChart();
-  queueSelectedSkinHandoff();
+  if (selectorTabActive()) reselectCurrentChart();
+  if (auto *scene = activeUtilityTab()) scene->onResume();
+  if (activeTab_ == Tab::Play) queueSelectedSkinHandoff();
 }
 
 void MainMenuScene::queueSelectedSkinHandoff() {
@@ -855,11 +1011,14 @@ void MainMenuScene::queueSelectedSkinHandoff() {
 
 void MainMenuScene::onPresentationOrientationChanged() {
   updatePanelLayout();
+  refreshTabPresentation();
   presentationSkinRefreshPending = true;
 }
 
 void MainMenuScene::onLanguageChanged() {
   Scene::onLanguageChanged();
+  if (musicTab_) musicTab_->refreshLanguageIfNeeded();
+  if (irTab_) irTab_->refreshLanguageIfNeeded();
   // Rebind presentation only: reinitializing the scene would cancel workers,
   // discard selection, and replace the user's filter and lane-order input.
   if (folderRecyclerView != nullptr) folderRecyclerView->rebindVisibleItems();
@@ -898,6 +1057,8 @@ void MainMenuScene::applyThemeChange() {
   }
 
   appliedUiThemeMode = activeMode;
+  for (Scene *scene : std::array<Scene *, 2>{musicTab_.get(), irTab_.get()})
+    if (scene) for (auto *view : scene->views) view->propagateThemeChange();
   for (auto *view : views) {
     if (view != nullptr) {
       view->propagateThemeChange();
@@ -1028,10 +1189,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
-  musicButton = nullptr;
-  musicButtonText = nullptr;
-  irUploadsButton = nullptr;
-  irUploadsButtonText = nullptr;
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
@@ -1165,7 +1322,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item, prioritizeVisibleArtworkBindings);
-    chartListItemView->setDisplayIndex(idx);
     chartListItemView->setClearRank(clearRankForChart(item));
     if (!item.courseStart && !item.solidArchive && !item.unavailable &&
         !item.meta.BmsPath.empty()) {
@@ -1285,6 +1441,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           fspath_to_utf8(meta.BmsPath));
       return;
     }
+    if (restoringTabSelection_ || !selectorTabActive()) return;
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
     if (previewWorker_ != nullptr) {
@@ -1378,10 +1535,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-  rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
+  rootLayout->setPadding(Edge::Bottom, 0);
   rootLayout->setThemedBackgroundColor(main_menu_theme::canvas);
   auto *header = new View();
   header->setName("mainMenuHeader");
+  header->setThemedBackgroundColor(main_menu_theme::canvas);
   header->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
   header->setHeight(kMenuHeaderHeight)->setFlexShrink(0);
   rootLayout->addView(header);
@@ -1507,29 +1665,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *tabs = new View();
   tabs->setName("mainMenuTabs");
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
-  for (const auto &[key, label] : std::array<std::pair<const char *, const char *>, 2>{
-           {{"all", "library.folders.all_songs.label"},
-            {"favorites", "library.folders.favorites.label"}}}) {
+  const std::array<const char *, 4> tabLabels{"PLAY", "COURSE", "MUSIC", "IR"};
+  for (size_t index = 0; index < tabLabels.size(); ++index) {
     TextView *text = nullptr;
-    auto *button = makeSelectorButton(i18n::message(label), 22, &text);
-    button->setName(std::string("mainMenuTab:") + key);
-    button->setWidth(158)->setHeight(kMenuHeaderHeight - 14);
-    styleMenuButton(button, text, std::string(key) == "all");
+    auto *button = makeSelectorButton(i18n::Text(tabLabels[index]), 22, &text);
+    button->setName(std::string("mainMenuTab:") + tabLabels[index]);
+    button->setWidth(112)->setHeight(kMenuHeaderHeight - 14);
+    styleMenuButton(button, text, index == 0);
     button->setStyledBorderWidth(0);
-    button->setOnClickListener([this, key] {
-      for (const auto &folder : folderRecyclerView->getItems()) {
-        if (folder.key != key) continue;
-        auto selected = folder;
-        selected.expandable = false;
-        selectFolder(selected);
-        reloadFolderItems(true);
-        return;
-      }
-    });
+    button->setOnClickListener([this, index] { selectTab(static_cast<Tab>(index)); });
     tabs->addView(button);
   }
   header->addView(tabs);
   auto *headerSpace = new View();
+  headerSpace->setName("mainMenuHeaderSpace");
   headerSpace->setFlex(1)->setMinWidth(0);
   header->addView(headerSpace);
 
@@ -1601,43 +1750,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   styleMenuButton(parseLogButton, parseLogButtonText);
   libraryHeader->addView(parseLogButton);
 
-  musicButton = makeSelectorButton(i18n::message("menu.music.label"), 18, &musicButtonText);
-  musicButton->setWidth(122);
-  musicButton->setHeight(kMenuActionHeight);
-  musicButton->setOnClickListener([this, &context]() {
-    if (context.sceneManager != nullptr) {
-      if (previewWorker_ != nullptr) {
-        previewWorker_->stop();
-      }
-      stopAndClearSelectedChart();
-      context.sceneManager->changeScene(
-          std::make_unique<MusicPlayerScene>(
-              context, SceneReturnTarget::Retained(this)),
-          true);
-    }
-  });
-  styleMenuButton(musicButton, musicButtonText);
-  libraryHeader->addView(musicButton);
-
-  irUploadsButton =
-      makeSelectorButton(i18n::message("menu.ir_uploads.label"), 18, &irUploadsButtonText);
-  irUploadsButton->setWidth(154);
-  irUploadsButton->setHeight(kMenuActionHeight);
-  irUploadsButton->setOnClickListener([this, &context]() {
-    if (context.sceneManager != nullptr) {
-      if (previewWorker_ != nullptr) {
-        previewWorker_->stop();
-      }
-      stopAndClearSelectedChart();
-      context.sceneManager->changeScene(
-          std::make_unique<IrUploadsScene>(
-              context, SceneReturnTarget::Retained(this)),
-          true);
-    }
-  });
-  styleMenuButton(irUploadsButton, irUploadsButtonText);
-  libraryHeader->addView(irUploadsButton);
-
   tasksButton = makeSelectorButton(i18n::message("menu.task_count.empty"), 18, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(kMenuActionHeight);
@@ -1649,7 +1761,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   addFolderButton->moveTo(*libraryHeader);
   addFolderButton->setWidth(130);
   addFolderButton->setStyledBorderWidth(0);
-  for (auto *button : {parseLogButton, musicButton, irUploadsButton, tasksButton})
+  for (auto *button : {parseLogButton, tasksButton})
     button->setStyledBorderWidth(0);
 
 
@@ -1735,7 +1847,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(chartCount);
 
   left->addView(filterRow);
-  left->addView(ChartListItemView::createColumnHeader());
 
   chartFilterPanel = new ChartFilterPanelView({
       .onClearMarkChanged =
@@ -2185,7 +2296,7 @@ void MainMenuScene::updatePanelLayout() {
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
-  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - kMenuHeaderHeight);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
   const float detailsHeight = portraitDetailsHeight(contentHeight);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
@@ -2199,6 +2310,8 @@ void MainMenuScene::updatePanelLayout() {
   body->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
   dock->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
   dock->setVisible(!portrait);
+  dock->setHeight(kPlayDockHeight + safe.bottom);
+  dock->setPadding(Edge::Bottom, safe.bottom);
   if (browser) {
     browser->setFlex(portrait ? 0.0F : 1.0F);
     browser->setWidth(portrait ? contentWidth : YGUndefined);
@@ -2215,12 +2328,13 @@ void MainMenuScene::updatePanelLayout() {
   }
   if (details) {
     details->setWidth(portrait ? YGUndefined : kDetailsPanelWidth);
-    details->setHeight(portrait ? detailsHeight : YGUndefined)->setMinHeight(0);
+    details->setHeight(portrait ? detailsHeight + safe.bottom : YGUndefined)->setMinHeight(0);
     details->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
     details->setAlignItems(portrait ? YGAlignStretch : YGAlignCenter);
     details->setPadding(Edge::Left, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Right, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Top, 16.0F);
+    details->setPadding(Edge::Bottom, 16.0F + (portrait ? safe.bottom : 0));
   }
   if (detailsScroll) {
     detailsScroll->setWidth(portrait ? YGUndefined : kDetailsContentWidth + 16);
@@ -2252,7 +2366,7 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
            unzipButtonSlot}) {
     view->moveTo(*target);
   }
-  settings->moveTo(portrait ? *records : *rootLayout->findViewByName("mainMenuToolbar"));
+  settings->moveTo(*rootLayout->findViewByName("mainMenuToolbar"));
   primary->moveTo(portrait ? *controls : *details);
   controls->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
   controls->setVisible(portrait);
@@ -2298,22 +2412,33 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
   auto *tabs = rootLayout->findViewByName("mainMenuTabs");
   auto *wordmark = rootLayout->findViewByName("mainMenuWordmark");
-  auto *columnHeader = rootLayout->findViewByName("chartListColumnHeader");
-  const bool narrowHeader = portrait || rendering::window_width < 1600;
-  tabs->setDisplay(narrowHeader ? YGDisplayNone : YGDisplayFlex);
-  wordmark->setWidth(narrowHeader ? 280 : kLibraryPanelWidth);
+  const bool narrowHeader = rendering::window_width < 1000;
+  auto *header = rootLayout->findViewByName("mainMenuHeader");
+  header->setFlexDirection(narrowHeader ? FlexDirection::Column : FlexDirection::Row);
+  header->setHeight(kMenuHeaderHeight * (narrowHeader ? 2 : 1));
+  tabs->setDisplay(YGDisplayFlex);
+  tabs->setWidth(narrowHeader ? YGUndefined : 460);
+  if (narrowHeader) tabs->setWidthPercent(100);
+  for (auto *tab : tabs->getChildren()) {
+    tab->setFlex(narrowHeader ? 1 : 0)->setMinWidth(0)->setWidth(narrowHeader ? YGUndefined : 112);
+  }
+  wordmark->setDisplay(rendering::window_width < 1500 ? YGDisplayNone : YGDisplayFlex);
+  wordmark->setWidth(kLibraryPanelWidth);
+  if (auto *space = rootLayout->findViewByName("mainMenuHeaderSpace"))
+    space->setDisplay(narrowHeader ? YGDisplayNone : YGDisplayFlex);
   const float songWidth = rendering::window_width - getSafeAreaInsetsUi().left - getSafeAreaInsetsUi().right - kLibraryPanelWidth - kDetailsPanelWidth - 48;
-  columnHeader->setDisplay(portrait || songWidth < 840 ? YGDisplayNone : YGDisplayFlex);
   auto *folderTitle = rootLayout->findViewByName("mainMenuFolderTitle");
   folderTitle->setDisplay(portrait || songWidth < 780 ? YGDisplayNone : YGDisplayFlex);
   if (auto *count = rootLayout->findViewByName("mainMenuChartCount"))
     count->setDisplay(portrait || songWidth < 900 ? YGDisplayNone : YGDisplayFlex);
-  toolbar->setFlex(portrait ? 1 : 0)->setMinWidth(0);
+  toolbar->setFlex(0)->setMinWidth(0);
+  toolbar->setWidth(YGUndefined);
+  if (narrowHeader) toolbar->setWidthPercent(100);
   size_t toolbarIndex = 0;
-  constexpr std::array<float, 6> toolbarWidths{64, 80, 104, 86, 110, 110};
+  constexpr std::array<float, 4> toolbarWidths{64, 86, 110, 110};
   for (auto *view : toolbar->getChildren()) {
-    view->setFlex(portrait ? 1 : 0)->setMinWidth(0);
-    view->setWidth(portrait ? YGUndefined : toolbarWidths[std::min(toolbarIndex, toolbarWidths.size() - 1)]);
+    view->setFlex(narrowHeader ? 1 : 0)->setMinWidth(0);
+    view->setWidth(narrowHeader ? YGUndefined : toolbarWidths[std::min(toolbarIndex, toolbarWidths.size() - 1)]);
     ++toolbarIndex;
   }
   auto *summary = readyPlayOptionsButton->getContentView();
@@ -2494,7 +2619,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         .depth = 0,
         .count = -1,
         .expandable = true,
-        .expanded = isExpanded("courses"),
+        .expanded = selectorTab_ == Tab::Course,
     };
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
@@ -2600,6 +2725,20 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     }
   }
 
+  const auto isCourseFolder = [](const LibraryFolderItem &folder) {
+    return folder.type == LibraryFolderItem::Type::CoursesRoot ||
+           folder.type == LibraryFolderItem::Type::CourseTable ||
+           folder.type == LibraryFolderItem::Type::CourseGroup ||
+           folder.type == LibraryFolderItem::Type::Course;
+  };
+  std::erase_if(folders, [&](const LibraryFolderItem &folder) {
+    return selectorTab_ == Tab::Course
+        ? !isCourseFolder(folder) || folder.type == LibraryFolderItem::Type::CoursesRoot
+        : isCourseFolder(folder);
+  });
+  if (selectorTab_ == Tab::Course)
+    for (auto &folder : folders) --folder.depth;
+
   for (auto &folder : folders) {
     folder.clearRank =
         folder.clearMarkFolder ? folder.clearMarkRank
@@ -2607,7 +2746,10 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   }
 
   if (activeFolder.key.empty()) {
-    activeFolder = folders.front();
+    activeFolder = folders.empty()
+        ? LibraryFolderItem{.key = "courses", .label = i18n::tr("library.folders.courses.label"),
+                            .type = LibraryFolderItem::Type::CoursesRoot}
+        : folders.front();
   }
 
   bool activeStillExists = false;
@@ -2622,7 +2764,10 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     }
   }
   if (!activeStillExists) {
-    activeFolder = folders.front();
+    activeFolder = folders.empty()
+        ? LibraryFolderItem{.key = "courses", .label = i18n::tr("library.folders.courses.label"),
+                            .type = LibraryFolderItem::Type::CoursesRoot}
+        : folders.front();
     activeIndex = 0;
   }
   refreshChartFilterPanel();
@@ -3151,14 +3296,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       }
       title->setText(label);
     }
-    for (const char *key : {"all", "favorites"}) {
-      auto *tab = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + key));
-      if (tab) {
-        auto *label = dynamic_cast<TextView *>(tab->getContentView()->findViewByName("selectorButtonLabel"));
-        styleMenuButton(tab, label, activeFolder.key == key);
-        tab->setStyledBorderWidth(0);
-      }
-    }
+
   }
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
@@ -3219,7 +3357,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   recyclerView->scrollOffset = restoredScrollOffset;
 
   const int restoredSelectedIndex =
-      selectedChartRecord && selectedChartRecord->unzipAll && leadingOffset > 0
+      selectedChartRecord && (selectedChartRecord->unzipAll || selectedChartRecord->courseStart) && leadingOffset > 0
           ? 0 : findPathNear(previousSelectedPath, previousSelectedIndex);
 
   recyclerView->selectedIndex = restoredSelectedIndex;
@@ -3540,7 +3678,8 @@ void MainMenuScene::selectChartByPathAfterReload(
     }
   }
 
-  if (activeFolder.type != LibraryFolderItem::Type::AllSongs) {
+  if (selectorTab_ == Tab::Play &&
+      activeFolder.type != LibraryFolderItem::Type::AllSongs) {
     activeFolder = {
         .key = "all",
         .label = i18n::tr("menu.all_songs.label"),
@@ -7709,6 +7848,18 @@ void MainMenuScene::applyReplayExportResult() {
 }
 
 void MainMenuScene::update(float dt) {
+  if (irTab_) {
+    irTab_->refreshLanguageIfNeeded();
+    irTab_->update(dt);
+    irTab_->handleDeferred();
+  }
+  if (activeTab_ == Tab::Music && musicTab_) {
+    musicTab_->refreshLanguageIfNeeded();
+    musicTab_->update(dt);
+    musicTab_->handleDeferred();
+  }
+  if (rootLayout) rootLayout->setVisible(
+      !(activeTab_ == Tab::Music && musicTab_ && musicTab_->coversTabHeader()));
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (presentationSkinRefreshPending &&
       (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
@@ -7738,14 +7889,16 @@ void MainMenuScene::update(float dt) {
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
-  i18n::Text nativeMusicStatusMessage;
-  if (context.musicPlayer.ProcessNativeControlEvents(
-          nativeMusicStatusMessage)) {
-    musicStatusMessage = nativeMusicStatusMessage;
-  }
-  if (context.musicPlayer.ConsumeNativeControlStatus(
-          nativeMusicStatusMessage)) {
-    musicStatusMessage = nativeMusicStatusMessage;
+  if (activeTab_ != Tab::Music) {
+    i18n::Text nativeMusicStatusMessage;
+    if (context.musicPlayer.ProcessNativeControlEvents(
+            nativeMusicStatusMessage)) {
+      musicStatusMessage = nativeMusicStatusMessage;
+    }
+    if (context.musicPlayer.ConsumeNativeControlStatus(
+            nativeMusicStatusMessage)) {
+      musicStatusMessage = nativeMusicStatusMessage;
+    }
   }
   if (musicModalRoot != nullptr && musicModalRoot->getVisible()) {
     refreshMusicModal();
@@ -7756,11 +7909,11 @@ void MainMenuScene::update(float dt) {
   if (rankingsModal) {
     rankingsModal->update();
   }
-  if (rootLayout && rendering::window_height > rendering::window_width) {
+  if (selectorTabActive() && rootLayout && rendering::window_height > rendering::window_width) {
     const auto safe = getSafeAreaInsetsUi();
-    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - kMenuHeaderHeight);
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
     const auto *details = rootLayout->findViewByName("mainMenuDetails");
-    if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
+    if (details && std::abs(details->getHeight() - safe.bottom - portraitDetailsHeight(availableHeight)) > 1) {
       updatePanelLayout();
     }
   }
@@ -7831,16 +7984,24 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
     rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
     rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-    rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
+    rootLayout->setPadding(Edge::Bottom, 0);
     updatePanelLayout();
+    refreshTabPresentation();
     rootLayout->applyYogaLayout();
   }
+  if (auto *scene = activeUtilityTab()) scene->render();
   if (tutorial_ && tutorial_->getVisible()) {
     tutorial_->updateLayout(rendering::window_width, rendering::window_height);
   }
 }
 
 void MainMenuScene::cleanupScene() {
+  if (musicTab_) musicTab_->cleanup();
+  if (irTab_) irTab_->cleanup();
+  musicTab_.reset();
+  irTab_.reset();
+  activeTab_ = selectorTab_ = Tab::Play;
+  selectorStates_ = {};
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
@@ -7896,10 +8057,6 @@ void MainMenuScene::cleanupScene() {
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
-  musicButton = nullptr;
-  musicButtonText = nullptr;
-  irUploadsButton = nullptr;
-  irUploadsButtonText = nullptr;
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;

@@ -61,6 +61,8 @@ class OverlayPortal;
 class BlockingOverlayView;
 class DecideLoadingOverlay;
 class MainMenuPreviewController;
+class MusicPlayerScene;
+class IrUploadsScene;
 class PlayOptionsPanelView;
 class NewcomerTutorialView;
 class ScrollView;
@@ -79,6 +81,7 @@ public:
   ~MainMenuScene() override;
   void init() override;
   void onPause() override;
+  void onInputQueueOverflow() override;
   void onResume() override;
   void onLanguageChanged() override;
   void onPresentationOrientationChanged() override;
@@ -92,6 +95,17 @@ public:
   void cleanupScene() override;
 
 private:
+  enum class Tab { Play, Course, Music, Ir };
+  Tab activeTab_ = Tab::Play;
+  Tab selectorTab_ = Tab::Play;
+  std::unique_ptr<MusicPlayerScene> musicTab_;
+  std::unique_ptr<IrUploadsScene> irTab_;
+  bool restoringTabSelection_ = false;
+  bool selectorTabActive() const;
+  Scene *activeUtilityTab() const;
+  void selectTab(Tab tab);
+  void refreshTabPresentation();
+  bool renderViewBeforeScene(const View *view) const override;
   bool showTutorial_ = false;
   bool findBmsAvailableWithoutTutorial_ = false;
   NewcomerTutorialView *tutorial_ = nullptr;
@@ -164,6 +178,16 @@ private:
     bool sectionHeader = false;
   };
 
+  struct SelectorTabState {
+    LibraryFolderItem folder;
+    std::optional<ChartMetaRecord> selected;
+    std::optional<std::filesystem::path> temporaryFolder;
+    std::string search;
+    float songScroll = 0;
+    float folderScroll = 0;
+  };
+  std::array<SelectorTabState, 2> selectorStates_;
+
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   struct LibraryFolderMetadataCache {
@@ -222,10 +246,6 @@ private:
   TextView *unzipButtonText = nullptr;
   Button *parseLogButton = nullptr;
   TextView *parseLogButtonText = nullptr;
-  Button *musicButton = nullptr;
-  TextView *musicButtonText = nullptr;
-  Button *irUploadsButton = nullptr;
-  TextView *irUploadsButtonText = nullptr;
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;

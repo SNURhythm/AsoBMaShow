@@ -69,6 +69,19 @@ struct Lifecycle {
   }
 };
 struct MainMenuScene : Scene {
+  enum class Tab { Play, Course, Music, Ir };
+  Tab activeTab_ = Tab::Play;
+  struct Utility {
+    int pauses = 0, resumes = 0, profileChanges = 0;
+    void onPause() { ++pauses; }
+    void onResume() { ++resumes; }
+    void onProfileWillChange() { ++profileChanges; }
+  };
+  Utility *utility = nullptr, *irTab_ = nullptr;
+  Utility *activeUtilityTab() { return utility; }
+  bool selectorTabActive() const { return activeTab_ == Tab::Play || activeTab_ == Tab::Course; }
+  int reselections = 0;
+
   MainMenuScene() = default;
   template <class Context> MainMenuScene(Context &, bool) {}
   struct Context {
@@ -101,7 +114,7 @@ struct MainMenuScene : Scene {
   std::optional<int> refreshScoreClearRankViews() { return {}; }
   void refreshLongNoteModeClearRankViews() {}
   void refreshLibraryIfNeeded() { ++refreshed; }
-  void reselectCurrentChart() {}
+  void reselectCurrentChart() { ++reselections; }
   void onResume() RESUME_BODY
   void queueSelectedSkinHandoff() HANDOFF_BODY
 };

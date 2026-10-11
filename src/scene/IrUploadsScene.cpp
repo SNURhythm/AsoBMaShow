@@ -89,7 +89,84 @@ TextView *makeText(const i18n::Text &text, int fontSize,
 
 } // namespace
 
+void IrUploadsScene::configureTab(float topInset,
+                                  std::function<void()> onClose,
+                                  Scene *settingsReturnOwner) {
+  embeddedTab = true;
+  tabClose = std::move(onClose);
+  tabSettingsReturnOwner = settingsReturnOwner;
+  setTabTopInset(topInset);
+}
+
+void IrUploadsScene::setTabTopInset(float topInset) {
+  const float inset = std::max(0.0F, topInset);
+  if (tabTopInset == inset) {
+    return;
+  }
+  tabTopInset = inset;
+  updateLayoutInsets();
+}
+
+void IrUploadsScene::onPause() {
+  // Tab switches keep preparation running; only input ownership changes.
+  onInputQueueOverflow();
+}
+
+void IrUploadsScene::onResume() {
+  refreshProfileIfNeeded();
+  refreshLanguageIfNeeded();
+  refreshProviderState();
+  if (!controller.selectionLocked()) {
+    reloadCandidates();
+  }
+  updateLayoutInsets();
+}
+
+void IrUploadsScene::onProfileWillChange() {
+  stopPreparation();
+  preparationTask.reset();
+  controller = {};
+  displayedProfileId.clear();
+  loadError = {};
+  loadDiagnostic = {};
+  reloadRequested = false;
+  if (candidateList != nullptr) {
+    candidateList->setCandidates({}, {});
+    candidateList->scrollOffset = 0;
+  }
+  refreshUi();
+}
+
+void IrUploadsScene::refreshProfileIfNeeded() {
+  const auto &profileId = context.profileManager.activeProfile().id;
+  if (displayedProfileId == profileId) {
+    return;
+  }
+  onProfileWillChange();
+  displayedProfileId = profileId;
+  reloadCandidates();
+}
+
+void IrUploadsScene::updateLayoutInsets() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+  auto safe = getSafeAreaInsetsUi();
+  if (embeddedTab) safe.top = 0;
+  rootLayout->setSize(rendering::window_width, rendering::window_height);
+  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
+  headerLayout->setHeight(safe.top + kHeaderHeight)
+      ->setPadding(Edge::Top, safe.top + 10)
+      ->setPadding(Edge::Left, safe.left + kScreenPadding)
+      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  contentLayout->setPadding(Edge::Bottom, safe.bottom + 16)
+      ->setPadding(Edge::Left, safe.left + kScreenPadding)
+      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  rootLayout->applyYogaLayout();
+}
+
 void IrUploadsScene::init() {
+  displayedProfileId = context.profileManager.activeProfile().id;
   context.jukebox.stop();
   preparationTask.reset();
   lastLayoutWidth = rendering::window_width;
@@ -115,6 +192,7 @@ EventHandleResult IrUploadsScene::handleEvents(SDL_Event &event) {
 }
 
 void IrUploadsScene::update(float) {
+  refreshProfileIfNeeded();
   applyPreparationUpdates();
   observeRemoteRevisions();
   if (reloadRequested && !controller.selectionLocked()) {
@@ -126,8 +204,7 @@ void IrUploadsScene::update(float) {
                                 lastLayoutHeight != rendering::window_height)) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
-    rootLayout->setSize(rendering::window_width, rendering::window_height);
-    rootLayout->applyYogaLayout();
+    updateLayoutInsets();
   }
 }
 
@@ -140,6 +217,8 @@ void IrUploadsScene::renderScene() {
 void IrUploadsScene::cleanupScene() {
   stopPreparation();
   rootLayout = nullptr;
+  headerLayout = nullptr;
+  contentLayout = nullptr;
   candidateCountText = nullptr;
   providerStatusText = nullptr;
   selectionCountText = nullptr;
@@ -161,15 +240,19 @@ void IrUploadsScene::cleanupScene() {
 }
 
 void IrUploadsScene::buildView() {
-  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  auto safe = getSafeAreaInsetsUi();
+  if (embeddedTab) safe.top = 0;
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
+      ->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0)
       ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
   addView(rootLayout);
 
   auto *header = new View();
+  headerLayout = header;
+  header->setFlexShrink(0);
   header->setHeight(safe.top + kHeaderHeight)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
@@ -186,6 +269,8 @@ void IrUploadsScene::buildView() {
   auto *backButton = makeButton(i18n::message("ir.upload.back.label"), 20);
   backButton->setWidth(118);
   backButton->setOnClickListener([this]() { goBack(); });
+  backButton->setVisible(!embeddedTab);
+  backButton->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   header->addView(backButton);
 
   auto *title = makeText(i18n::message("ir.upload.ir_uploads.label"), 34, ui_theme::textPrimary);
@@ -211,6 +296,7 @@ void IrUploadsScene::buildView() {
   rootLayout->addView(header);
 
   auto *content = new View();
+  contentLayout = content;
   content->setFlex(1)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -573,6 +659,10 @@ void IrUploadsScene::stopPreparation() {
 }
 
 void IrUploadsScene::goBack() {
+  if (embeddedTab) {
+    if (tabClose) tabClose();
+    return;
+  }
   stopPreparation();
   if (context.sceneManager != nullptr) {
     (void)returnToScene(*context.sceneManager, returnTarget_);
@@ -584,8 +674,10 @@ void IrUploadsScene::openIrSettings() {
   if (context.sceneManager != nullptr) {
     returnTarget_.notifySettingsWillOpen();
     context.sceneManager->changeScene(
-        std::make_unique<SettingsScene>(context, SettingsDestination::Ir,
-                                        returnTarget_),
-        false);
+        std::make_unique<SettingsScene>(
+            context, SettingsDestination::Ir,
+            embeddedTab ? SceneReturnTarget::Retained(tabSettingsReturnOwner)
+                        : returnTarget_),
+        embeddedTab);
   }
 }

@@ -75,12 +75,14 @@ int main() {
     require(jacket->imagePath() == path_t("/charts/first/banner.png"),
             "banner artwork is a thumbnail fallback when a stage image is absent");
     require(artwork->getWidth() == 72 && artwork->getHeight() == 72 &&
-                artist->getX() >= title->getX() + title->getWidth() &&
-                difficulty->getX() >= artist->getX() + artist->getWidth(),
-            "desktop rows have square thumbnails and separate title, artist, and difficulty columns");
-    row.setDisplayIndex(2);
-    require(static_cast<TextView *>(row.findViewByName("chartListNumber"))->getText() == "03",
-            "row numbering follows the displayed result order");
+                artist->getX() == title->getX() &&
+                artist->getY() >= title->getY() + title->getHeight() &&
+                difficulty->getX() >= title->getX() + title->getWidth(),
+            "desktop rows stack title and artist beside the thumbnail without overlapping difficulty");
+    auto *leftLamp = row.findViewByName("chartListClearLamp");
+    require(leftLamp && leftLamp->getX() < artwork->getX() &&
+                leftLamp->getHeight() > leftLamp->getWidth(),
+            "the clear lamp is a compact vertical bar before the artwork");
     record.meta.StageFile = "stage.png";
     row.setMeta(record);
     require(jacket->imagePath() == path_t("/charts/first/stage.png"),
@@ -178,8 +180,12 @@ int main() {
             "compact rows preserve a visible clear lamp");
     row.setWidth(964);
     row.applyYogaLayout();
-    require(artist->getX() >= title->getX() + title->getWidth(),
-            "widening restores the independent artist column");
+    require(artist->getX() == title->getX() &&
+                artist->getY() >= title->getY() + title->getHeight(),
+            "widening preserves the stacked title and artist layout");
+    require(leftLamp->getX() < artwork->getX() &&
+                leftLamp->getHeight() > leftLamp->getWidth(),
+            "rotation keeps the clear lamp at the leading edge");
     record.meta.Banner.clear();
     row.setMeta(record);
     require(jacket->imagePath().empty(),

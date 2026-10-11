@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +26,15 @@ public:
           SceneReturnTarget::Registered("MainMenu"))
       : Scene(context), returnTarget_(std::move(returnTarget)) {}
 
+  // Configure before init; the shell owns the header and scene lifetime.
+  void configureTab(float topInset, std::function<void()> onClose,
+                    Scene *settingsReturnOwner);
+  void setTabTopInset(float topInset);
+  void onPause() override;
+  void onResume() override;
+  // Call before switching the active profile/repositories.
+  void onProfileWillChange();
+
   void init() override;
   void update(float dt) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
@@ -33,6 +43,13 @@ public:
 
 private:
   SceneReturnTarget returnTarget_;
+  Scene *tabSettingsReturnOwner = nullptr;
+  bool embeddedTab = false;
+  float tabTopInset = 0;
+  std::function<void()> tabClose;
+  std::string displayedProfileId;
+  void updateLayoutInsets();
+  void refreshProfileIfNeeded();
   void buildView();
   void reloadCandidates();
   void refreshUi();
@@ -46,6 +63,8 @@ private:
   [[nodiscard]] std::string serverOrigin() const;
 
   View *rootLayout = nullptr;
+  View *headerLayout = nullptr;
+  View *contentLayout = nullptr;
   TextView *candidateCountText = nullptr;
   TextView *providerStatusText = nullptr;
   TextView *selectionCountText = nullptr;

@@ -1,5 +1,6 @@
 // Production resource acquisition/release with controlled media and UI effects.
 #include "i18n/Localization.h"
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <functional>
@@ -35,10 +36,16 @@ struct NativeMusic {
   std::optional<MusicTrack> CurrentTrackSnapshot() const { return current; }
   void PlayCurrentAsync(std::string &, const i18n::Text &) { playback.loaded = true; }
 };
+struct ProfileManager {
+  struct Profile { std::string id = "first-profile"; } profile;
+  const Profile &activeProfile() const { return profile; }
+};
 struct ApplicationContext {
   Evidence e;
   Jukebox jukebox{e};
   NativeMusic musicPlayer;
+  ProfileManager profileManager;
+  int libraryRevision = 0;
   std::atomic_bool ignoreBgaPostOptions{false};
 };
 struct View {
@@ -47,6 +54,8 @@ struct View {
   void setVisible(bool) {}
   void setSize(int, int) {}
   void applyYogaLayout() {}
+  void cancelPointerInput() { e.events.push_back("cancel-input"); }
+  void endEditing() {}
   void freeImage() { e.events.push_back("free-image"); }
   Evidence &e;
 };
@@ -74,6 +83,26 @@ public:
   explicit MusicPlayerScene(ApplicationContext &context) : Scene(context) {}
   ~MusicPlayerScene() override;
   void watchVideo();
+  void onPause();
+  void onResume();
+  std::string displayedProfileId = "first-profile", statusMessage;
+  int pendingDeletePlaylistId = 0, pendingClearPlaylistId = 0,
+      selectedLibraryPlaylistId = 0;
+  int reloads = 0, observedLibraryRevision = -1;
+  bool selectionPreserved = false;
+  void reloadData(bool preserveSelection) {
+    ++reloads;
+    observedLibraryRevision = context.libraryRevision;
+    selectionPreserved = preserveSelection;
+  }
+  void applySystemPlaybackPrivacy(bool) {}
+  void refreshLanguageIfNeeded() {}
+  void setTabTopInset(float topInset);
+  float tabTopInset = 0;
+  int layoutUpdates = 0;
+  void updateLayoutInsets() { ++layoutUpdates; }
+  void onInputQueueOverflow() override;
+  void refreshPlaybackRateControl() {}
   void cleanupScene() override;
   void exitVideoFullscreen();
   std::optional<MusicTrack> displayTrack() const { return fallback; }
@@ -191,7 +220,54 @@ void testUnownedDestructionPreservesOtherPlayback(int priorState) {
   const int remainingViews = priorState == 1 || priorState == 2 ? 3 : 0;
   assert(context.e.events == std::vector<std::string>(remainingViews, "view"));
 }
+void testTabPauseReleasesVideoButKeepsPlaybackAndViews() {
+  ApplicationContext context;
+  MusicPlayerScene scene(context);
+  scene.buildControlledViews();
+  scene.setTabTopInset(80);
+  scene.setTabTopInset(80);
+  assert(scene.layoutUpdates == 1 && scene.tabTopInset == 80);
+  scene.setTabTopInset(-10);
+  scene.setTabTopInset(0);
+  assert(scene.layoutUpdates == 2 && scene.tabTopInset == 0);
+  scene.watchVideo();
+  scene.seekMouseDown = scene.videoSeekMouseDown = true;
+  scene.activeSeekTouchId = 4;
+  scene.activeVideoSeekTouchId = 5;
+  scene.playbackModeDropdownOpen = true;
+  context.e.events.clear();
+  scene.onPause();
+  assert(!scene.videoFullscreenActive && !scene.videoVisualsLoaded);
+  assert(!context.ignoreBgaPostOptions && !context.jukebox.visualsEnabled);
+  assert(context.musicPlayer.playback.loaded && context.musicPlayer.current);
+  assert(!scene.seekMouseDown && !scene.videoSeekMouseDown);
+  assert(scene.activeSeekTouchId == -1 && scene.activeVideoSeekTouchId == -1);
+  assert(!scene.playbackModeDropdownOpen && context.e.views == 0);
+  const auto events = context.e.events;
+  scene.onPause();
+  assert(context.e.events.size() == events.size() + 3);
+  assert(scene.views.size() == 3);
+}
+void testResumeRefreshesSameProfileLibraryAndClearsChangedProfileSelection() {
+  ApplicationContext context;
+  MusicPlayerScene scene(context);
+  scene.pendingDeletePlaylistId = 7;
+  scene.onResume();
+  assert(scene.reloads == 1 && scene.selectionPreserved);
+  context.libraryRevision = 1; // PLAY changed chart/favorite data only.
+  scene.onResume();
+  assert(scene.reloads == 2 && scene.observedLibraryRevision == 1);
+  assert(scene.selectionPreserved && scene.pendingDeletePlaylistId == 7);
+  context.profileManager.profile.id = "next-profile";
+  scene.pendingClearPlaylistId = scene.selectedLibraryPlaylistId = 7;
+  scene.onResume();
+  assert(scene.reloads == 3 && !scene.selectionPreserved);
+  assert(scene.pendingDeletePlaylistId == 0 && scene.pendingClearPlaylistId == 0);
+  assert(scene.selectedLibraryPlaylistId == 0 && scene.displayedProfileId == "next-profile");
+}
 int main() {
+  testResumeRefreshesSameProfileLibraryAndClearsChangedProfileSelection();
+  testTabPauseReleasesVideoButKeepsPlaybackAndViews();
   for (const bool previous : {false, true}) {
     for (const bool bga : {false, true}) {
       testDirectDestruction(previous, bga, false);

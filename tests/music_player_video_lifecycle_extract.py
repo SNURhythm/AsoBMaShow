@@ -16,14 +16,17 @@ def main():
     fixture = (args.root / "tests/music_player_video_lifecycle_fixture.cpp").read_text()
     fixture = fixture.replace("BASE_METHODS", "\n".join(extract(base, signature) for signature in (
         "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()",
-        "void clearPostedDeferred()")))
+        "void clearPostedDeferred()", "virtual void onInputQueueOverflow()")))
     cleanup = extract(source, "void MusicPlayerScene::cleanupScene()")
     # View implementations are controlled; keep every production cleanup handle.
     handles = re.findall(r"^  (\w+) = nullptr;", cleanup, re.MULTILINE)
     fixture = fixture.replace("VIEW_HANDLES", "\n".join(f"  View *{name} = nullptr;" for name in handles))
     fixture = fixture.replace("PLAYER_METHODS", "\n".join(extract(source, signature) for signature in (
         "MusicPlayerScene::~MusicPlayerScene()", "void MusicPlayerScene::watchVideo()",
-        "void MusicPlayerScene::exitVideoFullscreen()", "void MusicPlayerScene::cleanupScene()")))
+        "void MusicPlayerScene::exitVideoFullscreen()", "void MusicPlayerScene::cleanupScene()",
+        "void MusicPlayerScene::onPause()", "void MusicPlayerScene::onResume()",
+        "void MusicPlayerScene::onInputQueueOverflow()",
+        "void MusicPlayerScene::setTabTopInset(float topInset)")))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)
 

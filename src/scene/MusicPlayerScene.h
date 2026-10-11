@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,6 +39,15 @@ public:
   ~MusicPlayerScene() override;
 
   void onInputQueueOverflow() override;
+  // Configure before init; the shell owns the header and scene lifetime.
+  void configureTab(float topInset, std::function<void()> onClose,
+                    Scene *settingsReturnOwner);
+  void setTabTopInset(float topInset);
+  void onPause() override;
+  void onResume() override;
+  void onLanguageChanged() override;
+  [[nodiscard]] bool coversTabHeader() const { return videoFullscreenActive; }
+
   void init() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   void update(float dt) override;
@@ -46,6 +56,11 @@ public:
 
 private:
   SceneReturnTarget returnTarget_;
+  bool embeddedTab = false;
+  float tabTopInset = 0;
+  std::function<void()> tabClose;
+  std::string displayedProfileId;
+  void updateLayoutInsets();
   using MusicTrack = music_playlist::MusicTrack;
   using PlaylistInfo = MusicPlaylistInfo;
   enum class MusicPlayerTab { Library, Favorites, Playlists, Player };
@@ -58,8 +73,8 @@ private:
   void buildPlaylistsPage(View *page);
   void buildPlayerPage(View *page);
   void buildVideoOverlay();
-  View *makePanel(const std::string &title, TextView **subtitleText = nullptr);
-  Button *makeButton(const std::string &label, int fontSize,
+  View *makePanel(const i18n::Text &title, TextView **subtitleText = nullptr);
+  Button *makeButton(const i18n::Text &label, int fontSize,
                      TextView **textOut = nullptr);
   Button *makeIconButton(uint32_t iconCodepoint, int fontSize,
                          TextView **textOut = nullptr);
@@ -67,7 +82,7 @@ private:
                              uint32_t trailingIconCodepoint, int fontSize,
                              TextView **leadingTextOut = nullptr,
                              TextView **trailingTextOut = nullptr);
-  Button *makeNavButton(const std::string &label, TextView **textOut);
+  Button *makeNavButton(const i18n::Text &label, TextView **textOut);
   void styleButton(Button *button, TextView *text,
                    View::ThemeColorProvider normal,
                    View::ThemeColorProvider hover,
@@ -217,6 +232,8 @@ private:
   void goBack();
 
   View *rootLayout = nullptr;
+  View *headerLayout = nullptr;
+  View *contentLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
   View *videoOverlayRoot = nullptr;
   View *videoArtworkBackdrop = nullptr;

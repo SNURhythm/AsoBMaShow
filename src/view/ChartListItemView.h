@@ -14,8 +14,6 @@ public:
   ChartListItemView(int x, int y, int width, int height,
                     const ChartMetaRecord &record);
 
-  static View *createColumnHeader();
-  void setDisplayIndex(int index);
   void setMeta(const ChartMetaRecord &record,
                bool prioritizeArtwork = false);
   void setClearRank(int clearRank);
@@ -42,10 +40,6 @@ private:
   std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
   View *contentCard;
   bool compact_ = false;
-  View *selectedRail;
-  View *clearColumn;
-  TextView *rowNumber;
-  TextView *clearLabel;
   TextView *artworkPlaceholder;
   View *clearLamp;
   View *artworkFrame;

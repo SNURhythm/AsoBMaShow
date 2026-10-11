@@ -14,11 +14,8 @@
 #include <sstream>
 
 namespace {
-constexpr int kRowNumberWidth = 36;
 constexpr int kArtworkWidth = 72;
-constexpr int kArtistWidth = 140;
 constexpr int kDifficultyColumnWidth = 86;
-constexpr int kClearWidth = 104;
 constexpr int kBestWidth = 86;
 constexpr int kFavoriteWidth = 40;
 constexpr const char *kUiFont = main_menu_theme::font;
@@ -62,36 +59,6 @@ std::string keyModeDescription(const bms_parser::ChartMeta &meta) {
 }
 } // namespace
 
-View *ChartListItemView::createColumnHeader() {
-  auto *header = new View();
-  header->setName("chartListColumnHeader");
-  header->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
-  header->setHeight(50)->setFlexShrink(0)->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12)->setGap(12);
-  auto cell = [header](const char *key, int width, bool grow = false) {
-    auto *text = rowText("", 16, 30);
-    if (*key) text->setLocalizedText(i18n::message(key));
-    text->setThemedColor(main_menu_theme::muted);
-    if (grow) text->setFlex(1);
-    else text->setWidth(width);
-    header->addView(text);
-    return text;
-  };
-  cell("", kRowNumberWidth)->setText("#");
-  cell("", kArtworkWidth);
-  cell("menu.selector.title.label", 0, true);
-  cell("menu.selector.artist.label", kArtistWidth);
-  cell("menu.selector.difficulty.label", kDifficultyColumnWidth);
-  cell("menu.selector.clear.label", kClearWidth);
-  cell("menu.selector.best.label", kBestWidth);
-  auto *favoriteHeading = new TextView(ui_icons::kFontAwesomeSolidPath, 20);
-  favoriteHeading->setText(ui_icons::textForCodepoint(0xf005));
-  favoriteHeading->setWidth(kFavoriteWidth)->setHeight(30);
-  favoriteHeading->setVAlign(TextView::MIDDLE);
-  favoriteHeading->setThemedColor(main_menu_theme::muted);
-  header->addView(favoriteHeading);
-  return header;
-}
-
 ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const ChartMetaRecord &record)
     : View(x, y, width, height) {
@@ -107,15 +74,13 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   auto *rule = new View();
   rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(main_menu_theme::rule);
   addView(rule);
-  selectedRail = new View();
-  selectedRail->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0);
-  selectedRail->setPosition(Edge::Top, 0)->setWidth(7)->setHeight(height - 1);
-  selectedRail->setThemedBackgroundColor(main_menu_theme::action);
-  contentCard->addView(selectedRail);
+  clearLamp = new View();
+  clearLamp->setName("chartListClearLamp");
+  clearLamp->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0);
+  clearLamp->setPosition(Edge::Top, 8)->setWidth(8)->setHeight(height - 17);
+  clearLamp->setBorderColor(Color(76, 80, 89, 255));
+  contentCard->addView(clearLamp);
 
-  rowNumber = rowText("chartListNumber", 18, 30);
-  rowNumber->setWidth(kRowNumberWidth);
-  contentCard->addView(rowNumber);
   artworkFrame = new View();
   artworkFrame->setName("chartListArtwork");
   artworkFrame->setWidth(kArtworkWidth)->setHeight(kArtworkWidth)->setFlexShrink(0);
@@ -141,8 +106,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   textLayout->addView(titleView);
   contentCard->addView(textLayout);
   artistView = rowText("chartListArtist", 21, 32);
-  artistView->setWidth(kArtistWidth);
-  contentCard->addView(artistView);
+  textLayout->addView(artistView);
 
   detailsLayout = new View();
   detailsLayout->setWidth(kDifficultyColumnWidth)->setFlexShrink(0);
@@ -158,18 +122,6 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   keyModeView->setAlign(TextView::CENTER);
   detailsLayout->addView(keyModeView);
   contentCard->addView(detailsLayout);
-
-  clearColumn = new View();
-  clearColumn->setWidth(kClearWidth)->setFlexShrink(0)->setGap(6);
-  clearLabel = rowText("chartListClearLabel", 16, 28);
-  clearLabel->setAutoFitText(true);
-  clearColumn->addView(clearLabel);
-  clearLamp = new View();
-  clearLamp->setName("chartListClearLamp");
-  clearLamp->setWidth(48)->setHeight(7)->setFlexShrink(0);
-  clearLamp->setBorderColor(Color(76, 80, 89, 255));
-  clearColumn->addView(clearLamp);
-  contentCard->addView(clearColumn);
 
   scoreRankColumn = new View();
   scoreRankColumn->setName("chartListScoreRank");
@@ -215,33 +167,12 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   applyYogaLayout();
 }
 
-void ChartListItemView::setDisplayIndex(int index) {
-  std::ostringstream number;
-  number << std::setw(2) << std::setfill('0') << index + 1;
-  rowNumber->setText(number.str());
-}
-
 void ChartListItemView::onLayout() {
   View::onLayout();
   const bool compact = getWidth() < 840;
   if (compact == compact_) return;
   compact_ = compact;
   View::LayoutBatchScope batch;
-  rowNumber->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
-  rowNumber->setVisible(!compact);
-  artistView->moveTo(compact ? *textLayout : *contentCard);
-  if (!compact) {
-    // Reappend trailing columns so Artist returns immediately after Title.
-    for (auto *view : {detailsLayout, clearColumn, scoreRankColumn, static_cast<View *>(favoriteButton)}) {
-      view->moveTo(*textLayout);
-      view->moveTo(*contentCard);
-    }
-  }
-  artistView->setWidth(compact ? YGUndefined : kArtistWidth);
-  clearColumn->setWidth(compact ? 18 : kClearWidth);
-  clearLabel->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
-  clearLabel->setVisible(!compact);
-  clearLamp->setWidth(compact ? 8 : 48)->setHeight(compact ? 36 : 7);
   scoreRankColumn->setWidth(compact ? 76 : kBestWidth);
 }
 
@@ -291,7 +222,6 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
 }
 
 void ChartListItemView::setClearRank(int clearRank) {
-  clearLabel->setText(clearRank == kNoClearTypeRank ? "—" : clearTypeRankToLabel(clearRank));
   if (!solidArchive && hasClearLampColor(clearRank)) {
     clearLamp->setBorderWidth(1);
     clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
@@ -353,7 +283,6 @@ void ChartListItemView::refreshScoreRankColor() {
 void ChartListItemView::onSelected() {
   selected = true;
   contentCard->setThemedBackgroundColor(main_menu_theme::selected);
-  selectedRail->setVisible(true);
   applyTextColors(true);
   refreshFavoriteButton();
 }
@@ -361,7 +290,6 @@ void ChartListItemView::onSelected() {
 void ChartListItemView::onUnselected() {
   selected = false;
   contentCard->setThemedBackgroundColor(main_menu_theme::canvas);
-  selectedRail->setVisible(false);
   applyTextColors(false);
   refreshFavoriteButton();
 }
@@ -375,8 +303,6 @@ void ChartListItemView::applyTextColors(bool selected) {
   artistView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
   titleView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::ink);
   artistView->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::secondary);
-  rowNumber->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::secondary);
-  clearLabel->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::ink);
   keyModeView->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted);
   if (!selected && unavailable) titleView->setThemedColor(main_menu_theme::error);
   else if (!selected && solidArchive) titleView->setThemedColor(main_menu_theme::warning);
