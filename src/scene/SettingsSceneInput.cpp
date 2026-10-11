@@ -9,6 +9,9 @@
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 #include "VirtualControllerEditorView.h"
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
 
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
@@ -488,6 +491,75 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   const InputSettingsLayout layout =
       resolveInputSettingsLayout(bodyWidth, metrics.compact);
 
+  cards->addView(makeWrappedText(i18n::message("settings.input.general.label"),
+      metrics.sectionTitleSize, ui_theme::textPrimary()));
+  cards->addView(makeWrappedText(i18n::message("settings.input.general.help"),
+      metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *notePriorityControls = new View();
+  notePriorityControls->setFlexDirection(FlexDirection::Column);
+  notePriorityControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  notePriorityControls->setAlignItems(YGAlignFlexStart);
+  notePriorityModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  notePriorityModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        notePriorityModeText);
+  notePriorityModeButton->setOnClickListener([this]() {
+    context.settings.notePriorityMode =
+        nextNotePriorityMode(context.settings.notePriorityMode);
+    persistSettings();
+  });
+  notePriorityControls->addView(notePriorityModeButton);
+  cards->addView(makeCard(
+      metrics, i18n::message("settings.timing.note_priority.label"), i18n::message("settings.timing.choose_which_nearby_note_press_judges.message"),
+      notePriorityControls, metrics.modeCardHeight,
+      metrics.cardsWidth));
+
+  auto *touchVisualizationControls = new View();
+  touchVisualizationControls->setFlexDirection(FlexDirection::Column);
+  touchVisualizationControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  touchVisualizationControls->setAlignItems(YGAlignFlexStart);
+  touchVisualizationModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  touchVisualizationModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        touchVisualizationModeText);
+  touchVisualizationModeButton->setOnClickListener([this]() {
+    context.settings.touchVisualizationEnabled =
+        !context.settings.touchVisualizationEnabled;
+    persistSettings();
+  });
+  touchVisualizationControls->addView(touchVisualizationModeButton);
+  cards->addView(makeCard(
+      metrics, i18n::message("settings.visual.touch_points.label"), i18n::message("settings.visual.show_touch_positions_during_play.message"),
+      touchVisualizationControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  if (IsIOSPad()) {
+    auto *controls = new View();
+    ipadGestureReminderModeText =
+        makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    ipadGestureReminderModeButton = makeControlButton(metrics.actionButtonWidth,
+                                                     metrics.actionButtonHeight,
+                                                     ipadGestureReminderModeText);
+    ipadGestureReminderModeButton->setOnClickListener([this]() {
+      context.settings.ipadGestureReminderEnabled =
+          !context.settings.ipadGestureReminderEnabled;
+      persistSettings();
+    });
+    controls->addView(ipadGestureReminderModeButton);
+    cards->addView(makeCard(
+        metrics, i18n::message("settings.visual.ipad_gesture_reminder.label"),
+        i18n::message("settings.visual.ipad_gesture_reminder.description"),
+        controls, metrics.modeCardHeight, metrics.cardsWidth));
+  }
+#endif
+
+  cards->addView(makeWrappedText(i18n::message("settings.input.scoped.label"),
+      metrics.sectionTitleSize, ui_theme::textPrimary()));
   auto *selectorBody = new View();
   selectorBody->setFlexDirection(FlexDirection::Column);
   selectorBody->setGap(static_cast<float>(layout.selectorGap));
@@ -855,44 +927,6 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         gyroscopeBody, metrics.compact ? 300 : 240, metrics.cardsWidth));
   }
 
-  const bool showInputMonitor =
-      !showGyroscopeSettings ||
-      inputCaptureController->state() != InputCaptureController::State::Idle;
-  if (showInputMonitor) {
-    auto *monitorBody = new View();
-    monitorBody->setFlexDirection(FlexDirection::Column);
-    monitorBody->setGap(metrics.compact ? 8.0F : 12.0F);
-    inputCaptureStateText =
-        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
-    if (!showGyroscopeSettings) {
-      inputMonitorText =
-          makeWrappedText(i18n::message("settings.input.waiting_input.progress"), metrics.smallTextSize,
-                          ui_theme::textSecondary());
-    }
-    inputErrorText =
-        makeWrappedText("", metrics.smallTextSize, ui_theme::coral());
-    monitorBody->addView(inputCaptureStateText);
-    if (!showGyroscopeSettings) {
-      monitorBody->addView(inputMonitorText);
-    }
-    monitorBody->addView(inputErrorText);
-    if (inputCaptureController->state() !=
-        InputCaptureController::State::Idle) {
-      auto *cancelButton = makeControlButton(
-          metrics.actionButtonWidth, metrics.actionButtonHeight,
-          makeText(i18n::message("settings.input.cancel.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      cancelButton->setOnClickListener([this]() {
-        inputCaptureController->cancel();
-        inputCaptureAction.reset();
-        requestInputViewRebuild();
-      });
-      monitorBody->addView(cancelButton);
-    }
-    cards->addView(makeCard(metrics, i18n::message("settings.input.input_monitor.label"), "", monitorBody,
-                            metrics.compact ? 210 : 190, metrics.cardsWidth));
-  }
-
   auto *bindingsBody = new View();
   bindingsBody->setFlexDirection(FlexDirection::Column);
   bindingsBody->setGap(metrics.compact ? 16.0F : 20.0F);
@@ -1091,6 +1125,44 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   cards->addView(makeCard(
       metrics, i18n::message("settings.input.bindings.label"), i18n::message("settings.input.select_bind_then_press_control.message"),
       bindingsBody, metrics.compact ? 400 : 360, metrics.cardsWidth));
+
+  const bool showInputMonitor =
+      !showGyroscopeSettings ||
+      inputCaptureController->state() != InputCaptureController::State::Idle;
+  if (showInputMonitor) {
+    auto *monitorBody = new View();
+    monitorBody->setFlexDirection(FlexDirection::Column);
+    monitorBody->setGap(metrics.compact ? 8.0F : 12.0F);
+    inputCaptureStateText =
+        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+    if (!showGyroscopeSettings) {
+      inputMonitorText =
+          makeWrappedText(i18n::message("settings.input.waiting_input.progress"), metrics.smallTextSize,
+                          ui_theme::textSecondary());
+    }
+    inputErrorText =
+        makeWrappedText("", metrics.smallTextSize, ui_theme::coral());
+    monitorBody->addView(inputCaptureStateText);
+    if (!showGyroscopeSettings) {
+      monitorBody->addView(inputMonitorText);
+    }
+    monitorBody->addView(inputErrorText);
+    if (inputCaptureController->state() !=
+        InputCaptureController::State::Idle) {
+      auto *cancelButton = makeControlButton(
+          metrics.actionButtonWidth, metrics.actionButtonHeight,
+          makeText(i18n::message("settings.input.cancel.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      cancelButton->setOnClickListener([this]() {
+        inputCaptureController->cancel();
+        inputCaptureAction.reset();
+        requestInputViewRebuild();
+      });
+      monitorBody->addView(cancelButton);
+    }
+    cards->addView(makeCard(metrics, i18n::message("settings.input.input_monitor.label"), "", monitorBody,
+                            metrics.compact ? 210 : 190, metrics.cardsWidth));
+  }
 
   refreshInputMonitorText();
   inputLastViewSignature = inputViewSignature();

@@ -239,6 +239,79 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     return cardsColumn;
   }
 
+  auto *volumeControls = new View();
+  volumeControls->setFlexDirection(FlexDirection::Column);
+  volumeControls->setGap(metrics.compact ? 14.0F : 18.0F);
+  auto makeVolumeRow = [this, &metrics](const i18n::Text &label, int busIndex,
+                                        TextInputBox **inputOut) {
+    auto *group = new View();
+    group->setFlexDirection(FlexDirection::Column);
+    group->setGap(metrics.compact ? 7.0F : 9.0F);
+    group->addView(
+        makeText(label, metrics.bodyTextSize, ui_theme::textSecondary()));
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setGap(metrics.compact ? 8.0F : 10.0F);
+    row->setAlignItems(YGAlignCenter);
+    auto *minus =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5");
+    minus->setOnClickListener(
+        [this, busIndex]() { adjustVolume(busIndex, -5); });
+    row->addView(minus);
+    auto *input = makeNumericInput(metrics);
+    input->onEditingFinished([this, input, busIndex](const std::string &) {
+      commitVolumeInput(input, busIndex);
+    });
+    *inputOut = input;
+    row->addView(makeInputFrame(metrics, input));
+    auto *plus = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5");
+    plus->setOnClickListener(
+        [this, busIndex]() { adjustVolume(busIndex, 5); });
+    row->addView(plus);
+    group->addView(row);
+    return group;
+  };
+  volumeControls->addView(
+      makeVolumeRow(i18n::message("settings.audio.volume.master.label"), 0, &masterVolumeInput));
+  volumeControls->addView(makeVolumeRow(i18n::message("settings.audio.volume.bgm.label"), 1, &bgmVolumeInput));
+  volumeControls->addView(
+      makeVolumeRow(i18n::message("settings.audio.volume.keysound.label"), 2, &keysoundVolumeInput));
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.audio.volume.label"), "",
+      volumeControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *keysoundControls = new View();
+  keysoundControls->setFlexDirection(FlexDirection::Column);
+  keysoundControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  keysoundControls->setAlignItems(YGAlignFlexStart);
+  keysoundModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  keysoundModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText);
+  keysoundModeButton->setOnClickListener([this]() {
+    context.settings.inputKeysoundEnabled =
+        !context.settings.inputKeysoundEnabled;
+    persistSettings();
+  });
+  keysoundControls->addView(keysoundModeButton);
+  prepMetronomeModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  prepMetronomeModeButton =
+      makeControlButton(kFitContentWidth, metrics.actionButtonHeight,
+                        prepMetronomeModeText);
+  prepMetronomeModeButton->setOnClickListener([this]() {
+    context.settings.prepMetronomeEnabled =
+        !context.settings.prepMetronomeEnabled;
+    persistSettings();
+  });
+  keysoundControls->addView(prepMetronomeModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.timing.input_audio.label"), i18n::message("settings.timing.choose_hit_sounds_count_in.message"),
+      keysoundControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   const auto model = BuildAudioControlModel(
       audioDraft, context.audioDeviceManager.capabilities(),
       context.jukebox.audioRuntime().runtimeState());
@@ -332,48 +405,6 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.audio.audio_output.label"), i18n::message("settings.audio.choose_output_latency.message"),
       streamControls, metrics.modeCardHeight, metrics.cardsWidth));
-
-  auto *volumeControls = new View();
-  volumeControls->setFlexDirection(FlexDirection::Column);
-  volumeControls->setGap(metrics.compact ? 14.0F : 18.0F);
-  auto makeVolumeRow = [this, &metrics](const i18n::Text &label, int busIndex,
-                                        TextInputBox **inputOut) {
-    auto *group = new View();
-    group->setFlexDirection(FlexDirection::Column);
-    group->setGap(metrics.compact ? 7.0F : 9.0F);
-    group->addView(
-        makeText(label, metrics.bodyTextSize, ui_theme::textSecondary()));
-    auto *row = new View();
-    row->setFlexDirection(FlexDirection::Row);
-    row->setFlexWrap(YGWrapWrap);
-    row->setGap(metrics.compact ? 8.0F : 10.0F);
-    row->setAlignItems(YGAlignCenter);
-    auto *minus =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-5");
-    minus->setOnClickListener(
-        [this, busIndex]() { adjustVolume(busIndex, -5); });
-    row->addView(minus);
-    auto *input = makeNumericInput(metrics);
-    input->onEditingFinished([this, input, busIndex](const std::string &) {
-      commitVolumeInput(input, busIndex);
-    });
-    *inputOut = input;
-    row->addView(makeInputFrame(metrics, input));
-    auto *plus = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+5");
-    plus->setOnClickListener(
-        [this, busIndex]() { adjustVolume(busIndex, 5); });
-    row->addView(plus);
-    group->addView(row);
-    return group;
-  };
-  volumeControls->addView(
-      makeVolumeRow(i18n::message("settings.audio.volume.master.label"), 0, &masterVolumeInput));
-  volumeControls->addView(makeVolumeRow(i18n::message("settings.audio.volume.bgm.label"), 1, &bgmVolumeInput));
-  volumeControls->addView(
-      makeVolumeRow(i18n::message("settings.audio.volume.keysound.label"), 2, &keysoundVolumeInput));
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.audio.volume.label"), "",
-      volumeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *diagnostics = new View();
   diagnostics->setFlexDirection(FlexDirection::Column);

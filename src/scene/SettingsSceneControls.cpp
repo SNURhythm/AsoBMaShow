@@ -691,10 +691,11 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   };
   applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);
-  applyTabStyle(visualTabButton, visualTabText, SettingsTab::Visual);
+  applyTabStyle(hudTabButton, hudTabText, SettingsTab::Hud);
+  applyTabStyle(backgroundTabButton, backgroundTabText, SettingsTab::Background);
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
   applyTabStyle(inputTabButton, inputTabText, SettingsTab::Input);
-  applyTabStyle(miscTabButton, miscTabText, SettingsTab::Misc);
+  applyTabStyle(generalTabButton, generalTabText, SettingsTab::General);
   applyTabStyle(audioTabButton, audioTabText, SettingsTab::Audio);
   applyTabStyle(displayTabButton, displayTabText, SettingsTab::Display);
   applyTabStyle(difficultyTablesTabButton, difficultyTablesTabText,

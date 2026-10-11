@@ -8,6 +8,40 @@ for input, audio/video, Internet Ranking, gameplay options, tables, and skins.
 Views are reusable layout/rendering components, not owners of application
 transactions.
 
+## Settings organization
+
+Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,
+Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
+
+- Profiles shows the active profile first, other profiles next, then creation
+  and import/export tools.
+- Input separates profile-wide note priority, touch indicators, and iPad
+  gesture reminders from scoped configuration. These preferences appear above
+  the scope selector and apply to every mode/device. In the scoped section,
+  key mode selects touch/virtual-controller layouts and bindings; player and
+  device select bindings. Touch and virtual-controller editors precede bindings,
+  and the input monitor follows the binding list.
+- Timing contains audio and visual calibration offsets. HUD owns judgement
+  text/combo styling and position, FAST/SLOW and millisecond feedback, timing
+  indicators, judgement counts, and gauge placement. Built-in-only controls
+  are identified separately from HUD settings shared with custom skins.
+- Lane starts with preview and scroll/covers, then built-in geometry, opacity,
+  beam/keybomb effects, and visibility aids. Preview controls follow the same
+  geometry/effect order. Background groups BGA playback, aspect, brightness,
+  and blur. Skins retains selection and skin-specific appearance controls,
+  followed by package installation and diagnostics.
+- Audio starts with volumes and input sounds/count-in, followed by device,
+  sample rate/buffer settings, and test sound/status. Display retains orientation
+  and platform display controls.
+- BMS Library groups folders, archive preview/extraction preferences, and cache
+  cleanup. Difficulty Tables puts installation in its own first card, before
+  installed-table updates/removal. IR groups connection and submission tools.
+- General contains language and application theme.
+
+This organization changes presentation only: saved setting keys, profile and
+orientation scopes, platform visibility, and action callbacks retain their
+existing behavior.
+
 ## Code map
 
 - `src/scene/SceneManager.*` and `Scene.*` define scene navigation and shared

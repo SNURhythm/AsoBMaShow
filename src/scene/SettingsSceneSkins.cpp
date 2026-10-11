@@ -1396,9 +1396,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         ui_theme::lime()));
     imports->addView(nameRow);
   }
-  column->addView(makeCard(metrics, i18n::message("settings.skins.install.label"),
-                           i18n::message("settings.skins.import_zip_unpacked_folder.message"), imports,
-                           metrics.modeCardHeight, metrics.cardsWidth));
+
 
   const auto traits = skin::gameplaySkinSettingsTargets();
   if (!std::ranges::any_of(traits, [this](const auto &trait) {
@@ -1672,6 +1670,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     column->addView(makeCard(metrics, i18n::message("settings.skins.installed_skins.label"), i18n::message("settings.skins.catalog.label"), empty,
                              metrics.modeCardHeight, metrics.cardsWidth));
   }
+  column->addView(makeCard(metrics, i18n::message("settings.skins.install.label"),
+                           i18n::message("settings.skins.import_zip_unpacked_folder.message"), imports,
+                           metrics.modeCardHeight, metrics.cardsWidth));
+
   if (!snapshot.history.empty()) {
     auto *history = new View();
     history->setFlexDirection(FlexDirection::Column);

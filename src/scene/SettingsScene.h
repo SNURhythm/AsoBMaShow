@@ -131,10 +131,11 @@ private:
   enum class SettingsTab {
     Profile,
     Timing,
-    Visual,
+    Hud,
+    Background,
     Lane,
     Input,
-    Misc,
+    General,
     Audio,
     Display,
     DifficultyTables,
@@ -225,10 +226,11 @@ private:
   Button *archiveCacheCleanupButton = nullptr;
   Button *profileTabButton = nullptr;
   Button *timingTabButton = nullptr;
-  Button *visualTabButton = nullptr;
+  Button *hudTabButton = nullptr;
+  Button *backgroundTabButton = nullptr;
   Button *laneTabButton = nullptr;
   Button *inputTabButton = nullptr;
-  Button *miscTabButton = nullptr;
+  Button *generalTabButton = nullptr;
   Button *audioTabButton = nullptr;
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
@@ -236,10 +238,11 @@ private:
   Button *gameplaySkinsTabButton = nullptr;
   Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
-  TextView *visualTabText = nullptr;
+  TextView *hudTabText = nullptr;
+  TextView *backgroundTabText = nullptr;
   TextView *laneTabText = nullptr;
   TextView *inputTabText = nullptr;
-  TextView *miscTabText = nullptr;
+  TextView *generalTabText = nullptr;
   TextView *audioTabText = nullptr;
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
@@ -471,14 +474,15 @@ private:
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
-  View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildHudTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildBackgroundTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
   void buildInputConflictOverlay(
       const settings_scene::LayoutMetrics &metrics);
   void buildInputVirtualControllerEditorOverlay(
       const settings_scene::LayoutMetrics &metrics);
-  View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildGeneralTab(const settings_scene::LayoutMetrics &metrics);
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
