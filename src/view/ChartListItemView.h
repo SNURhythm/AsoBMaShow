@@ -42,6 +42,8 @@ private:
   View *contentCard;
   bool compact_ = false;
   int desiredDifficultyWidth_ = 86;
+  int desiredLevelWidth_ = 24;
+  int appliedLevelWidth_ = -1;
   int appliedDifficultyWidth_ = -1;
   int appliedTitleMinimumWidth_ = -1;
   TextView *artworkPlaceholder;

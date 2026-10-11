@@ -19,6 +19,7 @@ constexpr int kRowPadding = 12;
 constexpr int kColumnGap = 12;
 constexpr int kTitleMinimumWidth = 120;
 constexpr int kDifficultyColumnWidth = 86;
+constexpr int kLevelPadding = 12;
 constexpr int kBestWidth = 86;
 constexpr int kCompactBestWidth = 76;
 constexpr int kFavoriteWidth = 40;
@@ -123,6 +124,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   detailsLayout->setAlignItems(YGAlignStretch)->setGap(3);
   levelView = rowText("chartListDifficulty", 27, 44, TextView::FontWeight::Bold);
   levelView->setAlign(TextView::RIGHT);
+  levelView->setAlignSelf(YGAlignFlexEnd)->setPadding(Edge::Left, kLevelPadding)->setPadding(Edge::Right, kLevelPadding);
   levelView->setThemedBackgroundColor([] { return main_menu_theme::light() ? main_menu_theme::action() : Color(0, 0, 0, 0); });
   levelView->setThemedColor([] { return main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::accent(); });
   detailsLayout->addView(levelView);
@@ -203,11 +205,15 @@ void ChartListItemView::refreshColumnWidths() {
       (compact_ ? kCompactBestWidth : kBestWidth));
   const int titleMinimum = std::min(kTitleMinimumWidth, availableWidth / 2);
   const int difficultyWidth = std::min(desiredDifficultyWidth_, availableWidth - titleMinimum);
-  if (difficultyWidth == appliedDifficultyWidth_ && titleMinimum == appliedTitleMinimumWidth_) return;
+  const int levelWidth = std::min(desiredLevelWidth_, difficultyWidth);
+  if (difficultyWidth == appliedDifficultyWidth_ && titleMinimum == appliedTitleMinimumWidth_ &&
+      levelWidth == appliedLevelWidth_) return;
   appliedDifficultyWidth_ = difficultyWidth;
+  appliedLevelWidth_ = levelWidth;
   appliedTitleMinimumWidth_ = titleMinimum;
   View::LayoutBatchScope batch;
   detailsLayout->setWidth(difficultyWidth);
+  levelView->setWidth(levelWidth);
   textLayout->setMinWidth(titleMinimum);
 }
 
@@ -245,8 +251,8 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
     keyModeView->setLocalizedText(unavailable ? i18n::message("library.chart.missing.badge")
                                      : keyModeDescription(meta));
   }
-  desiredDifficultyWidth_ = std::max({kDifficultyColumnWidth,
-      levelView->measureTextWidth(levelView->getText()) + 12,
+  desiredLevelWidth_ = levelView->measureTextWidth(levelView->getText()) + 2 * kLevelPadding;
+  desiredDifficultyWidth_ = std::max({kDifficultyColumnWidth, desiredLevelWidth_,
       keyModeView->measureTextWidth(keyModeView->getText())});
   refreshColumnWidths();
   const auto artwork = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;

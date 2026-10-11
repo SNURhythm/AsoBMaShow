@@ -53,3 +53,7 @@ Removed the glyph-shaped glow entirely. Clear-rank lettering stays plain and
 bold; its adjacent rounded status bar glows instead. Folder clear lamps now
 use the same bright core and soft colored glow, clearing it when a recycled
 folder has no clear rank.
+
+The chart-list level badge now fits its text with 12 units of padding on each
+side and remains anchored to the right of its column. Long values still respect
+the existing narrow-row width cap and marquee behavior.
