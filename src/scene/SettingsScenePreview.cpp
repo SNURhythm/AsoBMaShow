@@ -76,7 +76,7 @@ previewPresentationConfiguration(const AppSettings &settings,
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           settings.presentation().judgementIndicatorRangeMilliseconds,
-      .keybombs = settings.presentation().keybombs,
+      .keybombs = settings.keybombsForKeyMode(gameplay::presentationKeyMode(chart)),
       .judgementTextVisibility = settings.presentation().judgementTextVisibility,
       .judgementTextY = settings.presentation().judgementTextY,
       .judgementTimingY = settings.presentation().judgementTimingY,

@@ -465,9 +465,6 @@ void SettingsScene::cleanupScene() {
   irStatusMessage = {};
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
-  laneAngleInput = nullptr;
-  laneLengthInput = nullptr;
-  laneBeamLengthInput = nullptr;
   noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;

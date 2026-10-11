@@ -654,11 +654,14 @@ void readBuiltInLanes(const json &document, built_in_lane::Settings &settings,
 
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
   json keybombs = json::object();
-  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
-    const auto style = keybomb::sanitize(settings.keybombs[option.judgement]);
-    keybombs[option.label] = {{"visible", style.visible}, {"sizePercent", style.sizePercent},
-                            {"opacityPercent", style.opacityPercent}};
-    if (style.color) keybombs[option.label]["color"] = built_in_notes::colorHex(*style.color);
+  for (const auto &[mode, styles] : settings.keybombs) {
+    auto &modeStyles = keybombs[std::to_string(mode)];
+    for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+      const auto style = keybomb::sanitize(styles[option.judgement]);
+      modeStyles[option.label] = {{"visible", style.visible}, {"sizePercent", style.sizePercent},
+                                  {"opacityPercent", style.opacityPercent}};
+      if (style.color) modeStyles[option.label]["color"] = built_in_notes::colorHex(*style.color);
+    }
   }
   json judgementVisibility = json::object();
   for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
@@ -899,24 +902,32 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
   if (const auto found = document.find("keybombs"); found != document.end()) {
     if (found->is_object()) {
-      for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
-        const auto entry = found->find(option.label);
-        if (entry == found->end()) continue;
-        if (!entry->is_object()) {
-          invalidValue("keybombs", "expected judgement object", diagnostics);
+      for (const int mode : built_in_notes::kModes) {
+        const auto modeStyles = found->find(std::to_string(mode));
+        if (modeStyles == found->end()) continue;
+        if (!modeStyles->is_object()) {
+          invalidValue("keybombs", "expected mode object", diagnostics);
           continue;
         }
-        auto &style = settings.keybombs[option.judgement];
-        readValue(*entry, "visible", style.visible, diagnostics);
-        readValue(*entry, "sizePercent", style.sizePercent, diagnostics);
-        readValue(*entry, "opacityPercent", style.opacityPercent, diagnostics);
-        if (const auto color = entry->find("color"); color != entry->end()) {
-          const auto rgb = color->is_string()
-              ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
-          if (rgb) style.color = *rgb;
-          else invalidValue("keybombs.color", "expected six-digit RGB color", diagnostics);
+        for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+          const auto entry = modeStyles->find(option.label);
+          if (entry == modeStyles->end()) continue;
+          if (!entry->is_object()) {
+            invalidValue("keybombs", "expected judgement object", diagnostics);
+            continue;
+          }
+          auto &style = settings.keybombs[mode][option.judgement];
+          readValue(*entry, "visible", style.visible, diagnostics);
+          readValue(*entry, "sizePercent", style.sizePercent, diagnostics);
+          readValue(*entry, "opacityPercent", style.opacityPercent, diagnostics);
+          if (const auto color = entry->find("color"); color != entry->end()) {
+            const auto rgb = color->is_string()
+                ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
+            if (rgb) style.color = *rgb;
+            else invalidValue("keybombs.color", "expected six-digit RGB color", diagnostics);
+          }
+          style = keybomb::sanitize(style);
         }
-        style = keybomb::sanitize(style);
       }
     } else {
       invalidValue("keybombs", "expected object", diagnostics);

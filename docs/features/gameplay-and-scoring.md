@@ -70,8 +70,8 @@ pulse. BAD fragments rise, POOR fragments fall, and KPOOR uses a subdued ripple.
 Default colors match judgement text in both light and dark themes. No external
 skin artwork is required.
 
-Settings → Lane → Keybombs and the built-in preview's
-Lane controls expose a judgement selector, visibility, size (25–300%),
+Settings → Skins → Built-in → Effects → Keybombs and the built-in preview's
+Lane controls expose per-mode settings with a judgement selector, visibility, size (25–300%),
 opacity (0–100%), and color presets, picker, and hex input. Reset color restores
 the original palette for that judgement. Each judgement is independent, and landscape/portrait
 presentations retain separate settings. The preview's random timing mode

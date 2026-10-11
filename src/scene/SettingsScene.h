@@ -109,7 +109,9 @@ private:
   std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
-  int builtInLaneOpacityMode = 7;
+  enum class BuiltInSkinTab { Lane, Notes, Effects, Hud };
+  BuiltInSkinTab builtInSkinTab = BuiltInSkinTab::Lane;
+  int builtInSkinFallbackMode = 7;
   Judgement keybombEditingJudgement = PGreat;
   std::string builtInNoteDropdown;
   void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
@@ -125,7 +127,7 @@ private:
   void appendBuiltInLanePercentControl(View *body, const settings_scene::LayoutMetrics &metrics,
       int keyMode, const i18n::Text &label, int built_in_lane::Style::*property,
       const i18n::Text &resetLabel);
-  void appendKeybombColorControls(View *body, const settings_scene::LayoutMetrics &metrics, Judgement judgement);
+  void appendKeybombColorControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode, Judgement judgement);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {
@@ -258,9 +260,6 @@ private:
   TextInputBox *irApiKeyInput = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
-  TextInputBox *laneAngleInput = nullptr;
-  TextInputBox *laneLengthInput = nullptr;
-  TextInputBox *laneBeamLengthInput = nullptr;
   TextInputBox *noteStartPositionInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
@@ -465,7 +464,7 @@ private:
   View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
   View *buildJudgementFeedbackPositionControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
-  View *buildKeybombControls(const settings_scene::LayoutMetrics &metrics, bool previewStyle);
+  View *buildKeybombControls(const settings_scene::LayoutMetrics &metrics, int keyMode, bool previewStyle);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
@@ -548,6 +547,11 @@ private:
                                      const settings_scene::LayoutMetrics &metrics,
                                      bool includeBuiltInOnlySettings);
 
+  void appendBuiltInGameplayTraitSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
+      bool followsOriginal = false);
+  void appendBuiltInSkinFallbackSettings(
+      View *column, const settings_scene::LayoutMetrics &metrics);
   void appendScratchlessModeSettings(
       View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
       bool enabled);
@@ -578,9 +582,6 @@ private:
   void appendGameplaySkinViewportSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
-  void appendBuiltInGameplayTraitSettings(
-      View *body, const settings_scene::LayoutMetrics &metrics, int keyMode,
-      bool followsOriginal = false);
   void buildGameplaySkinSafetyOverlay(
       const settings_scene::LayoutMetrics &metrics);
   bool handleGameplaySkinActionResult(skin::ControllerActionResult result);
@@ -617,9 +618,6 @@ private:
   void syncVisibleTimeInputText(bool force = false);
   void syncBgaBrightnessInputText(bool force = false);
   void syncBgaBlurInputText(bool force = false);
-  void syncLaneAngleInputText(bool force = false);
-  void syncLaneLengthInputText(bool force = false);
-  void syncLaneBeamLengthInputText(bool force = false);
   void syncNoteStartPositionInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
@@ -629,9 +627,6 @@ private:
   void commitVisibleTimeInput();
   void commitBgaBrightnessInput();
   void commitBgaBlurInput();
-  void commitLaneAngleInput();
-  void commitLaneLengthInput();
-  void commitLaneBeamLengthInput();
   void commitNoteStartPositionInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();

@@ -25,11 +25,15 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
   text/combo styling and position, FAST/SLOW and millisecond feedback, timing
   indicators, judgement counts, and gauge placement. Built-in-only controls
   are identified separately from HUD settings shared with custom skins.
-- Lane starts with preview and scroll/covers, then built-in geometry, opacity,
-  beam/keybomb effects, and visibility aids. Preview controls follow the same
-  geometry/effect order. Background groups BGA playback, aspect, brightness,
-  and blur. Skins retains selection and skin-specific appearance controls,
-  followed by package installation and diagnostics.
+- Lane contains preview, shared scroll/covers, and visibility aids. Built-in
+  appearance has one editor in Skins, with horizontal Lane, Notes, Effects,
+  and HUD tabs. Lane groups width, length, angle, scratch position, opacity,
+  and judge/measure lines; Effects groups beams and keybombs. The catalog's
+  screen/mode selectors stay vertical; only the built-in editor uses horizontal tabs.
+  Built-in controls remain available here when custom skin services are
+  unavailable. The live preview retains its compact editing controls.
+  Background groups BGA playback, aspect, brightness, and blur. Skin package
+  installation and diagnostics follow selection and appearance controls.
 - Audio starts with volumes and input sounds/count-in, followed by device,
   sample rate/buffer settings, and test sound/status. Display retains orientation
   and platform display controls.
@@ -38,9 +42,9 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
   installed-table updates/removal. IR groups connection and submission tools.
 - General contains language and application theme.
 
-This organization changes presentation only: saved setting keys, profile and
-orientation scopes, platform visibility, and action callbacks retain their
-existing behavior.
+Keybomb appearance is stored per key mode within each profile and orientation.
+Scratchless modes follow the parent mode when their skin is set to follow it.
+Other settings retain their existing scope and saved values.
 
 ## Code map
 

@@ -3526,7 +3526,7 @@ void GamePlayScene::init() {
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           context.settings.presentation().judgementIndicatorRangeMilliseconds,
-      .keybombs = context.settings.presentation().keybombs,
+      .keybombs = context.settings.keybombsForKeyMode(presentationKeyMode()),
       .judgementTextVisibility = context.settings.presentation().judgementTextVisibility,
       .judgementTextY = context.settings.presentation().judgementTextY,
       .judgementTimingY = context.settings.presentation().judgementTimingY,

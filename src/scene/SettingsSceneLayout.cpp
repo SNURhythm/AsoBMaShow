@@ -181,9 +181,6 @@ void SettingsScene::resetViewState() {
   irApiKeyInput = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
-  laneAngleInput = nullptr;
-  laneLengthInput = nullptr;
-  laneBeamLengthInput = nullptr;
   noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
@@ -876,7 +873,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     beamControls->addView(resetBeam);
     previewControls->addView(beamControls);
 
-    previewControls->addView(buildKeybombControls(metrics, true));
+    previewControls->addView(buildKeybombControls(metrics, previewKeyMode, true));
   } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
     appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
     appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
@@ -1030,7 +1027,9 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
   return body;
 }
 
-View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool previewStyle) {
+View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, int keyMode, bool previewStyle) {
+  if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;
+  if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) keyMode = 7;
   auto *body = new View();
   body->setWidthPercent(100);
   body->setFlexDirection(FlexDirection::Column);
@@ -1055,15 +1054,15 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool pre
                                 TextView::CENTER, TextView::MIDDLE);
   auto *visibleButton = makeControlButton(metrics.actionButtonWidth,
                                            metrics.actionButtonHeight, visibleText);
-  const auto refreshVisible = [this, judgement, visibleText, visibleButton]() {
-    const bool visible = context.settings.presentation().keybombs[judgement].visible;
+  const auto refreshVisible = [this, keyMode, judgement, visibleText, visibleButton]() {
+    const bool visible = context.settings.keybombsForKeyMode(keyMode)[judgement].visible;
     visibleText->setLocalizedText(i18n::message(visible ? "settings.skins.visible.label"
                                                       : "settings.skins.hidden.label"));
     styleVisibilityButton(visibleButton, visibleText, visible);
   };
   refreshVisible();
-  visibleButton->setOnClickListener([this, judgement, refreshVisible]() {
-    auto &visible = context.settings.presentation().keybombs[judgement].visible;
+  visibleButton->setOnClickListener([this, keyMode, judgement, refreshVisible]() {
+    auto &visible = context.settings.presentation().keybombs[keyMode][judgement].visible;
     visible = !visible;
     refreshVisible();
     persistSettings();
@@ -1080,18 +1079,18 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool pre
     row->setAlignItems(YGAlignCenter);
     row->setGap(8.0F);
     auto *input = previewStyle ? nullptr : makeTextInput(metrics, metrics.compact ? 116 : 136);
-    const auto refresh = [this, judgement, member, valueText, input]() {
-      const auto value = std::to_string(context.settings.presentation().keybombs[judgement].*member);
+    const auto refresh = [this, keyMode, judgement, member, valueText, input]() {
+      const auto value = std::to_string(context.settings.keybombsForKeyMode(keyMode)[judgement].*member);
       valueText->setText(value + "%");
       if (input) input->setEditingText(value);
     };
     refresh();
     if (input) {
-      input->onEditingFinished([this, judgement, member, minimum, maximum, refresh](const std::string &text) {
+      input->onEditingFinished([this, keyMode, judgement, member, minimum, maximum, refresh](const std::string &text) {
         int value = 0;
         const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
         if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
-          context.settings.presentation().keybombs[judgement].*member = std::clamp(value, minimum, maximum);
+          context.settings.presentation().keybombs[keyMode][judgement].*member = std::clamp(value, minimum, maximum);
         refresh();
         persistSettings();
       });
@@ -1099,8 +1098,8 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool pre
     } else {
       for (const int delta : {-5, 5}) {
         auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall, delta < 0 ? "-5%" : "+5%");
-        button->setOnClickListener([this, judgement, member, delta, minimum, maximum, refresh]() {
-          auto &value = context.settings.presentation().keybombs[judgement].*member;
+        button->setOnClickListener([this, keyMode, judgement, member, delta, minimum, maximum, refresh]() {
+          auto &value = context.settings.presentation().keybombs[keyMode][judgement].*member;
           value = std::clamp(value + delta, minimum, maximum);
           refresh();
           persistSettings();
@@ -1109,15 +1108,15 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool pre
       }
     }
     auto *reset = makeResetButton(metrics);
-    reset->setOnClickListener([this, judgement, member, refresh]() {
-      context.settings.presentation().keybombs[judgement].*member = keybomb::Style{}.*member;
+    reset->setOnClickListener([this, keyMode, judgement, member, refresh]() {
+      context.settings.presentation().keybombs[keyMode][judgement].*member = keybomb::Style{}.*member;
       refresh();
       persistSettings();
     });
     row->addView(reset);
     body->addView(row);
   };
-  appendKeybombColorControls(body, metrics, judgement);
+  appendKeybombColorControls(body, metrics, keyMode, judgement);
   appendPercent(i18n::message("settings.keybomb.size"), &keybomb::Style::sizePercent, 25, 300);
   appendPercent(i18n::message("settings.lane_background.opacity"), &keybomb::Style::opacityPercent, 0, 100);
   return body;
@@ -1982,255 +1981,6 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.lane.covers.title"), "",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
-
-  cardsColumn->addView(makeWrappedText(i18n::message("settings.lane.builtin_help"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
-  cardsColumn->addView(makeCard(metrics,
-      i18n::message("settings.skins.scratch_position.label"), "",
-      buildScratchLanePositionControl(metrics), metrics.modeCardHeight, metrics.cardsWidth));
-  auto *playAreaWidthControls = new View();
-  playAreaWidthControls->setFlexDirection(FlexDirection::Column);
-  playAreaWidthControls->setGap(metrics.compact ? 10.0f : 12.0f);
-  playAreaWidthControls->setAlignItems(YGAlignFlexStart);
-
-  auto makePlayAreaWidthRow = [this, &metrics](int keyMode) {
-    auto *row = new View();
-    row->setFlexDirection(FlexDirection::Row);
-    row->setFlexWrap(YGWrapWrap);
-    row->setGap(metrics.compact ? 8.0f : 10.0f);
-    row->setAlignItems(YGAlignCenter);
-
-    auto *label =
-        makeText(gameplay::keyModeLabel(keyMode), metrics.bodyTextSize + 4,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
-    label->setWidth(metrics.compact ? 54.0f : 64.0f);
-    label->setHeight(static_cast<float>(metrics.actionButtonHeight));
-    row->addView(label);
-
-    auto *input = makeNumericInput(metrics);
-    auto syncInput = [this, keyMode, input]() {
-      input->setEditingText(formatPlayAreaWidthLabel(
-          context.settings.playAreaWidthForKeyMode(keyMode)));
-    };
-    auto applyWidth = [this, keyMode, input](float width) {
-      context.settings.setPlayAreaWidthForKeyMode(keyMode,
-                                                  clampPlayAreaWidth(context.settings, width));
-      persistSettings();
-      input->setEditingText(formatPlayAreaWidthLabel(
-          context.settings.playAreaWidthForKeyMode(keyMode)));
-    };
-
-    auto *minusWidth =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
-    minusWidth->setOnClickListener([this, keyMode, applyWidth]() {
-      applyWidth(context.settings.playAreaWidthForKeyMode(keyMode) - 0.5f);
-    });
-    row->addView(minusWidth);
-
-    input->onEditingFinished(
-        [this, keyMode, input, applyWidth](const std::string &) {
-          const std::string rawText = input->getText();
-          if (rawText.empty()) {
-            input->setEditingText(formatPlayAreaWidthLabel(
-                context.settings.playAreaWidthForKeyMode(keyMode)));
-            return;
-          }
-          try {
-            applyWidth(std::stof(rawText));
-          } catch (const std::exception &) {
-            input->setEditingText(formatPlayAreaWidthLabel(
-                context.settings.playAreaWidthForKeyMode(keyMode)));
-          }
-        });
-    row->addView(makeInputFrame(metrics, input));
-
-    auto *plusWidth =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
-    plusWidth->setOnClickListener([this, keyMode, applyWidth]() {
-      applyWidth(context.settings.playAreaWidthForKeyMode(keyMode) + 0.5f);
-    });
-    row->addView(plusWidth);
-
-    auto *resetWidth = makeResetButton(metrics);
-    resetWidth->setOnClickListener(
-        [this, applyWidth]() { applyWidth(context.settings.geometryPolicy().width.defaultValue); });
-    row->addView(resetWidth);
-
-    syncInput();
-    return row;
-  };
-
-  for (int keyMode : {4, 5, 6, 7, 8, 10, 14}) {
-    playAreaWidthControls->addView(makePlayAreaWidthRow(keyMode));
-  }
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.lane.play_area_width.label"), i18n::message("settings.lane.set_width_each_key_mode.message"),
-      playAreaWidthControls, metrics.visibleTimeCardHeight,
-      metrics.cardsWidth));
-
-  auto *lengthControls = new View();
-  lengthControls->setFlexDirection(FlexDirection::Row);
-  lengthControls->setFlexWrap(YGWrapWrap);
-  lengthControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  lengthControls->setAlignItems(YGAlignFlexStart);
-  auto updateLaneLength = [this](float delta) {
-    context.settings.presentation().laneLength =
-        clampLaneLength(context.settings, context.settings.presentation().laneLength + delta);
-    persistSettings();
-    syncLaneLengthInputText(true);
-  };
-  auto *minusLengthLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-1");
-  minusLengthLarge->setOnClickListener(
-      [updateLaneLength]() { updateLaneLength(-1.0f); });
-  lengthControls->addView(minusLengthLarge);
-  auto *minusLengthSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
-  minusLengthSmall->setOnClickListener(
-      [updateLaneLength]() { updateLaneLength(-0.5f); });
-  lengthControls->addView(minusLengthSmall);
-  laneLengthInput = makeNumericInput(metrics);
-  laneLengthInput->onEditingFinished(
-      [this](const std::string &) { commitLaneLengthInput(); });
-  lengthControls->addView(makeInputFrame(metrics, laneLengthInput));
-  auto *plusLengthSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
-  plusLengthSmall->setOnClickListener(
-      [updateLaneLength]() { updateLaneLength(0.5f); });
-  lengthControls->addView(plusLengthSmall);
-  auto *plusLengthLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+1");
-  plusLengthLarge->setOnClickListener(
-      [updateLaneLength]() { updateLaneLength(1.0f); });
-  lengthControls->addView(plusLengthLarge);
-  auto *resetLength = makeResetButton(metrics);
-  resetLength->setOnClickListener([this]() {
-    context.settings.presentation().laneLength = context.settings.geometryPolicy().length.defaultValue;
-    persistSettings();
-    syncLaneLengthInputText(true);
-  });
-  lengthControls->addView(resetLength);
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.lane.lane_length.label"), i18n::message("settings.lane.set_how_far_lane_reaches.message"),
-      lengthControls, metrics.offsetCardHeight, metrics.cardsWidth));
-
-  auto *angleControls = new View();
-  angleControls->setFlexDirection(FlexDirection::Row);
-  angleControls->setFlexWrap(YGWrapWrap);
-  angleControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  angleControls->setAlignItems(YGAlignFlexStart);
-  auto updateLaneAngle = [this](float delta) {
-    context.settings.presentation().laneAngleDegrees =
-        clampLaneAngle(context.settings, context.settings.presentation().laneAngleDegrees + delta);
-    persistSettings();
-    syncLaneAngleInputText(true);
-  };
-  auto *minusAngleLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5");
-  minusAngleLarge->setOnClickListener(
-      [updateLaneAngle]() { updateLaneAngle(-5.0f); });
-  angleControls->addView(minusAngleLarge);
-  auto *minusAngleSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
-  minusAngleSmall->setOnClickListener(
-      [updateLaneAngle]() { updateLaneAngle(-1.0f); });
-  angleControls->addView(minusAngleSmall);
-  laneAngleInput = makeNumericInput(metrics);
-  laneAngleInput->onEditingFinished(
-      [this](const std::string &) { commitLaneAngleInput(); });
-  angleControls->addView(makeInputFrame(metrics, laneAngleInput));
-  auto *plusAngleSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
-  plusAngleSmall->setOnClickListener(
-      [updateLaneAngle]() { updateLaneAngle(1.0f); });
-  angleControls->addView(plusAngleSmall);
-  auto *plusAngleLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5");
-  plusAngleLarge->setOnClickListener(
-      [updateLaneAngle]() { updateLaneAngle(5.0f); });
-  angleControls->addView(plusAngleLarge);
-  auto *resetAngle = makeResetButton(metrics);
-  resetAngle->setOnClickListener([this]() {
-    context.settings.presentation().laneAngleDegrees = context.settings.geometryPolicy().angle.defaultValue;
-    persistSettings();
-    syncLaneAngleInputText(true);
-  });
-  angleControls->addView(resetAngle);
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.lane.lane_angle.label"), i18n::message("settings.lane.tilt_lane_touch_plane.message"),
-      angleControls, metrics.offsetCardHeight, metrics.cardsWidth));
-
-  auto *opacityControls = new View();
-  opacityControls->setFlexDirection(FlexDirection::Column);
-  opacityControls->setGap(metrics.compact ? 12.0F : 16.0F);
-  auto *opacityMode = new DropdownView({
-      .onOptionSelected = [this](const std::string &id) {
-        builtInLaneOpacityMode = std::stoi(id);
-        lastLayoutWidth = -1;
-      }}, overlayPortal);
-  std::vector<DropdownView::Option> opacityModes;
-  for (const int mode : built_in_notes::kModes)
-    opacityModes.push_back({.id = std::to_string(mode), .label = gameplay::keyModeLabel(mode)});
-  opacityMode->setWidthPercent(100.0F);
-  opacityMode->refresh({.label = i18n::message("settings.input.mode.label"),
-      .selectedId = std::to_string(builtInLaneOpacityMode), .options = std::move(opacityModes)});
-  opacityControls->addView(opacityMode);
-  appendBuiltInLanePercentControl(opacityControls, metrics, builtInLaneOpacityMode,
-      i18n::message("settings.lane_background.opacity"),
-      &built_in_lane::Style::backgroundOpacityPercent,
-      i18n::message("settings.lane_background.reset_opacity"));
-  cardsColumn->addView(makeCard(metrics, i18n::message("settings.lane_background.title"), "",
-      opacityControls, metrics.offsetCardHeight, metrics.cardsWidth));
-
-  auto *beamControls = new View();
-  beamControls->setFlexDirection(FlexDirection::Row);
-  beamControls->setFlexWrap(YGWrapWrap);
-  beamControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  beamControls->setAlignItems(YGAlignFlexStart);
-  auto updateLaneBeamLength = [this](int deltaPercent) {
-    context.settings.presentation().laneBeamLengthPercent = clampLaneBeamLengthPercent(
-        context.settings.presentation().laneBeamLengthPercent + deltaPercent);
-    persistSettings();
-    syncLaneBeamLengthInputText(true);
-  };
-  auto *minusBeamLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
-  minusBeamLarge->setOnClickListener(
-      [updateLaneBeamLength]() { updateLaneBeamLength(-5); });
-  beamControls->addView(minusBeamLarge);
-  auto *minusBeamSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
-  minusBeamSmall->setOnClickListener(
-      [updateLaneBeamLength]() { updateLaneBeamLength(-1); });
-  beamControls->addView(minusBeamSmall);
-  laneBeamLengthInput = makeNumericInput(metrics);
-  laneBeamLengthInput->onEditingFinished(
-      [this](const std::string &) { commitLaneBeamLengthInput(); });
-  beamControls->addView(makeInputFrame(metrics, laneBeamLengthInput));
-  auto *plusBeamSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
-  plusBeamSmall->setOnClickListener(
-      [updateLaneBeamLength]() { updateLaneBeamLength(1); });
-  beamControls->addView(plusBeamSmall);
-  auto *plusBeamLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
-  plusBeamLarge->setOnClickListener(
-      [updateLaneBeamLength]() { updateLaneBeamLength(5); });
-  beamControls->addView(plusBeamLarge);
-  auto *resetBeam = makeResetButton(metrics);
-  resetBeam->setOnClickListener([this]() {
-    context.settings.presentation().laneBeamLengthPercent =
-        AppSettings::kDefaultLaneBeamLengthPercent;
-    persistSettings();
-    syncLaneBeamLengthInputText(true);
-  });
-  beamControls->addView(resetBeam);
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.lane.lane_beam_length.label"), i18n::message("settings.lane.set_press_feedback_height.message"),
-      beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
-
-  cardsColumn->addView(makeCard(metrics, i18n::message("settings.keybomb.title"), "",
-      buildKeybombControls(metrics, false), metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *invisibleNoteControls = new View();
   invisibleNoteControls->setFlexDirection(FlexDirection::Column);

@@ -443,8 +443,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
   settings.presentation().judgementIndicatorRangeMilliseconds = 123;
   settings.presentation().scratchLaneOnRight = true;
-  settings.presentation().keybombs[PGreat] = {false, 175, 35};
-  settings.presentation().keybombs[Poor] = {true, 70, 20};
+  settings.presentation().keybombs[7][PGreat] = {false, 175, 35};
+  settings.presentation().keybombs[7][Poor] = {true, 70, 20};
   settings.presentation().judgementTextY = 0.6F;
   settings.presentation().judgementTimingY = 0.4F;
   settings.presentation().pacemakerDiffY = 0.2F;
@@ -464,6 +464,7 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
 
   bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
   chart.Meta.Bpm = 120.0;
   chart.Meta.MinBpm = 120.0;
   chart.Meta.MaxBpm = 120.0;
@@ -477,6 +478,14 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   const auto configuration =
       replay_video_export::replayGameplayPresentationConfig(
           settings, 9.5F, chart, false, false);
+  settings.presentation().keybombs[14][PGreat] = {true, 250, 80, 0x123456};
+  auto otherChart = bms_parser::Chart{};
+  otherChart.Meta.KeyMode = 14;
+  const auto otherModeConfiguration =
+      replay_video_export::replayGameplayPresentationConfig(
+          settings, 9.5F, otherChart, false, false);
+  expect(otherModeConfiguration.keybombs[PGreat] == keybomb::Style{true, 250, 80, 0x123456},
+         "replay exports use keybomb appearance for the exported chart mode");
   expect(configuration.keybombs[PGreat] == keybomb::Style{false, 175, 35} &&
              configuration.keybombs[Poor] == keybomb::Style{true, 70, 20},
          "replay exports preserve the configured per-judgement keybomb appearance");

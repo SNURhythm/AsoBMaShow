@@ -132,7 +132,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           settings.presentation().judgementIndicatorRangeMilliseconds,
-      .keybombs = settings.presentation().keybombs,
+      .keybombs = settings.keybombsForKeyMode(presentationKeyMode),
       .judgementTextVisibility = settings.presentation().judgementTextVisibility,
       .judgementTextY = settings.presentation().judgementTextY,
       .judgementTimingY = settings.presentation().judgementTimingY,

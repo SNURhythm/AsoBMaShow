@@ -1,4 +1,5 @@
 #include "../i18n/Localization.h"
+#include "../GameplayKeyMode.h"
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/IconText.h"
@@ -13,6 +14,198 @@
 #include <charconv>
 
 using namespace settings_scene;
+
+namespace {
+float sanitizeViewportComponent(std::string_view text, float fallback,
+                                float minimum, float maximum) {
+  try {
+    std::size_t consumed = 0;
+    const float value = std::stof(std::string(text), &consumed);
+    if (consumed != text.size() || !std::isfinite(value)) {
+      return fallback;
+    }
+    return std::clamp(value, minimum, maximum);
+  } catch (...) {
+    return fallback;
+  }
+}
+
+} // namespace
+
+void SettingsScene::appendBuiltInGameplayTraitSettings(
+    View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
+  body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
+                                ui_theme::lime()));
+  const auto appendNumeric =
+      [this, body, &metrics](const i18n::Text &label, const std::string &value,
+                             const std::string &defaultValue,
+                             std::function<void(const std::string &)> apply) {
+        auto *row = new View();
+        row->setFlexDirection(FlexDirection::Row);
+        row->setFlexWrap(YGWrapWrap);
+        row->setAlignItems(YGAlignCenter);
+        row->setGap(metrics.compact ? 8.0F : 10.0F);
+        auto *labelView =
+            makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
+                     TextView::LEFT, TextView::MIDDLE);
+        labelView->setMinWidth(0.0F);
+        labelView->setFlexShrink(1.0F);
+        row->addView(labelView);
+        auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+        input->setEditingText(value);
+        input->onEditingFinished(
+            [this, input, apply](const std::string &) {
+              apply(input->getText());
+              lastLayoutWidth = -1;
+            });
+        row->addView(input);
+        auto *reset = makeResetButton(metrics);
+        reset->setOnClickListener([this, apply, defaultValue]() {
+          apply(defaultValue);
+          lastLayoutWidth = -1;
+        });
+        row->addView(reset);
+        body->addView(row);
+      };
+
+  if (keyMode == -5 || keyMode == -7) {
+    const bool hide = keyMode == -5 ? context.settings.presentation().hideEmptyScratchLane5K
+                                     : context.settings.presentation().hideEmptyScratchLane7K;
+    const auto apply = [this, keyMode](bool value) {
+      auto &settings = context.settings.presentation();
+      (keyMode == -5 ? settings.hideEmptyScratchLane5K : settings.hideEmptyScratchLane7K) = value;
+      persistSettings();
+      lastLayoutWidth = -1;
+    };
+    body->addView(makeGameplaySkinChoiceRow(
+        metrics, i18n::message("settings.skins.hide_empty_scratch.label"), true,
+        {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
+          .selected = !hide, .action = [apply] { apply(false); }},
+         {.label = i18n::message("settings.skins.judgement_hud.on.label"),
+          .selected = hide, .action = [apply] { apply(true); }}}));
+  }
+  if (followsOriginal) {
+    body->addView(makeWrappedText(
+        i18n::message("settings.skins.follow_original.description",
+            {{"mode", keyMode == -5 ? "5K1S" : "7K1S"}}),
+        metrics.smallTextSize, ui_theme::textSecondary()));
+    return;
+  }
+  auto *tabs = new View();
+  tabs->setFlexDirection(FlexDirection::Row);
+  tabs->setFlexWrap(YGWrapWrap);
+  tabs->setGap(metrics.compact ? 8.0F : 10.0F);
+  const auto appendTab = [this, tabs, &metrics](BuiltInSkinTab page, const i18n::Text &label) {
+    auto *text = makeText(label, metrics.smallTextSize, ui_theme::textPrimary(),
+                          TextView::CENTER, TextView::MIDDLE);
+    const int width = std::max(metrics.compact ? 96 : 116, text->textureWidth() + 32);
+    auto *button = builtInSkinTab == page
+        ? makeAccentButton(width, metrics.actionButtonHeight, text, ui_theme::cyan())
+        : makeControlButton(width, metrics.actionButtonHeight, text);
+    button->setOnClickListener([this, page]() {
+      if (builtInSkinTab == page) return;
+      builtInSkinTab = page;
+      lastLayoutWidth = -1;
+    });
+    tabs->addView(button);
+  };
+  appendTab(BuiltInSkinTab::Lane, i18n::message("settings.preview_layout.lane.label"));
+  appendTab(BuiltInSkinTab::Notes, i18n::message("settings.notes.title"));
+  appendTab(BuiltInSkinTab::Effects, i18n::message("settings.skins.effects.label"));
+  appendTab(BuiltInSkinTab::Hud, "HUD");
+  body->addView(tabs);
+  body->addView(makeWrappedText(i18n::message("settings.skins.builtin_scope.description"),
+                                metrics.smallTextSize, ui_theme::textSecondary()));
+
+  switch (builtInSkinTab) {
+  case BuiltInSkinTab::Lane: {
+    if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
+      body->addView(buildScratchLanePositionControl(metrics));
+    }
+    appendNumeric(i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
+                  formatPlayAreaWidthLabel(
+                      context.settings.playAreaWidthForKeyMode(keyMode)),
+                  formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue),
+                  [this, keyMode](const std::string &text) {
+                    context.settings.setPlayAreaWidthForKeyMode(
+                        keyMode,
+                        sanitizeViewportComponent(
+                            text,
+                            context.settings.playAreaWidthForKeyMode(keyMode),
+                            context.settings.geometryPolicy().width.minimum,
+                            context.settings.geometryPolicy().width.maximum));
+                    persistSettings();
+                  });
+    appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
+                  formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1),
+                  [this](const std::string &text) {
+                    context.settings.presentation().laneLength = sanitizeViewportComponent(
+                        text, context.settings.presentation().laneLength,
+                        context.settings.geometryPolicy().length.minimum, context.settings.geometryPolicy().length.maximum);
+                    persistSettings();
+                  });
+    appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
+                  formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
+                  formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1),
+                  [this](const std::string &text) {
+                    context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
+                        text, context.settings.presentation().laneAngleDegrees,
+                        context.settings.geometryPolicy().angle.minimum,
+                        context.settings.geometryPolicy().angle.maximum);
+                    persistSettings();
+                  });
+    appendBuiltInLaneOpacityControls(body, metrics, keyMode);
+    appendBuiltInJudgeLineControls(body, metrics, keyMode);
+    appendBuiltInMeasureLineControls(body, metrics, keyMode);
+    break;
+  }
+  case BuiltInSkinTab::Notes:
+    appendBuiltInNoteControls(body, metrics, keyMode);
+    break;
+  case BuiltInSkinTab::Effects:
+    appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
+                  std::to_string(context.settings.presentation().laneBeamLengthPercent),
+                  std::to_string(AppSettings::kDefaultLaneBeamLengthPercent),
+                  [this](const std::string &text) {
+                    context.settings.presentation().laneBeamLengthPercent =
+                        clampLaneBeamLengthPercent(sanitizeOffsetComponent(
+                            text, context.settings.presentation().laneBeamLengthPercent));
+                    persistSettings();
+                  });
+    body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
+                                  metrics.bodyTextSize, ui_theme::textPrimary()));
+    body->addView(buildKeybombControls(metrics, keyMode, false));
+    break;
+  case BuiltInSkinTab::Hud:
+    appendSelectedSkinHudSettings(body, metrics, true);
+    break;
+  }
+}
+
+void SettingsScene::appendBuiltInSkinFallbackSettings(
+    View *column, const LayoutMetrics &metrics) {
+  auto *body = new View();
+  body->setFlexDirection(FlexDirection::Column);
+  body->setGap(metrics.compact ? 10.0F : 12.0F);
+  auto *mode = new DropdownView({
+      .onOptionSelected = [this](const std::string &id) {
+        builtInSkinFallbackMode = std::stoi(id);
+        lastLayoutWidth = -1;
+      }}, overlayPortal);
+  std::vector<DropdownView::Option> options;
+  for (const int keyMode : built_in_notes::kModes)
+    options.push_back({.id = std::to_string(keyMode), .label = gameplay::keyModeLabel(keyMode)});
+  mode->setWidthPercent(100.0F);
+  mode->refresh({.label = i18n::message("settings.input.mode.label"),
+      .selectedId = std::to_string(builtInSkinFallbackMode), .options = std::move(options)});
+  body->addView(mode);
+  const bool followsOriginal =
+      (builtInSkinFallbackMode == -5 && context.settings.presentation().skin.follow5K1S) ||
+      (builtInSkinFallbackMode == -7 && context.settings.presentation().skin.follow7K1S);
+  appendBuiltInGameplayTraitSettings(body, metrics, builtInSkinFallbackMode, followsOriginal);
+  column->addView(makeCard(metrics, i18n::message("settings.skins.built_in_gameplay.label"), "",
+                           body, metrics.modeCardHeight, metrics.cardsWidth));
+}
 
 void SettingsScene::appendScratchlessModeSettings(
     View *body, const LayoutMetrics &metrics, int keyMode, bool enabled) {
@@ -421,20 +614,11 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   if (summaryBgaBlurValueText != nullptr) {
     summaryBgaBlurValueText->setLocalizedText(bgaBlurLabel);
   }
-  if (syncInputs) {
-    syncLaneAngleInputText();
-  }
   if (summaryLaneAngleValueText != nullptr) {
     summaryLaneAngleValueText->setLocalizedText(laneAngleLabel);
   }
-  if (syncInputs) {
-    syncLaneLengthInputText();
-  }
   if (summaryLaneLengthValueText != nullptr) {
     summaryLaneLengthValueText->setLocalizedText(laneLengthLabel);
-  }
-  if (syncInputs) {
-    syncLaneBeamLengthInputText();
   }
   if (summaryLaneBeamLengthValueText != nullptr) {
     summaryLaneBeamLengthValueText->setLocalizedText(laneBeamLengthLabel);
@@ -792,39 +976,6 @@ void SettingsScene::syncBgaBlurInputText(bool force) {
       formatFloatValue(context.settings.bgaBlurStrength));
 }
 
-void SettingsScene::syncLaneAngleInputText(bool force) {
-  if (laneAngleInput == nullptr) {
-    return;
-  }
-  if (!force && laneAngleInput->getSelected()) {
-    return;
-  }
-  laneAngleInput->setEditingText(
-      formatFloatValue(context.settings.presentation().laneAngleDegrees));
-}
-
-void SettingsScene::syncLaneLengthInputText(bool force) {
-  if (laneLengthInput == nullptr) {
-    return;
-  }
-  if (!force && laneLengthInput->getSelected()) {
-    return;
-  }
-  laneLengthInput->setEditingText(
-      formatFloatValue(context.settings.presentation().laneLength));
-}
-
-void SettingsScene::syncLaneBeamLengthInputText(bool force) {
-  if (laneBeamLengthInput == nullptr) {
-    return;
-  }
-  if (!force && laneBeamLengthInput->getSelected()) {
-    return;
-  }
-  laneBeamLengthInput->setEditingText(
-      std::to_string(context.settings.presentation().laneBeamLengthPercent));
-}
-
 void SettingsScene::syncNoteStartPositionInputText(bool force) {
   if (noteStartPositionInput == nullptr) {
     return;
@@ -975,67 +1126,6 @@ void SettingsScene::commitBgaBlurInput() {
     syncBgaBlurInputText(true);
   } catch (const std::exception &) {
     syncBgaBlurInputText(true);
-  }
-}
-
-void SettingsScene::commitLaneAngleInput() {
-  if (laneAngleInput == nullptr) {
-    return;
-  }
-
-  const std::string rawText = laneAngleInput->getText();
-  if (rawText.empty()) {
-    syncLaneAngleInputText(true);
-    return;
-  }
-
-  try {
-    context.settings.presentation().laneAngleDegrees = clampLaneAngle(context.settings, std::stof(rawText));
-    persistSettings();
-    syncLaneAngleInputText(true);
-  } catch (const std::exception &) {
-    syncLaneAngleInputText(true);
-  }
-}
-
-void SettingsScene::commitLaneLengthInput() {
-  if (laneLengthInput == nullptr) {
-    return;
-  }
-
-  const std::string rawText = laneLengthInput->getText();
-  if (rawText.empty()) {
-    syncLaneLengthInputText(true);
-    return;
-  }
-
-  try {
-    context.settings.presentation().laneLength = clampLaneLength(context.settings, std::stof(rawText));
-    persistSettings();
-    syncLaneLengthInputText(true);
-  } catch (const std::exception &) {
-    syncLaneLengthInputText(true);
-  }
-}
-
-void SettingsScene::commitLaneBeamLengthInput() {
-  if (laneBeamLengthInput == nullptr) {
-    return;
-  }
-
-  const std::string rawText = laneBeamLengthInput->getText();
-  if (rawText.empty()) {
-    syncLaneBeamLengthInputText(true);
-    return;
-  }
-
-  try {
-    context.settings.presentation().laneBeamLengthPercent =
-        clampLaneBeamLengthPercent(std::stoi(rawText));
-    persistSettings();
-    syncLaneBeamLengthInputText(true);
-  } catch (const std::exception &) {
-    syncLaneBeamLengthInputText(true);
   }
 }
 
@@ -1418,12 +1508,12 @@ void SettingsScene::appendBuiltInNoteControls(
 }
 
 void SettingsScene::appendKeybombColorControls(
-    View *body, const LayoutMetrics &metrics, Judgement judgement) {
-  const auto style = context.settings.presentation().keybombs[judgement];
+    View *body, const LayoutMetrics &metrics, int keyMode, Judgement judgement) {
+  const auto style = context.settings.keybombsForKeyMode(keyMode)[judgement];
   const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
   const auto color = keybomb::resolvedColor(judgement, style, light);
-  const auto apply = [this, judgement](std::optional<std::uint32_t> rgb) {
-    context.settings.presentation().keybombs[judgement].color = rgb;
+  const auto apply = [this, keyMode, judgement](std::optional<std::uint32_t> rgb) {
+    context.settings.presentation().keybombs[keyMode][judgement].color = rgb;
     persistSettings();
     syncPreviewPresentationConfiguration();
     lastLayoutWidth = -1;
@@ -1433,7 +1523,7 @@ void SettingsScene::appendKeybombColorControls(
   auto *presets = makeAppearanceColorPresets(metrics, keybomb::defaultColor(judgement, light),
       color, [apply](std::uint32_t rgb) { apply(rgb); });
   body->addView(presets);
-  appendAppearanceColorPicker(presets, metrics, "keybomb-" + std::to_string(judgement), color,
+  appendAppearanceColorPicker(presets, metrics, "keybomb-" + std::to_string(keyMode) + "-" + std::to_string(judgement), color,
       {{.label = "", .width = 48, .height = 48}},
       [apply](std::uint32_t rgb) { apply(rgb); },
       [this, judgement](std::uint32_t rgb) {
