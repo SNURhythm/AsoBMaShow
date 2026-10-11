@@ -36,36 +36,31 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     View *body, const LayoutMetrics &metrics, int keyMode, bool followsOriginal) {
   body->addView(makeWrappedText(i18n::message("settings.skins.built_in_gameplay.label"), metrics.bodyTextSize,
                                 ui_theme::lime()));
+  body->setAlignItems(YGAlignFlexStart);
   const auto appendNumeric =
-      [this, body, &metrics](const i18n::Text &label, const std::string &value,
-                             const std::string &defaultValue,
+      [this, body, &metrics](const i18n::Text &label, std::function<std::string()> read,
+                             const std::string &defaultValue, float step, int precision,
                              std::function<void(const std::string &)> apply) {
-        auto *row = new View();
-        row->setFlexDirection(FlexDirection::Row);
-        row->setFlexWrap(YGWrapWrap);
-        row->setAlignItems(YGAlignCenter);
-        row->setGap(metrics.compact ? 8.0F : 10.0F);
-        auto *labelView =
-            makeText(label, metrics.smallTextSize, ui_theme::textSecondary(),
-                     TextView::LEFT, TextView::MIDDLE);
-        labelView->setMinWidth(0.0F);
-        labelView->setFlexShrink(1.0F);
-        row->addView(labelView);
+        body->addView(makeWrappedText(label, metrics.smallTextSize, ui_theme::textSecondary()));
         auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
-        input->setEditingText(value);
-        input->onEditingFinished(
-            [this, input, apply](const std::string &) {
-              apply(input->getText());
-              lastLayoutWidth = -1;
-            });
-        row->addView(input);
-        auto *reset = makeResetButton(metrics);
-        reset->setOnClickListener([this, apply, defaultValue]() {
-          apply(defaultValue);
+        input->setEditingText(read());
+        input->onEditingFinished([this, input, read, apply](const std::string &text) {
+          apply(text);
+          input->setEditingText(read());
           lastLayoutWidth = -1;
         });
-        row->addView(reset);
-        body->addView(row);
+        auto *reset = makeResetButton(metrics);
+        reset->setOnClickListener([this, input, read, apply, defaultValue]() {
+          apply(defaultValue);
+          input->setEditingText(read());
+          lastLayoutWidth = -1;
+        });
+        body->addView(makeSteppedValueRow(metrics, input, formatFloatValue(step, precision),
+            [this, input, read, apply, step, precision](int direction) {
+              apply(formatFloatValue(std::stof(read()) + direction * step, precision));
+              input->setEditingText(read());
+              lastLayoutWidth = -1;
+            }, reset));
       };
 
   if (keyMode == -5 || keyMode == -7) {
@@ -123,9 +118,9 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
       body->addView(buildScratchLanePositionControl(metrics));
     }
     appendNumeric(i18n::message("settings.skins.play_area_width.mode", {{"mode", gameplay::keyModeLabel(keyMode)}}),
-                  formatPlayAreaWidthLabel(
-                      context.settings.playAreaWidthForKeyMode(keyMode)),
-                  formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue),
+                  [this, keyMode] { return formatPlayAreaWidthLabel(
+                      context.settings.playAreaWidthForKeyMode(keyMode)); },
+                  formatPlayAreaWidthLabel(context.settings.geometryPolicy().width.defaultValue), 0.5F, 1,
                   [this, keyMode](const std::string &text) {
                     context.settings.setPlayAreaWidthForKeyMode(
                         keyMode,
@@ -136,8 +131,9 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                             context.settings.geometryPolicy().width.maximum));
                     persistSettings();
                   });
-    appendNumeric(i18n::message("settings.skins.lane_length.label"), formatFloatValue(context.settings.presentation().laneLength, 1),
-                  formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1),
+    appendNumeric(i18n::message("settings.skins.lane_length.label"),
+                  [this] { return formatFloatValue(context.settings.presentation().laneLength, 1); },
+                  formatFloatValue(context.settings.geometryPolicy().length.defaultValue, 1), 0.5F, 1,
                   [this](const std::string &text) {
                     context.settings.presentation().laneLength = sanitizeViewportComponent(
                         text, context.settings.presentation().laneLength,
@@ -145,8 +141,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
                     persistSettings();
                   });
     appendNumeric(i18n::message("settings.skins.lane_angle_deg.label"),
-                  formatFloatValue(context.settings.presentation().laneAngleDegrees, 1),
-                  formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1),
+                  [this] { return formatFloatValue(context.settings.presentation().laneAngleDegrees, 1); },
+                  formatFloatValue(context.settings.geometryPolicy().angle.defaultValue, 1), 1.0F, 1,
                   [this](const std::string &text) {
                     context.settings.presentation().laneAngleDegrees = sanitizeViewportComponent(
                         text, context.settings.presentation().laneAngleDegrees,
@@ -164,8 +160,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     break;
   case BuiltInSkinTab::Effects:
     appendNumeric(i18n::message("settings.skins.beam_length.percent_label"),
-                  std::to_string(context.settings.presentation().laneBeamLengthPercent),
-                  std::to_string(AppSettings::kDefaultLaneBeamLengthPercent),
+                  [this] { return std::to_string(context.settings.presentation().laneBeamLengthPercent); },
+                  std::to_string(AppSettings::kDefaultLaneBeamLengthPercent), 5.0F, 0,
                   [this](const std::string &text) {
                     context.settings.presentation().laneBeamLengthPercent =
                         clampLaneBeamLengthPercent(sanitizeOffsetComponent(
@@ -1491,20 +1487,11 @@ void SettingsScene::appendBuiltInNoteControls(
       apply(EditKind::Thickness, value);
     } else lastLayoutWidth = -1;
   });
-  body->addView(thicknessInput);
-  auto *steps = new View();
-  steps->setFlexDirection(FlexDirection::Row);
-  steps->setFlexWrap(YGWrapWrap);
-  steps->setGap(8.0F);
-  for (const int delta : {-10, 10}) {
-    auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
-                                  delta < 0 ? "-10%" : "+10%");
-    button->setOnClickListener([apply, delta] { apply(EditKind::AdjustThickness, delta); });
-    steps->addView(button);
-  }
-  steps->addView(makePropertyReset(i18n::message(isBody(type)
-      ? "settings.notes.reset_width" : "settings.notes.reset_thickness"), EditKind::ResetThickness));
-  body->addView(steps);
+  auto *reset = makePropertyReset(i18n::message(isBody(type)
+      ? "settings.notes.reset_width" : "settings.notes.reset_thickness"), EditKind::ResetThickness);
+  body->addView(makeSteppedValueRow(metrics, thicknessInput, "10%",
+      [apply](int direction) { apply(EditKind::AdjustThickness, direction * 10); }, reset));
+
 }
 
 void SettingsScene::appendKeybombColorControls(
@@ -1622,23 +1609,13 @@ void SettingsScene::appendBuiltInJudgeLineControls(
       apply(std::nullopt, value);
     else lastLayoutWidth = -1;
   });
-  body->addView(heightInput);
-  auto *steps = new View();
-  steps->setFlexDirection(FlexDirection::Row);
-  steps->setFlexWrap(YGWrapWrap);
-  steps->setGap(8.0F);
-  for (const int delta : {-10, 10}) {
-    auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
-                                  delta < 0 ? "-10%" : "+10%");
-    button->setOnClickListener([this, keyMode, apply, delta] {
-      apply(std::nullopt, context.settings.builtInJudgeLineForKeyMode(keyMode).heightPercent + delta);
-    });
-    steps->addView(button);
-  }
   auto *resetHeight = makeReset(i18n::message("settings.judge_line.reset_height"));
   resetHeight->setOnClickListener([apply] { apply(std::nullopt, 100); });
-  steps->addView(resetHeight);
-  body->addView(steps);
+  body->addView(makeSteppedValueRow(metrics, heightInput, "10%",
+      [this, keyMode, apply](int direction) {
+        apply(std::nullopt, context.settings.builtInJudgeLineForKeyMode(keyMode).heightPercent + direction * 10);
+      }, resetHeight));
+
 }
 
 void SettingsScene::appendBuiltInMeasureLineControls(
@@ -1735,23 +1712,13 @@ void SettingsScene::appendBuiltInLanePercentControl(
       apply([property, value](auto &next) { next.*property = value; });
     else lastLayoutWidth = -1;
   });
-  body->addView(input);
-  auto *steps = new View();
-  steps->setFlexDirection(FlexDirection::Row);
-  steps->setFlexWrap(YGWrapWrap);
-  steps->setGap(8.0F);
-  for (const int delta : {-10, 10}) {
-    auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
-                                  delta < 0 ? "-10%" : "+10%");
-    button->setOnClickListener([apply, property, delta] {
-      apply([property, delta](auto &next) { next.*property += delta; });
-    });
-    steps->addView(button);
-  }
   auto *reset = makeReset(resetLabel);
   reset->setOnClickListener([apply, property] {
     apply([property](auto &next) { next.*property = built_in_lane::Style{}.*property; });
   });
-  steps->addView(reset);
-  body->addView(steps);
+  body->addView(makeSteppedValueRow(metrics, input, "10%",
+      [apply, property](int direction) {
+        apply([property, direction](auto &next) { next.*property += direction * 10; });
+      }, reset));
+
 }

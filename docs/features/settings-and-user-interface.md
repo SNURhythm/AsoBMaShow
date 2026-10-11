@@ -27,7 +27,10 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
   are identified separately from HUD settings shared with custom skins.
 - Lane contains preview, shared scroll/covers, and visibility aids. Built-in
   appearance has one editor in Skins, with horizontal Lane, Notes, Effects,
-  and HUD tabs. Lane groups width, length, angle, scratch position, opacity,
+  and HUD tabs. Numeric appearance controls consistently use left-aligned
+  decrement, editable value, increment, and reset controls, retaining each
+  setting’s limits and reset behavior. Toggle and choice-button groups start
+  below their labels at the left edge. Lane groups width, length, angle, scratch position, opacity,
   and judge/measure lines; Effects groups beams and keybombs. The catalog's
   screen/mode selectors stay vertical; only the built-in editor uses horizontal tabs.
   Built-in controls remain available here when custom skin services are

@@ -420,6 +420,28 @@ inline TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   return input;
 }
 
+inline View *makeSteppedValueRow(const LayoutMetrics &metrics, TextInputBox *input,
+                                  const std::string &stepLabel,
+                                  std::function<void(int)> adjust, Button *reset) {
+  auto *row = new View();
+  row->setWidthPercent(100);
+  row->setFlexDirection(FlexDirection::Row);
+  row->setFlexWrap(YGWrapWrap);
+  row->setJustifyContent(YGJustifyFlexStart);
+  row->setAlignItems(YGAlignCenter);
+  row->setGap(metrics.compact ? 8.0F : 10.0F);
+  input->setAlign(TextView::LEFT);
+  for (const int direction : {-1, 1}) {
+    auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
+                                (direction < 0 ? "-" : "+") + stepLabel);
+    step->setOnClickListener([adjust, direction] { adjust(direction); });
+    row->addView(step);
+    if (direction < 0) row->addView(input);
+  }
+  row->addView(reset);
+  return row;
+}
+
 inline View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
