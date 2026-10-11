@@ -17,6 +17,8 @@ parser.add_argument('--output',type=pathlib.Path)
 parser.add_argument('--samples',type=int,default=7)
 parser.add_argument('--skip-build',action='store_true')
 parser.add_argument('--build-only',action='store_true')
+parser.add_argument('--baseline-workspace',action='store_true',
+                    help='Use ScanWorkspace in a baseline that already supports it')
 options=parser.parse_args()
 if options.samples<1: raise ValueError('Samples must be positive')
 out=(options.output or pathlib.Path(tempfile.mkdtemp(prefix='asobmashow-scan-'))).resolve()
@@ -29,7 +31,7 @@ files=[pathlib.Path(p).expanduser().resolve() for p in options.files_from.read_t
 if not files or any(not p.is_file() for p in files): raise ValueError('Manifest must contain existing charts')
 source_names=('bms_parser.hpp','bms_parser.cpp','ChartLibraryScanner.cpp')
 harness_names=('performance.cpp','ChartSnapshot.h')
-provenance=dict(baseline=revision,build_dir=str(build),
+provenance=dict(baseline=revision,baseline_workspace=options.baseline_workspace,build_dir=str(build),
  current={n:hashlib.sha256((root/'src'/n).read_bytes()).hexdigest() for n in source_names},
  harness={n:hashlib.sha256((options.parser_repo/'test'/n).read_bytes()).hexdigest() for n in harness_names},
  runner=hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest())
@@ -92,7 +94,7 @@ if not options.skip_build:
  for v in ('baseline','current'):
   d=out/v
   args=['clang++','-std=c++17','-O2','-g0','-pthread','-DWITH_AMALGAMATION=1','-DBMS_PARSER_VERBOSE=0','-DBMS_BENCH_SCAN=1','-DBMS_BENCH_ALLOCATIONS=1','-I'+str(d),str(d/'performance.cpp'),str(d/'bms_parser.cpp'),'-o',str(d/'parser')]
-  if v=='current':args+=['-DBMS_BENCH_WORKSPACE=1']
+  if v=='current' or options.baseline_workspace:args+=['-DBMS_BENCH_WORKSPACE=1']
   jobs.append((args,str(root)))
  def run(job):
   r=subprocess.run(job[0],cwd=job[1],capture_output=True,text=True)
@@ -155,5 +157,5 @@ records.append(dict(case='fresh-library',samples=samples))
 for record in records:
  record['median']={v:{key:statistics.median(s[key] for s in samples) for key in samples[0]} for v,samples in record['samples'].items()}
  print(json.dumps({k:v for k,v in record.items() if k!='samples'}),flush=True)
-(out/'results.json').write_text(json.dumps(dict(baseline=revision,charts=len(files),bytes=sum(p.stat().st_size for p in files),fixed_seed=12345,parser_metadata_equal=True,stored_metadata_equal=True,results=records),indent=2)+'\n')
+(out/'results.json').write_text(json.dumps(dict(baseline=revision,charts=len(files),bytes=sum(p.stat().st_size for p in files),fixed_seed=12345,baseline_workspace=options.baseline_workspace,parser_metadata_equal=True,stored_metadata_equal=True,results=records),indent=2)+'\n')
 print('Results:',out)
