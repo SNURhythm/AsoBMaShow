@@ -2,11 +2,9 @@
 
 #include "View.h"
 #include <array>
-#include <functional>
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ScoreRepositoryModels.h"
 
-class Button;
 class ImageView;
 class TextView;
 
@@ -21,7 +19,6 @@ public:
   }
   void setScoreContainer(View *container);
   void setCompact(bool compact);
-  void setMoreActionHandler(std::function<void()> more);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
@@ -43,9 +40,6 @@ private:
   View *identity_ = nullptr;
   View *titles_ = nullptr;
   View *titleRow_ = nullptr;
-  View *titleActions_ = nullptr;
-  Button *moreButton_ = nullptr;
-  std::function<void()> onMore_;
   std::array<View *, 3> factRows_{};
   std::array<View *, 6> factCells_{};
   ImageView *artwork_ = nullptr;
@@ -57,14 +51,12 @@ private:
   View *scoreSlot_ = nullptr;
   View *levelGroup_ = nullptr;
   View *levelLine_ = nullptr;
-  View *expandedFacts_ = nullptr;
   TextView *tempo_ = nullptr;
   TextView *desktopRate_ = nullptr;
   TextView *grade_ = nullptr;
   View *facts_ = nullptr;
   View *personalBest_ = nullptr;
   View *scoreContainer_ = nullptr;
-  View *clearLamp_ = nullptr;
   TextView *title_ = nullptr;
   TextView *artist_ = nullptr;
   TextView *genre_ = nullptr;

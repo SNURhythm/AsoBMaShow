@@ -46,6 +46,7 @@ private:
   int appliedTitleMinimumWidth_ = -1;
   TextView *artworkPlaceholder;
   View *clearLamp;
+  View *clearLampHalo;
   View *artworkFrame;
   ImageView *jacketImage;
   View *textLayout;

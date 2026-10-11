@@ -78,10 +78,16 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   auto *rule = new View();
   rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(main_menu_theme::rule);
   addView(rule);
+  clearLampHalo = new View();
+  clearLampHalo->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 1);
+  clearLampHalo->setPosition(Edge::Top, 10)->setWidth(6)->setHeight(height - 21);
+  clearLampHalo->setCornerRadius(3);
+  contentCard->addView(clearLampHalo);
   clearLamp = new View();
   clearLamp->setName("chartListClearLamp");
-  clearLamp->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0);
-  clearLamp->setPosition(Edge::Top, 8)->setWidth(8)->setHeight(height - 17);
+  clearLamp->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 1);
+  clearLamp->setPosition(Edge::Top, 10)->setWidth(6)->setHeight(height - 21);
+  clearLamp->setCornerRadius(3);
   clearLamp->setBorderWidth(0);
   contentCard->addView(clearLamp);
 
@@ -257,11 +263,20 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
 void ChartListItemView::setClearRank(int clearRank) {
   if (!solidArchive && hasClearLampColor(clearRank)) {
     auto glow = clearLampColorForRank(clearRank);
-    clearLamp->setBackgroundColor(glow);
-    glow.a = 150;
-    clearLamp->setShadow(glow, 0, 0, 8);
+    auto core = glow;
+    core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);
+    core.g = static_cast<uint8_t>((3 * core.g + 255) / 4);
+    core.b = static_cast<uint8_t>((3 * core.b + 255) / 4);
+    core.a = 255;
+    clearLamp->setBackgroundColor(core);
+    if (clearRank == kClearTypeHardClearRank) glow = Color(140, 185, 255, 255);
+    glow.a = 175;
+    clearLamp->setShadow(glow, 0, 0, 5);
+    glow.a = 85;
+    clearLampHalo->setShadow(glow, 0, 0, 15);
   } else {
     clearLamp->clearShadow();
+    clearLampHalo->clearShadow();
     clearLamp->clearBackgroundColor();
   }
 }

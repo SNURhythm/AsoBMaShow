@@ -233,16 +233,23 @@ int main() {
             "desktop artwork occupies the hero frame above the chart and best-score summary");
     require(view.findViewByName("chartDetailsTotal")->getX() < view.findViewByName("chartDetailsNotes")->getX() &&
                 view.findViewByName("chartDetailsNotes")->getX() < view.findViewByName("chartDetailsNoteTypes")->getX() &&
-                view.findViewByName("chartDetailsNoteTypes")->getX() < view.findViewByName("chartDetailsBpm")->getX(),
-            "desktop facts follow the reference's horizontal total, notes, note-type and tempo strip");
+                view.findViewByName("chartDetailsNoteTypes")->getX() < view.findViewByName("chartDetailsJudge")->getX(),
+            "desktop facts contain total, notes, note types and judge without duplicated tempo");
+    require(YGNodeStyleGetDisplay(YGNodeGetParent(view.findViewByName("chartDetailsBpm")->getNode())) == YGDisplayNone &&
+                YGNodeStyleGetDisplay(YGNodeGetParent(view.findViewByName("chartDetailsLength")->getNode())) == YGDisplayNone,
+            "BPM and length occur only in the desktop summary");
+    require(view.findViewByName("chartDetailsGenre")->getY() >=
+                view.findViewByName("chartDetailsArtist")->getY() + view.findViewByName("chartDetailsArtist")->getHeight() &&
+                view.findViewByName("chartDetailsGenre")->getY() < summary->getY() &&
+                view.findViewByName("chartDetailsMore") == nullptr,
+            "genre follows the artist and the title has no overflow action");
     require(view.findViewByName("chartDetailsDifficulty")->getY() < view.findViewByName("chartDetailsTempo")->getY() &&
                 view.findViewByName("chartDetailsGrade")->getX() > view.findViewByName("chartDetailsChartLevel")->getX(),
             "desktop summary places tempo below difficulty and the best grade on the right");
     require(text(view, "chartDetailsBestRate") == "90.78%" &&
                 text(view, "chartDetailsTempo") == "BPM 75.5–180   |   2:05",
             "desktop summary displays percentage without repeating the grade and preserves tempo range");
-    require(view.findViewByName("chartDetailsExpanded")->getVisible() &&
-                text(view, "chartDetailsJudge") == "NORMAL" && text(view, "chartDetailsScore") == "2451 / 2700",
+    require(text(view, "chartDetailsJudge") == "NORMAL" && text(view, "chartDetailsScore") == "2451 / 2700",
             "all chart metadata and cached scores are visible without unfolding");
     auto *scoreCard = view.findViewByName("chartDetailsPersonalBest");
     auto *facts = view.findViewByName("chartDetailsFacts");
@@ -251,6 +258,14 @@ int main() {
                 !view.findViewByName("chartDetailsRate")->getVisible() &&
                 view.findViewByName("chartDetailsNext")->getVisible(),
             "desktop EX score and next-rank card sits below the summary without duplicate grade/rate");
+    auto *next = view.findViewByName("chartDetailsNext");
+    auto *clear = dynamic_cast<TextView *>(view.findViewByName("chartDetailsClear"));
+    auto *scoreValue = view.findViewByName("chartDetailsScore");
+    require(next->getX() + next->getWidth() == scoreCard->getX() + scoreCard->getWidth() &&
+                clear->getX() + clear->getWidth() == scoreCard->getX() + scoreCard->getWidth() &&
+                next->getY() < clear->getY() && clear->getY() == scoreValue->getY() &&
+                clear->pointSize() == 32 && clear->fontWeight() == TextView::FontWeight::Bold,
+            "next rank occupies the upper right above the larger clear rank at lower right");
     const int fullHeight = view.getHeight();
     record.meta.StageFile.clear();
     view.setChart(&record, best, kClearTypeHardClearRank, "320");

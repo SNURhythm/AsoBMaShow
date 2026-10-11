@@ -231,6 +231,8 @@ private:
   Button *chartSortButton = nullptr;
   TextView *chartSortButtonText = nullptr;
   Button *startButton = nullptr;
+  View *primaryActionSlot_ = nullptr;
+  bool unzipButtonAvailable_ = false;
   Button *rankingsButton = nullptr;
   TextView *rankingsButtonText = nullptr;
   std::unique_ptr<ir::IrRankingModal> rankingsModal;
@@ -507,6 +509,7 @@ private:
   void setPlayableChartActionsVisible(bool visible);
   void setPlayableChartActionsVisible(bool visible, bool chartActionsVisible);
   void setUnzipButtonVisible(bool visible);
+  void refreshPrimaryActionVisibility();
   void refreshUnzipButtonForSelection(const ChartMetaRecord *record);
   void buildUnzipProgressModal();
   bool archiveUnzipInProgress() const;

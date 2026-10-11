@@ -1,56 +1,39 @@
-# Song selector refinement QA
+# Song selector action and detail QA
 
 Date: 2026-10-12.
 
 ## Requested changes
 
-- Removed the redundant folder title and chart count beside search/sort.
-- Portrait hides the wordmark in both Yoga layout and the render visibility flag.
-- Level/key-mode text aligns right and expands left within the available row.
-- Removed the duplicate detail favorite, Chart details fold and overflow button
-  beside Rankings. Metadata stays open; the title's Viewer/Reveal menu remains.
-- Stagefile artwork uses decoded aspect ratio, with a 4:3 missing/loading
-  placeholder. Wide artwork saves vertical space; compact tall artwork fits.
-- The dock replaces key mode with ASSIST, uses uppercase captions without the
-  Gauge colon, and enlarges PLAY OPTIONS without its left separator.
-- The bottom bar and landscape Play button ignore the bottom safe-area inset.
-  Portrait also excludes that inset from its content sizing and padding.
+- Play, Download and solid-archive Unzip now share one primary action slot.
+  Download takes priority while available, then Unzip, otherwise Play. Rotation
+  moves the whole slot; the landscape slot matches the 540-unit detail panel.
+- Records, Rankings, Viewer and Reveal occupy a pinned 2×2 grid. Both rows use
+  matching column widths/gaps, 76-unit landscape buttons and 64-unit portrait
+  buttons. Existing action guards and Reveal's file/folder choices remain.
+- Genre sits immediately below artist. Desktop chart facts omit the duplicate
+  BPM and length, which remain in the summary. Portrait retains its sole values.
+- Next-rank difference is at the score card's upper right; a larger bold clear
+  rank sits below it at the lower right. The clear text has a soft glyph-shaped
+  halo. Row lamps use a rounded bright core, close glow and wider subtle halo.
+- Summary grade and percentage align right, matching the difficulty and tempo
+  rows. The redundant PERSONAL BEST caption and its extra height are removed.
 
-## Validation
+## Verification
 
-The full CTest suite passed all 483 tests. After the narrow-row review fix, the
-desktop app was rebuilt and all five affected CTest targets passed again
-(chart rows, details, UI scale, localization and catalog). Regression
-checks cover wide/tall decoded artwork, artwork arriving after initial layout,
-unchanged-frame layout stability, always-visible metadata, right-aligned labels,
-wide portrait wordmark hiding, rotation and bottom safe-area geometry.
+The desktop app and affected native view targets built successfully. Native
+view tests cover score-card positions, genre order, metadata deduplication,
+artwork aspect ratios, score ownership and rotation. Real Yoga tests exercise
+Play/Download/Unzip replacement and priority at multiple portrait/landscape
+sizes, dock width, bottom safe area and aligned action-grid columns.
 
-Review identified unbounded difficulty text that could push trailing controls
-outside narrow rows. The final implementation caps it to the row's available
-space and updates it when the row is resized.
+Read-only review found no remaining material issue in ownership, action
+availability, rotation or glow rendering. All 483 CTest tests passed. After
+matching both grid-row gaps, the desktop app rebuilt and all 10 UI-scale
+checks passed again.
 
 ## Limits
 
-A fresh native screenshot could not be captured because the Mac was locked.
-Portrait and safe-area behavior are covered by real Yoga layout tests; no mobile
-build or device visual check was performed. Screenshots from the earlier tab
-redesign predate these refinements. No deployment was performed.
-
-## Clear lamp, favorite feedback and score-card follow-up
-
-The clear lamp now uses an eight-unit glow in its clear-state color, with no
-border; recycling to a row without a lamp clears the glow. Favorite hover and
-pressed feedback use subtle foreground-color overlays that adapt to selected
-and unselected rows in either theme.
-
-The landscape EX-score/next-rank card now follows the BPM/personal-best summary,
-before chart facts. Its duplicate grade/rate is hidden, while the sole portrait
-rank/rate remains visible. Rotation and external portrait score ownership remain
-covered by native detail-view tests.
-
-The desktop build and three affected CTest targets passed. A native desktop
-visual check confirmed the score-card placement using an unplayed chart
-(`/tmp/asobmashow-score-polish.png`). This library did not provide a scored chart
-for checking the glow and score values visually; scored geometry is covered by
-fixtures. Native pointer automation still did not reliably select/hover rows,
-so hover/down colors were checked in code rather than captured visually.
+The Mac locked during the fresh native visual check, so no screenshot of this
+revision was captured. Earlier screenshots predate this revision. Glow
+appearance still needs a visual check on an unlocked desktop or device.
+No mobile build, download, extraction, score upload or deployment was performed.

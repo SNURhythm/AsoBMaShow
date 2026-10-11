@@ -527,7 +527,6 @@
 {"menu.details.length.label", "LENGTH", "곡 길이", "演奏時間", "时长", "長度"},
 {"menu.details.note_types.label", "LN / SCRATCH", "LN / 스크래치", "LN / スクラッチ", "长音符 / 皿", "長音符 / 皿"},
 {"menu.details.notes.label", "NOTES", "노트 수", "ノート数", "音符数", "音符數"},
-{"menu.details.personal_best.label", "PERSONAL BEST", "개인 최고 기록", "自己ベスト", "个人最佳", "個人最佳"},
 {"menu.details.select_chart.label", "Select a chart", "채보를 선택하세요", "譜面を選択", "选择谱面", "選擇譜面"},
 {"menu.details.total.label", "TOTAL", "TOTAL", "TOTAL", "TOTAL", "TOTAL"},
 {"menu.details.total_auto.label", "TOTAL · AUTO", "TOTAL · 자동", "TOTAL · 自動", "TOTAL · 自动", "TOTAL · 自動"},

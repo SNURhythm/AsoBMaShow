@@ -175,10 +175,6 @@ constexpr int kDetailsContentWidth = 472;
 // Compact desktop chrome leaves the chart table as the primary browsing surface.
 constexpr int kMenuActionHeight = 56;
 constexpr int kPortraitMenuActionHeight = 64;
-int currentMenuActionHeight() {
-  return rendering::window_height > rendering::window_width
-             ? kPortraitMenuActionHeight : kMenuActionHeight;
-}
 constexpr int kLibraryPanelPadding = 24;
 constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
@@ -1178,6 +1174,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartSortButton = nullptr;
   chartSortButtonText = nullptr;
   startButton = nullptr;
+  primaryActionSlot_ = nullptr;
+  unzipButtonAvailable_ = false;
   chartActionsRow = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;
@@ -1919,9 +1917,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartDetailsView_ = new ChartDetailsView(jacketView);
   chartDetailsView_->setWidth(kDetailsContentWidth);
   rightContent->addView(chartDetailsView_);
-  chartDetailsView_->setMoreActionHandler([this] {
-    toggleRevealContextMenu(chartDetailsView_->findViewByName("chartDetailsMore"));
-  });
 
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
@@ -2042,7 +2037,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonSlot->setFlex(1)->setMinWidth(0)->setHeight(kMenuActionHeight);
   replayButtonSlot->setAlignItems(YGAlignStretch);
 
-  replayButton = makeSelectorButton(i18n::message("menu.records.label"), 22, &replayButtonText, 0xf15c);
+  replayButton = makeSelectorButton(i18n::message("menu.records.label"), 26, &replayButtonText, 0xf15c);
   replayButton->setWidthPercent(100);
   styleMenuButton(replayButton, replayButtonText);
   replayButton->setStyledBorderWidth(0);
@@ -2088,6 +2083,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonSlot = new View();
   unzipButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0);
   unzipButtonSlot->setVisible(false);
+  unzipButtonSlot->setDisplay(YGDisplayNone);
   unzipButtonSlot->setAlignItems(YGAlignStretch);
 
   unzipButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
@@ -2096,12 +2092,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
   unzipButton->setContentView(unzipButtonText);
-  styleMenuButton(unzipButton, unzipButtonText);
+  styleMenuButton(unzipButton, unzipButtonText, true);
   unzipButton->setOnClickListener(
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
 
-  rankingsButton = makeSelectorButton(i18n::message("menu.rankings.label"), 22, &rankingsButtonText, 0xf080);
+  rankingsButton = makeSelectorButton(i18n::message("menu.rankings.label"), 26, &rankingsButtonText, 0xf080);
   rankingsButton->setFlex(1)->setMinWidth(0);
   styleMenuButton(rankingsButton, rankingsButtonText);
   rankingsButton->setStyledBorderWidth(0);
@@ -2128,36 +2124,31 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartActionsRow->setHeight(kMenuActionHeight);
   chartActionsRow->setGap(10);
 
-  auto *viewerButton = new Button(0, 0, 224, kMenuActionHeight);
-  viewerButton->setFlex(1);
-  auto *viewerButtonText = new TextView(main_menu_theme::font, 18);
-  viewerButtonText->setLocalizedText(i18n::message("menu.viewer.label"));
-  viewerButtonText->setAlign(TextView::CENTER);
-  viewerButtonText->setVAlign(TextView::MIDDLE);
-  viewerButton->setContentView(viewerButtonText);
+  TextView *viewerButtonText = nullptr;
+  auto *viewerButton = makeSelectorButton(i18n::message("menu.viewer.label"), 26,
+                                         &viewerButtonText, 0xf201);
+  viewerButton->setFlex(1)->setMinWidth(0);
   styleMenuButton(viewerButton, viewerButtonText);
   viewerButton->setStyledBorderWidth(0);
   viewerButton->setOnClickListener([this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
 
-  revealButton = new Button(0, 0, 224, kMenuActionHeight);
-  revealButton->setFlex(1);
-  auto *revealButtonText = new TextView(main_menu_theme::font, 18);
-  revealButtonText->setLocalizedText(i18n::message("menu.reveal.label"));
-  revealButtonText->setAlign(TextView::CENTER);
-  revealButtonText->setVAlign(TextView::MIDDLE);
-  revealButton->setContentView(revealButtonText);
+  TextView *revealButtonText = nullptr;
+  revealButton = makeSelectorButton(i18n::message("menu.reveal.label"), 26,
+                                    &revealButtonText, 0xf07c);
+  revealButton->setFlex(1)->setMinWidth(0);
   styleMenuButton(revealButton, revealButtonText);
   revealButton->setStyledBorderWidth(0);
   revealButton->setOnClickListener([this]() { toggleRevealContextMenu(); });
   chartActionsRow->addView(revealButton);
-  rightContent->addView(chartActionsRow);
+  for (auto *button : {replayButton, rankingsButton, viewerButton, revealButton}) {
+    button->setThemedBackgroundColors(main_menu_theme::surface,
+                                     main_menu_theme::hover, main_menu_theme::pressed);
+  }
 
   ContextMenuView::Callbacks revealMenuCallbacks;
   revealMenuCallbacks.onActionSelected = [this](const std::string &actionId) {
-    if (actionId == "viewer") {
-      openChartViewerForSelection();
-    } else if (actionId == "show-same-folder") {
+    if (actionId == "show-same-folder") {
       showSelectedChartFolder();
     } else if (actionId == "reveal-file") {
       revealSelectedChartInFileManager();
@@ -2166,7 +2157,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealContextMenu = std::make_unique<ContextMenuView>(
       overlayPortal, std::move(revealMenuCallbacks));
 
-  rightContent->addView(unzipButtonSlot);
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   settingsButton->setName("mainMenuSettings");
@@ -2208,9 +2198,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   primaryActions->setName("mainMenuPrimaryActions");
   primaryActions->setWidth(kDetailsContentWidth)->setFlexShrink(0);
   primaryActions->setFlexDirection(FlexDirection::Column)->setGap(12);
-  primaryActions->addView(startButton);
-  primaryActions->addView(findBmsButtonSlot);
+  primaryActionSlot_ = new View();
+  primaryActionSlot_->setName("mainMenuPrimaryActionSlot");
+  primaryActionSlot_->setFlexShrink(0)->setAlignItems(YGAlignStretch);
+  primaryActionSlot_->addView(startButton);
+  primaryActionSlot_->addView(findBmsButtonSlot);
+  primaryActionSlot_->addView(unzipButtonSlot);
+  primaryActions->addView(primaryActionSlot_);
   primaryActions->addView(recordActions);
+  primaryActions->addView(chartActionsRow);
   primaryActions->addView(settingsButton);
   right->addView(primaryActions);
   auto *controls = new View();
@@ -2331,12 +2327,9 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   auto *settings = static_cast<Button *>(rootLayout->findViewByName("mainMenuSettings"));
   auto *detailsScroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
   auto *target = portrait ? detailsControlsContent_ : detailsContent_;
-  startButton->moveTo(*primary);
+  primaryActionSlot_->moveTo(*primary);
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
-  for (auto *view : std::array<View *, 3>{readyPlayOptionsButton, chartActionsRow,
-           unzipButtonSlot}) {
-    view->moveTo(*target);
-  }
+  readyPlayOptionsButton->moveTo(*target);
   settings->moveTo(*rootLayout->findViewByName("mainMenuToolbar"));
   primary->moveTo(portrait ? *controls : *details);
   controls->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
@@ -2344,12 +2337,13 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   tutorialRightScroll_ = portrait ? detailsControlsScroll_ : detailsScroll;
   primary->setGap(portrait ? 8 : 12);
   records->setGap(portrait ? 8 : 12);
+  chartActionsRow->setGap(portrait ? 8 : 12);
   settings->setFlex(portrait ? 1 : 0)->setMinWidth(0);
   settings->setWidth(portrait ? YGUndefined : 130);
   settings->getContentView()->setAutoFitText(portrait);
   replayButtonText->setAutoFitText(portrait);
   rankingsButtonText->setAutoFitText(portrait);
-  for (auto *view : std::array<View *, 7>{primary, records, startButton,
+  for (auto *view : std::array<View *, 8>{primary, records, primaryActionSlot_, startButton,
            readyPlayOptionsButton, chartActionsRow, unzipButtonSlot, findBmsButtonSlot}) {
     if (portrait) view->setWidthPercent(100);
     else view->setWidth(kDetailsContentWidth);
@@ -2358,17 +2352,22 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
     if (portrait) button->setWidthPercent(100);
     else button->setWidth(kDetailsContentWidth);
   }
-  chartActionsRow->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
+  chartActionsRow->setVisible(true);
+  chartActionsRow->setDisplay(YGDisplayFlex);
   const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
-  records->setHeight(portrait ? height : 44);
+  const int detailActionHeight = portrait ? 64 : 76;
+  records->setHeight(detailActionHeight);
   const int primaryHeight = portrait ? height : kPlayDockHeight;
+  primaryActionSlot_->setHeight(primaryHeight);
   startButton->setHeight(primaryHeight);
   findBmsButton->setHeight(primaryHeight);
   findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
-  for (auto *view : std::array<View *, 7>{replayButtonSlot, replayButton, rankingsButton,
-           settings, chartActionsRow, unzipButton, searchBox}) view->setHeight(height);
-  for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
-  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? height : 0);
+  for (auto *view : std::array<View *, 4>{replayButtonSlot, replayButton, rankingsButton,
+           chartActionsRow}) view->setHeight(detailActionHeight);
+  for (auto *view : chartActionsRow->getChildren()) view->setHeight(detailActionHeight);
+  for (auto *view : std::array<View *, 2>{settings, searchBox}) view->setHeight(height);
+  unzipButton->setHeight(primaryHeight);
+  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? primaryHeight : 0);
   for (auto *button : {chartFilterButton, chartSortButton})
     button->setWidth(portrait ? 84 : 112)->setHeight(height);
   auto *toolbar = rootLayout->findViewByName("mainMenuToolbar");
@@ -2419,17 +2418,16 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   if (!portrait) {
     readyPlayOptionsButton->moveTo(*dock);
     readyPlayOptionsButton->setWidth(YGUndefined)->setFlex(1)->setMinWidth(0)->setHeight(kPlayDockHeight);
-    startButton->moveTo(*dock);
-    startButton->setWidth(395)->setHeight(kPlayDockHeight);
-    for (auto *view : std::array<View *, 4>{records, replayButtonSlot, replayButton, rankingsButton}) view->setHeight(44);
-    chartActionsRow->setHeight(20);
-    for (auto *view : chartActionsRow->getChildren()) view->setHeight(20);
+    primaryActionSlot_->moveTo(*dock);
+    primaryActionSlot_->setWidth(kDetailsPanelWidth)->setHeight(kPlayDockHeight);
+    for (auto *view : std::array<View *, 5>{startButton, findBmsButtonSlot,
+             findBmsButton, unzipButtonSlot, unzipButton}) view->setWidthPercent(100);
   } else {
-    // Preserve the primary action order after returning from the desktop dock.
-    findBmsButtonSlot->moveTo(*dock);
-    findBmsButtonSlot->moveTo(*primary);
+    // Preserve the primary action and grid order after returning from the dock.
     records->moveTo(*dock);
     records->moveTo(*primary);
+    chartActionsRow->moveTo(*dock);
+    chartActionsRow->moveTo(*primary);
     readyPlayOptionsButton->setFlex(0)->setHeight(232);
   }
   detailsScroll->refreshContentLayout();
@@ -4725,8 +4723,7 @@ void MainMenuScene::toggleRevealContextMenu(View *anchor) {
        .y = anchor->getY(),
        .width = anchor->getWidth(),
        .height = anchor->getHeight()},
-      {{.id = "viewer", .label = i18n::message("menu.viewer.label")},
-       {.id = "show-same-folder",
+      {{.id = "show-same-folder",
         .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
        {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")}},
@@ -4909,15 +4906,23 @@ void MainMenuScene::setPlayableChartActionsVisible(bool visible,
 }
 
 void MainMenuScene::setUnzipButtonVisible(bool visible) {
-  if (unzipButtonSlot == nullptr) {
-    return;
-  }
+  unzipButtonAvailable_ = visible;
+  refreshPrimaryActionVisibility();
+}
 
-  unzipButtonSlot->setVisible(visible);
-  unzipButtonSlot->setHeight(visible ? currentMenuActionHeight() : 0.0f);
-  if (rootLayout != nullptr) {
-    rootLayout->applyYogaLayout();
-  }
+void MainMenuScene::refreshPrimaryActionVisibility() {
+  if (!startButton || !findBmsButtonSlot || !unzipButtonSlot) return;
+  const bool download = findBmsButtonSlot->getVisible();
+  const bool unzip = unzipButtonAvailable_ && !download;
+  const int height = rendering::window_height > rendering::window_width
+                         ? kPortraitMenuActionHeight : kPlayDockHeight;
+  unzipButtonSlot->setVisible(unzip);
+  unzipButtonSlot->setDisplay(unzip ? YGDisplayFlex : YGDisplayNone);
+  unzipButtonSlot->setHeight(unzip ? height : 0);
+  findBmsButtonSlot->setHeight(download ? height : 0);
+  startButton->setVisible(!download && !unzip);
+  startButton->setDisplay(download || unzip ? YGDisplayNone : YGDisplayFlex);
+  if (rootLayout) rootLayout->applyYogaLayout();
 }
 
 void MainMenuScene::refreshUnzipButtonForSelection(
@@ -5019,16 +5024,7 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
 
   findBmsButtonSlot->setVisible(visible);
   findBmsButtonSlot->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
-  const int primaryHeight = rendering::window_height > rendering::window_width
-                                ? kPortraitMenuActionHeight : 88;
-  findBmsButtonSlot->setHeight(visible ? primaryHeight : 0);
-  if (startButton != nullptr) {
-    startButton->setVisible(!visible);
-    startButton->setDisplay(visible ? YGDisplayNone : YGDisplayFlex);
-  }
-  if (rootLayout != nullptr) {
-    rootLayout->applyYogaLayout();
-  }
+  refreshPrimaryActionVisibility();
 }
 
 void MainMenuScene::openFindBmsForSelection() {
@@ -7979,6 +7975,8 @@ void MainMenuScene::cleanupScene() {
   chartDetailsView_ = nullptr;
   searchBox = nullptr;
   startButton = nullptr;
+  primaryActionSlot_ = nullptr;
+  unzipButtonAvailable_ = false;
   rankingsButton = nullptr;
   rankingsButtonText = nullptr;
   chartActionsRow = nullptr;

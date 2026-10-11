@@ -18,6 +18,10 @@ class UiScaleTests(unittest.TestCase):
                              "void MainMenuScene::updateMenuPresentation(bool portrait)") + "\n" + extract(
                                  (root / "src/scene/MainMenuScene.cpp").read_text(),
                                  "float MainMenuScene::portraitDetailsHeight(float availableHeight) const")
+        for signature in ("void MainMenuScene::refreshPrimaryActionVisibility()",
+                          "void MainMenuScene::setFindBmsButtonVisible(bool visible)",
+                          "void MainMenuScene::setUnzipButtonVisible(bool visible)"):
+            method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), signature)
         source = r'''
 #include <yoga/Yoga.h>
 #include <array>
@@ -48,6 +52,7 @@ struct View {
   View* setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v);return this; }
   View* setPadding(Edge e,float v) { YGNodeStyleSetPadding(node,YGEdge(e),v);return this; }
   View* setAlignItems(YGAlign v) { YGNodeStyleSetAlignItems(node,v);return this; }
+  void applyYogaLayout() { YGNodeCalculateLayout(node,YGUndefined,YGUndefined,YGDirectionLTR); }
   void setAutoFitText(bool) {}
   void setVisible(bool v) { visible=v; }
   bool getVisible() { return visible; }
@@ -68,6 +73,8 @@ SafeAreaInsets getSafeAreaInsetsUi() { return {}; }
 constexpr int kRootPadding=0,kLibraryPanelWidth=350,kDetailsPanelWidth=540,kDetailsContentWidth=472;
 constexpr int kMenuHeaderHeight=80,kPlayDockHeight=120;
 constexpr int kPortraitMenuActionHeight=64,kMenuActionHeight=56;
+enum class NewcomerTutorialStep { Download };
+struct Tutorial { bool getVisible() { return false; } NewcomerTutorialStep step() { return NewcomerTutorialStep::Download; } };
 struct MainMenuScene {
   View* rootLayout;
   View *detailsContent_, *detailsControlsContent_;
@@ -79,11 +86,18 @@ struct MainMenuScene {
   View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
   void updatePanelLayout(); void updateMenuPresentation(bool portrait);
   float portraitDetailsHeight(float) const;
+  View *primaryActionSlot_=nullptr;
+  bool unzipButtonAvailable_=false,findBmsAvailableWithoutTutorial_=false;
+  Tutorial *tutorial_=nullptr;
+  void refreshPrimaryActionVisibility();
+  void setFindBmsButtonVisible(bool visible);
+  void setUnzipButtonVisible(bool visible);
 };
 PRODUCTION_METHOD
 int main() {
   View body("mainMenuBody"),dock("mainMenuPlayDock"),header("mainMenuHeader"),tabs("mainMenuTabs"),wordmark("mainMenuWordmark"),searchRow("mainMenuSearchRow");
   View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
+  View actionSlot("mainMenuPrimaryActionSlot"),viewer("viewer"),reveal("reveal");
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
@@ -110,13 +124,16 @@ int main() {
   controls.setFlex(1)->setMinWidth(0)->setMinHeight(0);controls.add(controlsScroll);
   controlsScroll.setWidthPercent(100)->setFlex(1)->setMinHeight(0);
   primary.setFlexShrink(0);scroll.setFlex(1)->setMinWidth(0)->setMinHeight(0);
-  primary.add(start);primary.add(findSlot);primary.add(records);primary.add(settings);
+  primary.add(actionSlot);actionSlot.setFlexShrink(0);actionSlot.add(start);actionSlot.add(findSlot);actionSlot.add(unzipSlot);
+  primary.add(records);primary.add(tools);primary.add(settings);
+  tools.setFlexDirection(FlexDirection::Row);tools.add(viewer);tools.add(reveal);viewer.setFlex(1);reveal.setFlex(1);
   records.setFlexDirection(FlexDirection::Row);records.add(replaySlot);records.add(ranking);
   replaySlot.setFlex(1)->setMinWidth(0);ranking.setFlex(1)->setMinWidth(0);
   replaySlot.add(replay);replay.setWidthPercent(100);
-  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);
-  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
+  content.add(chart);content.add(options);
+  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);unzipSlot.setDisplay(YGDisplayNone);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
   MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
+  scene.primaryActionSlot_=&actionSlot;
   for (auto dimensions : {std::pair{800,1200},std::pair{1600,2200},std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1440,1080},std::pair{1280,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
@@ -137,20 +154,39 @@ int main() {
     }
     if(dimensions.first<1000)
       assert(YGNodeLayoutGetTop(toolbar.node)>=YGNodeLayoutGetHeight(tabs.node));
-    assert(findSlot.parent==&primary && "download must remain with the primary action when rotating");
+    assert(findSlot.parent==&actionSlot && unzipSlot.parent==&actionSlot && start.parent==&actionSlot);
+    // Every replacement occupies the same slot, including across rotation.
+    for (int action : {0,1,2,1,0}) {
+      scene.setFindBmsButtonVisible(action==1);
+      scene.setUnzipButtonVisible(action==2);
+      root.applyYogaLayout();
+      assert(start.visible==(action==0) && findSlot.visible==(action==1) && unzipSlot.visible==(action==2));
+      auto *active=action==0?static_cast<View*>(&start):action==1?&findSlot:&unzipSlot;
+      assert(YGNodeLayoutGetTop(active->node)==0);
+      assert(YGNodeLayoutGetWidth(active->node)==YGNodeLayoutGetWidth(actionSlot.node));
+      assert(YGNodeLayoutGetHeight(active->node)==YGNodeLayoutGetHeight(actionSlot.node));
+    }
+    scene.setUnzipButtonVisible(true);
+    scene.setFindBmsButtonVisible(true);
+    assert(findSlot.visible && !unzipSlot.visible && !start.visible);
+    scene.setFindBmsButtonVisible(false);
+    assert(unzipSlot.visible && !start.visible);
+    scene.setUnzipButtonVisible(false);
+    assert(YGNodeLayoutGetLeft(reveal.node)==YGNodeLayoutGetLeft(ranking.node));
+    assert(YGNodeLayoutGetWidth(viewer.node)==YGNodeLayoutGetWidth(replaySlot.node));
     float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
     assert(YGNodeLayoutGetWidth(search.node)>=100 && "search remains usable on 4:3 and narrow landscape screens");
     assert(YGNodeLayoutGetLeft(toolbar.node)+YGNodeLayoutGetWidth(toolbar.node)<=dimensions.first+1);
     if(dimensions.second>dimensions.first) {
       const float usable=dimensions.second-30-(dimensions.first<1000?160:80);
-      assert(std::abs(dh-(448+34))<1 && std::abs(bh+dh-usable)<1);
+      assert(std::abs(dh-(476+34))<1 && std::abs(bh+dh-usable)<1);
       controlsContent.setHeight(400);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
-      assert(scene.portraitDetailsHeight(usable)==std::min(578.0F,usable-320));
+      assert(scene.portraitDetailsHeight(usable)==std::min(650.0F,usable-320));
       assert(scene.portraitDetailsHeight(600)==280);
       controlsContent.setHeight(260);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
-      assert(scene.portraitDetailsHeight(usable)==482);
+      assert(scene.portraitDetailsHeight(usable)==510);
       assert(YGNodeStyleGetMinHeight(chart.node).value == dh-34);
       assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 0 &&
              YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
@@ -158,12 +194,12 @@ int main() {
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
       assert(std::abs(YGNodeLayoutGetWidth(library.node)/YGNodeLayoutGetWidth(browser.node)-.3)<.02);
       assert(YGNodeLayoutGetTop(details.node)>=YGNodeLayoutGetTop(browser.node)+bh);
-      assert(chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&controlsContent);
+      assert(chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&primary);
       assert(primary.parent==&controls && settings.parent==&toolbar);
       assert(YGNodeLayoutGetHeight(records.node)==64 &&
              YGNodeLayoutGetHeight(ranking.node)<=YGNodeLayoutGetHeight(records.node));
       assert(YGNodeLayoutGetLeft(headerButtons.back().node)+YGNodeLayoutGetWidth(headerButtons.back().node)<=YGNodeLayoutGetWidth(toolbar.node)+1);
-      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==136);
+      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==208);
       assert(YGNodeLayoutGetLeft(controls.node)>YGNodeLayoutGetLeft(scroll.node));
       assert(std::abs(YGNodeLayoutGetWidth(controls.node)-YGNodeLayoutGetWidth(scroll.node))<1);
       assert(YGNodeLayoutGetWidth(button.node)<=YGNodeLayoutGetWidth(library.node)-28+1);
@@ -175,12 +211,15 @@ int main() {
              YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
       assert(YGNodeLayoutGetWidth(library.node)==350 && YGNodeLayoutGetWidth(details.node)==540);
       assert(std::abs(bh-dh)<1);
-      assert(dock.children.size()==2 && dock.children[0]==&options && dock.children[1]==&start);
+      assert(dock.children.size()==2 && dock.children[0]==&options && dock.children[1]==&actionSlot);
       assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second);
-      assert(YGNodeLayoutGetTop(start.node)+YGNodeLayoutGetHeight(start.node)==YGNodeLayoutGetHeight(dock.node));
-      assert(!controls.visible && chart.best.parent==&chart && options.parent==&dock && start.parent==&dock && tools.parent==&content);
+      assert(YGNodeLayoutGetTop(actionSlot.node)+YGNodeLayoutGetHeight(actionSlot.node)==YGNodeLayoutGetHeight(dock.node));
+      assert(!controls.visible && chart.best.parent==&chart && options.parent==&dock && actionSlot.parent==&dock && tools.parent==&primary);
       assert(primary.parent==&details && settings.parent==&toolbar);
-      assert(YGNodeLayoutGetHeight(primary.node)==44 && YGNodeLayoutGetHeight(button.node)==56);
+      assert(YGNodeLayoutGetWidth(actionSlot.node)==YGNodeLayoutGetWidth(details.node));
+      assert(YGNodeLayoutGetTop(tools.node)>=YGNodeLayoutGetTop(records.node)+YGNodeLayoutGetHeight(records.node));
+      assert(YGNodeLayoutGetHeight(viewer.node)==76 && YGNodeLayoutGetHeight(ranking.node)==76);
+      assert(YGNodeLayoutGetHeight(primary.node)==164 && YGNodeLayoutGetHeight(button.node)==56);
     }
     if(dimensions.second<=dimensions.first)continue;
     assert(YGNodeLayoutGetHeight(controlsScroll.node)>0);

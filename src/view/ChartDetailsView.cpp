@@ -2,7 +2,6 @@
 #include "ChartDetailsView.h"
 
 #include "ClearLampColors.h"
-#include "Button.h"
 #include "ImageView.h"
 #include "IconText.h"
 #include "MainMenuTheme.h"
@@ -18,6 +17,64 @@
 
 namespace {
 constexpr const char *kFont = main_menu_theme::font;
+
+class ClearRankLabel final : public TextView {
+public:
+  ClearRankLabel() : TextView(kFont, 32, FontWeight::Bold) {}
+
+  void setClearRank(int rank) {
+    glowing_ = hasClearLampColor(rank);
+    setThemedColor([rank] {
+      if (!hasClearLampColor(rank)) return main_menu_theme::secondary();
+      auto color = clearLampColorForRank(rank);
+      if (main_menu_theme::light()) {
+        // Keep the luminous status legible on the paper-colored surface.
+        color.r = static_cast<uint8_t>(color.r * 0.48f);
+        color.g = static_cast<uint8_t>(color.g * 0.48f);
+        color.b = static_cast<uint8_t>(color.b * 0.48f);
+      }
+      color.a = 255;
+      return color;
+    });
+  }
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (!bgfx::isValid(texture)) createTexture();
+    if (glowing_ && bgfx::isValid(texture)) {
+      const auto bounds = resolvedTextRect();
+      constexpr std::array<std::array<float, 2>, 8> directions{{
+          {1, 0}, {0.7071f, 0.7071f}, {0, 1}, {-0.7071f, 0.7071f},
+          {-1, 0}, {-0.7071f, -0.7071f}, {0, -1}, {0.7071f, -0.7071f}}};
+      constexpr std::array<std::array<float, 2>, 4> rings{{
+          {8, 0.018f}, {5, 0.035f}, {3, 0.055f}, {1.5f, 0.08f}}};
+      for (const auto &ring : rings) {
+        RenderContext::OpacityScope opacity(context, ring[1]);
+        auto state = context.makeUiBatchState(
+            rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT),
+            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+        state.texture = texture;
+        state.sampler = s_texColor;
+        for (const auto &direction : directions) {
+          const float x = bounds.x + direction[0] * ring[0];
+          const float y = bounds.y + direction[1] * ring[0];
+          const float right = x + bounds.w, bottom = y + bounds.h;
+          const std::array vertices{
+              rendering::PosTexCoord0Vertex{x, y, 0, 0, 0},
+              rendering::PosTexCoord0Vertex{right, y, 0, 1, 0},
+              rendering::PosTexCoord0Vertex{right, bottom, 0, 1, 1},
+              rendering::PosTexCoord0Vertex{x, bottom, 0, 0, 1}};
+          constexpr std::array<uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+          context.appendUiTextured(vertices, indices, state);
+        }
+      }
+    }
+    TextView::renderImpl(context);
+  }
+
+private:
+  bool glowing_ = false;
+};
 
 class ArtworkPlaceholder final : public TextView {
 public:
@@ -152,19 +209,6 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   titleRow_->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10);
   title_->setFlex(1)->setMinWidth(0);
   titleRow_->addView(title_);
-  titleActions_ = new View();
-  titleActions_->setFlexDirection(FlexDirection::Row)->setGap(6)->setFlexShrink(0);
-  moreButton_ = new Button(0, 0, 32, 44);
-  moreButton_->setName("chartDetailsMore");
-  auto *moreIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
-  moreIcon->setText(ui_icons::textForCodepoint(0xf141));
-  moreIcon->setVAlign(TextView::MIDDLE);
-  moreIcon->setAlign(TextView::CENTER);
-  moreIcon->setThemedColor(main_menu_theme::ink);
-  moreButton_->setContentView(moreIcon);
-  moreButton_->setOnClickListener([this] { if (onMore_) onMore_(); });
-  titleActions_->addView(moreButton_);
-  titleRow_->addView(titleActions_);
   titles->addView(titleRow_);
   titles->addView(artist_);
   titles->addView(genre_);
@@ -233,38 +277,39 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   bestLabel_ = label("", 20, 26, main_menu_theme::secondary);
   bestLabel_->setFlex(1);
   bestHeading->addView(bestLabel_);
-  auto *clearRow = new View();
-  clearRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(8);
-  clearRow->setFlex(2)->setMinWidth(0);
-  clearLamp_ = new View();
-  clearLamp_->setWidth(10)->setHeight(22)->setCornerRadius(3)->setFlexShrink(0);
-  clearRow->addView(clearLamp_);
-  clear_ = label("chartDetailsClear", 20, 28);
-  clear_->setFlex(1);
-  clear_->setOverflow(TextView::TextOverflow::Marquee);
-  clearRow->addView(clear_);
-  bestHeading->addView(clearRow);
-  personalBest_->addView(bestHeading);
-  score_ = label("chartDetailsScore", 34, 44, main_menu_theme::ink,
-                 TextView::FontWeight::Bold);
-  personalBest_->addView(score_);
-  auto *progress = new View();
-  progress->setFlexDirection(FlexDirection::Row)->setGap(8);
-  rate_ = label("chartDetailsRate", 24, 32);
-  rate_->setFlex(1);
-  next_ = label("chartDetailsNext", 22, 32, main_menu_theme::secondary);
+  next_ = label("chartDetailsNext", 22, 28, main_menu_theme::secondary);
+  next_->setFlex(1)->setMinWidth(0);
   next_->setAlign(TextView::RIGHT);
-  progress->addView(rate_);
-  progress->addView(next_);
-  personalBest_->addView(progress);
-  emptyScore_ = label("chartDetailsEmptyScore", 26, 44, main_menu_theme::secondary);
+  next_->setAutoFitText(true);
+  bestHeading->addView(next_);
+  personalBest_->addView(bestHeading);
+  auto *scoreRow = new View();
+  scoreRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12);
+  scoreRow->setHeight(52)->setFlexShrink(0);
+  score_ = label("chartDetailsScore", 34, 52, main_menu_theme::ink,
+                 TextView::FontWeight::Bold);
+  score_->setFlex(1)->setMinWidth(0);
+  score_->setAutoFitText(true);
+  scoreRow->addView(score_);
+  emptyScore_ = label("chartDetailsEmptyScore", 26, 52, main_menu_theme::secondary);
+  emptyScore_->setFlex(1)->setMinWidth(0);
   emptyScore_->setLocalizedText(i18n::message("menu.details.unplayed.label"));
-  personalBest_->addView(emptyScore_);
+  scoreRow->addView(emptyScore_);
+  clear_ = new ClearRankLabel();
+  clear_->setName("chartDetailsClear");
+  clear_->setFlex(1)->setMinWidth(0)->setHeight(52);
+  clear_->setAlign(TextView::RIGHT);
+  clear_->setVAlign(TextView::MIDDLE);
+  clear_->setAutoFitText(true);
+  scoreRow->addView(clear_);
+  personalBest_->addView(scoreRow);
+  rate_ = label("chartDetailsRate", 24, 32);
+  personalBest_->addView(rate_);
   addView(personalBest_);
   summary_ = new View();
   summary_->setName("chartDetailsSummary");
   summary_->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(16);
-  summary_->setHeight(104)->setFlexShrink(0)->setPadding(Edge::Top, 10);
+  summary_->setHeight(96)->setFlexShrink(0)->setPadding(Edge::Top, 10);
   auto *summaryRule = new View();
   summaryRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Top, 0);
   summaryRule->setWidthPercent(100)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::secondary);
@@ -279,15 +324,14 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   levelGroup_->addView(tempo_);
   summary_->addView(levelGroup_);
   auto *bestOverview = new View();
-  bestOverview->setWidth(112)->setFlexShrink(0);
-  grade_ = label("chartDetailsGrade", 48, 50, main_menu_theme::ink, TextView::FontWeight::Bold);
+  bestOverview->setWidth(112)->setFlexShrink(0)->setGap(8);
+  grade_ = label("chartDetailsGrade", 48, 46, main_menu_theme::ink, TextView::FontWeight::Bold);
+  grade_->setAlign(TextView::RIGHT);
+  grade_->setAutoFitText(true);
   bestOverview->addView(grade_);
-  desktopRate_ = label("chartDetailsBestRate", 25, 29, main_menu_theme::ink, TextView::FontWeight::Bold);
+  desktopRate_ = label("chartDetailsBestRate", 25, 32, main_menu_theme::ink, TextView::FontWeight::Bold);
+  desktopRate_->setAlign(TextView::RIGHT);
   bestOverview->addView(desktopRate_);
-  auto *bestCaption = label("", 14, 20, main_menu_theme::secondary);
-  bestCaption->setLocalizedText(i18n::message("menu.details.personal_best.label"));
-  bestCaption->setAutoFitText(true);
-  bestOverview->addView(bestCaption);
   summary_->addView(bestOverview);
   addView(summary_);
   visible(summary_, false);
@@ -297,16 +341,7 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   addView(scoreSlot_);
   visible(scoreSlot_, false);
 
-  expandedFacts_ = new View();
-  expandedFacts_->setName("chartDetailsExpanded");
-  expandedFacts_->setFlexDirection(FlexDirection::Column)->setGap(8)->setMinWidth(0);
-  addView(expandedFacts_);
-  visible(expandedFacts_, false);
   setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
-}
-
-void ChartDetailsView::setMoreActionHandler(std::function<void()> more) {
-  onMore_ = std::move(more);
 }
 
 void ChartDetailsView::setScoreContainer(View *container) {
@@ -346,7 +381,7 @@ void ChartDetailsView::refreshArtworkLayout() {
   artworkFrame_->setWidth(width)->setHeight(height);
   artwork_->setWidthPercent(100)->setHeight(height);
   artworkPlaceholder_->setHeight(height);
-  identity_->setHeight(compact_ ? kIdentityHeight : height + 96);
+  identity_->setHeight(compact_ ? kIdentityHeight : height + 124);
 }
 
 void ChartDetailsView::setCompact(bool compact) {
@@ -359,18 +394,16 @@ void ChartDetailsView::setCompact(bool compact) {
   refreshArtworkLayout();
   titleRow_->setHeight(compact ? 74 : 56);
   title_->setHeight(compact ? 74 : 56);
-  visible(titleActions_, !compact);
   title_->setWrap(compact);
   title_->setOverflow(compact ? TextView::TextOverflow::Hidden : TextView::TextOverflow::Marquee);
   artist_->moveTo(*titles_);
-  genre_->moveTo(compact ? *titles_ : *expandedFacts_);
+  genre_->moveTo(*titles_);
   artist_->setFlex(0)->setMinWidth(0)->setHeight(compact ? 28 : 30);
   genre_->setFlex(0)->setMinWidth(0);
   setGap(compact ? kSectionGap : 6);
   visible(summary_, !compact);
   visible(scoreSlot_, !compact);
   visible(rate_, compact);
-  next_->setFlex(compact ? 0 : 1);
   personalBest_->setPadding(Edge::All, compact ? 14 : 0);
   difficulty_->moveTo(*levelLine_);
   chartLevel_->moveTo(*levelLine_);
@@ -392,25 +425,25 @@ void ChartDetailsView::setCompact(bool compact) {
     scoreSlot_->moveTo(*this);
   }
   facts_->moveTo(*this);
-  expandedFacts_->moveTo(*identity_);
-  expandedFacts_->moveTo(*this);
   facts_->setPadding(Edge::All, compact ? kFactPadding : 0);
   facts_->setGap(compact ? kFactGap : 0)->setFlexGrow(compact ? 1 : 0);
-  for (auto *cell : factCells_) cell->moveTo(*levelGroup_);
+  for (size_t i = 0; i < factCells_.size(); ++i) {
+    factCells_[i]->moveTo(*levelGroup_);
+    visible(factCells_[i], compact || (i != 0 && i != 2));
+  }
   for (auto *row : factRows_) row->moveTo(*levelGroup_);
   for (auto *row : factRows_) row->moveTo(*facts_);
   if (compact) {
     for (size_t i = 0; i < factCells_.size(); ++i) factCells_[i]->moveTo(*factRows_[i / 2]);
   } else {
-    // TOTAL, notes, LN/scratch and BPM are the always-visible detail strip.
-    for (size_t i : {4U, 3U, 5U, 0U}) factCells_[i]->moveTo(*factRows_[0]);
-    factCells_[1]->moveTo(*factRows_[1]);
+    // Keep only facts not already shown in the tempo summary.
+    for (size_t i : {4U, 3U, 5U, 1U}) factCells_[i]->moveTo(*factRows_[0]);
+    factCells_[0]->moveTo(*factRows_[1]);
     factCells_[2]->moveTo(*factRows_[1]);
-    factRows_[1]->moveTo(*expandedFacts_);
   }
   for (size_t i = 0; i < factRows_.size(); ++i) {
     auto *row = factRows_[i];
-    visible(row, compact || i < 2);
+    visible(row, compact || i == 0);
     row->setHeight(compact ? kFactRowHeight : 48)->setMinHeight(compact ? kFactRowHeight : 48);
     row->setFlexGrow(compact ? 1 : 0)->setGap(compact ? 14 : 10);
     for (auto *cell : row->getChildren()) {
@@ -426,7 +459,6 @@ void ChartDetailsView::setCompact(bool compact) {
     personalBest_->moveTo(*levelGroup_);
     setScoreContainer(nullptr);
   }
-  visible(expandedFacts_, !compact);
 }
 
 void ChartDetailsView::setChart(const ChartMetaRecord *record,
@@ -434,7 +466,6 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                int clearRank, const std::string &total) {
   const bool chart = record && !record->courseStart && !record->solidArchive &&
                      !record->unavailable && !record->meta.BmsPath.empty();
-  moreButton_->setEnabled(chart);
   artwork_->setVisible(chart && !record->meta.StageFile.empty());
   setCompact(compact_);
   title_->setLocalizedText(record ? i18n::Text(record->meta.Title +
@@ -455,7 +486,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
     visible(score_, true);
     bestLabel_->setLocalizedText(i18n::message("menu.details.best.label"));
     totalLabel_->setLocalizedText(i18n::message("menu.details.total.label"));
-    clearLamp_->clearBackgroundColor();
+    static_cast<ClearRankLabel *>(clear_)->setClearRank(kNoClearTypeRank);
     rate_->setThemedColor(main_menu_theme::secondary);
     if (record) {
       difficulty_->setLocalizedText(i18n::message(record->courseStart
@@ -487,11 +518,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   bestLabel_->setLocalizedText(i18n::message(best && best->source == ScoreBestSource::ImportedIr
       ? "menu.details.best_ir.label" : "menu.details.best.label"));
   clear_->setText(clearRank == kNoClearTypeRank ? "—" : clearTypeRankToLabel(clearRank));
-  if (hasClearLampColor(clearRank)) {
-    clearLamp_->setBackgroundColor(clearLampColorForRank(clearRank));
-  } else {
-    clearLamp_->clearBackgroundColor();
-  }
+  static_cast<ClearRankLabel *>(clear_)->setClearRank(clearRank);
   if (!best) {
     score_->setText("");
     rate_->setText("");

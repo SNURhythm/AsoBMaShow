@@ -196,7 +196,7 @@ int main() {
     require(artist->getY() >= title->getY() + title->getHeight() &&
                 difficulty->getX() >= title->getX() + title->getWidth(),
             "narrow rows put the artist under the title without obscuring difficulty");
-    require(row.findViewByName("chartListClearLamp")->getWidth() == 8,
+    require(row.findViewByName("chartListClearLamp")->getWidth() == 6,
             "compact rows preserve a visible clear lamp");
     row.setWidth(964);
     row.applyYogaLayout();
