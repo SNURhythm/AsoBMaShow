@@ -1,3 +1,4 @@
+#include "../view/KeybombPreviewView.h"
 #include "../GameplayKeyMode.h"
 #include "SettingsSceneShared.h"
 #include "../i18n/Localization.h"
@@ -1043,13 +1044,31 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, int keyM
         lastLayoutWidth = -1;
       }}, overlayPortal);
   std::vector<DropdownView::Option> options;
-  for (const auto &option : player_settings::kJudgementTextVisibilityOptions)
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+    if (option.judgement == Poor) continue;
     options.push_back({.id = std::to_string(option.judgement), .label = option.label});
+  }
   selector->setWidthPercent(100);
   selector->refresh({.label = i18n::message("settings.keybomb.judgement"),
       .selectedId = std::to_string(keybombEditingJudgement), .options = std::move(options)});
   body->addView(selector);
   const auto judgement = keybombEditingJudgement;
+  body->addView(makeWrappedText(i18n::message("settings.keybomb.preview"),
+                                metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *sample = new KeybombPreviewView(judgement, [this, keyMode, judgement]() {
+    auto styles = context.settings.keybombsForKeyMode(keyMode);
+    if (appearanceColorPreview) {
+      PlayfieldPresentationConfig draft;
+      draft.keybombs = styles;
+      appearanceColorPreview(draft);
+      styles = draft.keybombs;
+    }
+    return styles[judgement];
+  });
+  sample->setWidthPercent(100);
+  sample->setHeight(previewStyle ? 160 : 220);
+  sample->setFlexShrink(0);
+  body->addView(sample);
   auto *visibleText = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
                                 TextView::CENTER, TextView::MIDDLE);
   auto *visibleButton = makeControlButton(metrics.actionButtonWidth,

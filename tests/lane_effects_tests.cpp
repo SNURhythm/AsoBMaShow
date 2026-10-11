@@ -55,10 +55,27 @@ void testGeometry() {
   Geometry zero;
   keybomb::draw(zero, event, 150000, 10, 20, 2, {true, 100, 0});
   assert(zero.count == 0);
-  for (const auto judgement : {PGreat, Great, Good, Bad, Poor, Kpoor}) {
+  for (const auto judgement : {PGreat, Great, Good, Bad, Kpoor}) {
     Geometry burst;
     keybomb::draw(burst, {judgement, 0}, 80000, 10, 20, 2, {});
     assert(burst.count > 0 && burst.count < 200);
+  }
+}
+
+void testPoorHasNoKeybomb() {
+  for (const auto style : {keybomb::Style{}, keybomb::Style{true, 300, 100, 0xFFFFFF}}) {
+    Geometry burst, hold;
+    keybomb::draw(burst, {Poor, 0}, 80'000, 10, 20, 2, style);
+    keybomb::drawHold(hold, Poor, 2'000'000, 10, 20, 2, style);
+    assert(burst.count == 0 && hold.count == 0);
+  }
+}
+
+void testDefaultHitsStayClearlyVisible() {
+  for (const auto judgement : {PGreat, Great, Good}) {
+    Geometry burst;
+    keybomb::draw(burst, {judgement, 0}, 80'000, 10, 20, 2, {});
+    assert(burst.maxAlpha >= 200); // Keep a strong core after the initial flash.
   }
 }
 
@@ -83,6 +100,8 @@ void testHoldGeometry() {
 }
 
 int main() {
+  testPoorHasNoKeybomb();
+  testDefaultHitsStayClearlyVisible();
   testGeometry();
   testHoldGeometry();
   AtomicLaneState lane;

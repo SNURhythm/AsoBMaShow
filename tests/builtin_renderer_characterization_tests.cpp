@@ -13,6 +13,7 @@
 #include "settings/BuiltInNoteEditing.h"
 #include "settings/BuiltInScratchGradient.h"
 #include "view/DropdownView.h"
+#include "view/KeybombPreviewView.h"
 #include "view/IconText.h"
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
@@ -2323,6 +2324,65 @@ void verifyColorPickerPopupPixels(const RenderTarget &target) {
   }
 }
 
+void verifyKeybombPreview(const RenderTarget &target) {
+  keybomb::Style appearance;
+  KeybombPreviewView preview(PGreat, [&] { return appearance; });
+  preview.setSize(720, 220);
+  preview.setPosition(120, 120, YGPositionTypeAbsolute);
+  preview.applyYogaLayout();
+  const auto render = [&](long long now) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      preview.renderAt(context, now);
+    }
+    return readPixels(target);
+  };
+  const auto normal = render(80'000);
+  expect(render(160'000) != normal, "inline burst and hold previews animate over time");
+  appearance.color = 0xE83FA0;
+  expect(render(80'000) != normal, "inline preview reads color edits without recreating the view");
+  appearance = {true, 200, 100};
+  expect(render(80'000) != normal, "inline preview reads size edits");
+  appearance = {true, 100, 25};
+  expect(render(80'000) != normal, "inline preview reads opacity edits");
+  appearance = {false, 100, 100};
+  const auto hidden = render(80'000);
+  expect(hidden != normal && render(160'000) == hidden,
+         "hidden keybomb preview leaves only stationary lane guides");
+  appearance = {true, 100, 0};
+  expect(render(80'000) == hidden, "zero-opacity preview matches hidden preview");
+  preview.setSize(240, 160);
+  preview.applyYogaLayout();
+  const auto compactHidden = render(200'000);
+  appearance = {true, 300, 100};
+  const auto compactLarge = render(200'000);
+  expect(compactLarge != compactHidden, "maximum-size compact preview remains visible");
+  bool escaped = false;
+  const int left = static_cast<int>(preview.getX() * rendering::ui_scale_x);
+  const int top = static_cast<int>(preview.getY() * rendering::ui_scale_y);
+  const int right = static_cast<int>((preview.getX() + preview.getWidth()) * rendering::ui_scale_x);
+  const int bottom = static_cast<int>((preview.getY() + preview.getHeight()) * rendering::ui_scale_y);
+  for (int y = 0; y < kDrawableHeight; ++y)
+    for (int x = 0; x < kDrawableWidth; ++x) {
+      if (x >= left && x < right && y >= top && y < bottom) continue;
+      const auto offset = (y * kDrawableWidth + x) * 4;
+      if (!std::equal(compactLarge.begin() + offset, compactLarge.begin() + offset + 3,
+                      compactHidden.begin() + offset)) escaped = true;
+    }
+  expect(!escaped, "maximum-size compact preview never paints outside its bounds");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "keybomb-preview.png").string(),
+                           normal, kDrawableWidth, kDrawableHeight) == 0,
+           "inline keybomb preview inspection image encodes");
+  }
+}
+
 void verifyKeybombRendering(const RenderTarget &target) {
   const auto render = [&](Judgement judgement, keybomb::Style style = {},
                            long long age = 80'000, bool captured = false,
@@ -2406,6 +2466,10 @@ void verifyKeybombRendering(const RenderTarget &target) {
     return readPixels(target);
   };
   const auto empty = render(None);
+  expect(render(Poor) == empty && render(Poor, {true, 300, 100, 0xFFFFFF}) == empty,
+         "POOR never renders a keybomb even with maximum visibility settings");
+  expect(render(Poor, {}, 80'000, true) == empty,
+         "captured replay POOR judgements do not render keybombs");
   const auto perfect = render(PGreat);
   expect(perfect != empty, "judgement keybomb renders with lane beams disabled");
   expect(render(PGreat, {false, 100, 100}) == empty &&
@@ -2457,9 +2521,9 @@ void verifyKeybombRendering(const RenderTarget &target) {
              hold(3, false, true, true, 2'200'000, false, false, None),
          "classic holds without a published head judgement still sparkle");
   std::vector<std::vector<std::uint8_t>> variants;
-  for (auto result : {PGreat, Great, Good, Bad, Poor, Kpoor}) {
+  for (auto result : {PGreat, Great, Good, Bad, Kpoor}) {
     auto pixels = render(result);
-    expect(pixels != empty, "every judgement has a visible keybomb");
+    expect(pixels != empty, "supported judgements have visible keybombs");
     for (const auto &previous : variants)
       expect(pixels != previous, "judgements produce distinct rendered bursts");
     variants.push_back(std::move(pixels));
@@ -4102,6 +4166,7 @@ int main() {
 
   if (failures == 0) {
     try {
+      verifyKeybombPreview(target);
       verifyKeybombRendering(target);
       verifyJudgementIndicatorContinuousAverage(target);
       verifyCapturedFrameRetainsContinuousAverage(target);

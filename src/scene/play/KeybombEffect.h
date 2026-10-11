@@ -12,7 +12,8 @@ namespace keybomb {
 template <typename Batch>
 void draw(Batch &batch, LaneKeybombEvent event, long long now,
           float x, float y, float laneWidth, Style style) {
-  if (!valid(event.judgement) || now < event.timeMicros || laneWidth <= 0) return;
+  if (!valid(event.judgement) || event.judgement == Poor ||
+      now < event.timeMicros || laneWidth <= 0) return;
   style = sanitize(style);
   if (!style.visible || style.opacityPercent == 0) return;
   const bool perfect = event.judgement == PGreat;
@@ -23,10 +24,11 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
   const auto elapsed = now - event.timeMicros;
   if (elapsed >= duration) return;
   const float t = static_cast<float>(elapsed) / static_cast<float>(duration);
-  const float fade = (1 - t) * (1 - t);
+  // Keep successful hits legible after the first frame, then fade smoothly.
+  const float fade = hit ? 1 - t * t : (1 - t) * (1 - t);
   const float expansion = 1 - (1 - t) * (1 - t) * (1 - t);
   const float radius = laneWidth * style.sizePercent / 100.0F *
-      (perfect ? 0.82F : great ? 0.70F : good ? 0.52F : 0.42F);
+      (perfect ? 0.92F : great ? 0.80F : good ? 0.64F : 0.42F);
   const float opacity = style.opacityPercent / 100.0F;
   const std::uint32_t rgb = effectColor(event.judgement, style);
   const auto color = [&](std::uint32_t base, float alpha) {
@@ -45,7 +47,7 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
                               color(rgbColor, alpha), rgbColor, rgbColor);
     }
   };
-  glow(radius * 0.7F * (1 - t * 0.65F), rgb, (hit ? 180 : 65) * fade);
+  glow(radius * (hit ? 0.9F : 0.7F) * (1 - t * 0.45F), rgb, (hit ? 240 : 65) * fade);
   const auto ring = [&](float r, float alpha, bool broken) {
     constexpr int segments = 40;
     for (int i = 0; i < segments; ++i) {
@@ -54,19 +56,19 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
       const float b = 2 * std::numbers::pi_v<float> * (i + 1) / segments;
       batch.addLine(x + std::cos(a) * r, y + std::sin(a) * r,
                     x + std::cos(b) * r, y + std::sin(b) * r,
-                    radius * 0.025F * (1 - t * 0.6F), color(rgb, alpha * fade));
+                    radius * (hit ? 0.055F : 0.025F) * (1 - t * 0.6F), color(rgb, alpha * fade));
     }
   };
-  if (hit || event.judgement == Kpoor) ring(ringRadius, hit ? 180 : 75, !good);
-  if (perfect) ring(ringRadius * 0.73F, 100, false);
+  if (hit || event.judgement == Kpoor) ring(ringRadius, hit ? 230 : 75, !good);
+  if (perfect) ring(ringRadius * 0.73F, 160, false);
   if (perfect || great) {
     const int sparks = perfect ? 8 : 6;
     for (int i = 0; i < sparks; ++i) {
       const float a = 2 * std::numbers::pi_v<float> * i / sparks + 0.23F;
       const float dx = std::cos(a), dy = std::sin(a);
       const float r = radius * (0.28F + expansion * (i % 2 ? 0.80F : 1.15F));
-      const float length = radius * (i % 2 ? 0.14F : 0.24F) * (1 - t);
-      const float width = radius * 0.035F * (1 - t);
+      const float length = radius * (i % 2 ? 0.18F : 0.28F) * (1 - t);
+      const float width = radius * 0.055F * (1 - t);
       const float cx = x + dx * r, cy = y + dy * r;
       const auto c = color(i % 2 ? rgb : 0x00FFFFFF, 230 * fade);
       batch.addTriangle(cx + dx * length, cy + dy * length,
@@ -77,17 +79,16 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
                         cx + dy * width, cy - dx * width, c);
     }
   } else if (!hit && event.judgement != Kpoor) {
-    const bool miss = event.judgement == Poor;
     for (int i = 0; i < 5; ++i) {
       const float dx = (i - 2) * radius * 0.35F * (0.3F + expansion);
-      const float dy = radius * (miss ? -1 : 1) * expansion * (i % 2 ? 0.5F : 0.9F);
+      const float dy = radius * expansion * (i % 2 ? 0.5F : 0.9F);
       batch.addLine(x + dx, y + dy, x + dx * 1.2F,
-                    y + dy + radius * (miss ? -0.15F : 0.15F),
+                    y + dy + radius * 0.15F,
                     radius * 0.045F, color(rgb, 150 * fade));
     }
   }
   if (hit) {
-    const float core = radius * 0.15F * (1 - t);
+    const float core = radius * 0.23F * (1 - t);
     glow(core * 1.6F, 0x00FFFFFF, 255 * fade);
     if (perfect) {
       batch.addLine(x - core * 2.5F, y, x + core * 2.5F, y,
@@ -103,7 +104,7 @@ template <typename Batch>
 void drawHold(Batch &batch, Judgement judgement, long long now,
               float x, float y, float laneWidth, Style style) {
   style = sanitize(style);
-  if (!valid(judgement) || !style.visible || style.opacityPercent == 0 || laneWidth <= 0) return;
+  if (!valid(judgement) || judgement == Poor || !style.visible || style.opacityPercent == 0 || laneWidth <= 0) return;
   const auto rgb = effectColor(judgement, style);
   const float opacity = style.opacityPercent / 100.0F;
   const float radius = laneWidth * style.sizePercent / 100.0F * 0.65F;

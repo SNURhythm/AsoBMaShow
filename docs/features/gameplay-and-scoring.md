@@ -66,7 +66,9 @@ NOSPEED courses suppress cover amounts and their adjustment controls.
 
 Judged lanes display short procedural bursts at the judgement line. PGREAT
 uses a layered halo and sparks; GREAT uses a ring and sparks; GOOD uses a soft
-pulse. BAD fragments rise, POOR fragments fall, and KPOOR uses a subdued ripple.
+pulse. Successful hits use a bright core, thicker rings and sparks, and a sustained
+fade for clear feedback. BAD fragments rise, KPOOR uses a subdued ripple, and
+POOR never renders keybombs.
 Default colors match judgement text in both light and dark themes. No external
 skin artwork is required.
 
@@ -75,7 +77,9 @@ Lane controls expose per-mode settings with a judgement selector, visibility, si
 opacity (0–100%), and color presets, picker, and hex input. Reset color restores
 the original palette for that judgement. Each judgement is independent, and landscape/portrait
 presentations retain separate settings. The preview's random timing mode
-exercises poorer judgements as well as successful hits.
+exercises poorer judgements as well as successful hits. An inline animated
+preview shows the selected judgement’s burst and hold sparks side by side and
+responds to appearance edits. POOR is excluded from the keybomb selector.
 
 `LaneEffects.h` shares the preallocated lane state with beams. A keybomb event
 publishes its judgement and timestamp with one lock-free atomic store; it
