@@ -4772,6 +4772,8 @@ bool prepareZipDirectReadTarget(mz_zip_archive *archive,
   return true;
 }
 
+constexpr std::size_t kZipDirectChunkSize = 64 * 1024;
+
 bool readZipDirectTarget(RandomAccessFile &archiveFile,
                          const ZipDirectReadTarget &target, FileData &file,
                          std::vector<unsigned char> &compressedScratch,
@@ -4806,7 +4808,7 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     return true;
   }
 
-  constexpr std::size_t kChunkSize = 64 * 1024;
+  constexpr std::size_t kChunkSize = kZipDirectChunkSize;
   const auto readChunks = [&](std::vector<unsigned char> &bytes) {
     for (std::size_t offset = 0; offset < bytes.size();) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -4839,13 +4841,13 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       return false;
     }
   } else if (target.method == MZ_DEFLATED) {
-    compressedScratch.resize(static_cast<std::size_t>(target.compressedSize));
-    if (!readChunks(compressedScratch)) {
-      return false;
-    }
+    const auto compressedSize = static_cast<std::size_t>(target.compressedSize);
+    compressedScratch.resize(std::min(kChunkSize, compressedSize));
     tinfl_decompressor decompressor;
     tinfl_init(&decompressor);
     std::size_t inputOffset = 0;
+    std::size_t bufferedOffset = 0;
+    std::size_t bufferedSize = 0;
     std::size_t outputOffset = 0;
     unsigned char emptyBuffer = 0;
     auto *output = file.bytes.empty() ? &emptyBuffer : file.bytes.data();
@@ -4856,21 +4858,37 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
         return false;
       }
-      std::size_t inputSize =
-          std::min(kChunkSize, compressedScratch.size() - inputOffset);
+      // Refill only after tinfl consumes the previous chunk. It may need
+      // multiple output calls per input chunk, or consume input without output.
+      if (bufferedOffset == bufferedSize && inputOffset < compressedSize) {
+        bufferedSize = std::min(kChunkSize, compressedSize - inputOffset);
+        bufferedOffset = 0;
+        const auto readStart = std::chrono::steady_clock::now();
+        const bool read = archiveFile.readAt(target.dataOffset + inputOffset,
+                                              compressedScratch.data(), bufferedSize,
+                                              errorMessage);
+        if (timing != nullptr) {
+          timing->readMicros += elapsedMicrosSince(readStart);
+        }
+        if (!read) {
+          return false;
+        }
+      }
+      std::size_t inputSize = bufferedSize - bufferedOffset;
       std::size_t outputSize =
           std::min(kChunkSize, file.bytes.size() - outputOffset);
       const mz_uint32 flags = TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
-          (inputOffset + inputSize < compressedScratch.size()
+          (inputOffset + inputSize < compressedSize
                ? TINFL_FLAG_HAS_MORE_INPUT : 0);
       const auto inflateStart = std::chrono::steady_clock::now();
-      status = tinfl_decompress(&decompressor, input + inputOffset, &inputSize,
+      status = tinfl_decompress(&decompressor, input + bufferedOffset, &inputSize,
                                 output, output + outputOffset, &outputSize,
                                 flags);
       if (timing != nullptr) {
         timing->inflateMicros += elapsedMicrosSince(inflateStart);
       }
       inputOffset += inputSize;
+      bufferedOffset += inputSize;
       outputOffset += outputSize;
       if (status <= TINFL_STATUS_DONE ||
           (inputSize == 0 && outputSize == 0)) {
@@ -5976,7 +5994,9 @@ bool readZipEntriesByIndexConcurrent(
 
       // Stored entries read directly into the output buffer.
       const std::uint64_t scratchBytes =
-          target.method == MZ_DEFLATED ? target.compressedSize : 0;
+          target.method == MZ_DEFLATED
+              ? std::min<std::uint64_t>(target.compressedSize, kZipDirectChunkSize)
+              : 0;
       const std::uint64_t targetBytes =
           target.size > std::numeric_limits<std::uint64_t>::max() - scratchBytes
               ? std::numeric_limits<std::uint64_t>::max()
