@@ -62,4 +62,5 @@ private:
   std::string scoreRank;
   Button *favoriteButton;
   TextView *favoriteIconView;
+  TextView *favoriteOutlineView;
 };

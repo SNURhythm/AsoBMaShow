@@ -132,6 +132,13 @@ std::vector<std::string> systemFontFallbackPaths() {
 }
 
 std::string fontPathForWeight(const std::string &path, TextView::FontWeight weight) {
+  constexpr std::string_view selectorFont = "assets/fonts/roboto-condensed-regular.ttf";
+  if (std::string_view(path).ends_with(selectorFont)) {
+    return path.substr(0, path.size() - selectorFont.size()) +
+        (weight == TextView::FontWeight::Bold
+            ? "assets/fonts/roboto-condensed-bold.ttf"
+            : "assets/fonts/roboto-condensed-regular.ttf");
+  }
   static constexpr std::string_view notoPaths[] = {
       "assets/fonts/notosanscjkjp.ttf", "assets/fonts/notosansjp.ttf",
       "assets/fonts/notosanskr.otf"};

@@ -21,7 +21,7 @@ constexpr int kDifficultyColumnWidth = 86;
 constexpr int kClearWidth = 104;
 constexpr int kBestWidth = 86;
 constexpr int kFavoriteWidth = 40;
-constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kUiFont = main_menu_theme::font;
 
 TextView *rowText(const char *name, int size, int height,
                   TextView::FontWeight weight = TextView::FontWeight::Regular) {
@@ -66,7 +66,7 @@ View *ChartListItemView::createColumnHeader() {
   auto *header = new View();
   header->setName("chartListColumnHeader");
   header->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
-  header->setHeight(38)->setFlexShrink(0)->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12)->setGap(12);
+  header->setHeight(50)->setFlexShrink(0)->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12)->setGap(12);
   auto cell = [header](const char *key, int width, bool grow = false) {
     auto *text = rowText("", 16, 30);
     if (*key) text->setLocalizedText(i18n::message(key));
@@ -78,12 +78,17 @@ View *ChartListItemView::createColumnHeader() {
   };
   cell("", kRowNumberWidth)->setText("#");
   cell("", kArtworkWidth);
-  cell("library.sort.title.label", 0, true);
-  cell("music_player.artist.label", kArtistWidth);
-  cell("library.sort.difficulty.label", kDifficultyColumnWidth);
-  cell("library.filter_sort.clear_mark.label", kClearWidth);
+  cell("menu.selector.title.label", 0, true);
+  cell("menu.selector.artist.label", kArtistWidth);
+  cell("menu.selector.difficulty.label", kDifficultyColumnWidth);
+  cell("menu.selector.clear.label", kClearWidth);
   cell("menu.selector.best.label", kBestWidth);
-  cell("", kFavoriteWidth);
+  auto *favoriteHeading = new TextView(ui_icons::kFontAwesomeSolidPath, 20);
+  favoriteHeading->setText(ui_icons::textForCodepoint(0xf005));
+  favoriteHeading->setWidth(kFavoriteWidth)->setHeight(30);
+  favoriteHeading->setVAlign(TextView::MIDDLE);
+  favoriteHeading->setThemedColor(main_menu_theme::muted);
+  header->addView(favoriteHeading);
   return header;
 }
 
@@ -145,8 +150,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = rowText("chartListDifficulty", 27, 44, TextView::FontWeight::Bold);
   levelView->setWidth(kDifficultyColumnWidth - 12);
   levelView->setAlign(TextView::CENTER);
-  levelView->setThemedBackgroundColor(main_menu_theme::action);
-  levelView->setThemedColor(main_menu_theme::onAction);
+  levelView->setThemedBackgroundColor([] { return main_menu_theme::light() ? main_menu_theme::action() : Color(0, 0, 0, 0); });
+  levelView->setThemedColor([] { return main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::accent(); });
   detailsLayout->addView(levelView);
   keyModeView = rowText("chartListKeyMode", 17, 24, TextView::FontWeight::Bold);
   keyModeView->setWidth(kDifficultyColumnWidth);
@@ -185,7 +190,17 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   favoriteIconView->setText(ui_icons::textForCodepoint(0xf005));
   favoriteIconView->setAlign(TextView::CENTER);
   favoriteIconView->setVAlign(TextView::MIDDLE);
-  favoriteButton->setContentView(favoriteIconView);
+  auto *favoriteContent = new View();
+  favoriteContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+  favoriteIconView->setWidth(36)->setHeight(40);
+  favoriteOutlineView = new TextView("assets/fonts/fa-regular-400.ttf", 25);
+  favoriteOutlineView->setText(ui_icons::textForCodepoint(0xf005));
+  favoriteOutlineView->setWidth(36)->setHeight(40);
+  favoriteOutlineView->setAlign(TextView::CENTER);
+  favoriteOutlineView->setVAlign(TextView::MIDDLE);
+  favoriteContent->addView(favoriteIconView);
+  favoriteContent->addView(favoriteOutlineView);
+  favoriteButton->setContentView(favoriteContent);
   favoriteButton->setOnClickListener([this]() {
     if (currentRecord.courseStart || solidArchive || unavailable ||
         currentRecord.meta.BmsPath.empty()) return;
@@ -315,6 +330,11 @@ void ChartListItemView::setFavoriteState(bool nextFavorite) {
 
 void ChartListItemView::refreshFavoriteButton() {
   if (!favoriteIconView) return;
+  favoriteIconView->setVisible(favorite);
+  favoriteIconView->setDisplay(favorite ? YGDisplayFlex : YGDisplayNone);
+  favoriteOutlineView->setVisible(!favorite);
+  favoriteOutlineView->setDisplay(favorite ? YGDisplayNone : YGDisplayFlex);
+  favoriteOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
   favoriteIconView->setThemedColor(favorite
       ? (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent)
       : (selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted));
@@ -347,6 +367,10 @@ void ChartListItemView::onUnselected() {
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
+  levelView->setThemedColor([selected] {
+    return main_menu_theme::light() ? main_menu_theme::onAction() :
+        selected ? main_menu_theme::selectedAccent() : main_menu_theme::accent();
+  });
   titleView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
   artistView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
   titleView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::ink);

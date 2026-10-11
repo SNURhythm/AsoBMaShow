@@ -662,6 +662,37 @@ void testCancelledTouchDoesNotClick() {
   REQUIRE(clicks == 1);
 }
 
+void testRecyclerSkipsSectionHeadings() {
+  RecyclerView<int> list([](int a, int b) { return a == b; });
+  list.setSize(200, 200);
+  list.itemHeight = 40;
+  list.onCreateView = [](const int &) { return new View(); };
+  list.onBind = [](View *, const int &, int, bool) {};
+  list.setItems(std::vector<int>{1, 0, 2});
+  list.isSelectable = [](const int &item, int) { return item != 0; };
+  int selected = -1;
+  list.onSelected = [&](const int &, int index) { selected = index; };
+  list.selectedIndex = 0;
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.key = SDLK_DOWN;
+  list.handleEvents(key);
+  REQUIRE(selected == 2 && list.selectedIndex == 2);
+  key.key.key = SDLK_UP;
+  list.handleEvents(key);
+  REQUIRE(selected == 0 && list.selectedIndex == 0);
+  list.handleEvents(key);
+  REQUIRE(selected == 2 && list.selectedIndex == 2);
+  auto down = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 30, 60);
+  auto up = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 30, 60);
+  list.handleEvents(down);
+  list.handleEvents(up);
+  REQUIRE(list.selectedIndex == 2);
+  list.isSelectable = [](const int &, int) { return false; };
+  list.handleEvents(key);
+  REQUIRE(list.selectedIndex == -1);
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--navigation-only") {
     testNavigationMayDestroyDispatchingViews();
@@ -671,6 +702,7 @@ int main(int argc, char **argv) {
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
     testNavigationMayDestroyDispatchingViews();
+    testRecyclerSkipsSectionHeadings();
     testCancelledTouchDoesNotClick();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
     testDisabledSiblingEndsCoveredScrollGestures();

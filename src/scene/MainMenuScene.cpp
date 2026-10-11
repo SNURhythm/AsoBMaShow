@@ -136,6 +136,34 @@ void styleMenuButton(Button *button, TextView *text, bool primary = false) {
   button->setThemedBorderColors(main_menu_theme::rule,
                                 main_menu_theme::accent, main_menu_theme::accent);
   text->setThemedColor(primary ? main_menu_theme::onAction : main_menu_theme::ink);
+  if (auto *icon = dynamic_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonIcon")))
+    icon->setThemedColor(primary ? main_menu_theme::onAction : main_menu_theme::ink);
+}
+
+Button *makeSelectorButton(const i18n::Text &label, int size, TextView **out = nullptr,
+                           uint32_t glyph = 0, bool trailing = false) {
+  auto *button = new Button(0, 0, 160, 56);
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+  content->setJustifyContent(YGJustifyCenter)->setGap(10);
+  auto *text = new TextView(main_menu_theme::font, size);
+  text->setName("selectorButtonLabel");
+  text->setLocalizedText(label);
+  text->setHeight(40)->setMinWidth(0);
+  text->setVAlign(TextView::MIDDLE);
+  auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, size - 3);
+  icon->setName("selectorButtonIcon");
+  icon->setText(glyph ? ui_icons::textForCodepoint(glyph) : "");
+  icon->setWidth(glyph ? size : 0)->setHeight(40)->setFlexShrink(0);
+  icon->setVAlign(TextView::MIDDLE);
+  icon->setThemedColor(main_menu_theme::ink);
+  if (!trailing && glyph) content->addView(icon);
+  content->addView(text);
+  if (trailing && glyph) content->addView(icon);
+  if (!glyph) delete icon;
+  button->setContentView(content);
+  if (out) *out = text;
+  return button;
 }
 
 constexpr int kRootPadding = 0;
@@ -1306,13 +1334,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
       default:
         break;
       }
+      if (item.sectionHeader) label = i18n::tr("menu.selector.difficulty_tables.label");
       folderView->setItem(label, item.depth, item.count, isSelected,
                           item.clearMarkFolder ? item.clearMarkRank
                                                : clearRankForFolder(item.key),
                           item.clearMarkFolder, item.expandable,
-                          item.expanded);
+                          item.expanded,
+                          item.type == LibraryFolderItem::Type::AllSongs && !item.sectionHeader ? ui_icons::kMusic :
+                          item.type == LibraryFolderItem::Type::Favorites ? 0xf005 : 0,
+                          item.sectionHeader);
     }
   };
+  folderRecyclerView->isSelectable = [](const LibraryFolderItem &item, int) { return !item.sectionHeader; };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
                                           int idx) {
     auto selectedView = folderRecyclerView->getViewByIndex(idx);
@@ -1453,8 +1486,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   nav->setThemedBorderColor(main_menu_theme::rule);
   nav->setBorderWidth(0);
+  auto *libraryRule = new View();
+  libraryRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Right, 0)->setPosition(Edge::Top, 0);
+  libraryRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::rule);
+  nav->addView(libraryRule);
 
-  auto *wordmark = new TextView("assets/fonts/notosanscjkjp.ttf", 38,
+  auto *wordmark = new TextView(main_menu_theme::font, 38,
                                 TextView::FontWeight::Bold);
   wordmark->setName("mainMenuWordmark");
   wordmark->setText("AsoBMaShow");
@@ -1463,6 +1500,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   wordmark->setVAlign(TextView::MIDDLE);
   wordmark->setThemedColor(main_menu_theme::ink);
   header->addView(wordmark);
+  auto *headerRule = new View();
+  headerRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Bottom, 0);
+  headerRule->setWidth(kLibraryPanelWidth)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::rule);
+  header->addView(headerRule);
   auto *tabs = new View();
   tabs->setName("mainMenuTabs");
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
@@ -1470,7 +1511,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
            {{"all", "library.folders.all_songs.label"},
             {"favorites", "library.folders.favorites.label"}}}) {
     TextView *text = nullptr;
-    auto *button = makeModalButton(i18n::message(label), 22, &text);
+    auto *button = makeSelectorButton(i18n::message(label), 22, &text);
     button->setName(std::string("mainMenuTab:") + key);
     button->setWidth(158)->setHeight(kMenuHeaderHeight - 14);
     styleMenuButton(button, text, std::string(key) == "all");
@@ -1500,7 +1541,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
   addFolderButton_ = addFolderButton;
-  auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  auto *addFolderText = new TextView(main_menu_theme::font, 18);
 #if TARGET_OS_ANDROID
   addFolderText->setLocalizedText(i18n::message("menu.manage_files.label"));
 #else
@@ -1553,14 +1594,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   libraryHeader->setGap(12);
   libraryHeader->setHeight(kMenuActionHeight);
 
-  parseLogButton = makeModalButton(i18n::message("menu.log.label"), 20, &parseLogButtonText);
+  parseLogButton = makeSelectorButton(i18n::message("menu.log.label"), 18, &parseLogButtonText);
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(kMenuActionHeight);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
   styleMenuButton(parseLogButton, parseLogButtonText);
   libraryHeader->addView(parseLogButton);
 
-  musicButton = makeModalButton(i18n::message("menu.music.label"), 20, &musicButtonText);
+  musicButton = makeSelectorButton(i18n::message("menu.music.label"), 18, &musicButtonText);
   musicButton->setWidth(122);
   musicButton->setHeight(kMenuActionHeight);
   musicButton->setOnClickListener([this, &context]() {
@@ -1579,7 +1620,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   libraryHeader->addView(musicButton);
 
   irUploadsButton =
-      makeModalButton(i18n::message("menu.ir_uploads.label"), 20, &irUploadsButtonText);
+      makeSelectorButton(i18n::message("menu.ir_uploads.label"), 18, &irUploadsButtonText);
   irUploadsButton->setWidth(154);
   irUploadsButton->setHeight(kMenuActionHeight);
   irUploadsButton->setOnClickListener([this, &context]() {
@@ -1597,7 +1638,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   styleMenuButton(irUploadsButton, irUploadsButtonText);
   libraryHeader->addView(irUploadsButton);
 
-  tasksButton = makeModalButton(i18n::message("menu.task_count.empty"), 20, &tasksButtonText);
+  tasksButton = makeSelectorButton(i18n::message("menu.task_count.empty"), 18, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(kMenuActionHeight);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
@@ -1618,14 +1659,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->setAlignItems(YGAlignStretch);
   filterRow->setGap(10);
 
-  auto *folderTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30, TextView::FontWeight::Bold);
+  auto *folderTitle = new TextView(main_menu_theme::font, 36, TextView::FontWeight::Bold);
   folderTitle->setName("mainMenuFolderTitle");
-  folderTitle->setWidth(240)->setMinWidth(0)->setHeight(kMenuActionHeight)->setFlexShrink(0);
+  folderTitle->setWidth(260)->setMinWidth(0)->setHeight(kMenuActionHeight)->setFlexShrink(0);
   folderTitle->setVAlign(TextView::MIDDLE);
   folderTitle->setOverflow(TextView::TextOverflow::Marquee);
   folderTitle->setThemedColor(main_menu_theme::ink);
   filterRow->addView(folderTitle);
-  searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 22);
+  searchBox = new TextInputBox(main_menu_theme::font, 22);
   searchBox->setEditingText(searchText);
   searchBox->setClearable(true);
   searchBox->setHeight(kMenuActionHeight);
@@ -1634,13 +1675,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox->setCornerRadius(0);
   searchBox->setThemedBorderColor(main_menu_theme::rule);
   searchBox->setBorderWidth(1);
+  searchBox->setPadding(Edge::Left, 42);
   searchBox->setVAlign(TextView::MIDDLE);
   searchBox->setThemedColor(main_menu_theme::ink);
-  auto *searchHint = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  auto *searchHint = new TextView(main_menu_theme::font, 22);
   searchHint->setName("mainMenuSearchHint");
-  searchHint->setLocalizedText(i18n::message("menu.search.label"));
+  searchHint->setLocalizedText(i18n::message("menu.selector.search.label"));
   searchHint->setThemedColor(main_menu_theme::muted);
-  searchHint->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 18)->setPosition(Edge::Top, 0);
+  searchHint->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 44)->setPosition(Edge::Top, 0);
   searchHint->setHeight(kMenuActionHeight)->setMinWidth(0);
   searchHint->setPosition(Edge::Right, 18);
   searchHint->setVAlign(TextView::MIDDLE);
@@ -1649,6 +1691,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchField->setFlex(1)->setMinWidth(0);
   searchField->addView(searchBox);
   searchField->addView(searchHint);
+  auto *searchIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 17);
+  searchIcon->setText(ui_icons::textForCodepoint(0xf002));
+  searchIcon->setThemedColor(main_menu_theme::muted);
+  searchIcon->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 16)->setPosition(Edge::Top, 0);
+  searchIcon->setWidth(22)->setHeight(kMenuActionHeight);
+  searchIcon->setVAlign(TextView::MIDDLE);
+  searchField->addView(searchIcon);
   auto onSearchChanged = [this, searchHint](const std::string &text) {
     searchHint->setVisible(text.empty());
     searchText = text;
@@ -1659,7 +1708,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(searchField);
 
   chartFilterButton =
-      makeModalButton(i18n::message("menu.selector.filter.label"), 20, &chartFilterButtonText);
+      makeSelectorButton(i18n::message("menu.selector.filter.label"), 20, &chartFilterButtonText, 0xf0d7, true);
   chartFilterButton->setWidth(kMenuActionHeight);
   chartFilterButton->setHeight(kMenuActionHeight);
   chartFilterButton->setFlexShrink(0.0f);
@@ -1669,7 +1718,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(chartFilterButton);
 
   chartSortButton =
-      makeModalButton(i18n::message("library.filter_sort.sort.label"), 20, &chartSortButtonText);
+      makeSelectorButton(i18n::message("library.filter_sort.sort.label"), 20, &chartSortButtonText, 0xf0d7, true);
   chartSortButton->setWidth(kMenuActionHeight);
   chartSortButton->setHeight(kMenuActionHeight);
   chartSortButton->setFlexShrink(0.0f);
@@ -1677,6 +1726,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
     setChartSortPanelVisible(!chartSortPanelVisible);
   });
   filterRow->addView(chartSortButton);
+  auto *chartCount = new TextView(main_menu_theme::font, 16);
+  chartCount->setName("mainMenuChartCount");
+  chartCount->setWidth(80)->setHeight(kMenuActionHeight)->setFlexShrink(0);
+  chartCount->setAlign(TextView::RIGHT);
+  chartCount->setVAlign(TextView::MIDDLE);
+  chartCount->setThemedColor(main_menu_theme::muted);
+  filterRow->addView(chartCount);
 
   left->addView(filterRow);
   left->addView(ChartListItemView::createColumnHeader());
@@ -1742,6 +1798,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   right->setThemedBorderColor(main_menu_theme::rule);
   right->setBorderWidth(0);
+  auto *detailsRule = new View();
+  detailsRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 16);
+  detailsRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::rule);
+  right->addView(detailsRule);
   right->setGap(8);
   right->setPadding(Edge::Top, 16);
   right->setPadding(Edge::Bottom, 8);
@@ -1764,11 +1824,19 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartDetailsView_ = new ChartDetailsView(jacketView);
   chartDetailsView_->setWidth(kDetailsContentWidth);
   rightContent->addView(chartDetailsView_);
+  chartDetailsView_->setActionHandlers([this](bool favorite) {
+    const auto record = selectedRecordSnapshot();
+    if (!record || !toggleChartFavorite(*record, favorite)) return;
+    if (selectedChartRecord && selectedChartRecord->meta.BmsPath == record->meta.BmsPath) {
+      selectedChartRecord->favorite = favorite;
+      refreshSelectedChartDetails();
+    }
+  }, [this] { toggleRevealContextMenu(chartDetailsView_->findViewByName("chartDetailsMore")); });
 
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
   readySettings->setPadding(Edge::Left, 28)->setPadding(Edge::Right, 20)->setGap(0);
-  auto statusCell = [readySettings](const char *key, const char *name) {
+  auto statusCell = [readySettings](const char *key, const char *name, uint32_t glyph) {
     auto *cell = new View();
     cell->setName(name);
     cell->setFlex(1)->setMinWidth(0)->setHeight(72)->setGap(6);
@@ -1777,25 +1845,51 @@ void MainMenuScene::initView(ApplicationContext &context) {
     rule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
     rule->setWidth(1)->setHeight(72)->setBackgroundColor(Color(75, 79, 88, 255));
     cell->addView(rule);
-    auto *caption = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    auto *caption = new TextView(main_menu_theme::font, 15);
+    caption->setName(std::string(name) + "Caption");
     caption->setHeight(23)->setMinWidth(0);
     caption->setLocalizedText(i18n::message(key));
     caption->setThemedColor(main_menu_theme::dockSecondary);
     cell->addView(caption);
-    auto *value = new TextView("assets/fonts/notosanscjkjp.ttf", 24, TextView::FontWeight::Bold);
+    auto *value = new TextView(main_menu_theme::font, 24, TextView::FontWeight::Bold);
     value->setHeight(34)->setMinWidth(0);
     value->setOverflow(TextView::TextOverflow::Marquee);
     value->setThemedColor(main_menu_theme::dockText);
-    cell->addView(value);
+    auto *valueRow = new View();
+    valueRow->setName(std::string(name) + "ValueRow");
+    valueRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12)->setHeight(34);
+    auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
+    icon->setText(ui_icons::textForCodepoint(glyph));
+    icon->setWidth(28)->setHeight(32);
+    icon->setVAlign(TextView::MIDDLE);
+    icon->setThemedColor(main_menu_theme::dockText);
+    valueRow->addView(icon);
+    value->setFlex(1);
+    valueRow->addView(value);
+    auto *caret = new TextView(ui_icons::kFontAwesomeSolidPath, 13);
+    caret->setText(ui_icons::textForCodepoint(0xf0d7));
+    caret->setWidth(14)->setHeight(30);
+    caret->setVAlign(TextView::MIDDLE);
+    caret->setThemedColor(main_menu_theme::dockSecondary);
+    valueRow->addView(caret);
+    cell->addView(valueRow);
+    if (std::string(name) == "readyOptionsCell") {
+      caption->setLocalizedText(i18n::message("menu.selector.play_options.label"));
+      caption->setHeight(52);
+      caption->setWrap(true);
+      valueRow->setVisible(false);
+      valueRow->setDisplay(YGDisplayNone);
+      cell->setJustifyContent(YGJustifyCenter);
+    }
     readySettings->addView(cell);
     return value;
   };
-  readyAssistOptionText = statusCell("menu.play_options.play_options.label", "readyOptionsCell");
-  readyKeyModeText = statusCell("menu.selector.key_mode.label", "readyKeyModeCell");
-  readyGaugeText = statusCell("menu.gauge.label", "readyGaugeCell");
-  readyPlayOptionText = statusCell("chart_viewer.random.label", "readyRandomCell");
-  readySpeedText = statusCell("menu.selector.speed.label", "readySpeedCell");
-  readyPacemakerText = statusCell("menu.selector.target.label", "readyTargetCell");
+  readyAssistOptionText = statusCell("menu.play_options.play_options.label", "readyOptionsCell", ui_icons::kPlayOptions);
+  readyKeyModeText = statusCell("menu.selector.key_mode.label", "readyKeyModeCell", 0xf11c);
+  readyGaugeText = statusCell("menu.gauge.label", "readyGaugeCell", 0xf2d0);
+  readyPlayOptionText = statusCell("chart_viewer.random.label", "readyRandomCell", 0xf074);
+  readySpeedText = statusCell("menu.selector.speed.label", "readySpeedCell", 0xf062);
+  readyPacemakerText = statusCell("menu.selector.target.label", "readyTargetCell", 0xf140);
 
   readyPlayOptionsButton = new Button(0, 0, kDetailsContentWidth, 122);
   readyPlayOptionsButton->setName("mainMenuPlayOptions");
@@ -1818,7 +1912,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton = new Button(0, 0, kDetailsContentWidth, 88);
   startButton->setName("mainMenuStart");
   startButton->setFlexShrink(0);
-  auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 44, TextView::FontWeight::Bold);
+  auto buttonText = new TextView(main_menu_theme::font, 44, TextView::FontWeight::Bold);
   startButtonText = buttonText;
   buttonText->setLocalizedText(i18n::message("menu.selector.play.label"));
   buttonText->setAlign(TextView::CENTER);
@@ -1855,13 +1949,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonSlot->setFlex(1)->setMinWidth(0)->setHeight(kMenuActionHeight);
   replayButtonSlot->setAlignItems(YGAlignStretch);
 
-  replayButton = new Button(0, 0, 224, kMenuActionHeight);
+  replayButton = makeSelectorButton(i18n::message("menu.records.label"), 22, &replayButtonText, 0xf15c);
   replayButton->setWidthPercent(100);
-  replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  replayButtonText->setLocalizedText(i18n::message("menu.records.label"));
-  replayButtonText->setAlign(TextView::CENTER);
-  replayButtonText->setVAlign(TextView::MIDDLE);
-  replayButton->setContentView(replayButtonText);
   styleMenuButton(replayButton, replayButtonText);
   replayButton->setStyledBorderWidth(0);
   replayButton->setThemedBackgroundColors(
@@ -1894,7 +1983,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButtonSlot->setAlignItems(YGAlignStretch);
 
   findBmsButton = new Button(0, 0, kDetailsContentWidth, 88);
-  findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  findBmsButtonText = new TextView(main_menu_theme::font, 32);
   findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
@@ -1909,7 +1998,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonSlot->setAlignItems(YGAlignStretch);
 
   unzipButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
-  unzipButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  unzipButtonText = new TextView(main_menu_theme::font, 26);
   unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
@@ -1919,13 +2008,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
 
-  rankingsButton = new Button(0, 0, 224, kMenuActionHeight);
+  rankingsButton = makeSelectorButton(i18n::message("menu.rankings.label"), 22, &rankingsButtonText, 0xf080);
   rankingsButton->setFlex(1)->setMinWidth(0);
-  rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  rankingsButtonText->setLocalizedText(i18n::message("menu.rankings.label"));
-  rankingsButtonText->setAlign(TextView::CENTER);
-  rankingsButtonText->setVAlign(TextView::MIDDLE);
-  rankingsButton->setContentView(rankingsButtonText);
   styleMenuButton(rankingsButton, rankingsButtonText);
   rankingsButton->setStyledBorderWidth(0);
   rankingsButton->setThemedBackgroundColors(
@@ -1939,6 +2023,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recordActions->setFlexDirection(FlexDirection::Row)->setGap(12);
   recordActions->addView(replayButtonSlot);
   recordActions->addView(rankingsButton);
+  auto *detailMore = new Button(0, 0, 52, 44);
+  detailMore->setName("mainMenuDetailMore");
+  detailMore->setFlexShrink(0);
+  auto *detailMoreIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+  detailMoreIcon->setText(ui_icons::textForCodepoint(0xf141));
+  detailMoreIcon->setAlign(TextView::CENTER);
+  detailMoreIcon->setVAlign(TextView::MIDDLE);
+  detailMoreIcon->setThemedColor(main_menu_theme::ink);
+  detailMore->setContentView(detailMoreIcon);
+  detailMore->setOnClickListener([this, detailMore] { toggleRevealContextMenu(detailMore); });
+  recordActions->addView(detailMore);
   auto *recordsRule = new View();
   recordsRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Top, 0);
   recordsRule->setWidthPercent(100)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::rule);
@@ -1953,7 +2048,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *viewerButton = new Button(0, 0, 224, kMenuActionHeight);
   viewerButton->setFlex(1);
-  auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  auto *viewerButtonText = new TextView(main_menu_theme::font, 18);
   viewerButtonText->setLocalizedText(i18n::message("menu.viewer.label"));
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
@@ -1965,7 +2060,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   revealButton = new Button(0, 0, 224, kMenuActionHeight);
   revealButton->setFlex(1);
-  auto *revealButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  auto *revealButtonText = new TextView(main_menu_theme::font, 18);
   revealButtonText->setLocalizedText(i18n::message("menu.reveal.label"));
   revealButtonText->setAlign(TextView::CENTER);
   revealButtonText->setVAlign(TextView::MIDDLE);
@@ -1978,7 +2073,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   ContextMenuView::Callbacks revealMenuCallbacks;
   revealMenuCallbacks.onActionSelected = [this](const std::string &actionId) {
-    if (actionId == "show-same-folder") {
+    if (actionId == "viewer") {
+      openChartViewerForSelection();
+    } else if (actionId == "show-same-folder") {
       showSelectedChartFolder();
     } else if (actionId == "reveal-file") {
       revealSelectedChartInFileManager();
@@ -1991,12 +2088,23 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *settingsButton = new Button(0, 0, kDetailsContentWidth, kMenuActionHeight);
   settingsButton->setName("mainMenuSettings");
-  auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  auto *settingsText = new TextView(main_menu_theme::font, 18);
   settingsText->setLocalizedText(i18n::message("menu.settings.label"));
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
-  settingsButton->setContentView(settingsText);
+  auto *settingsContent = new View();
+  settingsContent->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter)->setGap(10);
+  auto *settingsIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 22);
+  settingsIcon->setText(ui_icons::textForCodepoint(ui_icons::kSettings));
+  settingsIcon->setThemedColor(main_menu_theme::ink);
+  settingsIcon->setWidth(24)->setHeight(32);
+  settingsIcon->setVAlign(TextView::MIDDLE);
+  settingsText->setHeight(32)->setMinWidth(0);
+  settingsContent->addView(settingsIcon);
+  settingsContent->addView(settingsText);
+  settingsButton->setContentView(settingsContent);
   styleMenuButton(settingsButton, settingsText);
+  settingsButton->setStyledBorderWidth(0);
   settingsButton->setOnClickListener([this, &context]() {
     if (willStart.load() || replayExportJob_.inProgress()) {
       return;
@@ -2165,6 +2273,11 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
     if (portrait) button->setWidthPercent(100);
     else button->setWidth(kDetailsContentWidth);
   }
+  if (auto *more = rootLayout->findViewByName("mainMenuDetailMore")) {
+    more->setVisible(!portrait);
+    more->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
+  }
+  chartActionsRow->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
   const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
   records->setHeight(portrait ? height : 44);
   const int primaryHeight = portrait ? height : kPlayDockHeight;
@@ -2193,9 +2306,11 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   columnHeader->setDisplay(portrait || songWidth < 840 ? YGDisplayNone : YGDisplayFlex);
   auto *folderTitle = rootLayout->findViewByName("mainMenuFolderTitle");
   folderTitle->setDisplay(portrait || songWidth < 780 ? YGDisplayNone : YGDisplayFlex);
+  if (auto *count = rootLayout->findViewByName("mainMenuChartCount"))
+    count->setDisplay(portrait || songWidth < 900 ? YGDisplayNone : YGDisplayFlex);
   toolbar->setFlex(portrait ? 1 : 0)->setMinWidth(0);
   size_t toolbarIndex = 0;
-  constexpr std::array<float, 6> toolbarWidths{88, 100, 144, 126, 130, 130};
+  constexpr std::array<float, 6> toolbarWidths{64, 80, 104, 86, 110, 110};
   for (auto *view : toolbar->getChildren()) {
     view->setFlex(portrait ? 1 : 0)->setMinWidth(0);
     view->setWidth(portrait ? YGUndefined : toolbarWidths[std::min(toolbarIndex, toolbarWidths.size() - 1)]);
@@ -2316,6 +2431,11 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     });
   }
 
+  if (!folderMetadataCache.tables.empty()) {
+    folders.push_back({.key = "difficulty-tables-heading",
+        .label = i18n::tr("menu.selector.difficulty_tables.label"),
+        .sectionHeader = true});
+  }
   for (const auto &table : folderMetadataCache.tables) {
     const std::string tableKey = folderKeyForTable(table.id);
     const LibraryFolderItem tableItem{
@@ -3016,6 +3136,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   selectedChartRecord = main_menu_library::chartSelectionRecordForReload(
       selectedChartRecord, leadingRecord, preserveViewState);
   const int count = databaseCount + (leadingRecord.has_value() ? 1 : 0);
+  if (auto *label = dynamic_cast<TextView *>(rootLayout->findViewByName("mainMenuChartCount")))
+    label->setLocalizedText(i18n::message("menu.selector.charts.count", {{"count", std::to_string(count)}}));
   if (auto *title = dynamic_cast<TextView *>(rootLayout->findViewByName("mainMenuFolderTitle"))) {
     if (activeFolder.type == LibraryFolderItem::Type::AllSongs)
       title->setLocalizedText(i18n::message("library.folders.all_songs.label"));
@@ -3032,7 +3154,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     for (const char *key : {"all", "favorites"}) {
       auto *tab = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + key));
       if (tab) {
-        auto *label = static_cast<TextView *>(tab->getContentView());
+        auto *label = dynamic_cast<TextView *>(tab->getContentView()->findViewByName("selectorButtonLabel"));
         styleMenuButton(tab, label, activeFolder.key == key);
         tab->setStyledBorderWidth(0);
       }
@@ -3908,13 +4030,11 @@ void MainMenuScene::refreshReadySettingsSummary() {
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(gaugeButtonLabel(profileSelections.gaugeType,
                                              profileSelections.gaugeAutoShift));
-    readyGaugeText->setColor(readyGaugeTextColor(
-        profileSelections.gaugeType, profileSelections.gaugeAutoShift));
+    readyGaugeText->setThemedColor(main_menu_theme::dockText);
   }
   if (readyPlayOptionText != nullptr) {
     readyPlayOptionText->setText(
-        std::string(gameplayRulesetLabel(profileSelections.ruleset)) + " · " +
-        effective.playOption + " · " + effective.longNoteMode);
+        effective.playOption);
   }
   refreshSelectedChartDetails();
   if (readyAssistOptionText != nullptr) {
@@ -3939,10 +4059,30 @@ void MainMenuScene::refreshReadySettingsSummary() {
       }
       readyAssistOptionText->setText(i18n::tr("menu.assist.prefix") + reasons);
     }
+    const bool customRules = profileSelections.ruleset != GameplayRuleset::LR2;
+    const bool customLn = effective.longNoteMode != AppSettings::kDefaultLnMode;
+    const bool showStatus = optionEnabled || percent != 100 || customRules || customLn;
+    if (customRules || customLn) {
+      std::string status = optionEnabled || percent != 100 ? readyAssistOptionText->getText() : "";
+      if (customRules) {
+        if (!status.empty()) status += " / ";
+        status += gameplayRulesetLabel(profileSelections.ruleset);
+      }
+      if (customLn) {
+        if (!status.empty()) status += " / ";
+        status += effective.longNoteMode;
+      }
+      readyAssistOptionText->setText(status);
+    }
+    if (auto *row = rootLayout->findViewByName("readyOptionsCellValueRow")) {
+      row->setVisible(showStatus);
+      row->setDisplay(showStatus ? YGDisplayFlex : YGDisplayNone);
+    }
+    if (auto *caption = rootLayout->findViewByName("readyOptionsCellCaption"))
+      caption->setHeight(showStatus ? 23 : 52);
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
-        i18n::tr("menu.target.prefix") +
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
 }
@@ -4481,7 +4621,8 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       true);
 }
 
-void MainMenuScene::toggleRevealContextMenu() {
+void MainMenuScene::toggleRevealContextMenu(View *anchor) {
+  if (!anchor) anchor = revealButton;
   if (revealContextMenu == nullptr || revealButton == nullptr) {
     return;
   }
@@ -4505,11 +4646,12 @@ void MainMenuScene::toggleRevealContextMenu() {
   revealContextMenu->setViewportSize(rendering::window_width,
                                      rendering::window_height);
   revealContextMenu->show(
-      {.x = revealButton->getX(),
-       .y = revealButton->getY(),
-       .width = revealButton->getWidth(),
-       .height = revealButton->getHeight()},
-      {{.id = "show-same-folder",
+      {.x = anchor->getX(),
+       .y = anchor->getY(),
+       .width = anchor->getWidth(),
+       .height = anchor->getHeight()},
+      {{.id = "viewer", .label = i18n::message("menu.viewer.label")},
+       {.id = "show-same-folder",
         .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
        {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")}},

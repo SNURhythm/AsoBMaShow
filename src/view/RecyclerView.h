@@ -88,7 +88,8 @@ private:
         } else {
           selectedIndex = itemCount() - 1;
         }
-        if (itemCount() > 0) {
+        skipUnselectable(-1);
+        if (itemCount() > 0 && selectedIndex >= 0) {
           if (onUnselected && !isInitialSelection) {
             onUnselected(itemAt(prevIndex), prevIndex);
           }
@@ -106,7 +107,8 @@ private:
         } else {
           selectedIndex = 0;
         }
-        if (itemCount() > 0) {
+        skipUnselectable(1);
+        if (itemCount() > 0 && selectedIndex >= 0) {
           if (onUnselected && !isInitialSelection) {
             onUnselected(itemAt(prevIndex), prevIndex);
           }
@@ -414,6 +416,7 @@ public:
   std::function<bool(const T &, const T &)> itemComparator;
 
   // on click
+  std::function<bool(const T &, int)> isSelectable;
   std::function<void(const T &, int)> onSelected;
   std::function<void(const T &, int)> onUnselected;
   int selectedIndex = -1;
@@ -522,8 +525,18 @@ private:
                             itemHeight);
   }
 
+  inline void skipUnselectable(int direction) {
+    if (!isSelectable || itemCount() == 0) return;
+    for (int checked = 0; checked < itemCount(); ++checked) {
+      if (isSelectable(itemAt(selectedIndex), selectedIndex)) return;
+      selectedIndex = (selectedIndex + direction + itemCount()) % itemCount();
+    }
+    selectedIndex = -1;
+  }
+
   inline void selectIndex(int index) {
-    if (index < 0 || index >= itemCount()) {
+    if (index < 0 || index >= itemCount() ||
+        (isSelectable && !isSelectable(itemAt(index), index))) {
       return;
     }
     if (selectedIndex != -1 && onUnselected) {

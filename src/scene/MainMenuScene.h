@@ -161,6 +161,7 @@ private:
     bool clearMarkFolder = false;
     bool expandable = false;
     bool expanded = false;
+    bool sectionHeader = false;
   };
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
@@ -478,7 +479,7 @@ private:
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
   void openChartViewerForSelection();
   void openChartViewerDirect(const ChartMetaRecord &record);
-  void toggleRevealContextMenu();
+  void toggleRevealContextMenu(View *anchor = nullptr);
   void showSelectedChartFolder();
   bool clearSameFolderScope();
   void revealSelectedChartInFileManager();

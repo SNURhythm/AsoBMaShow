@@ -447,6 +447,7 @@ void ChartFilterPanelView::refresh(const State &state, bool open) {
   refreshDropdowns(state);
   refreshRangeButtons(state);
   setVisible(open);
+  setDisplay(open ? YGDisplayFlex : YGDisplayNone);
   setZIndex(open ? 100 : 0);
   setHeight(open ? preferredHeight(state) : 0.0f);
 }
@@ -671,6 +672,7 @@ void ChartSortPanelView::buildContent() {
 void ChartSortPanelView::refresh(const State &state, bool open) {
   refreshButtons(state);
   setVisible(open);
+  setDisplay(open ? YGDisplayFlex : YGDisplayNone);
   setZIndex(open ? 100 : 0);
   setHeight(open ? 184.0f : 0.0f);
 }

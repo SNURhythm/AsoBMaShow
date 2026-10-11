@@ -4,6 +4,7 @@
 #include "ClearLampColors.h"
 #include "Button.h"
 #include "ImageView.h"
+#include "IconText.h"
 #include "MainMenuTheme.h"
 #include "TextView.h"
 #include "UiTheme.h"
@@ -16,7 +17,7 @@
 #include <sstream>
 
 namespace {
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = main_menu_theme::font;
 
 TextView *label(const char *name, int size, int height,
                 View::ThemeColorProvider color = main_menu_theme::ink,
@@ -118,7 +119,45 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   artist_->setOverflow(TextView::TextOverflow::Marquee);
   genre_ = label("chartDetailsGenre", 21, 26, main_menu_theme::muted);
   genre_->setOverflow(TextView::TextOverflow::Marquee);
-  titles->addView(title_);
+  titleRow_ = new View();
+  titleRow_->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10);
+  title_->setFlex(1)->setMinWidth(0);
+  titleRow_->addView(title_);
+  titleActions_ = new View();
+  titleActions_->setFlexDirection(FlexDirection::Row)->setGap(6)->setFlexShrink(0);
+  favoriteButton_ = new Button(0, 0, 38, 44);
+  favoriteButton_->setName("chartDetailsFavorite");
+  auto *favoriteContent = new View();
+  favoriteContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+  auto star = [](const char *font) {
+    auto *icon = new TextView(font, 27);
+    icon->setText(ui_icons::textForCodepoint(0xf005));
+    icon->setWidth(36)->setHeight(40);
+    icon->setVAlign(TextView::MIDDLE);
+    icon->setAlign(TextView::CENTER);
+    return icon;
+  };
+  favoriteIcon_ = star(ui_icons::kFontAwesomeSolidPath);
+  favoriteIcon_->setThemedColor(main_menu_theme::action);
+  favoriteOutline_ = star("assets/fonts/fa-regular-400.ttf");
+  favoriteOutline_->setThemedColor(main_menu_theme::secondary);
+  favoriteContent->addView(favoriteIcon_);
+  favoriteContent->addView(favoriteOutline_);
+  favoriteButton_->setContentView(favoriteContent);
+  favoriteButton_->setOnClickListener([this] { if (onFavorite_) onFavorite_(!favorite_); });
+  titleActions_->addView(favoriteButton_);
+  moreButton_ = new Button(0, 0, 32, 44);
+  moreButton_->setName("chartDetailsMore");
+  auto *moreIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+  moreIcon->setText(ui_icons::textForCodepoint(0xf141));
+  moreIcon->setVAlign(TextView::MIDDLE);
+  moreIcon->setAlign(TextView::CENTER);
+  moreIcon->setThemedColor(main_menu_theme::ink);
+  moreButton_->setContentView(moreIcon);
+  moreButton_->setOnClickListener([this] { if (onMore_) onMore_(); });
+  titleActions_->addView(moreButton_);
+  titleRow_->addView(titleActions_);
+  titles->addView(titleRow_);
   titles->addView(artist_);
   titles->addView(genre_);
   identity->addView(titles);
@@ -272,6 +311,12 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
 }
 
+void ChartDetailsView::setActionHandlers(std::function<void(bool)> favorite,
+                                         std::function<void()> more) {
+  onFavorite_ = std::move(favorite);
+  onMore_ = std::move(more);
+}
+
 void ChartDetailsView::setScoreContainer(View *container) {
   scoreContainer_ = container;
   personalBest_->moveTo(container ? *container : compact_ ? *this : *expandedFacts_);
@@ -293,7 +338,9 @@ void ChartDetailsView::setCompact(bool compact) {
   artworkFrame_->setWidth(compact ? 112 : 472)->setHeight(compact ? 112 : 472);
   artworkFrame_->setAlignSelf(YGAlignCenter);
   artwork_->setWidthPercent(100)->setHeight(compact ? 112 : 472);
+  titleRow_->setHeight(compact ? 74 : 56);
   title_->setHeight(compact ? 74 : 56);
+  visible(titleActions_, !compact);
   title_->setWrap(compact);
   title_->setOverflow(compact ? TextView::TextOverflow::Hidden : TextView::TextOverflow::Marquee);
   artist_->moveTo(*titles_);
@@ -365,6 +412,11 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                int clearRank, const std::string &total) {
   const bool chart = record && !record->courseStart && !record->solidArchive &&
                      !record->unavailable && !record->meta.BmsPath.empty();
+  favorite_ = chart && record->favorite;
+  favoriteButton_->setEnabled(chart);
+  moreButton_->setEnabled(chart);
+  visible(favoriteIcon_, favorite_);
+  visible(favoriteOutline_, !favorite_);
   visible(artworkFrame_, chart && !record->meta.StageFile.empty());
   setCompact(compact_);
   title_->setLocalizedText(record ? i18n::Text(record->meta.Title +

@@ -97,7 +97,7 @@ int main() {
       require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 1,
               "clear lamps retain a contrasting outline on the selected surface");
       const auto color = difficulty->currentColor();
-      const auto expected = main_menu_theme::onAction();
+      const auto expected = main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::selectedAccent();
       require(difficulty->getText() == record.difficultyTableLabels &&
                   color.r == expected.r && color.g == expected.g && color.b == expected.b,
               "selected table units stay verbatim and readable in both themes");
