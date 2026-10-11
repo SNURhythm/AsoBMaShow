@@ -43,6 +43,7 @@ struct View {
   View* setMinHeight(float v) { YGNodeStyleSetMinHeight(node,v);return this; }
   View* setFlex(float v) { YGNodeStyleSetFlex(node,v);return this; }
   View* setFlexShrink(float v) { YGNodeStyleSetFlexShrink(node,v);return this; }
+  View* setFlexWrap(YGWrap v) { YGNodeStyleSetFlexWrap(node,v);return this; }
   View* setFlexDirection(FlexDirection v) { YGNodeStyleSetFlexDirection(node,YGFlexDirection(v));return this; }
   View* setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v);return this; }
   View* setPadding(Edge e,float v) { YGNodeStyleSetPadding(node,YGEdge(e),v);return this; }
@@ -64,8 +65,9 @@ using ChartDetailsView = ChartDetails;
 namespace rendering { int window_width=1080,window_height=1920; }
 struct SafeAreaInsets { int top=30,right=0,bottom=20,left=0; };
 SafeAreaInsets getSafeAreaInsetsUi() { return {}; }
-constexpr int kRootPadding=28,kLibraryPanelWidth=320,kDetailsPanelWidth=500,kDetailsContentWidth=460;
-constexpr int kPortraitMenuActionHeight=64,kMenuActionHeight=84;
+constexpr int kRootPadding=0,kLibraryPanelWidth=350,kDetailsPanelWidth=540,kDetailsContentWidth=472;
+constexpr int kMenuHeaderHeight=80,kPlayDockHeight=120;
+constexpr int kPortraitMenuActionHeight=64,kMenuActionHeight=56;
 struct MainMenuScene {
   View* rootLayout;
   View *detailsContent_, *detailsControlsContent_;
@@ -80,20 +82,23 @@ struct MainMenuScene {
 };
 PRODUCTION_METHOD
 int main() {
-  View body("mainMenuBody"),dock("mainMenuPlayDock");
+  View body("mainMenuBody"),dock("mainMenuPlayDock"),header("mainMenuHeader"),tabs("mainMenuTabs"),wordmark("mainMenuWordmark"),columnHeader("chartListColumnHeader"),folderTitle("mainMenuFolderTitle"),searchRow("mainMenuSearchRow");
   View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
-  root.setPadding(Edge::All,28)->setGap(24)->setAlignItems(YGAlignStretch);
-  browser.setFlexDirection(FlexDirection::Row)->setGap(24)->setMinWidth(0)->setMinHeight(0);
-  root.add(body);root.add(dock);body.setFlex(1)->setMinHeight(0)->setGap(24);
-  dock.setHeight(104)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);
+  root.setPadding(Edge::All,0)->setGap(0)->setAlignItems(YGAlignStretch);
+  browser.setFlexDirection(FlexDirection::Row)->setGap(0)->setMinWidth(0)->setMinHeight(0);
+  root.add(header);header.setHeight(80)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);header.add(wordmark);header.add(tabs);tabs.setWidth(320);header.add(toolbar);
+  root.add(body);root.add(dock);body.setFlex(1)->setMinHeight(0)->setGap(0);
+  dock.setHeight(120)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);
   body.add(browser);body.add(details);browser.add(library);browser.add(songs);
   library.add(actions);actions.add(button);library.add(list);list.setFlex(1);
   library.setPadding(Edge::All,14);button.setWidth(292)->setHeight(84);
   songs.setFlex(1)->setMinWidth(0)->setMinHeight(0)->setPadding(Edge::All,16);
-  songs.add(toolbar);toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
+  songs.add(columnHeader);songs.add(searchRow);searchRow.setFlexDirection(FlexDirection::Row)->setGap(10);
+  searchRow.add(folderTitle);folderTitle.setWidth(240)->setHeight(56)->setFlexShrink(0);searchRow.add(search);search.setFlex(1)->setMinWidth(0);searchRow.add(filter);searchRow.add(sort);
+  toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
   std::array<View,4> headerButtons={View("add"),View("refresh"),View("search"),View("tasks")};
   int widths[]={112,122,154,142};
   for(int i=0;i<4;++i){toolbar.add(headerButtons[i]);headerButtons[i].setWidth(widths[i]);}
@@ -109,10 +114,10 @@ int main() {
   content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);
   unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
   MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
-  for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1080,1920}}) {
+  for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1440,1080},std::pair{1280,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
-    root.setPadding(Edge::Top,58)->setPadding(Edge::Bottom,48);
+    root.setPadding(Edge::Top,30)->setPadding(Edge::Bottom,20);
     content.setHeight(340);controlsContent.setHeight(260);
     YGNodeCalculateLayout(content.node,YGUndefined,YGUndefined,YGDirectionLTR);
     YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
@@ -120,8 +125,10 @@ int main() {
     scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
     assert(findSlot.parent==&primary && "download must remain with the primary action when rotating");
     float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
+    assert(YGNodeLayoutGetWidth(search.node)>=100 && "search remains usable on 4:3 and narrow landscape screens");
+    assert(YGNodeLayoutGetLeft(toolbar.node)+YGNodeLayoutGetWidth(toolbar.node)<=dimensions.first+1);
     if(dimensions.second>dimensions.first) {
-      const float usable=dimensions.second-106-24;
+      const float usable=dimensions.second-50-80;
       assert(std::abs(dh-(448+34))<1 && std::abs(bh+dh-usable)<1);
       controlsContent.setHeight(400);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
@@ -135,10 +142,12 @@ int main() {
              YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
       assert(YGNodeLayoutGetLeft(songs.node)>YGNodeLayoutGetLeft(library.node));
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
-      assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
+      assert(std::abs(YGNodeLayoutGetWidth(library.node)/YGNodeLayoutGetWidth(browser.node)-.3)<.02);
       assert(YGNodeLayoutGetTop(details.node)>=YGNodeLayoutGetTop(browser.node)+bh);
       assert(chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&controlsContent);
       assert(primary.parent==&controls && settings.parent==&records);
+      assert(YGNodeLayoutGetHeight(records.node)==64 &&
+             YGNodeLayoutGetHeight(ranking.node)<=YGNodeLayoutGetHeight(records.node));
       assert(YGNodeLayoutGetLeft(headerButtons.back().node)+YGNodeLayoutGetWidth(headerButtons.back().node)<=YGNodeLayoutGetWidth(toolbar.node)+1);
       assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==136);
       assert(YGNodeLayoutGetLeft(controls.node)>YGNodeLayoutGetLeft(scroll.node));
@@ -146,15 +155,15 @@ int main() {
       assert(YGNodeLayoutGetWidth(button.node)<=YGNodeLayoutGetWidth(library.node)-28+1);
     } else {
       assert(YGNodeStyleGetMinHeight(chart.node).value == 0);
-      assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 16 &&
-             YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 16);
-      assert(YGNodeLayoutGetWidth(library.node)==320 && YGNodeLayoutGetWidth(details.node)==500);
+      assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 0 &&
+             YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
+      assert(YGNodeLayoutGetWidth(library.node)==350 && YGNodeLayoutGetWidth(details.node)==540);
       assert(std::abs(bh-dh)<1);
       assert(dock.children.size()==2 && dock.children[0]==&options && dock.children[1]==&start);
-      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)<=dimensions.second-48+1);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)<=dimensions.second-20+1);
       assert(!controls.visible && chart.best.parent==&chart && options.parent==&dock && start.parent==&dock && tools.parent==&content);
-      assert(primary.parent==&details && settings.parent==&library);
-      assert(YGNodeLayoutGetHeight(primary.node)==84 && YGNodeLayoutGetHeight(button.node)==84);
+      assert(primary.parent==&details && settings.parent==&toolbar);
+      assert(YGNodeLayoutGetHeight(primary.node)==44 && YGNodeLayoutGetHeight(button.node)==56);
     }
     if(dimensions.second<=dimensions.first)continue;
     assert(YGNodeLayoutGetHeight(controlsScroll.node)>0);

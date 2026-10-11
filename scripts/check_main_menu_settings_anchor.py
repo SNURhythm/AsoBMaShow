@@ -69,7 +69,7 @@ require(
     "Settings footer must not rely on an intrinsic-height spacer",
 )
 require(
-    "right->setGap(12);" in block and "right->setPadding(Edge::Bottom, 16);" in block,
+    "right->setGap(8);" in block and "right->setPadding(Edge::Bottom, 8);" in block,
     "right panel must separate and pad its fixed record actions",
 )
 require_in_order(

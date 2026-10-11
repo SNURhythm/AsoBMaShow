@@ -21,6 +21,9 @@ imageResourceAvailable(const std::filesystem::path &path);
                                           std::stop_token stop);
 
 class ImageView : public View {
+public:
+  enum class ContentMode { Stretch, Contain };
+
 private:
   void renderImpl(RenderContext &context) override;
   using ImageCache = image_decode::DecodedImageData;
@@ -50,12 +53,17 @@ private:
   std::optional<ImageFade> fade_;
   std::optional<Color> scrimColor_;
   ThemeColorProvider themedScrimColorProvider_;
+  ContentMode contentMode_ = ContentMode::Stretch;
 
 protected:
   void onLayout() override;
   void onThemeChanged() override;
 
 public:
+  ImageView *setContentMode(ContentMode mode) {
+    contentMode_ = mode;
+    return this;
+  }
   ImageView() = delete;
   ImageView(int x, int y, int width, int height);
   ImageView(int x, int y, int width, int height, const path_t &path);

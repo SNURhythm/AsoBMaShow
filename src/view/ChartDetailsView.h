@@ -1,9 +1,11 @@
 #pragma once
 
 #include "View.h"
+#include <array>
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ScoreRepositoryModels.h"
 
+class Button;
 class ImageView;
 class TextView;
 
@@ -18,6 +20,7 @@ public:
   }
   void setScoreContainer(View *container);
   void setCompact(bool compact);
+  void setExpanded(bool expanded);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
@@ -31,10 +34,24 @@ private:
   static constexpr float kFactPadding = 14;
   View *artworkFrame_ = nullptr;
   View *identity_ = nullptr;
+  View *titles_ = nullptr;
+  std::array<View *, 3> factRows_{};
+  std::array<View *, 6> factCells_{};
   ImageView *artwork_ = nullptr;
   bool compact_ = true;
+  View *summary_ = nullptr;
+  View *levelGroup_ = nullptr;
+  View *levelLine_ = nullptr;
+  View *expandedFacts_ = nullptr;
+  Button *detailsToggle_ = nullptr;
+  TextView *disclosure_ = nullptr;
+  TextView *tempo_ = nullptr;
+  TextView *desktopRate_ = nullptr;
+  bool expanded_ = false;
+  TextView *grade_ = nullptr;
   View *facts_ = nullptr;
   View *personalBest_ = nullptr;
+  View *scoreContainer_ = nullptr;
   View *clearLamp_ = nullptr;
   TextView *title_ = nullptr;
   TextView *artist_ = nullptr;

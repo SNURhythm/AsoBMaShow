@@ -286,6 +286,8 @@ private:
   TextView *tasksCloseButtonText = nullptr;
   std::unique_ptr<FindBmsModal> findBmsModal_;
   TextView *readyGaugeText = nullptr;
+  TextView *readyKeyModeText = nullptr;
+  TextView *readySpeedText = nullptr;
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;
   TextView *readyPacemakerText = nullptr;

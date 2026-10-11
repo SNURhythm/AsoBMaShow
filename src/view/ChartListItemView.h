@@ -14,6 +14,8 @@ public:
   ChartListItemView(int x, int y, int width, int height,
                     const ChartMetaRecord &record);
 
+  static View *createColumnHeader();
+  void setDisplayIndex(int index);
   void setMeta(const ChartMetaRecord &record,
                bool prioritizeArtwork = false);
   void setClearRank(int clearRank);
@@ -22,6 +24,9 @@ public:
       std::function<bool(const ChartMetaRecord &, bool)> handler);
   void onSelected() override;
   void onUnselected() override;
+
+protected:
+  void onLayout() override;
 
 private:
   void applyTextColors(bool selected);
@@ -36,7 +41,12 @@ private:
   bool selected = false;
   std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
   View *contentCard;
-  ImageView *bannerImage;
+  bool compact_ = false;
+  View *selectedRail;
+  View *clearColumn;
+  TextView *rowNumber;
+  TextView *clearLabel;
+  TextView *artworkPlaceholder;
   View *clearLamp;
   View *artworkFrame;
   ImageView *jacketImage;
@@ -47,8 +57,6 @@ private:
   TextView *artistView;
   TextView *levelView;
   TextView *keyModeView;
-  TextView *scoreRankShadowView;
-  TextView *scoreRankWeightView;
   TextView *scoreRankView;
   TextView *bestScoreView;
   std::string scoreRank;

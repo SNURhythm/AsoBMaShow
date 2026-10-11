@@ -958,8 +958,17 @@ void ImageView::renderImpl(RenderContext &context) {
   } else {
     program = rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
   }
-  submitTexturedRoundedRect(context, texture, s_texColor, getX(), getY(),
-                            getWidth(), getHeight(), getCornerRadius(), program,
+  float width = getWidth();
+  float height = getHeight();
+  if (contentMode_ == ContentMode::Contain && currentImageWidth > 0 && currentImageHeight > 0) {
+    const float scale = std::min(width / currentImageWidth, height / currentImageHeight);
+    width = currentImageWidth * scale;
+    height = currentImageHeight * scale;
+  }
+  const float x = getX() + (getWidth() - width) * 0.5F;
+  const float y = getY() + (getHeight() - height) * 0.5F;
+  submitTexturedRoundedRect(context, texture, s_texColor, x, y,
+                            width, height, getCornerRadius(), program,
                             std::span<const rendering::UiBatchUniform>(uniforms)
                                 .first(uniformCount));
 }

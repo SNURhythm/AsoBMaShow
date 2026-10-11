@@ -61,46 +61,31 @@ int main() {
     row.applyYogaLayout();
 
     auto *card = row.findViewByName("chartListContentCard");
-    auto *banner = dynamic_cast<ImageView *>(
-        row.findViewByName("chartListBanner"));
-    auto *difficulty = dynamic_cast<TextView *>(
-        row.findViewByName("chartListDifficulty"));
-    auto *keyMode = dynamic_cast<TextView *>(
-        row.findViewByName("chartListKeyMode"));
-    require(card != nullptr && banner != nullptr,
-            "chart row exposes its card and banner background");
-    require(difficulty != nullptr && keyMode != nullptr,
-            "chart row exposes difficulty and key-mode labels");
+    auto *jacket = dynamic_cast<ImageView *>(row.findViewByName("chartListJacket"));
+    auto *difficulty = dynamic_cast<TextView *>(row.findViewByName("chartListDifficulty"));
+    auto *keyMode = dynamic_cast<TextView *>(row.findViewByName("chartListKeyMode"));
+    auto *title = row.findViewByName("chartListTitle");
+    auto *artist = row.findViewByName("chartListArtist");
+    auto *artwork = row.findViewByName("chartListArtwork");
+    require(card && jacket && difficulty && keyMode && title && artist && artwork,
+            "the row exposes its aligned data columns and artwork");
     require(difficulty->fontWeight() == TextView::FontWeight::Bold &&
                 keyMode->fontWeight() == TextView::FontWeight::Bold,
-            "difficulty and key-mode labels use bold text");
-    require(banner->imagePath() == path_t("/charts/first/banner.png"),
-            "chart row binds Folder/Banner through ImageView");
-    require(banner->fade().has_value() &&
-                banner->fade()->direction ==
-                    ImageFadeDirection::LeftToRight &&
-                banner->fade()->strength == 1.0F,
-            "chart banner fades in from left to right at full strength");
-    require(banner->scrimColor().has_value() &&
-                sameColor(*banner->scrimColor(), Color(5, 10, 18, 144)),
-            "dark chart banner uses the readability scrim");
-    ui_theme::setActiveMode(ui_theme::ThemeMode::Light);
-    row.propagateThemeChange();
-    require(banner->scrimColor().has_value() &&
-                sameColor(*banner->scrimColor(),
-                          Color(255, 255, 255, 168)),
-            "chart banner scrim follows the active light theme");
-    ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
-    row.propagateThemeChange();
-    require(banner->getWidth() == 368 &&
-                banner->getX() + banner->getWidth() ==
-                    card->getX() + card->getWidth() - 1 &&
-                banner->getY() == card->getY() + 1,
-            "chart banner is inset and anchored to the card right edge");
-    require(!card->getChildren().empty() &&
-                card->getChildren().front() == banner,
-            "chart banner renders behind row content");
-
+            "table difficulty and key mode retain clear typographic hierarchy");
+    require(jacket->imagePath() == path_t("/charts/first/banner.png"),
+            "banner artwork is a thumbnail fallback when a stage image is absent");
+    require(artwork->getWidth() == 72 && artwork->getHeight() == 72 &&
+                artist->getX() >= title->getX() + title->getWidth() &&
+                difficulty->getX() >= artist->getX() + artist->getWidth(),
+            "desktop rows have square thumbnails and separate title, artist, and difficulty columns");
+    row.setDisplayIndex(2);
+    require(static_cast<TextView *>(row.findViewByName("chartListNumber"))->getText() == "03",
+            "row numbering follows the displayed result order");
+    record.meta.StageFile = "stage.png";
+    row.setMeta(record);
+    require(jacket->imagePath() == path_t("/charts/first/stage.png"),
+            "stage artwork takes priority over a banner");
+    record.meta.StageFile.clear();
     for (const auto mode : {ui_theme::ThemeMode::Light, ui_theme::ThemeMode::Dark}) {
       ui_theme::setActiveMode(mode);
       row.propagateThemeChange();
@@ -112,13 +97,12 @@ int main() {
       require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 1,
               "clear lamps retain a contrasting outline on the selected surface");
       const auto color = difficulty->currentColor();
-      const auto expected = main_menu_theme::selectedAccent();
+      const auto expected = main_menu_theme::onAction();
       require(difficulty->getText() == record.difficultyTableLabels &&
                   color.r == expected.r && color.g == expected.g && color.b == expected.b,
               "selected table units stay verbatim and readable in both themes");
-      require(!banner->getVisible(), "selection contrast is independent of banner artwork");
       row.onUnselected();
-      require(banner->getVisible(), "deselecting restores banner presentation");
+      require(jacket->getVisible(), "selection retains the dedicated thumbnail");
     }
     record.difficultyTableLabels.clear();
 
@@ -178,33 +162,47 @@ int main() {
     }
     require(hasFailingGrade, "a recorded zero EX score displays grade F");
     row.setBestScoreRank(0, 0);
-    require(!rankBadge->getVisible() && bestScore->getText().empty(),
-            "unplayed rows hide the badge and clear the previous score");
+    require(rankBadge->getVisible() && bestScore->getText().empty(),
+            "unplayed rows keep column alignment and clear the previous score");
     row.setBestScoreRank(2451, 2700);
 
+    ChartListItemView initiallyNarrow(0, 0, 620, 100, record);
+    initiallyNarrow.setMeta(record);
+    initiallyNarrow.applyYogaLayout();
+    row.setWidth(620);
+    row.applyYogaLayout();
+    require(artist->getY() >= title->getY() + title->getHeight() &&
+                difficulty->getX() >= title->getX() + title->getWidth(),
+            "narrow rows put the artist under the title without obscuring difficulty");
+    require(row.findViewByName("chartListClearLamp")->getWidth() == 8,
+            "compact rows preserve a visible clear lamp");
+    row.setWidth(964);
+    row.applyYogaLayout();
+    require(artist->getX() >= title->getX() + title->getWidth(),
+            "widening restores the independent artist column");
     record.meta.Banner.clear();
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "rebind without a banner clears recycled image identity");
-    require(!rankBadge->getVisible() && bestScore->getText().empty(),
+    require(rankBadge->getVisible() && bestScore->getText().empty(),
             "recycling a row clears the score before a new best is bound");
 
     record.meta.Banner = "banner.png";
     record.unavailable = true;
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "unavailable rows do not request banner files");
 
     record.unavailable = false;
     record.solidArchive = true;
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "solid archive rows do not request banner files");
 
     record.solidArchive = false;
     record.courseStart = true;
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "course rows do not borrow a chart banner");
   }
 

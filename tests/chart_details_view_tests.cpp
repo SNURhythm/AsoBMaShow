@@ -157,6 +157,32 @@ int main() {
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
     require(view.getHeight() > selectedHeight, "landscape artwork reserves its own space");
+    auto *artwork = view.findViewByName("chartDetailsArtwork");
+    auto *summary = view.findViewByName("chartDetailsSummary");
+    require(artwork && artwork->getWidth() == 472 && artwork->getHeight() == 472 &&
+                summary && summary->getY() > artwork->getY() + artwork->getHeight(),
+            "desktop artwork occupies the hero frame above the chart and best-score summary");
+    require(view.findViewByName("chartDetailsTotal")->getX() < view.findViewByName("chartDetailsNotes")->getX() &&
+                view.findViewByName("chartDetailsNotes")->getX() < view.findViewByName("chartDetailsNoteTypes")->getX() &&
+                view.findViewByName("chartDetailsNoteTypes")->getX() < view.findViewByName("chartDetailsBpm")->getX(),
+            "desktop facts follow the reference's horizontal total, notes, note-type and tempo strip");
+    require(view.findViewByName("chartDetailsDifficulty")->getY() < view.findViewByName("chartDetailsTempo")->getY() &&
+                view.findViewByName("chartDetailsGrade")->getX() > view.findViewByName("chartDetailsChartLevel")->getX(),
+            "desktop summary places tempo below difficulty and the best grade on the right");
+    require(text(view, "chartDetailsBestRate") == "90.78%" &&
+                text(view, "chartDetailsTempo") == "BPM 75.5–180   |   2:05",
+            "desktop summary displays percentage without repeating the grade and preserves tempo range");
+    require(!view.findViewByName("chartDetailsExpanded")->getVisible(),
+            "additional metadata begins collapsed to preserve the reference composition");
+    const int collapsedHeight = view.getHeight();
+    view.setExpanded(true);
+    view.applyYogaLayout();
+    require(view.findViewByName("chartDetailsExpanded")->getVisible() && view.getHeight() > collapsedHeight &&
+                text(view, "chartDetailsJudge") == "NORMAL" && text(view, "chartDetailsScore") == "2451 / 2700",
+            "expanding chart details retains judge rank and full cached score information");
+    require(text(view, "chartDetailsGrade") == "AAA",
+            "desktop summary gives the cached best grade its own display");
+
     scroll.setHeight(shortViewportContentHeight);
     scroll.refreshContentLayout();
     scroll.scrollToBottom();
@@ -168,6 +194,13 @@ int main() {
     view.setCompact(true);
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
+
+    require(view.findViewByName("chartDetailsBpm")->getX() < view.findViewByName("chartDetailsJudge")->getX() &&
+                view.findViewByName("chartDetailsLength")->getX() < view.findViewByName("chartDetailsNotes")->getX(),
+            "portrait rotation restores the original metric order in two columns");
+    require(view.findViewByName("chartDetailsBpm")->getY() < view.findViewByName("chartDetailsLength")->getY() &&
+                view.findViewByName("chartDetailsLength")->getY() < view.findViewByName("chartDetailsTotal")->getY(),
+            "portrait rotation restores the original vertical metric row order");
 
     // Selecting non-chart rows must not leave an existing scroll offset past
     // the end of the details now that placeholders preserve their height.
