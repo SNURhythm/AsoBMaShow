@@ -88,3 +88,8 @@ translucent surface fill. Normal fills use alpha 64/255, hover 96/255 and
 pressed 128/255 over the existing selector backdrop, preserving visible
 interaction feedback. Desktop build and the three affected CTest targets
 (chart-list, chart-details and UI-scale) passed. No fresh visual capture.
+
+Chart-list level badges now use the details panel's blue action fill and white
+foreground in dark mode as well as light mode, including selected rows. The
+existing theme regression expectation was updated to white text. Desktop build,
+chart-list and UI-scale tests passed. No fresh visual capture.

@@ -100,7 +100,7 @@ int main() {
       require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 0,
               "clear lamps have no hard border on the selected surface");
       const auto color = difficulty->currentColor();
-      const auto expected = main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::selectedAccent();
+      const auto expected = main_menu_theme::onAction();
       require(difficulty->getText() == record.difficultyTableLabels &&
                   color.r == expected.r && color.g == expected.g && color.b == expected.b,
               "selected table units stay verbatim and readable in both themes");

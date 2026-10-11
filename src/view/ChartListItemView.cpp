@@ -125,8 +125,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = rowText("chartListDifficulty", 27, 44, TextView::FontWeight::Bold);
   levelView->setAlign(TextView::RIGHT);
   levelView->setAlignSelf(YGAlignFlexEnd)->setPadding(Edge::Left, kLevelPadding)->setPadding(Edge::Right, kLevelPadding);
-  levelView->setThemedBackgroundColor([] { return main_menu_theme::light() ? main_menu_theme::action() : Color(0, 0, 0, 0); });
-  levelView->setThemedColor([] { return main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::accent(); });
+  levelView->setThemedBackgroundColor(main_menu_theme::action);
+  levelView->setThemedColor(main_menu_theme::onAction);
   detailsLayout->addView(levelView);
   keyModeView = rowText("chartListKeyMode", 17, 24, TextView::FontWeight::Bold);
   keyModeView->setAlign(TextView::RIGHT);
@@ -352,10 +352,7 @@ void ChartListItemView::onUnselected() {
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
-  levelView->setThemedColor([selected] {
-    return main_menu_theme::light() ? main_menu_theme::onAction() :
-        selected ? main_menu_theme::selectedAccent() : main_menu_theme::accent();
-  });
+  levelView->setThemedColor(main_menu_theme::onAction);
   titleView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
   artistView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
   titleView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::ink);
