@@ -70,8 +70,9 @@ GOOD uses a soft mint pulse. BAD fragments rise, POOR fragments fall, and
 KPOOR uses a subdued violet ripple. No external skin artwork is required.
 
 Settings → Timing → Judgement feedback → Keybombs and the built-in preview's
-HUD controls expose a judgement selector, visibility, size (25–300%), and
-opacity (0–100%). Each judgement is independent, and landscape/portrait
+HUD controls expose a judgement selector, visibility, size (25–300%),
+opacity (0–100%), and color presets, picker, and hex input. Reset color restores
+the original palette for that judgement. Each judgement is independent, and landscape/portrait
 presentations retain separate settings. The preview's random timing mode
 exercises poorer judgements as well as successful hits.
 
@@ -82,10 +83,15 @@ callbacks. The render side samples both effects once per lane, generates
 bounded geometry, and submits batches. The newest judgement replaces a lane's
 previous burst. Empty presses/releases preserve it, reset clears it, and the
 visual clock controls expiry in live play, autoplay, preview, and replay.
+Holding an LN, CN, or HCN sustains a pulsing glow with staggered, rotating sparks
+using the selected judgement style. Release, a broken hold, or reaching the tail
+stops the continuous emitter; HCN regrabs restart it. The short judgement burst
+retains its own lifetime. Holds without a head judgement use the PGREAT style.
+The emitter reuses render traversal and fixed geometry, with no extra input work.
 Beams can be disabled independently. Custom skins keep their own effects.
 
 `lane_effects_tests` checks coherent publication, zero producer allocations,
-geometry, expiry, and style controls. The captured-state and headless Metal
+geometry, expiry, moving hold particles, and style controls. The captured-state and headless Metal
 renderer tests cover misses, preview/replay handoffs, reset, and actual pixels.
 These checks do not replace performance measurements on a mobile device.
 

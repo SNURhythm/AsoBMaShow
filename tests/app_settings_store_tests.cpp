@@ -2713,8 +2713,9 @@ void testKeybombSettingsPersist() {
   expect(AppSettingsStore::Save(path, AppSettings{}, error), "save keybomb defaults");
   auto document = nlohmann::json::parse(readFile(path));
   document["presentations"]["landscape"]["keybombs"] = {
-      {"PGREAT", {{"visible", false}, {"sizePercent", 175}, {"opacityPercent", 35}}},
-      {"POOR", {{"visible", true}, {"sizePercent", 999}, {"opacityPercent", -1}}}};
+      {"PGREAT", {{"visible", false}, {"sizePercent", 175}, {"opacityPercent", 35}, {"color", "E83FA0"}}},
+      {"POOR", {{"visible", true}, {"sizePercent", 999}, {"opacityPercent", -1}}},
+      {"GREAT", {{"color", "not-a-color"}}}, {"GOOD", {{"color", 42}}}};
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
   expect(AppSettingsStore::Save(path, loaded.settings, error), "save loaded keybombs");
@@ -2724,7 +2725,9 @@ void testKeybombSettingsPersist() {
   if (!landscape.contains("keybombs")) return;
   const auto &bombs = landscape["keybombs"];
   expect(bombs["PGREAT"] == document["presentations"]["landscape"]["keybombs"]["PGREAT"],
-         "visibility, size and opacity persist independently per judgement");
+         "visibility, size, opacity and custom color persist independently per judgement");
+  expect(!bombs["GREAT"].contains("color") && !bombs["GOOD"].contains("color"),
+         "malformed keybomb colors retain their default palettes");
   expect(bombs["POOR"]["sizePercent"] == 300 && bombs["POOR"]["opacityPercent"] == 0,
          "keybomb size and opacity are bounded");
   expect(saved["presentations"]["portrait"]["keybombs"]["PGREAT"]["visible"] == true,

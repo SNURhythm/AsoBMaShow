@@ -125,6 +125,7 @@ private:
   void appendBuiltInLanePercentControl(View *body, const settings_scene::LayoutMetrics &metrics,
       int keyMode, const i18n::Text &label, int built_in_lane::Style::*property,
       const i18n::Text &resetLabel);
+  void appendKeybombColorControls(View *body, const settings_scene::LayoutMetrics &metrics, Judgement judgement);
   void appendBuiltInJudgeLineControls(View *body, const settings_scene::LayoutMetrics &metrics, int keyMode);
   SceneReturnTarget returnTarget_;
   enum class SettingsTab {

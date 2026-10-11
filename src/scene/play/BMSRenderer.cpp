@@ -624,6 +624,7 @@ BMSRenderer::BMSRenderer(
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
   laneStateSnapshot.reserve(laneOrder.size());
+  longHoldEffectsByOrder.resize(laneOrder.size());
   whiteKeyLaneIndices.reserve(laneOrder.size());
   blueKeyLaneIndices.reserve(laneOrder.size());
   scratchLaneIndices.reserve(2);
@@ -1874,11 +1875,17 @@ void BMSRenderer::recordCharacterizationSubmission(
 }
 #endif
 
+void BMSRenderer::markLongHoldEffect(int lane, bool active, long long tailMicros) {
+  if (!active || currentRenderMicros >= tailMicros) return;
+  const auto found = laneToOrderIndex.find(lane);
+  if (found != laneToOrderIndex.end()) longHoldEffectsByOrder[found->second] = true;
+}
+
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
     bool renderBudgetReserved) {
-  if (!renderBudgetReserved || head == nullptr || head->Timeline == nullptr ||
+  if (head == nullptr || head->Timeline == nullptr ||
       head->Tail == nullptr || head->Tail->Timeline == nullptr) {
     return;
   }
@@ -1893,6 +1900,11 @@ void BMSRenderer::drawLongNote(
     return;
   const bool isClassicLongNote = effectiveLongNoteIsClassic(head, chart);
   const bool isHellCharge = effectiveLongNoteIsHellCharge(head, chart);
+  markLongHoldEffect(head->Lane,
+      head->IsHolding || (isHellCharge && currentRenderMicros >= head->Timeline->Timing &&
+                         laneIsCurrentlyPressed(head->Lane)),
+      head->Tail->Timeline->Timing);
+  if (!renderBudgetReserved) return;
   const auto headType = isHellCharge ? NoteType::HellHead : NoteType::LongHead;
   const auto tailType = isHellCharge ? NoteType::HellTail : NoteType::LongTail;
   const float headRenderY =
@@ -2964,6 +2976,7 @@ void BMSRenderer::renderFrame(
   const long long chartTimeMicros =
       gameplay_scroll_geometry::chartRenderTimeMicros(micro);
   currentRenderMicros = micro;
+  std::fill(longHoldEffectsByOrder.begin(), longHoldEffectsByOrder.end(), false);
   applyPendingHudText(micro);
   updateJudgementCounterText();
 
@@ -3283,6 +3296,12 @@ void BMSRenderer::renderFrame(
           !longNote.tailReleasedEarly) {
         return;
       }
+      const int lane = rendererLaneFor(longNote.lane);
+      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
+      markLongHoldEffect(lane,
+          longNote.active || (isHellCharge && currentRenderMicros >= longNote.headTimeMicros &&
+                              laneIsCurrentlyPressed(lane)),
+          longNote.tailTimeMicros);
       if (!chartEntityRenderBudget.tryConsume(
               gameplay_chart_entity_render_budget::kLongNoteReservationCost)) {
         return;
@@ -3292,9 +3311,7 @@ void BMSRenderer::renderFrame(
       if (!std::isfinite(headY) || !std::isfinite(tailY)) {
         return;
       }
-      const int lane = rendererLaneFor(longNote.lane);
       const bool isClassicLongNote = longNote.mode == ChartLongNoteMode::LN;
-      const bool isHellCharge = longNote.mode == ChartLongNoteMode::HCN;
       const auto headType = isHellCharge ? NoteType::HellHead : NoteType::LongHead;
       const auto tailType = isHellCharge ? NoteType::HellTail : NoteType::LongTail;
       const float legacyHeadY =
@@ -3752,10 +3769,14 @@ void BMSRenderer::renderFrame(
         built_in_judge_line::height(noteRenderWidth, builtInJudgeLine) * 0.5F;
     for (const auto &[lane, effects] : laneStateSnapshot) {
       if (emptyScratchLaneHidden && lane == 7) continue;
-      if (!keybomb::valid(effects.keybomb.judgement)) continue;
+      const float x = laneToX(lane) + noteRenderWidth * 0.5F;
+      const auto judgement = keybomb::valid(effects.keybomb.judgement)
+          ? effects.keybomb.judgement : PGreat;
       keybomb::draw(simpleBatchRenderer, effects.keybomb, nowMicros,
-                    laneToX(lane) + noteRenderWidth * 0.5F, keybombY, noteRenderWidth,
-                    keybombs[effects.keybomb.judgement]);
+                    x, keybombY, noteRenderWidth, keybombs[judgement]);
+      if (effects.isPressed && longHoldEffectsByOrder[laneToOrderIndex.at(lane)])
+        keybomb::drawHold(simpleBatchRenderer, judgement, nowMicros,
+                          x, keybombY, noteRenderWidth, keybombs[judgement]);
     }
     simpleBatchRenderer.flush();
   }

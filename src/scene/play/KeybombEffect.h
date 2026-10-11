@@ -28,10 +28,7 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
   const float radius = laneWidth * style.sizePercent / 100.0F *
       (perfect ? 0.82F : great ? 0.70F : good ? 0.52F : 0.42F);
   const float opacity = style.opacityPercent / 100.0F;
-  // ABGR: ice-blue prism, gold, mint, coral, muted red, violet.
-  const std::uint32_t rgb = perfect ? 0x00FFE8A0 : great ? 0x006EDCFF :
-      good ? 0x00B2E39C : event.judgement == Bad ? 0x007892F0 :
-      event.judgement == Poor ? 0x00626CC2 : 0x00BE87A1;
+  const std::uint32_t rgb = effectColor(event.judgement, style);
   const auto color = [&](std::uint32_t base, float alpha) {
     return base | (static_cast<std::uint32_t>(std::clamp(alpha * opacity, 0.0F, 255.0F)) << 24);
   };
@@ -98,6 +95,49 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
       batch.addLine(x, y - core * 2.5F, x, y + core * 2.5F,
                     core * 0.35F, color(0x00FFFFFF, 200 * fade));
     }
+  }
+}
+// A continuous emitter, evaluated only while the renderer sees an active hold.
+// Staggered particle ages keep sparks moving without creating input-side events.
+template <typename Batch>
+void drawHold(Batch &batch, Judgement judgement, long long now,
+              float x, float y, float laneWidth, Style style) {
+  style = sanitize(style);
+  if (!valid(judgement) || !style.visible || style.opacityPercent == 0 || laneWidth <= 0) return;
+  const auto rgb = effectColor(judgement, style);
+  const float opacity = style.opacityPercent / 100.0F;
+  const float radius = laneWidth * style.sizePercent / 100.0F * 0.65F;
+  // Reduce before float conversion to preserve motion throughout long sessions.
+  const float phase = static_cast<float>((now % 2'400'000 + 2'400'000) % 2'400'000) / 2'400'000.0F;
+  const float angle = phase * 2 * std::numbers::pi_v<float>;
+  const float pulse = 0.75F + 0.25F * std::sin(angle * 4);
+  const auto color = [&](float alpha) {
+    return rgb | (static_cast<std::uint32_t>(std::clamp(alpha * opacity, 0.0F, 255.0F)) << 24);
+  };
+  const float glowRadius = radius * (0.36F + pulse * 0.12F);
+  for (int i = 0; i < 32; ++i) {
+    const float a = 2 * std::numbers::pi_v<float> * i / 32;
+    const float b = 2 * std::numbers::pi_v<float> * (i + 1) / 32;
+    batch.addTriangleColors(x, y, x + std::cos(a) * glowRadius, y + std::sin(a) * glowRadius,
+                            x + std::cos(b) * glowRadius, y + std::sin(b) * glowRadius,
+                            color(140 * pulse), rgb, rgb);
+  }
+  for (int i = 0; i < 8; ++i) {
+    const float age = std::fmod(phase * 4 + i / 8.0F, 1.0F);
+    const float a = 2 * std::numbers::pi_v<float> * i / 8 + angle;
+    const float dx = std::cos(a), dy = std::sin(a);
+    const float distance = radius * (0.15F + age * 1.15F);
+    const float cx = x + dx * distance;
+    const float cy = y + dy * distance + radius * age * age * 0.5F;
+    const float length = radius * (0.05F + (1 - age) * 0.10F);
+    const float width = radius * 0.035F * (1 - age);
+    const auto c = color(230 * std::sin(age * std::numbers::pi_v<float>));
+    batch.addTriangle(cx + dx * length, cy + dy * length,
+                      cx - dy * width, cy + dx * width,
+                      cx + dy * width, cy - dx * width, c);
+    batch.addTriangle(cx - dx * length, cy - dy * length,
+                      cx - dy * width, cy + dx * width,
+                      cx + dy * width, cy - dx * width, c);
   }
 }
 } // namespace keybomb

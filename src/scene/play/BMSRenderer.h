@@ -247,6 +247,8 @@ private:
   std::vector<AtomicLaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
+  std::vector<bool> longHoldEffectsByOrder; // Render-side only, reused every frame.
+  void markLongHoldEffect(int lane, bool active, long long tailMicros);
   std::vector<float> laneXLookup;
   std::vector<size_t> whiteKeyLaneIndices;
   std::vector<size_t> blueKeyLaneIndices;

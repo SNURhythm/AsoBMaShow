@@ -1416,6 +1416,45 @@ void SettingsScene::appendBuiltInNoteControls(
   body->addView(steps);
 }
 
+void SettingsScene::appendKeybombColorControls(
+    View *body, const LayoutMetrics &metrics, Judgement judgement) {
+  const auto style = context.settings.presentation().keybombs[judgement];
+  const auto color = keybomb::resolvedColor(judgement, style);
+  const auto apply = [this, judgement](std::optional<std::uint32_t> rgb) {
+    context.settings.presentation().keybombs[judgement].color = rgb;
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  };
+  body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *presets = makeAppearanceColorPresets(metrics, keybomb::defaultColor(judgement),
+      color, [apply](std::uint32_t rgb) { apply(rgb); });
+  body->addView(presets);
+  appendAppearanceColorPicker(presets, metrics, "keybomb-" + std::to_string(judgement), color,
+      {{.label = "", .width = 48, .height = 48}},
+      [apply](std::uint32_t rgb) { apply(rgb); },
+      [this, judgement](std::uint32_t rgb) {
+        appearanceColorPreview = [judgement, rgb](auto &configuration) {
+          configuration.keybombs[judgement].color = rgb;
+        };
+      });
+  body->addView(makeWrappedText(i18n::message("settings.notes.custom_color"),
+                               metrics.smallTextSize, ui_theme::textSecondary()));
+  auto *input = makeTextInput(metrics, 140);
+  input->setEditingText("#" + built_in_notes::colorHex(color));
+  input->onEditingFinished([this, apply](const std::string &text) {
+    if (const auto rgb = built_in_notes::parseColor(text)) apply(*rgb);
+    else lastLayoutWidth = -1;
+  });
+  body->addView(input);
+  auto *reset = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.notes.reset_color"), metrics.smallTextSize,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  reset->setOnClickListener([apply] { apply(std::nullopt); });
+  body->addView(reset);
+}
+
 void SettingsScene::appendBuiltInJudgeLineControls(
     View *body, const LayoutMetrics &metrics, int keyMode) {
   if (keyMode == -5 && context.settings.presentation().skin.follow5K1S) keyMode = 5;

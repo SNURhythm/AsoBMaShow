@@ -1113,6 +1113,7 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool pre
     row->addView(reset);
     body->addView(row);
   };
+  appendKeybombColorControls(body, metrics, judgement);
   appendPercent(i18n::message("settings.keybomb.size"), &keybomb::Style::sizePercent, 25, 300);
   appendPercent(i18n::message("settings.lane_background.opacity"), &keybomb::Style::opacityPercent, 0, 100);
   return body;

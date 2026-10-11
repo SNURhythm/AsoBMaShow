@@ -10,8 +10,12 @@ struct Geometry {
   int count = 0;
   int gradientTriangles = 0;
   float extent = 0;
+  double motion = 0;
+  unsigned firstColor = 0;
   unsigned maxAlpha = 0;
   void point(float x, float y, unsigned color) {
+    if (firstColor == 0) firstColor = color;
+    motion += x * x + y * y;
     assert(std::isfinite(x) && std::isfinite(y));
     extent = std::max(extent, std::max(std::abs(x - 10), std::abs(y - 20)));
     maxAlpha = std::max(maxAlpha, color >> 24);
@@ -58,8 +62,29 @@ void testGeometry() {
   }
 }
 
+void testHoldGeometry() {
+  Geometry a, b, paused, large, dim, hidden, zero;
+  const keybomb::Style pink{true, 100, 100, 0xE83FA0};
+  keybomb::drawHold(a, PGreat, 2'000'000, 10, 20, 2, pink);
+  keybomb::drawHold(b, PGreat, 2'080'000, 10, 20, 2, pink);
+  keybomb::drawHold(paused, PGreat, 2'000'000, 10, 20, 2, pink);
+  keybomb::drawHold(large, PGreat, 2'000'000, 10, 20, 2, {true, 200, 100});
+  keybomb::drawHold(dim, PGreat, 2'000'000, 10, 20, 2, {true, 100, 25});
+  keybomb::drawHold(hidden, PGreat, 2'000'000, 10, 20, 2, {false, 100, 100});
+  keybomb::drawHold(zero, PGreat, 2'000'000, 10, 20, 2, {true, 100, 0});
+  assert(a.count > 0 && a.count < 100 && a.count == b.count);
+  assert(a.motion != b.motion && a.motion == paused.motion);
+  assert((a.firstColor & 0xFFFFFFU) == 0xA03FE8);
+  assert(std::abs(large.extent - a.extent * 2) < 0.001F);
+  assert(dim.maxAlpha < a.maxAlpha && hidden.count == 0 && zero.count == 0);
+  Geometry burst;
+  keybomb::draw(burst, {PGreat, 0}, 80000, 10, 20, 2, pink);
+  assert((burst.firstColor & 0xFFFFFFU) == 0xA03FE8);
+}
+
 int main() {
   testGeometry();
+  testHoldGeometry();
   AtomicLaneState lane;
   {
     graph_test::AllocationGuard guard;

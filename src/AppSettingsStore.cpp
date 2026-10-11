@@ -658,6 +658,7 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
     const auto style = keybomb::sanitize(settings.keybombs[option.judgement]);
     keybombs[option.label] = {{"visible", style.visible}, {"sizePercent", style.sizePercent},
                             {"opacityPercent", style.opacityPercent}};
+    if (style.color) keybombs[option.label]["color"] = built_in_notes::colorHex(*style.color);
   }
   json judgementVisibility = json::object();
   for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
@@ -909,6 +910,12 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
         readValue(*entry, "visible", style.visible, diagnostics);
         readValue(*entry, "sizePercent", style.sizePercent, diagnostics);
         readValue(*entry, "opacityPercent", style.opacityPercent, diagnostics);
+        if (const auto color = entry->find("color"); color != entry->end()) {
+          const auto rgb = color->is_string()
+              ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
+          if (rgb) style.color = *rgb;
+          else invalidValue("keybombs.color", "expected six-digit RGB color", diagnostics);
+        }
         style = keybomb::sanitize(style);
       }
     } else {
