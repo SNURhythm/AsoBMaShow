@@ -177,45 +177,38 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   const float barY = indicatorLayout.centerY - indicatorLayout.barHeight * 0.5f;
   const float markerY =
       indicatorLayout.centerY - indicatorLayout.markerHeight * 0.5f;
-  const float outline = indicatorLayout.markerWidth * 0.5f;
-
-  // Back the entire hit-marker area so bright notes cannot wash out the ticks.
-  addRect(batch, indicatorLayout.width + outline * 2.0f,
-          indicatorLayout.markerHeight + outline * 2.0f,
-          indicatorLayout.x - outline, markerY - outline,
-          Color(8, 12, 18, 210));
+  // Keep the horizontal reference subtle so the vertical hit markers stand out.
+  addRect(batch, indicatorLayout.width, indicatorLayout.barHeight,
+          indicatorLayout.x, barY, Color(8, 12, 18, 32));
   drawSegment(batch, -currentRangeMicros, timingWindowEarly(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 190));
+              judgementColor(Poor, 64));
   drawSegment(batch, timingWindowEarly(Bad), timingWindowEarly(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 195));
+              judgementColor(Bad, 72));
   drawSegment(batch, timingWindowEarly(Good), timingWindowEarly(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 200));
+              judgementColor(Good, 80));
   drawSegment(batch, timingWindowEarly(Great), timingWindowEarly(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 210));
+              judgementColor(Great, 88));
   drawSegment(batch, timingWindowEarly(PGreat), timingWindowLate(PGreat),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(PGreat, 230));
+              judgementColor(PGreat, 104));
   drawSegment(batch, timingWindowLate(PGreat), timingWindowLate(Great),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Great, 210));
+              judgementColor(Great, 88));
   drawSegment(batch, timingWindowLate(Great), timingWindowLate(Good),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Good, 200));
+              judgementColor(Good, 80));
   drawSegment(batch, timingWindowLate(Good), timingWindowLate(Bad),
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Bad, 195));
+              judgementColor(Bad, 72));
   drawSegment(batch, timingWindowLate(Bad), currentRangeMicros,
               currentRangeMicros, indicatorLayout, barY,
-              judgementColor(Poor, 190));
+              judgementColor(Poor, 64));
 
   const float centerX = indicatorLayout.x + indicatorLayout.width * 0.5f;
-  addRect(batch, indicatorLayout.markerWidth + outline * 2.0f,
-          indicatorLayout.markerHeight, centerX - indicatorLayout.markerWidth,
-          markerY, Color(0, 0, 0, 255));
   addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
           centerX - indicatorLayout.markerWidth * 0.5f, markerY,
           Color(255, 255, 255, 230));
@@ -233,43 +226,24 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
     }
     const float x =
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
-    addRect(batch, indicatorLayout.markerWidth + outline * 2.0f,
-            indicatorLayout.markerHeight + outline * 2.0f,
-            x - indicatorLayout.markerWidth * 0.5f - outline,
-            markerY - outline, Color(0, 0, 0, alphaByte(alpha)));
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
             judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
   }
 
-  // Caps remain visible even when many recent hits overlap the zero line.
-  const float capWidth = indicatorLayout.markerWidth * 3.0f;
-  for (const float y : {markerY - outline * 2.0f,
-                        markerY + indicatorLayout.markerHeight}) {
-    addRect(batch, capWidth + outline * 2.0f, outline * 4.0f,
-            centerX - capWidth * 0.5f - outline, y - outline,
-            Color(0, 0, 0, 255));
-    addRect(batch, capWidth, outline * 2.0f,
-            centerX - capWidth * 0.5f, y, Color(255, 255, 255, 255));
-  }
-
   if (average.count() > 0) {
     const float x =
         offsetToX(average.value(), currentRangeMicros, indicatorLayout);
-    // Keep the average below the history, with a distinct shape and an outline.
+    // Keep the average below the history, with a distinct shape.
     const float down = currentHudMode || geometry.verticalDirection < 0.0f
                            ? 1.0f : -1.0f;
     const float tipY = indicatorLayout.centerY +
-        down * (indicatorLayout.markerHeight * 0.5f + outline * 4.0f);
-    const float pointerSize = indicatorLayout.markerWidth * 3.0f;
+        down * (indicatorLayout.markerHeight * 0.5f +
+                indicatorLayout.markerWidth * 2.0f);
+    const float pointerSize = indicatorLayout.markerWidth * 2.0f;
     batch.addTriangle(x, tipY, x - pointerSize,
                       tipY + down * pointerSize, x + pointerSize,
-                      tipY + down * pointerSize, Color(0, 0, 0, 255).toABGR());
-    batch.addTriangle(x, tipY + down * outline * 1.5f,
-                      x - pointerSize + outline * 2.0f,
-                      tipY + down * (pointerSize - outline),
-                      x + pointerSize - outline * 2.0f,
-                      tipY + down * (pointerSize - outline),
+                      tipY + down * pointerSize,
                       Color(255, 235, 110, 255).toABGR());
   }
 }
@@ -333,7 +307,7 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
     indicatorLayout.centerY =
         static_cast<float>(rendering::window_height) * (1.0f - normalizedY);
     const float verticalMargin = indicatorLayout.markerHeight * 0.5f +
-                                 indicatorLayout.markerWidth * 5.0f;
+                                 indicatorLayout.markerWidth * 4.0f;
     indicatorLayout.centerY =
         std::clamp(indicatorLayout.centerY,
                    verticalMargin,
