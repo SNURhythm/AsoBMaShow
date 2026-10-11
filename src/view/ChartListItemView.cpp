@@ -15,8 +15,12 @@
 
 namespace {
 constexpr int kArtworkWidth = 72;
+constexpr int kRowPadding = 12;
+constexpr int kColumnGap = 12;
+constexpr int kTitleMinimumWidth = 120;
 constexpr int kDifficultyColumnWidth = 86;
 constexpr int kBestWidth = 86;
+constexpr int kCompactBestWidth = 76;
 constexpr int kFavoriteWidth = 40;
 constexpr const char *kUiFont = main_menu_theme::font;
 
@@ -69,7 +73,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   contentCard->setName("chartListContentCard");
   contentCard->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
   contentCard->setHeight(height - 1)->setFlexShrink(0);
-  contentCard->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12)->setGap(12);
+  contentCard->setPadding(Edge::Left, kRowPadding)->setPadding(Edge::Right, kRowPadding)->setGap(kColumnGap);
   addView(contentCard);
   auto *rule = new View();
   rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(main_menu_theme::rule);
@@ -110,16 +114,14 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
 
   detailsLayout = new View();
   detailsLayout->setWidth(kDifficultyColumnWidth)->setFlexShrink(0);
-  detailsLayout->setAlignItems(YGAlignCenter)->setGap(3);
+  detailsLayout->setAlignItems(YGAlignStretch)->setGap(3);
   levelView = rowText("chartListDifficulty", 27, 44, TextView::FontWeight::Bold);
-  levelView->setWidth(kDifficultyColumnWidth - 12);
-  levelView->setAlign(TextView::CENTER);
+  levelView->setAlign(TextView::RIGHT);
   levelView->setThemedBackgroundColor([] { return main_menu_theme::light() ? main_menu_theme::action() : Color(0, 0, 0, 0); });
   levelView->setThemedColor([] { return main_menu_theme::light() ? main_menu_theme::onAction() : main_menu_theme::accent(); });
   detailsLayout->addView(levelView);
   keyModeView = rowText("chartListKeyMode", 17, 24, TextView::FontWeight::Bold);
-  keyModeView->setWidth(kDifficultyColumnWidth);
-  keyModeView->setAlign(TextView::CENTER);
+  keyModeView->setAlign(TextView::RIGHT);
   detailsLayout->addView(keyModeView);
   contentCard->addView(detailsLayout);
 
@@ -134,6 +136,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   contentCard->addView(scoreRankColumn);
 
   favoriteButton = new Button();
+  favoriteButton->setName("chartListFavorite");
   favoriteButton->setWidth(kFavoriteWidth)->setHeight(56)->setFlexShrink(0);
   favoriteButton->setThemedBackgroundColors(
       [] { return Color(0, 0, 0, 0); }, main_menu_theme::hover, main_menu_theme::pressed);
@@ -170,10 +173,26 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
 void ChartListItemView::onLayout() {
   View::onLayout();
   const bool compact = getWidth() < 840;
-  if (compact == compact_) return;
-  compact_ = compact;
   View::LayoutBatchScope batch;
-  scoreRankColumn->setWidth(compact ? 76 : kBestWidth);
+  if (compact != compact_) {
+    compact_ = compact;
+    scoreRankColumn->setWidth(compact ? kCompactBestWidth : kBestWidth);
+  }
+  refreshColumnWidths();
+}
+
+void ChartListItemView::refreshColumnWidths() {
+  const int availableWidth = std::max(0, getWidth() - 2 * kRowPadding -
+      4 * kColumnGap - kArtworkWidth - kFavoriteWidth -
+      (compact_ ? kCompactBestWidth : kBestWidth));
+  const int titleMinimum = std::min(kTitleMinimumWidth, availableWidth / 2);
+  const int difficultyWidth = std::min(desiredDifficultyWidth_, availableWidth - titleMinimum);
+  if (difficultyWidth == appliedDifficultyWidth_ && titleMinimum == appliedTitleMinimumWidth_) return;
+  appliedDifficultyWidth_ = difficultyWidth;
+  appliedTitleMinimumWidth_ = titleMinimum;
+  View::LayoutBatchScope batch;
+  detailsLayout->setWidth(difficultyWidth);
+  textLayout->setMinWidth(titleMinimum);
 }
 
 void ChartListItemView::setMeta(const ChartMetaRecord &record,
@@ -210,6 +229,10 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
     keyModeView->setLocalizedText(unavailable ? i18n::message("library.chart.missing.badge")
                                      : keyModeDescription(meta));
   }
+  desiredDifficultyWidth_ = std::max({kDifficultyColumnWidth,
+      levelView->measureTextWidth(levelView->getText()) + 12,
+      keyModeView->measureTextWidth(keyModeView->getText())});
+  refreshColumnWidths();
   const auto artwork = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
   const bool hasArtwork = !record.courseStart && !unavailable && !solidArchive && !artwork.empty();
   artworkPlaceholder->setVisible(!hasArtwork);

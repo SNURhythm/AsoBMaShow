@@ -52,6 +52,7 @@ int main() {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
     ChartMetaRecord record;
     record.meta.Folder = "/charts/first";
+    record.meta.BmsPath = "/charts/first/song.bms";
     record.meta.Banner = "banner.png";
     record.meta.Title = "Banner Song";
     record.meta.Artist = "Banner Artist";
@@ -107,6 +108,25 @@ int main() {
       require(jacket->getVisible(), "selection retains the dedicated thumbnail");
     }
     record.difficultyTableLabels.clear();
+    row.setMeta(record);
+    row.applyYogaLayout();
+    const int shortLevelWidth = difficulty->getWidth();
+    const int difficultyRight = difficulty->getX() + difficulty->getWidth();
+    const int shortTitleWidth = title->getWidth();
+    record.difficultyTableLabels = "sl12 / ★25 / st10";
+    row.setMeta(record);
+    row.applyYogaLayout();
+    require(difficulty->getWidth() >= difficulty->measureTextWidth(difficulty->getText()) &&
+                difficulty->getWidth() > shortLevelWidth &&
+                difficulty->getX() + difficulty->getWidth() == difficultyRight &&
+                keyMode->getX() + keyMode->getWidth() == difficultyRight &&
+                title->getWidth() < shortTitleWidth,
+            "long difficulty units expand left without clipping or moving the right-aligned key mode");
+    record.difficultyTableLabels.clear();
+    row.setMeta(record);
+    row.applyYogaLayout();
+    require(difficulty->getWidth() == shortLevelWidth && title->getWidth() == shortTitleWidth,
+            "recycled short levels return space to the title column");
 
     for (const int keys : {5, 7}) {
       record.meta.KeyMode = keys;
@@ -186,6 +206,30 @@ int main() {
     require(leftLamp->getX() < artwork->getX() &&
                 leftLamp->getHeight() > leftLamp->getWidth(),
             "rotation keeps the clear lamp at the leading edge");
+    record.difficultyTableLabels = "sl12 / ★25 / st10 / ◆12 / sl15 / ★24 / st11 / sl13 / ★22 / st9 / ◆15";
+    row.setMeta(record);
+    row.applyYogaLayout();
+    const int wideDifficultyWidth = difficulty->getWidth();
+    auto *favorite = row.findViewByName("chartListFavorite");
+    require(favorite && favorite->getVisible(), "playable rows retain their favorite action");
+    for (const int width : {620, 420, 780, 620}) {
+      row.setWidth(width);
+      row.applyYogaLayout();
+      require(difficulty->getX() >= title->getX() + title->getWidth() && title->getWidth() >= 80 &&
+                  rankBadge->getX() >= difficulty->getX() + difficulty->getWidth() &&
+                  favorite->getX() >= rankBadge->getX() + rankBadge->getWidth() &&
+                  favorite->getX() + favorite->getWidth() <= row.getX() + row.getWidth(),
+              "long multi-table labels preserve title space and keep score and favorite inside narrow rows");
+      require(difficulty->getWidth() < wideDifficultyWidth,
+              "difficulty width adapts to resizing within the compact breakpoint");
+      require(difficulty->getText() == record.difficultyTableLabels,
+              "width caps retain the full difficulty label for marquee scrolling");
+    }
+    row.setWidth(964);
+    row.applyYogaLayout();
+    require(difficulty->getWidth() == wideDifficultyWidth,
+            "widening restores the desired difficulty width without rebinding metadata");
+    record.difficultyTableLabels.clear();
     record.meta.Banner.clear();
     row.setMeta(record);
     require(jacket->imagePath().empty(),

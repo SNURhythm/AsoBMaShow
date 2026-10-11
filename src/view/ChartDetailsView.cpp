@@ -154,27 +154,6 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   titleRow_->addView(title_);
   titleActions_ = new View();
   titleActions_->setFlexDirection(FlexDirection::Row)->setGap(6)->setFlexShrink(0);
-  favoriteButton_ = new Button(0, 0, 38, 44);
-  favoriteButton_->setName("chartDetailsFavorite");
-  auto *favoriteContent = new View();
-  favoriteContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
-  auto star = [](const char *font) {
-    auto *icon = new TextView(font, 27);
-    icon->setText(ui_icons::textForCodepoint(0xf005));
-    icon->setWidth(36)->setHeight(40);
-    icon->setVAlign(TextView::MIDDLE);
-    icon->setAlign(TextView::CENTER);
-    return icon;
-  };
-  favoriteIcon_ = star(ui_icons::kFontAwesomeSolidPath);
-  favoriteIcon_->setThemedColor(main_menu_theme::action);
-  favoriteOutline_ = star("assets/fonts/fa-regular-400.ttf");
-  favoriteOutline_->setThemedColor(main_menu_theme::secondary);
-  favoriteContent->addView(favoriteIcon_);
-  favoriteContent->addView(favoriteOutline_);
-  favoriteButton_->setContentView(favoriteContent);
-  favoriteButton_->setOnClickListener([this] { if (onFavorite_) onFavorite_(!favorite_); });
-  titleActions_->addView(favoriteButton_);
   moreButton_ = new Button(0, 0, 32, 44);
   moreButton_->setName("chartDetailsMore");
   auto *moreIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
@@ -313,36 +292,15 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   addView(summary_);
   visible(summary_, false);
 
-  detailsToggle_ = new Button();
-  detailsToggle_->setName("chartDetailsToggle");
-  detailsToggle_->setHeight(32)->setFlexShrink(0);
-  auto *heading = new View();
-  heading->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(8)->setPadding(Edge::Top, 4);
-  auto *detailsRule = new View();
-  detailsRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Top, 0);
-  detailsRule->setWidthPercent(100)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::rule);
-  heading->addView(detailsRule);
-  disclosure_ = label("", 18, 26);
-  disclosure_->setWidth(16);
-  heading->addView(disclosure_);
-  auto *caption = label("", 18, 26);
-  caption->setLocalizedText(i18n::message("menu.details.chart_details.label"));
-  heading->addView(caption);
-  detailsToggle_->setContentView(heading);
-  detailsToggle_->setOnClickListener([this] { setExpanded(!expanded_); });
-  addView(detailsToggle_);
   expandedFacts_ = new View();
   expandedFacts_->setName("chartDetailsExpanded");
   expandedFacts_->setFlexDirection(FlexDirection::Column)->setGap(8)->setMinWidth(0);
   addView(expandedFacts_);
-  visible(detailsToggle_, false);
   visible(expandedFacts_, false);
   setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
 }
 
-void ChartDetailsView::setActionHandlers(std::function<void(bool)> favorite,
-                                         std::function<void()> more) {
-  onFavorite_ = std::move(favorite);
+void ChartDetailsView::setMoreActionHandler(std::function<void()> more) {
   onMore_ = std::move(more);
 }
 
@@ -351,10 +309,39 @@ void ChartDetailsView::setScoreContainer(View *container) {
   personalBest_->moveTo(container ? *container : compact_ ? *this : *expandedFacts_);
 }
 
-void ChartDetailsView::setExpanded(bool expanded) {
-  expanded_ = expanded;
-  disclosure_->setText(expanded ? "▾" : "▸");
-  visible(expandedFacts_, !compact_ && expanded);
+void ChartDetailsView::onLayout() {
+  View::onLayout();
+  refreshArtworkLayout();
+}
+
+void ChartDetailsView::renderImpl(RenderContext &) {
+  // Async image decodes arrive during ImageView rendering. Observe them on the
+  // next frame, without invalidating layout while the dimensions are unchanged.
+  refreshArtworkLayout();
+}
+
+void ChartDetailsView::refreshArtworkLayout() {
+  if (!artworkFrame_ || !artworkPlaceholder_ || !identity_) return;
+  const bool hasImage = artwork_->getVisible() && artwork_->imageWidth() > 0 &&
+                        artwork_->imageHeight() > 0;
+  const double aspect = hasImage
+      ? static_cast<double>(artwork_->imageWidth()) / artwork_->imageHeight()
+      : 4.0 / 3.0;
+  const int availableWidth = compact_ ? 112 : std::min(472, getWidth() > 0 ? getWidth() : 472);
+  const int width = compact_ && aspect < 1.0
+      ? std::max(1, static_cast<int>(std::lround(112 * aspect))) : availableWidth;
+  const int height = compact_ && aspect < 1.0
+      ? 112 : std::max(1, static_cast<int>(std::lround(width / aspect)));
+  if (width == artworkLayoutWidth_ && height == artworkLayoutHeight_ &&
+      compact_ == artworkLayoutCompact_) return;
+  artworkLayoutWidth_ = width;
+  artworkLayoutHeight_ = height;
+  artworkLayoutCompact_ = compact_;
+  View::LayoutBatchScope batch;
+  artworkFrame_->setWidth(width)->setHeight(height);
+  artwork_->setWidthPercent(100)->setHeight(height);
+  artworkPlaceholder_->setHeight(height);
+  identity_->setHeight(compact_ ? kIdentityHeight : height + 96);
 }
 
 void ChartDetailsView::setCompact(bool compact) {
@@ -363,11 +350,8 @@ void ChartDetailsView::setCompact(bool compact) {
   identity_->setFlexDirection(compact ? FlexDirection::Row : FlexDirection::Column);
   identity_->setAlignItems(compact ? YGAlignCenter : YGAlignStretch);
   identity_->setGap(compact ? 14 : 8);
-  identity_->setHeight(compact ? kIdentityHeight : 568);
-  artworkFrame_->setWidth(compact ? 112 : 472)->setHeight(compact ? 112 : 472);
   artworkFrame_->setAlignSelf(YGAlignCenter);
-  artwork_->setWidthPercent(100)->setHeight(compact ? 112 : 472);
-  artworkPlaceholder_->setHeight(compact ? 112 : 472);
+  refreshArtworkLayout();
   titleRow_->setHeight(compact ? 74 : 56);
   title_->setHeight(compact ? 74 : 56);
   visible(titleActions_, !compact);
@@ -379,7 +363,6 @@ void ChartDetailsView::setCompact(bool compact) {
   genre_->setFlex(0)->setMinWidth(0);
   setGap(compact ? kSectionGap : 6);
   visible(summary_, !compact);
-  visible(detailsToggle_, !compact);
   difficulty_->moveTo(*levelLine_);
   chartLevel_->moveTo(*levelLine_);
   difficulty_->moveTo(compact ? *this : *levelLine_);
@@ -396,8 +379,6 @@ void ChartDetailsView::setCompact(bool compact) {
   if (!compact) {
     summary_->moveTo(*identity_);
     summary_->moveTo(*this);
-    detailsToggle_->moveTo(*identity_);
-    detailsToggle_->moveTo(*this);
   }
   facts_->moveTo(*this);
   expandedFacts_->moveTo(*identity_);
@@ -434,7 +415,7 @@ void ChartDetailsView::setCompact(bool compact) {
     personalBest_->moveTo(*levelGroup_);
     setScoreContainer(nullptr);
   }
-  setExpanded(expanded_);
+  visible(expandedFacts_, !compact);
 }
 
 void ChartDetailsView::setChart(const ChartMetaRecord *record,
@@ -442,11 +423,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                int clearRank, const std::string &total) {
   const bool chart = record && !record->courseStart && !record->solidArchive &&
                      !record->unavailable && !record->meta.BmsPath.empty();
-  favorite_ = chart && record->favorite;
-  favoriteButton_->setEnabled(chart);
   moreButton_->setEnabled(chart);
-  visible(favoriteIcon_, favorite_);
-  visible(favoriteOutline_, !favorite_);
   artwork_->setVisible(chart && !record->meta.StageFile.empty());
   setCompact(compact_);
   title_->setLocalizedText(record ? i18n::Text(record->meta.Title +

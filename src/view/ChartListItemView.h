@@ -31,6 +31,7 @@ private:
   void setFavoriteState(bool favorite);
   void refreshFavoriteButton();
   void refreshScoreRankColor();
+  void refreshColumnWidths();
 
   ChartMetaRecord currentRecord;
   bool unavailable = false;
@@ -40,6 +41,9 @@ private:
   std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
   View *contentCard;
   bool compact_ = false;
+  int desiredDifficultyWidth_ = 86;
+  int appliedDifficultyWidth_ = -1;
+  int appliedTitleMinimumWidth_ = -1;
   TextView *artworkPlaceholder;
   View *clearLamp;
   View *artworkFrame;

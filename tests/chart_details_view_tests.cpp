@@ -8,6 +8,8 @@
 
 #include <bgfx/bgfx.h>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 
 namespace rendering {
@@ -41,6 +43,18 @@ std::string text(View &view, const char *name) {
   require(label != nullptr, "chart details expose the requested value");
   return label->getText();
 }
+class ArtworkLayoutDetails : public ChartDetailsView {
+public:
+  using ChartDetailsView::ChartDetailsView;
+  using ChartDetailsView::renderImpl;
+};
+
+void writePpm(const std::filesystem::path &path, int width, int height) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output << "P6\n" << width << ' ' << height << "\n255\n";
+  const char pixel[] = {char(0x33), char(0x66), char(0x99)};
+  for (int index = 0; index < width * height; ++index) output.write(pixel, sizeof(pixel));
+}
 } // namespace
 
 int main() {
@@ -49,6 +63,55 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart details");
+  {
+    const auto fixture = std::filesystem::temp_directory_path() /
+        ("asobmashow-details-" + std::to_string(SDL_GetTicksNS()) + ".ppm");
+    auto *image = new ImageView(0, 0, 0, 0);
+    ArtworkLayoutDetails details(image);
+    details.setWidth(472);
+    details.setCompact(false);
+    ChartMetaRecord record;
+    record.meta.BmsPath = "/charts/artwork.bms";
+    record.meta.StageFile = fixture.filename().string();
+    details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
+    auto *frame = details.findViewByName("chartDetailsArtwork");
+    auto *summary = details.findViewByName("chartDetailsSummary");
+    details.applyYogaLayout();
+    require(frame->getWidth() == 472 && frame->getHeight() == 354,
+            "missing artwork uses a landscape 4:3 placeholder");
+    const int placeholderSummaryY = summary->getY();
+    writePpm(fixture, 32, 18);
+    require(image->setImage(fspath_to_path_t(fixture)), "wide stagefile fixture decodes");
+    RenderContext context;
+    details.renderImpl(context);
+    details.applyYogaLayout();
+    require(frame->getWidth() == 472 && frame->getHeight() == 266 &&
+                image->getWidth() == frame->getWidth() && image->getHeight() == frame->getHeight() &&
+                summary->getY() < placeholderSummaryY,
+            "decoded wide artwork removes letterboxing and brings metadata upward without rebinding");
+    const int wideHeight = details.getHeight();
+    details.renderImpl(context);
+    require(details.getHeight() == wideHeight && !YGNodeIsDirty(details.getNode()),
+            "unchanged decoded dimensions do not dirty layout on another frame");
+    details.setCompact(true);
+    details.applyYogaLayout();
+    require(frame->getWidth() == 112 && frame->getHeight() == 63,
+            "portrait keeps wide artwork at its native ratio in the compact frame");
+    image->freeImage();
+    ImageView::dropCache(fspath_to_path_t(fixture));
+    writePpm(fixture, 18, 32);
+    require(image->setImage(fspath_to_path_t(fixture)), "tall stagefile fixture decodes");
+    details.renderImpl(context);
+    details.applyYogaLayout();
+    require(frame->getWidth() == 63 && frame->getHeight() == 112,
+            "tall artwork fits the compact identity row without letterboxing");
+    record.meta.StageFile.clear();
+    details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
+    details.applyYogaLayout();
+    require(frame->getWidth() == 112 && frame->getHeight() == 84,
+            "missing artwork restores the 4:3 placeholder after a tall image");
+    std::filesystem::remove(fixture);
+  }
   {
     View scoreColumn;
     scoreColumn.setWidth(420);
@@ -156,7 +219,7 @@ int main() {
     require(view.getHeight() + 32 <= shortViewportContentHeight,
             "chart facts and best score fit above pinned records at 16:9");
 
-    // Landscape artwork gets a square frame; long details remain scrollable
+    // Landscape artwork keeps its native ratio; long details remain scrollable
     // without moving the primary controls into that scroll container.
     record.meta.StageFile = "stage.png";
     view.setCompact(false);
@@ -165,7 +228,7 @@ int main() {
     require(view.getHeight() > selectedHeight, "landscape artwork reserves its own space");
     auto *artwork = view.findViewByName("chartDetailsArtwork");
     auto *summary = view.findViewByName("chartDetailsSummary");
-    require(artwork && artwork->getWidth() == 472 && artwork->getHeight() == 472 &&
+    require(artwork && artwork->getWidth() == 460 && artwork->getHeight() == 345 &&
                 summary && summary->getY() > artwork->getY() + artwork->getHeight(),
             "desktop artwork occupies the hero frame above the chart and best-score summary");
     require(view.findViewByName("chartDetailsTotal")->getX() < view.findViewByName("chartDetailsNotes")->getX() &&
@@ -178,27 +241,24 @@ int main() {
     require(text(view, "chartDetailsBestRate") == "90.78%" &&
                 text(view, "chartDetailsTempo") == "BPM 75.5–180   |   2:05",
             "desktop summary displays percentage without repeating the grade and preserves tempo range");
-    require(!view.findViewByName("chartDetailsExpanded")->getVisible(),
-            "additional metadata begins collapsed to preserve the reference composition");
-    const int collapsedHeight = view.getHeight();
+    require(view.findViewByName("chartDetailsExpanded")->getVisible() &&
+                text(view, "chartDetailsJudge") == "NORMAL" && text(view, "chartDetailsScore") == "2451 / 2700",
+            "all chart metadata and cached scores are visible without unfolding");
+    const int fullHeight = view.getHeight();
     record.meta.StageFile.clear();
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
     require(artwork->getVisible() && artworkPlaceholder->getVisible() &&
-                view.getHeight() == collapsedHeight,
+                view.getHeight() == fullHeight,
             "missing landscape artwork preserves the hero frame and panel height");
     view.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
     view.applyYogaLayout();
     require(artwork->getVisible() && artworkPlaceholder->getVisible() &&
-                view.getHeight() == collapsedHeight,
+                view.getHeight() == fullHeight,
             "an empty landscape selection retains the same artwork placeholder");
     record.meta.StageFile = "stage.png";
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
-    view.setExpanded(true);
     view.applyYogaLayout();
-    require(view.findViewByName("chartDetailsExpanded")->getVisible() && view.getHeight() > collapsedHeight &&
-                text(view, "chartDetailsJudge") == "NORMAL" && text(view, "chartDetailsScore") == "2451 / 2700",
-            "expanding chart details retains judge rank and full cached score information");
     require(text(view, "chartDetailsGrade") == "AAA",
             "desktop summary gives the cached best grade its own display");
 

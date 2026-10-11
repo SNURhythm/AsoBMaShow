@@ -1249,7 +1249,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tasksCloseButton = nullptr;
   tasksCloseButtonText = nullptr;
   readyGaugeText = nullptr;
-  readyKeyModeText = nullptr;
   readySpeedText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
@@ -1771,13 +1770,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->setAlignItems(YGAlignStretch);
   filterRow->setGap(10);
 
-  auto *folderTitle = new TextView(main_menu_theme::font, 36, TextView::FontWeight::Bold);
-  folderTitle->setName("mainMenuFolderTitle");
-  folderTitle->setWidth(260)->setMinWidth(0)->setHeight(kMenuActionHeight)->setFlexShrink(0);
-  folderTitle->setVAlign(TextView::MIDDLE);
-  folderTitle->setOverflow(TextView::TextOverflow::Marquee);
-  folderTitle->setThemedColor(main_menu_theme::ink);
-  filterRow->addView(folderTitle);
   searchBox = new TextInputBox(main_menu_theme::font, 22);
   searchBox->setEditingText(searchText);
   searchBox->setClearable(true);
@@ -1838,14 +1830,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     setChartSortPanelVisible(!chartSortPanelVisible);
   });
   filterRow->addView(chartSortButton);
-  auto *chartCount = new TextView(main_menu_theme::font, 16);
-  chartCount->setName("mainMenuChartCount");
-  chartCount->setWidth(80)->setHeight(kMenuActionHeight)->setFlexShrink(0);
-  chartCount->setAlign(TextView::RIGHT);
-  chartCount->setVAlign(TextView::MIDDLE);
-  chartCount->setThemedColor(main_menu_theme::muted);
-  filterRow->addView(chartCount);
-
   left->addView(filterRow);
 
   chartFilterPanel = new ChartFilterPanelView({
@@ -1935,14 +1919,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartDetailsView_ = new ChartDetailsView(jacketView);
   chartDetailsView_->setWidth(kDetailsContentWidth);
   rightContent->addView(chartDetailsView_);
-  chartDetailsView_->setActionHandlers([this](bool favorite) {
-    const auto record = selectedRecordSnapshot();
-    if (!record || !toggleChartFavorite(*record, favorite)) return;
-    if (selectedChartRecord && selectedChartRecord->meta.BmsPath == record->meta.BmsPath) {
-      selectedChartRecord->favorite = favorite;
-      refreshSelectedChartDetails();
-    }
-  }, [this] { toggleRevealContextMenu(chartDetailsView_->findViewByName("chartDetailsMore")); });
+  chartDetailsView_->setMoreActionHandler([this] {
+    toggleRevealContextMenu(chartDetailsView_->findViewByName("chartDetailsMore"));
+  });
 
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
@@ -1955,8 +1934,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
     auto *rule = new View();
     rule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
     rule->setWidth(1)->setHeight(72)->setBackgroundColor(Color(75, 79, 88, 255));
-    cell->addView(rule);
-    auto *caption = new TextView(main_menu_theme::font, 15);
+    if (std::string(name) == "readyOptionsCell") delete rule;
+    else cell->addView(rule);
+    const bool heading = std::string(name) == "readyOptionsCell";
+    auto *caption = new TextView(main_menu_theme::font, heading ? 24 : 15,
+                                heading ? TextView::FontWeight::Bold : TextView::FontWeight::Regular);
     caption->setName(std::string(name) + "Caption");
     caption->setHeight(23)->setMinWidth(0);
     caption->setLocalizedText(i18n::message(key));
@@ -1986,7 +1968,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     cell->addView(valueRow);
     if (std::string(name) == "readyOptionsCell") {
       caption->setLocalizedText(i18n::message("menu.selector.play_options.label"));
-      caption->setHeight(52);
+      caption->setHeight(64);
       caption->setWrap(true);
       valueRow->setVisible(false);
       valueRow->setDisplay(YGDisplayNone);
@@ -1995,10 +1977,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     readySettings->addView(cell);
     return value;
   };
-  readyAssistOptionText = statusCell("menu.play_options.play_options.label", "readyOptionsCell", ui_icons::kPlayOptions);
-  readyKeyModeText = statusCell("menu.selector.key_mode.label", "readyKeyModeCell", 0xf11c);
-  readyGaugeText = statusCell("menu.gauge.label", "readyGaugeCell", 0xf2d0);
-  readyPlayOptionText = statusCell("chart_viewer.random.label", "readyRandomCell", 0xf074);
+  statusCell("menu.selector.play_options.label", "readyOptionsCell", ui_icons::kPlayOptions);
+  readyAssistOptionText = statusCell("menu.selector.assist.label", "readyAssistCell", ui_icons::kPlayOptions);
+  readyGaugeText = statusCell("menu.selector.gauge.label", "readyGaugeCell", 0xf2d0);
+  readyPlayOptionText = statusCell("menu.selector.random.label", "readyRandomCell", 0xf074);
   readySpeedText = statusCell("menu.selector.speed.label", "readySpeedCell", 0xf062);
   readyPacemakerText = statusCell("menu.selector.target.label", "readyTargetCell", 0xf140);
 
@@ -2134,17 +2116,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recordActions->setFlexDirection(FlexDirection::Row)->setGap(12);
   recordActions->addView(replayButtonSlot);
   recordActions->addView(rankingsButton);
-  auto *detailMore = new Button(0, 0, 52, 44);
-  detailMore->setName("mainMenuDetailMore");
-  detailMore->setFlexShrink(0);
-  auto *detailMoreIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
-  detailMoreIcon->setText(ui_icons::textForCodepoint(0xf141));
-  detailMoreIcon->setAlign(TextView::CENTER);
-  detailMoreIcon->setVAlign(TextView::MIDDLE);
-  detailMoreIcon->setThemedColor(main_menu_theme::ink);
-  detailMore->setContentView(detailMoreIcon);
-  detailMore->setOnClickListener([this, detailMore] { toggleRevealContextMenu(detailMore); });
-  recordActions->addView(detailMore);
   auto *recordsRule = new View();
   recordsRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Top, 0);
   recordsRule->setWidthPercent(100)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::rule);
@@ -2296,7 +2267,7 @@ void MainMenuScene::updatePanelLayout() {
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
-  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
   const float detailsHeight = portraitDetailsHeight(contentHeight);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
@@ -2310,8 +2281,8 @@ void MainMenuScene::updatePanelLayout() {
   body->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
   dock->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
   dock->setVisible(!portrait);
-  dock->setHeight(kPlayDockHeight + safe.bottom);
-  dock->setPadding(Edge::Bottom, safe.bottom);
+  dock->setHeight(kPlayDockHeight);
+  dock->setPadding(Edge::Bottom, 0);
   if (browser) {
     browser->setFlex(portrait ? 0.0F : 1.0F);
     browser->setWidth(portrait ? contentWidth : YGUndefined);
@@ -2328,13 +2299,13 @@ void MainMenuScene::updatePanelLayout() {
   }
   if (details) {
     details->setWidth(portrait ? YGUndefined : kDetailsPanelWidth);
-    details->setHeight(portrait ? detailsHeight + safe.bottom : YGUndefined)->setMinHeight(0);
+    details->setHeight(portrait ? detailsHeight : YGUndefined)->setMinHeight(0);
     details->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
     details->setAlignItems(portrait ? YGAlignStretch : YGAlignCenter);
     details->setPadding(Edge::Left, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Right, portrait ? 12.0F : 0.0F);
     details->setPadding(Edge::Top, 16.0F);
-    details->setPadding(Edge::Bottom, 16.0F + (portrait ? safe.bottom : 0));
+    details->setPadding(Edge::Bottom, 16.0F);
   }
   if (detailsScroll) {
     detailsScroll->setWidth(portrait ? YGUndefined : kDetailsContentWidth + 16);
@@ -2387,10 +2358,6 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
     if (portrait) button->setWidthPercent(100);
     else button->setWidth(kDetailsContentWidth);
   }
-  if (auto *more = rootLayout->findViewByName("mainMenuDetailMore")) {
-    more->setVisible(!portrait);
-    more->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
-  }
   chartActionsRow->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
   const int height = portrait ? kPortraitMenuActionHeight : kMenuActionHeight;
   records->setHeight(portrait ? height : 44);
@@ -2422,15 +2389,12 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   for (auto *tab : tabs->getChildren()) {
     tab->setFlex(narrowHeader ? 1 : 0)->setMinWidth(0)->setWidth(narrowHeader ? YGUndefined : 112);
   }
-  wordmark->setDisplay(rendering::window_width < 1500 ? YGDisplayNone : YGDisplayFlex);
+  const bool showWordmark = !portrait && rendering::window_width >= 1500;
+  wordmark->setVisible(showWordmark);
+  wordmark->setDisplay(showWordmark ? YGDisplayFlex : YGDisplayNone);
   wordmark->setWidth(kLibraryPanelWidth);
   if (auto *space = rootLayout->findViewByName("mainMenuHeaderSpace"))
     space->setDisplay(narrowHeader ? YGDisplayNone : YGDisplayFlex);
-  const float songWidth = rendering::window_width - getSafeAreaInsetsUi().left - getSafeAreaInsetsUi().right - kLibraryPanelWidth - kDetailsPanelWidth - 48;
-  auto *folderTitle = rootLayout->findViewByName("mainMenuFolderTitle");
-  folderTitle->setDisplay(portrait || songWidth < 780 ? YGDisplayNone : YGDisplayFlex);
-  if (auto *count = rootLayout->findViewByName("mainMenuChartCount"))
-    count->setDisplay(portrait || songWidth < 900 ? YGDisplayNone : YGDisplayFlex);
   toolbar->setFlex(0)->setMinWidth(0);
   toolbar->setWidth(YGUndefined);
   if (narrowHeader) toolbar->setWidthPercent(100);
@@ -3281,23 +3245,6 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   selectedChartRecord = main_menu_library::chartSelectionRecordForReload(
       selectedChartRecord, leadingRecord, preserveViewState);
   const int count = databaseCount + (leadingRecord.has_value() ? 1 : 0);
-  if (auto *label = dynamic_cast<TextView *>(rootLayout->findViewByName("mainMenuChartCount")))
-    label->setLocalizedText(i18n::message("menu.selector.charts.count", {{"count", std::to_string(count)}}));
-  if (auto *title = dynamic_cast<TextView *>(rootLayout->findViewByName("mainMenuFolderTitle"))) {
-    if (activeFolder.type == LibraryFolderItem::Type::AllSongs)
-      title->setLocalizedText(i18n::message("library.folders.all_songs.label"));
-    else if (activeFolder.type == LibraryFolderItem::Type::Favorites)
-      title->setLocalizedText(i18n::message("library.folders.favorites.label"));
-    else {
-      std::string label = activeFolder.label;
-      if (activeFolder.type == LibraryFolderItem::Type::DifficultyLevel) {
-        for (const auto &table : folderMetadataCache.tables)
-          if (table.id == activeFolder.tableId) { label = table.name + " / " + label; break; }
-      }
-      title->setText(label);
-    }
-
-  }
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
                        std::move(leadingRecord));
@@ -4156,10 +4103,6 @@ void MainMenuScene::refreshSelectedChartDetails() {
 void MainMenuScene::refreshReadySettingsSummary() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
-  if (readyKeyModeText) {
-    readyKeyModeText->setText(selectedChartRecord
-        ? gameplay::keyModeLabel(selectedChartRecord->meta.KeyMode) : "—");
-  }
   if (readySpeedText) {
     std::ostringstream rate;
     rate << std::fixed << std::setprecision(2)
@@ -4200,7 +4143,6 @@ void MainMenuScene::refreshReadySettingsSummary() {
     }
     const bool customRules = profileSelections.ruleset != GameplayRuleset::LR2;
     const bool customLn = effective.longNoteMode != AppSettings::kDefaultLnMode;
-    const bool showStatus = optionEnabled || percent != 100 || customRules || customLn;
     if (customRules || customLn) {
       std::string status = optionEnabled || percent != 100 ? readyAssistOptionText->getText() : "";
       if (customRules) {
@@ -4213,12 +4155,6 @@ void MainMenuScene::refreshReadySettingsSummary() {
       }
       readyAssistOptionText->setText(status);
     }
-    if (auto *row = rootLayout->findViewByName("readyOptionsCellValueRow")) {
-      row->setVisible(showStatus);
-      row->setDisplay(showStatus ? YGDisplayFlex : YGDisplayNone);
-    }
-    if (auto *caption = rootLayout->findViewByName("readyOptionsCellCaption"))
-      caption->setHeight(showStatus ? 23 : 52);
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
@@ -7911,9 +7847,9 @@ void MainMenuScene::update(float dt) {
   }
   if (selectorTabActive() && rootLayout && rendering::window_height > rendering::window_width) {
     const auto safe = getSafeAreaInsetsUi();
-    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
     const auto *details = rootLayout->findViewByName("mainMenuDetails");
-    if (details && std::abs(details->getHeight() - safe.bottom - portraitDetailsHeight(availableHeight)) > 1) {
+    if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
       updatePanelLayout();
     }
   }
@@ -8115,7 +8051,6 @@ void MainMenuScene::cleanupScene() {
   tasksCloseButton = nullptr;
   tasksCloseButtonText = nullptr;
   readyGaugeText = nullptr;
-  readyKeyModeText = nullptr;
   readySpeedText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;

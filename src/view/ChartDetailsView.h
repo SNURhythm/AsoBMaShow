@@ -21,13 +21,17 @@ public:
   }
   void setScoreContainer(View *container);
   void setCompact(bool compact);
-  void setExpanded(bool expanded);
-  void setActionHandlers(std::function<void(bool)> favorite, std::function<void()> more);
+  void setMoreActionHandler(std::function<void()> more);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
 
+protected:
+  void onLayout() override;
+  void renderImpl(RenderContext &context) override;
+
 private:
+  void refreshArtworkLayout();
   static constexpr float kIdentityHeight = 132;
   static constexpr float kDifficultyHeight = 34;
   static constexpr float kSectionGap = 10;
@@ -40,26 +44,21 @@ private:
   View *titles_ = nullptr;
   View *titleRow_ = nullptr;
   View *titleActions_ = nullptr;
-  Button *favoriteButton_ = nullptr;
   Button *moreButton_ = nullptr;
-  TextView *favoriteIcon_ = nullptr;
-  TextView *favoriteOutline_ = nullptr;
-  bool favorite_ = false;
-  std::function<void(bool)> onFavorite_;
   std::function<void()> onMore_;
   std::array<View *, 3> factRows_{};
   std::array<View *, 6> factCells_{};
   ImageView *artwork_ = nullptr;
   bool compact_ = true;
+  int artworkLayoutWidth_ = -1;
+  int artworkLayoutHeight_ = -1;
+  bool artworkLayoutCompact_ = true;
   View *summary_ = nullptr;
   View *levelGroup_ = nullptr;
   View *levelLine_ = nullptr;
   View *expandedFacts_ = nullptr;
-  Button *detailsToggle_ = nullptr;
-  TextView *disclosure_ = nullptr;
   TextView *tempo_ = nullptr;
   TextView *desktopRate_ = nullptr;
-  bool expanded_ = false;
   TextView *grade_ = nullptr;
   View *facts_ = nullptr;
   View *personalBest_ = nullptr;
