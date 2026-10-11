@@ -23,6 +23,8 @@ public:
   AllocationSizeObserver() noexcept;
   ~AllocationSizeObserver();
   [[nodiscard]] std::size_t largest() const noexcept;
+  [[nodiscard]] std::size_t count() const noexcept;
+  [[nodiscard]] std::size_t totalBytes() const noexcept;
   AllocationSizeObserver(const AllocationSizeObserver &) = delete;
   AllocationSizeObserver &operator=(const AllocationSizeObserver &) = delete;
 };

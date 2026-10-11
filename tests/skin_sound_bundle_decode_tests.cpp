@@ -1,12 +1,16 @@
 #include "audio/decoder.h"
+#include "audio/SoundFileIO.h"
+#include "support/AllocationFailure.h"
 #include "ArchiveFile.h"
 #include "ArchiveRAII.h"
 #include "RAII.h"
 #include "Utils.h"
 
 #include <archive_entry.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -21,6 +25,16 @@
 #ifdef __APPLE__
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
+
+#ifdef ASOBMASHOW_AUDIO_DECODE_BENCHMARK
+// The benchmark script compiles the actual pre-change decoder under these names.
+bool benchmarkBaselineDecodeAudioToPCMBounded(
+    const path_t &, std::vector<short> &, SF_INFO &, std::atomic<bool> &,
+    AudioDecodeLimits, std::stop_token);
+bool benchmarkBaselineDecodeAudioBytesToPCMBounded(
+    const path_t &, const std::vector<unsigned char> &, std::vector<short> &,
+    SF_INFO &, std::atomic<bool> &, std::size_t);
 #endif
 
 namespace {
@@ -65,6 +79,203 @@ public:
 private:
   std::filesystem::path root_;
 };
+
+struct ReferencePcm {
+  SF_INFO info{};
+  sf_count_t framesRead = 0;
+  std::vector<short> samples;
+};
+
+// Preserve the old one-shot decoder as an independent compatibility oracle.
+ReferencePcm readOneShotPcm(const std::filesystem::path &path) {
+  ReferencePcm result;
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, result.info);
+  expect(bool(file), "open the one-shot reference audio");
+  if (!file) return result;
+  const auto sampleCount = static_cast<std::size_t>(result.info.frames) *
+                           result.info.channels;
+  std::vector<double> decoded(sampleCount);
+  result.framesRead = sf_readf_double(file.get(), decoded.data(), result.info.frames);
+  expect(result.framesRead >= 0, "the one-shot reference read succeeds");
+  result.samples.resize(sampleCount);
+  std::transform(decoded.begin(), decoded.end(), result.samples.begin(),
+      [](double value) {
+        return static_cast<short>(std::clamp(value, -1.0, 1.0) * 32767);
+      });
+  if (result.framesRead >= 0 && result.framesRead < result.info.frames) {
+    std::fill(result.samples.begin() + result.framesRead * result.info.channels,
+              result.samples.end(), 0);
+  }
+  return result;
+}
+
+void compareFileAndMemoryDecode(const std::filesystem::path &path,
+                               const ReferencePcm &reference) {
+  std::ifstream input(path, std::ios::binary);
+  const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), {});
+  for (bool fromMemory : {false, true}) {
+    // Reuse a nonzero output to catch stale samples after a short final read.
+    std::vector<short> pcm(reference.samples.size(), 1234);
+    SF_INFO info{};
+    std::atomic<bool> cancelled{false};
+    const bool decoded = fromMemory
+        ? decodeAudioBytesToPCM(fspath_to_path_t(path), bytes, pcm, info, cancelled)
+        : decodeAudioToPCM(fspath_to_path_t(path), pcm, info, cancelled);
+    expect(decoded, "file and memory decoding succeed");
+    expect(info.frames == reference.info.frames &&
+               info.channels == reference.info.channels &&
+               info.samplerate == reference.info.samplerate &&
+               info.format == reference.info.format,
+           "chunked decoding preserves audio metadata");
+    expect(pcm == reference.samples, "every PCM sample equals the one-shot decoder");
+  }
+}
+
+bool writeAudioFixture(const std::filesystem::path &path, int format,
+                       int channels, sf_count_t frames) {
+  SF_INFO info{};
+  info.samplerate = 44100;
+  info.channels = channels;
+  info.format = format;
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, info);
+  expect(bool(file), "create the encoded audio compatibility fixture");
+  if (!file) return false;
+  std::vector<double> samples(static_cast<std::size_t>(frames) * channels);
+  for (std::size_t index = 0; index < samples.size(); ++index) {
+    samples[index] = (static_cast<int>((index * 7919) % 65536) - 32768) / 32768.0;
+  }
+  if ((format & SF_FORMAT_SUBMASK) == SF_FORMAT_DOUBLE) {
+    const std::array<double, 9> edges{-1.5, -1.0, -0.5, -0.00001, 0.0,
+                                     0.00001, 0.5, 1.0, 1.5};
+    for (std::size_t index = 0; index < samples.size(); index += 31) {
+      samples[index] = edges[(index / 31) % edges.size()];
+    }
+  }
+  expect(sf_writef_double(file.get(), samples.data(), frames) == frames,
+         "write every fixture frame");
+  return true;
+}
+
+void testChunkedDecodeMatchesOneShot() {
+  SoundSandbox sandbox;
+  for (const int channels : {1, 2, 3}) {
+    for (const sf_count_t frames : {0, 1, 4095, 4096, 4097, 12305}) {
+      const auto path = sandbox.root() / "boundary.wav";
+      if (writeAudioFixture(path, SF_FORMAT_WAV | SF_FORMAT_PCM_16, channels, frames)) {
+        compareFileAndMemoryDecode(path, readOneShotPcm(path));
+      }
+    }
+  }
+  struct FormatCase { const char *name; int format; int channels; };
+  for (const auto &test : {
+           FormatCase{"float.wav", SF_FORMAT_WAV | SF_FORMAT_DOUBLE, 3},
+           FormatCase{"lossless.flac", SF_FORMAT_FLAC | SF_FORMAT_PCM_24, 2},
+           FormatCase{"lossy.ogg", SF_FORMAT_OGG | SF_FORMAT_VORBIS, 2},
+           FormatCase{"lossy.mp3", SF_FORMAT_MPEG | SF_FORMAT_MPEG_LAYER_III, 2}}) {
+    const auto path = sandbox.root() / test.name;
+    if (writeAudioFixture(path, test.format, test.channels, 12305)) {
+      compareFileAndMemoryDecode(path, readOneShotPcm(path));
+    }
+  }
+  const auto truncated = sandbox.root() / "truncated.flac";
+  if (writeAudioFixture(truncated, SF_FORMAT_FLAC | SF_FORMAT_PCM_24, 2, 12305)) {
+    std::filesystem::resize_file(truncated, std::filesystem::file_size(truncated) - 64);
+    const auto reference = readOneShotPcm(truncated);
+    expect(reference.framesRead > 4096 && reference.framesRead < reference.info.frames,
+           "truncated FLAC exercises a short read after complete chunks");
+    compareFileAndMemoryDecode(truncated, reference);
+  }
+}
+
+void testLongDecodeUsesBoundedScratch() {
+  SoundSandbox sandbox;
+  const auto path = sandbox.copyBundledAudio();
+  const auto reference = readOneShotPcm(path);
+  compareFileAndMemoryDecode(path, reference);
+  // Reserve only the final PCM outside observation: a clip-sized floating-point
+  // temporary would otherwise dwarf the intended bounded scratch allocation.
+  std::vector<short> pcm(reference.samples.size());
+  SF_INFO info{};
+  std::atomic<bool> cancelled{false};
+  std::size_t largestAllocation = 0;
+  {
+    test_support::AllocationSizeObserver observer;
+    expect(decodeAudioToPCM(fspath_to_path_t(path), pcm, info, cancelled),
+           "decode the complete 60-second track with allocation observation");
+    largestAllocation = observer.largest();
+  }
+  expect(pcm == reference.samples, "bounded scratch preserves the long track sample-for-sample");
+  expect(largestAllocation <= 256U * 1024U,
+         "long audio decoding avoids any clip-sized temporary C++ allocation");
+  std::cout << "60-second mono decode largest scratch allocation: "
+            << largestAllocation << " bytes\n";
+}
+
+#ifdef ASOBMASHOW_AUDIO_DECODE_BENCHMARK
+int benchmarkDecodeFiles(int argc, char **argv) {
+  if (argc < 3) return 2;
+  constexpr std::size_t maximumSamples = 64U * 1024U * 1024U;
+  for (int index = 2; index < argc; ++index) {
+    const auto path = std::filesystem::path(argv[index]);
+    const auto displayPath = fspath_to_path_t(path);
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), {});
+    std::atomic<bool> cancelled{false};
+    SF_INFO referenceInfo{};
+    std::vector<short> reference;
+    if (!benchmarkBaselineDecodeAudioBytesToPCMBounded(
+            displayPath, bytes, reference, referenceInfo, cancelled, maximumSamples)) return 1;
+    std::cout << "AUDIO_INPUT case=" << index - 2
+              << " extension=" << path.extension().string() << " encoded_bytes=" << bytes.size()
+              << " frames=" << referenceInfo.frames << " channels=" << referenceInfo.channels
+              << " sample_rate=" << referenceInfo.samplerate << '\n';
+    for (bool fromMemory : {false, true}) {
+      // Warm both backends, then alternate their order for eight paired trials.
+      for (int iteration = -1; iteration < 8; ++iteration) {
+        for (int trial = 0; trial < 2; ++trial) {
+          const bool baseline = (iteration + trial) % 2 == 0;
+          SF_INFO info{};
+          std::vector<short> pcm;
+          bool decoded = false;
+          std::size_t allocationCount = 0, allocationBytes = 0, largestAllocation = 0;
+          double elapsedMs = 0;
+          {
+            test_support::AllocationSizeObserver observer;
+            const auto start = std::chrono::steady_clock::now();
+            if (fromMemory) {
+              const auto decode = baseline ? benchmarkBaselineDecodeAudioBytesToPCMBounded
+                                           : decodeAudioBytesToPCMBounded;
+              decoded = decode(displayPath, bytes, pcm, info, cancelled, maximumSamples);
+            } else {
+              const auto decode = baseline ? benchmarkBaselineDecodeAudioToPCMBounded
+                                           : decodeAudioToPCMBounded;
+              decoded = decode(displayPath, pcm, info, cancelled,
+                               {.maximumPcmSamples = maximumSamples}, {});
+            }
+            elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            allocationCount = observer.count();
+            allocationBytes = observer.totalBytes();
+            largestAllocation = observer.largest();
+          }
+          expect(decoded && pcm == reference && info.frames == referenceInfo.frames &&
+                     info.channels == referenceInfo.channels &&
+                     info.samplerate == referenceInfo.samplerate && info.format == referenceInfo.format,
+                 "benchmark decode exactly matches the pre-change PCM and metadata");
+          if (failures) return 1;
+          if (iteration < 0) continue;
+          std::cout << "AUDIO case=" << index - 2 << " source=" << (fromMemory ? "memory" : "file")
+                    << " backend=" << (baseline ? "baseline" : "chunked")
+                    << " iteration=" << iteration << " ms=" << elapsedMs
+                    << " allocations=" << allocationCount << " allocated_bytes=" << allocationBytes
+                    << " largest_allocation=" << largestAllocation << '\n';
+        }
+      }
+    }
+  }
+  return 0;
+}
+#endif
 
 void testBundleAwareDecodeProducesPcm(bool extensionFallback) {
   SoundSandbox sandbox;
@@ -299,6 +510,11 @@ int runBundleOnlyPreviewDecode() {
 } // namespace
 
 int main(int argc, char **argv) {
+#ifdef ASOBMASHOW_AUDIO_DECODE_BENCHMARK
+  if (argc > 1 && std::string_view(argv[1]) == "--benchmark") {
+    return benchmarkDecodeFiles(argc, argv);
+  }
+#endif
 #ifdef __APPLE__
   if (argc == 2 && std::string_view(argv[1]) == "--bundle-preview") {
     return runBundleOnlyPreviewDecode();
@@ -319,6 +535,8 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
+  testChunkedDecodeMatchesOneShot();
+  testLongDecodeUsesBoundedScratch();
   testBundleAwareDecodeProducesPcm(false);
   testBundleAwareDecodeProducesPcm(true);
   for (bool archived : {false, true}) {

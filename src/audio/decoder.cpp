@@ -110,26 +110,39 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   buffer.resize(sampleCount, 0);
   // Read through libsndfile's floating-point path, then convert explicitly.
   // Direct int16 reads can produce audible differences for some keysounds.
-  std::vector<double> tempBuffer(sampleCount);
-  if (isCancelled) {
-    return false;
+  // Bound scratch space by a small number of complete interleaved frames,
+  // rather than keeping a second, double-precision copy of the entire clip.
+  const sf_count_t chunkFrames = std::min<sf_count_t>(fileInfo.frames, 4096);
+  const auto channels = static_cast<std::size_t>(fileInfo.channels);
+  std::vector<double> tempBuffer(static_cast<std::size_t>(chunkFrames) * channels);
+  sf_count_t numFrames = 0;
+  while (numFrames < fileInfo.frames) {
+    if (isCancelled) {
+      return false;
+    }
+    const sf_count_t requested = std::min(chunkFrames, fileInfo.frames - numFrames);
+    const sf_count_t read = sf_readf_double(fileHandle.get(), tempBuffer.data(), requested);
+    if (isCancelled) {
+      return false;
+    }
+    if (read < 0) {
+      SDL_Log("Failed to read audio data from file %s, error: %s",
+              path_t_to_utf8(displayPath).c_str(),
+              sf_strerror(fileHandle.get()));
+      return false;
+    }
+    const auto readSamples = static_cast<std::size_t>(read) * channels;
+    std::transform(
+        tempBuffer.begin(), tempBuffer.begin() + readSamples,
+        buffer.begin() + static_cast<std::size_t>(numFrames) * channels,
+        [](double val) {
+          return static_cast<short>(std::clamp(val, -1.0, 1.0) * 32767);
+        });
+    numFrames += read;
+    if (read < requested) {
+      break;
+    }
   }
-  sf_count_t numFrames =
-      sf_readf_double(fileHandle.get(), tempBuffer.data(), fileInfo.frames);
-  if (isCancelled) {
-    return false;
-  }
-  if (numFrames < 0) {
-    SDL_Log("Failed to read audio data from file %s, error: %s",
-            path_t_to_utf8(displayPath).c_str(),
-            sf_strerror(fileHandle.get()));
-    return false;
-  }
-  // Convert the double buffer to short
-  std::transform(
-      tempBuffer.begin(), tempBuffer.end(), buffer.begin(), [](double val) {
-        return static_cast<short>(std::clamp(val, -1.0, 1.0) * 32767);
-      });
   if (isCancelled) {
     return false;
   }
@@ -140,7 +153,8 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
             path_t_to_utf8(displayPath).c_str(),
             static_cast<std::int64_t>(numFrames));
     // Zero out the remaining buffer
-    std::fill(buffer.begin() + numFrames * fileInfo.channels, buffer.end(), 0);
+    std::fill(buffer.begin() + static_cast<std::size_t>(numFrames) * channels,
+              buffer.end(), 0);
   }
 
   return true;

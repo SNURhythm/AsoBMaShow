@@ -4825,6 +4825,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
     add_executable(skin_sound_bundle_decode_tests
         tests/skin_sound_bundle_decode_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/audio/decoder.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
