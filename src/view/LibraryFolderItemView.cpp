@@ -113,11 +113,19 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
   countView->setWidth(showCount ? kCountWidth : 0);
   countView->setText(showCount ? std::to_string(count) : "");
   if (hasClearLampColor(clearRank)) {
-    const Color clearColor = clearLampColorForRank(clearRank);
-    clearLamp->setBackgroundColor(
-        clearColor);
+    auto glow = clearLampColorForRank(clearRank);
+    auto core = glow;
+    core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);
+    core.g = static_cast<uint8_t>((3 * core.g + 255) / 4);
+    core.b = static_cast<uint8_t>((3 * core.b + 255) / 4);
+    core.a = 255;
+    clearLamp->setBackgroundColor(core);
+    if (clearRank == kClearTypeHardClearRank) glow = Color(140, 185, 255, 255);
+    glow.a = 160;
+    clearLamp->setShadow(glow, 0, 0, 10);
   } else {
     clearLamp->clearBackgroundColor();
+    clearLamp->clearShadow();
   }
   if (selected && !section) {
     onSelected();

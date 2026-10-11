@@ -13,8 +13,8 @@ Date: 2026-10-12.
 - Genre sits immediately below artist. Desktop chart facts omit the duplicate
   BPM and length, which remain in the summary. Portrait retains its sole values.
 - Next-rank difference is at the score card's upper right; a larger bold clear
-  rank sits below it at the lower right. The clear text has a soft glyph-shaped
-  halo. Row lamps use a rounded bright core, close glow and wider subtle halo.
+  rank sits below it at the lower right. A glowing vertical bar accompanies the
+  plain clear-rank text. Row lamps use a rounded bright core, close glow and wider subtle halo.
 - Summary grade and percentage align right, matching the difficulty and tempo
   rows. The redundant PERSONAL BEST caption and its extra height are removed.
 
@@ -46,3 +46,10 @@ portrait height is distributed between rows instead of inside each pair.
 Regression checks cover long-title metrics and pair/row spacing at 520- and
 720-unit panel heights. The desktop build and the three affected CTest targets
 (chart details, UI scale and text input) passed. No new visual capture was made.
+
+## Glow correction
+
+Removed the glyph-shaped glow entirely. Clear-rank lettering stays plain and
+bold; its adjacent rounded status bar glows instead. Folder clear lamps now
+use the same bright core and soft colored glow, clearing it when a recycled
+folder has no clear rank.

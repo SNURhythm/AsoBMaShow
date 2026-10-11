@@ -18,63 +18,25 @@
 namespace {
 constexpr const char *kFont = main_menu_theme::font;
 
-class ClearRankLabel final : public TextView {
-public:
-  ClearRankLabel() : TextView(kFont, 32, FontWeight::Bold) {}
-
-  void setClearRank(int rank) {
-    glowing_ = hasClearLampColor(rank);
-    setThemedColor([rank] {
-      if (!hasClearLampColor(rank)) return main_menu_theme::secondary();
-      auto color = clearLampColorForRank(rank);
-      if (main_menu_theme::light()) {
-        // Keep the luminous status legible on the paper-colored surface.
-        color.r = static_cast<uint8_t>(color.r * 0.48f);
-        color.g = static_cast<uint8_t>(color.g * 0.48f);
-        color.b = static_cast<uint8_t>(color.b * 0.48f);
-      }
-      color.a = 255;
-      return color;
-    });
+void updateClearLamp(View &lamp, int rank) {
+  const bool show = hasClearLampColor(rank);
+  lamp.setVisible(show);
+  if (!show) {
+    lamp.clearBackgroundColor();
+    lamp.clearShadow();
+    return;
   }
-
-protected:
-  void renderImpl(RenderContext &context) override {
-    if (!bgfx::isValid(texture)) createTexture();
-    if (glowing_ && bgfx::isValid(texture)) {
-      const auto bounds = resolvedTextRect();
-      constexpr std::array<std::array<float, 2>, 8> directions{{
-          {1, 0}, {0.7071f, 0.7071f}, {0, 1}, {-0.7071f, 0.7071f},
-          {-1, 0}, {-0.7071f, -0.7071f}, {0, -1}, {0.7071f, -0.7071f}}};
-      constexpr std::array<std::array<float, 2>, 4> rings{{
-          {8, 0.018f}, {5, 0.035f}, {3, 0.055f}, {1.5f, 0.08f}}};
-      for (const auto &ring : rings) {
-        RenderContext::OpacityScope opacity(context, ring[1]);
-        auto state = context.makeUiBatchState(
-            rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT),
-            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-        state.texture = texture;
-        state.sampler = s_texColor;
-        for (const auto &direction : directions) {
-          const float x = bounds.x + direction[0] * ring[0];
-          const float y = bounds.y + direction[1] * ring[0];
-          const float right = x + bounds.w, bottom = y + bounds.h;
-          const std::array vertices{
-              rendering::PosTexCoord0Vertex{x, y, 0, 0, 0},
-              rendering::PosTexCoord0Vertex{right, y, 0, 1, 0},
-              rendering::PosTexCoord0Vertex{right, bottom, 0, 1, 1},
-              rendering::PosTexCoord0Vertex{x, bottom, 0, 0, 1}};
-          constexpr std::array<uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
-          context.appendUiTextured(vertices, indices, state);
-        }
-      }
-    }
-    TextView::renderImpl(context);
-  }
-
-private:
-  bool glowing_ = false;
-};
+  auto color = clearLampColorForRank(rank);
+  auto core = color;
+  core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);
+  core.g = static_cast<uint8_t>((3 * core.g + 255) / 4);
+  core.b = static_cast<uint8_t>((3 * core.b + 255) / 4);
+  core.a = 255;
+  lamp.setBackgroundColor(core);
+  if (rank == kClearTypeHardClearRank) color = Color(140, 185, 255, 255);
+  color.a = 160;
+  lamp.setShadow(color, 0, 0, 10);
+}
 
 class ArtworkPlaceholder final : public TextView {
 public:
@@ -295,8 +257,12 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   emptyScore_->setFlex(1)->setMinWidth(0);
   emptyScore_->setLocalizedText(i18n::message("menu.details.unplayed.label"));
   scoreRow->addView(emptyScore_);
-  clear_ = new ClearRankLabel();
-  clear_->setName("chartDetailsClear");
+  clearLamp_ = new View();
+  clearLamp_->setName("chartDetailsClearLamp");
+  clearLamp_->setWidth(6)->setHeight(32)->setFlexShrink(0)->setCornerRadius(3);
+  scoreRow->addView(clearLamp_);
+  clear_ = label("chartDetailsClear", 32, 52, main_menu_theme::ink,
+                 TextView::FontWeight::Bold);
   clear_->setFlex(1)->setMinWidth(0)->setHeight(52);
   clear_->setAlign(TextView::RIGHT);
   clear_->setVAlign(TextView::MIDDLE);
@@ -487,7 +453,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
     visible(score_, true);
     bestLabel_->setLocalizedText(i18n::message("menu.details.best.label"));
     totalLabel_->setLocalizedText(i18n::message("menu.details.total.label"));
-    static_cast<ClearRankLabel *>(clear_)->setClearRank(kNoClearTypeRank);
+    updateClearLamp(*clearLamp_, kNoClearTypeRank);
     rate_->setThemedColor(main_menu_theme::secondary);
     if (record) {
       difficulty_->setLocalizedText(i18n::message(record->courseStart
@@ -519,7 +485,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   bestLabel_->setLocalizedText(i18n::message(best && best->source == ScoreBestSource::ImportedIr
       ? "menu.details.best_ir.label" : "menu.details.best.label"));
   clear_->setText(clearRank == kNoClearTypeRank ? "—" : clearTypeRankToLabel(clearRank));
-  static_cast<ClearRankLabel *>(clear_)->setClearRank(clearRank);
+  updateClearLamp(*clearLamp_, clearRank);
   if (!best) {
     score_->setText("");
     rate_->setText("");
