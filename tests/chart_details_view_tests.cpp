@@ -247,6 +247,29 @@ int main() {
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     view.applyYogaLayout();
     require(view.getHeight() > selectedHeight, "landscape artwork reserves its own space");
+    auto *badge = dynamic_cast<TextView *>(view.findViewByName("chartDetailsDifficulty"));
+    const int badgeLeft = badge->getX();
+    const int shortBadgeWidth = badge->getWidth();
+    record.difficultyTableLabels = "sl3 / ★11";
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    view.applyYogaLayout();
+    require(badge->getX() == badgeLeft && badge->getWidth() > shortBadgeWidth &&
+                badge->getWidth() >= badge->measureTextWidth(badge->getText()) + 24,
+            "detail level badge grows right to fit text with horizontal insets");
+    record.difficultyTableLabels = "sl3 / ★11 / st2 / ◆15 / sl12 / ★25";
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    view.applyYogaLayout();
+    auto *chartLevelValue = view.findViewByName("chartDetailsChartLevel");
+    require(badge->getX() == badgeLeft &&
+                badge->getX() + badge->getWidth() <= chartLevelValue->getX() &&
+                chartLevelValue->getWidth() >= 96 &&
+                chartLevelValue->getX() + chartLevelValue->getWidth() <= view.findViewByName("chartDetailsGrade")->getX(),
+            "long badges preserve space for key mode and the best-grade column");
+    record.difficultyTableLabels.clear();
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    view.applyYogaLayout();
+    require(badge->getWidth() == shortBadgeWidth,
+            "short levels restore their natural badge width");
     auto *artwork = view.findViewByName("chartDetailsArtwork");
     auto *summary = view.findViewByName("chartDetailsSummary");
     require(artwork && artwork->getWidth() == 460 && artwork->getHeight() == 345 &&

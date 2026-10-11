@@ -375,8 +375,10 @@ void ChartDetailsView::setCompact(bool compact) {
   chartLevel_->moveTo(*levelLine_);
   difficulty_->moveTo(compact ? *this : *levelLine_);
   chartLevel_->moveTo(compact ? *this : *levelLine_);
-  difficulty_->setWidth(compact ? YGUndefined : 78)->setHeight(compact ? kDifficultyHeight : 46);
-  chartLevel_->setFlex(compact ? 0 : 1)->setMinWidth(0)->setHeight(compact ? 28 : 36);
+  difficulty_->setWidth(YGUndefined)->setHeight(compact ? kDifficultyHeight : 46);
+  difficulty_->setFlexShrink(compact ? 0 : 1);
+  difficulty_->setPadding(Edge::Left, compact ? 0 : 12)->setPadding(Edge::Right, compact ? 0 : 12);
+  chartLevel_->setFlex(compact ? 0 : 1)->setMinWidth(compact ? 0 : 96)->setHeight(compact ? 28 : 36);
   chartLevel_->setAutoFitText(!compact);
   difficulty_->setThemedBackgroundColor(compact ? [] { return Color(0, 0, 0, 0); } : main_menu_theme::action);
   difficulty_->setThemedColor(compact ? main_menu_theme::accent : main_menu_theme::onAction);

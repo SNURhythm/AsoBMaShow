@@ -57,3 +57,9 @@ folder has no clear rank.
 The chart-list level badge now fits its text with 12 units of padding on each
 side and remains anchored to the right of its column. Long values still respect
 the existing narrow-row width cap and marquee behavior.
+
+The detail level badge also uses its natural text width with 12-unit horizontal
+insets, growing right from its existing left edge. Long labels leave at least
+96 units for the adjacent key-mode value. Regression checks cover growth,
+neighbor spacing and restoring the short-label width. The desktop build and
+chart-details/UI-scale CTest targets passed; no new visual capture was made.
