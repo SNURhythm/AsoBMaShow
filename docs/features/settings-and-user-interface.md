@@ -35,7 +35,8 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
   screen/mode selectors stay vertical; only the built-in editor uses horizontal tabs.
   Built-in controls remain available here when custom skin services are
   unavailable. The live preview uses the same left-aligned editable rows, including its
-  scroll duration and cover amounts.
+  scroll duration and cover amounts. Judge line and measure line controls belong
+  to Lane in both the skin editor and live preview.
   Background groups BGA playback, aspect, brightness, and blur. Skin package
   installation and diagnostics follow selection and appearance controls.
 - Audio starts with volumes and input sounds/count-in, followed by device,

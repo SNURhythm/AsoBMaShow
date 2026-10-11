@@ -819,13 +819,13 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     }
     appendBuiltInLaneGeometryControls(previewControls, metrics, previewKeyMode);
     appendBuiltInLaneOpacityControls(previewControls, metrics, previewKeyMode);
+    appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
+    appendBuiltInMeasureLineControls(previewControls, metrics, previewKeyMode);
     appendBuiltInBeamLengthControls(previewControls, metrics);
 
     previewControls->addView(buildKeybombControls(metrics, previewKeyMode, true));
   } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
     appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInMeasureLineControls(previewControls, metrics, previewKeyMode);
   } else {
     appendSelectedSkinHudSettings(previewControls, metrics, !previewHasSelectedSkin);
   }
