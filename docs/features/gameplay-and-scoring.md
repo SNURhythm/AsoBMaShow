@@ -62,6 +62,33 @@ Skins still supply their own cover artwork. Replays record initial amounts and
 subsequent adjustments; older replays retain their existing fallback behavior.
 NOSPEED courses suppress cover amounts and their adjustment controls.
 
+## Built-in keybombs
+
+Judged lanes display short procedural bursts at the judgement line. PGREAT
+uses a layered ice-blue halo and sparks; GREAT uses a gold ring and sparks;
+GOOD uses a soft mint pulse. BAD fragments rise, POOR fragments fall, and
+KPOOR uses a subdued violet ripple. No external skin artwork is required.
+
+Settings → Timing → Judgement feedback → Keybombs and the built-in preview's
+HUD controls expose a judgement selector, visibility, size (25–300%), and
+opacity (0–100%). Each judgement is independent, and landscape/portrait
+presentations retain separate settings. The preview's random timing mode
+exercises poorer judgements as well as successful hits.
+
+`LaneEffects.h` shares the preallocated lane state with beams. A keybomb event
+publishes its judgement and timestamp with one lock-free atomic store; it
+adds no waits, allocations, particle simulation, or graphics calls to input
+callbacks. The render side samples both effects once per lane, generates
+bounded geometry, and submits batches. The newest judgement replaces a lane's
+previous burst. Empty presses/releases preserve it, reset clears it, and the
+visual clock controls expiry in live play, autoplay, preview, and replay.
+Beams can be disabled independently. Custom skins keep their own effects.
+
+`lane_effects_tests` checks coherent publication, zero producer allocations,
+geometry, expiry, and style controls. The captured-state and headless Metal
+renderer tests cover misses, preview/replay handoffs, reset, and actual pixels.
+These checks do not replace performance measurements on a mobile device.
+
 ## Verification
 
 Use `gameplay_ruleset_tests`, `gameplay_score_state_tests`,

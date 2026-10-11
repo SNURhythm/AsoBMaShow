@@ -474,6 +474,7 @@ void PlayfieldVisualStateStore::onLanePressed(int lane, JudgeResult judge,
   state.pressMicros = eventMicros;
   if (judge.judgement != None) {
     state.bombMicros = eventMicros;
+    state.keybomb = {judge.judgement, eventMicros};
   }
 }
 
@@ -494,6 +495,7 @@ void PlayfieldVisualStateStore::onLaneJudge(
   onJudge(judge, combo, score, clock, recordTimingSample);
   const auto found = laneIndices_.find(lane);
   if (judge.judgement == None || found == laneIndices_.end()) return;
+  lanes_[found->second].keybomb = {judge.judgement, clock.visualTimeMicros};
   lanes_[found->second].lastJudgement = {
       .judgement = judge.judgement,
       .combo = combo,

@@ -76,6 +76,7 @@ previewPresentationConfiguration(const AppSettings &settings,
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           settings.presentation().judgementIndicatorRangeMilliseconds,
+      .keybombs = settings.presentation().keybombs,
       .judgementTextVisibility = settings.presentation().judgementTextVisibility,
       .judgementTextY = settings.presentation().judgementTextY,
       .judgementTimingY = settings.presentation().judgementTimingY,
@@ -680,7 +681,7 @@ void SettingsScene::resetPreviewHudSample() {
 }
 
 void SettingsScene::publishPreviewJudgement(
-    const JudgeResult &judgeResult, long long sourceSongTimeMicros) {
+    const JudgeResult &judgeResult, long long sourceSongTimeMicros, int lane) {
   if (previewRenderer == nullptr) {
     return;
   }
@@ -698,7 +699,7 @@ void SettingsScene::publishPreviewJudgement(
   if (previewPresentationEvents != nullptr) {
     const PlayfieldJudgeEventClock clock =
         makePlayfieldJudgeEventClock(sourceSongTimeMicros, 0, 0);
-    previewPresentationEvents->onJudge(judgeResult, previewCombo,
+    previewPresentationEvents->onLaneJudge(lane, judgeResult, previewCombo,
                                        previewScore, clock, false);
   }
   previewRenderer->setJudgementCounter(
@@ -718,7 +719,8 @@ void SettingsScene::consumePreviewTransactions(
     }
     if (transaction.hasJudge)
       publishPreviewJudgement(transaction.judge,
-          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : previewElapsedMicros);
+          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : previewElapsedMicros,
+          transaction.hasReplayEvent ? transaction.replayEvent.lane : -1);
     const auto *timingNote =
         previewDefinition && transaction.noteId < previewDefinition->noteCount()
             ? &previewDefinition->note(transaction.noteId) : nullptr;

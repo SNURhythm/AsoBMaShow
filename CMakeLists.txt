@@ -5873,6 +5873,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     include(cmake/InputCaptureTests.cmake)
 
+    add_executable(lane_effects_tests tests/lane_effects_tests.cpp)
+    target_compile_features(lane_effects_tests PRIVATE cxx_std_23)
+    target_link_libraries(lane_effects_tests PRIVATE Threads::Threads)
+
     add_executable(app_settings_store_tests
         tests/app_settings_store_tests.cpp
         src/AppSettingsStore.cpp
@@ -9407,6 +9411,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     asobmashow_register_test(input_capture_startup_failure_tests)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
+    asobmashow_register_test(lane_effects_tests)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(image_alpha_bounds_tests)
     asobmashow_register_test(localization_tests)

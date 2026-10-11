@@ -1027,6 +1027,97 @@ View *SettingsScene::buildJudgementFeedbackPositionControls(const LayoutMetrics 
   return body;
 }
 
+View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool previewStyle) {
+  auto *body = new View();
+  body->setWidthPercent(100);
+  body->setFlexDirection(FlexDirection::Column);
+  body->setGap(8.0F);
+  body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
+                                metrics.bodyTextSize, ui_theme::textPrimary()));
+  auto *selector = new DropdownView({
+      .onOptionSelected = [this](const std::string &id) {
+        keybombEditingJudgement = static_cast<Judgement>(std::stoi(id));
+        lastLayoutWidth = -1;
+      }}, overlayPortal);
+  std::vector<DropdownView::Option> options;
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions)
+    options.push_back({.id = std::to_string(option.judgement), .label = option.label});
+  selector->setWidthPercent(100);
+  selector->refresh({.label = i18n::message("settings.keybomb.judgement"),
+      .selectedId = std::to_string(keybombEditingJudgement), .options = std::move(options)});
+  body->addView(selector);
+  const auto judgement = keybombEditingJudgement;
+  auto *visibleText = makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+                                TextView::CENTER, TextView::MIDDLE);
+  auto *visibleButton = makeControlButton(metrics.actionButtonWidth,
+                                           metrics.actionButtonHeight, visibleText);
+  const auto refreshVisible = [this, judgement, visibleText, visibleButton]() {
+    const bool visible = context.settings.presentation().keybombs[judgement].visible;
+    visibleText->setLocalizedText(i18n::message(visible ? "settings.skins.visible.label"
+                                                      : "settings.skins.hidden.label"));
+    styleVisibilityButton(visibleButton, visibleText, visible);
+  };
+  refreshVisible();
+  visibleButton->setOnClickListener([this, judgement, refreshVisible]() {
+    auto &visible = context.settings.presentation().keybombs[judgement].visible;
+    visible = !visible;
+    refreshVisible();
+    persistSettings();
+  });
+  body->addView(visibleButton);
+  const auto appendPercent = [&](const i18n::Text &label, int keybomb::Style::*member,
+                                  int minimum, int maximum) {
+    TextView *valueText = nullptr;
+    body->addView(makeSummaryRow(metrics, label, &valueText));
+    auto *row = new View();
+    row->setWidthPercent(100);
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setAlignItems(YGAlignCenter);
+    row->setGap(8.0F);
+    auto *input = previewStyle ? nullptr : makeTextInput(metrics, metrics.compact ? 116 : 136);
+    const auto refresh = [this, judgement, member, valueText, input]() {
+      const auto value = std::to_string(context.settings.presentation().keybombs[judgement].*member);
+      valueText->setText(value + "%");
+      if (input) input->setEditingText(value);
+    };
+    refresh();
+    if (input) {
+      input->onEditingFinished([this, judgement, member, minimum, maximum, refresh](const std::string &text) {
+        int value = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+          context.settings.presentation().keybombs[judgement].*member = std::clamp(value, minimum, maximum);
+        refresh();
+        persistSettings();
+      });
+      row->addView(input);
+    } else {
+      for (const int delta : {-5, 5}) {
+        auto *button = makeStepButton(metrics, metrics.offsetButtonWidthSmall, delta < 0 ? "-5%" : "+5%");
+        button->setOnClickListener([this, judgement, member, delta, minimum, maximum, refresh]() {
+          auto &value = context.settings.presentation().keybombs[judgement].*member;
+          value = std::clamp(value + delta, minimum, maximum);
+          refresh();
+          persistSettings();
+        });
+        row->addView(button);
+      }
+    }
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([this, judgement, member, refresh]() {
+      context.settings.presentation().keybombs[judgement].*member = keybomb::Style{}.*member;
+      refresh();
+      persistSettings();
+    });
+    row->addView(reset);
+    body->addView(row);
+  };
+  appendPercent(i18n::message("settings.keybomb.size"), &keybomb::Style::sizePercent, 25, 300);
+  appendPercent(i18n::message("settings.lane_background.opacity"), &keybomb::Style::opacityPercent, 0, 100);
+  return body;
+}
+
 View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &metrics,
                                                          bool previewStyle) {
   auto *body = new View();
@@ -1356,6 +1447,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementFeedbackControls->setAlignItems(YGAlignFlexStart);
   judgementFeedbackControls->addView(buildJudgementFeedbackPositionControls(metrics));
   judgementFeedbackControls->addView(buildJudgementFeedbackStyleControls(metrics));
+  judgementFeedbackControls->addView(buildKeybombControls(metrics, false));
 
   auto *timingCriteriaControls = new View();
   timingCriteriaControls->setFlexDirection(FlexDirection::Row);
@@ -3442,6 +3534,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
   }
 
   appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
+  body->addView(buildKeybombControls(metrics, true));
   body->addView(buildJudgementFeedbackStyleControls(metrics, true));
   body->addView(buildJudgementFeedbackPositionControls(metrics, true));
   const auto timingChoices =

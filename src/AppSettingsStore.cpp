@@ -653,6 +653,12 @@ void readBuiltInLanes(const json &document, built_in_lane::Settings &settings,
 }
 
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
+  json keybombs = json::object();
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+    const auto style = keybomb::sanitize(settings.keybombs[option.judgement]);
+    keybombs[option.label] = {{"visible", style.visible}, {"sizePercent", style.sizePercent},
+                            {"opacityPercent", style.opacityPercent}};
+  }
   json judgementVisibility = json::object();
   for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
     judgementVisibility[option.label] = settings.judgementTextVisibility.*option.member;
@@ -688,6 +694,7 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
       {"judgementIndicatorRangeMilliseconds",
        settings.judgementIndicatorRangeMilliseconds},
+      {"keybombs", std::move(keybombs)},
       {"judgementTextVisibility", std::move(judgementVisibility)},
       {"judgementTextY", settings.judgementTextY},
       {"judgementTimingY", settings.judgementTimingY},
@@ -889,6 +896,25 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             settings.judgementIndicatorWidthScale, diagnostics);
   readValue(document, "judgementIndicatorRangeMilliseconds",
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
+  if (const auto found = document.find("keybombs"); found != document.end()) {
+    if (found->is_object()) {
+      for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+        const auto entry = found->find(option.label);
+        if (entry == found->end()) continue;
+        if (!entry->is_object()) {
+          invalidValue("keybombs", "expected judgement object", diagnostics);
+          continue;
+        }
+        auto &style = settings.keybombs[option.judgement];
+        readValue(*entry, "visible", style.visible, diagnostics);
+        readValue(*entry, "sizePercent", style.sizePercent, diagnostics);
+        readValue(*entry, "opacityPercent", style.opacityPercent, diagnostics);
+        style = keybomb::sanitize(style);
+      }
+    } else {
+      invalidValue("keybombs", "expected object", diagnostics);
+    }
+  }
   if (const auto found = document.find("judgementTextVisibility"); found != document.end()) {
     if (found->is_object()) {
       for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {

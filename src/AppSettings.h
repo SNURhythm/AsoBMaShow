@@ -10,6 +10,7 @@
 #include "settings/BuiltInJudgeLine.h"
 #include "settings/BuiltInLaneAppearance.h"
 #include "settings/JudgementTextVisibility.h"
+#include "settings/KeybombSettings.h"
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
 #include "skin/SkinProfileSettings.h"
@@ -261,6 +262,7 @@ public:
     float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
     int judgementIndicatorRangeMilliseconds =
         kDefaultJudgementIndicatorRangeMilliseconds;
+    keybomb::Settings keybombs;
     player_settings::JudgementTextVisibility judgementTextVisibility;
     float judgementTextY = kDefaultJudgementTextY;
     float judgementTimingY = kDefaultJudgementTimingY;

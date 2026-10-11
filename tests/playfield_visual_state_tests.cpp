@@ -475,6 +475,15 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
   require(captured.touches.size() == 1 && captured.sceneStartMicros == 10 &&
               captured.lanes.at(2).releaseMicros == 200,
           "a captured DTO remains immutable after later store changes");
+  require(captured.lanes.at(2).keybomb.judgement == PGreat &&
+              captured.lanes.at(2).keybomb.timeMicros == 0,
+          "empty presses and releases preserve the judged burst");
+  store.onLaneJudge(1, JudgeResult(Poor, 0), 0, 42,
+                    {.visualTimeMicros = 450}, false);
+  const auto miss = store.capture({});
+  require(miss.lanes.at(2).keybomb.judgement == Poor &&
+              miss.lanes.at(2).keybomb.timeMicros == 450,
+          "misses publish a lane burst without a key press");
   require(captured.lanes.at(2).bombMicros == 0,
           "time zero is a valid bomb timestamp rather than the OFF sentinel");
   require(captured.lanes.front().pressMicros ==

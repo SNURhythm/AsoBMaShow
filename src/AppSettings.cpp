@@ -408,6 +408,7 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   built_in_notes::sanitize(builtInNotes);
   built_in_judge_line::sanitize(builtInJudgeLines);
   built_in_lane::sanitize(builtInLanes);
+  for (auto &style : keybombs) style = keybomb::sanitize(style);
   laneAngleDegrees = sanitizeFloat(laneAngleDegrees, policy.angle.defaultValue,
                                    policy.angle.minimum, policy.angle.maximum);
   laneLength = sanitizeFloat(laneLength, policy.length.defaultValue, policy.length.minimum,

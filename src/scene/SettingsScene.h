@@ -110,6 +110,7 @@ private:
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
   int builtInLaneOpacityMode = 7;
+  Judgement keybombEditingJudgement = PGreat;
   std::string builtInNoteDropdown;
   void appendAppearanceColorPicker(View *body, const settings_scene::LayoutMetrics &metrics,
                                    const std::string &id, std::uint32_t color,
@@ -460,6 +461,7 @@ private:
   View *buildScratchLanePositionControl(const settings_scene::LayoutMetrics &metrics);
   View *buildJudgementFeedbackPositionControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
+  View *buildKeybombControls(const settings_scene::LayoutMetrics &metrics, bool previewStyle);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
@@ -515,7 +517,7 @@ private:
   void advancePreviewSimulation();
   void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult> transactions);
   void publishPreviewJudgement(const JudgeResult &judgeResult,
-                               long long sourceSongTimeMicros);
+                               long long sourceSongTimeMicros, int lane = -1);
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();

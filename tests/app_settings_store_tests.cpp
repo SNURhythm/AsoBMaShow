@@ -2706,7 +2706,33 @@ void testSharedScratchlessPolicyMigration() {
   }
 }
 
+void testKeybombSettingsPersist() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "keybombs.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), "save keybomb defaults");
+  auto document = nlohmann::json::parse(readFile(path));
+  document["presentations"]["landscape"]["keybombs"] = {
+      {"PGREAT", {{"visible", false}, {"sizePercent", 175}, {"opacityPercent", 35}}},
+      {"POOR", {{"visible", true}, {"sizePercent", 999}, {"opacityPercent", -1}}}};
+  writeFile(path, document.dump());
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(AppSettingsStore::Save(path, loaded.settings, error), "save loaded keybombs");
+  const auto saved = nlohmann::json::parse(readFile(path));
+  const auto &landscape = saved["presentations"]["landscape"];
+  expect(landscape.contains("keybombs"), "keybomb configuration survives restart");
+  if (!landscape.contains("keybombs")) return;
+  const auto &bombs = landscape["keybombs"];
+  expect(bombs["PGREAT"] == document["presentations"]["landscape"]["keybombs"]["PGREAT"],
+         "visibility, size and opacity persist independently per judgement");
+  expect(bombs["POOR"]["sizePercent"] == 300 && bombs["POOR"]["opacityPercent"] == 0,
+         "keybomb size and opacity are bounded");
+  expect(saved["presentations"]["portrait"]["keybombs"]["PGREAT"]["visible"] == true,
+         "landscape keybomb edits do not change portrait");
+}
+
 int main() {
+  testKeybombSettingsPersist();
   testScratchlessPolicyDefaultsPersist();
   testScratchlessPolicyRoundTripAndSelection();
   testSharedScratchlessPolicyMigration();

@@ -2323,6 +2323,125 @@ void verifyColorPickerPopupPixels(const RenderTarget &target) {
   }
 }
 
+void verifyKeybombRendering(const RenderTarget &target) {
+  const auto render = [&](Judgement judgement, keybomb::Style style = {},
+                           long long age = 80'000, bool captured = false,
+                           bool rightScratch = false, bool allJudgements = false,
+                           bool reset = false) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    SyntheticChartFixture fixture;
+    const auto model = buildPlayfieldChartVisualModel(*fixture.chart, 0);
+    PlayfieldVisualStateStore store(model);
+    Judge judge(fixture.chart->Meta.Rank);
+    BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, false);
+    Recorder recorder;
+    renderer.setCharacterizationRecorder(&recorder);
+    auto config = presentationConfig(0);
+    config.laneBeamsEnabled = false;
+    config.judgementIndicatorEnabled = false;
+    config.scratchLaneOnRight = rightScratch;
+    for (auto &entry : config.keybombs) entry = style;
+    renderer.configure(config);
+    store.setConfiguration(config);
+    auto authority = authorityFor(*fixture.chart, 0);
+    authority.startLaneIndicatorsVisible = false;
+    store.applyAuthorityUpdate(authority);
+    applyAuthority(renderer, authority);
+    PlayfieldPresentationEventFanout events(store, renderer);
+    const auto publish = [&](int lane, Judgement result) {
+      events.onLaneJudge(lane, JudgeResult(result, 0), 1, 2,
+                         {.visualTimeMicros = kRenderMicros - age}, false);
+      // An empty press must not erase the judgement burst.
+      events.onLanePressed(lane, JudgeResult(None, 0), kRenderMicros - 1000);
+      events.onLaneReleased(lane, kRenderMicros);
+    };
+    if (allJudgements) {
+      int lane = 0;
+      for (auto result : {PGreat, Great, Good, Bad, Poor, Kpoor}) publish(lane++, result);
+    } else {
+      publish(7, judgement);
+    }
+    if (reset) renderer.reset();
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      if (captured) {
+        store.setNoteStates(captureNoteStates(*fixture.chart, model, kRenderMicros));
+        const auto state = store.capture({.serial = 1, .visualTimeMicros = kRenderMicros,
+                                          .gameplayTimeMicros = kRenderMicros});
+        PlayfieldProjection projector;
+        const auto projection = projector.project(model, state,
+            {.includeInvisibleNotes = config.showInvisibleNotes,
+             .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+             .builtInTraversal = renderer.builtInProjectionTraversal()});
+        renderer.render(context, state, projection);
+      } else {
+        renderer.render(context, kRenderMicros, kRenderMicros);
+      }
+    }
+    return readPixels(target);
+  };
+  const auto empty = render(None);
+  const auto perfect = render(PGreat);
+  expect(perfect != empty, "judgement keybomb renders with lane beams disabled");
+  expect(render(PGreat, {false, 100, 100}) == empty &&
+             render(PGreat, {true, 100, 0}) == empty,
+         "hidden or zero-opacity keybomb contributes no rendered pixels");
+  expect(render(PGreat, {}, -1) == empty && render(PGreat, {}, 500'000) == empty,
+         "keybombs are absent before their event and after their lifetime");
+  expect(render(PGreat, {}, 80'000, true) == perfect,
+         "captured replay presentation renders the same burst as direct lane events");
+  expect(render(PGreat, {}, 80'000, false, false, false, true) == empty,
+         "renderer reset removes stale bursts");
+  expect(render(PGreat, {true, 180, 100}) != perfect &&
+             render(PGreat, {true, 100, 30}) != perfect,
+         "keybomb size and opacity settings reach actual pixels");
+  std::vector<std::vector<std::uint8_t>> variants;
+  for (auto result : {PGreat, Great, Good, Bad, Poor, Kpoor}) {
+    auto pixels = render(result);
+    expect(pixels != empty, "every judgement has a visible keybomb");
+    for (const auto &previous : variants)
+      expect(pixels != previous, "judgements produce distinct rendered bursts");
+    variants.push_back(std::move(pixels));
+  }
+  const auto checkSide = [&](bool right) {
+    const auto background = render(None, {}, 80'000, false, right);
+    const auto burst = render(PGreat, {}, 80'000, false, right);
+    int left = kDrawableWidth, top = kDrawableHeight, edge = 0, bottom = 0;
+    for (int y = 0; y < kDrawableHeight; ++y) {
+      for (int x = 0; x < kDrawableWidth; ++x) {
+        const auto offset = (y * kDrawableWidth + x) * 4;
+        if (std::equal(burst.begin() + offset, burst.begin() + offset + 3,
+                       background.begin() + offset)) continue;
+        left = std::min(left, x); edge = std::max(edge, x);
+        top = std::min(top, y); bottom = std::max(bottom, y);
+      }
+    }
+    expect(left < edge && top < bottom &&
+               (right ? left > kDrawableWidth / 2 : edge < kDrawableWidth / 2),
+           "scratch keybomb follows the displayed scratch lane");
+  };
+  checkSide(false);
+  checkSide(true);
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    const auto pixels = render(PGreat, {}, 80'000, true, false, true);
+    expect(lodepng::encode((std::filesystem::path(directory) / "keybombs.png").string(),
+                           pixels, kDrawableWidth, kDrawableHeight) == 0,
+           "keybomb comparison image encodes");
+    for (int frame = 0; frame < 10; ++frame) {
+      const auto animated = render(PGreat, {}, frame * 40'000, true, false, true);
+      expect(lodepng::encode((std::filesystem::path(directory) /
+                             ("keybomb-motion-" + std::to_string(frame) + ".png")).string(),
+                             animated, kDrawableWidth, kDrawableHeight) == 0,
+             "keybomb animation frame encodes");
+    }
+  }
+}
+
 void verifyCustomLaneAppearance(const RenderTarget &target) {
   using Kind = characterization::SubmissionKind;
   const built_in_lane::Style style{0x44EE88, 500, 100};
@@ -2604,7 +2723,7 @@ struct SettingsScene {
   bms_parser::Note *pressLane(int, double);
   bms_parser::Note *pressLane(int, int, double);
   bms_parser::Note *releaseLane(int, double, bool = false);
-  void publishPreviewJudgement(const JudgeResult &, long long);
+  void publishPreviewJudgement(const JudgeResult &, long long, int lane = -1);
 };
 using settings_scene::kPreviewBpm;
 using settings_scene::kPreviewLoopMicros;
@@ -3919,6 +4038,7 @@ int main() {
 
   if (failures == 0) {
     try {
+      verifyKeybombRendering(target);
       verifyJudgementIndicatorContinuousAverage(target);
       verifyCapturedFrameRetainsContinuousAverage(target);
       verifySelectedSkinTimingPointerStaysOnScreen(target);

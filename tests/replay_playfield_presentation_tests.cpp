@@ -443,6 +443,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
   settings.presentation().judgementIndicatorRangeMilliseconds = 123;
   settings.presentation().scratchLaneOnRight = true;
+  settings.presentation().keybombs[PGreat] = {false, 175, 35};
+  settings.presentation().keybombs[Poor] = {true, 70, 20};
   settings.presentation().judgementTextY = 0.6F;
   settings.presentation().judgementTimingY = 0.4F;
   settings.presentation().pacemakerDiffY = 0.2F;
@@ -475,6 +477,9 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   const auto configuration =
       replay_video_export::replayGameplayPresentationConfig(
           settings, 9.5F, chart, false, false);
+  expect(configuration.keybombs[PGreat] == keybomb::Style{false, 175, 35} &&
+             configuration.keybombs[Poor] == keybomb::Style{true, 70, 20},
+         "replay exports preserve the configured per-judgement keybomb appearance");
   expect(configuration.visibleTimeDurationMilliseconds == 1'001 &&
              configuration.configuredHispeed &&
              *configuration.configuredHispeed == 1.75F &&
