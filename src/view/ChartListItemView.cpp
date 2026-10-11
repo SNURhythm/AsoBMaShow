@@ -346,7 +346,7 @@ void ChartListItemView::onSelected() {
 
 void ChartListItemView::onUnselected() {
   selected = false;
-  contentCard->setThemedBackgroundColor(main_menu_theme::canvas);
+  contentCard->clearBackgroundColor();
   applyTextColors(false);
   refreshFavoriteButton();
 }

@@ -68,3 +68,16 @@ Download and Unzip now share Play's primary-button constructor: bold 44-unit
 labels, 42-unit icons, identical spacing and theme colors. Download uses the
 download icon and Unzip uses the archive icon. Desktop compilation and the UI
 scale regression target passed. No new visual capture was made.
+
+## Selector translucency
+
+The Play/Course selector backdrop now has alpha 200/255 in both themes.
+Unselected chart rows and the selector header inherit that one backdrop instead
+of stacking opaque fills. The dock wrapper is transparent; the options button
+adds a light translucent dark tint, with stronger hover/pressed states. Text,
+selection highlights and primary action buttons retain their contrast. Utility
+tabs retain their opaque header. Existing BGA brightness/blur settings still
+apply beneath the selector.
+
+Desktop compilation and chart-list, chart-details and UI-scale CTest targets
+passed. No fresh visual capture was made for this change.

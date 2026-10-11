@@ -847,8 +847,11 @@ void MainMenuScene::refreshTabPresentation() {
   const bool selector = selectorTabActive();
   const bool fullscreen = activeTab_ == Tab::Music && musicTab_ && musicTab_->coversTabHeader();
   rootLayout->setVisible(!fullscreen);
-  if (selector) rootLayout->setThemedBackgroundColor(main_menu_theme::canvas);
+  if (selector) rootLayout->setThemedBackgroundColor(main_menu_theme::backdrop);
   else rootLayout->clearBackgroundColor();
+  auto *header = rootLayout->findViewByName("mainMenuHeader");
+  if (selector) header->clearBackgroundColor();
+  else header->setThemedBackgroundColor(main_menu_theme::canvas);
   auto *body = rootLayout->findViewByName("mainMenuBody");
   body->setDisplay(selector ? YGDisplayFlex : YGDisplayNone);
   body->setVisible(selector);
@@ -1560,10 +1563,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, 0);
-  rootLayout->setThemedBackgroundColor(main_menu_theme::canvas);
+  rootLayout->setThemedBackgroundColor(main_menu_theme::backdrop);
   auto *header = new View();
   header->setName("mainMenuHeader");
-  header->setThemedBackgroundColor(main_menu_theme::canvas);
+  header->clearBackgroundColor();
   header->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
   header->setHeight(kMenuHeaderHeight)->setFlexShrink(0);
   rootLayout->addView(header);
@@ -1576,7 +1579,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playDock->setName("mainMenuPlayDock");
   playDock->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
   playDock->setHeight(kPlayDockHeight)->setFlexShrink(0)->setGap(0);
-  playDock->setThemedBackgroundColor(main_menu_theme::dock);
+  playDock->clearBackgroundColor();
   rootLayout->addView(playDock);
   auto *browser = new View();
   browser->setName("mainMenuBrowser");

@@ -2,8 +2,8 @@
 
 #include "UiTheme.h"
 
-// The built-in selector uses opaque, print-like surfaces. Keep these local to
-// the selector so imported skins and gameplay feedback retain their colors.
+// Keep selector colors local so imported skins and gameplay feedback retain
+// their colors. The backdrop lets preview BGA show through beneath crisp text.
 namespace main_menu_theme {
 
 inline constexpr const char *font = "assets/fonts/roboto-condensed-regular.ttf";
@@ -11,6 +11,7 @@ inline constexpr const char *boldFont = "assets/fonts/roboto-condensed-bold.ttf"
 
 inline bool light() { return ui_theme::activeMode() == ui_theme::ThemeMode::Light; }
 inline Color canvas() { return light() ? Color(249, 248, 243, 255) : Color(18, 20, 24, 255); }
+inline Color backdrop() { auto color = canvas(); color.a = 200; return color; }
 inline Color surface() { return light() ? Color(242, 241, 237, 255) : Color(27, 30, 36, 255); }
 inline Color hover() { return light() ? Color(223, 225, 230, 255) : Color(40, 45, 55, 255); }
 inline Color pressed() { return light() ? Color(209, 215, 228, 255) : Color(49, 57, 72, 255); }
@@ -29,9 +30,9 @@ inline Color selectedSecondary() { return light() ? Color(190, 195, 205, 255) : 
 inline Color selectedAccent() { return light() ? Color(159, 186, 255, 255) : Color(0, 80, 255, 255); }
 inline Color warning() { return light() ? Color(132, 84, 14, 255) : Color(241, 195, 108, 255); }
 inline Color error() { return light() ? Color(171, 38, 55, 255) : Color(255, 148, 159, 255); }
-inline Color dock() { return Color(18, 20, 24, 255); }
-inline Color dockHover() { return Color(35, 39, 48, 255); }
-inline Color dockPressed() { return Color(44, 50, 62, 255); }
+inline Color dock() { return Color(18, 20, 24, 96); }
+inline Color dockHover() { return Color(35, 39, 48, 120); }
+inline Color dockPressed() { return Color(44, 50, 62, 144); }
 inline Color dockText() { return Color(238, 237, 232, 255); }
 inline Color dockSecondary() { return Color(173, 178, 188, 255); }
 
