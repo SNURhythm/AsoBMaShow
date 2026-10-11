@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../scene/play/Judgement.h"
+#include "../scene/play/JudgementColors.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -22,18 +22,11 @@ inline Style sanitize(Style style) {
   return style;
 }
 inline bool valid(Judgement judge) { return judge >= PGreat && judge <= Poor; }
-inline std::uint32_t defaultColor(Judgement judge) {
-  switch (judge) {
-  case PGreat: return 0xA0E8FF;
-  case Great: return 0xFFDC6E;
-  case Good: return 0x9CE3B2;
-  case Bad: return 0xF09278;
-  case Poor: return 0xC26C62;
-  default: return 0xA187BE;
-  }
+inline std::uint32_t defaultColor(Judgement judge, bool light = false) {
+  return judgement_colors::rgb(judge, light);
 }
-inline std::uint32_t resolvedColor(Judgement judge, const Style &style) {
-  return style.color.value_or(defaultColor(judge));
+inline std::uint32_t resolvedColor(Judgement judge, const Style &style, bool light = false) {
+  return style.color.value_or(defaultColor(judge, light));
 }
 inline std::uint32_t effectColor(Judgement judge, const Style &style) {
   const auto rgb = resolvedColor(judge, style);

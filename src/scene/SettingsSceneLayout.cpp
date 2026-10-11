@@ -874,6 +874,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     playAreaWidthControls->addView(resetWidth);
     previewControls->addView(playAreaWidthControls);
     appendBuiltInLaneOpacityControls(previewControls, metrics, previewKeyMode);
+    previewControls->addView(buildKeybombControls(metrics, true));
   } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
     appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
     appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
@@ -1032,8 +1033,9 @@ View *SettingsScene::buildKeybombControls(const LayoutMetrics &metrics, bool pre
   body->setWidthPercent(100);
   body->setFlexDirection(FlexDirection::Column);
   body->setGap(8.0F);
-  body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
-                                metrics.bodyTextSize, ui_theme::textPrimary()));
+  if (previewStyle)
+    body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
+                                  metrics.bodyTextSize, ui_theme::textPrimary()));
   auto *selector = new DropdownView({
       .onOptionSelected = [this](const std::string &id) {
         keybombEditingJudgement = static_cast<Judgement>(std::stoi(id));
@@ -1448,7 +1450,6 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementFeedbackControls->setAlignItems(YGAlignFlexStart);
   judgementFeedbackControls->addView(buildJudgementFeedbackPositionControls(metrics));
   judgementFeedbackControls->addView(buildJudgementFeedbackStyleControls(metrics));
-  judgementFeedbackControls->addView(buildKeybombControls(metrics, false));
 
   auto *timingCriteriaControls = new View();
   timingCriteriaControls->setFlexDirection(FlexDirection::Row);
@@ -2117,6 +2118,9 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.lane.gameplay_preview.label"), i18n::message("settings.lane.preview_current_lane_hud.message"),
       previewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  cardsColumn->addView(makeCard(metrics, i18n::message("settings.keybomb.title"), "",
+      buildKeybombControls(metrics, false), metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *opacityControls = new View();
   opacityControls->setFlexDirection(FlexDirection::Column);
@@ -3535,7 +3539,6 @@ void SettingsScene::appendSelectedSkinHudSettings(
   }
 
   appendHeading(i18n::message("settings.skins.judgement_feedback.label"));
-  body->addView(buildKeybombControls(metrics, true));
   body->addView(buildJudgementFeedbackStyleControls(metrics, true));
   body->addView(buildJudgementFeedbackPositionControls(metrics, true));
   const auto timingChoices =

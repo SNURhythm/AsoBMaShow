@@ -202,24 +202,10 @@ Color hudPanelBorder() {
 }
 
 Color hudCounterAccent(size_t index) {
-  switch (index) {
-  case 0:
-    return ui_theme::cyan();
-  case 1:
-    return ui_theme::lime();
-  case 2:
-    return ui_theme::amber();
-  case 3:
-    return Color(255, 132, 96, 255);
-  case 4:
-    return ui_theme::coral();
-  case 5:
-    return Color(255, 78, 102, 255);
-  case 6:
-    return ui_theme::coral();
-  default:
-    return ui_theme::textPrimary();
-  }
+  constexpr Judgement judgements[] = {PGreat, Great, Good, Bad, Poor, Kpoor, Poor};
+  if (index >= std::size(judgements)) return ui_theme::textPrimary();
+  return Color(0xFF000000U | judgement_colors::rgb(
+      judgements[index], ui_theme::activeMode() == ui_theme::ThemeMode::Light));
 }
 
 Color hudCounterFill(size_t index, bool active, bool topPosition) {
@@ -3772,11 +3758,14 @@ void BMSRenderer::renderFrame(
       const float x = laneToX(lane) + noteRenderWidth * 0.5F;
       const auto judgement = keybomb::valid(effects.keybomb.judgement)
           ? effects.keybomb.judgement : PGreat;
+      auto style = keybombs[judgement];
+      style.color = keybomb::resolvedColor(judgement, style,
+          ui_theme::activeMode() == ui_theme::ThemeMode::Light);
       keybomb::draw(simpleBatchRenderer, effects.keybomb, nowMicros,
-                    x, keybombY, noteRenderWidth, keybombs[judgement]);
+                    x, keybombY, noteRenderWidth, style);
       if (effects.isPressed && longHoldEffectsByOrder[laneToOrderIndex.at(lane)])
         keybomb::drawHold(simpleBatchRenderer, judgement, nowMicros,
-                          x, keybombY, noteRenderWidth, keybombs[judgement]);
+                          x, keybombY, noteRenderWidth, style);
     }
     simpleBatchRenderer.flush();
   }

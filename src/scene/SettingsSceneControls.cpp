@@ -1419,7 +1419,8 @@ void SettingsScene::appendBuiltInNoteControls(
 void SettingsScene::appendKeybombColorControls(
     View *body, const LayoutMetrics &metrics, Judgement judgement) {
   const auto style = context.settings.presentation().keybombs[judgement];
-  const auto color = keybomb::resolvedColor(judgement, style);
+  const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
+  const auto color = keybomb::resolvedColor(judgement, style, light);
   const auto apply = [this, judgement](std::optional<std::uint32_t> rgb) {
     context.settings.presentation().keybombs[judgement].color = rgb;
     persistSettings();
@@ -1428,7 +1429,7 @@ void SettingsScene::appendKeybombColorControls(
   };
   body->addView(makeWrappedText(i18n::message("settings.notes.presets"),
                                metrics.smallTextSize, ui_theme::textSecondary()));
-  auto *presets = makeAppearanceColorPresets(metrics, keybomb::defaultColor(judgement),
+  auto *presets = makeAppearanceColorPresets(metrics, keybomb::defaultColor(judgement, light),
       color, [apply](std::uint32_t rgb) { apply(rgb); });
   body->addView(presets);
   appendAppearanceColorPicker(presets, metrics, "keybomb-" + std::to_string(judgement), color,

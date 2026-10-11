@@ -65,12 +65,13 @@ NOSPEED courses suppress cover amounts and their adjustment controls.
 ## Built-in keybombs
 
 Judged lanes display short procedural bursts at the judgement line. PGREAT
-uses a layered ice-blue halo and sparks; GREAT uses a gold ring and sparks;
-GOOD uses a soft mint pulse. BAD fragments rise, POOR fragments fall, and
-KPOOR uses a subdued violet ripple. No external skin artwork is required.
+uses a layered halo and sparks; GREAT uses a ring and sparks; GOOD uses a soft
+pulse. BAD fragments rise, POOR fragments fall, and KPOOR uses a subdued ripple.
+Default colors match judgement text in both light and dark themes. No external
+skin artwork is required.
 
-Settings → Timing → Judgement feedback → Keybombs and the built-in preview's
-HUD controls expose a judgement selector, visibility, size (25–300%),
+Settings → Lane → Keybombs and the built-in preview's
+Lane controls expose a judgement selector, visibility, size (25–300%),
 opacity (0–100%), and color presets, picker, and hex input. Reset color restores
 the original palette for that judgement. Each judgement is independent, and landscape/portrait
 presentations retain separate settings. The preview's random timing mode
