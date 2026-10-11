@@ -81,3 +81,10 @@ apply beneath the selector.
 
 Desktop compilation and chart-list, chart-details and UI-scale CTest targets
 passed. No fresh visual capture was made for this change.
+
+Unselected tabs and secondary control buttons now use a translucent neutral
+fill. Search, utility action cards and both jacket placeholders share a
+translucent surface fill. Normal fills use alpha 64/255, hover 96/255 and
+pressed 128/255 over the existing selector backdrop, preserving visible
+interaction feedback. Desktop build and the three affected CTest targets
+(chart-list, chart-details and UI-scale) passed. No fresh visual capture.

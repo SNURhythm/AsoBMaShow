@@ -12,9 +12,10 @@ inline constexpr const char *boldFont = "assets/fonts/roboto-condensed-bold.ttf"
 inline bool light() { return ui_theme::activeMode() == ui_theme::ThemeMode::Light; }
 inline Color canvas() { return light() ? Color(249, 248, 243, 255) : Color(18, 20, 24, 255); }
 inline Color backdrop() { auto color = canvas(); color.a = 200; return color; }
-inline Color surface() { return light() ? Color(242, 241, 237, 255) : Color(27, 30, 36, 255); }
-inline Color hover() { return light() ? Color(223, 225, 230, 255) : Color(40, 45, 55, 255); }
-inline Color pressed() { return light() ? Color(209, 215, 228, 255) : Color(49, 57, 72, 255); }
+inline Color control() { auto color = canvas(); color.a = 64; return color; }
+inline Color surface() { return light() ? Color(242, 241, 237, 64) : Color(27, 30, 36, 64); }
+inline Color hover() { return light() ? Color(223, 225, 230, 96) : Color(40, 45, 55, 96); }
+inline Color pressed() { return light() ? Color(209, 215, 228, 128) : Color(49, 57, 72, 128); }
 inline Color ink() { return light() ? Color(25, 27, 32, 255) : Color(238, 237, 232, 255); }
 inline Color secondary() { return light() ? Color(84, 87, 94, 255) : Color(173, 178, 188, 255); }
 inline Color muted() { return light() ? Color(104, 107, 114, 255) : Color(148, 155, 167, 255); }

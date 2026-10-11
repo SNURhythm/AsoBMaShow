@@ -130,7 +130,7 @@ void styleMenuButton(Button *button, TextView *text, bool primary = false) {
   button->setCornerRadius(0);
   button->setStyledBorderWidth(primary ? 0 : 1);
   button->setThemedBackgroundColors(
-      primary ? main_menu_theme::action : main_menu_theme::canvas,
+      primary ? main_menu_theme::action : main_menu_theme::control,
       primary ? main_menu_theme::actionHover : main_menu_theme::hover,
       primary ? main_menu_theme::actionPressed : main_menu_theme::pressed);
   button->setThemedBorderColors(main_menu_theme::rule,
