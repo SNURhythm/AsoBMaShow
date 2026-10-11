@@ -8,7 +8,6 @@
 #include <cmath>
 
 namespace {
-constexpr long long kFadeMicros = 1800000LL;
 constexpr float kWorldWidthRatio = 0.4f;
 constexpr float kHudWidthRatio = 0.2f;
 constexpr float kHudMinWidth = 220.0f;
@@ -61,6 +60,14 @@ Color judgementColor(Judgement judgement, uint8_t alpha) {
     break;
   }
   return Color(255, 255, 255, alpha);
+}
+
+Color timingMarkerColor(Judgement judgement, uint8_t alpha) {
+  Color color = judgementColor(judgement, alpha);
+  color.r = static_cast<uint8_t>((color.r + 255) / 2);
+  color.g = static_cast<uint8_t>((color.g + 255) / 2);
+  color.b = static_cast<uint8_t>((color.b + 255) / 2);
+  return color;
 }
 
 void addRect(rendering::SimpleBatchRenderer &batch, float width, float height,
@@ -161,16 +168,13 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
         currentTimeMicros < sample.createdTimeMicros) {
       continue;
     }
-    const long long ageMicros = currentTimeMicros - sample.createdTimeMicros;
-    if (ageMicros < kFadeMicros &&
-        visibleSampleCount < visibleSamples.size()) {
+    if (visibleSampleCount < visibleSamples.size()) {
       visibleSamples[visibleSampleCount++] = sample;
     }
     if (sample.hasAverage && sample.averageTimeMicros <= currentTimeMicros) {
       averageMicros = sample.averageMicros;
-      averageAlpha = std::max(0.0f,
-          1.0f - static_cast<float>(currentTimeMicros - sample.averageTimeMicros) /
-                     static_cast<float>(kFadeMicros));
+      averageAlpha = static_cast<float>(judgement_indicator::timingWeight(
+          sample.averageTimeMicros, currentTimeMicros));
     }
   }
 
@@ -223,23 +227,20 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   for (size_t i = 0; i < visibleSampleCount; ++i) {
     const auto &sample = visibleSamples[i];
-    long long ageMicros = currentTimeMicros - sample.createdTimeMicros;
-    if (ageMicros < 0) {
-      ageMicros = 0;
-    }
-    const float alpha =
-        1.0f - static_cast<float>(ageMicros) / static_cast<float>(kFadeMicros);
-    if (alpha <= 0.0f) {
+    const uint8_t alpha = alphaByte(
+        static_cast<float>(judgement_indicator::timingWeight(
+            sample.createdTimeMicros, currentTimeMicros)));
+    if (alpha == 0) {
       continue;
     }
     const float x =
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
-            judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
+            timingMarkerColor(sample.judgement, alpha));
   }
 
-  if (averageAlpha > 0.0f) {
+  if (alphaByte(averageAlpha) > 0) {
     const float x =
         offsetToX(averageMicros, currentRangeMicros, indicatorLayout);
     // Keep the average below the history, with a distinct shape.

@@ -69,6 +69,15 @@ clipSegment(std::int64_t startMicros, std::int64_t endMicros,
   return clipped;
 }
 
+// Shared by the running average and visible timing-bar opacity.
+[[nodiscard]] inline double timingWeight(std::int64_t sampleTimeMicros,
+                                         std::int64_t currentTimeMicros) noexcept {
+  constexpr double halfLifeMicros = 1'800'000.0;
+  const double ageMicros = std::max(
+      0.0, static_cast<double>(currentTimeMicros) - sampleTimeMicros);
+  return std::exp2(-ageMicros / halfLifeMicros);
+}
+
 // Normalized exponential weighting, anchored at the newest input rather than
 // wall-clock time. Idle time cannot move the mean or underflow both sums.
 class ExponentialAverageAccumulator {
@@ -78,16 +87,12 @@ public:
       latestSampleTimeMicros_ = sampleTimeMicros;
     }
     if (sampleTimeMicros >= latestSampleTimeMicros_) {
-      const double decay = std::exp2(
-          (static_cast<double>(latestSampleTimeMicros_) -
-           static_cast<double>(sampleTimeMicros)) / kHalfLifeMicros);
+      const double decay = timingWeight(latestSampleTimeMicros_, sampleTimeMicros);
       weightedSumMicros_ = weightedSumMicros_ * decay + diffMicros;
       totalWeight_ = totalWeight_ * decay + 1.0;
       latestSampleTimeMicros_ = sampleTimeMicros;
     } else {
-      const double weight = std::exp2(
-          (static_cast<double>(sampleTimeMicros) -
-           static_cast<double>(latestSampleTimeMicros_)) / kHalfLifeMicros);
+      const double weight = timingWeight(sampleTimeMicros, latestSampleTimeMicros_);
       weightedSumMicros_ += diffMicros * weight;
       totalWeight_ += weight;
     }
@@ -102,7 +107,6 @@ public:
   }
 
 private:
-  static constexpr double kHalfLifeMicros = 1'800'000.0;
   double weightedSumMicros_ = 0.0;
   double totalWeight_ = 0.0;
   std::int64_t latestSampleTimeMicros_ = 0;

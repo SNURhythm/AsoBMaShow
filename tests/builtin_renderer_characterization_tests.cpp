@@ -963,10 +963,10 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   };
   const auto empty = render(2'000'000);
   indicator.record(JudgeResult(Great, -60'000), 0);
-  expect(render(2'000'000) == empty,
-         "the average disappears when all timing samples have expired");
-  expect(render(1'800'000) == empty,
-         "the average expires exactly with the vertical markers");
+  expect(render(16'200'000) == empty,
+         "the indicator history disappears once exponential opacity rounds to zero");
+  expect(render(1'800'000) != empty,
+         "timing history remains visible at one exponential half-life");
   indicator.record(JudgeResult(Great, 60'000), 2'000'000);
   const auto withOldSample = render(2'000'000);
   indicator.clear();
@@ -993,6 +993,29 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
     }
     return brightest;
   };
+  const auto markerBrightness = [&](const std::vector<std::uint8_t> &pixels) {
+    int brightest = 0;
+    for (unsigned y = 350; y < 354; ++y) {
+      for (unsigned x = 0; x < kDrawableWidth; ++x) {
+        const auto offset = (y * kDrawableWidth + x) * 4U + 1U;
+        brightest = std::max(brightest,
+            static_cast<int>(pixels[offset]) - empty[offset]);
+      }
+    }
+    return brightest;
+  };
+  const int freshMarker = markerBrightness(fresh);
+  const auto halfLife = render(3'800'000);
+  const auto twoHalfLives = render(5'600'000);
+  const int fullMarkerBrightness = 255 - empty[350 * kDrawableWidth * 4 + 1];
+  expect(std::abs(freshMarker - fullMarkerBrightness) <= 1,
+         "fresh timing bars render at full brightness");
+  expect(std::abs(markerBrightness(halfLife) * 2 - freshMarker) <= 3 &&
+             std::abs(markerBrightness(twoHalfLives) * 4 - freshMarker) <= 4,
+         "timing bar brightness halves every 1.8 seconds like its average weight");
+  expect(std::abs(pointerBrightness(halfLife) * 2 -
+                  pointerBrightness(fresh)) <= 3,
+         "the average pointer fades consistently with the weighted timing bars");
   const int freshBrightness = pointerBrightness(fresh);
   const int fadedBrightness = pointerBrightness(faded);
   expect(freshBrightness > 100 && fadedBrightness > freshBrightness / 4 &&
