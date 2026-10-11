@@ -1,0 +1,114 @@
+[
+  {
+    "case": "litone-gameplay",
+    "metric": "cold",
+    "beforeMillis": 337.546,
+    "afterMillis": 315.016,
+    "reductionPercent": 6.674645826050368
+  },
+  {
+    "case": "litone-gameplay",
+    "metric": "warm",
+    "beforeMillis": 273.9625,
+    "afterMillis": 251.4805,
+    "reductionPercent": 8.206232604827292
+  },
+  {
+    "case": "litone-gameplay",
+    "metric": "frameMedian",
+    "beforeMillis": 0.271667,
+    "afterMillis": 0.256667,
+    "reductionPercent": 5.521465617833603
+  },
+  {
+    "case": "litone-gameplay",
+    "metric": "frameP95",
+    "beforeMillis": 0.347125,
+    "afterMillis": 0.334083,
+    "reductionPercent": 3.7571480014404024
+  },
+  {
+    "case": "litone-select",
+    "metric": "cold",
+    "beforeMillis": 272.401,
+    "afterMillis": 254.689,
+    "reductionPercent": 6.502178773205684
+  },
+  {
+    "case": "litone-select",
+    "metric": "warm",
+    "beforeMillis": 252.0045,
+    "afterMillis": 228.378,
+    "reductionPercent": 9.375427819741324
+  },
+  {
+    "case": "litone-select",
+    "metric": "frameMedian",
+    "beforeMillis": 0.970542,
+    "afterMillis": 0.246875,
+    "reductionPercent": 74.56318222189252
+  },
+  {
+    "case": "litone-select",
+    "metric": "frameP95",
+    "beforeMillis": 1.043583,
+    "afterMillis": 0.293833,
+    "reductionPercent": 71.84383034219607
+  },
+  {
+    "case": "modern-gameplay",
+    "metric": "cold",
+    "beforeMillis": 447.724,
+    "afterMillis": 447.407,
+    "reductionPercent": 0.07080254799832202
+  },
+  {
+    "case": "modern-gameplay",
+    "metric": "warm",
+    "beforeMillis": 81.3755,
+    "afterMillis": 83.4585,
+    "reductionPercent": -2.5597384962304357
+  },
+  {
+    "case": "modern-gameplay",
+    "metric": "frameMedian",
+    "beforeMillis": 0.061458,
+    "afterMillis": 0.0625,
+    "reductionPercent": -1.6954668228709058
+  },
+  {
+    "case": "modern-gameplay",
+    "metric": "frameP95",
+    "beforeMillis": 0.065459,
+    "afterMillis": 0.069125,
+    "reductionPercent": -5.600452191448086
+  },
+  {
+    "case": "modern-select",
+    "metric": "cold",
+    "beforeMillis": 263.823,
+    "afterMillis": 263.865,
+    "reductionPercent": -0.015919764387498442
+  },
+  {
+    "case": "modern-select",
+    "metric": "warm",
+    "beforeMillis": 139.875,
+    "afterMillis": 139.251,
+    "reductionPercent": 0.4461126005361896
+  },
+  {
+    "case": "modern-select",
+    "metric": "frameMedian",
+    "beforeMillis": 2.997167,
+    "afterMillis": 0.418125,
+    "reductionPercent": 86.04932591343758
+  },
+  {
+    "case": "modern-select",
+    "metric": "frameP95",
+    "beforeMillis": 3.285958,
+    "afterMillis": 0.495625,
+    "reductionPercent": 84.91687964362296
+  }
+]

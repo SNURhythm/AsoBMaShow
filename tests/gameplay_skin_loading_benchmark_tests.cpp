@@ -1,5 +1,7 @@
 #include "scene/play/PlayfieldChartVisualModel.h"
 #include "rendering/common.h"
+#include "rendering/SkinQuadBatchRenderer.h"
+#include "view/View.h"
 #include "scene/play/PlayfieldProjection.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "skin/SkinConfigurationWriteQueue.h"
@@ -23,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -155,6 +158,83 @@ public:
   bool materializedPathsValid = true;
 };
 
+class BenchmarkQuadBackend final : public rendering::SkinQuadBatchBackend {
+public:
+  bool preflightVertexLayouts(std::span<const bgfx::VertexLayout *const>) override {
+    return true;
+  }
+  bool preflightSamplers(std::span<const SkinFilterMode>) override { return true; }
+  bool reserve(std::size_t, std::size_t, std::size_t,
+               const GameplayBgaTransientRequirements &) override { return true; }
+  void submit(const rendering::SkinQuadBackendBatch &batch) override {
+    ++batches;
+    vertices += batch.vertices.size();
+    // Compare submitted geometry and render state without hashing padding or
+    // pointer values. The same inexpensive recorder is used in both builds.
+    const auto add = [&](std::uint64_t value) {
+      digest = (digest ^ value) * 1099511628211ULL;
+    };
+    add(batch.vertices.size());
+    add(batch.indices.size());
+    add(batch.texture.idx);
+    add(static_cast<unsigned>(batch.topology));
+    add(static_cast<unsigned>(batch.program));
+    add(static_cast<unsigned>(batch.blend));
+    add(static_cast<unsigned>(batch.filter));
+    add(batch.textured);
+    add(batch.bgfxState);
+    add(batch.samplerFlags);
+    add(batch.scissor.has_value());
+    if (batch.scissor) {
+      add(std::bit_cast<std::uint64_t>(batch.scissor->x));
+      add(std::bit_cast<std::uint64_t>(batch.scissor->y));
+      add(std::bit_cast<std::uint64_t>(batch.scissor->width));
+      add(std::bit_cast<std::uint64_t>(batch.scissor->height));
+    }
+    add(batch.distanceField.has_value());
+    if (batch.distanceField) {
+      const auto &field = *batch.distanceField;
+      add(field.colored);
+      add(std::bit_cast<std::uint64_t>(field.outlineDistance));
+      for (const auto value : field.outlineRgba) add(value);
+      for (const auto value : field.shadowRgba) add(value);
+      add(std::bit_cast<std::uint64_t>(field.shadowSmoothing));
+      add(std::bit_cast<std::uint64_t>(field.shadowOffsetU));
+      add(std::bit_cast<std::uint64_t>(field.shadowOffsetV));
+    }
+    for (const auto &vertex : batch.vertices) {
+      add(std::bit_cast<std::uint32_t>(vertex.x));
+      add(std::bit_cast<std::uint32_t>(vertex.y));
+      add(std::bit_cast<std::uint32_t>(vertex.z));
+      add(std::bit_cast<std::uint32_t>(vertex.u));
+      add(std::bit_cast<std::uint32_t>(vertex.v));
+      add(vertex.abgr);
+    }
+    for (const auto index : batch.indices) add(index);
+  }
+  std::uint64_t batches = 0;
+  std::uint64_t vertices = 0;
+  std::uint64_t digest = 14695981039346656037ULL;
+};
+
+MusicSelectSkinFrame benchmarkMusicSelectFrame() {
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  frame.elapsedMillis = 2'000;
+  frame.properties.integers = {{21, 2026}, {22, 10}, {23, 9}};
+  frame.songList.elapsedMillis = 2'000;
+  frame.songList.selectedIndex = 8;
+  for (int index = 0; index < 17; ++index) {
+    frame.songList.bars.push_back(
+        {.kind = MusicSelectBarKind::Song,
+         .title = "Chart " + std::to_string(index),
+         .exists = true,
+         .difficulty = 2,
+         .level = 10});
+  }
+  return frame;
+}
+
 struct BenchmarkOptions {
   bool benchmark = false;
   bool acceptanceReport = false;
@@ -233,7 +313,11 @@ std::optional<BenchmarkOptions> parseOptions(int argc, char **argv) {
     return std::nullopt;
   }
   if (result.acceptanceMatrix && !result.skin) return std::nullopt;
-  if (result.frameSamples != 0 && !result.acceptanceReport) return std::nullopt;
+  if (result.frameSamples != 0 && !result.acceptanceReport &&
+      !result.benchmark) return std::nullopt;
+  if (result.benchmark && result.frameSamples != 0 && !result.entry) {
+    return std::nullopt;
+  }
   return result;
 }
 
@@ -333,20 +417,7 @@ public:
       auto movieDevice = std::make_shared<BenchmarkMovieDevice>();
       auto counters = std::make_shared<SkinLiveResourceCounters>();
       if (entry.musicSelect) {
-        MusicSelectSkinFrame frame;
-        frame.serial = 1;
-        frame.elapsedMillis = 2'000;
-        frame.properties.integers = {{21, 2026}, {22, 10}, {23, 9}};
-        frame.songList.elapsedMillis = 2'000;
-        frame.songList.selectedIndex = 8;
-        for (int index = 0; index < 17; ++index) {
-          frame.songList.bars.push_back(
-              {.kind = MusicSelectBarKind::Song,
-               .title = "Chart " + std::to_string(index),
-               .exists = true,
-               .difficulty = 2,
-               .level = 10});
-        }
+        auto frame = benchmarkMusicSelectFrame();
         auto created = MusicSelectSkinSession::create(
             {.sessionSerial = ++sessionSerial,
              .profileId = profile_,
@@ -418,10 +489,85 @@ public:
     return total;
   }
 
+  std::optional<nlohmann::json> musicSelectFrameReport(
+      std::string_view entryIdentity, std::size_t frameSamples) {
+    SkinResourcePreparationService preparation;
+    auto device = std::make_shared<BenchmarkTextureDevice>();
+    auto movieDevice = std::make_shared<BenchmarkMovieDevice>();
+    auto counters = std::make_shared<SkinLiveResourceCounters>();
+    BenchmarkQuadBackend backend;
+    auto frame = benchmarkMusicSelectFrame();
+    const auto &entry = entries_.front();
+    auto created = MusicSelectSkinSession::create(
+        {.sessionSerial = 700,
+         .profileId = profile_,
+         .activation = {.revision = lease_->clone(),
+                        .entry = entry.entry,
+                        .reconciledSettings = entry.settings,
+                        .configurationDigest = entry.digest}},
+        {.storageRoots = roots_,
+         .resourcePreparation = preparation,
+         .initialFrame = frame,
+         .textureDevice = device,
+         .movieDevice = movieDevice,
+         .liveResourceCounters = counters,
+         .quadBackend = &backend});
+    if (!created.session) return std::nullopt;
+    std::set<std::string> diagnostics;
+    for (const auto &item : created.diagnostics) diagnostics.insert(item.code);
+    const std::size_t warmup = frameSamples != 0 ? 256 : 0;
+    const std::size_t measured = frameSamples != 0 ? frameSamples : 3;
+    std::vector<std::int64_t> samples;
+    samples.reserve(measured);
+    RenderContext context;
+    if (std::getenv("ASOBMASHOW_BENCHMARK_TRACE")) {
+      std::cerr << "benchmark frames begin\n";
+    }
+    for (std::size_t index = 0; index < warmup + measured; ++index) {
+      frame.serial = index + 2;
+      frame.elapsedMillis = 2'000 + static_cast<long long>(index) / 2;
+      frame.songList.elapsedMillis = frame.elapsedMillis;
+      // Exercise different rows using only titles already resident at load.
+      frame.songList.selectedIndex = (8 + index / 120) % frame.songList.size();
+      if (index == warmup) backend = BenchmarkQuadBackend{};
+      const auto started = std::chrono::steady_clock::now();
+      const bool ready = created.session->render(context, frame);
+      const auto elapsed = std::chrono::steady_clock::now() - started;
+      if (!ready) return std::nullopt;
+      if (index >= warmup) {
+        samples.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+      }
+      for (const auto &item : created.session->takeLastDiagnostics()) {
+        diagnostics.insert(item.code);
+      }
+    }
+    const auto rawSamples = samples;
+    std::ranges::sort(samples);
+    created.session.reset();
+    if (device->created != device->destroyed ||
+        movieDevice->loaded != movieDevice->destroyed ||
+        counters->snapshot() != SkinLiveResourceSnapshot{}) return std::nullopt;
+    return nlohmann::json{
+        {"schemaVersion", 1}, {"entryIdentity", entryIdentity},
+        {"sessionPublished", true}, {"screen", "music-select"},
+        {"diagnosticCodes", diagnostics},
+        {"frameEvaluation", {
+            {"warmupFrames", warmup}, {"measuredFrames", measured},
+            {"batches", backend.batches}, {"vertices", backend.vertices},
+            {"geometryDigest", std::to_string(backend.digest)},
+            {"medianNanos", samples[samples.size() / 2]},
+            {"p95Nanos", samples[(samples.size() - 1) * 95 / 100]},
+            {"samplesNanos", rawSamples},
+            {"scope", "CPU render including recording backend; synthetic song list; no GPU submission"}}}};
+  }
+
   std::optional<nlohmann::json>
   acceptanceReport(std::string_view entryIdentity, std::size_t frameSamples = 0) {
     if (!ready() || entries_.size() != 1 || entryIdentity.empty()) {
       return std::nullopt;
+    }
+    if (entries_.front().musicSelect) {
+      return musicSelectFrameReport(entryIdentity, frameSamples);
     }
     constexpr std::array<std::string_view, 4> familyNames{
         "noteDistribution", "timingVisualizer", "bpmGraph",
@@ -561,6 +707,9 @@ public:
       std::vector<std::int64_t> frameNanos;
       frameNanos.reserve(frameSamples);
       std::uint64_t measuredCommands = 0;
+      if (std::getenv("ASOBMASHOW_BENCHMARK_TRACE")) {
+        std::cerr << "benchmark frames begin\n";
+      }
       for (std::uint64_t serial = 2; serial < 2 + frameCount; ++serial) {
         auto state = initialState_;
         auto projection = initialProjection_;
@@ -855,6 +1004,15 @@ private:
     fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                       "tests/fixtures/beatoraja_skin/resources/fixture.png",
                   source / "skin/resources/fixture.png");
+    writeText(source / "skin/select.luaskin", R"lua(
+local skin = {type=5, name="Selector frames", author="fixture", w=1280, h=720}
+if skin_config then
+  skin.source = {{id="atlas", path="resources/fixture.png"}}
+  skin.image = {{id="image", src="atlas", x=0, y=0, w=40, h=20}}
+  skin.destination = {{id="image", dst={{x=10, y=20, w=40, h=20}}}}
+end
+return skin
+)lua");
     writeText(source / "skin/resources/fixture.mp4", "bounded movie fixture");
     writeText(source / "skin/parity.luaskin", R"lua(
 local skin = {type=0, name="Lua loading", author="fixture", w=1280, h=720}
@@ -1033,6 +1191,19 @@ int runBenchmark(const BenchmarkOptions &options) {
     std::cout << fixture.acceptanceMatrix().dump() << '\n';
     return 0;
   }
+  if (options.benchmark && options.frameSamples != 0) {
+    // Reuse the same immutable package fixture for cold/warm loading and
+    // frame measurements; copying and snapshotting large skins is untimed.
+    const auto cold = runSamples(fixture, false, options.samples);
+    const auto warm = runSamples(fixture, true, options.samples);
+    const auto frames = fixture.acceptanceReport(*options.entry,
+                                                 options.frameSamples);
+    if (!cold || !warm || !frames || !frames->contains("frameEvaluation")) return 1;
+    std::cout << nlohmann::json{
+        {"coldSamplesMicros", *cold}, {"warmSamplesMicros", *warm},
+        {"frames", *frames}}.dump() << '\n';
+    return 0;
+  }
   if (!options.benchmark) {
     const auto cold = runSamples(fixture, false, 1);
     const auto warm = runSamples(fixture, true, 2);
@@ -1063,6 +1234,18 @@ int runBenchmark(const BenchmarkOptions &options) {
                (*measured)["frameEvaluation"]["commands"] > 0 &&
                (*measured)["frameEvaluation"]["medianNanos"] > 0,
            "frame benchmark measures ready frames after excluding warmup");
+    BenchmarkFixture selectFixture({}, GameplaySkinSourceFormat::Lua,
+                                   "skin/select.luaskin");
+    const auto selected = selectFixture.acceptanceReport("synthetic-select", 8);
+    const auto repeated = selectFixture.acceptanceReport("synthetic-select", 8);
+    expect(selected && repeated && (*selected)["sessionPublished"] == true &&
+               (*selected)["frameEvaluation"]["measuredFrames"] == 8 &&
+               (*selected)["frameEvaluation"]["warmupFrames"] == 256 &&
+               (*selected)["frameEvaluation"]["samplesNanos"].size() == 8 &&
+               (*selected)["frameEvaluation"]["vertices"] == 32 &&
+               (*selected)["frameEvaluation"]["geometryDigest"] ==
+                   (*repeated)["frameEvaluation"]["geometryDigest"],
+           "selector frame benchmark records repeatable output and excludes warmup");
     return failures == 0 ? 0 : 1;
   }
   const auto samples = runSamples(fixture, options.warm, options.samples);
@@ -1086,7 +1269,8 @@ int main(int argc, char **argv) {
   const auto options = parseOptions(argc, argv);
   if (!options) {
     std::cerr << "usage: gameplay_skin_loading_benchmark_tests "
-                 "[--benchmark --mode cold|warm --samples N] [--skin PATH] "
+                 "[--benchmark --mode cold|warm --samples N [--frame-samples N]] "
+                 "[--skin PATH] [--entry PATH] "
                  "[--acceptance-report --skin PATH --entry PATH "
                  "--entry-identity ID [--frame-samples N]] "
                  "[--acceptance-matrix --skin PATH]\n";

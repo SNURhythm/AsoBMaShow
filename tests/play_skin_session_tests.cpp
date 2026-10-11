@@ -4096,6 +4096,51 @@ void testMusicSelectScrollingDoesNotStarveGlyphPatches() {
          "new titles using resident glyphs do not rebuild an atlas per scroll");
 }
 
+void testMusicSelectSteadyRenderDoesNotReallocatePropertyIndexes() {
+  const auto renderBytes = [](std::size_t unusedBindings) {
+    ActivationFixture fixture({.skinType = 5});
+    auto context = fixture.musicSelectContext();
+    auto prepared = MusicSelectSkinSession::prepare(
+        {.sessionSerial = 100, .profileId = fixture.profile(),
+         .activation = fixture.takeActivation()},
+        {.storageRoots = context.storageRoots,
+         .resourcePreparation = context.resourcePreparation,
+         .initialFrame = context.initialFrame});
+    expect(prepared.prepared.has_value(), "selector index fixture prepares");
+    if (!prepared.prepared) return std::size_t{0};
+    auto &bindings = prepared.prepared->document.model.model.integerProperties;
+    for (std::size_t index = 0; index < unusedBindings; ++index) {
+      bindings.push_back(
+          {.id = SkinIntegerPropertyId{static_cast<std::uint32_t>(10'000 + index)},
+           .source = SkinBuiltinPropertySelector{0}});
+    }
+    SessionQuadBackend backend;
+    auto created = MusicSelectSkinSession::finalize(
+        std::move(*prepared.prepared),
+        {.resourcePreparation = context.resourcePreparation,
+         .textureDevice = context.textureDevice,
+         .movieDevice = context.movieDevice,
+         .liveResourceCounters = context.liveResourceCounters,
+         .quadBackend = &backend});
+    expect(created.session != nullptr, "selector index fixture finalizes");
+    if (!created.session) return std::size_t{0};
+    RenderContext renderContext;
+    MusicSelectSkinFrame frame;
+    frame.serial = 2;
+    expect(created.session->render(renderContext, frame), "selector index warmup renders");
+    ++frame.serial;
+    const auto before = session_test_allocation_fault::allocatedBytes;
+    const bool rendered = created.session->render(renderContext, frame);
+    const auto bytes = session_test_allocation_fault::allocatedBytes - before;
+    expect(rendered, "selector index measured frame renders");
+    return bytes;
+  };
+  const auto small = renderBytes(0);
+  const auto large = renderBytes(8192);
+  expect(large <= small + 4096,
+         "steady selector frames do not allocate immutable property indexes");
+}
+
 void testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
                              .musicSelectSongListBearing = true});
@@ -11216,6 +11261,7 @@ int main(int argc, char **argv) {
   testMusicSelectRuntimeGlyphPatchesPreserveKerning();
   testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan();
   testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
+  testMusicSelectSteadyRenderDoesNotReallocatePropertyIndexes();
   testMusicSelectPrewarmsBoundedNearbyGlyphs();
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();

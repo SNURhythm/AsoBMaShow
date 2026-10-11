@@ -33,9 +33,12 @@ bool parseInteger(std::string_view value, int &output) noexcept {
   return result.ec == std::errc{} && result.ptr == value.data() + value.size();
 }
 
-std::map<std::string, std::string, std::less<>>
-attributes(std::string_view line) {
-  std::map<std::string, std::string, std::less<>> result;
+using Attributes = std::vector<std::pair<std::string_view, std::string_view>>;
+
+void readAttributes(std::string_view line, Attributes &result) {
+  // All views borrow the descriptor for this parse. Reuse the line's storage
+  // instead of allocating a map node and owning strings for every field.
+  result.clear();
   const auto firstSpace = line.find_first_of(" \t");
   std::size_t offset = firstSpace == std::string_view::npos
                            ? line.size()
@@ -57,13 +60,13 @@ attributes(std::string_view line) {
       }
       continue;
     }
-    std::string key(line.substr(keyStart, offset - keyStart));
+    const auto key = line.substr(keyStart, offset - keyStart);
     ++offset;
-    std::string value;
+    std::string_view value;
     if (offset < line.size() && line[offset] == '"') {
       const std::size_t valueStart = ++offset;
       while (offset < line.size() && line[offset] != '"') ++offset;
-      value.assign(line.substr(valueStart, offset - valueStart));
+      value = line.substr(valueStart, offset - valueStart);
       if (offset < line.size()) ++offset;
     } else {
       const std::size_t valueStart = offset;
@@ -71,17 +74,26 @@ attributes(std::string_view line) {
              !std::isspace(static_cast<unsigned char>(line[offset]))) {
         ++offset;
       }
-      value.assign(line.substr(valueStart, offset - valueStart));
+      value = line.substr(valueStart, offset - valueStart);
     }
-    result.insert_or_assign(std::move(key), std::move(value));
+    result.emplace_back(key, value);
   }
-  return result;
 }
 
-bool getInteger(const std::map<std::string, std::string, std::less<>> &values,
+std::optional<std::string_view> attribute(const Attributes &values,
+                                          std::string_view key) noexcept {
+  // insert_or_assign used to retain the last occurrence, including empty or
+  // malformed values. Reverse lookup preserves that behavior without sorting.
+  for (auto item = values.rbegin(); item != values.rend(); ++item) {
+    if (item->first == key) return item->second;
+  }
+  return std::nullopt;
+}
+
+bool getInteger(const Attributes &values,
                 std::string_view key, int &output) noexcept {
-  const auto found = values.find(key);
-  return found != values.end() && parseInteger(found->second, output);
+  const auto found = attribute(values, key);
+  return found && parseInteger(*found, output);
 }
 
 bool validCodepoint(int value) noexcept {
@@ -130,9 +142,10 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
   bool readAuxiliarySize = false;
   bool readAuxiliaryPageDimensions = false;
   std::size_t nextPage = 0;
+  Attributes values;
   for (const auto line : lines(text)) {
     if (line.empty()) continue;
-    const auto values = attributes(line);
+    readAttributes(line, values);
     if (line.starts_with("info ")) {
       int size = 0;
       if (getInteger(values, "size", size) && size != 0 &&
@@ -168,7 +181,7 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
       font.pagePaths.resize(static_cast<std::size_t>(declaredPages));
       sawCommon = true;
     } else if (line.starts_with("page ")) {
-      const auto file = values.find("file");
+      const auto file = attribute(values, "file");
       if (!sawCommon || nextPage >= font.pagePaths.size()) {
         continue;
       }
@@ -177,11 +190,11 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
       // id is treated as omitted and the declaration remains sequential.
       const bool hasId = getInteger(values, "id", id) && id >= 0;
       if ((hasId && id != static_cast<int>(nextPage)) ||
-          file == values.end() || file->second.empty() ||
-          file->second.size() > limit(policy, maximumDescriptorBytes)) {
+          !file || file->empty() ||
+          file->size() > limit(policy, maximumDescriptorBytes)) {
         return fail("BMFont page declaration is invalid");
       }
-      font.pagePaths[nextPage++] = file->second;
+      font.pagePaths[nextPage++] = *file;
     } else if (line.starts_with("chars ")) {
       // SkinTextBitmap rewrites this advisory count from the actual char rows
       // before libGDX parses the descriptor.

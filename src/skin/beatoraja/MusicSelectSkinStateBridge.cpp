@@ -18,6 +18,16 @@ template <typename Value> SkinPropertyLookup<Value> supported(Value value) {
   return {.value = std::move(value), .supported = true};
 }
 
+bool builtinContains(SkinBindingType type,
+                     const SkinBuiltinPropertySelector &selector) {
+  if (const auto *numeric = std::get_if<int>(&selector.value)) {
+    return gameplaySkinBuiltinNumericContains(type, *numeric);
+  }
+  // Named selectors have their own aliases and pattern rules; keep the
+  // authored name rather than admitting it through its normalized numeric ID.
+  return gameplaySkinBuiltinCatalog().contains(type, selector);
+}
+
 std::optional<int> namedFloatPropertySelector(std::string_view name) {
   constexpr std::array<std::pair<std::string_view, int>, 71> direct = {{
       {"musicselect_position", 1}, {"lanecover", 4},
@@ -145,7 +155,7 @@ SkinPropertyLookup<bool> MusicSelectSkinStateBridge::booleanProperty(
     }
     id = beatorajaBooleanPropertySelector(*name);
   }
-  if (!id || !gameplaySkinBuiltinCatalog().contains(
+  if (!id || !builtinContains(
                  {.kind = SkinBindingKind::BooleanProperty}, selector)) {
     return {};
   }
@@ -238,7 +248,7 @@ SkinPropertyLookup<std::int64_t> MusicSelectSkinStateBridge::integerProperty(
       return supported(found->second);
     }
   }
-  if (!gameplaySkinBuiltinCatalog().contains(integerType(domain), selector)) {
+  if (!builtinContains(integerType(domain), selector)) {
     return {};
   }
   return supported<std::int64_t>(std::numeric_limits<std::int32_t>::min());
@@ -266,7 +276,7 @@ SkinPropertyLookup<double> MusicSelectSkinStateBridge::floatProperty(
   if (const auto value = namedValue(selector, named)) {
     return supported(*value);
   }
-  if (!gameplaySkinBuiltinCatalog().contains(floatType(domain), selector)) {
+  if (!builtinContains(floatType(domain), selector)) {
     return {};
   }
   if (const auto *name = std::get_if<std::string>(&selector.value)) {
@@ -280,7 +290,7 @@ SkinPropertyLookup<double> MusicSelectSkinStateBridge::floatProperty(
     }
   }
   if (domain == SkinFloatPropertyDomain::FloatValue &&
-      gameplaySkinBuiltinCatalog().contains(
+      builtinContains(
           floatType(SkinFloatPropertyDomain::Rate), selector)) {
     return floatProperty(selector, SkinFloatPropertyDomain::Rate);
   }
@@ -307,7 +317,7 @@ MusicSelectSkinStateBridge::stringProperty(
       }
     }
   }
-  if (!gameplaySkinBuiltinCatalog().contains(
+  if (!builtinContains(
           {.kind = SkinBindingKind::StringProperty}, selector)) {
     return {};
   }
@@ -342,7 +352,7 @@ std::int64_t MusicSelectSkinStateBridge::timerProperty(
   if (const auto value = namedValue(selector, frame_->properties.namedTimers)) {
     return *value;
   }
-  if (!gameplaySkinBuiltinCatalog().contains(
+  if (!builtinContains(
           {.kind = SkinBindingKind::TimerProperty}, selector)) {
     return std::numeric_limits<std::int64_t>::min();
   }

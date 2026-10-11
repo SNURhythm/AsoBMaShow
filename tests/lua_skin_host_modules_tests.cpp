@@ -2310,18 +2310,34 @@ void testIndexedNumericCatalogMatchesExactAdmission() {
       {.kind = SkinBindingKind::Event},
   };
   for (const auto type : types) {
-    for (int selector = -1; selector <= 4100; ++selector) {
+    for (int selector = -4100; selector <= 4100; ++selector) {
       if (gameplaySkinBuiltinNumericContains(type, selector) !=
           catalog.contains(type, SkinBuiltinPropertySelector{selector})) {
         expect(false, "indexed catalog preserves numeric selectors and typed domains");
         return;
       }
     }
-    for (int selector : {std::numeric_limits<int>::min(), -65536,
-                         65535, 65536, std::numeric_limits<int>::max()}) {
+    for (int selector : {std::numeric_limits<int>::min(), -65536, -4097,
+                         -4096, 4095, 4096, 65535, 65536,
+                         std::numeric_limits<int>::max()}) {
       expect(gameplaySkinBuiltinNumericContains(type, selector) ==
                  catalog.contains(type, SkinBuiltinPropertySelector{selector}),
              "indexed catalog preserves timer/event ranges and integer boundaries");
+    }
+  }
+  for (const auto type : {
+           SkinBindingType{.kind = static_cast<SkinBindingKind>(255)},
+           SkinBindingType{.kind = SkinBindingKind::IntegerProperty,
+                           .integerDomain = static_cast<SkinIntegerPropertyDomain>(255)},
+           SkinBindingType{.kind = SkinBindingKind::FloatProperty,
+                           .floatDomain = static_cast<SkinFloatPropertyDomain>(255)},
+           SkinBindingType{.kind = SkinBindingKind::BooleanProperty,
+                           .integerDomain = SkinIntegerPropertyDomain::ImageIndex,
+                           .floatDomain = SkinFloatPropertyDomain::FloatValue}}) {
+    for (const int selector : {-3035, -1, 0, 1, 30, 1000, 4096}) {
+      expect(gameplaySkinBuiltinNumericContains(type, selector) ==
+                 catalog.contains(type, SkinBuiltinPropertySelector{selector}),
+             "numeric admission preserves invalid domains and ignores irrelevant domains");
     }
   }
 }

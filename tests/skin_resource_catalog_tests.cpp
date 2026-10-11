@@ -24,14 +24,66 @@
 #include <limits>
 #include <mutex>
 #include <memory>
+#include <new>
 #include <optional>
 #include <string_view>
 #include <thread>
 #include <tuple>
 
+namespace bitmap_font_allocations {
+thread_local std::size_t *count = nullptr;
+}
+
+void *operator new(std::size_t size) {
+  if (bitmap_font_allocations::count) ++*bitmap_font_allocations::count;
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  throw std::bad_alloc{};
+}
+void *operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
+
 namespace {
 int failures = 0;
 void expect(bool value, std::string_view message) { if (!value) { std::cerr << "FAIL: " << message << '\n'; ++failures; } }
+
+void testBitmapFontAttributeStorageIsReused() {
+  constexpr std::size_t glyphCount = 256;
+  std::string descriptor =
+      "info size=8\ncommon lineHeight=10 base=8 scaleW=64 scaleH=64 pages=1\n"
+      "page id=0 file=discard.png file=\"page with spaces.png\"\n";
+  for (std::size_t index = 0; index < glyphCount; ++index) {
+    descriptor += "char id=" + std::to_string(index + 1) +
+        " x=0 y=1 width=2 height=3 xoffset=-1 yoffset=0 xadvance=4 page=0";
+    for (int field = 0; field < 32; ++field) {
+      descriptor += " ignored" + std::to_string(field) + "=\"long metadata value\"";
+    }
+    descriptor += " xadvance=7\n";
+  }
+  descriptor += "kerning first=65 second=66 amount=-1 amount=-3\n";
+  std::size_t allocations = 0;
+  skin::SkinBitmapFontParseResult parsed;
+  {
+    bitmap_font_allocations::count = &allocations;
+    ScopeExit stopCounting([] { bitmap_font_allocations::count = nullptr; });
+    parsed = skin::parseSkinBitmapFont(
+        {.id = 1, .virtualPath = "fixture.fnt"},
+        std::as_bytes(std::span(descriptor)),
+        skin::SkinBitmapFontSourceFormat::BmFont);
+  }
+  // The returned glyph map owns a node per glyph. Temporary attributes must
+  // not add allocations per field or per line on top of that retained data.
+  expect(allocations < glyphCount * 2 + 64,
+         "BMFont parsing reuses temporary attribute storage across glyphs");
+  expect(parsed.font && parsed.font->glyphs.size() == glyphCount &&
+             parsed.font->pagePaths == std::vector<std::string>{"page with spaces.png"} &&
+             parsed.font->glyphs.at(U'A').xAdvance == 7 &&
+             parsed.font->glyphs.at(U'A').xOffset == -1 &&
+             parsed.font->kerning.at({U'A', U'B'}) == -3,
+         "BMFont attributes preserve quoted values, unknown fields, and last duplicate wins");
+}
 
 void testBitmapFontDescriptorParsingMatchesPinnedSources() {
   const auto fixture = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
@@ -3574,6 +3626,7 @@ int main(int argc, char **argv) {
          "resource preparation starts without a startup timing log");
 #endif
   testBitmapFontDescriptorParsingMatchesPinnedSources();
+  testBitmapFontAttributeStorageIsReused();
   testInstalledSelectorBmFontsWhenRequested();
   testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs();
   testBoundedPngAndJpegDecodeBeforeAllocation();
