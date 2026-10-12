@@ -117,8 +117,8 @@ void IrUploadsScene::onPause() {
 void IrUploadsScene::onResume() {
   refreshProfileIfNeeded();
   refreshLanguageIfNeeded();
-  refreshProviderState();
-  if (!controller.selectionLocked()) {
+  observeRemoteRevisions();
+  if ((!candidatesLoaded || reloadRequested) && !controller.selectionLocked()) {
     reloadCandidates();
   }
   updateLayoutInsets();
@@ -129,6 +129,7 @@ void IrUploadsScene::onProfileWillChange() {
   preparationTask.reset();
   controller = {};
   displayedProfileId.clear();
+  candidatesLoaded = false;
   loadError = {};
   loadDiagnostic = {};
   reloadRequested = false;
@@ -146,7 +147,7 @@ void IrUploadsScene::refreshProfileIfNeeded() {
   }
   onProfileWillChange();
   displayedProfileId = profileId;
-  reloadCandidates();
+  reloadRequested = true;
 }
 
 void IrUploadsScene::updateLayoutInsets() {
@@ -487,6 +488,11 @@ std::string IrUploadsScene::serverOrigin() const {
 }
 
 void IrUploadsScene::reloadCandidates() {
+  candidatesLoaded = false;
+  // Consume changes before the read; changes arriving during it trigger a
+  // subsequent refresh. Failed reads are retried on resume or explicit Refresh.
+  observeRemoteRevisions();
+  reloadRequested = false;
   const float scrollOffset =
       candidateList != nullptr ? candidateList->scrollOffset : 0.0F;
   loadError = {};
@@ -537,6 +543,7 @@ void IrUploadsScene::reloadCandidates() {
   } while (beforeResultId.has_value());
 
   controller.applyCandidateRefresh(std::move(candidates));
+  candidatesLoaded = true;
   if (candidateList != nullptr) {
     candidateList->setCandidates(controller.candidates(),
                                  controller.selectedAttemptIds());
@@ -631,6 +638,17 @@ void IrUploadsScene::refreshUi() {
 
 void IrUploadsScene::observeRemoteRevisions() {
   bool changed = false;
+  const auto scoreRevision = context.scoreRepository.GetRevision();
+  const auto profileRevision = context.profileCacheRevision.load();
+  const auto origin = serverOrigin();
+  if (scoreRevision != observedScoreRevision ||
+      profileRevision != observedProfileCacheRevision ||
+      origin != observedServerOrigin) {
+    observedScoreRevision = scoreRevision;
+    observedProfileCacheRevision = profileRevision;
+    observedServerOrigin = origin;
+    changed = true;
+  }
   const std::uint64_t accountRevision =
       context.irAccountEvidenceRevision.load(std::memory_order_acquire);
   if (accountRevision != observedAccountEvidenceRevision) {

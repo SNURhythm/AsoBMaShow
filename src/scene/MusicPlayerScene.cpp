@@ -668,15 +668,26 @@ void MusicPlayerScene::onPause() {
 void MusicPlayerScene::onResume() {
   const auto &profileId = context.profileManager.activeProfile().id;
   const bool sameProfile = displayedProfileId == profileId;
-  applySystemPlaybackPrivacy(false);
+  // Privacy changes and profile activation already publish native metadata.
+  // Reopening the tab only needs to reflect those settings in its controls.
+  refreshSystemPlaybackPrivacyButtons();
   if (!sameProfile) {
     pendingDeletePlaylistId = 0;
     pendingClearPlaylistId = 0;
     selectedLibraryPlaylistId = 0;
     statusMessage.clear();
   }
-  // PLAY can change charts and favorites without changing the active profile.
-  reloadData(sameProfile);
+  // Retained tabs already own their library lists. A tab switch alone must not
+  // query the whole library, rebuild rows, or republish the native music queue.
+  if (!sameProfile || !dataLoaded ||
+      loadedLibraryRevision != context.chartRepository.GetLibraryRevision() ||
+      loadedProfileCacheRevision != context.profileCacheRevision.load() ||
+      loadedContentRevision != context.musicPlayer.ContentRevision()) {
+    reloadData(sameProfile);
+  } else {
+    refreshActiveQueueList(true);
+    refreshUi();
+  }
   displayedProfileId = profileId;
   refreshLanguageIfNeeded();
   updateLayoutInsets();
@@ -2343,6 +2354,10 @@ void MusicPlayerScene::styleButton(Button *button, TextView *text,
 
 void MusicPlayerScene::reloadData(bool preserveSelection) {
   View::LayoutBatchScope layoutBatch;
+  dataLoaded = false;
+  // Capture before reading so a concurrent library update remains observable.
+  loadedLibraryRevision = context.chartRepository.GetLibraryRevision();
+  loadedProfileCacheRevision = context.profileCacheRevision.load();
   const auto selectedLibrary = selectedLibraryTrack();
   const auto selectedFavorite =
       selectedTrackBrowserTrack(TrackBrowserKind::Favorites);
@@ -2358,8 +2373,10 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
       preserveSelection && selectedPlaylistId > 0 ? selectedPlaylistId : 0;
 
   std::string errorMessage;
-  if (!context.musicPlayer.ReloadLibraryAndPlaylists(
-          errorMessage, servicePreferredPlaylistId)) {
+  const bool loaded = context.musicPlayer.ReloadLibraryAndPlaylists(
+      errorMessage, servicePreferredPlaylistId);
+  loadedContentRevision = context.musicPlayer.ContentRevision();
+  if (!loaded) {
     setStatus(errorMessage);
   }
   const auto persistedState = context.musicPlayer.PlayerStateSnapshot();
@@ -2411,6 +2428,7 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
   refreshPlaylistDirectoryList(preferredPlaylistId);
   refreshPlaylistList(playlistIndex);
   refreshUi();
+  dataLoaded = loaded;
 }
 
 void MusicPlayerScene::refreshLibraryList(int preferredIndex) {

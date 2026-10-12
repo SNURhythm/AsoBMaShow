@@ -61,6 +61,10 @@ private:
   float tabTopInset = 0;
   std::function<void()> tabClose;
   std::string displayedProfileId;
+  bool dataLoaded = false;
+  std::uint64_t loadedLibraryRevision = 0;
+  std::uint64_t loadedProfileCacheRevision = 0;
+  std::uint64_t loadedContentRevision = 0;
   void updateLayoutInsets();
   using MusicTrack = music_playlist::MusicTrack;
   using PlaylistInfo = MusicPlaylistInfo;

@@ -173,6 +173,7 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   favoriteTracks = loadFavoriteTracks(charts);
 
   libraryTracks = music_playlist::MakeTracks(records);
+  contentRevision.fetch_add(1, std::memory_order_release);
   return true;
 }
 
@@ -262,6 +263,7 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
     return false;
   }
   favoriteTracks = loadFavoriteTracks(charts);
+  contentRevision.fetch_add(1, std::memory_order_release);
   return true;
 }
 
@@ -296,6 +298,7 @@ void MusicPlayerService::RefreshPlaylistCachesLocked(
           : (selectedPlaylistId > 0
                  ? loadPlaylistTracks(repository, selectedPlaylistId)
                  : std::vector<music_playlist::MusicTrack>{});
+  contentRevision.fetch_add(1, std::memory_order_release);
 }
 
 void MusicPlayerService::RestoreQueueFromPersistedStateLocked() {

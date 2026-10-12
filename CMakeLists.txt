@@ -9480,6 +9480,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/lane_cover_scene_input_tests.py)
     add_test(NAME main_menu_tabs_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/main_menu_tabs_tests.py)
+    add_test(NAME utility_tab_resume_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/utility_tab_resume_tests.py)
+    set_tests_properties(utility_tab_resume_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES

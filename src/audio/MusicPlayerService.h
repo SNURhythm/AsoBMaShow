@@ -32,6 +32,9 @@ public:
   bool ReloadLibrary(std::string &errorMessage);
   bool ReloadLibraryAndPlaylists(std::string &errorMessage,
                                  int preferredSelectedPlaylistId = 0);
+  [[nodiscard]] std::uint64_t ContentRevision() const {
+    return contentRevision.load(std::memory_order_acquire);
+  }
   [[nodiscard]] std::size_t LibraryTrackCount() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   LibraryTracksSnapshot() const;
@@ -197,6 +200,7 @@ private:
   MusicPlaylistRepository &repository;
   ChartRepository &charts;
   mutable std::mutex stateMutex;
+  std::atomic<std::uint64_t> contentRevision{0};
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;
