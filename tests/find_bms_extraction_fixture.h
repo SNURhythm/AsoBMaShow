@@ -13,13 +13,16 @@ namespace asobmshow::bms_search {
 std::filesystem::path extractionDownloadFixture;
 std::filesystem::path observedDownloadAttempt;
 std::function<bool(const std::string &, std::string &)> downloadFixtureFailure;
+long downloadFixtureHttpStatus = 0;
 
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &, std::string &error,
                        BmsSearchDownloadProgressCallback,
-                       BmsSearchDownloadRetryCallback) {
+                       BmsSearchDownloadRetryCallback, long *httpStatus) {
   observedDownloadAttempt = path.parent_path();
-  if (downloadFixtureFailure && downloadFixtureFailure(url, error)) return false;
+  const bool failed = downloadFixtureFailure && downloadFixtureFailure(url, error);
+  if (httpStatus != nullptr) *httpStatus = downloadFixtureHttpStatus;
+  if (failed) return false;
   std::filesystem::copy_file(extractionDownloadFixture, path);
   return true;
 }

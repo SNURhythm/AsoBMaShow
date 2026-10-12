@@ -175,6 +175,83 @@ void testPackageCandidateRespectsBuildArchiveSupport() {
   assert(supported.archiveName == "package.zip");
 }
 
+void testPixelDrainPackageUsesDownloadApi() {
+  using namespace asobmshow::bms_search;
+  struct Link {
+    const char *url;
+    const char *downloadUrl;
+  };
+  for (const auto &link : {
+           Link{"https://pixeldrain.net/u/aB12Cd34",
+                "https://pixeldrain.net/api/file/aB12Cd34?download"},
+           Link{"https://pixeldrain.com/u/aB12Cd34?download#preview",
+                "https://pixeldrain.com/api/file/aB12Cd34?download"},
+           Link{"https://pixeldra.in/u/aB12Cd34",
+                "https://pixeldra.in/api/file/aB12Cd34?download"},
+           Link{"https://pixeldra.in/d/aB12Cd34/folder/song%23name.zip?download#preview",
+                "https://pixeldra.in/api/filesystem/aB12Cd34/folder/song%23name.zip?attach"},
+           Link{"https://PIXELDRAIN.NET/u/aB12Cd34/",
+                "https://pixeldrain.net/api/file/aB12Cd34?download"},
+           Link{"https://pixeldrain.net/d/h76bfTjz/-Never%20ending%20journey-.7z",
+                "https://pixeldrain.net/api/filesystem/h76bfTjz/-Never%20ending%20journey-.7z?attach"},
+           Link{"https://pixeldrain.com/d/aB12Cd34/folder/song%23name.zip?download#preview",
+                "https://pixeldrain.com/api/filesystem/aB12Cd34/folder/song%23name.zip?attach"}}) {
+    DownloadCandidate classified;
+    classified.downloadUrl = link.url;
+    classified.reason = "This link is not a direct archive.";
+    const auto candidate = configurePackageDownloadCandidate(
+        classified, link.url, "song.zip", "abc123",
+        acceptPackageArchiveExtension);
+    assert(candidate.downloadUrl == link.downloadUrl);
+    assert(candidate.originalUrl == link.url);
+    assert(candidate.archiveName == "song.zip");
+    assert(candidate.supported);
+    assert(candidate.reason.empty());
+
+    const auto fallback = configurePackageDownloadCandidate(
+        classified, link.url, "", "abc123", acceptPackageArchiveExtension);
+    assert(fallback.downloadUrl == link.downloadUrl);
+    assert(fallback.archiveName == "abc123.7z");
+    const auto unsupported = configurePackageDownloadCandidate(
+        classified, link.url, "song.7z", "abc123",
+        rejectPackageArchiveExtension);
+    assert(!unsupported.supported);
+    assert(unsupported.knownUnsupportedArchive);
+  }
+}
+
+void testPixelDrainPackageLeavesOtherUrlsUnchanged() {
+  using namespace asobmshow::bms_search;
+  for (const std::string url : {
+           "https://pixeldrain.net/api/file/aB12Cd34?download&token=abc",
+           "https://pixeldrain.net/api/filesystem/h76bfTjz/song.7z?download",
+           "https://pixeldrain.net/d/",
+           "https://pixeldrain.net/d/h76bfTjz",
+           "https://pixeldrain.net/d/h76bfTjz/",
+           "https://pixeldrain.net.example/d/h76bfTjz/song.7z",
+           "https://pixeldrain.net/l/aB12Cd34",
+           "https://pixeldrain.net/u/",
+           "https://pixeldrain.net/u/aB12Cd34/extra",
+           "https://pixeldrain.net/u/..",
+           "https://pixeldrain.net/u/a%2Fb",
+           "https://pixeldrain.net.example/u/aB12Cd34",
+           "https://notpixeldrain.net/u/aB12Cd34",
+           "https://pixeldra.in.example/u/aB12Cd34",
+           "https://notpixeldra.in/d/aB12Cd34/song.zip",
+           "https://example.com/u/aB12Cd34",
+           "ftp://pixeldrain.net/u/aB12Cd34"}) {
+    const auto candidate = configurePackageDownloadCandidate(
+        {}, url, "song.zip", "abc123", acceptPackageArchiveExtension);
+    assert(candidate.downloadUrl == url);
+  }
+  DownloadCandidate classified;
+  classified.downloadUrl = "https://example.com/already-resolved.zip";
+  const auto candidate = configurePackageDownloadCandidate(
+      classified, "https://example.com/share", "song.zip", "abc123",
+      acceptPackageArchiveExtension);
+  assert(candidate.downloadUrl == classified.downloadUrl);
+}
+
 BmsSearchPendingArtifact extractedArtifact(
     const FindBmsDownloadAttempt &attempt,
     const std::filesystem::path &downloadRoot) {
@@ -1281,6 +1358,9 @@ int main(int argc, char **argv) {
   testRunningDetailFollowsProgress();
   testProviderSelectionStopsAfterAFileIsFound();
   testChosenProviderRetriesOnlyOnUserDecision();
+  testPixelDrainApiErrorDownloadsFromNextProvider();
+  testPixelDrainApiErrorsContinueThroughRemainingSources();
+  testApiWaterfallDoesNotOverrideCancellationOrOtherFailures();
   testExtractionLimitsAndCancellation();
 #if ASOBMSHOW_HAS_LIBARCHIVE
   testUnknownSizeStreamIsBounded();
@@ -1289,6 +1369,8 @@ int main(int argc, char **argv) {
   testStorageNamesDistinguishSameNamedPackages();
   testStorageNamesPreserveLongAndCompoundExtensions();
   testPackageCandidateRespectsBuildArchiveSupport();
+  testPixelDrainPackageUsesDownloadApi();
+  testPixelDrainPackageLeavesOtherUrlsUnchanged();
   testExtractedCommitMergesTransactionally();
   testExtractedCommitConflictCleansPrivateTransaction();
   testDeleteRemovesOnlyAttempt();

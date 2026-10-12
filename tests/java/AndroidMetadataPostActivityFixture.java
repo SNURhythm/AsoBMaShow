@@ -2,6 +2,8 @@ package com.snurhythm.asobmashow;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -10,6 +12,8 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -19,10 +23,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 class AsoBMaShowActivity {
     private static native boolean nativeDownloadUrlTextCheckpoint(long token);
+    private static native void nativeDownloadUrlToFileResponse(long token, int status);
+    private static native void nativeDownloadUrlToFileProgress(long token, long bytes, long total);
+    private static native boolean nativeDownloadUrlToFileCancelled(long token);
     private static native void cancel();
     private static native int registeredBridges();
     private native String request(String url, boolean cancellable);
     private native String requestBridge(String url, boolean cancellable);
+    private native String requestFile(String url, String path, boolean wantStatus);
     private static final List<Connection> connections = new ArrayList<>();
     private static final CountDownLatch blocked = new CountDownLatch(1);
     private static String scenario;
@@ -98,6 +106,7 @@ class AsoBMaShowActivity {
             stall("headers");
             if (scenario.equals("io-error")) throw new IOException("Fixture network failure");
             if (scenario.equals("http-error")) return 503;
+            if (scenario.equals("forbidden")) return 403;
             if (scenario.equals("redirect-limit")) return 307;
             if (number == 0) {
                 if (scenario.equals("redirect-302")) return 302;
@@ -112,6 +121,8 @@ class AsoBMaShowActivity {
             if (scenario.equals("redirect-scheme")) return "file:///tmp/metadata";
             return "/next";
         }
+
+        @Override public long getContentLengthLong() { return 0; }
 
         @Override public InputStream getInputStream() {
             if (scenario.equals("body")) {
@@ -134,6 +145,8 @@ class AsoBMaShowActivity {
         scenario = args[1];
         boolean directBridge = scenario.startsWith("bridge-");
         if (directBridge) scenario = scenario.substring("bridge-".length());
+        boolean fileDownload = scenario.startsWith("file-");
+        if (fileDownload) scenario = scenario.substring("file-".length());
         URL.setURLStreamHandlerFactory(protocol -> {
             if (!protocol.equals("http") && !protocol.equals("https")) return null;
             return new URLStreamHandler() {
@@ -143,6 +156,35 @@ class AsoBMaShowActivity {
             };
         });
         AsoBMaShowActivity activity = new AsoBMaShowActivity();
+        if (fileDownload) {
+            Path directory = Files.createTempDirectory("android-download-status-");
+            Path target = directory.resolve("chart.zip");
+            try {
+                String response = activity.requestFile("https://fixture/start", target.toString(),
+                        !scenario.equals("no-status"));
+                if (scenario.equals("forbidden")) {
+                    require(response.startsWith("403:ERROR:HTTP 403"), response);
+                } else if (scenario.equals("http-error")) {
+                    require(response.startsWith("503:ERROR:HTTP 503"), response);
+                } else if (scenario.equals("io-error")) {
+                    require(response.equals("0:ERROR:Fixture network failure"), response);
+                } else {
+                    require(response.equals(scenario.equals("no-status") ? "999:OK" : "200:OK"), response);
+                    require(Files.readString(target).equals("{\"title\":\"곡🎵\"}"), "Downloaded bytes changed");
+                }
+                require(registeredBridges() == 0, "Native download bridge leaked");
+                if (!scenario.equals("io-error")) {
+                    for (Connection connection : connections) {
+                        require(connection.disconnected.getCount() == 0, "Download connection leaked");
+                    }
+                }
+            } finally {
+                Files.deleteIfExists(target);
+                Files.delete(directory);
+            }
+            System.out.println("PASS " + args[1]);
+            return;
+        }
         AtomicReference<String> result = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         if (scenario.equals("pre-cancelled")) cancel();

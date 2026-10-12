@@ -647,9 +647,12 @@ void exerciseFileFaults(const std::string &origin,
   nativeIo.fault = NativeFileFault::None;
   std::atomic_bool cancelled{true};
   std::string error;
-  expect(!download(origin + "/normal", destination, cancelled, error) &&
+  long httpStatus = 503;
+  expect(!DownloadURLToFileIOS(origin + "/normal", destination, cancelled,
+                               65536, error, nullptr, nullptr, {}, &httpStatus) &&
              error.find("cancel") != std::string::npos,
          "pre-cancelled native request is rejected");
+  expect(httpStatus == 0, "native cancellation clears stale HTTP status");
   cancelled.store(false);
   std::atomic_size_t progressCalls{0};
   const auto throwingProgress = [](void *context, std::uint64_t, std::uint64_t) {
@@ -775,15 +778,31 @@ int main(int argc, char **argv) {
     std::ofstream(destination, std::ios::trunc) << "zzz";
     std::atomic_bool cancelled{false};
     std::string error;
-    expect(!download(origin + "/error", destination, cancelled, error),
+    long httpStatus = 200;
+    expect(!downloadUrlToFile(origin + "/error", destination, cancelled, error,
+                             {}, {}, &httpStatus),
            "failed replacement does not report success");
+    expect(httpStatus == 503,
+           "actual Find BMS caller preserves HTTP rejection status");
     expect(expectedFile(destination, 'z', 3),
            "failed replacement preserves original destination");
     wholeFileReads.store(0);
-    expect(downloadUrlToFile(origin + "/normal", destination, cancelled, error, {}),
+    expect(downloadUrlToFile(origin + "/normal", destination, cancelled, error,
+                            {}, {}, &httpStatus),
            "actual Find BMS archive caller completes");
+    expect(httpStatus == 200, "successful download replaces stale HTTP status");
     expect(expectedFile(destination, 'a', 16384) && wholeFileReads.load() == 0,
            "actual Find BMS archive caller uses the file bridge");
+    httpStatus = 503;
+    cancelled.store(true);
+    expect(!downloadUrlToFile(origin + "/normal", destination, cancelled, error,
+                             {}, {}, &httpStatus) && httpStatus == 0,
+           "cancelled download clears stale HTTP rejection status");
+    cancelled.store(false);
+    httpStatus = 503;
+    expect(!downloadUrlToFile("file:///invalid-download", destination, cancelled,
+                             error, {}, {}, &httpStatus) && httpStatus == 0,
+           "invalid download URL clears stale HTTP rejection status");
 #if TRANSPORT_HAS_FILE_BRIDGE
     exerciseDownloadRecovery(origin, root);
     exerciseDownloadRecoveryDecision(origin, root);

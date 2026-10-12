@@ -36,6 +36,12 @@ def main():
         start = transport.index("std::once_flag curlInitFlag;")
         stop = transport.index("struct CurlDownloadContext", start)
         selected = transport[start:stop]
+        file_start = stop
+        file_function_start = transport.index("bool downloadUrlToFile(", file_start)
+        selected += ("\n#ifdef FIND_BMS_TEST_CURL_FILE_TRANSPORT\n" +
+                     transport[file_start:file_function_start] +
+                     function(transport[file_start:], "bool downloadUrlToFile(") +
+                     "\n#endif\n")
         context = "struct CurlTextResponseContext" in selected
         args.output.write_text(
             f"#define TRANSPORT_HAS_RECEIVE_CONTEXT {int(context)}\n" + selected)

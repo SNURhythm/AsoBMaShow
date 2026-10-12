@@ -180,7 +180,8 @@ bool DownloadURLToFileIOS(const std::string &url,
                           std::string &errorMessage,
                           IOSDownloadProgressCallback progressCallback = nullptr,
                           void *progressContext = nullptr,
-                          std::function<bool(const std::string &, bool)> retryCallback = nullptr);
+                          std::function<bool(const std::string &, bool)> retryCallback = nullptr,
+                          long *httpStatus = nullptr);
 bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           const IOSNormalizedRect &sourceAnchor,

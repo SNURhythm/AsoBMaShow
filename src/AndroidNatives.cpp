@@ -142,6 +142,7 @@ struct AndroidDownloadProgressBridge {
   AndroidDownloadProgressCallback *progressCallback = nullptr;
   AndroidDownloadCheckpoint *checkpoint = nullptr;
   AndroidDownloadPauseProbe *pauseRequested = nullptr;
+  long *httpStatus = nullptr;
 };
 
 std::mutex gAndroidDownloadProgressMutex;
@@ -980,6 +981,17 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeFinishChartImport(
         jstringToUtf8(env, error), jstringToUtf8(env, retainedError), uri,
         newGrant == JNI_TRUE, std::move(owner)) ? JNI_TRUE : JNI_FALSE;
   } catch (...) { return JNI_FALSE; }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileResponse(
+    JNIEnv *, jclass, jlong progressToken, jint statusCode) {
+  std::lock_guard lock(gAndroidDownloadProgressMutex);
+  const auto found = gAndroidDownloadProgressBridges.find(progressToken);
+  if (found != gAndroidDownloadProgressBridges.end() &&
+      found->second->httpStatus != nullptr) {
+    *found->second->httpStatus = statusCode;
+  }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1885,9 +1897,14 @@ bool DownloadURLToFileAndroid(const std::string &url,
                               const std::filesystem::path &path,
                               std::atomic_bool &cancelled,
                               AndroidDownloadProgressCallback progressCallback,
-                              std::string &errorMessage) {
+                              std::string &errorMessage,
+                              long *httpStatus) {
+  if (httpStatus != nullptr) {
+    *httpStatus = 0;
+  }
   AndroidDownloadProgressBridge bridge{.cancelled = &cancelled,
-                                       .progressCallback = &progressCallback};
+                                       .progressCallback = &progressCallback,
+                                       .httpStatus = httpStatus};
   const jlong progressToken = registerAndroidDownloadProgressBridge(bridge);
   struct ProgressBridgeCleanup {
     jlong token;

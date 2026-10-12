@@ -174,7 +174,9 @@ std::optional<std::string> postUrlText(
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback,
-                       BmsSearchDownloadRetryCallback retryCallback) {
+                       BmsSearchDownloadRetryCallback retryCallback,
+                       long *httpStatus) {
+  if (httpStatus != nullptr) *httpStatus = 0;
   if (cancelled.load()) {
     errorMessage = "Download cancelled.";
     return false;
@@ -187,7 +189,8 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
       .progressCallback = &progressCallback};
   if (!DownloadURLToFileIOS(url, path, cancelled, maximumArchiveBytes,
                             errorMessage, reportIOSDownloadProgress,
-                            &progressContext, std::move(retryCallback))) {
+                            &progressContext, std::move(retryCallback),
+                            httpStatus)) {
     return false;
   }
   if (progressCallback) {
@@ -500,7 +503,9 @@ int curlProgress(void *userdata, curl_off_t downloadTotal,
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback,
-                       BmsSearchDownloadRetryCallback retryCallback) {
+                       BmsSearchDownloadRetryCallback retryCallback,
+                       long *httpStatus) {
+  if (httpStatus != nullptr) *httpStatus = 0;
   (void)retryCallback; // Nonresumable transports retry the complete archive attempt.
 #if TARGET_OS_ANDROID
   if (cancelled.load()) {
@@ -520,7 +525,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
     }
   };
   if (!DownloadURLToFileAndroid(url, path, cancelled, androidProgressCallback,
-                                errorMessage)) {
+                                errorMessage, httpStatus)) {
     if (errorMessage.empty()) {
       errorMessage = "Download failed.";
     }
@@ -578,6 +583,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   long statusCode = 0;
   curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
   file.close();
+  if (httpStatus != nullptr) *httpStatus = statusCode;
 
   if (cancelled.load()) {
     errorMessage = "Download cancelled.";
@@ -615,6 +621,7 @@ static bool downloadAndExtractArchiveAttempt(
     const std::string &storageIdentity,
     bool *downloadedArchive) {
   result.presentationMessage = {};
+  result.downloadHttpStatus = 0;
   if (downloadedArchive != nullptr) {
     *downloadedArchive = false;
   }
@@ -679,7 +686,8 @@ static bool downloadAndExtractArchiveAttempt(
 
   std::string downloadError;
   if (!downloadUrlToFile(downloadUrl, archivePath, cancelled, downloadError,
-                         progressCallback, options.requestRetry)) {
+                         progressCallback, options.requestRetry,
+                         &result.downloadHttpStatus)) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         downloadError.empty() ? "Download failed." : downloadError;
@@ -777,6 +785,7 @@ bool downloadAndExtractArchive(
         progressCallback, options, result, suggestedArchiveName,
         storageIdentity, downloadedArchive);
     if (finished || cancelled.load() || result.pendingArtifact ||
+        isPixelDrainApiError(downloadUrl, result.downloadHttpStatus) ||
         !options.requestRetry) {
       return finished;
     }

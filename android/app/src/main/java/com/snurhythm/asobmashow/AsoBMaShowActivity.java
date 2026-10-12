@@ -475,6 +475,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         };
     }
 
+    private static native void nativeDownloadUrlToFileResponse(long progressToken, int statusCode);
     private static native void nativeDownloadUrlToFileProgress(long progressToken,
                                                                long downloadedBytes,
                                                                long totalBytes);
@@ -1510,6 +1511,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             connection = openHttpConnection(urlText, "GET", 8);
 
             int statusCode = connection.getResponseCode();
+            nativeDownloadUrlToFileResponse(progressToken, statusCode);
             if (statusCode >= 400) {
                 return ERROR_PREFIX + "HTTP " + statusCode + " while downloading " + urlText;
             }

@@ -181,7 +181,9 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     }
 
     BmsSearchResult attempt = result;
-    if (!lookup.sourceUrl.empty()) {
+    if (!lookup.candidate->originalUrl.empty()) {
+      attempt.fallbackUrl = lookup.candidate->originalUrl;
+    } else if (!lookup.sourceUrl.empty()) {
       attempt.fallbackUrl = lookup.sourceUrl;
     }
     const std::string effectiveArchiveKey =
@@ -199,9 +201,16 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
             {{"source", lookup.sourceName}, {"detail", attempt.presentationMessage}});
       }
     }
-    // A downloadable file commits this operation to its provider. Failure or
-    // cancellation must not silently start another provider's archive.
+    const bool apiRejected = !cancelled.load() &&
+        attempt.status == BmsSearchResult::Status::DownloadFailed &&
+        isPixelDrainApiError(lookup.candidate->downloadUrl,
+                            attempt.downloadHttpStatus);
     result = std::move(attempt);
+    if (apiRejected) {
+      SDL_Log("BMS package source rejected download: %s", result.message.c_str());
+      continue;
+    }
+    // Other failures and cancellation stay with the chosen provider.
     return true;
   }
 
