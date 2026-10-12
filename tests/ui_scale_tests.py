@@ -614,9 +614,11 @@ int main() {
 #include <initializer_list>
 constexpr int YGUndefined = -1;
 enum class Edge { Top, Right, Bottom, Left };
+namespace app_theme { constexpr int resultBackdrop() { return 42; } }
 struct View {
   struct LayoutBatchScope {};
-  int width = 0, height = 0, minimum = 0;
+  int width = 0, height = 0, minimum = 0, background = 0;
+  void setBackgroundColor(int color) { background=color; }
   std::array<int, 4> margins{};
   void setSize(int w, int h) { width=w; height=h; }
   void setWidth(int w) { width=w; }
@@ -655,10 +657,13 @@ int main() {
                      &scene.restore, &scene.confirmation}) {
     assert(view->width==1080 && view->height==2340);
   }
+  assert(scene.viewport.background==0); // Custom skins own their background.
   ScrollView scroll;
   scene.resultScroll=&scroll;
   scene.resultLayoutSignature={};
   scene.resizeResultLayout();
+  assert(scene.viewport.background==app_theme::resultBackdrop());
+  assert(scene.viewport.width==1080 && scene.viewport.height==2340);
   assert(scene.root.width==1080 && scene.root.minimum==2110);
   assert(scroll.margins[0]==140 && scroll.margins[2]==90);
   rendering::safe={160, 0, 100, 0};
@@ -668,6 +673,8 @@ int main() {
   rendering::window_height=1080;
   rendering::safe={0, 140, 60, 140};
   scene.resizeResultLayout();
+  assert(scene.viewport.background==app_theme::resultBackdrop());
+  assert(scene.viewport.width==2340 && scene.viewport.height==1080);
   assert(scene.root.width==2060 && scene.root.minimum==1020);
   assert(scene.controls.width==2340 && scene.controls.height==1080);
 }

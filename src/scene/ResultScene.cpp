@@ -4610,6 +4610,8 @@ void ResultScene::resizeResultLayout() {
     rootLayout->setMinHeight(rendering::window_height);
     return;
   }
+  // Paint through every safe-area edge; only the scrollable content is inset.
+  viewportLayout->setBackgroundColor(app_theme::resultBackdrop());
   resultScroll->setMargin(Edge::Top, safe.top)->setMargin(Edge::Right, safe.right);
   resultScroll->setMargin(Edge::Bottom, safe.bottom)->setMargin(Edge::Left, safe.left);
   const int width = rendering::window_width - safe.left - safe.right;

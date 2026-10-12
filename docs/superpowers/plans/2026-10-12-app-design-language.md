@@ -210,3 +210,9 @@ The remaining Music top-header container and per-page summary rows are also
 removed. Standalone Music keeps its Back action in the navigation rail, and
 safe-area layout no longer reserves header height. The Korean unplayed label
 is now “미플레이”. Desktop build and six focused tests passed for this follow-up.
+
+Scene background fills always cover the full window; safe-area insets apply
+only to content and controls. The built-in result scene now paints its backdrop
+on the viewport outside the inset scroll area as well. Portrait/landscape
+regressions verify the full background bounds and retained content insets.
+Desktop build and three focused tests passed; no fresh native visual pass.
