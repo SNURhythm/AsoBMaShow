@@ -28,10 +28,12 @@ class MainMenuTabsTests(unittest.TestCase):
             "bool MainMenuScene::selectorTabActive() const",
             "Scene *MainMenuScene::activeUtilityTab() const",
             "void MainMenuScene::selectTab(Tab tab)",
+            "EventHandleResult MainMenuScene::handleEvents(SDL_Event &event)",
             "void MainMenuScene::selectChartByPathAfterReload(",
             "ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const"))
         source = r'''
 #include <algorithm>
+#define TARGET_OS_ANDROID 0
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -70,6 +72,10 @@ ChartMetaQuery chartQueryForSameFolder(const std::filesystem::path &folder,
 namespace rendering { int window_width=1920; }
 struct Insets { int top=0; };
 Insets getSafeAreaInsetsUi() { return {}; }
+using EventHandleResult = int;
+constexpr int SDL_EVENT_KEY_DOWN=1, SDL_EVENT_KEY_UP=2;
+constexpr int SDL_KMOD_CTRL=1, SDL_KMOD_GUI=2, SDLK_1=49, SDLK_4=52;
+struct SDL_Event { int type=0; struct { int mod=0,key=0,repeat=0; } key; };
 struct View {
   virtual ~View()=default;
   std::vector<View*> children;
@@ -77,7 +83,12 @@ struct View {
   std::string editing;
   void cancelPointerInput() {}
   void dismiss() {}
-  void setVisible(bool) {}
+  bool visible=false;
+  void setVisible(bool v) { visible=v; }
+  bool getVisible() const { return visible; }
+  bool isVisible() const { return visible; }
+  bool isOpen() const { return visible; }
+  bool handleEvents(SDL_Event&) { return true; }
   void applyYogaLayout() {}
   void setEditingText(const std::string &value) { editing=value; }
   View *findViewByName(const char*) { return nullptr; }
@@ -87,8 +98,11 @@ struct TextInputBox: View {
   void endEditing() { editingActive=false; }
 };
 struct Scene {
-  void onPause() {} void onResume() {} void refreshLanguageIfNeeded() {}
-  void prepareForUse() {} void init() {}
+  int initializations=0, resumes=0, digitEvents=0;
+  EventHandleResult handleEvents(SDL_Event &event) { if(event.type==SDL_EVENT_KEY_DOWN) ++digitEvents; return {}; }
+  bool coversTabHeader() const { return false; }
+  void onPause() {} void onResume() { ++resumes; } void refreshLanguageIfNeeded() {}
+  void prepareForUse() {} void init() { ++initializations; }
   template<class... Args> void configureTab(Args...) {}
 };
 struct MusicPlayerScene: Scene { explicit MusicPlayerScene(int) {} };
@@ -117,7 +131,7 @@ struct Session {
     return -1;
   }
 };
-struct MainMenuScene {
+struct MainMenuScene : Scene {
   enum class Tab { Play, Course, Music, Ir };
   enum class AutoSelectionPreview { Suppress, Load };
   FOLDER_TYPE;
@@ -150,6 +164,9 @@ struct MainMenuScene {
   std::optional<Session> chartSession=Session{};
   bool selectorTabActive() const;
   Scene *activeUtilityTab() const;
+  EventHandleResult handleEvents(SDL_Event &);
+  View *tutorial_=nullptr, *archiveUnzipModal_=nullptr, *findBmsModal_=nullptr, *decideOverlay_=nullptr, *recordsModal_=nullptr;
+  View *playOptionsModalRoot=nullptr, *parseLogModalRoot=nullptr, *musicModalRoot=nullptr, *tasksModalRoot=nullptr, *rankingsModal=nullptr;
   void selectTab(Tab);
   void selectChartByPathAfterReload(const std::filesystem::path&, AutoSelectionPreview);
   ChartMetaQuery chartQueryForActiveFolder() const;
@@ -218,7 +235,29 @@ int main(int argc,char **argv) {
   MainMenuScene scene;
   auto folders=MainMenuScene::fixtureFolders();
   const std::string scenario=argv[1];
-  if(scenario=="play") {
+  if(scenario=="shell-shortcuts") {
+    for (int key=SDLK_1;key<=SDLK_4;++key) {
+      scene.selectTab(Tab::Music);
+      const int before=scene.musicTab_->digitEvents;
+      SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=key}};
+      scene.handleEvents(event);
+      assert(scene.activeTab_==static_cast<Tab>(key-SDLK_1));
+      assert(scene.musicTab_->digitEvents==before);
+      event.type=SDL_EVENT_KEY_UP;
+      event.key.mod=0;
+      scene.handleEvents(event);
+      assert(scene.activeTab_==static_cast<Tab>(key-SDLK_1));
+    }
+  } else if(scenario=="utility-lifecycle") {
+    for (auto tab : {Tab::Music, Tab::Ir}) {
+      scene.selectTab(tab);
+      auto *utility=scene.activeUtilityTab();
+      assert(utility->initializations==1 && utility->resumes==0);
+      scene.selectTab(Tab::Play);
+      scene.selectTab(tab);
+      assert(utility->initializations==1 && utility->resumes==1);
+    }
+  } else if(scenario=="play") {
     scene.activeFolder={.key="course",.type=T::Course,.courseId=42};
     scene.project(folders);
     const std::vector<std::string> expected{"all","favorites","archives","tables-heading","table","level","clear"};
@@ -369,6 +408,12 @@ int main(int argc,char **argv) {
         cls.binary = Path(cls.temp.name) / "test"
         path.write_text(source)
         subprocess.run(["c++", "-std=c++20", str(path), "-o", str(cls.binary)], check=True)
+
+    def test_shell_shortcuts_precede_music_digit_handlers(self):
+        subprocess.run([str(self.binary), "shell-shortcuts"], check=True)
+
+    def test_utility_tabs_load_once_on_creation_and_resume_when_retained(self):
+        subprocess.run([str(self.binary), "utility-lifecycle"], check=True)
 
     def test_play_excludes_every_course_folder_kind(self):
         subprocess.run([str(self.binary), "play"], check=True)

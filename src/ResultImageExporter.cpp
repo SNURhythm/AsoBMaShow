@@ -713,7 +713,7 @@ ResultImageExportResult renderResultImageWithSkinData(
   backdropBatch.begin();
   backdropBatch.addRect(0.0f, 0.0f, static_cast<float>(rendering::window_width),
                         static_cast<float>(rendering::window_height),
-                        app_theme::backdrop().toABGR());
+                        app_theme::withAlpha(app_theme::backdrop(), 255).toABGR());
   backdropBatch.end();
   bool rendered = true;
   {

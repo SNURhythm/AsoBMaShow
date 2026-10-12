@@ -77,6 +77,7 @@ private:
   bool dispatchingOptionCallback = false;
   bool deferredRefreshScheduled = false;
   bool deferredOptionViewClearScheduled = false;
+  float lastTriggerHeight = 0.0f;
   float resolvedWidth = kDefaultWidth;
   float triggerWidth = 0.0f;
   mutable std::optional<float> cachedPreferredWidth;
@@ -88,6 +89,7 @@ private:
   void clearOptionViews();
   void refreshVisualState();
   void refreshWidths();
+  void refreshDensity();
   void setOpen(bool open);
   void updateMenuPlacement();
   void scheduleDeferredRefresh();

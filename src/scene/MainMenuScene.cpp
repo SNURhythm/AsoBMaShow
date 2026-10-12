@@ -730,10 +730,12 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
       || (fileActionsModalRoot_ && fileActionsModalRoot_->getVisible())
 #endif
       ;
-  if (!shellModalOpen && event.type == SDL_EVENT_KEY_UP &&
+  if (!shellModalOpen &&
+      (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
       (event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0 &&
       event.key.key >= SDLK_1 && event.key.key <= SDLK_4) {
-    selectTab(static_cast<Tab>(event.key.key - SDLK_1));
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
+      selectTab(static_cast<Tab>(event.key.key - SDLK_1));
     return {};
   }
   if (auto *scene = activeUtilityTab()) {
@@ -788,16 +790,19 @@ void MainMenuScene::selectTab(Tab tab) {
   const float inset = getSafeAreaInsetsUi().top +
       kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);
   const auto returnToPlay = [this] { selectTab(Tab::Play); };
+  bool initializedUtilityTab = false;
   if (tab == Tab::Music && !musicTab_) {
     musicTab_ = std::make_unique<MusicPlayerScene>(context);
     musicTab_->prepareForUse();
     musicTab_->configureTab(inset, returnToPlay, this);
     musicTab_->init();
+    initializedUtilityTab = true;
   } else if (tab == Tab::Ir && !irTab_) {
     irTab_ = std::make_unique<IrUploadsScene>(context);
     irTab_->prepareForUse();
     irTab_->configureTab(inset, returnToPlay, this);
     irTab_->init();
+    initializedUtilityTab = true;
   }
   if (selectorTabActive()) {
     selectorTab_ = tab;
@@ -836,7 +841,7 @@ void MainMenuScene::selectTab(Tab tab) {
     restoringTabSelection_ = false;
   } else if (auto *scene = activeUtilityTab()) {
     scene->refreshLanguageIfNeeded();
-    scene->onResume();
+    if (!initializedUtilityTab) scene->onResume();
   }
   updatePanelLayout();
   refreshTabPresentation();
@@ -995,9 +1000,11 @@ void MainMenuScene::onResume() {
 
 void MainMenuScene::queueSelectedSkinHandoff() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (activeTab_ != Tab::Play) return;
   // Settings retains the built-in selector. Re-evaluate type 5 after resume
   // unwinds, so changing the scene cannot clean up views inside onResume().
   defer([this]() {
+    if (activeTab_ != Tab::Play) return true;
     if (context.gameplaySkinLifecycle &&
         !context.gameplaySkinLifecycle->presentationReady()) {
       presentationSkinRefreshPending = true;
@@ -1563,7 +1570,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-  rootLayout->setPadding(Edge::Bottom, 0);
+  rootLayout->setPadding(Edge::Bottom, safe.bottom);
   rootLayout->setThemedBackgroundColor(main_menu_theme::backdrop);
   auto *header = new View();
   header->setName("mainMenuHeader");
@@ -1695,9 +1702,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tabs->setName("mainMenuTabs");
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
   const std::array<const char *, 4> tabLabels{"PLAY", "COURSE", "MUSIC", "IR"};
+  const std::array<const char *, 4> tabMessages{
+      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir"};
   for (size_t index = 0; index < tabLabels.size(); ++index) {
     TextView *text = nullptr;
-    auto *button = makeSelectorButton(i18n::Text(tabLabels[index]), 22, &text);
+    auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text);
     button->setName(std::string("mainMenuTab:") + tabLabels[index]);
     button->setWidth(112)->setHeight(kMenuHeaderHeight - 14);
     styleMenuButton(button, text, index == 0);
@@ -1924,6 +1933,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setThemedBorderColor(main_menu_theme::rule);
   right->setBorderWidth(0);
   auto *detailsRule = new View();
+  detailsRule->setName("mainMenuDetailsDivider");
   detailsRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 16);
   detailsRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   right->addView(detailsRule);
@@ -1958,11 +1968,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     cell->setName(name);
     cell->setFlex(1)->setMinWidth(0)->setHeight(72)->setGap(6);
     cell->setPadding(Edge::Left, 24)->setPadding(Edge::Right, 16);
-    auto *rule = new View();
-    rule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
-    rule->setWidth(1)->setHeight(72)->setBackgroundColor(Color(75, 79, 88, 255));
-    if (std::string(name) == "readyOptionsCell") delete rule;
-    else cell->addView(rule);
     const bool heading = std::string(name) == "readyOptionsCell";
     auto *caption = new TextView(main_menu_theme::font, heading ? 24 : 15,
                                 heading ? TextView::FontWeight::Bold : TextView::FontWeight::Regular);
@@ -2267,13 +2272,13 @@ void MainMenuScene::updatePanelLayout() {
   View::LayoutBatchScope batch;
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
-  rootLayout->setPadding(Edge::Bottom, 0);
+  rootLayout->setPadding(Edge::Bottom, safe.bottom);
   rootLayout->findViewByName("mainMenuLibrary")->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
   rootLayout->findViewByName("mainMenuSongs")->setPadding(Edge::Left, 16)->setPadding(Edge::Right, 16);
   detailsContent_->setWidth(kDetailsContentWidth);
   chartDetailsView_->setWidth(kDetailsContentWidth);
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
-  const float contentHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
   const float detailsHeight = portraitDetailsHeight(contentHeight);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
@@ -2321,6 +2326,12 @@ void MainMenuScene::updatePanelLayout() {
     controls->setWidth(YGUndefined);
     controls->setHeight(portrait ? std::max(0.0F, detailsHeight - 34) : YGUndefined);
   }
+  if (auto *divider = rootLayout->findViewByName("mainMenuDetailsDivider")) {
+    divider->setPosition(Edge::Left, 0)->setPosition(Edge::Top, portrait ? 0 : 16);
+    divider->setPosition(Edge::Right, portrait ? 0 : YGUndefined);
+    divider->setPosition(Edge::Bottom, portrait ? YGUndefined : 0);
+    divider->setWidth(portrait ? YGUndefined : 1)->setHeight(portrait ? 1 : YGUndefined);
+  }
   chartDetailsView_->setCompact(portrait);
   chartDetailsView_->setMinHeight(portrait ? std::max(0.0F, detailsHeight - 34) : 0);
   detailsContent_->setPadding(Edge::Top, 0);
@@ -2333,7 +2344,7 @@ void MainMenuScene::updatePhonePanelLayout() {
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
   const float width = rendering::window_width - safe.left - safe.right;
-  rootLayout->setPadding(Edge::Bottom, portrait ? safe.bottom : 0);
+  rootLayout->setPadding(Edge::Bottom, safe.bottom);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *songs = rootLayout->findViewByName("mainMenuSongs");
@@ -2375,20 +2386,20 @@ void MainMenuScene::updatePhonePanelLayout() {
   for (auto *view : std::array<View *, 3>{replayButtonSlot, replayButton, rankingsButton}) view->setHeight(height);
   for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
   auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
-  const int dockHeight = 96 + safe.bottom;
+  const int dockHeight = 96;
   const int primaryHeight = portrait ? height : dockHeight;
   dock->setHeight(dockHeight);
   primaryActionSlot_->setWidth(portrait ? YGUndefined : detailsWidth)->setHeight(primaryHeight);
   if (portrait) primaryActionSlot_->setWidthPercent(100);
   for (auto *button : {startButton, findBmsButton, unzipButton}) {
     button->setWidthPercent(100)->setHeight(primaryHeight);
-    button->getContentView()->setPadding(Edge::Bottom, portrait ? 0 : safe.bottom);
+    button->getContentView()->setPadding(Edge::Bottom, 0);
   }
   findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
   unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? primaryHeight : 0);
   if (!portrait) readyPlayOptionsButton->setHeight(dockHeight);
   auto *summary = readyPlayOptionsButton->getContentView();
-  summary->setPadding(Edge::Bottom, portrait ? 8 : 8 + safe.bottom);
+  summary->setPadding(Edge::Bottom, 8);
   size_t cellIndex = 0;
   for (auto *cell : summary->getChildren()) {
     // The redundant heading costs one sixth of a narrow options bar.
@@ -5462,17 +5473,6 @@ void MainMenuScene::resizeFileActionsModal() {
   }
 }
 
-void MainMenuScene::resizeTasksModal() {
-  if (tasksModalRoot == nullptr || tasksScrollView == nullptr) return;
-  auto *panel = tasksModalRoot->findViewByName("mainMenuTasksPanel");
-  if (panel == nullptr) return;
-  const float width = std::min(760.0f, std::max(
-      0.0f, static_cast<float>(rendering::window_width) - 32.0f));
-  const float height = std::min(460.0f, std::max(
-      0.0f, static_cast<float>(rendering::window_height) - 32.0f));
-  panel->setWidth(width)->setHeight(height);
-  tasksScrollView->setWidth(std::max(0.0f, width - 44.0f));
-}
 
 void MainMenuScene::showFileActionsModal() {
   if (fileActionsModalRoot_ == nullptr) return;
@@ -5487,6 +5487,35 @@ void MainMenuScene::showFileActionsModal() {
   fileActionsModalRoot_->applyYogaLayout();
 }
 #endif
+
+void MainMenuScene::resizeTasksModal() {
+  if (tasksModalRoot == nullptr || tasksScrollView == nullptr) return;
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = getSafeAreaInsetsUi();
+  tasksModalRoot->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  tasksModalRoot->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float width = std::min(760.0f, std::max(0.0f,
+      float(rendering::window_width - safe.left - safe.right - 32)));
+  const float height = std::min(460.0f, std::max(0.0f,
+      float(rendering::window_height - safe.top - safe.bottom - 32)));
+  tasksModalRoot->findViewByName("mainMenuTasksPanel")->setWidth(width)->setHeight(height);
+  tasksScrollView->setWidth(std::max(0.0f, width - 46));
+  tasksScrollView->refreshContentLayout();
+}
+
+void MainMenuScene::resizeParseLogModal() {
+  if (parseLogModalRoot == nullptr || parseLogRecyclerView == nullptr) return;
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = getSafeAreaInsetsUi();
+  parseLogModalRoot->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  parseLogModalRoot->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float width = std::min(900.0f, std::max(0.0f,
+      float(rendering::window_width - safe.left - safe.right - 32)));
+  const float height = std::min(640.0f, std::max(0.0f,
+      float(rendering::window_height - safe.top - safe.bottom - 32)));
+  parseLogModalRoot->findViewByName("mainMenuParseLogPanel")->setWidth(width)->setHeight(height);
+  parseLogRecyclerView->setWidth(std::max(0.0f, width - 46));
+}
 
 void MainMenuScene::buildParseLogModal() {
   if (rootLayout == nullptr) {
@@ -5511,6 +5540,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
+  panel->setName("mainMenuParseLogPanel");
   panel->setWidth(kModalPanelWidth)
       ->setHeight(640)
       ->setFlexDirection(FlexDirection::Column)
@@ -5536,7 +5566,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogRecyclerView->itemHeight = kParseLogRowHeight;
   parseLogRecyclerView->reserveScrollbarGutter = true;
   parseLogRecyclerView->setWidth(kModalContentWidth);
-  parseLogRecyclerView->setFlex(1);
+  parseLogRecyclerView->setFlex(1)->setMinHeight(0);
   parseLogRecyclerView->setThemedBackgroundColor(app_theme::insetSurface);
   parseLogRecyclerView->setCornerRadius(app_theme::controlRadius());
   parseLogRecyclerView->setThemedBorderColor(app_theme::hairline);
@@ -5598,6 +5628,7 @@ void MainMenuScene::showParseLogModal() {
     return;
   }
   parseLogModalRoot->setSize(rendering::window_width, rendering::window_height);
+  resizeParseLogModal();
   parseLogModalRoot->setVisible(true);
   parseLogDisplayedRevision = 0;
   refreshParseLogExportControls();
@@ -6209,9 +6240,7 @@ void MainMenuScene::buildTasksModal() {
   tasksModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
-#if TARGET_OS_ANDROID
   panel->setName("mainMenuTasksPanel");
-#endif
   panel->setWidth(kModalPanelWidth)
       ->setHeight(460)
       ->setFlexDirection(FlexDirection::Column)
@@ -6234,9 +6263,7 @@ void MainMenuScene::buildTasksModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 400);
   tasksScrollView->setWidth(kModalContentWidth);
   tasksScrollView->setFlex(1);
-#if TARGET_OS_ANDROID
   tasksScrollView->setMinHeight(0);
-#endif
   tasksScrollView->setThemedBackgroundColor(app_theme::insetSurface);
   tasksScrollView->setCornerRadius(app_theme::controlRadius());
   tasksScrollView->setThemedBorderColor(app_theme::hairline);
@@ -6296,9 +6323,7 @@ void MainMenuScene::buildTasksModal() {
 
   tasksModalRoot->addView(panel);
   rootLayout->addView(tasksModalRoot);
-#if TARGET_OS_ANDROID
   resizeTasksModal();
-#endif
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
   refreshTasksModal();
@@ -7882,7 +7907,7 @@ void MainMenuScene::update(float dt) {
   if (rootLayout) rootLayout->setVisible(
       !(activeTab_ == Tab::Music && musicTab_ && musicTab_->coversTabHeader()));
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (presentationSkinRefreshPending &&
+  if (activeTab_ == Tab::Play && presentationSkinRefreshPending &&
       (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
     presentationSkinRefreshPending = false;
     queueSelectedSkinHandoff();
@@ -7932,7 +7957,7 @@ void MainMenuScene::update(float dt) {
   }
   if (selectorTabActive() && rootLayout && !rendering::compactMenuCanvasActive && rendering::window_height > rendering::window_width) {
     const auto safe = getSafeAreaInsetsUi();
-    const float availableHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
     const auto *details = rootLayout->findViewByName("mainMenuDetails");
     if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
       updatePanelLayout();
@@ -7956,9 +7981,8 @@ void MainMenuScene::renderScene() {
   if (recordsModal_ != nullptr) {
     recordsModal_->resize(rendering::window_width, rendering::window_height);
   }
-  if (playOptionsModalRoot != nullptr) {
-    playOptionsModalRoot->setSize(rendering::window_width,
-                                  rendering::window_height);
+  if (playOptionsModal != nullptr && layoutChanged) {
+    playOptionsModal->resize(rendering::window_width, rendering::window_height);
   }
   if (overlayPortal != nullptr) {
     overlayPortal->setSize(rendering::window_width, rendering::window_height);
@@ -7986,9 +8010,12 @@ void MainMenuScene::renderScene() {
 #if TARGET_OS_ANDROID
   if (layoutChanged) {
     resizeFileActionsModal();
-    resizeTasksModal();
   }
 #endif
+  if (layoutChanged) {
+    resizeTasksModal();
+    resizeParseLogModal();
+  }
   if (findBmsModal_ != nullptr) {
     findBmsModal_->resize(rendering::window_width, rendering::window_height);
   }
@@ -8005,7 +8032,7 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
     rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
     rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-    rootLayout->setPadding(Edge::Bottom, 0);
+    rootLayout->setPadding(Edge::Bottom, safe.bottom);
     updatePanelLayout();
     refreshTabPresentation();
     rootLayout->applyYogaLayout();

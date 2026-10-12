@@ -108,7 +108,8 @@ DropdownView::DropdownView(Callbacks callbacks, OverlayPortal *portal)
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setWidth(kDefaultWidth);
-  setHeight(triggerHeight());
+  lastTriggerHeight = triggerHeight();
+  setHeight(lastTriggerHeight);
   setMinHeight(triggerHeight());
   setFlexShrink(1.0f);
   setZIndex(0);
@@ -212,6 +213,7 @@ void DropdownView::refresh(const State &state) {
 }
 
 void DropdownView::applyRefresh(State state) {
+  refreshDensity();
   const bool rebuild = !optionsMatch(state.options);
   const bool wasOpen = current.open;
   if (rebuild || current.label != state.label) cachedPreferredWidth.reset();
@@ -593,7 +595,21 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
   return true;
 }
 
-void DropdownView::onLayout() { updateMenuPlacement(); }
+void DropdownView::refreshDensity() {
+  if (triggerButton == nullptr) return;
+  const float height = triggerHeight();
+  if (height == lastTriggerHeight) return;
+  lastTriggerHeight = height;
+  View::LayoutBatchScope batch;
+  setHeight(height)->setMinHeight(height);
+  triggerButton->setHeight(height);
+  for (auto &option : optionButtons) option.button->setHeight(optionHeight());
+}
+
+void DropdownView::onLayout() {
+  refreshDensity();
+  updateMenuPlacement();
+}
 
 void DropdownView::onMove(int, int) { updateMenuPlacement(); }
 

@@ -5,6 +5,8 @@
 #include "../Utils.h"
 #include "../library/ChartLibraryPlatform.h"
 #include "../rendering/common.h"
+#include "../rendering/ResponsiveUi.h"
+#include "../rendering/UiSafeArea.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/ModalViewHelpers.h"
@@ -13,6 +15,7 @@
 #include "../view/AppTheme.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace {
@@ -266,7 +269,31 @@ bool FindBmsModal::isVisible() const {
 View *FindBmsModal::root() const { return findBmsModalRoot; }
 
 void FindBmsModal::resize(int width, int height) {
-  if (findBmsModalRoot != nullptr) findBmsModalRoot->setSize(width, height);
+  if (findBmsModalRoot == nullptr) return;
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = rendering::uiSafeAreaInsets();
+  findBmsModalRoot->setSize(width, height);
+  findBmsModalRoot->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  findBmsModalRoot->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float panelWidth = std::max(0.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
+  const float panelHeight = std::max(0.0f, std::min(560.0f, float(height - safe.top - safe.bottom - 24)));
+  const float contentWidth = std::max(0.0f, panelWidth - 46);
+  findBmsModalRoot->findViewByName("findBmsPanel")->setWidth(panelWidth)->setHeight(panelHeight);
+  findBmsCandidateRecyclerView->setWidth(contentWidth)->setMinHeight(0);
+  findBmsDetailText->setMinHeight(0);
+  findBmsProgressTrack->setWidth(contentWidth);
+  auto *footer = findBmsModalRoot->findViewByName("findBmsFooter");
+  footer->setFlexWrap(YGWrapWrap)->setHeight(YGUndefined)->setFlexShrink(0);
+  const float actionHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 58;
+  const std::array<float, 8> widths{130, 240, 150, 150, 150, 180, 150, 150};
+  size_t index = 0;
+  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+                       findBmsKeepFilesButton, findBmsDeleteFilesButton,
+                       findBmsOpenButton, findBmsGoogleButton, findBmsRefreshButton}) {
+    button->setWidth(std::min(widths[index++], contentWidth));
+    button->setHeight(actionHeight)->setFlexShrink(0);
+    button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
+  }
 }
 
 void FindBmsModal::cancelAndWait() {
@@ -323,6 +350,7 @@ void FindBmsModal::build(View *parent) {
   findBmsModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
+  panel->setName("findBmsPanel");
   panel->setWidth(kModalPanelWidth)
       ->setHeight(560)
       ->setFlexDirection(FlexDirection::Column)
@@ -402,6 +430,7 @@ void FindBmsModal::build(View *parent) {
   panel->addView(findBmsProgressTrack);
 
   auto *footer = new View();
+  footer->setName("findBmsFooter");
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
@@ -874,6 +903,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
       findBmsRefreshButton, findBmsRefreshButtonText, hasRefreshAction,
       app_theme::successAction, app_theme::successActionHover,
       app_theme::successActionPressed, app_theme::accentBorder);
+  resize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->applyYogaLayout();
 }
 

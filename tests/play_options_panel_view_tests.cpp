@@ -578,6 +578,23 @@ void testDropdownSelectionDefersTeardownUntilItsCallbackReturns() {
 }
 } // namespace
 
+void testRetainedDropdownChangesDensity() {
+  rendering::compactMenuCanvasActive = false;
+  View root(0, 0, 600, 900);
+  auto *dropdown = new DropdownView({});
+  root.addView(dropdown);
+  for (const bool compact : {false, true, false, true}) {
+    rendering::compactMenuCanvasActive = compact;
+    root.setWidth(compact ? 585 : 600);
+    root.applyYogaLayout();
+    const int expected = compact ? rendering::compactTouchTarget : 42;
+    require(dropdown->getHeight() == expected &&
+                dropdown->triggerButton->getHeight() == expected,
+            "retained dropdown updates its trigger height across density changes");
+  }
+  rendering::compactMenuCanvasActive = false;
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -597,6 +614,7 @@ int main() {
   testScrollViewTargetsWheelEventPosition();
   testDropdownDefersOptionViewsUntilOpen();
   testInputSelectorWidthsStayStableAcrossRefreshes();
+  testRetainedDropdownChangesDensity();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
 
   {

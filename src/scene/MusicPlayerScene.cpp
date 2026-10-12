@@ -706,12 +706,16 @@ void MusicPlayerScene::updateLayoutInsets() {
       ->setPadding(Edge::Right, safe.right);
   const float width = rendering::window_width - safe.left - safe.right;
   const bool compactNavigation = width < 900;
+  const int navigationHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 58;
+  const int compactRailHeight = navigationHeight + 72 + 8 + 16;
   contentLayout->setFlexDirection(compactNavigation ? FlexDirection::Column
                                                     : FlexDirection::Row);
   if (auto *rail = rootLayout->findViewByName("musicNavigationRail")) {
     rail->setWidth(compactNavigation ? width
                                     : (width < 1100 ? width * 0.24F : kRailWidth));
-    rail->setHeight(compactNavigation ? 76 : YGUndefined);
+    rail->setHeight(compactNavigation ? compactRailHeight : YGUndefined);
+    rail->setFlexWrap(compactNavigation ? YGWrapWrap : YGWrapNoWrap);
+    rail->setGap(8);
     rail->setFlexDirection(compactNavigation ? FlexDirection::Row
                                              : FlexDirection::Column);
     rail->setPadding(Edge::All, compactNavigation ? 8 : 24);
@@ -719,13 +723,16 @@ void MusicPlayerScene::updateLayoutInsets() {
                          playlistsNavButton, playerNavButton}) {
       button->setFlex(compactNavigation ? 1 : 0);
       button->setMinWidth(0);
+      button->setHeight(navigationHeight);
     }
   }
   if (auto *spacer = rootLayout->findViewByName("musicNavigationSpacer")) {
     spacer->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
   }
   if (statusText != nullptr) {
-    statusText->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
+    statusText->setDisplay(YGDisplayFlex);
+    statusText->setWidthPercent(100);
+    statusText->setFlexShrink(0);
   }
   const bool phoneStack = rendering::compactMenuCanvasActive && width < 900;
   for (const auto *name : {"musicLibraryWorkspace", "musicFavoritesWorkspace"}) {
@@ -749,7 +756,7 @@ void MusicPlayerScene::updateLayoutInsets() {
   }
   const float availableHeight = rendering::window_height - safe.bottom -
       (embeddedTab ? tabTopInset : safe.top) -
-      (compactNavigation ? 76 : 0) - 150;
+      (compactNavigation ? compactRailHeight : 0) - 150;
   for (const auto *name : {"musicPlayerViewport", "musicPlaylistsViewport"}) {
     auto *viewport = dynamic_cast<ScrollView *>(rootLayout->findViewByName(name));
     if (viewport == nullptr) continue;

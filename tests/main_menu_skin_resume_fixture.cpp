@@ -230,6 +230,23 @@ int main() {
     assert(lifecycle.calls == 1 && manager.current && !menu.presentationSkinRefreshPending);
   }
 #endif
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  for (const auto tab : {MainMenuScene::Tab::Course, MainMenuScene::Tab::Music,
+                         MainMenuScene::Tab::Ir}) {
+    MainMenuScene menu;
+    SceneManager manager;
+    Lifecycle lifecycle;
+    menu.context.sceneManager = &manager;
+    menu.context.gameplaySkinLifecycle = &lifecycle;
+    menu.queueSelectedSkinHandoff();
+    menu.activeTab_ = tab;
+    menu.deferred.back()();
+    assert(lifecycle.calls == 0 && !manager.current);
+    const auto count = menu.deferred.size();
+    menu.queueSelectedSkinHandoff();
+    assert(menu.deferred.size() == count);
+  }
+#endif
   for (int scenario = 0; scenario < 5; ++scenario) {
     MainMenuScene menu;
     SceneManager manager;

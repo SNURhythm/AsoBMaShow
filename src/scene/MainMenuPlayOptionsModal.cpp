@@ -86,6 +86,14 @@ MainMenuPlayOptionsModal::Create(View *parent,
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
+  const auto addRule = [](View *region, Edge edge) {
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setPosition(Edge::Left, 0)->setPosition(edge, 0);
+    rule->setWidthPercent(100)->setHeight(1);
+    rule->setThemedBackgroundColor(app_theme::hairline);
+    region->addView(rule);
+  };
   auto *header = new View();
   header->setHeight(64)->setFlexShrink(0);
   header->setPadding(Edge::Left, kPanelPadding);
@@ -96,6 +104,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   title->setThemedColor(app_theme::textPrimary);
   title->setHeight(36);
   header->addView(title);
+  addRule(header, Edge::Bottom);
   panel->addView(header);
 
   auto *scrollView = new ScrollView(0, 0, static_cast<int>(contentWidth), 1);
@@ -129,13 +138,16 @@ MainMenuPlayOptionsModal::Create(View *parent,
   panel->addView(scrollView);
 
   auto *footer = new View();
+  footer->setName("playOptionsModalFooter");
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignCenter);
   footer->setHeight(rendering::compactMenuCanvasActive ? 82 : 72)->setFlexShrink(0);
   footer->setPadding(Edge::Left, kPanelPadding);
   footer->setPadding(Edge::Right, kPanelPadding);
+  addRule(footer, Edge::Top);
   auto *close = makeCloseButton();
+  close->setName("playOptionsModalClose");
   close->setOnClickListener([raw = modal.get()] { raw->hide(); });
   footer->addView(close);
   panel->addView(footer);
@@ -167,7 +179,7 @@ void MainMenuPlayOptionsModal::hide() {
 void MainMenuPlayOptionsModal::resize(int width, int height) {
   if (root_ == nullptr) return;
   root_->setSize(width, height);
-  if (!rendering::compactMenuCanvasActive) return;
+  View::LayoutBatchScope layoutBatch;
   const auto safe = rendering::uiSafeAreaInsets();
   root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
   root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
@@ -178,5 +190,8 @@ void MainMenuPlayOptionsModal::resize(int width, int height) {
   scroll->setWidth(panelWidth - 36);
   scroll->getContentView()->setWidth(panelWidth - 54);
   panel_->setWidth(panelWidth - 54);
+  const bool compact = rendering::compactMenuCanvasActive;
+  root_->findViewByName("playOptionsModalFooter")->setHeight(compact ? 82 : 72);
+  root_->findViewByName("playOptionsModalClose")->setHeight(compact ? rendering::compactTouchTarget : 48);
   scroll->refreshContentLayout();
 }

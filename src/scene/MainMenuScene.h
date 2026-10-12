@@ -547,9 +547,10 @@ private:
 #if TARGET_OS_ANDROID
   void buildFileActionsModal();
   void resizeFileActionsModal();
-  void resizeTasksModal();
   void showFileActionsModal();
 #endif
+  void resizeTasksModal();
+  void resizeParseLogModal();
   void buildTasksModal();
   void showTasksModal();
   void hideTasksModal();

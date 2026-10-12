@@ -34,6 +34,12 @@ View *makeSectionHeader(TextView *label) {
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Column);
   header->setPadding(Edge::Top, 10);
+  auto *rule = new View();
+  rule->setPositionType(YGPositionTypeAbsolute);
+  rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+  rule->setWidthPercent(100)->setHeight(1);
+  rule->setThemedBackgroundColor(app_theme::hairline);
+  header->addView(rule);
   header->addView(label);
   return header;
 }

@@ -916,8 +916,28 @@ void SettingsScene::persistSettings() {
       context.settings.uiThemeMode == AppSettings::UiThemeMode::Light
           ? app_theme::ThemeMode::Light
           : app_theme::ThemeMode::Dark;
-  app_theme::setActiveMode(nextMode);
   const bool themeChanged = previousMode != nextMode;
+  const std::array<SDL_Color *, 5> statusColors{
+      &difficultyTableStatusColor, &chartFolderStatusColor,
+      &archiveCacheCleanupStatusColor, &audioStatusColor, &displayStatusColor};
+  const std::array<TextView *, 5> statusViews{
+      difficultyTableStatusText, chartFolderStatusText,
+      archiveCacheCleanupStatusText, audioStatusText, displayStatusText};
+  std::array<View::ThemeColorProvider, 5> statusProviders;
+  if (themeChanged) {
+    for (size_t i = 0; i < statusColors.size(); ++i) {
+      const auto color = *statusColors[i];
+      statusProviders[i] = themeTextColorProvider(Color(color.r, color.g, color.b, color.a));
+    }
+  }
+  app_theme::setActiveMode(nextMode);
+  if (themeChanged) {
+    for (size_t i = 0; i < statusColors.size(); ++i) {
+      if (!statusProviders[i]) continue;
+      *statusColors[i] = app_theme::sdl(statusProviders[i]());
+      if (statusViews[i]) statusViews[i]->setThemedColor(statusProviders[i]);
+    }
+  }
   if (!context.saveSettings()) {
     SDL_Log("Failed to save settings");
   }

@@ -25,6 +25,22 @@ constexpr int kCompactBestWidth = 76;
 constexpr int kFavoriteWidth = 40;
 constexpr const char *kUiFont = main_menu_theme::font;
 
+class ArtworkPlaceholder final : public TextView {
+public:
+  explicit ArtworkPlaceholder(ImageView &artwork)
+      : TextView(ui_icons::kFontAwesomeSolidPath, 24), artwork_(artwork) {}
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (artwork_.imageWidth() <= 0 || artwork_.imageHeight() <= 0) {
+      TextView::renderImpl(context);
+    }
+  }
+
+private:
+  ImageView &artwork_;
+};
+
 TextView *rowText(const char *name, int size, int height,
                   TextView::FontWeight weight = TextView::FontWeight::Regular) {
   auto *view = new TextView(kUiFont, size, weight);
@@ -96,19 +112,20 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artworkFrame->setName("chartListArtwork");
   artworkFrame->setWidth(kArtworkWidth)->setHeight(kArtworkWidth)->setFlexShrink(0);
   artworkFrame->setThemedBackgroundColor(main_menu_theme::surface);
-  artworkPlaceholder = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
-  artworkPlaceholder->setText(ui_icons::textForCodepoint(ui_icons::kMusic));
-  artworkPlaceholder->setAlign(TextView::CENTER);
-  artworkPlaceholder->setVAlign(TextView::MIDDLE);
-  artworkPlaceholder->setWidth(kArtworkWidth)->setHeight(kArtworkWidth);
-  artworkPlaceholder->setThemedColor(main_menu_theme::muted);
-  artworkFrame->addView(artworkPlaceholder);
   jacketImage = new ImageView(0, 0, kArtworkWidth, kArtworkWidth);
   jacketImage->setName("chartListJacket");
   jacketImage->setPositionType(YGPositionTypeAbsolute);
   jacketImage->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
   jacketImage->setContentMode(ImageView::ContentMode::Contain);
   artworkFrame->addView(jacketImage);
+  artworkPlaceholder = new ArtworkPlaceholder(*jacketImage);
+  artworkPlaceholder->setName("chartListArtworkPlaceholder");
+  artworkPlaceholder->setText(ui_icons::textForCodepoint(ui_icons::kMusic));
+  artworkPlaceholder->setAlign(TextView::CENTER);
+  artworkPlaceholder->setVAlign(TextView::MIDDLE);
+  artworkPlaceholder->setWidth(kArtworkWidth)->setHeight(kArtworkWidth);
+  artworkPlaceholder->setThemedColor(main_menu_theme::muted);
+  artworkFrame->addView(artworkPlaceholder);
   contentCard->addView(artworkFrame);
 
   textLayout = new View();
@@ -257,7 +274,6 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   refreshColumnWidths();
   const auto artwork = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
   const bool hasArtwork = !record.courseStart && !unavailable && !solidArchive && !artwork.empty();
-  artworkPlaceholder->setVisible(!hasArtwork);
   if (hasArtwork) jacketImage->setImageAsync(meta.Folder / artwork, prioritizeArtwork);
   else jacketImage->freeImage();
   favoriteButton->setVisible(!record.courseStart && !unavailable &&

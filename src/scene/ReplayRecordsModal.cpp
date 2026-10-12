@@ -496,19 +496,11 @@ ReplayRecordsModal::Create(View *parent,
   filterSortContent->addView(filterScroll);
   contentFrame->addView(filterSortContent);
 
-  const auto makePhoneOptionsScrollable = [phone, kModalContentWidth, kModalContentHeight](View *page) -> View * {
-    if (!phone) return page;
+  const auto makeOptionsScrollable = [kModalContentWidth, kModalContentHeight](View *page) -> View * {
     page->setPositionType(YGPositionTypeRelative);
     page->setHeight(YGUndefined)->setWidth(kModalContentWidth);
     page->setJustifyContent(YGJustifyFlexStart);
     page->setVisible(true);
-    for (auto *row : page->getChildren()) {
-      if (row->getChildren().empty()) continue;
-      row->setMinHeight(rendering::compactTouchTarget);
-      for (auto *child : row->getChildren()) {
-        if (dynamic_cast<Button *>(child)) child->setHeight(rendering::compactTouchTarget);
-      }
-    }
     auto *scroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
                                   static_cast<int>(kModalContentHeight));
     scroll->setPositionType(YGPositionTypeAbsolute);
@@ -627,7 +619,7 @@ ReplayRecordsModal::Create(View *parent,
   addKeysoundRow(watchOptionsContent, &modal->keysoundAutoButton_,
                 &modal->keysoundAutoButtonText_, &modal->keysoundInputButton_,
                 &modal->keysoundInputButtonText_);
-  watchOptionsContent = makePhoneOptionsScrollable(watchOptionsContent);
+  watchOptionsContent = makeOptionsScrollable(watchOptionsContent);
   contentFrame->addView(watchOptionsContent);
 
   auto *exportOptionsContent = new View();
@@ -802,7 +794,7 @@ ReplayRecordsModal::Create(View *parent,
                 &modal->exportKeysoundAutoButtonText_,
                 &modal->exportKeysoundInputButton_,
                 &modal->exportKeysoundInputButtonText_);
-  exportOptionsContent = makePhoneOptionsScrollable(exportOptionsContent);
+  exportOptionsContent = makeOptionsScrollable(exportOptionsContent);
   contentFrame->addView(exportOptionsContent);
 
   auto *exportProgressContent = new View();
@@ -912,7 +904,7 @@ ReplayRecordsModal::Create(View *parent,
   deleteConfirmationActions->addView(deleteCancelButton);
   deleteConfirmationActions->addView(deleteConfirmButton);
   deleteConfirmationContent->addView(deleteConfirmationActions);
-  deleteConfirmationContent = makePhoneOptionsScrollable(deleteConfirmationContent);
+  deleteConfirmationContent = makeOptionsScrollable(deleteConfirmationContent);
   contentFrame->addView(deleteConfirmationContent);
 
   auto *footer = new View();
@@ -1170,7 +1162,8 @@ void ReplayRecordsModal::hide() {
 void ReplayRecordsModal::resize(int width, int height) {
   if (root_ == nullptr) return;
   root_->setSize(width, height);
-  if (!rendering::compactMenuCanvasActive) return;
+  const bool compact = rendering::compactMenuCanvasActive;
+  View::LayoutBatchScope layoutBatch;
   const auto safe = rendering::uiSafeAreaInsets();
   root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
   root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
@@ -1178,7 +1171,10 @@ void ReplayRecordsModal::resize(int width, int height) {
   const float panelWidth = std::max(200.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
   const float panelHeight = std::max(200.0f, std::min(660.0f, float(height - safe.top - safe.bottom - 24)));
   const float contentWidth = panelWidth - 44;
-  const float contentHeight = std::max(80.0f, panelHeight - 330);
+  const float contentHeight = std::max(80.0f, panelHeight - (compact ? 330 : 242));
+  auto *footer = root_->findViewByName("recordsFooter");
+  footer->setHeight(compact ? 152 : 72);
+  footer->setFlexWrap(compact ? YGWrapWrap : YGWrapNoWrap);
   panel->setWidth(panelWidth)->setHeight(panelHeight);
   contentFrame_->setWidth(contentWidth)->setHeight(contentHeight);
   for (auto *page : {listContent_, filterSortContent_, watchOptionsContent_,
@@ -1186,7 +1182,16 @@ void ReplayRecordsModal::resize(int width, int height) {
     if (!page) continue;
     page->setWidth(contentWidth)->setHeight(contentHeight);
     if (auto *scroll = dynamic_cast<ScrollView *>(page)) {
-      scroll->getContentView()->setWidth(contentWidth);
+      auto *options = scroll->getContentView();
+      options->setWidth(contentWidth)->setMinHeight(compact ? 0 : contentHeight);
+      options->setJustifyContent(compact ? YGJustifyFlexStart : YGJustifyCenter);
+      const int optionHeight = compact ? rendering::compactTouchTarget : 58;
+      for (auto *row : options->getChildren()) {
+        if (row->getChildren().empty()) continue;
+        row->setMinHeight(optionHeight);
+        for (auto *child : row->getChildren())
+          if (dynamic_cast<Button *>(child)) child->setHeight(optionHeight);
+      }
       scroll->refreshContentLayout();
     }
     for (auto *child : page->getChildren()) {
@@ -1197,8 +1202,18 @@ void ReplayRecordsModal::resize(int width, int height) {
       }
     }
   }
-  for (auto *button : {watchButton_, gbattleButton_, resultButton_, exportButton_})
-    if (button) button->setWidth(button->getVisible() ? (contentWidth - 8) / 2 : 0);
+  const bool watchOptions = watchOptionsContent_ && watchOptionsContent_->getVisible();
+  const bool exportOptions = exportOptionsContent_ && exportOptionsContent_->getVisible();
+  const std::array<float, 4> widths{watchOptions ? 160.0f : 124.0f, 144.0f,
+                                  142.0f, exportOptions ? 160.0f : 142.0f};
+  size_t index = 0;
+  for (auto *button : {watchButton_, gbattleButton_, resultButton_, exportButton_}) {
+    if (button) {
+      button->setWidth(button->getVisible() ? (compact ? (contentWidth - 8) / 2 : widths[index]) : 0);
+      button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
+    }
+    ++index;
+  }
   if (exportProgressTrack_) exportProgressTrack_->setWidth(contentWidth);
 }
 

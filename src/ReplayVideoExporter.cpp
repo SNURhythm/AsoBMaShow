@@ -2,6 +2,7 @@
 #include "ScratchlessGameplayPolicy.h"
 #include "GameplayKeyMode.h"
 #include "ReplayVideoExporter.h"
+#include "rendering/ResponsiveUi.h"
 #include "ExportFileName.h"
 #include "replay/CourseReplayConsumer.h"
 #include "replay/ReplayOption.h"
@@ -742,6 +743,8 @@ void reportReplayExportProgress(const ReplayVideoExportOptions &options,
 }
 
 struct ReplayVideoRenderGeometryState {
+  bool responsiveMenuSceneActive = rendering::responsiveMenuSceneActive;
+  bool compactMenuCanvasActive = rendering::compactMenuCanvasActive;
   int windowWidth = rendering::window_width;
   int windowHeight = rendering::window_height;
   int renderWidth = rendering::render_width;
@@ -758,6 +761,8 @@ struct ReplayVideoRenderGeometryState {
 
 void restoreReplayVideoRenderGeometry(
     const ReplayVideoRenderGeometryState &state) {
+  rendering::responsiveMenuSceneActive = state.responsiveMenuSceneActive;
+  rendering::compactMenuCanvasActive = state.compactMenuCanvasActive;
   rendering::window_width = state.windowWidth;
   rendering::window_height = state.windowHeight;
   rendering::render_width = state.renderWidth;
@@ -779,7 +784,10 @@ public:
 
   ~ScopedReplayVideoRenderGeometry() { restorePrimary(); }
 
-  void applyExport() { rendering::updateUIScale(exportWidth, exportHeight); }
+  void applyExport() {
+    rendering::responsiveMenuSceneActive = false;
+    rendering::updateUIScale(exportWidth, exportHeight);
+  }
 
   void restorePrimary() {
     restoreReplayVideoRenderGeometry(primary);

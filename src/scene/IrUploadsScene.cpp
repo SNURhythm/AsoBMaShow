@@ -166,24 +166,36 @@ void IrUploadsScene::updateLayoutInsets() {
       ->setPadding(Edge::Left, safe.left)
       ->setPadding(Edge::Right, safe.right);
   const float width = rendering::window_width - safe.left - safe.right;
-  const bool phoneStack = rendering::compactMenuCanvasActive && width < 900;
+  const bool phoneStack = width < 900;
   contentLayout->setFlexDirection(phoneStack ? FlexDirection::Column : FlexDirection::Row);
   if (auto *rail = rootLayout->findViewByName("irProviderRail")) {
     rail->setWidth(phoneStack ? width : (width < 1100 ? width * 0.28F : 350));
-    rail->setHeight(phoneStack ? 112 : YGUndefined);
+    rail->setHeight(YGUndefined);
+    rail->setFlexWrap(phoneStack ? YGWrapWrap : YGWrapNoWrap);
+    rail->setGap(phoneStack ? 12 : 16);
     rail->setFlexDirection(phoneStack ? FlexDirection::Row : FlexDirection::Column);
     rail->setPadding(Edge::All, phoneStack ? 12 : 24);
   }
   if (auto *provider = rootLayout->findViewByName("irProviderIdentity")) {
-    provider->setFlex(phoneStack ? 1 : 0);
+    provider->setFlex(0);
+    provider->setWidth(phoneStack ? std::max(0.0f, width - 196) : YGUndefined);
   }
   providerStatusText->setMinHeight(phoneStack ? 36 : 100);
   openIrSettingsButton->setWidth(phoneStack ? 160 : YGUndefined);
   if (!phoneStack) openIrSettingsButton->setWidthPercent(100);
-  if (rendering::compactMenuCanvasActive) {
-    for (auto *button : {openIrSettingsButton, selectAllButton, clearButton, refreshButton})
-      button->setHeight(rendering::compactTouchTarget);
+  if (embeddedTab) {
+    candidateCountText->setWidth(phoneStack ? std::max(0.0f, width - 196) : YGUndefined);
+    refreshButton->setWidth(phoneStack ? 160 : YGUndefined);
+    if (!phoneStack) {
+      candidateCountText->setWidthPercent(100);
+      refreshButton->setWidthPercent(100);
+    }
   }
+  const int actionHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 52;
+  for (auto *button : {openIrSettingsButton, selectAllButton, clearButton, refreshButton})
+    button->setHeight(actionHeight);
+  if (auto *toolbar = rootLayout->findViewByName("irSelectionToolbar"))
+    toolbar->setHeight(std::max(58, actionHeight));
 
   rootLayout->applyYogaLayout();
 }
@@ -371,6 +383,7 @@ void IrUploadsScene::buildView() {
   content->addView(workspace);
 
   auto *selectionToolbar = new View();
+  selectionToolbar->setName("irSelectionToolbar");
   selectionToolbar->setHeight(58)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Row)
